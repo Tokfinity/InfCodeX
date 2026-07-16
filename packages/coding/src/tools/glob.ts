@@ -12,6 +12,14 @@ export async function toolGlob(input: Record<string, unknown>, ctx: KodaXToolExe
   const pattern = input.pattern as string;
   const cwd = resolveExecutionPathOrCwd(input.path as string | undefined, ctx);
   const files = await globAsync(pattern, { cwd, nodir: true, absolute: true, ignore: ['**/node_modules/**', '**/dist/**', '**/.*'] });
-  if (files.length === 0) return 'No files found';
-  return files.slice(0, 100).join('\n') + (files.length > 100 ? '\n... (more files)' : '');
+  const admitted = files.filter((file) => {
+    try {
+      ctx.assertReadablePath?.(file);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (admitted.length === 0) return 'No files found';
+  return admitted.join('\n');
 }

@@ -168,6 +168,53 @@ describe('toolChangedDiff', () => {
     expect(result).toContain("+export const beta = 3;");
   });
 
+  it('does not silently omit unique paths after duplicate entries', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-changed-diff-'));
+    initGitRepo(tempDir);
+
+    mkdirSync(join(tempDir, 'src'), { recursive: true });
+    const paths = Array.from({ length: 11 }, (_, index) => `src/file-${index}.ts`);
+    for (const [index, relativePath] of paths.entries()) {
+      writeFileSync(join(tempDir, relativePath), `export const value${index} = 1;\n`);
+    }
+    commitAll(tempDir, 'initial');
+    for (const [index, relativePath] of paths.entries()) {
+      writeFileSync(join(tempDir, relativePath), `export const value${index} = 2;\n`);
+    }
+
+    const result = await toolChangedDiffBundle({
+      paths: [
+        ...Array.from({ length: 10 }, () => paths[0]),
+        ...paths.slice(1),
+      ],
+      limit_per_path: 20,
+    }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain('Changed diff bundle for 11 file(s)');
+    expect(result).toContain('=== src/file-10.ts ===');
+    expect(result).toContain('+export const value10 = 2;');
+    expect(result).toContain('[Bundle complete]');
+    expect(result).not.toContain('Additional paths omitted');
+  });
+
+  it('rejects an execution bundle that exceeds the declared path acquisition limit', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-changed-diff-'));
+    initGitRepo(tempDir);
+    const paths = Array.from({ length: 65 }, (_, index) => `src/file-${index}.ts`);
+
+    const result = await toolChangedDiffBundle({ paths }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(result).toContain('[Tool Error] changed_diff_bundle');
+    expect(result).toContain('at most 64 unique paths');
+    expect(result).toContain('split the request');
+  });
+
   it('reads compare-range bundle diffs with per-file continuation hints', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'kodax-changed-diff-'));
     initGitRepo(tempDir);

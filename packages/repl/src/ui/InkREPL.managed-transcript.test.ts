@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { KodaXMessage } from "@kodax-ai/agent";
+import { setLocale } from "../common/i18n.js";
 import { ToolCallStatus } from "./types.js";
 import {
   appendPersistedUiHistorySnapshot,
+  buildAmaWorkStripFromStatus,
+  buildManagedForegroundTurnHistoryItems,
   buildManagedTaskTranscriptItems,
   buildRoundHistoryItems,
+  hasSubstantiveManagedAssistantText,
+  restoreHistoryItemsFromSession,
+  shouldAppendManagedAssistantTextDelta,
   shouldShowStatusBarBusyStatus,
 } from "./InkREPL.js";
 
@@ -67,6 +74,175 @@ describe("buildManagedTaskTranscriptItems", () => {
     expect(transcript).not.toContain("## Final Findings");
   });
 
+  it("appends a completion label when verdict disposition is complete (en)", () => {
+    setLocale("en");
+    const items = buildManagedTaskTranscriptItems({
+      success: true,
+      messages: [],
+      lastText: "All checks passed.",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "generator", role: "generator", title: "Generator" },
+          { id: "evaluator", role: "evaluator", title: "Evaluator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "generator",
+              title: "Generator",
+              role: "generator",
+              round: 1,
+              status: "completed",
+              summary: "Generator applied all fixes.",
+            },
+          ],
+        },
+        verdict: {
+          decidedByAssignmentId: "evaluator",
+          disposition: "complete",
+        },
+      },
+    } as any);
+
+    expect(items.at(-1)).toBe("[Task completed]");
+  });
+
+  it("appends a localized completion label for zh locale", () => {
+    setLocale("zh");
+    const items = buildManagedTaskTranscriptItems({
+      success: true,
+      messages: [],
+      lastText: "All checks passed.",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "generator", role: "generator", title: "Generator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "generator",
+              title: "Generator",
+              role: "generator",
+              round: 1,
+              status: "completed",
+              summary: "Generator finished.",
+            },
+          ],
+        },
+        verdict: {
+          decidedByAssignmentId: "generator",
+          disposition: "complete",
+        },
+      },
+    } as any);
+
+    expect(items.at(-1)).toBe("[任务完成]");
+    setLocale("en");
+  });
+
+  it("appends blocked label when verdict disposition is blocked", () => {
+    setLocale("en");
+    const items = buildManagedTaskTranscriptItems({
+      success: false,
+      messages: [],
+      lastText: "",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "generator", role: "generator", title: "Generator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "generator",
+              title: "Generator",
+              role: "generator",
+              round: 1,
+              status: "failed",
+              summary: "Generator could not proceed.",
+            },
+          ],
+        },
+        verdict: {
+          decidedByAssignmentId: "generator",
+          disposition: "blocked",
+          signalReason: "Budget denied.",
+        },
+      },
+    } as any);
+
+    expect(items.at(-1)).toBe("[Task blocked]");
+  });
+
+  it("appends continuation label when verdict disposition is needs_continuation", () => {
+    setLocale("en");
+    const items = buildManagedTaskTranscriptItems({
+      success: false,
+      messages: [],
+      lastText: "",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "generator", role: "generator", title: "Generator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "generator",
+              title: "Generator",
+              role: "generator",
+              round: 1,
+              status: "completed",
+              summary: "Partial progress made.",
+            },
+          ],
+        },
+        verdict: {
+          decidedByAssignmentId: "generator",
+          disposition: "needs_continuation",
+        },
+      },
+    } as any);
+
+    expect(items.at(-1)).toBe("[Task needs continuation]");
+  });
+
+  it("omits completion label when verdict has no known disposition", () => {
+    setLocale("en");
+    const items = buildManagedTaskTranscriptItems({
+      success: true,
+      messages: [],
+      lastText: "done",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "generator", role: "generator", title: "Generator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "generator",
+              title: "Generator",
+              role: "generator",
+              round: 1,
+              status: "completed",
+              summary: "Done.",
+            },
+          ],
+        },
+        verdict: {
+          decidedByAssignmentId: "generator",
+        },
+      },
+    } as any);
+
+    // No completion label appended when disposition is undefined
+    const last = items.at(-1) ?? "";
+    expect(last).not.toMatch(/^\[Task/);
+  });
+
   it("keeps the final round transcript visible when the managed run is interrupted", () => {
     const items = buildManagedTaskTranscriptItems({
       success: false,
@@ -115,6 +291,259 @@ describe("buildManagedTaskTranscriptItems", () => {
     const transcript = items.join("\n\n");
     expect(transcript).toContain("Evaluator identified three blocking issues.");
   });
+
+  // FEATURE_195 (v0.7.43) — Sidecar Verifier UI silent accept.
+  //
+  // Hides accept verdict evidence entries by default (post-F184 design
+  // intent — verifier.ts JSDoc + ADR-030 §F184 specify silent accept).
+  // Revise / blocked still surface (user-actionable). `verifierLog`
+  // opt-in (env `KODAX_VERIFIER_LOG=1` or config `verifierLog: true`)
+  // restores accept visibility for debug/audit.
+  describe("FEATURE_195 — Sidecar Verifier UI silent accept", () => {
+    const baseSidecarAcceptResult = (): unknown => ({
+      success: true,
+      messages: [],
+      lastText: "你好! 我是 KodaX 的开发助手。",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "worker", role: "worker", title: "Worker" },
+          { id: "evaluator", role: "evaluator", title: "Evaluator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "worker",
+              title: "Worker",
+              role: "worker",
+              round: 1,
+              status: "completed",
+              summary: "你好! 我是 KodaX 的开发助手。",
+            },
+            {
+              // Sidecar accept verdict — observer-bridge maps
+              // `verdict.status='accept'` → `signal: 'COMPLETE'` +
+              // `summary: verdict.reason` (the verifier reasoning text).
+              assignmentId: "evaluator",
+              title: "Evaluator",
+              role: "evaluator",
+              round: 1,
+              status: "completed",
+              signal: "COMPLETE",
+              signalReason: "Greeting is a fitting response, no pending tasks.",
+              summary: "用户用中文说\"你好\"，主 agent 用中文回复了问候。这是恰当回应，没有未完成的任务。",
+            },
+          ],
+        },
+        verdict: {
+          // FEATURE_195: trivial "你好" goes H0_DIRECT — `payload-builder.ts:218`
+          // sets decidedByAssignmentId='direct' (H0 branch wins over the
+          // verdictStatus → 'evaluator' branch). The Evaluator evidence
+          // entry's assignmentId='evaluator' ≠ 'direct', so the existing
+          // "skip final" filter at InkREPL:584 does NOT drop it. This is
+          // exactly the production path the F195 silent-accept filter targets.
+          decidedByAssignmentId: "direct",
+          disposition: "complete",
+        },
+      },
+    });
+
+    it("default mode (verifierLog=false): hides sidecar accept verdict entry", () => {
+      const items = buildManagedTaskTranscriptItems(
+        baseSidecarAcceptResult() as any,
+        { verifierLog: false },
+      );
+      const transcript = items.join("\n\n");
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).not.toContain("用户用中文说");
+      // Worker entry still shows.
+      expect(transcript).toContain("你好! 我是 KodaX 的开发助手。");
+    });
+
+    it("verifierLog=true: shows sidecar accept verdict entry", () => {
+      const items = buildManagedTaskTranscriptItems(
+        baseSidecarAcceptResult() as any,
+        { verifierLog: true },
+      );
+      const transcript = items.join("\n\n");
+      // verifierLog surfaces the accept entry too — under the Sidecar identity.
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).toContain("用户用中文说");
+    });
+
+    it("default mode: sidecar revise verdict (status='running', no signal) still surfaces — user actionable", () => {
+      const result = {
+        success: true,
+        messages: [],
+        lastText: "Worker text-only response before revise.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                // Sidecar revise — observer-bridge maps to
+                // status='running' with no `signal`. Filter must NOT
+                // hide because the user needs to see what to revise.
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "running",
+                summary: "Worker claimed completion but did not run any verification step — revise needed.",
+              },
+            ],
+          },
+          // Trivial-task H0_DIRECT path — decidedByAssignmentId='direct'
+          // (per payload-builder.ts:218) so the skip-final filter at
+          // InkREPL:584 does NOT drop the Evaluator entry. F195 silent-
+          // accept filter must NOT drop revise verdicts (signal !== 'COMPLETE'
+          // — user actionable).
+          verdict: { decidedByAssignmentId: "direct" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      // The verdict surfaces under the Sidecar identity, NOT the legacy
+      // [Evaluator] role label (FEATURE_184 follow-up — the in-chain Evaluator
+      // was retired; this feedback is the Sidecar Verifier's).
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).toContain("revise needed");
+    });
+
+    it("default mode: sidecar blocked verdict (signal='BLOCKED') still surfaces — user actionable", () => {
+      const result = {
+        success: false,
+        signal: "BLOCKED",
+        messages: [],
+        lastText: "Worker reported blocker.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "blocked",
+                signal: "BLOCKED",
+                signalReason: "Cannot proceed — missing dependency in user environment.",
+                summary: "Cannot proceed — missing dependency in user environment.",
+              },
+            ],
+          },
+          // BLOCKED case — per payload-builder.ts:218, harness='H0_DIRECT'
+          // wins so decidedByAssignmentId='direct'. F195 filter must NOT
+          // drop blocked verdict (signal='BLOCKED', not 'COMPLETE' — user
+          // actionable).
+          verdict: { decidedByAssignmentId: "direct", disposition: "blocked" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      // Blocked verdict surfaces under the Sidecar identity, not [Evaluator].
+      expect(transcript).toContain("⚡ Sidecar Verifier");
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).toContain("missing dependency");
+    });
+
+    it("default mode: non-evaluator entries with signal='COMPLETE' (e.g. direct H0) still surface", () => {
+      // Filter must be evaluator-role-specific; a Worker / Scout / direct
+      // entry that happens to also carry signal='COMPLETE' must NOT be
+      // affected by the silent-accept filter.
+      const result = {
+        success: true,
+        messages: [],
+        lastText: "Done.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "worker",
+                title: "Worker",
+                role: "worker",
+                round: 1,
+                status: "completed",
+                signal: "COMPLETE",
+                summary: "Worker completed the trivial task.",
+              },
+            ],
+          },
+          // decidedByAssignmentId='direct' so the existing skip-final
+          // filter doesn't drop the Worker entry (Worker entry's
+          // assignmentId='worker' ≠ 'direct'). What we want to verify:
+          // F195 silent-accept filter does NOT drop this entry even though
+          // it has signal='COMPLETE' — because role !== 'evaluator'.
+          verdict: { decidedByAssignmentId: "direct", disposition: "complete" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      expect(transcript).toContain("[Worker]");
+      expect(transcript).toContain("Worker completed");
+    });
+
+    it("env var KODAX_VERIFIER_LOG=1 is honored when options.verifierLog omitted", () => {
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      process.env.KODAX_VERIFIER_LOG = "1";
+      try {
+        const items = buildManagedTaskTranscriptItems(baseSidecarAcceptResult() as any);
+        const transcript = items.join("\n\n");
+        expect(transcript).toContain("⚡ Sidecar Verifier");
+        expect(transcript).not.toContain("[Evaluator]");
+        expect(transcript).toContain("用户用中文说");
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_VERIFIER_LOG;
+        else process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+
+    it("env var unset + options omitted: defaults to filter-on (silent accept)", () => {
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      delete process.env.KODAX_VERIFIER_LOG;
+      try {
+        const items = buildManagedTaskTranscriptItems(baseSidecarAcceptResult() as any);
+        const transcript = items.join("\n\n");
+        expect(transcript).not.toContain("[Evaluator]");
+        expect(transcript).not.toContain("用户用中文说");
+      } finally {
+        if (prev !== undefined) process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+
+    it("options.verifierLog=false overrides env var KODAX_VERIFIER_LOG=1 (explicit option wins)", () => {
+      // Test paths need deterministic behavior independent of test-env
+      // env vars. The `options.verifierLog` arg must take precedence
+      // over the env-var fallback.
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      process.env.KODAX_VERIFIER_LOG = "1";
+      try {
+        const items = buildManagedTaskTranscriptItems(
+          baseSidecarAcceptResult() as any,
+          { verifierLog: false },
+        );
+        const transcript = items.join("\n\n");
+        expect(transcript).not.toContain("[Evaluator]");
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_VERIFIER_LOG;
+        else process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+  });
 });
 
 describe("buildRoundHistoryItems", () => {
@@ -150,30 +579,404 @@ describe("appendPersistedUiHistorySnapshot", () => {
       { type: "info", text: "> AMA Routing - Routing ready" },
     ]);
     const afterSecondAppend = appendPersistedUiHistorySnapshot(afterFirstAppend, [
-      { type: "info", text: "> AMA H1 - Starting refinement round 2" },
+      { type: "info", text: "> AMA - Starting refinement round 2" },
     ]);
 
     expect(afterSecondAppend).toEqual([
       { type: "info", text: "> AMA Routing - Routing ready" },
-      { type: "info", text: "> AMA H1 - Starting refinement round 2" },
+      { type: "info", text: "> AMA - Starting refinement round 2" },
+    ]);
+  });
+
+  it("keeps terminal tool groups when a round later adds only tool output", () => {
+    const afterPrompt = appendPersistedUiHistorySnapshot([
+      { type: "assistant", text: "Round 1 answer" },
+    ], [
+      { type: "user", text: "Round 2 prompt" },
+    ]);
+
+    const afterToolOnlyUpdate = appendPersistedUiHistorySnapshot(afterPrompt, [
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-2",
+            name: "changed_diff",
+            status: ToolCallStatus.Success,
+            startTime: 100,
+            input: {
+              preview: "{\"path\":\"packages/repl/src/ui/InkREPL.tsx\"}",
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(afterToolOnlyUpdate).toEqual([
+      { type: "assistant", text: "Round 1 answer" },
+      { type: "user", text: "Round 2 prompt" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-2",
+            name: "changed_diff",
+            status: "success",
+            input: {
+              preview: "{\"path\":\"packages/repl/src/ui/InkREPL.tsx\"}",
+            },
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes in-flight tool groups before persisting", () => {
+    const history = appendPersistedUiHistorySnapshot([], [
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-running",
+            name: "bash",
+            status: ToolCallStatus.Executing,
+            input: {
+              command: "npm test",
+              apiKey: "secret-value",
+            },
+            preview: "running npm test",
+            progress: 50,
+            progressLines: ["halfway"],
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+
+    expect(history).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-running",
+            name: "bash",
+            status: "cancelled",
+            input: {
+              command: "npm test",
+              apiKey: "[redacted]",
+            },
+            preview: "running npm test",
+            error: "Session ended before the tool completed.",
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("does not recurse forever on cyclic tool inputs while persisting", () => {
+    const input: Record<string, unknown> = { command: "npm test" };
+    input.self = input;
+
+    const history = appendPersistedUiHistorySnapshot([], [
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-cyclic",
+            name: "bash",
+            status: ToolCallStatus.Success,
+            input,
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+
+    expect(history).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-cyclic",
+            name: "bash",
+            status: "success",
+            input: {
+              command: "npm test",
+              self: "[truncated]",
+            },
+            startTime: 100,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps only the most recent persisted rounds once the transcript grows too large", () => {
+    let history: ReturnType<typeof appendPersistedUiHistorySnapshot> = [];
+
+    for (let round = 1; round <= 55; round += 1) {
+      history = appendPersistedUiHistorySnapshot(history, [
+        { type: "user", text: `Round ${round} prompt` },
+        { type: "assistant", text: `Round ${round} answer` },
+      ]);
+    }
+
+    expect(history).toHaveLength(100);
+    expect(history[0]).toEqual({ type: "user", text: "Round 6 prompt" });
+    expect(history[history.length - 1]).toEqual({ type: "assistant", text: "Round 55 answer" });
+  });
+});
+
+describe("restoreHistoryItemsFromSession", () => {
+  it("enriches old text-only uiHistory with tool groups from canonical messages", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Need to read the file first." },
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "I found the answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "README contents" },
+        ],
+      },
+    ];
+
+    expect(restoreHistoryItemsFromSession({
+      messages,
+      uiHistory: [
+        { type: "user", text: "Inspect README" },
+        { type: "thinking", text: "Need to read the file first." },
+        { type: "assistant", text: "I found the answer." },
+      ],
+    })).toEqual([
+      { type: "user", text: "Inspect README" },
+      { type: "thinking", text: "Need to read the file first." },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: ToolCallStatus.Success,
+            input: { path: "README.md" },
+            output: "README contents",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "I found the answer." },
+    ]);
+  });
+
+  it("restores persisted tool groups without deriving duplicates", () => {
+    expect(restoreHistoryItemsFromSession({
+      messages: [],
+      uiHistory: [
+        {
+          type: "tool_group",
+          tools: [
+            {
+              id: "tool-1",
+              name: "grep",
+              status: "error",
+              error: "grep failed",
+            },
+          ],
+        },
+      ],
+    })).toEqual([
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "grep",
+            status: ToolCallStatus.Error,
+            error: "grep failed",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("enriches only text-only rounds when persisted history mixes old and new tool formats", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "First answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "README contents" }],
+      },
+      { role: "user", content: "Search TODOs" },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-2", name: "grep", input: { pattern: "TODO" } },
+          { type: "text", text: "Second answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-2", content: "TODO list" }],
+      },
+    ];
+
+    expect(restoreHistoryItemsFromSession({
+      messages,
+      uiHistory: [
+        { type: "user", text: "Inspect README" },
+        { type: "assistant", text: "First answer." },
+        { type: "user", text: "Search TODOs" },
+        {
+          type: "tool_group",
+          tools: [
+            {
+              id: "tool-2",
+              name: "grep",
+              status: "success",
+              input: { pattern: "TODO" },
+              output: "TODO list",
+            },
+          ],
+        },
+        { type: "assistant", text: "Second answer." },
+      ],
+    })).toEqual([
+      { type: "user", text: "Inspect README" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: ToolCallStatus.Success,
+            input: { path: "README.md" },
+            output: "README contents",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "First answer." },
+      { type: "user", text: "Search TODOs" },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-2",
+            name: "grep",
+            status: ToolCallStatus.Success,
+            input: { pattern: "TODO" },
+            output: "TODO list",
+            startTime: expect.any(Number),
+          },
+        ],
+      },
+      { type: "assistant", text: "Second answer." },
     ]);
   });
 });
 
-describe("shouldShowStatusBarBusyStatus", () => {
-  it("hides duplicate busy text while AMA live loading is active", () => {
-    expect(shouldShowStatusBarBusyStatus({
-      agentMode: "ama",
-      isLivePaused: false,
-      isLoading: true,
-    })).toBe(false);
+describe("buildManagedForegroundTurnHistoryItems", () => {
+  it("keeps completed foreground AMA phases as labeled thinking and assistant items", () => {
+    const items = buildManagedForegroundTurnHistoryItems("Planner", {
+      thinking: "Comparing ScrollBox ownership against the renderer viewport path.",
+      response: "Planner narrowed the bug to the fullscreen transcript geometry.",
+      toolCalls: [{
+        id: "tool-1",
+        name: "[Planner] changed_diff_bundle",
+        input: { paths: ["packages/repl/src/ui/InkREPL.tsx"] },
+        status: ToolCallStatus.Success,
+        output: "Bundle: 3 files",
+        startTime: 1,
+        endTime: 2,
+      }],
+      createId: ((index = 0) => () => `fg-${++index}`)(),
+    });
+
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({
+      type: "thinking",
+      text: "[Planner] Comparing ScrollBox ownership against the renderer viewport path.",
+    });
+    expect(items[1]).toMatchObject({
+      type: "tool_group",
+      tools: [expect.objectContaining({
+        name: "[Planner] changed_diff_bundle",
+      })],
+    });
+    expect(items[2]).toMatchObject({
+      type: "assistant",
+      text: "[Planner] Planner narrowed the bug to the fullscreen transcript geometry.",
+    });
+  });
+});
+
+describe("managed foreground assistant text guards", () => {
+  it("does not treat the worker prefix alone as substantive assistant text", () => {
+    expect(hasSubstantiveManagedAssistantText("[Worker] ", "Worker")).toBe(false);
+    expect(hasSubstantiveManagedAssistantText("[Worker] hello", "Worker")).toBe(true);
+    expect(hasSubstantiveManagedAssistantText("plain answer", "Worker")).toBe(true);
   });
 
-  it("keeps busy text visible for SA live loading", () => {
+  it("does not open a new assistant block for leading whitespace deltas", () => {
+    expect(shouldAppendManagedAssistantTextDelta(" \n\t", false)).toBe(false);
+    expect(shouldAppendManagedAssistantTextDelta(" \n\t", true)).toBe(true);
+    expect(shouldAppendManagedAssistantTextDelta("hello", false)).toBe(true);
+  });
+});
+
+describe("shouldShowStatusBarBusyStatus", () => {
+  it("keeps busy text visible while the prompt surface is loading", () => {
     expect(shouldShowStatusBarBusyStatus({
-      agentMode: "sa",
       isLivePaused: false,
       isLoading: true,
+      hasSpinnerLiveness: true,
     })).toBe(true);
+  });
+
+  it("hides busy text when live transcript updates are paused", () => {
+    expect(shouldShowStatusBarBusyStatus({
+      isLivePaused: true,
+      isLoading: true,
+      hasSpinnerLiveness: false,
+    })).toBe(false);
+  });
+});
+
+describe("buildAmaWorkStripFromStatus", () => {
+  it("hides the strip outside AMA loading", () => {
+    expect(buildAmaWorkStripFromStatus({
+      agentMode: "sa",
+      childFanoutClass: "finding-validation",
+      childFanoutCount: 2,
+    }, true)).toBeUndefined();
+    expect(buildAmaWorkStripFromStatus({
+      agentMode: "ama",
+      childFanoutClass: "finding-validation",
+      childFanoutCount: 2,
+    }, false)).toBeUndefined();
+  });
+
+  it("formats AMA child fan-out as a compact work strip", () => {
+    expect(buildAmaWorkStripFromStatus({
+      agentMode: "ama",
+      childFanoutClass: "finding-validation",
+      childFanoutCount: 3,
+    }, true)).toBe("Validating 3 findings");
   });
 });

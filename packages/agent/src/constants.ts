@@ -1,5 +1,5 @@
 /**
- * @kodax/agent Constants
+ * @kodax-ai/agent Constants
  *
  * 通用 Agent 常量配置
  */
@@ -9,14 +9,13 @@
 export const KODAX_MAX_TOKENS = 32768;
 export const KODAX_DEFAULT_TIMEOUT = 60;
 export const KODAX_HARD_TIMEOUT = 300;
-export const KODAX_COMPACT_THRESHOLD = 100000;
-export const KODAX_COMPACT_KEEP_RECENT = 10;
 
 // ============== 重试配置 ==============
 
 export const KODAX_MAX_RETRIES = 3;
 export const KODAX_RETRY_BASE_DELAY = 2;
 export const KODAX_MAX_INCOMPLETE_RETRIES = 2;
+export const KODAX_MAX_MAXTOKENS_RETRIES = 3;
 
 // ============== 并行 Agent 配置 ==============
 

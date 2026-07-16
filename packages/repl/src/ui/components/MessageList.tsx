@@ -2,14 +2,16 @@
  * MessageList
  *
  * Reference Gemini CLI's message display architecture implementation.
- * Support HistoryItem types: user, assistant, tool_group, thinking, error, info, and hint.
+ * Support HistoryItem types: user, assistant, tool_group, thinking, error, event, info, and hint.
  */
 
-import React, { useMemo, memo } from "react";
-import { Box, Static, Text, useStdout } from "ink";
+import React, { useEffect, useMemo, memo } from "react";
+import type { KodaXAgentMode } from "@kodax-ai/coding";
+import { Box, Static, Text, useStdout } from "../tui.js";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 import type { Theme } from "../types.js";
+import type { ScrollBoxWindow } from "../../tui/components/ScrollBox.js";
 import {
   ToolCallStatus,
   type HistoryItem,
@@ -18,6 +20,7 @@ import {
   type HistoryItemToolGroup,
   type HistoryItemThinking,
   type HistoryItemError,
+  type HistoryItemEvent,
   type HistoryItemInfo,
   type HistoryItemHint,
   type HistoryItemSystem,
@@ -25,19 +28,20 @@ import {
 } from "../types.js";
 import type { IterationRecord } from "../contexts/StreamingContext.js";
 import {
-  buildDynamicTranscriptSection,
-  buildHistoryItemTranscriptSections,
-  buildStaticTranscriptSections,
-  flattenTranscriptSections,
-  getVisibleTranscriptRows,
+  buildTranscriptRenderModel,
   resolveTranscriptColor,
+  resolveVisibleTranscriptRows,
+  type TranscriptRenderModel,
   type TranscriptSection,
   type TranscriptRow,
 } from "../utils/transcript-layout.js";
+import { sliceTranscriptText } from "../utils/transcript-text-metrics.js";
 import {
   collapseToolCalls,
   formatCollapsedToolInlineText,
 } from "../utils/tool-display.js";
+import type { TranscriptRowSelectionRange } from "../utils/transcript-text-selection.js";
+import { truncateUserMessageForDisplay } from "../utils/user-message-display.js";
 
 // === Types ===
 
@@ -71,9 +75,9 @@ export interface MessageListProps {
   /** Whether context compaction is in progress */
   isCompacting?: boolean;
   /** Managed-task agent mode shown in live transcript state */
-  agentMode?: "sa" | "ama";
+  agentMode?: KodaXAgentMode;
   /** Managed-task phase shown in live transcript state */
-  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   /** Managed-task harness profile shown in live transcript state */
   managedHarnessProfile?: string;
   /** Managed-task active worker title shown in live transcript state */
@@ -90,6 +94,8 @@ export interface MessageListProps {
   managedBudgetApprovalRequired?: boolean;
   /** Last known live activity label used when the stream is between deltas */
   lastLiveActivityLabel?: string;
+  /** Stable text rows for live status surfaces outside transcript history */
+  liveStatusLines?: readonly string[];
   /** Visible viewport rows for transcript slicing */
   viewportRows?: number;
   /** Optional width override for deterministic transcript layout */
@@ -100,6 +106,39 @@ export interface MessageListProps {
   animateSpinners?: boolean;
   /** Whether to render the transcript as a windowed viewport owned by the app */
   windowed?: boolean;
+  /** Whether thinking content should render in verbose form */
+  showFullThinking?: boolean;
+  /** Whether tool details should render in verbose form */
+  showDetailedTools?: boolean;
+  /** Whether transcript-only "show all" should disable compact truncation */
+  showAllContent?: boolean;
+  /** Whether prompt/live progress helper rows should render inside the transcript */
+  showLiveProgressRows?: boolean;
+  /** Optional selected transcript item id for browse mode affordances */
+  selectedItemId?: string;
+  /** Optional expanded transcript item ids */
+  expandedItemKeys?: ReadonlySet<string>;
+  /** Optional transcript metrics callback for owned scroll controllers */
+  onMetricsChange?: (metrics: {
+    scrollHeight: number;
+    viewportHeight: number;
+  }) => void;
+  /** Optional callback with the currently visible rows */
+  onVisibleRowsChange?: (snapshot: {
+    rows: TranscriptRow[];
+    allRows: TranscriptRow[];
+  }) => void;
+  /** Optional renderer-owned transcript window */
+  rendererWindow?: Pick<
+    ScrollBoxWindow,
+    "start" | "end" | "scrollHeight" | "viewportHeight" | "scrollTop" | "viewportTop" | "pendingDelta" | "sticky"
+  >;
+  /** Optional text selection ranges for app-owned transcript selection */
+  selectedTextRanges?: ReadonlyMap<string, TranscriptRowSelectionRange>;
+  /** Optional prebuilt transcript render model for owned fullscreen paths */
+  transcriptModel?: TranscriptRenderModel;
+  /** Optional precomputed visible transcript rows */
+  visibleRowsOverride?: TranscriptRow[];
 }
 
 export interface HistoryItemRendererProps {
@@ -182,20 +221,27 @@ function getToolStatusColor(status: ToolCallStatus, theme: Theme): string {
 
 /**
  * User message renderer.
+ *
+ * Issue 121 Layer 3: hard cap the rendered text so an oversized expansion
+ * (stdin pipe, legacy terminal pastes that bypass bracketed-paste) never
+ * forces Ink to wrap a giant `<Text>` node on every frame.
  */
-const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = memo(({ item, theme }) => (
-  <Box flexDirection="column" marginBottom={1}>
-    <Box>
-      <Text color={theme.colors.primary} bold>
-        You
-      </Text>
-      <Text dimColor> [{formatTimestamp(item.timestamp)}]</Text>
+const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = memo(({ item, theme }) => {
+  const displayText = useMemo(() => truncateUserMessageForDisplay(item.text), [item.text]);
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Box>
+        <Text color={theme.colors.primary} bold>
+          You
+        </Text>
+        <Text dimColor> [{formatTimestamp(item.timestamp)}]</Text>
+      </Box>
+      <Box marginLeft={2}>
+        <Text color={theme.colors.text}>{displayText}</Text>
+      </Box>
     </Box>
-    <Box marginLeft={2}>
-      <Text color={theme.colors.text}>{item.text}</Text>
-    </Box>
-  </Box>
-));
+  );
+});
 
 /**
  * Assistant message renderer.
@@ -205,7 +251,8 @@ const AssistantItemRenderer: React.FC<{
   theme: Theme;
   maxLines: number;
 }> = memo(({ item, theme, maxLines }) => {
-  const { lines, hasMore } = truncateLines(item.text, maxLines);
+  const displayText = item.compactText ?? item.text;
+  const { lines, hasMore } = truncateLines(displayText, maxLines);
 
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -228,7 +275,7 @@ const AssistantItemRenderer: React.FC<{
           </Text>
         ))}
         {hasMore && (
-          <Text dimColor>... ({item.text.split("\n").length - maxLines} more lines)</Text>
+          <Text dimColor>... ({displayText.split("\n").length - maxLines} more lines)</Text>
         )}
       </Box>
     </Box>
@@ -312,7 +359,7 @@ const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }
     </Box>
     <Box marginLeft={2}>
       <Text color={theme.colors.thinking} italic>
-        {item.text}
+        {item.compactText ?? item.text}
       </Text>
     </Box>
   </Box>
@@ -335,13 +382,26 @@ const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = me
 ));
 
 /**
+ * Managed/task event renderer.
+ */
+const EventItemRenderer: React.FC<{ item: HistoryItemEvent; theme: Theme }> = memo(({ item, theme }) => (
+  <Box flexDirection="column" marginBottom={1}>
+    <Text color={theme.colors.text}>
+      <Text color={theme.colors.accent} bold>{item.icon ?? ">"}</Text>
+      <Text> </Text>
+      {item.compactText ?? item.text}
+    </Text>
+  </Box>
+));
+
+/**
  * Info message renderer.
  */
 const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = memo(({ item, theme }) => (
-  <Box flexDirection="column" marginBottom={1}>
+  <Box flexDirection="column" marginBottom={item.tightSpacing ? 0 : 1}>
     <Text color={theme.colors.info}>
       <Text bold>{item.icon ?? "\u2139"} </Text>
-      {item.text}
+      {item.compactText ?? item.text}
     </Text>
   </Box>
 ));
@@ -373,7 +433,8 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
   theme: themeProp,
   maxLines = 1000, // Increased from 20 to avoid truncation (Issue 046)
 }) => {
-  const theme = themeProp ?? useMemo(() => getTheme("dark"), []);
+  const fallbackTheme = useMemo(() => getTheme("dark"), []);
+  const theme = themeProp ?? fallbackTheme;
 
   switch (item.type) {
     case "user":
@@ -388,6 +449,8 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
       return <ThinkingItemRenderer item={item} theme={theme} />;
     case "error":
       return <ErrorItemRenderer item={item} theme={theme} />;
+    case "event":
+      return <EventItemRenderer item={item} theme={theme} />;
     case "info":
       return <InfoItemRenderer item={item} theme={theme} />;
     case "hint":
@@ -402,14 +465,87 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
 });
 
 /**
- * MessageList
+ * FEATURE_172 P1.3 (v0.7.41) — custom React.memo comparator for transcript rows.
+ *
+ * The default `Object.is` comparator on `memo()` is useless here: `row` is a
+ * fresh object every time `buildTranscriptRenderModel` runs (i.e. every
+ * streaming flush), so every row re-renders even when its visual content is
+ * unchanged.
+ *
+ * This comparator compares the row by its visible fields (the only ones the
+ * renderer reads). When 200 items × ~5 rows = 1000 rows are on screen and only
+ * the active round's ~5 rows change per flush, we skip ~995 row renders per
+ * flush — the React-layer counterpart to the P1.1 data-layer cache.
+ *
+ * `selectionRange` is compared structurally (start/end) since `Map.get()`
+ * returns a fresh range object when selection changes.
+ *
+ * Exported for unit testing; the rest of the renderer is internal.
  */
-const TranscriptRowRenderer: React.FC<{
+export interface TranscriptRowRendererProps {
   row: TranscriptRow;
   theme: Theme;
   animateSpinners?: boolean;
-}> = memo(({ row, theme, animateSpinners = true }) => {
+  selectedItem?: boolean;
+  selectionRange?: TranscriptRowSelectionRange;
+}
+
+export function areTranscriptRowPropsEqual(
+  prev: TranscriptRowRendererProps,
+  next: TranscriptRowRendererProps,
+): boolean {
+  if (prev.theme !== next.theme) return false;
+  if ((prev.animateSpinners ?? true) !== (next.animateSpinners ?? true)) return false;
+  if ((prev.selectedItem ?? false) !== (next.selectedItem ?? false)) return false;
+
+  const a = prev.row;
+  const b = next.row;
+  if (a === b) {
+    // Same row reference + selection equal → safe to skip.
+  } else {
+    if (a.key !== b.key) return false;
+    if (a.text !== b.text) return false;
+    if (a.color !== b.color) return false;
+    if (a.bold !== b.bold) return false;
+    if (a.italic !== b.italic) return false;
+    if (a.indent !== b.indent) return false;
+    if (a.spinner !== b.spinner) return false;
+    if (a.itemId !== b.itemId) return false;
+  }
+
+  const ra = prev.selectionRange;
+  const rb = next.selectionRange;
+  if (ra === rb) return true;
+  if (!ra || !rb) return false;
+  return ra.start === rb.start && ra.end === rb.end;
+}
+
+const TranscriptRowRenderer: React.FC<TranscriptRowRendererProps> = memo(({
+  row,
+  theme,
+  animateSpinners = true,
+  selectedItem = false,
+  selectionRange,
+}) => {
   const color = resolveTranscriptColor(theme, row.color);
+  const normalizedText = row.text === " " ? "" : row.text;
+  const baseText = normalizedText || " ";
+  const selectedText = selectionRange && normalizedText
+    ? sliceTranscriptText(normalizedText, selectionRange.start, selectionRange.end)
+    : "";
+  const beforeSelection = selectionRange && normalizedText
+    ? sliceTranscriptText(normalizedText, 0, selectionRange.start)
+    : normalizedText;
+  const afterSelection = selectionRange && normalizedText
+    ? sliceTranscriptText(normalizedText, selectionRange.end)
+    : "";
+  const accentWholeRow = selectedItem && !selectionRange;
+  const dimColor = !accentWholeRow && row.color === "dim";
+  const commonTextProps = {
+    bold: row.bold || accentWholeRow,
+    italic: row.italic,
+    dimColor,
+  } as const;
 
   return (
     <Box marginLeft={row.indent ?? 0}>
@@ -419,40 +555,48 @@ const TranscriptRowRenderer: React.FC<{
           <Text> </Text>
         </>
       )}
-      <Text color={color} bold={row.bold} italic={row.italic} dimColor={row.color === "dim"}>
-        {row.text || " "}
+      <Text
+        color={accentWholeRow ? theme.colors.accent : color}
+        {...commonTextProps}
+      >
+        {selectionRange && normalizedText ? (
+          <>
+            {beforeSelection ? (
+              <Text
+                color={accentWholeRow ? theme.colors.accent : color}
+                {...commonTextProps}
+              >
+                {beforeSelection}
+              </Text>
+            ) : null}
+            <Text
+              backgroundColor={theme.colors.accent}
+              color={theme.colors.background}
+              bold
+              italic={row.italic}
+            >
+              {selectedText}
+            </Text>
+            {afterSelection ? (
+              <Text
+                color={accentWholeRow ? theme.colors.accent : color}
+                {...commonTextProps}
+              >
+                {afterSelection}
+              </Text>
+            ) : null}
+          </>
+        ) : (
+          baseText
+        )}
       </Text>
     </Box>
   );
-});
+}, areTranscriptRowPropsEqual);
 
-function findActiveRoundStartIndex(items: HistoryItem[]): number {
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i]?.type === "user") {
-      return i;
-    }
-  }
-
-  return 0;
-}
-
-export interface MessageHistorySections {
-  activeRoundStartIndex: number;
-  staticItems: HistoryItem[];
-  activeItems: HistoryItem[];
-}
-
-export function splitMessageHistorySections(items: HistoryItem[]): MessageHistorySections {
-  const activeRoundStartIndex = findActiveRoundStartIndex(items);
-
-  return {
-    activeRoundStartIndex,
-    staticItems: items.slice(0, activeRoundStartIndex),
-    activeItems: items.slice(activeRoundStartIndex),
-  };
-}
-
-const StaticTranscriptItemRenderer: React.FC<{
+// Exported so the FEATURE_214 offline section→scrollback renderer can reuse the
+// EXACT same React render path (no hand-rewritten styling) via renderToString.
+export const StaticTranscriptItemRenderer: React.FC<{
   section: TranscriptSection;
   theme: Theme;
   animateSpinners?: boolean;
@@ -496,78 +640,67 @@ export const MessageList: React.FC<MessageListProps> = ({
   managedBudgetUsage,
   managedBudgetApprovalRequired,
   lastLiveActivityLabel,
+  liveStatusLines,
   viewportRows,
   viewportWidth,
   scrollOffset = 0,
   animateSpinners = true,
   windowed = false,
+  showFullThinking = false,
+  showDetailedTools = false,
+  showAllContent = false,
+  showLiveProgressRows = true,
+  selectedItemId,
+  expandedItemKeys,
+  onMetricsChange,
+  onVisibleRowsChange,
+  rendererWindow,
+  selectedTextRanges,
+  transcriptModel,
+  visibleRowsOverride,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
   const { stdout } = useStdout();
   const terminalWidth = viewportWidth ?? stdout?.columns ?? 80;
-  const { staticItems, activeItems } = useMemo(
-    () => splitMessageHistorySections(items),
-    [items]
-  );
-  const staticSections = useMemo(
-    () => buildStaticTranscriptSections(staticItems, terminalWidth, maxLines, windowed),
-    [staticItems, terminalWidth, maxLines, windowed]
-  );
 
-  if (items.length === 0 && !isLoading) {
-    return (
-      <Box paddingY={1}>
-        <Text dimColor>No messages yet. Start typing to begin.</Text>
-      </Box>
-    );
-  }
-
-  const transcriptSections = useMemo(
-    () => {
-      const historySections = buildHistoryItemTranscriptSections(
-        windowed ? items : activeItems,
-        terminalWidth,
-        maxLines,
-        windowed
-      );
-      const pendingSection = buildDynamicTranscriptSection("active-pending", {
-        items: [],
-        viewportWidth: terminalWidth,
-        isLoading,
-        maxLines,
-        isThinking,
-        thinkingCharCount,
-        thinkingContent,
-        streamingResponse,
-        currentTool,
-        activeToolCalls,
-        toolInputCharCount,
-        toolInputContent,
-        iterationHistory,
-        currentIteration,
-        isCompacting,
-        managedAgentMode: agentMode,
-        managedPhase,
-        managedHarnessProfile,
-        managedWorkerTitle,
-        managedRound,
-        managedMaxRounds,
-        managedGlobalWorkBudget,
-        managedBudgetUsage,
-        managedBudgetApprovalRequired,
-        lastLiveActivityLabel,
-        showFullThinking: windowed,
-        showDetailedTools: windowed,
-      });
-
-      return pendingSection.rows.length > 0
-        ? [...historySections, pendingSection]
-        : historySections;
-    },
-    [
+  const effectiveTranscriptModel = useMemo(
+    () => transcriptModel ?? buildTranscriptRenderModel({
       items,
-      activeItems,
+      viewportWidth: terminalWidth,
+      isLoading,
+      maxLines,
+      isThinking,
+      thinkingCharCount,
+      thinkingContent,
+      streamingResponse,
+      currentTool,
+      activeToolCalls,
+      toolInputCharCount,
+      toolInputContent,
+      iterationHistory,
+      currentIteration,
+      isCompacting,
+      managedAgentMode: agentMode,
+      managedPhase,
+      managedHarnessProfile,
+      managedWorkerTitle,
+      managedRound,
+      managedMaxRounds,
+      managedGlobalWorkBudget,
+      managedBudgetUsage,
+      managedBudgetApprovalRequired,
+      lastLiveActivityLabel,
+      liveStatusLines,
       windowed,
+      showFullThinking,
+      showDetailedTools,
+      showAllContent,
+      showLiveProgressRows,
+      expandedItemKeys,
+    }),
+    [
+      transcriptModel,
+      items,
       terminalWidth,
       isLoading,
       maxLines,
@@ -592,22 +725,103 @@ export const MessageList: React.FC<MessageListProps> = ({
       managedBudgetUsage,
       managedBudgetApprovalRequired,
       lastLiveActivityLabel,
-    ]
+      liveStatusLines,
+      windowed,
+      showFullThinking,
+      showDetailedTools,
+      showAllContent,
+      showLiveProgressRows,
+      expandedItemKeys,
+    ],
   );
-  const transcriptRows = useMemo(
-    () => flattenTranscriptSections(transcriptSections),
-    [transcriptSections]
+  const staticSections = effectiveTranscriptModel.staticSections;
+  const transcriptRows = effectiveTranscriptModel.rows;
+  const previewRows = effectiveTranscriptModel.previewRows;
+  const allTranscriptRows = useMemo(
+    () => [...transcriptRows, ...previewRows],
+    [previewRows, transcriptRows],
+  );
+  // A prebuilt transcriptModel may supply rows even when items is empty (e.g. banners).
+  const hasRenderableTranscriptContent = allTranscriptRows.length > 0;
+  const showEmptyState = !hasRenderableTranscriptContent && items.length === 0 && !isLoading;
+  const windowedRowSource = useMemo(
+    () => (windowed || rendererWindow || visibleRowsOverride ? allTranscriptRows : transcriptRows),
+    [allTranscriptRows, rendererWindow, transcriptRows, visibleRowsOverride, windowed],
   );
 
   const visibleRows = useMemo(
-    () => (windowed
-      ? getVisibleTranscriptRows(transcriptRows, viewportRows, scrollOffset)
-      : transcriptRows),
-    [transcriptRows, viewportRows, scrollOffset, windowed]
+    () => {
+      if (visibleRowsOverride) {
+        return visibleRowsOverride;
+      }
+      return resolveVisibleTranscriptRows(windowedRowSource, {
+        viewportTop: rendererWindow
+          ? Math.max(0, rendererWindow.viewportTop)
+          : undefined,
+        viewportHeight: rendererWindow
+          ? Math.max(0, rendererWindow.viewportHeight)
+          : undefined,
+        start: undefined,
+        end: undefined,
+        viewportRows,
+        scrollOffset,
+        windowed,
+      });
+    },
+    [
+      rendererWindow,
+      scrollOffset,
+      viewportRows,
+      visibleRowsOverride,
+      windowed,
+      windowedRowSource,
+    ]
   );
+  const renderedRows = useMemo(
+    () => (visibleRowsOverride || windowed || rendererWindow ? visibleRows : allTranscriptRows),
+    [allTranscriptRows, rendererWindow, visibleRows, visibleRowsOverride, windowed],
+  );
+  const allRenderedRows = useMemo(
+    () => allTranscriptRows,
+    [allTranscriptRows],
+  );
+  const effectiveViewportRows = rendererWindow
+    ? Math.max(0, rendererWindow.viewportHeight)
+    : viewportRows;
+
+  useEffect(() => {
+    // FEATURE_214: in the inline prompt (un-materialized model) `allTranscriptRows` is
+    // the dynamic/live rows ONLY — finalized history lives in `staticSections`,
+    // committed to native scrollback via <Static>/the scrollback ledger and scrolled by
+    // the terminal, not the app. So `scrollHeight` here is intentionally the live-frame
+    // height, not the whole document, and the inline path does not use scroll-offset.
+    // The windowed/fullscreen transcript uses a materialized model, so its
+    // `scrollHeight` is the full document (correct for its owned-viewport scrolling).
+    onMetricsChange?.({
+      scrollHeight: allTranscriptRows.length,
+      viewportHeight: rendererWindow
+        ? Math.max(0, rendererWindow.viewportHeight)
+        : (effectiveViewportRows ?? allTranscriptRows.length),
+    });
+  }, [allTranscriptRows.length, effectiveViewportRows, onMetricsChange, rendererWindow]);
+
+  useEffect(() => {
+    onVisibleRowsChange?.({
+      rows: renderedRows,
+      allRows: allRenderedRows,
+    });
+  }, [allRenderedRows, onVisibleRowsChange, renderedRows]);
+
+  if (showEmptyState) {
+    return (
+      <Box paddingY={1}>
+        <Text dimColor>No messages yet. Start typing to begin.</Text>
+      </Box>
+    );
+  }
 
   return (
-    <Box flexDirection="column" paddingY={1}>
+    <Box flexDirection="column">
       {!windowed && staticSections.length > 0 && (
         <Static items={staticSections}>
           {(section) => (
@@ -620,12 +834,14 @@ export const MessageList: React.FC<MessageListProps> = ({
           )}
         </Static>
       )}
-      {visibleRows.map((row) => (
+      {renderedRows.map((row) => (
         <TranscriptRowRenderer
           key={row.key}
           row={row}
           theme={theme}
           animateSpinners={animateSpinners}
+          selectedItem={selectedItemId ? row.key.startsWith(`${selectedItemId}-`) : false}
+          selectionRange={selectedTextRanges?.get(row.key)}
         />
       ))}
     </Box>
@@ -686,3 +902,4 @@ export const SimpleMessageDisplay: React.FC<{
     </Box>
   );
 };
+

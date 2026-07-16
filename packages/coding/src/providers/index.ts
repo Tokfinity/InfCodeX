@@ -1,11 +1,11 @@
 /**
  * KodaX Providers
  *
- * Provider 模块统一导出 - 从 @kodax/ai 重新导出
- * @deprecated 直接从 @kodax/ai 导入
+ * Provider 模块统一导出 - 从 @kodax-ai/llm 重新导出
+ * @deprecated 直接从 @kodax-ai/llm 导入
  */
 
-// Re-export everything from @kodax/ai for backward compatibility
+// Re-export everything from @kodax-ai/llm for backward compatibility
 export {
   KodaXBaseProvider,
   KodaXAnthropicCompatProvider,
@@ -21,13 +21,8 @@ export {
   getProviderModels,
   getProviderList,
   isProviderName,
-  buildReasoningOverrideKey,
-  loadReasoningOverride,
-  saveReasoningOverride,
-  clearReasoningOverride,
-  reasoningCapabilityToOverride,
-  reasoningOverrideToCapability,
   createCustomProvider,
+  validateCustomProviderConfig,
   registerCustomProviders,
   getCustomProvider,
   isCustomProviderName,
@@ -42,5 +37,15 @@ export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
-} from '@kodax/ai';
-export type { ProviderName } from '@kodax/ai';
+  // v0.7.43 SDK model-capability exposure (built-in + custom, no API key).
+  getProviderModelDescriptors,
+  getModelCapabilities,
+  listBuiltinModelCapabilities,
+  getCustomProviderModelDescriptors,
+  getCustomModelCapabilities,
+  listCustomProviderModelCapabilities,
+  resolveProviderModelDescriptors,
+  resolveModelCapabilities,
+  listAllModelCapabilities,
+} from '@kodax-ai/llm';
+export type { ProviderName, KodaXModelCapabilities } from '@kodax-ai/llm';

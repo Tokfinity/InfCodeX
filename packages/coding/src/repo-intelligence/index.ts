@@ -5,11 +5,16 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import type { KodaXToolExecutionContext } from '../types.js';
-import { debugLogRepoIntelligence, safeReadJson } from './internal.js';
+import {
+  debugLogRepoIntelligence,
+  resolveRepoIntelligenceStorageDir,
+  safeReadJson,
+  writeJsonFileAtomic,
+} from './internal.js';
 
 const execFileAsync = promisify(execFile);
 
-const REPO_INTELLIGENCE_DIR = path.join('.agent', 'repo-intelligence');
+const DEFAULT_REPO_INTELLIGENCE_DIR = path.join('.agent', 'repo-intelligence');
 const MANIFEST_FILE = 'manifest.json';
 const OVERVIEW_FILE = 'repo-overview.json';
 const OVERVIEW_INVENTORY_FILE = 'repo-overview-inventory.json';
@@ -327,7 +332,7 @@ async function exists(targetPath: string): Promise<boolean> {
 }
 
 async function ensureStorageDir(workspaceRoot: string): Promise<string> {
-  const storageRoot = path.join(workspaceRoot, REPO_INTELLIGENCE_DIR);
+  const storageRoot = resolveRepoIntelligencePath(workspaceRoot);
   await fs.mkdir(storageRoot, { recursive: true });
   return storageRoot;
 }
@@ -453,7 +458,8 @@ function isTestFile(relativePath: string): boolean {
   return /\.(test|spec)\.[^.]+$/.test(normalized);
 }
 
-function classifyFileCategory(relativePath: string): 'source' | 'docs' | 'tests' | 'config' | 'other' {
+/** Pure path classifier shared by changed-scope and captured review packets. */
+export function classifyFileCategory(relativePath: string): 'source' | 'docs' | 'tests' | 'config' | 'other' {
   const normalized = normalizeRelativePath(relativePath);
   const ext = path.extname(normalized).toLowerCase();
   const base = path.posix.basename(normalized);
@@ -657,7 +663,7 @@ async function readStoredRepoOverview(
   fileName: string,
 ): Promise<RepoOverview | null> {
   return safeReadJson<RepoOverview>(
-    path.join(workspaceRoot, REPO_INTELLIGENCE_DIR, fileName),
+    resolveRepoIntelligencePath(workspaceRoot, fileName),
     isRepoOverviewPayload,
   );
 }
@@ -667,7 +673,7 @@ async function readStoredRepoOverviewInventory(
   fileName: string,
 ): Promise<RepoOverviewInventory | null> {
   return safeReadJson<RepoOverviewInventory>(
-    path.join(workspaceRoot, REPO_INTELLIGENCE_DIR, fileName),
+    resolveRepoIntelligencePath(workspaceRoot, fileName),
     isRepoOverviewInventoryPayload,
   );
 }
@@ -676,7 +682,7 @@ async function readStoredRepoOverviewManifest(
   workspaceRoot: string,
 ): Promise<RepoOverviewManifest | null> {
   return safeReadJson<RepoOverviewManifest>(
-    path.join(workspaceRoot, REPO_INTELLIGENCE_DIR, MANIFEST_FILE),
+    resolveRepoIntelligencePath(workspaceRoot, MANIFEST_FILE),
     isRepoOverviewManifestPayload,
   );
 }
@@ -805,13 +811,13 @@ async function writeRepoOverviewArtifacts(
     dirtyPathsFingerprint: options.dirtyIdentity?.dirtyPathsFingerprint,
     dirtySemanticFingerprint: options.dirtyIdentity?.dirtySemanticFingerprint,
   };
-  await fs.writeFile(path.join(storageRoot, MANIFEST_FILE), `${JSON.stringify(manifestPayload, null, 2)}\n`, 'utf8');
-  await fs.writeFile(path.join(storageRoot, OVERVIEW_FILE), `${JSON.stringify(overview, null, 2)}\n`, 'utf8');
-  await fs.writeFile(path.join(storageRoot, OVERVIEW_INVENTORY_FILE), `${JSON.stringify(inventory, null, 2)}\n`, 'utf8');
+  await writeJsonFileAtomic(path.join(storageRoot, MANIFEST_FILE), manifestPayload);
+  await writeJsonFileAtomic(path.join(storageRoot, OVERVIEW_FILE), overview);
+  await writeJsonFileAtomic(path.join(storageRoot, OVERVIEW_INVENTORY_FILE), inventory);
 
   if (options.writeBaseline === true) {
-    await fs.writeFile(path.join(storageRoot, OVERVIEW_BASELINE_FILE), `${JSON.stringify(overview, null, 2)}\n`, 'utf8');
-    await fs.writeFile(path.join(storageRoot, OVERVIEW_BASELINE_INVENTORY_FILE), `${JSON.stringify(inventory, null, 2)}\n`, 'utf8');
+    await writeJsonFileAtomic(path.join(storageRoot, OVERVIEW_BASELINE_FILE), overview);
+    await writeJsonFileAtomic(path.join(storageRoot, OVERVIEW_BASELINE_INVENTORY_FILE), inventory);
   }
 }
 
@@ -1504,18 +1510,32 @@ export async function analyzeChangedScopeFromSnapshot(
   };
 
   const storageRoot = await ensureStorageDir(overview.workspaceRoot);
-  await fs.writeFile(path.join(storageRoot, CHANGED_SCOPE_FILE), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  await writeJsonFileAtomic(path.join(storageRoot, CHANGED_SCOPE_FILE), report);
   return report;
+}
+
+function describeChangedScope(report: ChangedScopeReport): string {
+  switch (report.scope) {
+    case 'staged':
+      return 'staged (index vs HEAD)';
+    case 'unstaged':
+      return 'unstaged (working tree vs index)';
+    case 'compare':
+      return `compare (${report.baseRef ?? 'HEAD~1'}...HEAD — committed range)`;
+    case 'all':
+    default:
+      return 'all (uncommitted working tree vs HEAD — excludes committed history)';
+  }
 }
 
 export function renderChangedScope(report: ChangedScopeReport): string {
   const lines: string[] = [
     `Changed scope for ${path.basename(report.workspaceRoot)}`,
     `Root: ${report.workspaceRoot}`,
-    `Scope: ${report.scope}${report.baseRef ? ` vs ${report.baseRef}` : ''}`,
+    `Scope: ${describeChangedScope(report)}`,
     `Snapshot: ${report.analyzedAt}`,
     `Changed files: ${report.totalChangedFiles}`,
-    `Changed lines: ${report.changedLineCount} (+${report.addedLineCount} / -${report.deletedLineCount})`,
+    `Changed lines: ${report.changedLineCount} (+${report.addedLineCount} / -${report.deletedLineCount}; line counts cover tracked diffs only, untracked files excluded)`,
     `Categories: source=${report.categories.source} docs=${report.categories.docs} tests=${report.categories.tests} config=${report.categories.config} other=${report.categories.other}`,
   ];
 
@@ -1552,4 +1572,15 @@ export function renderChangedScope(report: ChangedScopeReport): string {
   }
 
   return lines.join('\n');
+}
+function getRepoIntelligenceDir(): string {
+  return resolveRepoIntelligenceStorageDir(DEFAULT_REPO_INTELLIGENCE_DIR);
+}
+
+function resolveRepoIntelligencePath(workspaceRoot: string, ...segments: string[]): string {
+  const configuredDir = getRepoIntelligenceDir();
+  const storageRoot = path.isAbsolute(configuredDir)
+    ? configuredDir
+    : path.join(workspaceRoot, configuredDir);
+  return path.join(storageRoot, ...segments);
 }

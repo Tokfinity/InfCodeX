@@ -1,0 +1,203 @@
+import { randomUUID } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
+
+import type { KodaXRuntime } from '../sdk-runtime.js';
+import type { RuntimeDaemonClientTransport } from './client.js';
+import {
+  resolveRuntimeDaemonOwnership,
+  runtimeDaemonEndpointFromState,
+  type RuntimeDaemonHealthCheckOptions,
+} from './lifecycle.js';
+import { startRuntimeDaemonHost, type RuntimeDaemonHost } from './host.js';
+import {
+  assertRuntimeDaemonOwnerAllowed,
+  releaseRuntimeDaemonLock,
+  resolveRuntimeDaemonPaths,
+  type RuntimeDaemonPaths,
+} from './state.js';
+import {
+  createRuntimeDaemonSocketClientTransport,
+  defaultRuntimeDaemonEndpoint,
+  type RuntimeDaemonEndpoint,
+} from './transport.js';
+
+export interface RuntimeDaemonLeaseOptions {
+  readonly homeDir?: string;
+  readonly profile?: string;
+  readonly endpoint?: RuntimeDaemonEndpoint;
+  readonly connectTimeoutMs?: number;
+  readonly startupTimeoutMs?: number;
+  readonly pollIntervalMs?: number;
+  readonly healthCheck?: RuntimeDaemonHealthCheckOptions;
+  createRuntime(runtimeId: string): Promise<KodaXRuntime>;
+}
+
+export interface RuntimeDaemonLease {
+  readonly transport: RuntimeDaemonClientTransport;
+  readonly endpoint: RuntimeDaemonEndpoint;
+  readonly paths: RuntimeDaemonPaths;
+  readonly ownsHost: boolean;
+  readonly hostClosed?: Promise<void>;
+  close(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+export async function acquireRuntimeDaemonLease(
+  options: RuntimeDaemonLeaseOptions,
+): Promise<RuntimeDaemonLease> {
+  const profile = options.profile ?? 'default';
+  const homeDir = resolveRuntimeDaemonHomeDir(options.homeDir);
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  assertRuntimeDaemonOwnerAllowed(paths);
+  const endpoint = options.endpoint ?? defaultRuntimeDaemonEndpoint(profile, homeDir);
+  const owner = {
+    runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    kind: 'daemon' as const,
+  };
+
+  const decision = await resolveRuntimeDaemonOwnership(paths, owner, options.healthCheck);
+  if (decision.kind === 'attach') {
+    const attachedEndpoint = runtimeDaemonEndpointFromState(decision.state);
+    return createAttachedLease(paths, attachedEndpoint, options.connectTimeoutMs);
+  }
+
+  if (decision.kind === 'wait') {
+    return waitForDaemonLease(paths, endpoint, owner, {
+      ...options,
+      profile,
+    });
+  }
+
+  if (decision.kind === 'unhealthy') {
+    throw new Error(`Runtime daemon is ${decision.health}; refusing to take ownership.`);
+  }
+
+  return createClaimedDaemonLease(paths, endpoint, owner, decision.lock, options);
+}
+
+function resolveRuntimeDaemonHomeDir(homeDir: string | undefined): string {
+  return path.resolve(homeDir ?? os.homedir());
+}
+
+async function waitForDaemonLease(
+  paths: RuntimeDaemonPaths,
+  endpoint: RuntimeDaemonEndpoint,
+  owner: { readonly runtimeId: string; readonly pid: number; readonly createdAt: string },
+  options: RuntimeDaemonLeaseOptions & { readonly profile: string },
+): Promise<RuntimeDaemonLease> {
+  const deadline = Date.now() + (options.startupTimeoutMs ?? 5_000);
+  while (Date.now() <= deadline) {
+    const decision = await resolveRuntimeDaemonOwnership(paths, owner, options.healthCheck);
+    if (decision.kind === 'attach') {
+      return createAttachedLease(
+        paths,
+        runtimeDaemonEndpointFromState(decision.state),
+        options.connectTimeoutMs,
+      );
+    }
+    if (decision.kind === 'claim') {
+      return createClaimedDaemonLease(paths, endpoint, owner, decision.lock, options);
+    }
+    if (decision.kind === 'unhealthy') {
+      throw new Error(`Runtime daemon is ${decision.health}; refusing to take ownership.`);
+    }
+    await delay(options.pollIntervalMs ?? 100);
+  }
+  throw new Error(`Timed out waiting for runtime daemon profile "${options.profile}" to become ready.`);
+}
+
+async function createClaimedDaemonLease(
+  paths: RuntimeDaemonPaths,
+  endpoint: RuntimeDaemonEndpoint,
+  owner: { readonly runtimeId: string },
+  lock: Parameters<typeof startRuntimeDaemonHost>[0]['lock'],
+  options: RuntimeDaemonLeaseOptions,
+): Promise<RuntimeDaemonLease> {
+  let runtime: KodaXRuntime | undefined;
+  let hostStartAttempted = false;
+  try {
+    runtime = await options.createRuntime(owner.runtimeId);
+    if (runtime.identity.runtimeId !== owner.runtimeId) {
+      throw new Error('Runtime factory returned an identity that does not match its owner fence.');
+    }
+    hostStartAttempted = true;
+    const host = await startRuntimeDaemonHost({ runtime, paths, endpoint, lock });
+    try {
+      const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+        connectTimeoutMs: options.connectTimeoutMs,
+      });
+      return createOwnedLease(paths, endpoint, transport, host);
+    } catch (error: unknown) {
+      await host.close();
+      throw error;
+    }
+  } catch (error: unknown) {
+    if (!hostStartAttempted) releaseRuntimeDaemonLock(lock);
+    await runtime?.close();
+    throw error;
+  }
+}
+
+async function createAttachedLease(
+  paths: RuntimeDaemonPaths,
+  endpoint: RuntimeDaemonEndpoint,
+  connectTimeoutMs: number | undefined,
+): Promise<RuntimeDaemonLease> {
+  const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
+    connectTimeoutMs,
+  });
+  return {
+    transport,
+    endpoint,
+    paths,
+    ownsHost: false,
+    async close() {
+      await transport.close?.();
+    },
+    async shutdown() {
+      try {
+        await transport.request('runtime.shutdown');
+      } finally {
+        await transport.close?.();
+      }
+    },
+  };
+}
+
+function createOwnedLease(
+  paths: RuntimeDaemonPaths,
+  endpoint: RuntimeDaemonEndpoint,
+  transport: RuntimeDaemonClientTransport,
+  host: RuntimeDaemonHost,
+): RuntimeDaemonLease {
+  host.unref();
+  let transportClosed = false;
+  let hostClosed = false;
+  return {
+    transport,
+    endpoint,
+    paths,
+    ownsHost: true,
+    hostClosed: host.closed,
+    async close() {
+      if (transportClosed) return;
+      transportClosed = true;
+      await transport.close?.();
+    },
+    async shutdown() {
+      if (hostClosed) return;
+      hostClosed = true;
+      await host.close();
+    },
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}

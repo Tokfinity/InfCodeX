@@ -2,14 +2,25 @@
  * Tests for Argument Completer - 参数补全器测试
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { getAgentConfigPath, setAgentConfigHome, type WorkflowAgentBackend, type WorkflowModule } from '@kodax-ai/agent';
+import { getDefaultWorkflowRunManager } from '@kodax-ai/coding';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ArgumentCompleter } from '../completers/argument-completer.js';
+import { deriveProjectKeyFromRoot } from '../project-key.js';
 
 describe('ArgumentCompleter', () => {
   let completer: ArgumentCompleter;
 
   beforeEach(() => {
     completer = new ArgumentCompleter();
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
   });
 
   describe('canComplete', () => {
@@ -45,6 +56,18 @@ describe('ArgumentCompleter', () => {
       expect(completer.canComplete('/delete ', 8)).toBe(true);
     });
 
+    it('should trigger on /status command', () => {
+      expect(completer.canComplete('/status ', 8)).toBe(true);
+      expect(completer.canComplete('/ctx ', 5)).toBe(true);
+    });
+
+    it('should trigger on /repo-intel command and legacy alias', () => {
+      expect(completer.canComplete('/repo-intel ', 12)).toBe(true);
+      expect(completer.canComplete('/repo-intel mode ', 17)).toBe(true);
+      expect(completer.canComplete('/repointel ', 11)).toBe(true);
+      expect(completer.canComplete('/ri ', 4)).toBe(true);
+    });
+
     it('should trigger on aliased commands', () => {
       expect(completer.canComplete('/t ', 3)).toBe(true); // thinking alias
     });
@@ -63,7 +86,8 @@ describe('ArgumentCompleter', () => {
         // Check for known mode arguments (default mode removed)
         expect(completions.some(c => c.display === 'plan')).toBe(true);
         expect(completions.some(c => c.display === 'accept-edits')).toBe(true);
-        expect(completions.some(c => c.display === 'auto-in-project')).toBe(true);
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'auto-in-project')).toBe(false);
       });
 
       it('should filter by substring (case-insensitive)', async () => {
@@ -187,7 +211,9 @@ describe('ArgumentCompleter', () => {
         const modelNames = completions.map(c => c.display.replace('minimax-coding/', ''));
         expect(modelNames).toContain('MiniMax-M2.7');
         expect(modelNames).toContain('MiniMax-M2.7-highspeed');
-        expect(modelNames).toContain('MiniMax-M2.5');
+        // 2026-06: M2.5 family retired upstream; M3 Frontier Coding
+        // promoted into the completer surface in its place.
+        expect(modelNames).toContain('MiniMax-M3');
       });
 
       it('should expose the default CLI bridge model for codex-cli two-stage completion', async () => {
@@ -220,8 +246,11 @@ describe('ArgumentCompleter', () => {
           expect(c.display.startsWith('anthropic/')).toBe(true);
           return c.display.toLowerCase().includes('cl');
         })).toBe(true);
-        // Should match claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5
-        expect(completions.length).toBe(3);
+        expect(completions.map(c => c.display)).toEqual(expect.arrayContaining([
+          'anthropic/claude-sonnet-4-6',
+          'anthropic/claude-opus-4-6',
+          'anthropic/claude-haiku-4-5',
+        ]));
       });
 
       it('should filter models by partial matching haiku', async () => {
@@ -246,14 +275,310 @@ describe('ArgumentCompleter', () => {
       });
     });
 
+    describe('/status command', () => {
+      it('should return workspace/runtime detail arguments', async () => {
+        const completions = await completer.getCompletions('/status ', 8);
+
+        expect(completions.map(c => c.display)).toEqual(
+          expect.arrayContaining(['workspace', 'runtime', 'worktree'])
+        );
+      });
+    });
+
     describe('/plan command', () => {
-      it('should return plan arguments', async () => {
+      it('should not return arguments for a non-existent command', async () => {
         const completions = await completer.getCompletions('/plan ', 6);
 
-        expect(completions.length).toBeGreaterThan(0);
-        expect(completions.some(c => c.display === 'on')).toBe(true);
+        expect(completions).toEqual([]);
+      });
+    });
+
+    describe('built-in command arguments', () => {
+      it('returns simple subcommand arguments for commands with declared usage', async () => {
+        const cases = [
+          ['/mcp ', ['status', 'refresh']],
+          ['/fallback ', ['status', 'off']],
+          ['/auto-engine ', ['llm', 'rules']],
+          ['/agent-mode ', ['ama', 'amaw', 'ama-workflow', 'sa', 'toggle']],
+          ['/verifier-log ', ['on', 'off']],
+          ['/stall-log ', ['on', 'off']],
+          ['/memory ', ['list', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],
+          ['/goal ', ['status', 'pause', 'resume', 'clear', 'help']],
+          ['/paste ', ['show', 'list']],
+          ['/review ', ['--lean', '--workflow', 'base', 'sha', 'help']],
+          ['/agents ', ['init', 'lean', 'help']],
+        ] as const;
+
+        for (const [input, expected] of cases) {
+          const completions = await completer.getCompletions(input, input.length);
+          expect(completions.map(c => c.display)).toEqual(expect.arrayContaining([...expected]));
+        }
+      });
+
+      it('shares provider/model completion with /provider', async () => {
+        const providerCompletions = await completer.getCompletions('/provider ', 10);
+        expect(providerCompletions.length).toBeGreaterThan(0);
+        expect(providerCompletions.every(c => !c.display.includes('/'))).toBe(true);
+
+        const modelCompletions = await completer.getCompletions('/provider anthropic/', 20);
+        expect(modelCompletions.some(c => c.display === 'anthropic/claude-sonnet-4-6')).toBe(true);
+      });
+    });
+
+    describe('/repo-intel command', () => {
+      it('should return top-level subcommands', async () => {
+        const completions = await completer.getCompletions('/repo-intel ', 12);
+        const displays = completions.map(c => c.display);
+
+        expect(displays).toContain('status');
+        expect(displays).toContain('mode');
+        expect(displays).toContain('trace');
+        expect(displays).not.toContain('warm');
+        expect(displays).not.toContain('endpoint');
+        expect(displays).not.toContain('bin');
+      });
+
+      it('should keep legacy /repointel and /ri completion narrow', async () => {
+        const repointelCompletions = await completer.getCompletions('/repointel ', 11);
+        const completions = await completer.getCompletions('/ri ', 4);
+
+        expect(repointelCompletions.map(c => c.display)).toEqual(['status']);
+        expect(completions.some(c => c.display === 'status')).toBe(true);
+        expect(completions.some(c => c.display === 'mode')).toBe(false);
+      });
+
+      it('should return public runtime modes after /repo-intel mode', async () => {
+        const completions = await completer.getCompletions('/repo-intel mode ', 17);
+
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'full')).toBe(true);
+        expect(completions.some(c => c.display === 'light')).toBe(true);
         expect(completions.some(c => c.display === 'off')).toBe(true);
-        expect(completions.some(c => c.display === 'once')).toBe(true);
+        expect(completions.some(c => c.display === 'premium-native')).toBe(false);
+      });
+
+      it('should filter runtime modes by partial input', async () => {
+        const completions = await completer.getCompletions('/repo-intel mode li', 19);
+
+        expect(completions.map(c => c.display)).toEqual(['light']);
+      });
+
+      it('should return trace toggles after /repo-intel trace', async () => {
+        const completions = await completer.getCompletions('/repo-intel trace ', 18);
+
+        expect(completions.map(c => c.display)).toContain('on');
+        expect(completions.map(c => c.display)).toContain('off');
+        expect(completions.map(c => c.display)).toContain('toggle');
+      });
+
+      it('should stop suggesting after a complete second-level repo-intel argument', async () => {
+        const completions = await completer.getCompletions('/repo-intel mode full ', 22);
+        expect(completions).toEqual([]);
+      });
+    });
+
+    describe('/workflow command', () => {
+      it('should return workflow subcommands and built-in workflows', async () => {
+        const completions = await completer.getCompletions('/workflow ', 10);
+
+        expect(completions.some(c => c.display === 'runs')).toBe(true);
+        expect(completions.some(c => c.display === 'stop')).toBe(true);
+        expect(completions.some(c => c.display === 'delete')).toBe(true);
+        expect(completions.some(c => c.display === 'prune')).toBe(true);
+        expect(completions.some(c => c.display === 'rename')).toBe(true);
+        expect(completions.some(c => c.display === 'revise')).toBe(true);
+        expect(completions.some(c => c.display === 'parallel-investigation')).toBe(true);
+      });
+
+      it('should include rerun and preserve declared subcommand order at empty prefix', async () => {
+        const completions = await completer.getCompletions('/workflow ', 10);
+        const names = completions.map((c) => c.display);
+
+        // `rerun` is the entry the autocomplete cap + length-sort used to drop
+        // out of reach (it sorted to position 9, past the truncation limit).
+        expect(names).toContain('rerun');
+
+        // Empty prefix must preserve the declared subcommand order, not collapse
+        // to a length sort. Under a length sort 'runs'(4) would precede
+        // 'create'(6); the declared order is the reverse — assert it holds so the
+        // regression that buried `rerun` cannot silently come back.
+        expect(names.indexOf('create')).toBeLessThan(names.indexOf('runs'));
+        expect(names.indexOf('runs')).toBeLessThan(names.indexOf('rerun'));
+        expect(names.indexOf('rerun')).toBeLessThan(names.indexOf('save'));
+      });
+
+      it('should return workflow list and prune options', async () => {
+        const runsOptions = await completer.getCompletions('/workflow runs ', 15);
+        expect(runsOptions.some(c => c.display === '--all')).toBe(true);
+        expect(runsOptions.some(c => c.display === '--limit')).toBe(true);
+
+        const pruneOptions = await completer.getCompletions('/workflow prune ', 16);
+        expect(pruneOptions.some(c => c.display === '--dry-run')).toBe(true);
+        expect(pruneOptions.some(c => c.display === '--keep')).toBe(true);
+        expect(pruneOptions.some(c => c.display === '--older-than')).toBe(true);
+      });
+
+      it('should return persisted workflow run ids for history commands', async () => {
+        const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-persisted-complete-'));
+        const previousCwd = process.cwd();
+        process.chdir(cwd);
+        setAgentConfigHome(join(cwd, '.kodax-home'));
+        const projectKey = deriveProjectKeyFromRoot(cwd).key;
+        const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+        const runDir = join(baseDir, 'run-persisted-complete');
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, 'run.json'),
+          JSON.stringify({
+            runId: '../../outside',
+            workflow: 'persisted-audit',
+            status: 'failed',
+            totalSpawned: 1,
+            endedAt: Date.now(),
+          }),
+          'utf8',
+        );
+
+        try {
+          const input = '/workflow delete ';
+          const completions = await completer.getCompletions(input, input.length);
+
+          expect(completions.some(c => c.display === 'run-persisted-complete')).toBe(true);
+          expect(completions.some(c => c.display === '../../outside')).toBe(false);
+        } finally {
+          process.chdir(previousCwd);
+          rmSync(baseDir, { recursive: true, force: true });
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      });
+
+      it('should return saved workflow names for top-level and rerun completions', async () => {
+        const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-saved-complete-'));
+        const previousCwd = process.cwd();
+        process.chdir(cwd);
+        setAgentConfigHome(join(cwd, '.kodax-home'));
+        const workflowsDir = join(cwd, '.kodax', 'workflows');
+        mkdirSync(workflowsDir, { recursive: true });
+        writeFileSync(join(workflowsDir, 'saved-audit.workflow.json'), '{}', 'utf8');
+
+        const projectKey = deriveProjectKeyFromRoot(cwd).key;
+        const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+        const runDir = join(baseDir, 'run-persisted-complete');
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, 'run.json'),
+          JSON.stringify({
+            runId: 'run-persisted-complete',
+            workflow: 'persisted-audit',
+            status: 'completed',
+            totalSpawned: 0,
+            endedAt: Date.now(),
+          }),
+          'utf8',
+        );
+        writeFileSync(
+          join(runDir, 'workflow-metadata.json'),
+          JSON.stringify({ displayName: 'AliasAudit' }),
+          'utf8',
+        );
+        const spacedRunDir = join(baseDir, 'run-spaced-alias');
+        mkdirSync(spacedRunDir, { recursive: true });
+        writeFileSync(
+          join(spacedRunDir, 'run.json'),
+          JSON.stringify({
+            runId: 'run-spaced-alias',
+            workflow: 'persisted-audit',
+            status: 'completed',
+            totalSpawned: 0,
+            endedAt: Date.now(),
+            displayName: 'Alias Audit',
+          }),
+          'utf8',
+        );
+
+        try {
+          const topLevel = await completer.getCompletions('/workflow ', 10);
+          expect(topLevel.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const rerun = await completer.getCompletions('/workflow rerun ', 16);
+          expect(rerun.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          const saved = rerun.find((c) => c.display === 'saved-audit');
+          expect(saved?.description).toContain('saved workflow');
+
+          const renameInput = '/workflow rename ';
+          const rename = await completer.getCompletions(renameInput, renameInput.length);
+          expect(rename.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(rename.some((c) => c.display === 'AliasAudit')).toBe(true);
+          expect(rename.some((c) => c.display === 'Alias Audit')).toBe(false);
+          expect(rename.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const deleteInput = '/workflow delete ';
+          const deleteCompletions = await completer.getCompletions(deleteInput, deleteInput.length);
+          expect(deleteCompletions.some((c) => c.display === '--saved')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === '--run')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(deleteCompletions.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const deleteSavedInput = '/workflow delete --saved ';
+          const deleteSavedCompletions = await completer.getCompletions(deleteSavedInput, deleteSavedInput.length);
+          expect(deleteSavedCompletions.some((c) => c.display === 'saved-audit')).toBe(true);
+          expect(deleteSavedCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(false);
+
+          const deleteRunInput = '/workflow delete --run ';
+          const deleteRunCompletions = await completer.getCompletions(deleteRunInput, deleteRunInput.length);
+          expect(deleteRunCompletions.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(deleteRunCompletions.some((c) => c.display === 'saved-audit')).toBe(false);
+
+          const reviseInput = '/workflow revise ';
+          const revise = await completer.getCompletions(reviseInput, reviseInput.length);
+          expect(revise.some((c) => c.display === '--replace')).toBe(true);
+          expect(revise.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          expect(revise.some((c) => c.display === 'AliasAudit')).toBe(true);
+          expect(revise.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const replaceInput = '/workflow revise --replace ';
+          const replace = await completer.getCompletions(replaceInput, replaceInput.length);
+          expect(replace.some((c) => c.display === 'saved-audit')).toBe(true);
+          expect(replace.some((c) => c.display === 'run-persisted-complete')).toBe(false);
+        } finally {
+          process.chdir(previousCwd);
+          rmSync(baseDir, { recursive: true, force: true });
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      });
+
+      it('should return active run ids after workflow control subcommands', async () => {
+        const runDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-complete-'));
+        const manager = getDefaultWorkflowRunManager();
+        let finishRun = (): void => undefined;
+        const module: WorkflowModule = {
+          meta: {
+            name: 'autocomplete-hold',
+            description: 'Hold open for autocomplete tests',
+            phases: ['hold'],
+            readOnly: true,
+          },
+          run: async () => new Promise<void>((resolve) => {
+            finishRun = resolve;
+          }),
+        };
+        const run = manager.start({
+          module,
+          args: {},
+          runId: 'run-autocomplete-live',
+          runDir,
+          backend: {} as WorkflowAgentBackend,
+        });
+
+        try {
+          const completions = await completer.getCompletions('/workflow stop ', 15);
+          expect(completions.some(c => c.display === 'run-autocomplete-live')).toBe(true);
+        } finally {
+          manager.stop('run-autocomplete-live');
+          finishRun();
+          await run.done.catch(() => undefined);
+          rmSync(runDir, { recursive: true, force: true });
+        }
       });
     });
 

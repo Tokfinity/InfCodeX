@@ -1,212 +1,158 @@
-# @kodax/repl
+# @kodax-ai/repl
 
-KodaX REPL - 完整的交互式终端体验。
+KodaX 的交互式终端层，基于 Ink/React，同时保留 readline 传统 REPL。源码开发时可从 `@kodax-ai/repl` 引入；npm SDK 用户通常从 `@kodax-ai/kodax/repl` 或更窄的 `@kodax-ai/kodax/session` 引入。
 
 ## 概述
 
-`@kodax/repl` 是 KodaX 的交互式终端层，提供：
-- 基于 Ink/React 的 UI 组件
-- 权限控制
-- 命令系统
-- 主题系统
+`packages/repl` 负责终端体验和本地用户配置，不承载 coding agent 核心逻辑。主要能力包括：
 
-## 安装
+- Ink TUI 入口：`runInkInteractiveMode`
+- 传统 readline REPL：`runInteractiveMode`
+- Slash command parsing / execution
+- Provider、custom provider、MCP server 配置读写
+- Permission mode helpers and path/tool allow logic
+- File-backed session storage and public session-management SDK
+- Terminal host detection and renderer policy
+
+## 安装 / 导入
 
 ```bash
-npm install @kodax/repl
+npm install @kodax-ai/kodax
 ```
 
-## 使用示例
+```typescript
+import { runInkInteractiveMode, loadConfig } from '@kodax-ai/kodax/repl';
+import { listSessions } from '@kodax-ai/kodax/session';
+```
 
-### 启动 REPL
+仓库内部开发可直接使用 workspace 包名：
 
 ```typescript
-import { runREPL, REPLOptions } from '@kodax/repl';
+import { runInkInteractiveMode } from '@kodax-ai/repl';
+```
 
-const options: REPLOptions = {
+## 启动 Ink REPL
+
+```typescript
+import { runInkInteractiveMode, type InkREPLOptions } from '@kodax-ai/kodax/repl';
+
+const options: InkREPLOptions = {
   provider: 'zhipu-coding',
-  thinking: true,
+  reasoningMode: 'auto',
   session: {
     resume: true,
   },
 };
 
-await runREPL(options);
+await runInkInteractiveMode(options);
 ```
 
-### 自定义主题
+## 传统 REPL
 
 ```typescript
-import { setTheme, getTheme, Theme } from '@kodax/repl';
+import { runInteractiveMode, type RepLOptions } from '@kodax-ai/kodax/repl';
 
-// 使用内置主题
-setTheme('warp');
-setTheme('dark');
+const options: RepLOptions = {
+  provider: 'zhipu-coding',
+  reasoningMode: 'off',
+};
 
-// 获取当前主题
-const current = getTheme();
-console.log(current.name);
+await runInteractiveMode(options);
 ```
 
-### 权限控制
+## 配置管理
 
 ```typescript
-import { PermissionController, PermissionMode } from '@kodax/repl';
+import {
+  loadConfig,
+  listCustomProviders,
+  upsertCustomProvider,
+  listMcpServers,
+  upsertMcpServer,
+} from '@kodax-ai/kodax/repl';
 
-const controller = new PermissionController();
+const config = loadConfig();
+console.log(config.provider);
 
-// 获取当前模式
-const mode = controller.getMode();
-
-// 切换模式
-controller.setMode('accept-edits');
-
-// 检查工具是否需要确认
-const needsConfirm = controller.needsConfirmation('write', { path: '/test.txt' });
-```
-
-## UI 组件
-
-`@kodax/repl` 提供了多个可复用的 Ink 组件：
-
-### MessageList
-
-显示对话消息列表：
-
-```tsx
-import { MessageList } from '@kodax/repl';
-
-<MessageList
-  messages={messages}
-  isLoading={isLoading}
-  theme={theme}
-/>
-```
-
-### TextInput
-
-多行文本输入组件：
-
-```tsx
-import { TextInput } from '@kodax/repl';
-
-<TextInput
-  value={value}
-  onChange={setValue}
-  onSubmit={handleSubmit}
-  placeholder="输入消息..."
-  multiline={true}
-/>
-```
-
-### StatusBar
-
-状态栏组件：
-
-```tsx
-import { StatusBar } from '@kodax/repl';
-
-<StatusBar
-  provider="zhipu-coding"
-  sessionId="20260304_001"
-  mode="default"
-  thinking={true}
-/>
-```
-
-### LoadingIndicator
-
-加载指示器：
-
-```tsx
-import { LoadingIndicator } from '@kodax/repl';
-
-<LoadingIndicator
-  type="thinking"
-  message="思考中..."
-/>
-```
-
-## 命令系统
-
-REPL 支持内置命令和自定义命令：
-
-```typescript
-import { CommandRegistry, registerCommand } from '@kodax/repl';
-
-// 注册自定义命令
-registerCommand('my-cmd', {
-  description: 'My custom command',
-  handler: async (args, context) => {
-    console.log('Executed my-cmd with args:', args);
-    return { success: true };
-  },
+upsertCustomProvider({
+  name: 'my-openai-compatible',
+  protocol: 'openai',
+  baseUrl: 'https://example.com/v1',
+  apiKeyEnv: 'MY_LLM_API_KEY',
+  model: 'my-model',
 });
 
-// 获取所有命令
-const commands = CommandRegistry.getAll();
+console.log(listCustomProviders().length);
+console.log(Object.keys(listMcpServers()).length);
+upsertMcpServer('local-tools', { command: 'node', args: ['server.js'] });
 ```
 
-### 内置命令
-
-| Command | Description |
-|---------|-------------|
-| `/help` | 显示帮助 |
-| `/mode [mode]` | 切换权限模式 |
-| `/theme [name]` | 切换主题 |
-| `/clear` | 清空屏幕 |
-| `/session [id]` | 会话管理 |
-| `/exit` | 退出 REPL |
-
-## API 导出
+## 权限与 Session SDK
 
 ```typescript
-// REPL 入口
-export { runREPL, REPLOptions };
+import {
+  computeConfirmTools,
+  isPermissionMode,
+  listSessions,
+  forkSession,
+  watchSessions,
+} from '@kodax-ai/kodax/repl';
 
-// UI 组件
-export {
-  MessageList,
-  TextInput,
-  StatusBar,
-  LoadingIndicator,
-  InputPrompt,
-  ToolGroup,
-  SuggestionsDisplay,
-};
+if (!isPermissionMode('default')) {
+  throw new Error('unexpected permission mode');
+}
 
-// 主题
-export { setTheme, getTheme, themes, Theme };
+const confirmTools = computeConfirmTools('default');
+console.log(confirmTools);
 
-// 权限
-export { PermissionController, PermissionMode };
+const firstPage = await listSessions({
+  limit: 20,
+  scope: 'user',
+  surface: 'repl',
+});
+const first = firstPage[0];
+const nextPage = firstPage.at(-1)?.cursor
+  ? await listSessions({
+      limit: 20,
+      scope: 'user',
+      surface: 'repl',
+      cursor: firstPage.at(-1)?.cursor,
+    })
+  : [];
 
-// 命令
-export { CommandRegistry, registerCommand, Command };
+if (first) {
+  await forkSession(first.id, { title: `${first.title} copy` });
+}
 
-// Hooks
-export { useInputHistory, useKeypress, useTextBuffer };
+const watcher = watchSessions((event) => {
+  console.log(event.kind, event.sessionId);
+});
 
-// Contexts
-export { StreamingContext, KeypressContext, UIStateContext };
-
-// 类型
-export type {
-  REPLOptions,
-  REPLContext,
-  ThemeConfig,
-  MessageBlock,
-};
+watcher.close();
 ```
 
-## 依赖
+Session-only consumers can import the same session APIs from `@kodax-ai/kodax/session` to avoid the full REPL surface.
 
-- `@kodax/coding` - Coding Agent
-- `@kodax/skills` - Skills 系统
-- `ink` - React 终端 UI
-- `react` - React
-- `chalk` - 终端颜色
+## 常用公开能力
+
+- Entrypoints: `runInkInteractiveMode`, `runInteractiveMode`, `processSpecialSyntax`
+- Commands: `InteractiveContext`, `parseCommand`, `executeCommand`, `BUILTIN_COMMANDS`
+- Config: `loadConfig`, `prepareRuntimeConfig`, `saveConfig`, custom-provider CRUD, MCP-server CRUD
+- Sessions: `FileSessionStorage`, `listSessions`, `loadSession`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
+- Permissions: `computeConfirmTools`, `isPermissionMode`, `isToolCallAllowed`, `getPlanModeBlockReason`
+- Headless events: JSON/CLI event output includes `sidecar.message` for Sidecar Verifier `revise` / `blocked` messages
+- UI exports: `App`, `SimpleApp`, hooks, contexts, components, terminal-host utilities
+
+## 构建与测试
+
+```bash
+npm run build -w @kodax-ai/repl
+npm test -- packages/repl/src
+```
 
 ## License
 
-MIT
+[KodaX-AI Fair Core License (KAI-FCL) 1.0](LICENSE). KodaX 0.7.70 and later
+are source-available / fair-core, not OSI open source. Commercial or managed
+use requires KodaX-AI authorization. Earlier released Apache-2.0 copies keep
+their existing license.

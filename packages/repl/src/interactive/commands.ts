@@ -3,14 +3,23 @@
  */
 
 import type * as readline from 'readline';
+import * as fsSync from 'fs';
+import path from 'path';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import {
+  createExtensionRuntime,
+  dedupeExtensionPathsByEntrypoint,
+  discoverDefaultExtensions,
+  excludeExtensionPathsByEntrypoint,
   estimateTokens,
   type ExtensionRuntimeDiagnostics,
   type KodaXAgentMode,
+  type KodaXRepoIntelligenceMode,
+  type RepoIntelligenceRuntimeInspection,
   KODAX_REASONING_MODE_SEQUENCE,
   getActiveExtensionRuntime,
+  inspectRepoIntelligenceRuntime,
   isKnownProvider,
   getAvailableProviderNames,
   resolveProvider,
@@ -18,8 +27,12 @@ import {
   type ExtensionCommandResult,
   type KodaXReasoningMode,
   KodaXOptions,
-} from '@kodax/coding';
-import type { AgentsFile } from '@kodax/coding';
+  normalizeReasoningEffortValue,
+  CODING_SUMMARY_PROMPT,
+  CODING_UPDATE_SUMMARY_PROMPT,
+  resolveKodaXManual,
+} from '@kodax-ai/coding';
+import type { AgentsFile } from '@kodax-ai/coding';
 import {
   PermissionMode,
   PERMISSION_MODES,
@@ -29,6 +42,8 @@ import {
   describeProviderCapabilitySummary,
   formatProviderCapabilityDetailLines,
   formatProviderSourceKind,
+  formatReasoningEffortStatusLabel,
+  getProviderReasoningEffortOptions,
   describeReasoningCapabilityControl,
   describeReasoningExecution,
   formatReasoningCapabilityShort,
@@ -40,13 +55,20 @@ import {
   getProviderAvailableModels,
   getProviderList,
   loadConfig,
+  resolvePermissionModeEffort,
   saveConfig,
 } from '../common/utils.js';
+import { probeProviderReasoningEfforts } from '../common/capability-probe.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
-import { runWithPlanMode, listPlans, resumePlan, clearCompletedPlans } from '../common/plan-mode.js';
-import { handleProjectCommand, printProjectHelp } from './project-commands.js';
-import { compact } from '@kodax/agent';
-import type { CompactionConfig } from '@kodax/agent';
+import { nextAgentMode } from '../common/agent-mode.js';
+import {
+  clearCapabilityCache,
+  compact,
+  emitKodaXDiagnostic,
+  getAgentConfigHome,
+  getCachedRejectedEfforts,
+} from '@kodax-ai/agent';
+import type { CompactionConfig, KodaXDiagnosticLevel } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
@@ -54,22 +76,43 @@ import {
   expandSkillForLLM,
   type SkillMetadata,
   type SkillContext,
-} from '@kodax/skills';
+} from '@kodax-ai/agent';
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
+import { learnCommand } from '../commands/learn-command.js';
+import { memoryCommand } from '../commands/memory-command.js';
+import { goalCommand } from '../commands/goal-command.js';
+import { workflowCommand } from '../commands/workflow-command.js';
 import { newCommand } from '../commands/new-command.js';
+import { recoverCommand } from '../commands/recover-command.js';
+import { reviewCommand } from '../commands/review-command.js';
+import { agentsCommand } from '../commands/agents-command.js';
+import {
+  printLearningPendingForFilter,
+  resolveLearningCommandCwd,
+} from '../commands/learning-inbox.js';
+import { getActivePasteStore } from '../ui/utils/paste-store.js';
+import { retrievePastedText } from '../ui/utils/paste-cache.js';
 import {
   toCommandDefinition,
   type Command as RegisteredCommand,
   type CommandCallbacks,
   type CommandHandler as RegisteredCommandHandler,
   type CommandInvocationRequest,
+  type CommandWorkflowInvocationRequest,
   type CurrentConfig,
+  type RuntimeSurfaceStatus,
 } from '../commands/types.js';
 import { registerAllCommands } from '../commands/index.js';
+import { formatWorkspaceTruth } from './workspace-runtime.js';
 
 // Re-export types needed by downstream modules.
-export type { CommandCallbacks, CurrentConfig } from '../commands/types.js';
+export type {
+  CommandCallbacks,
+  CurrentConfig,
+  RuntimeSurfaceMode,
+  RuntimeSurfaceStatus,
+} from '../commands/types.js';
 
 // Builtin commands use the shared command definition so registry metadata stays in one model.
 export type CommandHandler = RegisteredCommandHandler;
@@ -84,23 +127,148 @@ function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory:
   };
 }
 
-function createManualCompactionConfig(
-  config: CompactionConfig,
-  currentTokens: number,
-  contextWindow: number
-): CompactionConfig {
-  if (!Number.isFinite(currentTokens) || currentTokens <= 0 || contextWindow <= 0) {
-    return { ...config, enabled: true };
+async function reloadSkillRegistry(gitRoot: string | undefined): Promise<number> {
+  const registry = getSkillRegistry(gitRoot);
+  await registry.reload();
+  return registry.size;
+}
+
+interface ReloadExtensionRuntimeSummary {
+  reloaded: number;
+  loaded: number;
+  failures: number;
+}
+
+interface ExtensionReloadConfig extends Readonly<Record<string, unknown>> {
+  extensions?: string[];
+}
+
+function normalizeConfiguredExtensionPaths(configFile: string, configured: unknown): string[] {
+  if (!Array.isArray(configured)) {
+    return [];
   }
 
-  const currentUsagePercent = (currentTokens / contextWindow) * 100;
-  const forcedTriggerPercent = Math.max(1, Math.ceil(currentUsagePercent) - 1);
+  const result: string[] = [];
+  for (const value of configured) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    result.push(path.isAbsolute(trimmed)
+      ? trimmed
+      : path.resolve(path.dirname(configFile), trimmed));
+  }
+  return result;
+}
 
+function loadExtensionReloadConfig(): ExtensionReloadConfig {
+  const configFile = path.join(getAgentConfigHome(), 'config.json');
+  try {
+    if (!fsSync.existsSync(configFile)) {
+      return {};
+    }
+    const parsed = JSON.parse(fsSync.readFileSync(configFile, 'utf-8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const config = parsed as Record<string, unknown>;
+    return {
+      ...config,
+      extensions: normalizeConfiguredExtensionPaths(configFile, config.extensions),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.yellow(`[extensions] Failed to read configured extensions: ${message}`));
+    return {};
+  }
+}
+
+async function discoverDefaultExtensionsForReload(): Promise<string[]> {
+  try {
+    return await discoverDefaultExtensions();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.yellow(`[extensions] Failed to discover default extensions: ${message}`));
+    return [];
+  }
+}
+
+async function reloadExtensionRuntimeFromDisk(): Promise<ReloadExtensionRuntimeSummary> {
+  const config = loadExtensionReloadConfig();
+  const configuredExtensions = await dedupeExtensionPathsByEntrypoint(config.extensions ?? []);
+  const discoveredExtensions = await dedupeExtensionPathsByEntrypoint(
+    await discoverDefaultExtensionsForReload(),
+  );
+  const discoveredOnlyExtensions = await excludeExtensionPathsByEntrypoint(
+    discoveredExtensions,
+    configuredExtensions,
+  );
+  const candidateExtensions = [
+    ...discoveredOnlyExtensions,
+    ...configuredExtensions,
+  ];
+
+  let extensionRuntime = getActiveExtensionRuntime();
+  if (!extensionRuntime && candidateExtensions.length > 0) {
+    extensionRuntime = createExtensionRuntime({ config }).activate();
+  }
+  if (!extensionRuntime) {
+    return { reloaded: 0, loaded: 0, failures: 0 };
+  }
+
+  const before = getExtensionRuntimeDiagnostics(extensionRuntime);
+  const beforeFailureCount = before.failures.length;
+  await extensionRuntime.reloadExtensions({ continueOnError: true });
+
+  const afterReload = getExtensionRuntimeDiagnostics(extensionRuntime);
+  const reloadFailures = Math.max(0, afterReload.failures.length - beforeFailureCount);
+  const loadedPaths = afterReload.loadedExtensions.map((extension) => extension.path);
+  const newDiscovered = await excludeExtensionPathsByEntrypoint(
+    discoveredOnlyExtensions,
+    loadedPaths,
+  );
+  const newConfigured = await excludeExtensionPathsByEntrypoint(
+    configuredExtensions,
+    [...loadedPaths, ...newDiscovered],
+  );
+
+  await extensionRuntime.loadExtensions(newDiscovered, {
+    continueOnError: true,
+    loadSource: 'discovery',
+    stage: 'reload',
+  });
+  await extensionRuntime.loadExtensions(newConfigured, {
+    continueOnError: true,
+    loadSource: 'config',
+    stage: 'reload',
+  });
+
+  const afterLoad = getExtensionRuntimeDiagnostics(extensionRuntime);
+  return {
+    reloaded: Math.max(0, before.loadedExtensions.length - reloadFailures),
+    loaded: Math.max(0, afterLoad.loadedExtensions.length - afterReload.loadedExtensions.length),
+    failures: Math.max(0, afterLoad.failures.length - beforeFailureCount),
+  };
+}
+
+function createManualCompactionConfig(
+  config: CompactionConfig,
+): CompactionConfig {
   return {
     ...config,
     enabled: true,
-    triggerPercent: Math.min(config.triggerPercent, forcedTriggerPercent),
   };
+}
+
+function printWorkspaceUnchangedNote(context: InteractiveContext): void {
+  if (context.runtimeInfo?.workspaceRoot) {
+    console.log(chalk.dim(`  Workspace unchanged: ${formatWorkspaceTruth(context.runtimeInfo)}`));
+  } else {
+    console.log(chalk.dim('  Workspace unchanged.'));
+  }
 }
 
 export const BUILTIN_COMMANDS: Command[] = [
@@ -111,8 +279,21 @@ export const BUILTIN_COMMANDS: Command[] = [
     usage: '/help [command]',
     handler: async (args) => {
       if (args.length > 0) {
-        // Show detailed help for a specific command.
-        printDetailedHelp(args[0]!);
+        const name = args[0]!;
+        if (commandRegistry.size === 0) {
+          initCommandRegistry();
+        }
+        const isKnownCommand =
+          commandRegistry.has(name.toLowerCase()) || Boolean(getActiveExtensionCommand(name));
+        if (isKnownCommand) {
+          // Show detailed help for a specific command.
+          printDetailedHelp(name);
+        } else {
+          // FEATURE_218 — fall through to the KodaX self-knowledge manual for
+          // product topics (/help providers, /help config, ...). Unknown topics
+          // return the manual index, not an "unknown command" error.
+          printManualTopic(name);
+        }
       } else {
         printHelp();
       }
@@ -122,11 +303,12 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /help              ') + 'Show all available commands');
       console.log(chalk.dim('  /help <command>    ') + 'Show detailed help for a specific command');
+      console.log(chalk.dim('  /<command> help    ') + 'Shortcut for command-specific help');
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /help              ') + '# List all commands');
       console.log(chalk.dim('  /help mode         ') + '# Detailed help for /mode');
-      console.log(chalk.dim('  /help project      ') + '# Detailed help for /project');
+      console.log(chalk.dim('  /mode help         ') + '# Same detailed help shortcut');
       console.log();
     },
   },
@@ -134,10 +316,10 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'exit',
     aliases: ['quit', 'q', 'bye'],
     description: 'Exit interactive mode',
-    handler: async (_args, _context, callbacks) => {
+    handler: async (_args, context, callbacks) => {
       await callbacks.saveSession();
       console.log(chalk.green('\nSession saved. Goodbye!'));
-      callbacks.exit();
+      await callbacks.exit();
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/exit - Exit Interactive Mode\n'));
@@ -148,6 +330,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Saves the current conversation session and exits interactive mode.'));
       console.log(chalk.dim('  Sessions can be resumed later with /load or CLI -c option.'));
+      console.log(chalk.dim('  Exiting never removes or mutates the current workspace.'));
       console.log();
     },
   },
@@ -174,6 +357,110 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: 'cost',
+    description: 'Show session cost report',
+    usage: '/cost',
+    handler: async (_args, _context, callbacks) => {
+      const report = callbacks.getCostReport?.();
+      if (!report) {
+        console.log(chalk.dim('\n[No cost data available yet]'));
+        return;
+      }
+      console.log(chalk.cyan('\n' + report));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/cost - Session Cost Report\n'));
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  Shows token usage and estimated cost for the current session,'));
+      console.log(chalk.dim('  broken down by provider and AMA role.'));
+      console.log();
+    },
+  },
+  {
+    // Issue 121: inspect a `[Pasted text #N]` placeholder's original content.
+    name: 'paste',
+    description: 'Inspect pasted text stored in the input buffer',
+    usage: '/paste show <id> | /paste list',
+    argumentHint: 'show <id> | list',
+    handler: async (args) => {
+      const sub = args[0]?.toLowerCase();
+
+      if (!sub || sub === 'help') {
+        console.log(chalk.cyan('\n/paste - Inspect stored paste contents'));
+        console.log(chalk.dim('  /paste list           - Show all pasted text ids in this session'));
+        console.log(chalk.dim('  /paste show <id>      - Print the full content of paste #<id>'));
+        console.log();
+        return;
+      }
+
+      const store = getActivePasteStore();
+      if (!store) {
+        console.log(chalk.yellow('\n[No paste registry active]'));
+        console.log(chalk.dim('  The REPL composer is not mounted, or no paste has been captured yet.'));
+        return;
+      }
+
+      if (sub === 'list') {
+        const entries = store.export();
+        if (entries.length === 0) {
+          console.log(chalk.dim('\n[No pasted content in this session yet]'));
+          return;
+        }
+        console.log(chalk.bold('\nPasted content in this session:\n'));
+        for (const entry of entries) {
+          const len = entry.content?.length ?? 0;
+          const hashTag = entry.contentHash ? ` (hash ${entry.contentHash.slice(0, 8)})` : '';
+          console.log(`  ${chalk.cyan(`#${entry.id}`)} ${entry.type} ${len} chars${hashTag}`);
+        }
+        console.log();
+        return;
+      }
+
+      if (sub === 'show') {
+        const rawId = args[1];
+        const id = rawId ? Number.parseInt(rawId, 10) : NaN;
+        if (!Number.isFinite(id) || id <= 0) {
+          console.log(chalk.yellow('\nUsage: /paste show <id>'));
+          return;
+        }
+        const entry = store.get(id);
+        if (!entry) {
+          console.log(chalk.dim(`\n[No paste registered with id #${id}]`));
+          return;
+        }
+        let body = entry.content ?? '';
+        if (!body && entry.contentHash) {
+          const cached = await retrievePastedText(entry.contentHash);
+          if (cached) body = cached;
+        }
+        if (!body) {
+          console.log(chalk.yellow(`\n[Paste #${id} has no stored content (hash ${entry.contentHash ?? 'n/a'})]`));
+          return;
+        }
+        console.log(chalk.bold(`\nPasted text #${id} (${body.length} chars):\n`));
+        console.log(body);
+        console.log();
+        return;
+      }
+
+      console.log(chalk.yellow(`\n[Unknown /paste subcommand: ${sub}]`));
+      console.log(chalk.dim('  Try /paste show <id> or /paste list'));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/paste - Inspect stored paste contents\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /paste list           - Show all pasted text ids in this session'));
+      console.log(chalk.dim('  /paste show <id>      - Print the full content of paste #<id>'));
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  When you paste more than ~800 chars into the input bar, KodaX'));
+      console.log(chalk.dim('  replaces the pasted text with a `[Pasted text #N +K lines]` anchor'));
+      console.log(chalk.dim('  to keep the UI responsive. The full content is preserved and sent'));
+      console.log(chalk.dim('  to the LLM on submit. Use this command to see what was captured.'));
+      console.log();
+    },
+  },
+  {
     name: 'compact',
     description: 'Manually trigger context compaction',
     usage: '/compact [instructions]',
@@ -194,12 +481,17 @@ export const BUILTIN_COMMANDS: Command[] = [
         // Get custom instructions if provided
         const customInstructions = args.length > 0 ? args.join(' ') : undefined;
 
-        // Get contextWindow: user config > provider > default 200k
+        // Get contextWindow:
+        //   user config (manual override)
+        //   > active model descriptor (FEATURE_098)
+        //   > provider default
+        //   > 200k fallback
         const contextWindow = config.contextWindow
+          ?? provider.getEffectiveContextWindow?.(currentConfig.model)
           ?? provider.getContextWindow?.()
           ?? 200000;
         const currentTokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
-        const manualConfig = createManualCompactionConfig(config, currentTokens, contextWindow);
+        const manualConfig = createManualCompactionConfig(config);
 
         console.log(chalk.dim('\n[Compacting conversation...]'));
 
@@ -216,7 +508,12 @@ export const BUILTIN_COMMANDS: Command[] = [
             contextWindow,
             customInstructions,
             undefined,
-            currentTokens
+            currentTokens,
+            CODING_SUMMARY_PROMPT,
+            CODING_UPDATE_SUMMARY_PROMPT,
+            currentConfig.model,
+            true,
+            provider.getEffectiveMaxOutputTokens(currentConfig.model),
           );
 
           if (!result.compacted) {
@@ -229,9 +526,19 @@ export const BUILTIN_COMMANDS: Command[] = [
           context.messages = result.messages;
           context.contextTokenSnapshot = {
             currentTokens: result.tokensAfter,
-            baselineEstimatedTokens: result.tokensAfter,
-            source: 'estimate',
+            baselineEstimatedTokens: estimateTokens(result.messages),
+            source: context.contextTokenSnapshot?.source ?? 'estimate',
           };
+
+          // Push the post-compact token count into the UI layer's live
+          // counter. `contextUsage` in InkREPL reads `liveTokenCount`
+          // before `context.contextTokenSnapshot`, so without this hook
+          // the status bar would keep showing the stale pre-compact
+          // value despite the snapshot above being up to date.
+          callbacks.onCompactStats?.({
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter,
+          });
 
           // Clear UI history - it will be re-created from the new context.messages
           // This ensures the UI shows the summary + protected recent context.
@@ -274,7 +581,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Configuration:'));
       console.log(chalk.dim('  Config file: ~/.kodax/config.json'));
       console.log(chalk.dim('  Settings:'));
-      console.log(chalk.dim('    - compaction.triggerPercent: Usage percentage that triggers compaction'));
+      console.log(chalk.dim('    - compaction.triggerPercent: Optional early trigger below 100; 100 uses physical capacity'));
       console.log(chalk.dim('    - compaction.enabled: Controls auto-compaction only; /compact always remains available'));
       console.log(chalk.dim('    - compaction.contextWindow: Optional token-window override'));
       console.log(chalk.dim('    - compaction.protectionPercent / rollingSummaryPercent / pruningThresholdTokens: Advanced tuning'));
@@ -289,38 +596,26 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'reload',
-    description: 'Reload project rules and active extensions',
-    handler: async (_args, _context, callbacks, _currentConfig) => {
-      console.log(chalk.cyan('\nReloading project rule files and runtime extensions...\n'));
+    description: 'Reload project rules, skills, and active extensions',
+    handler: async (_args, context, callbacks, _currentConfig) => {
+      console.log(chalk.cyan('\nReloading project rule files, skills, and runtime extensions...\n'));
 
       try {
         const files = await callbacks.reloadAgentsFiles?.() ?? [];
         const result = summarizeAgentsFiles(files);
-        const extensionRuntime = getActiveExtensionRuntime();
-        const extensionCount = extensionRuntime
-          ? getExtensionRuntimeDiagnostics(extensionRuntime).loadedExtensions.length
-          : 0;
-        const previousFailureCount = extensionRuntime
-          ? getExtensionRuntimeDiagnostics(extensionRuntime).failures.length
-          : 0;
-        let reloadedExtensions = 0;
-        let reloadFailures = 0;
+        const skillCount = await reloadSkillRegistry(context.gitRoot);
+        const extensionSummary = await reloadExtensionRuntimeFromDisk();
+        const extensionCount = extensionSummary.reloaded + extensionSummary.loaded;
+        const reloadFailures = extensionSummary.failures;
 
-        if (extensionRuntime) {
-          await extensionRuntime.reloadExtensions({ continueOnError: true });
-          const diagnostics = getExtensionRuntimeDiagnostics(extensionRuntime);
-          reloadedExtensions = extensionCount || diagnostics.loadedExtensions.length;
-          reloadFailures = Math.max(0, diagnostics.failures.length - previousFailureCount);
-        }
-
-        if (files.length === 0 && reloadedExtensions === 0) {
-          console.log(chalk.yellow('No project rule files or active extensions found.\n'));
-          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, or load extensions with --extension.'));
+        if (files.length === 0 && skillCount === 0 && extensionCount === 0 && reloadFailures === 0) {
+          console.log(chalk.yellow('No project rule files, skills, or active extensions found.\n'));
+          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, add skills, or load extensions with --extension.'));
           console.log();
           return;
         }
 
-        console.log(chalk.green('Rules reloaded successfully:\n'));
+        console.log(chalk.green('Reloaded successfully:\n'));
         if (result.global > 0) {
           console.log(chalk.dim(`  - Global: ${result.global} file(s)`));
         }
@@ -330,29 +625,36 @@ export const BUILTIN_COMMANDS: Command[] = [
         if (result.project > 0) {
           console.log(chalk.dim(`  - Project: ${result.project} file(s)`));
         }
-        if (reloadedExtensions > 0) {
-          console.log(chalk.dim(`  - Extensions: ${reloadedExtensions} module(s)`));
+        if (extensionSummary.reloaded > 0) {
+          console.log(chalk.dim(`  - Extensions reloaded: ${extensionSummary.reloaded} module(s)`));
+        }
+        if (extensionSummary.loaded > 0) {
+          console.log(chalk.dim(`  - Extensions loaded: ${extensionSummary.loaded} module(s)`));
+        }
+        if (skillCount > 0) {
+          console.log(chalk.dim(`  - Skills: ${skillCount} skill(s)`));
         }
         if (reloadFailures > 0) {
           console.log(chalk.yellow(`  - Failures: ${reloadFailures} recorded (run /extensions for details)`));
         }
-        console.log(chalk.dim('  Updated rules will apply to subsequent requests in this session.'));
+        console.log(chalk.dim('  Updated rules, skills, and extensions will apply to subsequent requests in this session.'));
         console.log();
         return;
       } catch (error) {
-        console.log(chalk.red('Failed to reload rules.\n'));
+        console.log(chalk.red('Failed to reload.\n'));
         console.log(chalk.dim(`  Error: ${error instanceof Error ? error.message : String(error)}`));
         console.log();
       }
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/reload - Reload Project Rules\n'));
+      console.log(chalk.cyan('\n/reload - Reload Project Context\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /reload            ') + 'Reload project rule files and active extensions');
+      console.log(chalk.dim('  /reload            ') + 'Reload project rule files, skills, and active extensions');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log('  Reloads project-level context rules from AGENTS.md, CLAUDE.md, and .kodax/AGENTS.md files.');
-      console.log('  If a runtime extension host is active, it also hot-reloads loaded extensions.');
+      console.log('  Reloads skills from .kodax/skills/, ~/.kodax/skills/, ~/.agents/skills/, plugins, and builtins.');
+      console.log('  Rediscovers default/configured extensions, creates a runtime if needed, and hot-reloads loaded extensions.');
       console.log();
       console.log(chalk.bold('Rule Priority:'));
       console.log(chalk.dim('  1. Global:   ') + '~/.kodax/AGENTS.md');
@@ -417,7 +719,8 @@ export const BUILTIN_COMMANDS: Command[] = [
       if (diagnostics.capabilityProviders.length > 0) {
         console.log(chalk.bold('Capability Providers:'));
         for (const provider of diagnostics.capabilityProviders) {
-          console.log(chalk.dim(`  - ${provider.id} [${provider.kinds.join(', ')}]`));
+          const metadata = formatExtensionDiagnosticMetadata(provider.metadata);
+          console.log(chalk.dim(`  - ${provider.id} [${provider.kinds.join(', ')}]${metadata ? `  ${metadata}` : ''}`));
         }
         console.log();
       }
@@ -454,13 +757,15 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'status',
     aliases: ['info', 'ctx'],
     description: 'Show current session status',
-    handler: async (_args, context, _callbacks, currentConfig) => {
-      printStatus(context, currentConfig);
+    handler: async (args, context, callbacks, currentConfig) => {
+      await printStatus(context, currentConfig, args, callbacks);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/status - Show Session Status\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /status            ') + 'Display current session information');
+      console.log(chalk.dim('  /status workspace  ') + 'Show deeper workspace/runtime details');
+      console.log(chalk.dim('  /status runtime    ') + 'Show SDK runtime mode, identity, and queue counters');
       console.log(chalk.dim('  /info, /ctx        ') + 'Aliases for /status');
       console.log();
       console.log(chalk.bold('Displays:'));
@@ -468,20 +773,277 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  - Session ID'));
       console.log(chalk.dim('  - Message count'));
       console.log(chalk.dim('  - Estimated token usage'));
-      console.log(chalk.dim('  - Git root directory'));
+      console.log(chalk.dim('  - Current workspace truth'));
       console.log(chalk.dim('  - Session timestamps'));
+      console.log(chalk.dim('  - Repo-intelligence mode and active runtime summary'));
       console.log();
     },
   },
   {
+    name: 'mcp',
+    description: 'Show MCP server status or refresh catalogs',
+    usage: '/mcp [status|refresh]',
+    handler: async (args) => {
+      const extensionRuntime = getActiveExtensionRuntime();
+      if (!extensionRuntime) {
+        console.log(chalk.yellow('\n[No extension runtime active — MCP is not available]'));
+        return;
+      }
+      const diagnostics = getExtensionRuntimeDiagnostics(extensionRuntime);
+      const mcpProvider = diagnostics.capabilityProviders.find((p) => p.id === 'mcp');
+
+      const subcommand = args[0]?.toLowerCase() ?? 'status';
+
+      if (subcommand === 'refresh') {
+        console.log(chalk.dim('\nRefreshing MCP catalogs...'));
+        try {
+          await extensionRuntime.refreshCapabilityProviders('mcp');
+          console.log(chalk.green('MCP catalogs refreshed.'));
+        } catch (error) {
+          console.log(chalk.red(`Refresh failed: ${error instanceof Error ? error.message : String(error)}`));
+        }
+        return;
+      }
+
+      // Default: status
+      console.log(chalk.cyan('\nMCP Status\n'));
+      if (!mcpProvider) {
+        console.log(chalk.yellow('  No MCP provider registered.'));
+        console.log(chalk.dim('  Add mcpServers to ~/.kodax/config.json to enable MCP.\n'));
+        return;
+      }
+
+      const meta = mcpProvider.metadata as Record<string, unknown> | undefined;
+      const servers = (meta?.servers ?? []) as Array<{
+        serverId: string; connect: string; status: string;
+        tools: number; resources: number; prompts: number;
+        lastError?: string; cachedAt?: string;
+      }>;
+
+      console.log(chalk.dim(`  Servers: ${servers.length}`));
+      console.log();
+      for (const s of servers) {
+        const statusColor = s.status === 'ready' ? chalk.green
+          : s.status === 'error' ? chalk.red
+          : chalk.yellow;
+        console.log(`  ${chalk.bold(s.serverId)}  ${statusColor(s.status)}  connect=${chalk.dim(s.connect)}`);
+        if (s.cachedAt) {
+          console.log(chalk.dim(`    tools=${s.tools}  resources=${s.resources}  prompts=${s.prompts}`));
+        }
+        if (s.lastError) {
+          console.log(chalk.red(`    error: ${s.lastError}`));
+        }
+      }
+      console.log();
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/mcp - MCP Server Management\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /mcp            ') + 'Show MCP server status');
+      console.log(chalk.dim('  /mcp status     ') + 'Same as /mcp');
+      console.log(chalk.dim('  /mcp refresh    ') + 'Force-refresh all MCP server catalogs');
+      console.log();
+    },
+  },
+  {
+    name: 'repo-intel',
+    description: 'Inspect built-in repo intelligence',
+    usage: '/repo-intel [status|mode|trace]',
+    handler: async (args, context, callbacks, currentConfig) => {
+      const subcommand = args[0]?.toLowerCase() ?? 'status';
+
+      if (subcommand === 'status') {
+        const inspection = await inspectRepoIntelligenceRuntime({
+          mode: currentConfig.repoIntelligenceMode,
+          trace: currentConfig.repoIntelligenceTrace,
+          probe: true,
+          workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
+        });
+        printRepoIntelStatus(inspection);
+        return;
+      }
+
+      if (subcommand === 'mode') {
+        if (args.length === 1) {
+          console.log(chalk.dim(`\nCurrent repo-intelligence mode: ${chalk.cyan(formatRepoIntelPublicMode(currentConfig.repoIntelligenceMode ?? 'auto'))}`));
+          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
+          return;
+        }
+
+        const mode = normalizeRepoIntelPublicMode(args[1]);
+        if (!mode) {
+          console.log(chalk.red(`\n[Invalid repo-intelligence mode: ${args[1]}]`));
+          console.log(chalk.dim('Usage: /repo-intel mode [auto|full|light|off]\n'));
+          return;
+        }
+
+        const persistence = applyRepoIntelligenceRuntimeConfig(
+          { mode },
+          { repoIntelligenceMode: mode },
+          callbacks,
+          currentConfig,
+        );
+        printPersistedCommandStatus(`Repo intelligence mode: ${formatRepoIntelPublicMode(mode)}`, persistence);
+        return;
+      }
+
+      if (subcommand === 'trace') {
+        const raw = args[1]?.toLowerCase();
+        if (!raw) {
+          console.log(chalk.dim(`\nCurrent repo-intelligence trace: ${chalk.cyan(currentConfig.repoIntelligenceTrace ? 'on' : 'off')}`));
+          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
+          return;
+        }
+
+        const nextValue = resolveToggleFlag(raw, currentConfig.repoIntelligenceTrace ?? false);
+        if (nextValue === null) {
+          console.log(chalk.red(`\n[Invalid trace value: ${args[1]}]`));
+          console.log(chalk.dim('Usage: /repo-intel trace [on|off|toggle]\n'));
+          return;
+        }
+
+        const persistence = applyRepoIntelligenceRuntimeConfig(
+          { trace: nextValue },
+          { repoIntelligenceTrace: nextValue },
+          callbacks,
+          currentConfig,
+        );
+        printPersistedCommandStatus(`Repo intelligence trace: ${nextValue ? 'on' : 'off'}`, persistence);
+        return;
+      }
+
+      if (subcommand === 'refresh') {
+        console.log(chalk.yellow('\n[Repo intelligence refresh is automatic in this build]'));
+        console.log(chalk.dim('Use /repo-intel status to inspect the current engine state.\n'));
+        return;
+      }
+
+      console.log(chalk.red(`\n[Unknown /repo-intel subcommand: ${args[0]}]`));
+      console.log(chalk.dim('Usage: /repo-intel [status|mode|trace]\n'));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/repo-intel - Built-in Repo Intelligence\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /repo-intel                            ') + 'Show built-in repo-intelligence status');
+      console.log(chalk.dim('  /repo-intel status                     ') + 'Show built-in engine status without probing an external daemon');
+      console.log(chalk.dim('  /repo-intel mode auto                  ') + 'Let KodaX pick the best repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode full                  ') + 'Prefer the full repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode light                 ') + 'Use the light repo-intelligence engine');
+      console.log(chalk.dim('  /repo-intel mode off                   ') + 'Disable repo-intelligence injection');
+      console.log(chalk.dim('  /repo-intel trace on|off|toggle        ') + 'Toggle repo-intelligence trace output');
+      console.log();
+      console.log(chalk.bold('Notes:'));
+      console.log(chalk.dim('  - /status now includes a compact repo-intelligence summary.'));
+      console.log(chalk.dim('  - External repointel endpoint/bin controls are deprecated for built-in KodaX.'));
+      console.log();
+    },
+  },
+  {
+    name: 'repointel',
+    aliases: ['ri'],
+    description: 'Deprecated alias for /repo-intel status',
+    usage: '/repointel [status]',
+    userInvocable: false,
+    handler: async (args, context, _callbacks, currentConfig) => {
+      const subcommand = args[0]?.toLowerCase() ?? 'status';
+      console.log(chalk.yellow('\n[/repointel is deprecated; use /repo-intel status]\n'));
+
+      if (subcommand === 'status') {
+        const inspection = await inspectRepoIntelligenceRuntime({
+          mode: currentConfig.repoIntelligenceMode,
+          trace: currentConfig.repoIntelligenceTrace,
+          probe: true,
+          workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
+        });
+        printRepoIntelStatus(inspection);
+        return;
+      }
+
+      if (subcommand === 'mode') {
+        console.log(chalk.dim('Use /repo-intel mode [auto|full|light|off] to change repo-intelligence mode.\n'));
+        return;
+      }
+
+      if (subcommand === 'trace') {
+        console.log(chalk.dim('Use /repo-intel trace [on|off|toggle] to change repo-intelligence trace output.\n'));
+        return;
+      }
+
+      if (subcommand === 'warm' || subcommand === 'endpoint' || subcommand === 'bin') {
+        console.log(chalk.dim('Repo intelligence is built into KodaX; external daemon/bin controls are no longer a normal REPL command surface.'));
+        console.log(chalk.dim('Use /repo-intel status to inspect the active engine.\n'));
+        return;
+      }
+
+      console.log(chalk.dim('Usage: /repointel [status]\n'));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/repointel - Deprecated\n'));
+      console.log(chalk.dim('Use /repo-intel status for built-in repo-intelligence diagnostics.'));
+      console.log(chalk.dim('External endpoint/bin/warm controls are deprecated for KodaX.'));
+      console.log();
+    },
+  },
+  {
+    name: 'fallback',
+    description: 'Configure the cross-provider fallback chain for child tasks',
+    usage: '/fallback [status | <p1,p2,...> | off]',
+    handler: async (args, _context, _callbacks, _currentConfig) => {
+      // Read the live env (set at startup from config, or updated by this
+      // command) so status always reflects the running session.
+      const current = (process.env.KODAX_FALLBACK_PROVIDERS ?? '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const sub = args[0]?.toLowerCase();
+
+      if (!sub || sub === 'status') {
+        if (current.length === 0) {
+          console.log(chalk.dim('\nChild-task provider fallback: ') + chalk.yellow('off') + chalk.dim(' (no chain configured)'));
+        } else {
+          console.log(chalk.dim('\nChild-task provider fallback: ') + chalk.green('on'));
+          console.log(chalk.dim('  Order: ') + chalk.cyan(current.join(' → ')));
+        }
+        console.log(chalk.dim('\n  When a child\'s primary provider is exhausted/down, KodaX re-runs it'));
+        console.log(chalk.dim('  on the next provider in this list. Set: /fallback ark-coding,kimi-code\n'));
+        return;
+      }
+
+      if (sub === 'off' || sub === 'clear' || sub === 'none') {
+        saveConfig({ fallbackProviders: undefined });
+        delete process.env.KODAX_FALLBACK_PROVIDERS;
+        console.log(chalk.green('\n✓ ') + chalk.dim('Child-task provider fallback disabled.\n'));
+        return;
+      }
+
+      // Treat the rest as the chain — accept comma- or space-separated ids.
+      const chain = args
+        .join(',')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (chain.length === 0) {
+        console.log(chalk.red('\n[/fallback: no provider ids given]'));
+        console.log(chalk.dim('Usage: /fallback ark-coding,kimi-code   (or /fallback off)\n'));
+        return;
+      }
+
+      saveConfig({ fallbackProviders: chain });
+      // Live override (the startup env mirror is env-wins, so set it directly).
+      process.env.KODAX_FALLBACK_PROVIDERS = chain.join(',');
+      console.log(chalk.green('\n✓ ') + chalk.dim('Child-task fallback order: ') + chalk.cyan(chain.join(' → ')));
+      console.log(chalk.dim('  Provider ids must match your configured providers (see /status or kodax doctor).\n'));
+    },
+  },
+  {
     name: 'mode',
-    description: 'Show or switch permission mode (plan/accept-edits/auto-in-project)',
-    usage: '/mode [plan|accept-edits|auto-in-project]',
+    description: 'Show or switch permission mode (plan/accept-edits/auto)',
+    usage: '/mode [plan|accept-edits|auto]',
     handler: async (args, _context, callbacks, currentConfig) => {
       if (args.length === 0) {
         const m = normalizePermissionMode(currentConfig.permissionMode, 'accept-edits') ?? 'accept-edits';
         console.log(chalk.dim(`\nCurrent mode: ${chalk.cyan(m)}`));
-        console.log(chalk.dim('Usage: /mode [plan|accept-edits|auto-in-project]'));
+        console.log(chalk.dim('Usage: /mode [plan|accept-edits|auto]'));
         return;
       }
       const newMode = args[0] as PermissionMode;
@@ -491,7 +1053,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         savePermissionModeUser(newMode);
         console.log(chalk.cyan(`\n[Switched to ${newMode} mode] (saved)`));
       } else {
-        console.log(chalk.red(`\n[Unknown mode: ${args[0]}. Use: plan | accept-edits | auto-in-project]`));
+        console.log(chalk.red(`\n[Unknown mode: ${args[0]}. Use: plan | accept-edits | auto]`));
       }
     },
     detailedHelp: () => {
@@ -500,12 +1062,13 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /mode                        ') + 'Show current permission mode');
       console.log(chalk.dim('  /mode plan                   ') + 'Read-only: blocks all modifications');
       console.log(chalk.dim('  /mode accept-edits           ') + 'File edits auto, bash requires confirmation');
-      console.log(chalk.dim('  /mode auto-in-project        ') + 'Project-internal fully auto');
+      console.log(chalk.dim('  /mode auto                   ') + 'LLM classifier reviews each tool call (FEATURE_092)');
+      console.log(chalk.dim('  /mode auto-in-project        ') + chalk.gray('(deprecated alias for auto; will be removed in v0.7.38)'));
       console.log();
       console.log(chalk.bold('Permission Levels:'));
       console.log(chalk.yellow('  plan          ') + chalk.dim('- Read-only planning, no file/command modifications'));
       console.log(chalk.green('  accept-edits  ') + chalk.dim('- File edits auto-approved, bash still requires confirmation'));
-      console.log(chalk.green('  auto-in-project') + chalk.dim('- All tools auto within project, outside requires confirmation'));
+      console.log(chalk.green('  auto          ') + chalk.dim('- LLM classifier (engine=llm, default) or rules engine reviews each call'));
       console.log();
       console.log(chalk.bold('Notes:'));
       console.log(chalk.dim('  - .kodax/ directory and project-external paths always require confirmation'));
@@ -514,11 +1077,97 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    // FEATURE_092 phase 2b.8: read-only or set classifier engine for current session.
+    name: 'auto-engine',
+    description: 'Show or set auto-mode classifier engine (llm | rules)',
+    usage: '/auto-engine [llm|rules]',
+    handler: async (args, _context, callbacks) => {
+      const stats = callbacks.getAutoModeStats?.();
+      if (!stats) {
+        console.log(chalk.yellow('\n[auto-engine] not in auto mode — switch via /mode auto first'));
+        return;
+      }
+      if (args.length === 0) {
+        console.log(chalk.dim(`\nClassifier engine: ${chalk.cyan(stats.engine)}`));
+        console.log(chalk.dim(`  consecutive denials: ${stats.denials.consecutive}`));
+        console.log(chalk.dim(`  cumulative denials:  ${stats.denials.cumulative}`));
+        console.log(chalk.dim(`  breaker errors:      ${stats.breaker.timestamps.filter((t) => t >= Date.now() - 10 * 60 * 1000).length}`));
+        console.log(chalk.dim('Usage: /auto-engine [llm|rules]'));
+        return;
+      }
+      const newEngine = args[0];
+      if (newEngine !== 'llm' && newEngine !== 'rules') {
+        console.log(chalk.red(`\n[auto-engine] unknown engine "${args[0]}" — use llm or rules`));
+        return;
+      }
+      callbacks.setAutoModeEngine?.(newEngine);
+      console.log(chalk.cyan(`\n[auto-engine] switched to ${newEngine}`));
+      if (newEngine === 'rules') {
+        console.log(chalk.dim('  every non-Tier-1 tool call now escalates to user confirmation'));
+      } else {
+        console.log(chalk.dim('  classifier consultation resumed; threshold downgrades still apply'));
+      }
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/auto-engine - Auto-Mode Classifier Engine Toggle\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /auto-engine                 ') + 'Show current engine + denial/breaker counts');
+      console.log(chalk.dim('  /auto-engine llm             ') + 'Resume classifier consultation (default)');
+      console.log(chalk.dim('  /auto-engine rules           ') + 'Skip classifier; every non-Tier-1 call asks user');
+      console.log();
+      console.log(chalk.bold('Notes:'));
+      console.log(chalk.dim('  - Only meaningful in auto mode (/mode auto).'));
+      console.log(chalk.dim('  - The classifier may auto-downgrade to rules after 3 consecutive blocks,'));
+      console.log(chalk.dim('    20 cumulative blocks, or 5 errors in a 10-minute window. /auto-engine llm'));
+      console.log(chalk.dim('    manually flips back to llm.'));
+      console.log(chalk.dim('  - Override via env: KODAX_AUTO_MODE_ENGINE=rules.'));
+      console.log();
+    },
+  },
+  {
+    // FEATURE_092 phase 2b.8: dump tracker + breaker stats. Useful for the
+    // pilot to verify "5 fallback paths" manually + for debugging downgrades.
+    name: 'auto-denials',
+    description: 'Show auto-mode classifier denial tracker + circuit breaker stats',
+    usage: '/auto-denials',
+    handler: async (_args, _context, callbacks) => {
+      const stats = callbacks.getAutoModeStats?.();
+      if (!stats) {
+        console.log(chalk.yellow('\n[auto-denials] not in auto mode — switch via /mode auto first'));
+        return;
+      }
+      console.log(chalk.cyan('\n[auto-mode classifier stats]'));
+      console.log(chalk.dim(`  engine:               ${chalk.cyan(stats.engine)}`));
+      console.log(chalk.dim('  Denial tracker:'));
+      console.log(chalk.dim(`    consecutive blocks: ${stats.denials.consecutive} / 3`));
+      console.log(chalk.dim(`    cumulative blocks:  ${stats.denials.cumulative} / 20`));
+      console.log(chalk.dim('  Circuit breaker:'));
+      console.log(chalk.dim(`    errors in window:   ${stats.breaker.timestamps.filter((t) => t >= Date.now() - 10 * 60 * 1000).length} / 5 (10 min)`));
+      console.log();
+      if (stats.engine === 'rules') {
+        console.log(chalk.yellow('  ↪ engine has downgraded to rules. /auto-engine llm to flip back.'));
+      }
+      console.log();
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/auto-denials - Auto-Mode Classifier Diagnostic Dump\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /auto-denials                ') + 'Print engine + tracker + breaker counters');
+      console.log();
+      console.log(chalk.bold('Thresholds (FEATURE_092):'));
+      console.log(chalk.dim('  - 3 consecutive blocks  → engine downgrade to rules'));
+      console.log(chalk.dim('  - 20 cumulative blocks  → engine downgrade to rules'));
+      console.log(chalk.dim('  - 5 errors in 10-min    → circuit breaker trips → engine downgrade'));
+      console.log();
+    },
+  },
+  {
     name: 'save',
     description: 'Save current session',
-    handler: async (_args, _context, callbacks) => {
+    handler: async (_args, context, callbacks) => {
       await callbacks.saveSession();
       console.log(chalk.green('\n[Session saved]'));
+      printWorkspaceUnchangedNote(context);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/save - Save Current Session\n'));
@@ -529,6 +1178,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  Manually saves the current conversation session.'));
       console.log(chalk.dim('  Sessions are auto-saved after each message, but you can'));
       console.log(chalk.dim('  use this to ensure the session is persisted.'));
+      console.log(chalk.dim('  Saving updates session storage only; the current workspace stays untouched.'));
       console.log();
       console.log(chalk.dim('  See also: /help load, /help sessions'));
       console.log();
@@ -560,6 +1210,10 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /load              ') + '# See all sessions');
       console.log(chalk.dim('  /load 20260219_143052') + '# Load session by ID');
+      console.log();
+      console.log(chalk.bold('Workspace behavior:'));
+      console.log(chalk.dim('  /load can resume sessions from sibling workspaces in the same canonical repo.'));
+      console.log(chalk.dim('  If a saved workspace is unavailable, KodaX explains the fallback before loading.'));
       console.log();
       console.log(chalk.dim('  See also: /help sessions, /help save'));
       console.log();
@@ -643,6 +1297,31 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: 'rewind',
+    description: 'Rewind the current session to a previous point',
+    usage: '/rewind [entry-id|label]',
+    handler: async (args, _context, callbacks) => {
+      const status = await callbacks.rewindSession?.(args[0]);
+      if (status === 'failed') {
+        console.log(chalk.red(`\n[Unable to rewind${args[0] ? ` to ${args[0]}` : ' — no previous turn found'}]`));
+      }
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/rewind - Rewind Session to a Previous Point\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /rewind                 ') + 'Rewind to the previous user input');
+      console.log(chalk.dim('  /rewind <entry-id|label>') + 'Rewind to a specific tree node');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  Truncates the session after the target entry. Unlike /fork,'));
+      console.log(chalk.dim('  this modifies the current session in place. The rewind event'));
+      console.log(chalk.dim('  is recorded in the lineage for auditability.'));
+      console.log();
+      console.log(chalk.yellow('  ⚠ This is irreversible. Use /fork first to preserve a copy.'));
+      console.log();
+    },
+  },
+  {
     name: 'sessions',
     aliases: ['ls', 'list'],
     description: 'List recent sessions',
@@ -657,7 +1336,8 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Shows recent conversation sessions with their IDs,'));
-      console.log(chalk.dim('  message counts, and titles. Use /load <id> to resume.'));
+      console.log(chalk.dim('  message counts, titles, and workspace truth. Use /load <id> to resume.'));
+      console.log(chalk.dim('  This keeps sibling worktree sessions inspectable without a persistent cockpit.'));
       console.log();
       console.log(chalk.dim('  See also: /help load, /help delete'));
       console.log();
@@ -687,7 +1367,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     aliases: ['rm', 'del'],
     description: 'Delete a session',
     usage: '/delete <session-id> or /delete all',
-    handler: async (args, _context, callbacks) => {
+    handler: async (args, context, callbacks) => {
       if (args.length === 0) {
         console.log(chalk.red('\n[Usage: /delete <session-id> or /delete all]'));
         await callbacks.listSessions?.();
@@ -696,9 +1376,11 @@ export const BUILTIN_COMMANDS: Command[] = [
       if (args[0] === 'all') {
         await callbacks.deleteAllSessions?.();
         console.log(chalk.green('\n[All sessions deleted]'));
+        printWorkspaceUnchangedNote(context);
       } else {
         await callbacks.deleteSession?.(args[0]!);
         console.log(chalk.green(`\n[Session deleted: ${args[0]}]`));
+        printWorkspaceUnchangedNote(context);
       }
     },
     detailedHelp: () => {
@@ -712,6 +1394,10 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /delete 20260219_143052') + '  # Delete specific session');
       console.log(chalk.dim('  /delete all        ') + '# Delete all sessions');
+      console.log();
+      console.log(chalk.bold('Workspace behavior:'));
+      console.log(chalk.dim('  Deletes saved session records only.'));
+      console.log(chalk.dim('  Current workspaces and checkouts remain untouched.'));
       console.log();
       console.log(chalk.yellow('  Warning: /delete all cannot be undone!'));
       console.log();
@@ -839,6 +1525,59 @@ export const BUILTIN_COMMANDS: Command[] = [
     handler: async (args, _context, _callbacks, currentConfig) => {
       const input = (args[0] ?? '').trim();
 
+      // `/provider forget-capability [<provider>[/<model>]]` — clear the learned
+      // capability cache so an effort that was (mis)recorded as rejected is
+      // offered again. With no target, clears the whole cache.
+      if (input === 'forget-capability') {
+        const target = (args[1] ?? '').trim();
+        if (!target) {
+          clearCapabilityCache();
+          console.log(chalk.dim('\n[Cleared all learned capability overrides]\n'));
+          return;
+        }
+        const slash = target.indexOf('/');
+        const fp = slash === -1 ? target : target.slice(0, slash);
+        const fm = slash === -1 ? undefined : target.slice(slash + 1) || undefined;
+        clearCapabilityCache(fp, fm);
+        console.log(chalk.dim(`\n[Cleared learned capability overrides for ${fp}${fm ? `/${fm}` : ''}]\n`));
+        return;
+      }
+
+      // `/provider probe` — proactively send a minimal request per candidate
+      // effort and record the ones the active model rejects. Reuses the same
+      // signal as passive learning (source: probed). Real requests, a few
+      // tokens each; explicit and user-invoked only.
+      if (input === 'probe') {
+        const candidates = getProviderReasoningEffortOptions(
+          currentConfig.provider,
+          currentConfig.model,
+        ).filter((e) => e !== 'auto' && e !== 'off');
+        const label = `${currentConfig.provider}/${currentConfig.model ?? '(default)'}`;
+        console.log(chalk.dim(`\n[Probing ${label} — ${candidates.length} efforts, minimal requests…]`));
+        try {
+          const results = await probeProviderReasoningEfforts({
+            provider: currentConfig.provider,
+            model: currentConfig.model,
+            efforts: candidates,
+            resolve: resolveProvider,
+            now: () => new Date().toISOString(),
+          });
+          for (const r of results) {
+            const mark = r.status === 'accepted'
+              ? chalk.green('✓')
+              : r.status === 'rejected'
+                ? chalk.red('✗')
+                : chalk.yellow('!');
+            console.log(chalk.dim(`  ${mark} ${r.effort}${r.error ? ` — ${r.error}` : ''}`));
+          }
+          console.log(chalk.dim('  (rejections recorded; undo with /provider forget-capability)\n'));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.log(chalk.red(`\n[Probe failed: ${message}]\n`));
+        }
+        return;
+      }
+
       let targetProvider = currentConfig.provider;
       let targetModel = currentConfig.model;
 
@@ -881,6 +1620,11 @@ export const BUILTIN_COMMANDS: Command[] = [
       for (const line of formatProviderCapabilityDetailLines(snapshot)) {
         console.log(chalk.dim(`  - ${line}`));
       }
+      console.log(chalk.dim(`  - Session effort: ${formatReasoningEffortDisplay(currentConfig.effort)}`));
+      const learnedRejections = getCachedRejectedEfforts(targetProvider, targetModel);
+      if (learnedRejections.length > 0) {
+        console.log(chalk.dim(`  - Learned unsupported: ${learnedRejections.join(', ')} (clear with /provider forget-capability)`));
+      }
       console.log();
 
       if (commonScenarios.length > 0) {
@@ -904,6 +1648,9 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /provider                      ') + 'Inspect the current provider/model');
       console.log(chalk.dim('  /provider <provider>           ') + 'Inspect a provider using its default model');
       console.log(chalk.dim('  /provider <provider>/<model>   ') + 'Inspect a specific provider/model pair');
+      console.log(chalk.dim('  /provider probe                ') + 'Send minimal requests to learn which efforts the model rejects');
+      console.log(chalk.dim('  /provider forget-capability [<provider>[/<model>]]'));
+      console.log(chalk.dim('                                 ') + 'Clear learned (observed/probed) effort rejections; re-offer those rungs');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Shows the provider capability matrix and common 029 policy outcomes.'));
@@ -1007,28 +1754,88 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: 'effort',
+    description: 'Show or set native reasoning effort',
+    usage: '/effort [level]',
+    handler: async (args, _context, callbacks, currentConfig) => {
+      const usage = formatReasoningEffortUsage(currentConfig);
+      if (args.length === 0) {
+        const effortLabel = formatCurrentReasoningEffortStatus(currentConfig);
+        console.log(chalk.dim(`\nReasoning effort: ${chalk.cyan(effortLabel)}`));
+        console.log(chalk.dim(`Compatibility:    ${chalk.cyan(currentConfig.reasoningMode)}`));
+        console.log(chalk.dim(`Available:        ${getProviderReasoningEffortOptions(currentConfig.provider, currentConfig.model).join(', ')}`));
+        console.log(chalk.dim(`${usage}\n`));
+        return;
+      }
+
+      if (args.length > 1) {
+        console.log(chalk.red('\n[Reasoning effort accepts exactly one value]'));
+        console.log(chalk.dim(`${usage}\n`));
+        return;
+      }
+
+      const raw = args[0];
+      let value: string;
+      try {
+        value = normalizeReasoningEffortValue(raw);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[Invalid reasoning effort: ${message}]`));
+        console.log(chalk.dim(`${usage}\n`));
+        return;
+      }
+
+      const effort = value === 'auto' || value === 'unset' || value === 'clear' || value === 'reset'
+        ? undefined
+        : value;
+      const nextConfig = resolveConfigAfterReasoningEffort(effort, currentConfig);
+      const persistence = applyReasoningEffort(effort, callbacks, currentConfig);
+      printPersistedCommandStatus(
+        `Reasoning effort: ${formatCurrentReasoningEffortStatus(nextConfig)}`,
+        persistence,
+      );
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/effort - Set Native Reasoning Effort\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /effort             ') + 'Show current native reasoning effort');
+      console.log(chalk.dim('  /effort auto        ') + 'Clear the explicit effort override');
+      console.log(chalk.dim('  /effort off         ') + 'Disable reasoning effort');
+      console.log(chalk.dim('  /effort low         ') + 'Use low native reasoning effort');
+      console.log(chalk.dim('  /effort medium      ') + 'Use medium native reasoning effort');
+      console.log(chalk.dim('  /effort high        ') + 'Use high native reasoning effort');
+      console.log(chalk.dim('  /effort xhigh       ') + 'Use extra-high effort when the model supports it');
+      console.log(chalk.dim('  /effort max         ') + 'Use max effort when the model supports it');
+      console.log(chalk.dim('  /effort none        ') + 'Legacy alias for /effort off');
+      console.log(chalk.dim('\nRun /effort to see the active model\'s supported values.'));
+      console.log();
+    },
+  },
+  {
     name: 'agent-mode',
     aliases: ['am'],
     description: 'Show or set agent mode',
-    usage: '/agent-mode [ama|sa|toggle]',
+    usage: '/agent-mode [ama|amaw|ama-workflow|sa|toggle]',
     handler: async (args, _context, callbacks, currentConfig) => {
       if (args.length === 0) {
         console.log(chalk.dim(`\nAgent mode: ${chalk.cyan(currentConfig.agentMode.toUpperCase())}`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
         return;
       }
 
       const raw = args[0]?.toLowerCase();
       const nextMode: KodaXAgentMode | undefined =
         raw === 'toggle'
-          ? (currentConfig.agentMode === 'ama' ? 'sa' : 'ama')
-          : raw === 'ama' || raw === 'sa'
+          ? nextAgentMode(currentConfig.agentMode)
+          : raw === 'ama' || raw === 'sa' || raw === 'amaw'
             ? raw
+            : raw === 'ama-workflow'
+              ? 'amaw'
             : undefined;
 
       if (!nextMode) {
         console.log(chalk.red(`\n[Invalid agent mode: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
         return;
       }
 
@@ -1039,254 +1846,253 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.cyan('\n/agent-mode - Adaptive Multi-Agent Mode Control\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /agent-mode            ') + 'Show current agent mode');
-      console.log(chalk.dim('  /agent-mode ama        ') + 'Enable adaptive multi-agent mode');
+      console.log(chalk.dim('  /agent-mode ama        ') + 'Adaptive multi-agent mode; workflows run only via the /workflow command');
+      console.log(chalk.dim('  /agent-mode amaw       ') + 'AMA + the agent may start a workflow itself from natural language');
+      console.log(chalk.dim('  /agent-mode ama-workflow') + 'Alias for /agent-mode amaw');
       console.log(chalk.dim('  /agent-mode sa         ') + 'Force single-agent execution');
-      console.log(chalk.dim('  /agent-mode toggle     ') + 'Switch between AMA and SA');
+      console.log(chalk.dim('  /agent-mode toggle     ') + 'Cycle AMA -> AMAW -> SA');
       console.log(chalk.dim('  /am                    ') + 'Alias for /agent-mode');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  AMA keeps adaptive multi-agent harness selection enabled.'));
-      console.log(chalk.dim('  SA keeps routing and task artifacts, but forces single-agent execution to save tokens.'));
-      console.log();
-    },
-  },
-  {
-    name: 'parallel',
-    aliases: ['pm'],
-    description: 'Show or toggle parallel tool execution',
-    usage: '/parallel [on|off|toggle]',
-    handler: async (args, _context, callbacks, currentConfig) => {
-      if (args.length === 0) {
-        const executionMode = currentConfig.parallel
-          ? chalk.green(describeParallelExecution(currentConfig.parallel))
-          : chalk.dim(describeParallelExecution(currentConfig.parallel));
-        console.log(chalk.dim(`\nTool execution: ${executionMode}`));
-        console.log(chalk.dim('Parallel mode lets the agent run independent tool calls concurrently.'));
-        console.log(chalk.dim('Usage: /parallel on|off|toggle\n'));
-        return;
-      }
-
-      const value = args[0].toLowerCase();
-      if (!['on', 'off', 'toggle'].includes(value)) {
-        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /parallel on|off|toggle\n'));
-        return;
-      }
-
-      const nextValue =
-        value === 'toggle'
-          ? !currentConfig.parallel
-          : value === 'on';
-
-      const persistence = applyParallelMode(nextValue, callbacks, currentConfig);
-      printPersistedCommandStatus(
-        `Tool execution: ${describeParallelExecution(nextValue)}`,
-        persistence,
-      );
-    },
-    detailedHelp: () => {
-      console.log(chalk.cyan('\n/parallel - Toggle Parallel Tool Execution\n'));
-      console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /parallel          ') + 'Show the current execution mode');
-      console.log(chalk.dim('  /parallel on       ') + 'Enable parallel tool execution');
-      console.log(chalk.dim('  /parallel off      ') + 'Disable parallel tool execution');
-      console.log(chalk.dim('  /parallel toggle   ') + 'Switch between parallel and sequential execution');
-      console.log(chalk.dim('  /pm                ') + 'Alias for /parallel');
-      console.log();
-      console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  When enabled, independent tool calls from a single agent turn can run concurrently.'));
-      console.log(chalk.dim('  When disabled, tool calls run sequentially.'));
-      console.log(chalk.dim('  The current value is saved to your KodaX config and shown in the status bar.'));
+      console.log(chalk.dim('  AMA runs the adaptive multi-agent harness. Workflows are command-gated: the /workflow'));
+      console.log(chalk.dim('      command runs as a full scout-then-author Worker turn, but the agent never starts'));
+      console.log(chalk.dim('      one on its own from natural language.'));
+      console.log(chalk.dim('  AMAW is AMA plus self-activation: the agent may decide from natural language to author'));
+      console.log(chalk.dim('      and run a workflow (run_workflow). /workflow behaves identically to AMA.'));
+      console.log(chalk.dim('  SA forces a single solo agent — no sub-agents and no workflows — to save tokens.'));
       console.log();
     },
   },
   {
     name: 'auto',
     aliases: ['a'],
-    description: 'Quick switch to auto-in-project mode',
+    description: 'Quick switch to auto mode',
     handler: async (_args, _context, callbacks, currentConfig) => {
-      currentConfig.permissionMode = 'auto-in-project';
-      callbacks.setPermissionMode?.('auto-in-project');
-      savePermissionModeUser('auto-in-project');
-      console.log(chalk.cyan('\n[Switched to auto-in-project mode] (saved)'));
+      currentConfig.permissionMode = 'auto';
+      callbacks.setPermissionMode?.('auto');
+      savePermissionModeUser('auto');
+      console.log(chalk.cyan('\n[Switched to auto mode] (saved)'));
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/auto - Quick Switch to Auto-in-Project Mode\n'));
+      console.log(chalk.cyan('\n/auto - Quick Switch to Auto Mode\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /auto              ') + 'Switch to auto-in-project mode');
+      console.log(chalk.dim('  /auto              ') + 'Switch to auto mode');
       console.log(chalk.dim('  /a                 ') + 'Alias for /auto');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  Equivalent to /mode auto-in-project.'));
-      console.log(chalk.dim('  All tools auto-approved within project directory.'));
-      console.log(chalk.dim('  Operations outside project still require confirmation.'));
+      console.log(chalk.dim('  Equivalent to /mode auto.'));
+      console.log(chalk.dim('  Auto-mode classifier evaluates each non-Tier-1 tool call;'));
+      console.log(chalk.dim('  benign actions auto-approve, risky ones escalate to user confirm.'));
       console.log();
-      console.log(chalk.dim('  See also: /help mode'));
-      console.log();
-    },
-  },
-  {
-    name: 'plan',
-    aliases: ['p'],
-    description: 'Plan mode management',
-    usage: '/plan [on|off|once|list|resume|clear] [args]',
-    handler: async (args, _context, callbacks, _currentConfig) => {
-      const subCommand = args[0]?.toLowerCase();
-
-      switch (subCommand) {
-        case 'on':
-          callbacks.setPlanMode?.(true);
-          console.log(chalk.cyan('\n[Plan mode enabled]'));
-          break;
-
-        case 'off':
-          callbacks.setPlanMode?.(false);
-          console.log(chalk.cyan('\n[Plan mode disabled]'));
-          break;
-
-        case 'once': {
-          const prompt = args.slice(1).join(' ');
-          if (!prompt) {
-            console.log(chalk.yellow('\n[Usage: /plan once <your request>]'));
-            return;
-          }
-          const options = callbacks.createKodaXOptions?.();
-          if (options) {
-            await runWithPlanMode(prompt, options);
-          }
-          break;
-        }
-
-        case 'list':
-          await listPlans();
-          break;
-
-        case 'resume': {
-          const planId = args[1];
-          if (!planId) {
-            console.log(chalk.yellow('\n[Usage: /plan resume <plan-id>]'));
-            return;
-          }
-          const options = callbacks.createKodaXOptions?.();
-          if (options) {
-            await resumePlan(planId, options);
-          }
-          break;
-        }
-
-        case 'clear':
-          await clearCompletedPlans();
-          break;
-
-        default:
-          console.log(chalk.dim('\nUsage: /plan [on|off|once|list|resume|clear]'));
-          console.log(chalk.dim('  on    - Enable plan mode for all requests'));
-          console.log(chalk.dim('  off   - Disable plan mode'));
-          console.log(chalk.dim('  once  - Run plan mode for a single request'));
-          console.log(chalk.dim('  list  - List saved plans'));
-          console.log(chalk.dim('  resume- Resume a saved plan'));
-          console.log(chalk.dim('  clear - Clear completed plans\n'));
-      }
-    },
-    detailedHelp: () => {
-      console.log(chalk.cyan('\n/plan - Plan Mode Management\n'));
-      console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /plan              ') + 'Show usage help');
-      console.log(chalk.dim('  /plan on           ') + 'Enable plan mode for all requests');
-      console.log(chalk.dim('  /plan off          ') + 'Disable plan mode');
-      console.log(chalk.dim('  /plan once <task>  ') + 'Run a single task in plan mode');
-      console.log(chalk.dim('  /plan list         ') + 'List all saved plans');
-      console.log(chalk.dim('  /plan resume <id>  ') + 'Resume a saved plan');
-      console.log(chalk.dim('  /plan clear        ') + 'Clear completed plans');
-      console.log(chalk.dim('  /p                 ') + 'Alias for /plan');
-      console.log();
-      console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  Plan mode breaks down complex tasks into executable steps.'));
-      console.log(chalk.dim('  The agent creates a structured plan before execution,'));
-      console.log(chalk.dim('  allowing you to review and approve each step.'));
-      console.log();
-      console.log(chalk.bold('Workflow:'));
-      console.log(chalk.dim('  1. Enable plan mode with /plan on'));
-      console.log(chalk.dim('  2. Enter your complex request'));
-      console.log(chalk.dim('  3. Review the generated plan'));
-      console.log(chalk.dim('  4. Approve or modify the plan'));
-      console.log(chalk.dim('  5. Execute step by step'));
-      console.log();
-      console.log(chalk.bold('Examples:'));
-      console.log(chalk.dim('  /plan on                      ') + '# Enable persistent plan mode');
-      console.log(chalk.dim('  /plan once refactor auth.ts   ') + '# Single task with planning');
-      console.log(chalk.dim('  /plan list                    ') + '# See saved plans');
-      console.log(chalk.dim('  /plan resume plan_20260219    ') + '# Resume a saved plan');
-      console.log();
-    },
-  },
-  {
-    name: 'project',
-    aliases: ['proj'],
-    description: 'Project long-running task management',
-    usage: '/project [init|status|plan|quality|brainstorm|next|auto|verify|pause|list|mark|progress]',
-    handler: async (args, context, callbacks, currentConfig) => {
-      return await handleProjectCommand(args, context, callbacks, currentConfig);
-    },
-    detailedHelp: printProjectHelp,
-  },
-  {
-    name: 'skills',
-    description: '(Deprecated) Use /skill instead',
-    usage: '/skill',
-    handler: async (args, context) => {
-      // Redirect to the /skill namespace command.
-      console.log(chalk.dim('\n[/skills is deprecated. Use /skill instead]'));
-      await handleSkillNamespaceCommand(args, context);
-    },
-    detailedHelp: () => {
-      console.log(chalk.cyan('\n/skills - Deprecated\n'));
-      console.log(chalk.yellow('This command is deprecated. Use /skill instead.'));
-      console.log();
-      console.log(chalk.dim('  /skill           ') + 'List all available skills');
-      console.log(chalk.dim('  /skill:<name>    ') + 'Invoke a skill');
+      console.log(chalk.dim('  See also: /help mode, /auto-engine, /auto-denials'));
       console.log();
     },
   },
   {
     name: 'skill',
-    description: 'Skill namespace - invoke skills with /skill:name',
-    usage: '/skill[:name] [args]',
-    handler: async (args, context, callbacks, currentConfig) => {
-      // This handler is called when /skill is typed without :name
+    description: 'Skill namespace - list, invoke, or review skill learning',
+    usage: '/skill[:name] [pending|args]',
+    handler: async (args, context) => {
+      if ((args[0] ?? '').toLowerCase() === 'pending') {
+        await printLearningPendingForFilter(resolveLearningCommandCwd(context), 'skill');
+        return;
+      }
       // When /skill:name is used, parseCommand extracts the name and executeCommand
-      // calls executeSkillCommand directly
+      // calls executeSkillCommand directly. Plain /skill lists the namespace.
       await handleSkillNamespaceCommand(args, context);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/skill - Skill Namespace\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /skill               ') + 'List all available skills');
-      console.log(chalk.dim('  /skill:<name> [args] ') + 'Invoke a skill by name');
+      console.log(chalk.dim('  /<skill-name> [args] ') + 'Invoke a skill when no command uses that name');
+      console.log(chalk.dim('  /skill:<name> [args] ') + 'Invoke a skill with the compatibility form');
+      console.log(chalk.dim('  /skill reload        ') + 'Reload skills from disk');
+      console.log(chalk.dim('  /skill pending       ') + 'List pending method-guide learning suggestions');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  This is the pi-mono style skill invocation format.'));
+      console.log(chalk.dim('  Direct slash skill invocation follows the Claude Code style.'));
+      console.log(chalk.dim('  Built-in and extension commands keep priority when names overlap.'));
+      console.log(chalk.dim('  The /skill:<name> form remains supported for compatibility.'));
       console.log(chalk.dim('  Skills can also be triggered by natural language - just ask!'));
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /skill                    ') + '# List all skills');
-      console.log(chalk.dim('  /skill:code-review src/   ') + '# Invoke code-review skill');
+      console.log(chalk.dim('  /skill reload             ') + '# Reload skills after editing ~/.kodax/skills');
+      console.log(chalk.dim('  /code-review src/         ') + '# Invoke code-review skill');
+      console.log(chalk.dim('  /skill:code-review src/   ') + '# Compatibility form');
       console.log(chalk.dim('  /skill:tdd auth           ') + '# Invoke TDD skill');
       console.log();
     },
   },
+  {
+    name: 'verifier-log',
+    description: 'Toggle Sidecar Verifier log line (off by default)',
+    usage: '/verifier-log [on|off]',
+    argumentHint: 'on | off',
+    handler: async (args) => {
+      const raw = args[0]?.toLowerCase();
+      const envOn = process.env.KODAX_VERIFIER_LOG === '1';
+
+      if (!raw) {
+        const configOn = loadConfig().verifierLog === true;
+        const effective = envOn ? 'on' : 'off';
+        // Show config-vs-env divergence without asserting precedence —
+        // it depends on whether env came from shell (overrides config)
+        // or from `applyVerifierRuntimeEnv` (config-derived).
+        const persistedSuffix =
+          configOn === envOn
+            ? ''
+            : ` (env=${envOn ? 'on' : 'off'}, config=${configOn ? 'on' : 'off'})`;
+        console.log(
+          chalk.dim(`\nSidecar Verifier log: ${chalk.cyan(effective)}${persistedSuffix}`),
+        );
+        console.log(
+          chalk.dim(
+            '  When on, a one-line summary persists per verifier call:\n' +
+            '  `[Sidecar Verifier] {verdict} · {provider}/{model} · {ms}ms · {trace}`',
+          ),
+        );
+        console.log(chalk.dim('Usage: /verifier-log [on|off]\n'));
+        return;
+      }
+
+      let nextValue: boolean;
+      if (raw === 'on' || raw === 'true' || raw === '1') {
+        nextValue = true;
+      } else if (raw === 'off' || raw === 'false' || raw === '0') {
+        nextValue = false;
+      } else {
+        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
+        console.log(chalk.dim('Usage: /verifier-log [on|off]\n'));
+        return;
+      }
+
+      // Mutate runtime env so the change takes effect immediately
+      // (next sidecar call reads `process.env.KODAX_VERIFIER_LOG`).
+      if (nextValue) {
+        process.env.KODAX_VERIFIER_LOG = '1';
+      } else {
+        delete process.env.KODAX_VERIFIER_LOG;
+      }
+
+      const persistence = persistUserConfig({ verifierLog: nextValue });
+      printPersistedCommandStatus(
+        `Sidecar Verifier log: ${nextValue ? 'on' : 'off'}`,
+        persistence,
+      );
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/verifier-log - Sidecar Verifier Log Toggle\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /verifier-log           ') + 'Show current state');
+      console.log(chalk.dim('  /verifier-log on        ') + 'Enable + persist to config');
+      console.log(chalk.dim('  /verifier-log off       ') + 'Disable + persist to config');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  The Sidecar Verifier is the second-pass LLM judgment that fires'));
+      console.log(chalk.dim('  after a Worker terminates text-only. Off by default (silent happy'));
+      console.log(chalk.dim('  path). When on, every verifier call emits a one-line summary:'));
+      console.log(chalk.dim('    [Sidecar Verifier] accept · anthropic/claude-sonnet-4-6 · 3214ms · verifier_ok'));
+      console.log();
+      console.log(chalk.bold('Equivalent env var:'));
+      console.log(chalk.dim('  KODAX_VERIFIER_LOG=1   ') + 'Same effect, env wins over config');
+      console.log();
+    },
+  },
+  {
+    name: 'stall-log',
+    description: 'Toggle Stall Sidecar log line (off by default)',
+    usage: '/stall-log [on|off]',
+    argumentHint: 'on | off',
+    handler: async (args) => {
+      const raw = args[0]?.toLowerCase();
+      const envOn = process.env.KODAX_STALL_LOG === '1';
+
+      if (!raw) {
+        const configOn = loadConfig().stallLog === true;
+        const effective = envOn ? 'on' : 'off';
+        // Same env-vs-config divergence handling as /verifier-log.
+        const persistedSuffix =
+          configOn === envOn
+            ? ''
+            : ` (env=${envOn ? 'on' : 'off'}, config=${configOn ? 'on' : 'off'})`;
+        console.log(
+          chalk.dim(`\nStall Sidecar log: ${chalk.cyan(effective)}${persistedSuffix}`),
+        );
+        console.log(
+          chalk.dim(
+            '  When on, a one-line summary persists per L2 stall verdict:\n' +
+            '  `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`',
+          ),
+        );
+        console.log(chalk.dim('Usage: /stall-log [on|off]\n'));
+        return;
+      }
+
+      let nextValue: boolean;
+      if (raw === 'on' || raw === 'true' || raw === '1') {
+        nextValue = true;
+      } else if (raw === 'off' || raw === 'false' || raw === '0') {
+        nextValue = false;
+      } else {
+        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
+        console.log(chalk.dim('Usage: /stall-log [on|off]\n'));
+        return;
+      }
+
+      // Mutate runtime env so the change takes effect on the next stall
+      // verdict (no restart needed). Read by the stall sidecar factory's
+      // onVerdict gate in `runner-driven.ts`.
+      if (nextValue) {
+        process.env.KODAX_STALL_LOG = '1';
+      } else {
+        delete process.env.KODAX_STALL_LOG;
+      }
+
+      const persistence = persistUserConfig({ stallLog: nextValue });
+      printPersistedCommandStatus(
+        `Stall Sidecar log: ${nextValue ? 'on' : 'off'}`,
+        persistence,
+      );
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/stall-log - Stall Sidecar Log Toggle\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /stall-log           ') + 'Show current state');
+      console.log(chalk.dim('  /stall-log on        ') + 'Enable + persist to config');
+      console.log(chalk.dim('  /stall-log off       ') + 'Disable + persist to config');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  The Stall Sidecar (FEATURE_178) is the L2 anti-loop LLM judge that'));
+      console.log(chalk.dim('  fires when the L1 rule-based detector spots a repeat-tool pattern.'));
+      console.log(chalk.dim('  Off by default (silent happy path). When on, every L2 verdict emits'));
+      console.log(chalk.dim('  a one-line summary:'));
+      console.log(chalk.dim('    [Stall Sidecar] isStuck=true · zhipu/glm-5.1 (inherit) · 1842ms · sidecar_ok'));
+      console.log();
+      console.log(chalk.bold('Equivalent env var:'));
+      console.log(chalk.dim('  KODAX_STALL_LOG=1   ') + 'Same effect, env wins over config');
+      console.log();
+    },
+  },
   copyCommand,
+  learnCommand,
+  memoryCommand,
+  goalCommand,
+  workflowCommand,
   newCommand,
+  recoverCommand,
+  reviewCommand,
+  agentsCommand,
 ];
 
 // Print help.
 const COMMAND_CATEGORIES: Record<string, string[]> = {
-  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status'],
+  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status', 'agents'],
   Permission: ['mode', 'auto'],
-  Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
-  Settings: ['model', 'provider', 'thinking', 'reasoning', 'agent-mode', 'parallel', 'plan'],
-  Project: ['project'],
-  Skills: ['skill'],
+  Session: ['new', 'recover', 'save', 'load', 'sessions', 'history', 'delete'],
+  Settings: ['model', 'provider', 'thinking', 'reasoning', 'effort', 'agent-mode', 'plan', 'repo-intel'],
+  Skills: ['skill', 'learn'],
 };
 
 function getCommandsForCategory(names: string[]) {
@@ -1301,13 +2107,83 @@ function reasoningModeToLegacyThinking(mode: KodaXReasoningMode): boolean {
   return mode !== 'off';
 }
 
-function describeParallelExecution(enabled: boolean): 'parallel' | 'sequential' {
-  return enabled ? 'parallel' : 'sequential';
+function formatReasoningEffortDisplay(effort: string | undefined): string {
+  return effort === 'none' ? 'off' : effort ?? 'auto';
 }
+
+function formatReasoningEffortUsage(currentConfig: CurrentConfig): string {
+  const options = getProviderReasoningEffortOptions(
+    currentConfig.provider,
+    currentConfig.model,
+  );
+  return `Usage: /effort ${options.join('|')}|<provider-value>`;
+}
+
+function formatCurrentReasoningEffortStatus(config: CurrentConfig): string {
+  const effectiveEffort = resolvePermissionModeEffort(config);
+  return formatReasoningEffortStatusLabel({
+    provider: config.provider,
+    model: config.model,
+    effort: effectiveEffort,
+    effortOverride: config.effortOverride,
+    thinking: config.thinking,
+    reasoningMode: config.reasoningMode,
+  });
+}
+
+const REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
+  'auto',
+  'off',
+  'light',
+  'full',
+];
+type RepoIntelPublicMode = 'auto' | 'full' | 'light' | 'off';
 
 type ConfigPersistenceResult =
   | { saved: true }
   | { saved: false; error: Error };
+
+function normalizeRepoIntelPublicMode(
+  value: string | undefined,
+): KodaXRepoIntelligenceMode | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'auto') {
+    return 'auto';
+  }
+  if (normalized === 'full') {
+    return 'full';
+  }
+  if (normalized === 'light') {
+    return 'light';
+  }
+  if (normalized === 'off') {
+    return 'off';
+  }
+  return null;
+}
+
+function formatRepoIntelPublicMode(mode: KodaXRepoIntelligenceMode): RepoIntelPublicMode {
+  return mode;
+}
+
+function resolveToggleFlag(
+  value: string | undefined,
+  currentValue: boolean,
+): boolean | null {
+  if (!value) {
+    return null;
+  }
+  if (value === 'toggle') {
+    return !currentValue;
+  }
+  if (value === 'on' || value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === 'off' || value === 'false' || value === '0') {
+    return false;
+  }
+  return null;
+}
 
 function persistUserConfig(
   config: Parameters<typeof saveConfig>[0],
@@ -1342,15 +2218,81 @@ function applyReasoningMode(
   currentConfig: CurrentConfig,
 ): ConfigPersistenceResult {
   const thinking = reasoningModeToLegacyThinking(mode);
+  const clearBlockingEffort = mode !== 'off' && currentConfig.effort === 'none';
   const persistence = persistUserConfig({
     reasoningMode: mode,
     thinking,
+    ...(clearBlockingEffort ? { effort: undefined } : {}),
   });
 
   if (callbacks.setReasoningMode) {
     callbacks.setReasoningMode(mode);
   } else {
     currentConfig.reasoningMode = mode;
+    currentConfig.thinking = thinking;
+  }
+  if (clearBlockingEffort) {
+    if (callbacks.setEffort) {
+      callbacks.setEffort(undefined);
+    } else {
+      currentConfig.effort = undefined;
+      currentConfig.effortOverride = false;
+    }
+  }
+
+  return persistence;
+}
+
+// V2: `reasoningMode` is a derived compatibility field that is only ever 'off'
+// (thinking disabled via the `none` effort) or 'auto' (any thinking-on effort,
+// including a cleared `auto`). Normalize it on every `/effort` so a stale legacy
+// value (quick/balanced/deep) never lingers to mislead the status label or the
+// legacy display, and so the persisted state matches the Ctrl+T toggle's full
+// `{ effort, reasoningMode, thinking }` write (round-trip parity).
+function resolveReasoningModeAfterEffort(
+  effort: string | undefined,
+): KodaXReasoningMode {
+  return effort === 'none' ? 'off' : 'auto';
+}
+
+function resolveConfigAfterReasoningEffort(
+  effort: string | undefined,
+  currentConfig: CurrentConfig,
+): CurrentConfig {
+  const nextReasoningMode = resolveReasoningModeAfterEffort(effort);
+  return {
+    ...currentConfig,
+    effort,
+    effortOverride: effort !== undefined,
+    reasoningMode: nextReasoningMode,
+    thinking: reasoningModeToLegacyThinking(nextReasoningMode),
+  };
+}
+
+function applyReasoningEffort(
+  effort: string | undefined,
+  callbacks: CommandCallbacks,
+  currentConfig: CurrentConfig,
+): ConfigPersistenceResult {
+  const nextReasoningMode = resolveReasoningModeAfterEffort(effort);
+  const thinking = reasoningModeToLegacyThinking(nextReasoningMode);
+  const persistence = persistUserConfig({
+    effort,
+    reasoningMode: nextReasoningMode,
+    thinking,
+  });
+
+  if (callbacks.setEffort) {
+    callbacks.setEffort(effort);
+  } else {
+    currentConfig.effort = effort;
+    currentConfig.effortOverride = effort !== undefined;
+  }
+
+  if (callbacks.setReasoningMode) {
+    callbacks.setReasoningMode(nextReasoningMode);
+  } else {
+    currentConfig.reasoningMode = nextReasoningMode;
     currentConfig.thinking = thinking;
   }
 
@@ -1373,20 +2315,89 @@ function applyAgentMode(
   return persistence;
 }
 
-function applyParallelMode(
-  enabled: boolean,
+function applyRepoIntelligenceRuntimeConfig(
+  update: {
+    mode?: KodaXRepoIntelligenceMode;
+    trace?: boolean;
+  },
+  persistedConfig: {
+    repoIntelligenceMode?: KodaXRepoIntelligenceMode;
+    repoIntelligenceTrace?: boolean;
+  },
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig,
 ): ConfigPersistenceResult {
-  const persistence = persistUserConfig({ parallel: enabled });
+  const persistence = persistUserConfig(persistedConfig);
 
-  if (callbacks.setParallel) {
-    callbacks.setParallel(enabled);
+  if (callbacks.setRepoIntelligenceRuntime) {
+    callbacks.setRepoIntelligenceRuntime(update);
   } else {
-    currentConfig.parallel = enabled;
+    if (update.mode !== undefined) {
+      currentConfig.repoIntelligenceMode = update.mode;
+    }
+    if (update.trace !== undefined) {
+      currentConfig.repoIntelligenceTrace = update.trace;
+    }
   }
 
   return persistence;
+}
+
+function formatRepoIntelligenceSummary(
+  inspection: RepoIntelligenceRuntimeInspection,
+): string {
+  const requestedLabel = inspection.configuredMode === inspection.requestedMode
+    ? inspection.configuredMode
+    : `${inspection.configuredMode} -> ${inspection.requestedMode}`;
+  const fallbackLabel = inspection.fallbackToLight ? ', fallback=light' : '';
+  return `${requestedLabel} => ${inspection.effectiveEngine} (${inspection.status}${fallbackLabel})`;
+}
+
+function getRepoIntelInspectionWorkspaceRoot(context: InteractiveContext): string | undefined {
+  return context.runtimeInfo?.workspaceRoot
+    ?? context.gitRoot
+    ?? context.runtimeInfo?.executionCwd;
+}
+
+function formatRepoIntelStatusLabel(inspection: RepoIntelligenceRuntimeInspection): string {
+  return inspection.status;
+}
+
+function formatRepoIntelActiveEngine(inspection: RepoIntelligenceRuntimeInspection): string {
+  if (inspection.effectiveEngine === 'off') {
+    return 'off';
+  }
+  return inspection.effectiveEngine;
+}
+
+function normalizeRepoIntelWarning(warning: string): string {
+  return warning;
+}
+
+function printRepoIntelStatus(
+  inspection: RepoIntelligenceRuntimeInspection,
+): void {
+  console.log(chalk.bold('\nRepo Intelligence:\n'));
+  console.log(chalk.dim(`  Mode:        ${chalk.cyan(formatRepoIntelPublicMode(inspection.configuredMode))}`));
+  console.log(chalk.dim(`  Engine:      ${chalk.cyan(formatRepoIntelActiveEngine(inspection))}`));
+  console.log(chalk.dim(`  Status:      ${chalk.cyan(formatRepoIntelStatusLabel(inspection))}`));
+  console.log(chalk.dim(`  Trace:       ${chalk.cyan(inspection.traceEnabled ? 'on' : 'off')}`));
+  if (inspection.workerPath) {
+    console.log(chalk.dim(`  Worker:      ${inspection.workerPath}`));
+  }
+  if (inspection.storageRoot) {
+    console.log(chalk.dim(`  Cache:       ${inspection.storageRoot}`));
+  }
+  if (inspection.fallbackToLight) {
+    console.log(chalk.yellow('  Fallback:    light engine is currently active'));
+  }
+  if (inspection.error) {
+    console.log(chalk.red(`  Error:       ${inspection.error}`));
+  }
+  for (const warning of inspection.warnings) {
+    console.log(chalk.yellow(`  Warning:     ${normalizeRepoIntelWarning(warning)}`));
+  }
+  console.log();
 }
 
 function printCommandSection(
@@ -1419,10 +2430,6 @@ function printHelp(): void {
     }
     printCommandSection(category, commands);
 
-    if (category === 'Project') {
-      console.log(chalk.dim('    Subcommands: init, status, plan, quality, brainstorm, next, auto, verify, pause, list, mark, progress'));
-      console.log();
-    }
   }
 
   const dynamicSections = new Map<string, Array<{ name: string; aliases?: string[]; description: string }>>();
@@ -1467,16 +2474,41 @@ function printHelp(): void {
   }
 
   console.log(chalk.dim('Special syntax:'));
-  console.log(`  ${chalk.cyan('@file')}             Add file to context`);
+  console.log(`  ${chalk.cyan('@path')}             Attach image to context`);
   console.log(`  ${chalk.cyan('!command')}         Execute shell command`);
   console.log();
   console.log(chalk.dim('Skills:'));
   console.log(`  ${chalk.cyan('/skill')}            List all available skills`);
-  console.log(`  ${chalk.cyan('/skill:<name>')}     Invoke a skill (e.g., /skill:code-review)`);
+  console.log(`  ${chalk.cyan('/<skill-name>')}     Invoke a skill when no command has that name`);
+  console.log(`  ${chalk.cyan('/skill:<name>')}     Compatibility form (e.g., /skill:code-review)`);
+  console.log(`  ${chalk.cyan('/skill pending')}    Review pending skill learning suggestions`);
+  console.log();
+  console.log(chalk.dim(`Tip: ${chalk.cyan('/<command> help')} shows command-specific help.`));
   console.log();
 }
 
 // Print detailed help for a specific command.
+/**
+ * FEATURE_218 — render a KodaX self-knowledge manual topic in the REPL,
+ * reusing the same structured resolver the `kodax_manual` tool uses. Unknown
+ * topics resolve to the manual index instead of erroring.
+ */
+function printManualTopic(topic: string): void {
+  const result = resolveKodaXManual({ topic });
+  console.log(`\n${chalk.cyan(result.title)}`);
+  console.log(result.content);
+  if (result.topics.length > 0) {
+    console.log();
+    for (const topic of result.topics) {
+      console.log(`- ${topic.id}: ${topic.summary}`);
+    }
+  }
+  if (result.topics.length === 0 && result.nextTopics.length > 0) {
+    console.log(chalk.dim(`\nRelated topics: ${result.nextTopics.join(', ')}`));
+  }
+  console.log();
+}
+
 function printDetailedHelp(commandName: string): void {
   // Lazy initialization.
   if (commandRegistry.size === 0) {
@@ -1519,24 +2551,27 @@ function printDetailedHelp(commandName: string): void {
 }
 
 // Print status.
-function printStatus(context: InteractiveContext, currentConfig: CurrentConfig): void {
+async function printStatus(
+  context: InteractiveContext,
+  currentConfig: CurrentConfig,
+  args: string[] = [],
+  callbacks?: CommandCallbacks,
+): Promise<void> {
+  const detailMode = args[0]?.toLowerCase();
   const tokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
   const tokenSource = context.contextTokenSnapshot?.source ?? 'estimate';
-  const permissionMode = currentConfig.permissionMode ?? 'accept-edits';
-  const reasoningMode = currentConfig.reasoningMode ?? 'off';
-  const agentMode = currentConfig.agentMode ?? 'ama';
   const capabilityProfile = getProviderCapabilityProfile(currentConfig.provider);
   const generalProviderPolicy = getProviderPolicyDecision(
     currentConfig.provider,
     currentConfig.model,
-    reasoningMode,
+    currentConfig.reasoningMode,
   );
   console.log(chalk.bold('\nSession Status:\n'));
   console.log(chalk.dim(`  Provider:    ${chalk.cyan(currentConfig.provider)}${currentConfig.model ? ` / ${chalk.cyan(currentConfig.model)}` : ''}`));
-  console.log(chalk.dim(`  Permission:  ${chalk.cyan(permissionMode)}`));
-  console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(reasoningMode)}`));
-  console.log(chalk.dim(`  Agent Mode:  ${chalk.cyan(agentMode.toUpperCase())}`));
-  console.log(chalk.dim(`  Execution:   ${chalk.cyan(describeParallelExecution(currentConfig.parallel))}`));
+  console.log(chalk.dim(`  Permission:  ${chalk.cyan(currentConfig.permissionMode)}`));
+  console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(currentConfig.reasoningMode)}`));
+  console.log(chalk.dim(`  Effort:      ${chalk.cyan(formatReasoningEffortDisplay(currentConfig.effort))}`));
+  console.log(chalk.dim(`  Agent Mode:  ${chalk.cyan(currentConfig.agentMode.toUpperCase())}`));
   if (capabilityProfile) {
     const capabilitySummary = describeProviderCapabilitySummary(capabilityProfile);
     const capabilityColor = capabilityProfile.transport === 'cli-bridge'
@@ -1552,19 +2587,101 @@ function printStatus(context: InteractiveContext, currentConfig: CurrentConfig):
   console.log(chalk.dim(`  Session ID:  ${context.sessionId}`));
   console.log(chalk.dim(`  Messages:    ${context.messages.length}`));
   console.log(chalk.dim(`  Tokens:      ~${tokens} (${tokenSource})`));
-  if (context.gitRoot) {
-    console.log(chalk.dim(`  Git Root:    ${context.gitRoot}`));
+  const repoInspection = await inspectRepoIntelligenceRuntime({
+    mode: currentConfig.repoIntelligenceMode,
+    trace: currentConfig.repoIntelligenceTrace,
+    probe: true,
+    workspaceRoot: getRepoIntelInspectionWorkspaceRoot(context),
+  });
+  console.log(chalk.dim(`  Repo Intel:  ${chalk.cyan(formatRepoIntelligenceSummary(repoInspection))}`));
+  if (context.runtimeInfo?.workspaceRoot) {
+    console.log(chalk.dim(`  Workspace:   ${chalk.cyan(formatWorkspaceTruth(context.runtimeInfo))}`));
+  } else if (context.gitRoot) {
+    console.log(chalk.dim(`  Workspace:   ${chalk.cyan(context.gitRoot)}`));
+  }
+  if (detailMode === 'workspace' || detailMode === 'worktree' || detailMode === 'runtime') {
+    if (context.runtimeInfo?.canonicalRepoRoot) {
+      console.log(chalk.dim(`  Canonical:   ${context.runtimeInfo.canonicalRepoRoot}`));
+    }
+    if (context.runtimeInfo?.executionCwd) {
+      console.log(chalk.dim(`  Exec CWD:    ${context.runtimeInfo.executionCwd}`));
+    }
+    if (context.runtimeInfo?.workspaceKind) {
+      console.log(chalk.dim(`  Kind:        ${context.runtimeInfo.workspaceKind}`));
+    }
+  }
+  if (detailMode === 'runtime') {
+    await printRuntimeSurfaceStatus(callbacks);
   }
   console.log(chalk.dim(`  Created:     ${context.createdAt}`));
   console.log(chalk.dim(`  Last Active: ${context.lastAccessed}`));
   console.log();
 }
 
-// Handle /skill namespace command (pi-mono style).
+async function printRuntimeSurfaceStatus(callbacks: CommandCallbacks | undefined): Promise<void> {
+  if (!callbacks?.getRuntimeStatus) {
+    console.log(chalk.dim('  SDK Runtime: unavailable (host did not provide runtime status)'));
+    return;
+  }
+
+  let status: RuntimeSurfaceStatus | undefined;
+  try {
+    status = await callbacks.getRuntimeStatus();
+  } catch (error: unknown) {
+    console.log(chalk.dim(
+      `  SDK Runtime: unavailable (${error instanceof Error ? error.message : String(error)})`,
+    ));
+    return;
+  }
+
+  if (!status) {
+    console.log(chalk.dim('  SDK Runtime: unavailable'));
+    return;
+  }
+
+  console.log(chalk.dim(
+    `  SDK Runtime: ${chalk.cyan(status.mode)}  profile=${chalk.cyan(status.profile)}`,
+  ));
+  console.log(chalk.dim(`  Runtime ID:  ${status.runtimeId}`));
+  if (status.health) {
+    console.log(chalk.dim(`  Health:      ${status.health}`));
+  }
+  if (status.endpoint) {
+    console.log(chalk.dim(`  Endpoint:    ${status.endpoint}`));
+  }
+  if (status.startedAt) {
+    console.log(chalk.dim(`  Runtime Up:  ${status.startedAt}`));
+  }
+  const counters = [
+    formatRuntimeCount('sessions', status.sessions),
+    formatRuntimeCount('runs', status.runs),
+    formatRuntimeCount('active', status.activeRuns),
+    formatRuntimeCount('queued', status.queuedRuns),
+    formatRuntimeCount('pending permissions', status.pendingPermissions),
+    formatRuntimeCount('workflows', status.workflows),
+  ].filter((line): line is string => line !== undefined);
+  if (counters.length > 0) {
+    console.log(chalk.dim(`  Runtime Ctrs:${' '} ${counters.join('  ')}`));
+  }
+}
+
+function formatRuntimeCount(label: string, value: number | undefined): string | undefined {
+  return value === undefined ? undefined : `${label}=${value}`;
+}
+
+// Handle the /skill namespace command.
 async function handleSkillNamespaceCommand(args: string[], context: InteractiveContext): Promise<void> {
   const registry = getSkillRegistry(context.gitRoot);
+  const subcommand = args[0]?.toLowerCase();
 
-  // Ensure skills are discovered.
+  if (subcommand === 'reload') {
+    const count = await reloadSkillRegistry(context.gitRoot);
+    console.log(chalk.green(`\nSkills reloaded: ${count} skill(s)`));
+    console.log(chalk.dim('Updated skills will apply to subsequent requests in this session.'));
+    console.log();
+    return;
+  }
+
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
@@ -1573,7 +2690,7 @@ async function handleSkillNamespaceCommand(args: string[], context: InteractiveC
   printSkillsListPiMonoStyle(registry.listUserInvocable());
 }
 
-// Print skills list in pi-mono style.
+// Print skills list with direct slash invocation as the primary form.
 function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
   console.log(chalk.bold('\nAvailable Skills:\n'));
 
@@ -1582,30 +2699,43 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
     console.log(chalk.dim('\n  Skills can be placed in:'));
     console.log(chalk.dim('    - .kodax/skills/'));
     console.log(chalk.dim('    - ~/.kodax/skills/'));
+    console.log(chalk.dim('    - ~/.agents/skills/'));
     return;
   }
 
-  const maxNameLen = Math.max(...skills.map(s => s.name.length));
+  const slashCommands = getCommandRegistry();
+  const rows = skills.map((skill) => {
+    const commandNameTaken =
+      slashCommands.get(skill.name) !== undefined || getActiveExtensionCommand(skill.name) !== undefined;
+    return {
+      skill,
+      invocation: commandNameTaken ? `/skill:${skill.name}` : `/${skill.name}`,
+      commandNameTaken,
+    };
+  });
+  const maxInvocationLen = Math.max(...rows.map((row) => row.invocation.length));
 
-  for (const skill of skills) {
+  for (const row of rows) {
+    const { skill } = row;
     // Pad first, then color so ANSI escapes do not affect width calculation.
-    const paddedName = skill.name.padEnd(maxNameLen);
+    const paddedInvocation = row.invocation.padEnd(maxInvocationLen);
     const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
     // Show source for all skills except project level, which is the default.
     const sourceLabel = skill.source === 'builtin' ? ' [builtin]'
       : skill.source === 'user' ? ' [user]'
       : skill.source === 'plugin' ? ' [plugin]'
       : '';
-    // pi-mono style: /skill:name
+    const conflictLabel = row.commandNameTaken ? ' [command name exists]' : '';
     const desc = skill.description.length > 50
       ? skill.description.slice(0, 50) + '...'
       : skill.description;
-    console.log(`  ${chalk.cyan(`/skill:${paddedName}`)}${chalk.dim(hint)}${chalk.dim(sourceLabel)}  ${chalk.dim(desc)}`);
+    console.log(`  ${chalk.cyan(paddedInvocation)}${chalk.dim(hint)}${chalk.dim(sourceLabel)}${chalk.dim(conflictLabel)}  ${chalk.dim(desc)}`);
   }
 
   console.log();
   console.log(chalk.dim(`Total: ${skills.length} skills`));
-  console.log(chalk.dim('Usage: /skill:<name> [args] or ask naturally'));
+  console.log(chalk.dim('Usage: /<skill-name> [args], legacy /skill:<name> [args], or ask naturally'));
+  console.log(chalk.dim('Review pending skill learning suggestions with /skill pending'));
   console.log();
 }
 
@@ -1651,6 +2781,30 @@ function getActiveExtensionCommand(name: string): ExtensionCommandDefinition | u
 
 function formatExtensionCommandUsage(command: ExtensionCommandDefinition): string {
   return command.usage ?? `/${command.name}`;
+}
+
+function formatExtensionDiagnosticValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function formatExtensionDiagnosticMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+
+  const entries = Object.entries(metadata)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${formatExtensionDiagnosticValue(value)}`);
+
+  return entries.length > 0 ? entries.join(' | ') : undefined;
 }
 
 function getExtensionRuntimeDiagnostics(runtime: NonNullable<ReturnType<typeof getActiveExtensionRuntime>>): ExtensionRuntimeDiagnostics {
@@ -1728,6 +2882,30 @@ function toExtensionInvocationRequest(
   };
 }
 
+function formatDiagnosticParts(parts: readonly unknown[]): string {
+  return parts.map((part) => {
+    if (typeof part === 'string') {
+      return part;
+    }
+    if (part instanceof Error) {
+      return part.stack ?? part.message;
+    }
+    try {
+      return JSON.stringify(part);
+    } catch {
+      return String(part);
+    }
+  }).join(' ');
+}
+
+function emitCommandDiagnostic(source: string, level: KodaXDiagnosticLevel, parts: readonly unknown[]): void {
+  emitKodaXDiagnostic({
+    source,
+    level,
+    message: formatDiagnosticParts(parts),
+  });
+}
+
 async function executeExtensionCommand(
   command: ExtensionCommandDefinition,
   args: string[],
@@ -1742,14 +2920,14 @@ async function executeExtensionCommand(
   const result = await command.handler(args, {
     sessionId: context.sessionId,
     gitRoot: context.gitRoot,
-    workingDirectory: context.gitRoot ?? process.cwd(),
+    workingDirectory: context.runtimeInfo?.executionCwd ?? context.gitRoot ?? process.cwd(),
     reloadExtensions: () => runtime.reloadExtensions(),
     getDiagnostics: () => getExtensionRuntimeDiagnostics(runtime),
     logger: {
-      debug: (...parts) => console.debug(`[kodax:extension-command:${command.name}]`, ...parts),
-      info: (...parts) => console.info(`[kodax:extension-command:${command.name}]`, ...parts),
-      warn: (...parts) => console.warn(`[kodax:extension-command:${command.name}]`, ...parts),
-      error: (...parts) => console.error(`[kodax:extension-command:${command.name}]`, ...parts),
+      debug: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'debug', parts),
+      info: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'info', parts),
+      warn: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'warn', parts),
+      error: (...parts) => emitCommandDiagnostic(`repl:extension-command:${command.name}`, 'error', parts),
     },
   });
 
@@ -1769,6 +2947,67 @@ async function executeExtensionCommand(
   return true;
 }
 
+/**
+ * FEATURE_143 (v0.7.36) — mid-line `/skill:NAME` reference.
+ *
+ * Distinct from `parseCommand`: that function only resolves a leading
+ * `/cmd` (the entire input is the command). This represents one
+ * occurrence of `/skill:NAME` anywhere in a user message — typically
+ * in the middle of natural-language prose like "use /skill:foo to
+ * sketch the layout".
+ */
+export interface InlineSkillReference {
+  /** The skill name as written, without the `/skill:` prefix. */
+  readonly name: string;
+  /** The full matched substring including the `/skill:` prefix. */
+  readonly raw: string;
+  /** Offset of `raw` in the original input string. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Scan `input` for inline `/skill:NAME` references. Mirrors the
+ * pi-mono in-text skill annotation pattern. Each match must be
+ * preceded by start-of-string or whitespace so we don't accidentally
+ * pick up `https://example.com/skill:foo` URLs or code paths.
+ *
+ * Skipping the leading `/skill:` at column 0 of a trimmed input is
+ * intentional — that case is already handled by `parseCommand`'s
+ * leading-slash branch, and feeding it into this scanner too would
+ * produce a duplicate skill load.
+ *
+ * Returns matches in textual order. Caller decides what to do —
+ * typically: preload each match's `SKILL.md` and inject it as system
+ * context immediately before the user's message.
+ */
+export function parseInlineSkillReferences(input: string): readonly InlineSkillReference[] {
+  if (typeof input !== 'string' || input.length === 0) return [];
+  const trimmed = input.trim();
+  // If the whole input is a leading-slash command (`/skill:foo args...`),
+  // defer to parseCommand — don't double-load the skill.
+  if (trimmed.startsWith('/skill:')) return [];
+
+  const matches: InlineSkillReference[] = [];
+  // Allow word chars, dashes, dots, and `:` (for nested namespace forms).
+  const regex = /(^|\s)\/skill:([\w][\w.\-:]*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(input)) !== null) {
+    const lead = match[1] ?? '';
+    const name = match[2] ?? '';
+    if (!name) continue;
+    const rawStart = match.index + lead.length;
+    const raw = `/skill:${name}`;
+    matches.push({
+      name,
+      raw,
+      start: rawStart,
+      end: rawStart + raw.length,
+    });
+  }
+  return matches;
+}
+
 export function parseCommand(input: string): { command: string; args: string[]; skillInvocation?: { name: string } } | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -1780,7 +3019,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 
   if (!command) return null;
 
-  // Check for /skill:name format (pi-mono style).
+  // Check for legacy /skill:name format.
   if (command.startsWith('skill:')) {
     const skillName = command.slice(6); // Remove 'skill:' prefix
     if (skillName) {
@@ -1800,11 +3039,16 @@ export function parseCommand(input: string): { command: string; args: string[]; 
   return { command, args };
 }
 
+function isCommandHelpRequest(args: readonly string[]): boolean {
+  const firstArg = args[0]?.trim().toLowerCase();
+  return firstArg === 'help' || firstArg === '--help' || firstArg === '-h';
+}
+
 // Execute command.
 export type CommandResult = boolean | {
   skillContent?: string;
-  projectInitPrompt?: string;
   invocation?: CommandInvocationRequest;
+  workflow?: CommandWorkflowInvocationRequest;
 };
 
 export async function executeCommand(
@@ -1818,7 +3062,7 @@ export async function executeCommand(
     initCommandRegistry(context.gitRoot);
   }
 
-  // Handle /skill:name format (pi-mono style).
+  // Handle legacy /skill:name format.
   if (parsed.skillInvocation) {
     return await executeSkillCommand(
       { command: parsed.skillInvocation.name, args: parsed.args },
@@ -1831,6 +3075,11 @@ export async function executeCommand(
     if (cmd.userInvocable === false) {
       console.log(chalk.yellow(`\n[Command /${cmd.name} is not user-invocable]`));
       return false;
+    }
+
+    if (isCommandHelpRequest(parsed.args)) {
+      printDetailedHelp(parsed.command);
+      return true;
     }
 
     try {
@@ -1848,6 +3097,11 @@ export async function executeCommand(
 
   const extensionCommand = getActiveExtensionCommand(parsed.command);
   if (extensionCommand) {
+    if (isCommandHelpRequest(parsed.args)) {
+      printDetailedHelp(parsed.command);
+      return true;
+    }
+
     try {
       return await executeExtensionCommand(extensionCommand, parsed.args, context);
     } catch (error) {
@@ -1856,8 +3110,54 @@ export async function executeCommand(
     }
   }
 
+  const namespacedDirectSkill = await resolveNamespacedDirectSkillCommand(parsed, context);
+  if (namespacedDirectSkill) {
+    return await executeSkillCommand(
+      { command: namespacedDirectSkill.skill.name, args: namespacedDirectSkill.args },
+      context
+    );
+  }
+
+  const directSkill = await resolveDirectSkillCommand(parsed.command, context);
+  if (directSkill) {
+    return await executeSkillCommand(
+      { command: directSkill.name, args: parsed.args },
+      context
+    );
+  }
+
   console.log(chalk.yellow(`\n[Unknown command: /${parsed.command}. Type /help for available commands]`));
   return false;
+}
+
+async function resolveNamespacedDirectSkillCommand(
+  parsed: { command: string; args: string[] },
+  context: InteractiveContext
+): Promise<{ skill: SkillMetadata; args: string[] } | undefined> {
+  const firstArg = parsed.args[0];
+  if (!firstArg) return undefined;
+
+  const candidateName = `${parsed.command}:${firstArg}`;
+  const skill = await resolveDirectSkillCommand(candidateName, context);
+  if (!skill) return undefined;
+
+  return {
+    skill,
+    args: parsed.args.slice(1),
+  };
+}
+
+async function resolveDirectSkillCommand(
+  name: string,
+  context: InteractiveContext
+): Promise<SkillMetadata | undefined> {
+  const registry = getSkillRegistry(context.gitRoot);
+  if (registry.size === 0) {
+    await initializeSkillRegistry(context.gitRoot);
+  }
+
+  const skill = registry.get(name);
+  return skill?.userInvocable ? skill : undefined;
 }
 
 // Execute skill command.
@@ -1869,7 +3169,6 @@ async function executeSkillCommand(
   const skillName = parsed.command;
   const skillArgs = parsed.args.join(' ');
 
-  // Ensure skills are discovered.
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
@@ -1900,6 +3199,10 @@ async function executeSkillCommand(
       projectRoot: context.gitRoot ?? undefined,
       sessionId: context.sessionId,
       environment: {},
+      // FEATURE_222 (R4): honor the host dynamic-context policy on the user-typed
+      // /skill path too, so a sandbox host's disable/broker applies everywhere.
+      executeDynamicContext: context.skillDynamicContext?.execute,
+      disableDynamicContext: context.skillDynamicContext?.disable,
     };
 
     // Expand the skill content for LLM injection.

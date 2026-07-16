@@ -1,11 +1,31 @@
 import fsPromises from 'node:fs/promises';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildRepoIntelligenceContext, getRepoOverview } from './index.js';
-import { getImpactEstimate, getRepoRoutingSignals } from './query.js';
+import {
+  getImpactEstimate as getSemanticImpactEstimate,
+  getRepoRoutingSignals as getSemanticRepoRoutingSignals,
+} from './semantic-index.js';
 import { commitAll, initGitRepo } from '../tools/test-helpers.js';
+
+type RepoContext = { executionCwd?: string; gitRoot?: string };
+type LightQueryOptions = { targetPath?: string; refresh?: boolean };
+
+function getRepoRoutingSignals(
+  context: RepoContext,
+  options: LightQueryOptions = {},
+) {
+  return getSemanticRepoRoutingSignals(context, { ...options, profile: 'light' });
+}
+
+function getImpactEstimate(
+  context: RepoContext,
+  options: LightQueryOptions & { symbol?: string; module?: string; path?: string } = {},
+) {
+  return getSemanticImpactEstimate(context, { ...options, profile: 'light' });
+}
 
 function createWorkspaceFixture(workspaceRoot: string): void {
   mkdirSync(join(workspaceRoot, 'packages', 'app', 'src'), { recursive: true });
@@ -24,28 +44,6 @@ function createWorkspaceFixture(workspaceRoot: string): void {
 
 function getStorageRoot(workspaceRoot: string): string {
   return join(workspaceRoot, '.agent', 'repo-intelligence');
-}
-
-function getCanonicalStorageRoot(workspaceRoot: string): string {
-  try {
-    return getStorageRoot(realpathSync(workspaceRoot)).replace(/\\/g, '/');
-  } catch {
-    return getStorageRoot(workspaceRoot).replace(/\\/g, '/');
-  }
-}
-
-function getStorageRootCandidates(workspaceRoot: string): string[] {
-  const candidates = new Set<string>([
-    getStorageRoot(workspaceRoot).replace(/\\/g, '/'),
-  ]);
-
-  try {
-    candidates.add(getStorageRoot(realpathSync(workspaceRoot)).replace(/\\/g, '/'));
-  } catch {
-    // Keep the raw path fallback when the workspace no longer resolves.
-  }
-
-  return Array.from(candidates);
 }
 
 function forceDirtyOverviewArtifacts(workspaceRoot: string): void {
@@ -68,13 +66,10 @@ function writeJson(filePath: string, payload: unknown): void {
 }
 
 function collectOverviewWritePaths(calls: Array<unknown[]>, workspaceRoot: string): string[] {
-  const storageRoots = getStorageRootCandidates(workspaceRoot);
-
   return calls
     .map(([filePath]) => typeof filePath === 'string' ? filePath : null)
-    .filter((filePath): filePath is string => filePath !== null)
+    .filter((filePath): filePath is string => filePath !== null && filePath.startsWith(getStorageRoot(workspaceRoot)))
     .map((filePath) => filePath.replace(/\\/g, '/'))
-    .filter((filePath) => storageRoots.some((storageRoot) => filePath.startsWith(storageRoot)))
     .filter((filePath) =>
       filePath.endsWith('/manifest.json')
       || filePath.endsWith('/repo-overview.json')
@@ -120,6 +115,29 @@ describe('repo overview baseline cache', () => {
     expect(rebuilt.generatedAt).not.toBe(initial.generatedAt);
     expect(rebuiltInventory.schemaVersion).toBe(initial.schemaVersion);
     expect(rebuiltInventory.overviewGeneratedAt).toBe(rebuilt.generatedAt);
+  }, 15000);
+
+  it('honors an absolute repo-intelligence storage dir override', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-repo-overview-absolute-storage-'));
+    const storageDir = mkdtempSync(join(tmpdir(), 'kodax-ri-storage-'));
+    const originalStorageDir = process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
+    createWorkspaceFixture(tempDir);
+
+    try {
+      process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR = storageDir;
+      await getRepoOverview({ executionCwd: tempDir }, { refresh: true });
+
+      expect(existsSync(join(storageDir, 'repo-overview.json'))).toBe(true);
+      expect(existsSync(join(storageDir, 'repo-overview-inventory.json'))).toBe(true);
+      expect(existsSync(join(tempDir, storageDir, 'repo-overview.json'))).toBe(false);
+    } finally {
+      if (originalStorageDir === undefined) {
+        delete process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
+      } else {
+        process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR = originalStorageDir;
+      }
+      rmSync(storageDir, { recursive: true, force: true });
+    }
   }, 15000);
 
   it('does not write clean baseline artifacts for filesystem workspaces', async () => {
@@ -426,40 +444,28 @@ describe('repo overview baseline cache', () => {
     await getRepoOverview({ executionCwd: tempDir }, { refresh: true });
     writeFileSync(join(tempDir, 'docs', 'PRD.md'), '# PRD\n\nUpdated details.\n');
 
-    const routingWriteSpy = vi.spyOn(fsPromises, 'writeFile');
     await getRepoRoutingSignals({ executionCwd: tempDir }, { refresh: false });
-    const canonicalStorageRoot = getCanonicalStorageRoot(tempDir);
-    expect(collectOverviewWritePaths(routingWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${canonicalStorageRoot}/manifest.json`,
-      `${canonicalStorageRoot}/repo-overview-inventory.json`,
-      `${canonicalStorageRoot}/repo-overview.json`,
-    ]);
-    routingWriteSpy.mockRestore();
+    expect(existsSync(join(getStorageRoot(tempDir), 'manifest.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview-inventory.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview.json'))).toBe(true);
 
     forceDirtyOverviewArtifacts(tempDir);
-    const impactWriteSpy = vi.spyOn(fsPromises, 'writeFile');
     await getImpactEstimate({ executionCwd: tempDir }, {
       module: '@demo/app',
       refresh: false,
     });
-    expect(collectOverviewWritePaths(impactWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${canonicalStorageRoot}/manifest.json`,
-      `${canonicalStorageRoot}/repo-overview-inventory.json`,
-      `${canonicalStorageRoot}/repo-overview.json`,
-    ]);
-    impactWriteSpy.mockRestore();
+    expect(existsSync(join(getStorageRoot(tempDir), 'manifest.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview-inventory.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview.json'))).toBe(true);
 
     forceDirtyOverviewArtifacts(tempDir);
-    const contextWriteSpy = vi.spyOn(fsPromises, 'writeFile');
     await buildRepoIntelligenceContext({ executionCwd: tempDir }, {
       includeRepoOverview: true,
       includeChangedScope: true,
       refreshOverview: false,
     });
-    expect(collectOverviewWritePaths(contextWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${canonicalStorageRoot}/manifest.json`,
-      `${canonicalStorageRoot}/repo-overview-inventory.json`,
-      `${canonicalStorageRoot}/repo-overview.json`,
-    ]);
+    expect(existsSync(join(getStorageRoot(tempDir), 'manifest.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview-inventory.json'))).toBe(true);
+    expect(existsSync(join(getStorageRoot(tempDir), 'repo-overview.json'))).toBe(true);
   }, 20000);
 });

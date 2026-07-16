@@ -1,0 +1,7 @@
+// Trusted user Extension paths: ~/.kodax/integrations/extensions.json.
+// Extensions are host code. Reload is whole-domain atomic; use MCP for
+// capabilities that should remain outside the KodaX process.
+{
+  "version": 1,
+  "paths": []
+}

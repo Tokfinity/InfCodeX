@@ -1,0 +1,109 @@
+export interface CompactionAntiThrashState {
+  readonly lowSavingsStreak: number;
+  readonly cooldownTurnsRemaining: number;
+}
+
+export interface CompactionSavingsSample {
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+}
+
+export interface CompactionAntiThrashConfig {
+  readonly lowSavingsRatio?: number;
+  readonly lowSavingsStreakLimit?: number;
+  readonly cooldownTurns?: number;
+}
+
+export interface CompactionSavingsDecision {
+  readonly state: CompactionAntiThrashState;
+  readonly savingsRatio: number;
+  readonly lowSavings: boolean;
+  readonly enteredCooldown: boolean;
+}
+
+export type CompactionSkipReason = 'low_savings_cooldown';
+
+export interface RuntimeCompactionSkippedEvent {
+  readonly reason: CompactionSkipReason;
+  readonly currentTokens: number;
+  readonly contextWindow: number;
+  readonly triggerPercent: number;
+  readonly cooldownTurnsRemaining: number;
+  readonly lowSavingsStreak: number;
+}
+
+const DEFAULT_LOW_SAVINGS_RATIO = 0.1;
+const DEFAULT_LOW_SAVINGS_STREAK_LIMIT = 2;
+const DEFAULT_COOLDOWN_TURNS = 2;
+
+export function createCompactionAntiThrashState(): CompactionAntiThrashState {
+  return {
+    lowSavingsStreak: 0,
+    cooldownTurnsRemaining: 0,
+  };
+}
+
+export function shouldSkipLlmCompaction(state: CompactionAntiThrashState | undefined): boolean {
+  return (state?.cooldownTurnsRemaining ?? 0) > 0;
+}
+
+export function consumeCompactionCooldown(
+  state: CompactionAntiThrashState | undefined,
+): CompactionAntiThrashState {
+  const current = state ?? createCompactionAntiThrashState();
+  return {
+    lowSavingsStreak: current.lowSavingsStreak,
+    cooldownTurnsRemaining: Math.max(0, current.cooldownTurnsRemaining - 1),
+  };
+}
+
+export function recordCompactionSavings(
+  state: CompactionAntiThrashState | undefined,
+  sample: CompactionSavingsSample,
+  config: CompactionAntiThrashConfig = {},
+): CompactionSavingsDecision {
+  const current = state ?? createCompactionAntiThrashState();
+  const lowSavingsRatio = config.lowSavingsRatio ?? DEFAULT_LOW_SAVINGS_RATIO;
+  const streakLimit = config.lowSavingsStreakLimit ?? DEFAULT_LOW_SAVINGS_STREAK_LIMIT;
+  const cooldownTurns = config.cooldownTurns ?? DEFAULT_COOLDOWN_TURNS;
+  const savingsRatio = computeSavingsRatio(sample);
+  const lowSavings = savingsRatio < lowSavingsRatio;
+
+  if (!lowSavings) {
+    return {
+      state: createCompactionAntiThrashState(),
+      savingsRatio,
+      lowSavings: false,
+      enteredCooldown: false,
+    };
+  }
+
+  const nextStreak = current.lowSavingsStreak + 1;
+  if (nextStreak >= streakLimit) {
+    return {
+      state: {
+        lowSavingsStreak: 0,
+        cooldownTurnsRemaining: Math.max(1, cooldownTurns),
+      },
+      savingsRatio,
+      lowSavings: true,
+      enteredCooldown: true,
+    };
+  }
+
+  return {
+    state: {
+      lowSavingsStreak: nextStreak,
+      cooldownTurnsRemaining: current.cooldownTurnsRemaining,
+    },
+    savingsRatio,
+    lowSavings: true,
+    enteredCooldown: false,
+  };
+}
+
+function computeSavingsRatio(sample: CompactionSavingsSample): number {
+  if (sample.tokensBefore <= 0) return 0;
+  const savedTokens = Math.max(0, sample.tokensBefore - sample.tokensAfter);
+  return savedTokens / sample.tokensBefore;
+}

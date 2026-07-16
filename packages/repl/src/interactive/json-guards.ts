@@ -3,28 +3,32 @@ import type {
   KodaXExtensionSessionRecord,
   KodaXExtensionSessionState,
   KodaXJsonValue,
-  KodaXManagedTask,
   KodaXMessage,
   KodaXSessionUiHistoryItem,
+  KodaXSessionUiToolCall,
+  KodaXSessionUiToolCallStatus,
   SessionErrorMetadata,
-} from '@kodax/coding';
-import type { BrainstormSession } from './project-brainstorm.js';
-import type { FeatureList, ProjectControlState, ProjectFeature, ProjectWorkflowState } from './project-state.js';
+} from '@kodax-ai/agent';
+import type { KodaXManagedTask } from '@kodax-ai/coding';
 
 const MESSAGE_ROLES = new Set<KodaXMessage['role']>(['user', 'assistant', 'system']);
-const WORKFLOW_STAGES = new Set<ProjectWorkflowState['stage']>([
-  'bootstrap',
-  'discovering',
-  'aligned',
-  'planned',
-  'executing',
-  'blocked',
-  'completed',
+const UI_TEXT_ITEM_TYPES = new Set([
+  'user',
+  'assistant',
+  'system',
+  'thinking',
+  'error',
+  'event',
+  'info',
+  'hint',
 ]);
-const WORKFLOW_SCOPES = new Set<ProjectWorkflowState['scope']>(['project', 'change_request']);
-const BRAINSTORM_STATUSES = new Set<BrainstormSession['status']>(['active', 'completed']);
-const BRAINSTORM_ROLES = new Set<BrainstormSession['turns'][number]['role']>(['user', 'assistant']);
-const TASK_SURFACES = new Set<NonNullable<KodaXManagedTask['contract']['surface']>>(['cli', 'repl', 'project', 'plan']);
+const UI_TOOL_STATUSES = new Set<KodaXSessionUiToolCallStatus>([
+  'success',
+  'error',
+  'cancelled',
+  'awaiting_approval',
+]);
+const TASK_SURFACES = new Set<NonNullable<KodaXManagedTask['contract']['surface']>>(['cli', 'repl', 'plan']);
 const TASK_STATUSES = new Set<NonNullable<KodaXManagedTask['contract']['status']>>([
   'planned',
   'running',
@@ -118,6 +122,9 @@ function isKodaXContentBlock(value: unknown): value is KodaXContentBlock {
       return typeof value.tool_use_id === 'string'
         && typeof value.content === 'string'
         && (value.is_error === undefined || typeof value.is_error === 'boolean');
+    case 'image':
+      return typeof value.path === 'string'
+        && (value.mediaType === undefined || typeof value.mediaType === 'string');
     case 'thinking':
       return typeof value.thinking === 'string'
         && (value.signature === undefined || typeof value.signature === 'string');
@@ -147,74 +154,47 @@ export function isSessionErrorMetadata(value: unknown): value is SessionErrorMet
     && (value.consecutiveErrors === undefined || typeof value.consecutiveErrors === 'number');
 }
 
-function isProjectFeature(value: unknown): value is ProjectFeature {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (value.name === undefined || typeof value.name === 'string')
-    && (value.description === undefined || typeof value.description === 'string')
-    && (value.steps === undefined || isStringArray(value.steps))
-    && (value.passes === undefined || typeof value.passes === 'boolean')
-    && (value.skipped === undefined || typeof value.skipped === 'boolean')
-    && (value.startedAt === undefined || typeof value.startedAt === 'string')
-    && (value.completedAt === undefined || typeof value.completedAt === 'string')
-    && (value.notes === undefined || typeof value.notes === 'string');
+function isKodaXSessionUiToolInput(value: unknown): value is { [key: string]: KodaXJsonValue } {
+  return isRecord(value) && Object.values(value).every(isKodaXJsonValue);
 }
 
-export function isFeatureList(value: unknown): value is FeatureList {
-  return isRecord(value) && Array.isArray(value.features) && value.features.every(isProjectFeature);
-}
-
-export function isProjectWorkflowState(value: unknown): value is ProjectWorkflowState {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return typeof value.stage === 'string'
-    && WORKFLOW_STAGES.has(value.stage as ProjectWorkflowState['stage'])
-    && typeof value.scope === 'string'
-    && WORKFLOW_SCOPES.has(value.scope as ProjectWorkflowState['scope'])
-    && typeof value.unresolvedQuestionCount === 'number'
-    && typeof value.lastUpdated === 'string'
-    && typeof value.discoveryStepIndex === 'number'
-    && (value.activeRequestId === undefined || typeof value.activeRequestId === 'string')
-    && (value.currentFeatureIndex === undefined || typeof value.currentFeatureIndex === 'number')
-    && (value.lastPlannedAt === undefined || typeof value.lastPlannedAt === 'string')
-    && (value.latestExecutionSummary === undefined || typeof value.latestExecutionSummary === 'string');
+function isKodaXSessionUiToolCall(value: unknown): value is KodaXSessionUiToolCall {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.status === 'string'
+    && UI_TOOL_STATUSES.has(value.status as KodaXSessionUiToolCallStatus)
+    && (value.input === undefined || isKodaXSessionUiToolInput(value.input))
+    && (value.preview === undefined || typeof value.preview === 'string')
+    && (value.output === undefined || typeof value.output === 'string')
+    && (value.error === undefined || typeof value.error === 'string')
+    && (value.startTime === undefined || typeof value.startTime === 'number')
+    && (value.endTime === undefined || typeof value.endTime === 'number');
 }
 
 export function isKodaXSessionUiHistoryItem(value: unknown): value is KodaXSessionUiHistoryItem {
-  return isRecord(value)
-    && typeof value.type === 'string'
-    && (
-      value.type === 'user'
-      || value.type === 'assistant'
-      || value.type === 'system'
-      || value.type === 'thinking'
-      || value.type === 'error'
-      || value.type === 'info'
-      || value.type === 'hint'
-    )
-    && typeof value.text === 'string';
-}
-
-export function isKodaXSessionUiHistory(value: unknown): value is KodaXSessionUiHistoryItem[] {
-  return Array.isArray(value) && value.every(isKodaXSessionUiHistoryItem);
-}
-
-export function isProjectControlState(value: unknown): value is ProjectControlState {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
   }
 
-  return typeof value.scope === 'string'
-    && WORKFLOW_SCOPES.has(value.scope as ProjectControlState['scope'])
-    && typeof value.discoveryStepIndex === 'number'
-    && typeof value.lastUpdated === 'string'
-    && (value.activeRequestId === undefined || typeof value.activeRequestId === 'string')
-    && (value.lastPlannedAt === undefined || typeof value.lastPlannedAt === 'string')
-    && (value.latestExecutionSummary === undefined || typeof value.latestExecutionSummary === 'string');
+  if (value.type === 'tool_group') {
+    return Array.isArray(value.tools)
+      && value.tools.length > 0
+      && value.tools.every(isKodaXSessionUiToolCall);
+  }
+
+  return UI_TEXT_ITEM_TYPES.has(value.type)
+    && typeof value.text === 'string'
+    && (value.icon === undefined || typeof value.icon === 'string')
+    && (value.compactText === undefined || typeof value.compactText === 'string');
+}
+
+/**
+ * @deprecated Prefer per-item filtering with isKodaXSessionUiHistoryItem so one
+ * malformed persisted entry does not discard the whole UI history snapshot.
+ */
+export function isKodaXSessionUiHistory(value: unknown): value is KodaXSessionUiHistoryItem[] {
+  return Array.isArray(value) && value.every(isKodaXSessionUiHistoryItem);
 }
 
 function isKodaXTaskCapabilityHint(value: unknown): boolean {
@@ -241,27 +221,6 @@ function isKodaXTaskToolPolicy(value: unknown): boolean {
     && (value.allowedTools === undefined || isStringArray(value.allowedTools))
     && (value.blockedTools === undefined || isStringArray(value.blockedTools))
     && (value.allowedShellPatterns === undefined || isStringArray(value.allowedShellPatterns));
-}
-
-export function isBrainstormSession(value: unknown): value is BrainstormSession {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return typeof value.id === 'string'
-    && typeof value.topic === 'string'
-    && typeof value.createdAt === 'string'
-    && typeof value.updatedAt === 'string'
-    && typeof value.status === 'string'
-    && BRAINSTORM_STATUSES.has(value.status as BrainstormSession['status'])
-    && Array.isArray(value.turns)
-    && value.turns.every(turn =>
-      isRecord(turn)
-      && typeof turn.role === 'string'
-      && BRAINSTORM_ROLES.has(turn.role as BrainstormSession['turns'][number]['role'])
-      && typeof turn.text === 'string'
-      && typeof turn.createdAt === 'string'
-    );
 }
 
 export function isKodaXManagedTask(value: unknown): value is KodaXManagedTask {
@@ -332,7 +291,12 @@ export function isKodaXManagedTask(value: unknown): value is KodaXManagedTask {
     && Array.isArray(evidence.artifacts)
     && evidence.artifacts.every((artifact) =>
       isRecord(artifact)
-      && (artifact.kind === 'json' || artifact.kind === 'text' || artifact.kind === 'markdown')
+      && (
+        artifact.kind === 'json'
+        || artifact.kind === 'text'
+        || artifact.kind === 'markdown'
+        || artifact.kind === 'image'
+      )
       && typeof artifact.path === 'string'
       && (artifact.description === undefined || typeof artifact.description === 'string')
     )

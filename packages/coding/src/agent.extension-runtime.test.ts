@@ -9,10 +9,10 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax/agent';
-import { KodaXBaseProvider } from '@kodax/ai';
-import { clearRuntimeModelProviders } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
+import { clearRuntimeModelProviders } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import { createExtensionRuntime, getActiveExtensionRuntime } from './extensions/index.js';
 
@@ -119,6 +119,56 @@ class Feature034ParallelProvider extends KodaXBaseProvider {
   }
 }
 
+class Feature034ManagedProtocolProvider extends KodaXBaseProvider {
+  static calls: Array<{
+    messages: KodaXMessage[];
+    tools: KodaXToolDefinition[];
+  }> = [];
+
+  readonly name = TEST_PROVIDER_NAME;
+  readonly supportsThinking = true;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: TEST_PROVIDER_API_KEY_ENV,
+    model: 'baseline-model',
+    supportsThinking: true,
+  };
+
+  async stream(
+    messages: KodaXMessage[],
+    tools: KodaXToolDefinition[],
+    _system: string,
+    _reasoning?: boolean | KodaXReasoningRequest,
+    _streamOptions?: KodaXProviderStreamOptions,
+    _signal?: AbortSignal,
+  ): Promise<KodaXStreamResult> {
+    Feature034ManagedProtocolProvider.calls.push({ messages, tools });
+    return {
+      textBlocks: [{ type: 'text', text: 'Structured evaluator answer.' }],
+      toolBlocks: [
+        {
+          type: 'tool_use',
+          id: 'protocol-1',
+          name: 'emit_managed_protocol',
+          input: {
+            role: 'evaluator',
+            payload: {
+              status: 'accept',
+              reason: 'Protocol payload emitted through the hidden tool.',
+              followups: ['none'],
+            },
+          },
+        },
+      ],
+      thinkingBlocks: [],
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+      },
+    };
+  }
+}
+
 describe('runKodaX extension runtime integration', () => {
   let tempDir: string;
 
@@ -126,6 +176,7 @@ describe('runKodaX extension runtime integration', () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-034-'));
     process.env[TEST_PROVIDER_API_KEY_ENV] = 'test-key';
     Feature034TestProvider.calls = [];
+    Feature034ManagedProtocolProvider.calls = [];
   });
 
   afterEach(async () => {
@@ -134,12 +185,17 @@ describe('runKodaX extension runtime integration', () => {
     delete (globalThis as typeof globalThis & {
       __feature034ProviderClass?: typeof Feature034TestProvider;
       __feature034ParallelProviderClass?: typeof Feature034ParallelProvider;
+      __feature034ManagedProtocolProviderClass?: typeof Feature034ManagedProtocolProvider;
       __feature034ParallelMetrics?: { active: number; max: number };
     }).__feature034ProviderClass;
     delete (globalThis as typeof globalThis & {
       __feature034ParallelProviderClass?: typeof Feature034ParallelProvider;
+      __feature034ManagedProtocolProviderClass?: typeof Feature034ManagedProtocolProvider;
       __feature034ParallelMetrics?: { active: number; max: number };
     }).__feature034ParallelProviderClass;
+    delete (globalThis as typeof globalThis & {
+      __feature034ManagedProtocolProviderClass?: typeof Feature034ManagedProtocolProvider;
+    }).__feature034ManagedProtocolProviderClass;
     delete (globalThis as typeof globalThis & {
       __feature034ParallelMetrics?: { active: number; max: number };
     }).__feature034ParallelMetrics;
@@ -150,6 +206,12 @@ describe('runKodaX extension runtime integration', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  // Every runKodaX integration it-block below passes an explicit 30_000ms
+  // timeout (vitest default is 5_000). A full extension-runtime + runKodaX run
+  // is ~3s single but can exceed 5s under full-suite parallel scheduling — and a
+  // 5s timeout aborts the it-block WITHOUT halting the underlying async runKodaX,
+  // which then keeps writing the shared static `Feature034TestProvider.calls`
+  // and pollutes the next test (shows up as `calls` length 2 instead of 1).
   it('lets extensions drive tools, model selection, thinking level, and queued follow-ups', async () => {
     const extensionPath = path.join(tempDir, 'feature-034-extension.mjs');
     await writeFile(
@@ -161,7 +223,7 @@ describe('runKodaX extension runtime integration', () => {
         });
         api.runtime.setActiveTools(['read']);
         api.runtime.setModelSelection({ model: 'extension-default-model' });
-        api.runtime.setThinkingLevel('deep');
+        api.runtime.setThinkingLevel('high');
         api.hook('provider:before', (context) => {
           context.replaceModel('hooked-model');
         });
@@ -186,16 +248,16 @@ describe('runKodaX extension runtime integration', () => {
       {
         provider: TEST_PROVIDER_NAME,
         extensionRuntime: runtime,
+        reasoningMode: 'off',
       },
       'start feature 034',
     );
-
     expect(result.success).toBe(true);
     expect(result.lastText).toBe('second pass complete');
     expect(Feature034TestProvider.calls).toHaveLength(2);
     expect(Feature034TestProvider.calls[0]?.tools.map((tool) => tool.name)).toEqual(['read']);
     expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('hooked-model');
-    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({ mode: 'deep', depth: 'high' });
+    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({ enabled: true, effort: 'high' });
     expect(
       Feature034TestProvider.calls[1]?.messages.some(
         (message) => message.role === 'user'
@@ -205,7 +267,7 @@ describe('runKodaX extension runtime integration', () => {
     ).toBe(true);
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   it('respects empty active tool sets and provider hook reasoning overrides', async () => {
     const extensionPath = path.join(tempDir, 'feature-034-empty-tools.mjs');
@@ -218,7 +280,7 @@ describe('runKodaX extension runtime integration', () => {
         });
         api.runtime.setActiveTools([]);
         api.hook('provider:before', (context) => {
-          context.setThinkingLevel('off');
+          context.setThinkingLevel('none');
         });
       }`,
       'utf8',
@@ -235,21 +297,20 @@ describe('runKodaX extension runtime integration', () => {
       {
         provider: TEST_PROVIDER_NAME,
         extensionRuntime: runtime,
+        reasoningMode: 'off',
       },
       'start feature 034 with no tools',
     );
-
     expect(result.success).toBe(true);
     expect(Feature034TestProvider.calls).toHaveLength(1);
     expect(Feature034TestProvider.calls[0]?.tools).toEqual([]);
     expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({
       enabled: false,
-      mode: 'off',
-      depth: 'off',
+      effort: 'none',
     });
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   it('persists extension session state and records across session resume', async () => {
     const extensionPath = path.join(tempDir, 'feature-034-persisted-runtime.mjs');
@@ -365,28 +426,35 @@ describe('runKodaX extension runtime integration', () => {
     expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('resumed-model');
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   it('restores the previously active runtime when startup fails', async () => {
+    // Force the "provider not configured" startup failure by removing the key,
+    // then restore it so the deletion does not leak to other tests sharing the
+    // process env (this provider env is ambient in many sibling suites).
+    const savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
 
     const previousRuntime = createExtensionRuntime().activate();
     const requestedRuntime = createExtensionRuntime();
 
-    await expect(
-      runKodaX(
-        {
-          provider: 'anthropic',
-          extensionRuntime: requestedRuntime,
-        },
-        'this should fail early',
-      ),
-    ).rejects.toThrow('ANTHROPIC_API_KEY not set');
+    try {
+      await expect(
+        runKodaX(
+          {
+            provider: 'anthropic',
+            extensionRuntime: requestedRuntime,
+          },
+          'this should fail early',
+        ),
+      ).rejects.toThrow('Provider "anthropic" not configured. Set ANTHROPIC_API_KEY');
 
-    expect(getActiveExtensionRuntime()).toBe(previousRuntime);
-
-    await previousRuntime.dispose();
-    await requestedRuntime.dispose();
+      expect(getActiveExtensionRuntime()).toBe(previousRuntime);
+    } finally {
+      if (savedAnthropicKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+      await previousRuntime.dispose();
+      await requestedRuntime.dispose();
+    }
   });
 
   it('runs independent extension tools concurrently when parallel mode is enabled', async () => {
@@ -437,7 +505,6 @@ describe('runKodaX extension runtime integration', () => {
       {
         provider: TEST_PROVIDER_NAME,
         extensionRuntime: runtime,
-        parallel: true,
       },
       'start feature 034 parallel tools',
     );
@@ -450,5 +517,60 @@ describe('runKodaX extension runtime integration', () => {
     expect(metrics?.max).toBe(2);
 
     await runtime.dispose();
-  });
+  }, 30_000);
+
+  it('removes repo-intelligence working tools from the provider-visible tool list in off mode', async () => {
+    const extensionPath = path.join(tempDir, 'feature-034-off-mode-tools.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.registerModelProvider({
+          name: '${TEST_PROVIDER_NAME}',
+          factory: () => new (globalThis.__feature034ProviderClass)(),
+        });
+      }`,
+      'utf8',
+    );
+
+    (globalThis as typeof globalThis & {
+      __feature034ProviderClass?: typeof Feature034TestProvider;
+    }).__feature034ProviderClass = Feature034TestProvider;
+
+    const runtime = createExtensionRuntime();
+    await runtime.loadExtension(extensionPath);
+
+    const result = await runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        extensionRuntime: runtime,
+        context: {
+          repoIntelligenceMode: 'off',
+        },
+      },
+      'summarize this workspace',
+    );
+
+    expect(result.success).toBe(true);
+    expect(Feature034TestProvider.calls).toHaveLength(1);
+    const toolNames = Feature034TestProvider.calls[0]?.tools.map((tool) => tool.name) ?? [];
+    expect(toolNames).toContain('read');
+    expect(toolNames).toContain('glob');
+    expect(toolNames).not.toContain('repo_overview');
+    expect(toolNames).not.toContain('changed_scope');
+    expect(toolNames).not.toContain('changed_diff');
+    expect(toolNames).not.toContain('changed_diff_bundle');
+    expect(toolNames).not.toContain('module_context');
+    expect(toolNames).not.toContain('semantic_lookup');
+    expect(toolNames).not.toContain('impact_estimate');
+
+    await runtime.dispose();
+  }, 30_000);
+
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: the "captures hidden managed
+  // protocol tool payloads" integration test was tied to the
+  // `emit_managed_protocol` tool. That tool has been physically removed
+  // from the registry alongside the V1 chain retirement, so the test no
+  // longer has a hidden-protocol surface to capture. Sidecar Verifier
+  // (FEATURE_184) emits verdicts via the dedicated `emit_verdict` tool on
+  // a separate AMA path covered by `verifier-recorder-bridge.test.ts`.
 });

@@ -1,0 +1,6 @@
+{
+  "name": "kodax-electron-daemon-smoke",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs"
+}

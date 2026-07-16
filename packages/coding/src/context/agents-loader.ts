@@ -7,11 +7,27 @@
  * Priority: global < root < ... < current directory < .kodax/
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, statSync } from "node:fs";
 import { join, parse, resolve } from "node:path";
 
-const CONTEXT_FILE_CANDIDATES = ["AGENTS.md", "CLAUDE.md"];
+import { getAgentConfigHome } from "@kodax-ai/agent";
+
+// v0.7.38 (2026-05-09) — KodaX only reads `AGENTS.md`, never `CLAUDE.md`.
+//
+// Rationale: `CLAUDE.md` is Claude Code-specific project guidance (its content
+// is authored to be consumed by the Claude Code CLI). When a project ships
+// both files, the contents typically overlap — falling back to `CLAUDE.md`
+// when `AGENTS.md` is missing causes either (a) double-injection of the same
+// rules (when both exist + fallback by directory order), or (b) semantic
+// mis-match (KodaX agent receives Claude Code-targeted instructions). KodaX's
+// own repository dogfooded this bug: `docs/CLAUDE.md` is CC project rules and
+// must NOT be injected into KodaX agent context.
+//
+// Practical impact: projects that ONLY ship `CLAUDE.md` (no `AGENTS.md`)
+// stop receiving any project-agents section. Migration: rename to
+// `AGENTS.md` or symlink — `AGENTS.md` is the canonical AI-agent rules file
+// across the AI-agent ecosystem (KodaX, Cursor, Continue, …).
+const CONTEXT_FILE_CANDIDATES = ["AGENTS.md"];
 
 export interface AgentsFile {
   path: string;
@@ -27,33 +43,84 @@ export interface LoadAgentsOptions {
 }
 
 /**
- * Get KodaX global directory
+ * Get KodaX global directory.
+ *
+ * Routes through {@link getAgentConfigHome} (v0.7.35.1 FEATURE_145 3-tier
+ * resolution: programmatic override > KODAX_HOME env > ~/.kodax default).
  */
 export function getKodaxGlobalDir(): string {
-  return join(homedir(), ".kodax");
+  return getAgentConfigHome();
+}
+
+/**
+ * FEATURE_149 Phase 1.2 (v0.7.38) — mtime-based file content cache.
+ *
+ * `loadAgentsFiles` is on the hot path (called by `prompts/capability-sections.ts`
+ * for every agent round). Without caching, each round walked from cwd to the
+ * filesystem root calling `existsSync` + `readFileSync` at each level. Now we
+ * stat first, hit the cache if mtime matches, and only re-read when the file
+ * actually changed. Mirrors Claude Code's `services/claudemd.ts` + `utils/fileReadCache.ts`
+ * pattern.
+ *
+ * Cache key = absolute path. `mtimeMs` is treated as the version. Cache is
+ * module-singleton — survives across calls within a single process. Tests can
+ * reset via `clearAgentsLoaderCacheForTesting()`.
+ */
+const fileContentCache = new Map<string, { mtimeMs: number; content: string }>();
+
+/** Test-only helper. Resets the module-level cache between unit tests. */
+export function clearAgentsLoaderCacheForTesting(): void {
+  fileContentCache.clear();
+}
+
+function readFileWithMtimeCache(filePath: string): string | null {
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(filePath).mtimeMs;
+  } catch {
+    // File does not exist or is not stat-able — treat as absent.
+    fileContentCache.delete(filePath);
+    return null;
+  }
+
+  const cached = fileContentCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.content;
+  }
+
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    fileContentCache.set(filePath, { mtimeMs, content });
+    return content;
+  } catch {
+    // Read fail-after-stat-success is rare (race with delete, EACCES) —
+    // treat as absent to match the pre-FEATURE_149 silent behavior.
+    // KodaX project rule (CLAUDE.md): no console.log/warn in production.
+    fileContentCache.delete(filePath);
+    return null;
+  }
 }
 
 function loadAgentsFile(dir: string, filenames: readonly string[]): AgentsFile | null {
   for (const filename of filenames) {
     const filePath = join(dir, filename);
-    if (existsSync(filePath)) {
-      try {
-        return {
-          path: filePath,
-          content: readFileSync(filePath, "utf-8"),
-          scope: "directory", // Will be adjusted by caller if needed
-        };
-      } catch (error) {
-        console.warn(`[kodax:agents] Could not read ${filePath}: ${error}`);
-      }
+    const content = readFileWithMtimeCache(filePath);
+    if (content !== null) {
+      return {
+        path: filePath,
+        content,
+        scope: "directory", // Will be adjusted by caller if needed
+      };
     }
   }
   return null;
 }
 
 /**
- * Load context file from a directory
- * Priority: AGENTS.md > CLAUDE.md
+ * Load context file from a directory.
+ *
+ * Only reads `AGENTS.md` — `CLAUDE.md` is intentionally NOT a fallback;
+ * see the rationale on `CONTEXT_FILE_CANDIDATES` above.
  */
 function loadContextFileFromDir(dir: string): AgentsFile | null {
   return loadAgentsFile(dir, CONTEXT_FILE_CANDIDATES);

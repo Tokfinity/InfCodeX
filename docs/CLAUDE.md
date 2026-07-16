@@ -16,7 +16,7 @@
 > **Documentation & Testing**:
 > - **TDD First**: Write tests before implementation (RED-GREEN-REFACTOR)
 > - **Doc First**: Update docs before coding (PRD, ADR, Feature Design)
-> - **Doc Location**: ALL `.md` files go to `docs/` directory (see Documentation Standards)
+> - **Doc Location**: root docs are limited to the allow-list below; project docs live under `docs/`. Package/client/builtin skill README or SKILL files may live next to the package or skill they document.
 
 ---
 
@@ -32,7 +32,7 @@ If the user did not give you a concrete task in their first message, read README
 
 **Core Principle**: Write less code, leverage LLM intelligence, maintain high quality.
 
-**KodaX Philosophy**: 极致轻量化 - each of the 5 layers is independently usable.
+**KodaX Philosophy**: 极致轻量化 - each workspace package is independently usable.
 
 ### Code Addition Discipline
 
@@ -85,32 +85,33 @@ If the user did not give you a concrete task in their first message, read README
 | Category | Technology | Version |
 |----------|-----------|---------|
 | Runtime | Node.js | >= 20.0.0 |
-| Language | TypeScript | >= 5.3.0 |
+| Language | TypeScript | >= 5.7.0 (root uses 5.9.x) |
 | Package Manager | npm workspaces | - |
-| CLI Framework | Ink (React for CLI) | ^4.x |
-| Test | Vitest | ^1.2.0 |
-| LLM Providers | Anthropic, OpenAI, Google, Zhipu, Kimi, MiniMax, DeepSeek, etc. | 11 total |
+| CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
+| Test | Vitest | ^3.2.4 |
+| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, Zai, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, etc. | 15 built-in aliases |
 
 ## Monorepo Structure
 
 ```
 KodaX/
 ├── packages/
-│   ├── ai/              # LLM abstraction layer (独立库)
-│   ├── agent/           # Agent framework
-│   ├── coding/          # Coding tools + prompts
-│   ├── repl/            # Interactive terminal (Ink UI)
-│   └── skills/          # Agent skills (零外部依赖)
+│   ├── llm/             # LLM abstraction layer
+│   ├── agent/           # Agent framework + inline mcp/skills/session-lineage/tracing/workflow
+│   ├── coding/          # Coding tools + prompts + repo-intelligence protocol
+│   └── repl/            # Interactive terminal (Ink UI)
 ├── src/                 # CLI entry point
-└── docs/                # Documentation
+├── docs/                # Documentation
+├── clients/             # External clients / protocol adapters
+└── benchmark/           # Eval harness and datasets
 ```
 
 **Layer Independence**:
-- `@kodax/ai` - Can be used standalone in any project
-- `@kodax/agent` - Can be used with any LLM provider
-- `@kodax/coding` - Can be embedded in other agents
-- `@kodax/repl` - Full REPL experience
-- `@kodax/skills` - Zero external dependencies
+- `@kodax-ai/llm` - Can be used standalone in any project
+- `@kodax-ai/agent` - Can be used with any LLM provider
+- `@kodax-ai/coding` - Can be embedded in other agents
+- `@kodax-ai/repl` - Full REPL experience
+- Inline skills/MCP/session-lineage/tracing/repo-intelligence subtrees are not standalone workspace packages after FEATURE_194.
 
 ## Documentation Standards
 
@@ -126,6 +127,7 @@ KodaX/
 | `DD.md` | Detailed Design | ✅ Yes |
 | `FEATURE_LIST.md` | Feature tracking | ✅ Yes |
 | `KNOWN_ISSUES.md` | Known issues and workarounds | ⚠️ Optional |
+| `release.md` | Binary release & distribution pipeline | ⚠️ Optional |
 | `features/v{VERSION}.md` | Feature design by version | ✅ Yes |
 | `test-guides/*.md` | Human test guides | ✅ Yes |
 
@@ -135,6 +137,9 @@ KodaX/
 |------|---------|----------|
 | `README.md` | Project overview and quick start | ✅ Yes |
 | `README_CN.md` | Chinese README | ✅ Yes |
+| `AGENTS.md` | Agent development rules | ✅ Yes |
+| `CLAUDE.md` | Claude Code project rules | ⚠️ Optional |
+| `CHANGELOG.md` | Release notes | ✅ Yes |
 | `CONTRIBUTING.md` | Contribution guidelines | ⚠️ Optional |
 
 ### Feature Tracking
@@ -189,6 +194,34 @@ npm run start        # Production mode
 2. Run test - should FAIL
 3. Write minimal implementation (GREEN)
 4. Run test - should PASS
+
+### Prompt Eval (FEATURE_104, v0.7.29)
+
+Any change that touches **LLM-facing prompt content** must include a
+prompt-eval case under `tests/*.eval.ts` using the `benchmark/harness/`
+module (`aliases.ts` + `judges.ts` + `harness.ts` + `report.ts` + `persist.ts`).
+
+**Triggers** (must add/update an eval):
+- `packages/coding/src/prompts/capability-sections.ts` (FEATURE_142 v0.7.35.1 Batch E — single source of truth for the 13 capability sections; supersedes the pre-v0.7.35.1 `agent-runtime/system-prompt-*.ts` paths)
+- `packages/coding/src/prompts/builder.ts` / `packages/coding/src/prompts/system.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts`
+- Tool `description` fields in `packages/coding/src/tools/`
+- `coding-preset.ts:DEFAULT_CODING_INSTRUCTIONS`
+- `packages/coding/src/agents/protocol-emitters.ts` prompts
+- `packages/coding/src/guardrails/auto-mode/classifier-prompt.ts` (FEATURE_092 v0.7.33 — auto-mode classifier system prompt; eval: `tests/auto-mode-classifier.eval.ts`)
+
+**Non-triggers** (no eval needed):
+- Reasoning depth / parameter changes (FEATURE_078 / FEATURE_103 L1-L5 chain)
+- Routing / dispatcher logic (no prompt content change)
+- Compaction / session persistence infrastructure
+
+**Run**: `npm run test:eval` (skips when API keys absent).
+
+**Folder layout** (FEATURE_104 v2 restructure):
+- `benchmark/README.md` — convention guide + patterns + statistical caveats
+- `benchmark/harness/` — code modules + zero-LLM self-test (version-tracked)
+- `benchmark/datasets/` — test cases / golden inputs (version-tracked)
+- `benchmark/results/` — run outputs (**NOT** version-tracked)
 5. Refactor (IMPROVE)
 
 ## **CRITICAL** Forbidden Items
@@ -207,6 +240,6 @@ npm run start        # Production mode
 
 ## References
 
-- [Product Requirements](docs/PRD.md)
-- [Architecture Decisions](docs/ADR.md)
-- [Feature List](docs/FEATURE_LIST.md)
+- [Product Requirements](PRD.md)
+- [Architecture Decisions](ADR.md)
+- [Feature List](FEATURE_LIST.md)

@@ -29,6 +29,11 @@ const NATIVE_MCP_PROFILE = {
   evidenceSupport: 'full',
 } as const;
 
+const IMAGE_INPUT_NATIVE_PROFILE = {
+  ...NATIVE_MCP_PROFILE,
+  multimodalSupport: 'image-input',
+} as const;
+
 describe('provider policy', () => {
   it('builds a normalized capability snapshot for bridge providers', () => {
     const snapshot = buildProviderCapabilitySnapshot({
@@ -54,24 +59,20 @@ describe('provider policy', () => {
     });
   });
 
-  it('blocks project-harness long-running work on lossy bridge providers', () => {
+  it('blocks long-running work on lossy bridge providers', () => {
     const decision = evaluateProviderPolicy({
       providerName: 'gemini-cli',
       capabilityProfile: CLI_BRIDGE_PROFILE,
       reasoningCapability: 'prompt-only',
       hints: {
         longRunning: true,
-        harness: 'project',
       },
       reasoningMode: 'off',
     });
 
     expect(decision.status).toBe('block');
     expect(decision.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        'long-running-blocked',
-        'project-harness-blocked',
-      ]),
+      expect.arrayContaining(['long-running-blocked']),
     );
   });
 
@@ -114,24 +115,6 @@ describe('provider policy', () => {
     expect(decision.issues).toEqual([]);
   });
 
-  it('still treats explicit project harness protocol markers as structured long-running signals', () => {
-    const decision = evaluateProviderPolicy({
-      providerName: 'gemini-cli',
-      capabilityProfile: CLI_BRIDGE_PROFILE,
-      reasoningCapability: 'prompt-only',
-      prompt: 'Complete the task and end with <project-harness>{"status":"complete"}</project-harness>.',
-      reasoningMode: 'off',
-    });
-
-    expect(decision.status).toBe('block');
-    expect(decision.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        'long-running-blocked',
-        'project-harness-blocked',
-      ]),
-    );
-  });
-
   it('warns on evidence-heavy bridge flows without blocking simple execution', () => {
     const decision = evaluateProviderPolicy({
       providerName: 'gemini-cli',
@@ -148,25 +131,6 @@ describe('provider policy', () => {
       expect.arrayContaining([
         'evidence-context-loss',
         'evidence-support-limited',
-      ]),
-    );
-  });
-
-  it('warns rather than blocks plan-execute-eval routing on bridge providers', () => {
-    const decision = evaluateProviderPolicy({
-      providerName: 'gemini-cli',
-      capabilityProfile: CLI_BRIDGE_PROFILE,
-      reasoningCapability: 'prompt-only',
-      hints: {
-        harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
-      },
-      reasoningMode: 'balanced',
-    });
-
-    expect(decision.status).toBe('warn');
-    expect(decision.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        'plan-execute-eval-bridge',
       ]),
     );
   });
@@ -211,6 +175,47 @@ describe('provider policy', () => {
         'mcp-required',
         'multimodal-unsupported',
       ]),
+    );
+  });
+
+  it('detects image artifacts from context and allows them on image-input native providers', () => {
+    const decision = evaluateProviderPolicy({
+      providerName: 'openai',
+      capabilityProfile: IMAGE_INPUT_NATIVE_PROFILE,
+      reasoningCapability: 'native-effort',
+      context: {
+        inputArtifacts: [
+          {
+            kind: 'image',
+            path: 'C:/repo/assets/mockup.png',
+            source: 'user-inline',
+            mediaType: 'image/png',
+          },
+        ],
+      },
+      reasoningMode: 'balanced',
+    });
+
+    expect(decision.status).toBe('allow');
+    expect(decision.issues).toEqual([]);
+  });
+
+  it('surfaces evidence-reliability warnings for review / strict-audit tasks (no harness dependency)', () => {
+    // The retired harness H2 branch used to be the path that warned bridge
+    // providers; the still-live evidence protection keys on taskType /
+    // executionMode instead. This locks that non-harness path.
+    const decision = evaluateProviderPolicy({
+      providerName: 'gemini-cli',
+      capabilityProfile: CLI_BRIDGE_PROFILE,
+      reasoningCapability: 'prompt-only',
+      taskType: 'review',
+      executionMode: 'strict-audit',
+      reasoningMode: 'off',
+    });
+
+    expect(decision.status).toBe('warn');
+    expect(decision.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['evidence-context-loss', 'evidence-support-limited']),
     );
   });
 

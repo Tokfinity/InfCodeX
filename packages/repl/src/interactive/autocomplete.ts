@@ -8,8 +8,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as readline from 'readline';
-import { getActiveExtensionRuntime } from '@kodax/coding';
+import { getActiveExtensionRuntime } from '@kodax-ai/coding';
 import { getCommandRegistry } from './commands.js';
+import { SkillCompleter } from './completers/skill-completer.js';
+import { getRecentWorkingSetFiles } from './recent-files.js';
 
 /**
  * Completion item - 补全项
@@ -61,12 +63,20 @@ export function findCommandSlashIndex(beforeCursor: string): number {
  * Example: @src/u -> Tab completes to @src/utils/ - 例如: @src/u -> Tab 补全为 @src/utils/
  */
 export class FileCompleter implements Completer {
-  private cwd: string;
+  private cwdSource?: string | (() => string);
   private cache = new Map<string, { entries: string[]; expiresAt: number }>();
   private cacheTimeout = 5000; // 5 second cache - 5 秒缓存
+  // FEATURE_207 — recent (git working-set) files, cached like the dir listing.
+  private recentCache = new Map<string, { files: string[]; expiresAt: number }>();
+  private recentFilesProvider: (cwd: string) => Promise<string[]>;
 
-  constructor(cwd?: string) {
-    this.cwd = cwd ?? process.cwd();
+  constructor(
+    cwd?: string | (() => string),
+    // Injectable for testing; defaults to the git working-set source.
+    recentFilesProvider: (cwd: string) => Promise<string[]> = getRecentWorkingSetFiles,
+  ) {
+    this.cwdSource = cwd;
+    this.recentFilesProvider = recentFilesProvider;
   }
 
   canComplete(input: string, cursorPos: number): boolean {
@@ -96,10 +106,11 @@ export class FileCompleter implements Completer {
 
     const afterAt = beforeCursor.slice(lastAtIndex + 1);
     const completions: Completion[] = [];
+    const cwd = this.resolveCwd();
 
     // Parse path - 解析路径
     const lastSlash = afterAt.lastIndexOf('/');
-    const dir = lastSlash === -1 ? this.cwd : path.join(this.cwd, afterAt.slice(0, lastSlash));
+    const dir = lastSlash === -1 ? cwd : path.join(cwd, afterAt.slice(0, lastSlash));
     const prefix = lastSlash === -1 ? afterAt : afterAt.slice(lastSlash + 1);
 
     try {
@@ -122,7 +133,47 @@ export class FileCompleter implements Completer {
       // Directory doesn't exist or unreadable - 目录不存在或无法读取
     }
 
+    // FEATURE_207 — when the user hasn't navigated into a specific directory
+    // (no '/' in the @-segment), surface recent git working-set files first.
+    // They may live in nested dirs, so they complement (not duplicate) the
+    // flat cwd listing above. A specific path like `@src/` keeps the plain
+    // directory listing untouched.
+    if (lastSlash === -1) {
+      const recent = await this.getRecentFiles(cwd);
+      const seen = new Set(completions.map((c) => c.text));
+      const lowerPrefix = prefix.toLowerCase();
+      const recentCompletions: Completion[] = [];
+      for (const rel of recent) {
+        if (prefix && !path.basename(rel).toLowerCase().startsWith(lowerPrefix)) continue;
+        const text = '@' + rel;
+        if (seen.has(text)) continue;
+        seen.add(text);
+        recentCompletions.push({ text, display: rel, description: 'recent', type: 'file' });
+      }
+      // Prepend so recent files rank first when the pattern is empty.
+      completions.unshift(...recentCompletions);
+    }
+
     return completions;
+  }
+
+  private async getRecentFiles(cwd: string): Promise<string[]> {
+    const now = Date.now();
+    const cached = this.recentCache.get(cwd);
+    if (cached && cached.expiresAt > now) {
+      return cached.files;
+    }
+    const files = await this.recentFilesProvider(cwd);
+    this.recentCache.set(cwd, { files, expiresAt: Date.now() + this.cacheTimeout });
+    return files;
+  }
+
+  private resolveCwd(): string {
+    if (typeof this.cwdSource === 'function') {
+      return this.cwdSource();
+    }
+
+    return this.cwdSource ?? process.cwd();
   }
 
   private async readdir(dir: string): Promise<string[]> {
@@ -279,8 +330,9 @@ export class CommandCompleter implements Completer {
  *
  * Compatible with Node.js readline completer interface - 与 Node.js readline 的 completer 接口兼容
  */
-export function createCompleter(cwd?: string): (line: string) => Promise<[string[], string]> {
+export function createCompleter(cwd?: string | (() => string)): (line: string) => Promise<[string[], string]> {
   const fileCompleter = new FileCompleter(cwd);
+  const skillCompleter = new SkillCompleter();
   const commandCompleter = new CommandCompleter();
 
   return async (line: string): Promise<[string[], string]> => {
@@ -294,6 +346,16 @@ export function createCompleter(cwd?: string): (line: string) => Promise<[string
 
     const allCompletions: Completion[] = [];
 
+    if (hasSlash) {
+      const completions = await getArgumentCompletions(line, line.length);
+      allCompletions.push(...completions);
+    }
+
+    if (hasSlash && skillCompleter.canComplete(line, line.length)) {
+      const completions = await skillCompleter.getCompletions(line, line.length);
+      allCompletions.push(...completions);
+    }
+
     if (hasSlash && commandCompleter.canComplete(line, line.length)) {
       const completions = await commandCompleter.getCompletions(line, line.length);
       allCompletions.push(...completions);
@@ -305,7 +367,7 @@ export function createCompleter(cwd?: string): (line: string) => Promise<[string
     }
 
     // Format for readline: [[completions], originalLine] - 格式化为 readline 需要的格式
-    const displays = allCompletions.map(c => c.display);
+    const displays = allCompletions.map((completion) => formatReadlineCompletion(line, completion));
     return [displays, line];
   };
 }
@@ -345,15 +407,43 @@ export function displayCompletions(completions: Completion[]): void {
 /**
  * Get completion suggestions for UI display - 获取补全建议 (用于 UI 显示)
  */
+async function getArgumentCompletions(input: string, cursorPos: number): Promise<Completion[]> {
+  const { ArgumentCompleter } = await import('./completers/argument-completer.js');
+  const argumentCompleter = new ArgumentCompleter();
+  if (!argumentCompleter.canComplete(input, cursorPos)) return [];
+  return argumentCompleter.getCompletions(input, cursorPos);
+}
+
+function formatReadlineCompletion(line: string, completion: Completion): string {
+  if (completion.type !== 'argument') {
+    return completion.text;
+  }
+  const commandSlashIndex = findCommandSlashIndex(line);
+  if (commandSlashIndex !== -1 && !/\s/.test(line.slice(commandSlashIndex))) {
+    return `${line} ${completion.text}`;
+  }
+  const match = line.match(/\S+$/);
+  const currentToken = match?.[0] ?? '';
+  const prefix = currentToken ? line.slice(0, line.length - currentToken.length) : line;
+  return `${prefix}${completion.text}`;
+}
+
 export async function getCompletionSuggestions(
   input: string,
   cursorPos: number,
   cwd?: string
 ): Promise<Completion[]> {
   const fileCompleter = new FileCompleter(cwd);
+  const skillCompleter = new SkillCompleter();
   const commandCompleter = new CommandCompleter();
 
   const results: Completion[] = [];
+
+  results.push(...await getArgumentCompletions(input, cursorPos));
+
+  if (skillCompleter.canComplete(input, cursorPos)) {
+    results.push(...await skillCompleter.getCompletions(input, cursorPos));
+  }
 
   if (commandCompleter.canComplete(input, cursorPos)) {
     results.push(...await commandCompleter.getCompletions(input, cursorPos));

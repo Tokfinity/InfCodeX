@@ -4,9 +4,14 @@
 
 import * as path from 'path';
 import * as os from 'os';
+
+import { emitKodaXDiagnostic, getAgentConfigPath } from '@kodax-ai/agent';
+
 import type { CommandRegistry } from './registry.js';
+import { CommandRegistry as ReplCommandRegistry } from './registry.js';
 import { registerBuiltinCommands } from './builtin.js';
 import { discoverCommands, registerDiscoveredCommands } from './discovery.js';
+import type { CommandInfo } from './types.js';
 
 export type {
   CommandSource,
@@ -27,7 +32,11 @@ export { CommandRegistry, globalCommandRegistry } from './registry.js';
 export { registerBuiltinCommands, getBuiltinCommandCount } from './builtin.js';
 
 export { copyCommand } from './copy-command.js';
+export { learnCommand } from './learn-command.js';
+export { memoryCommand } from './memory-command.js';
 export { newCommand } from './new-command.js';
+export { recoverCommand } from './recover-command.js';
+export { agentsCommand } from './agents-command.js';
 
 export { discoverCommands, registerDiscoveredCommands } from './discovery.js';
 
@@ -51,13 +60,26 @@ export function registerAllCommands(registry: CommandRegistry, projectRoot?: str
     const discovered = discoverCommands([
       // Highest priority: project-level commands
       { path: path.join(root, '.kodax', 'commands'), location: 'project' },
-      // User-level: ~/.kodax/commands/
-      { path: path.join(home, '.kodax', 'commands'), location: 'user' },
-      // User-level: ~/.agents/commands/ (AgentSkills standard)
+      // User-level: KodaX agent home (default ~/.kodax/, redirectable
+      // via setAgentConfigHome / KODAX_HOME — v0.7.35.1 FEATURE_145).
+      { path: getAgentConfigPath('commands'), location: 'user' },
+      // User-level: ~/.agents/commands/ (cross-vendor AgentSkills standard,
+      // intentionally NOT redirectable — common across CLI agents).
       { path: path.join(home, '.agents', 'commands'), location: 'user' },
     ]);
     registerDiscoveredCommands(discovered, registry);
   } catch (error) {
-    console.error('Failed to discover commands:', error);
+    emitKodaXDiagnostic({
+      source: 'repl:commands',
+      level: 'error',
+      message: 'Failed to discover commands.',
+      detail: error,
+    });
   }
+}
+
+export function listRegisteredCommands(projectRoot?: string): CommandInfo[] {
+  const registry = new ReplCommandRegistry();
+  registerAllCommands(registry, projectRoot);
+  return registry.getAll();
 }

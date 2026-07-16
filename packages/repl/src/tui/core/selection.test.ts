@@ -1,0 +1,60 @@
+import { describe, expect, it } from "vitest";
+import { buildTranscriptScreenSelection, buildTranscriptScreenSelectionSummary } from "./selection.js";
+
+describe("transcript screen selection", () => {
+  const rows = [
+    { key: "row-1", text: "Alpha" },
+    { key: "row-2", text: "Beta" },
+    { key: "row-3", text: "Gamma" },
+  ];
+
+  it("builds multi-line selections using absolute row indices", () => {
+    const selection = buildTranscriptScreenSelection(
+      rows,
+      { rowKey: "row-1", modelRowIndex: 0, column: 2 },
+      { rowKey: "row-3", modelRowIndex: 2, column: 3 },
+    );
+
+    expect(selection?.text).toBe("pha\nBeta\nGam");
+    expect(selection?.rowRanges.get("row-1")).toEqual({ start: 2, end: 5 });
+    expect(selection?.rowRanges.get("row-2")).toEqual({ start: 0, end: 4 });
+    expect(selection?.rowRanges.get("row-3")).toEqual({ start: 0, end: 3 });
+    expect(buildTranscriptScreenSelectionSummary(selection)).toBe("Selected 10 chars across 3 lines");
+  });
+
+  it("does not convert a click into a whole-row copy by default", () => {
+    const selection = buildTranscriptScreenSelection(
+      rows,
+      { rowKey: "row-2", modelRowIndex: 1, column: 1 },
+      { rowKey: "row-2", modelRowIndex: 1, column: 1 },
+    );
+
+    expect(selection).toBeUndefined();
+  });
+
+  it("keeps wide-character selections aligned to grapheme indices", () => {
+    const selection = buildTranscriptScreenSelection(
+      [{ key: "row-cjk", text: "你好A" }],
+      { rowKey: "row-cjk", modelRowIndex: 0, column: 1 },
+      { rowKey: "row-cjk", modelRowIndex: 0, column: 2 },
+    );
+
+    expect(selection?.text).toBe("好");
+    expect(selection?.charCount).toBe(1);
+    expect(selection?.rowRanges.get("row-cjk")).toEqual({ start: 1, end: 2 });
+  });
+
+  it("strips ANSI color sequences before computing selection text", () => {
+    const selection = buildTranscriptScreenSelection(
+      [{
+        key: "ansi-row",
+        text: "\u001b[32m✓\u001b[39m \u001b[36mgenerated-fast-audit\u001b[39m run-mqc5v6ys",
+      }],
+      { rowKey: "ansi-row", modelRowIndex: 0, column: 0 },
+      { rowKey: "ansi-row", modelRowIndex: 0, column: 36 },
+    );
+
+    expect(selection?.text).toBe("✓ generated-fast-audit run-mqc5v6ys");
+    expect(selection?.text).not.toContain("\u001b[");
+  });
+});

@@ -14,8 +14,8 @@
 import { FileCompleter, CommandCompleter, findCommandSlashIndex, type Completer, type Completion } from './autocomplete.js';
 import { SkillCompleter } from './completers/skill-completer.js';
 import { ArgumentCompleter } from './completers/argument-completer.js';
-import { ProjectCompleter } from './completers/project-completer.js';
 import { sortCandidatesCombined } from './fuzzy.js';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 /**
  * Autocomplete state for UI binding
@@ -99,7 +99,6 @@ export class AutocompleteProvider {
     // 顺序很重要：更具体的补全器优先
     this.completers = [
       new SkillCompleter(this.options.gitRoot),
-      new ProjectCompleter(), // Feature index and option completion
       new ArgumentCompleter(),
       new CommandCompleter(),
       new FileCompleter(this.options.cwd),
@@ -380,7 +379,12 @@ export class AutocompleteProvider {
       } catch (error) {
         // Log error but continue with other completers
         // 记录错误但继续使用其他补全器
-        console.error('[Autocomplete] Completer error:', error);
+        emitKodaXDiagnostic({
+          source: 'repl:autocomplete',
+          level: 'error',
+          message: 'Completer failed; continuing with remaining completers.',
+          detail: error,
+        });
       }
     }
 
@@ -389,18 +393,27 @@ export class AutocompleteProvider {
     const pattern = this.extractPattern(input, cursorPos);
 
     // Sort by fuzzy match score - 按模糊匹配评分排序
+    // For command completions, strip the leading '/' from the scoring target so
+    // prefixMatch works correctly against a pattern that does not contain '/'.
+    // Without this, an exact prefix like '/mode' loses to a fuzzy subsequence
+    // like '/agent-mode' because prefixMatch('mode', '/mode') returns false.
+    // 命令补全排序时去掉 display 的前导 '/'，否则精确前缀如 /mode 会输给
+    // /agent-mode（因 prefixMatch 因 '/' 前缀而失败，退化为 fuzzy 评分）。
+    const scoringItems = allCompletions.map((c, idx) => ({
+      _idx: idx,
+      text: c.type === 'command' && c.display.startsWith('/') ? c.display.slice(1) : c.display,
+    }));
     const scoredCompletions = sortCandidatesCombined(
       pattern,
-      allCompletions.map((c) => ({ ...c, text: c.display })),
+      scoringItems,
       this.options.minScore
     );
 
-    // Return original completion objects with scores
-    // 返回带评分的原始补全对象
-    return scoredCompletions.map((scored) => {
-      const original = allCompletions.find((c) => c.display === scored.text);
-      return original ?? { text: scored.text, display: scored.text, type: 'file' as const };
-    });
+    // Map back to original completion objects via stable index
+    // 通过稳定索引映射回原始补全对象
+    return scoredCompletions
+      .map((scored) => allCompletions[scored._idx])
+      .filter((c): c is Completion => c !== undefined);
   }
 
   /**
@@ -460,7 +473,12 @@ export class AutocompleteProvider {
       try {
         listener(this.state);
       } catch (error) {
-        console.error('[Autocomplete] Listener error:', error);
+        emitKodaXDiagnostic({
+          source: 'repl:autocomplete',
+          level: 'error',
+          message: 'Listener failed during autocomplete state update.',
+          detail: error,
+        });
       }
     }
   }

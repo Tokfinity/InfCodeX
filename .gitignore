@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# npm pack tarballs (produced by `node scripts/release.mjs --pack-only`).
+# These are publish-ready artifacts for SDK consumer testing — never commit.
+# See scripts/release.mjs:167-192 for the produce-and-consume flow.
+*.tgz
+
 # Prevent accidental commit of tsc emit alongside source files
 # (e.g. running tsc without proper outDir configuration)
 src/**/*.js
@@ -25,6 +30,7 @@ Thumbs.db
 # Project specific
 .kodax/
 .agent/
+.repointel/
 .claude/
 
 # Logs
@@ -41,3 +47,15 @@ coverage/
 
 # Temp
 .tmp/
+
+# SA refactor goldens — recordings contain user prompts, file paths, and
+# model responses captured from real KodaX sessions. Treat as PII-adjacent;
+# regenerate locally with `tsx tests/sa-refactor-goldens/record-goldens.ts`.
+tests/sa-refactor-goldens/recordings/
+
+# Benchmark prompt-eval runs (FEATURE_104 v2). Run outputs are local-only,
+# never committed under any circumstance — including "baseline" snapshots.
+# The placeholder benchmark/results/.gitignore is the only tracked file
+# under benchmark/results/.
+benchmark/results/*
+!benchmark/results/.gitignore

@@ -20,7 +20,7 @@
 ## 测试环境
 
 ### 前置条件
-- Node.js >= 18.0.0
+- Node.js >= 20.0.0
 - 已运行 `npm install` 安装依赖
 - 已运行 `npm run build` 构建项目
 

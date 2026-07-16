@@ -1,5 +1,3 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import type {
   KodaXExecutionMode,
   KodaXHarnessProfile,
@@ -19,28 +17,26 @@ import type {
   KodaXMutationSurface,
   KodaXAssuranceIntent,
   KodaXThinkingDepth,
+  KodaXWireReasoningEffort,
 } from './types.js';
 import {
   getDefaultThinkingDepthForMode,
+  mapLegacyReasoningModeToEffortIntent,
   KODAX_REASONING_MODE_SEQUENCE,
-} from '@kodax/ai';
-import type { KodaXBaseProvider } from '@kodax/ai';
-import {
-  hasNonTransientRuntimeEvidence,
-  hasTransientRetryEvidence,
-  looksLikeActionableRuntimeEvidence,
-} from './runtime-evidence.js';
+} from '@kodax-ai/llm';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
+import type { AgentReasoningProfile } from '@kodax-ai/agent';
+import { looksLikeActionableRuntimeEvidence } from './runtime-evidence.js';
 import {
   evaluateProviderPolicy,
   type KodaXProviderPolicyDecision,
 } from './provider-policy.js';
+import { emitProviderRateLimit } from './agent-runtime/event-emitter.js';
 
 export { KODAX_REASONING_MODE_SEQUENCE };
 
-const execAsync = promisify(exec);
 
 const FALLBACK_REASONING_MODE: KodaXReasoningMode = 'off';
-const ROUTING_DEBUG_ENV_VAR = 'KODAX_DEBUG_ROUTING';
 
 const FALLBACK_UNKNOWN_CONFIDENCE = 0.4;
 const FALLBACK_COMPETING_SIGNAL_CONFIDENCE = 0.42;
@@ -61,105 +57,6 @@ const THINKING_DEPTH_ORDER: Record<KodaXThinkingDepth, number> = {
   high: 3,
 };
 
-const EXECUTION_MODE_OVERLAYS: Record<KodaXExecutionMode, string> = {
-  conversation: [
-    '[Execution Mode: conversation]',
-    '- Answer conversationally and directly.',
-    '- Do not expand into repo analysis, planning, or tool-heavy investigation unless the user asks for work.',
-  ].join('\n'),
-  lookup: [
-    '[Execution Mode: lookup]',
-    '- Answer the navigation or lookup question directly.',
-    '- Prefer precise paths, symbols, or locations over broad commentary.',
-    '- Do not escalate into planning or validation ceremony unless the user explicitly asks for deeper analysis.',
-  ].join('\n'),
-  'pr-review': [
-    '[Execution Mode: pr-review]',
-    '- Report only high-confidence, actionable issues that materially affect correctness, reliability, security, or merge readiness.',
-    '- Do not count naming preferences, formatting, or minor best-practice nits as findings.',
-    '- Prefer the output structure: Must fix, then Optional improvements.',
-    '- Limit must-fix findings to the most important 5 items, ordered by impact.',
-    '- Every reported issue must explain the concrete consequence.',
-  ].join('\n'),
-  'strict-audit': [
-    '[Execution Mode: strict-audit]',
-    '- Perform a broad audit across correctness, security, performance, and maintainability.',
-    '- Separate confirmed issues from lower-confidence risks.',
-    '- You may include broader risks and follow-up checks when clearly labeled.',
-  ].join('\n'),
-  implementation: [
-    '[Execution Mode: implementation]',
-    '- Focus on direct execution and high-signal reasoning.',
-    '- Prefer making progress over extended commentary.',
-    '- Keep explanations concise unless a tradeoff materially affects the result.',
-  ].join('\n'),
-  planning: [
-    '[Execution Mode: planning]',
-    '- Focus on architecture, constraints, sequencing, and risk management.',
-    '- Prefer structured plans, tradeoffs, and validation steps before code changes.',
-  ].join('\n'),
-  investigation: [
-    '[Execution Mode: investigation]',
-    '- Focus on isolating root cause, validating assumptions, and narrowing uncertainty.',
-    '- Prefer concrete evidence, reproduction steps, and targeted checks before broad changes.',
-  ].join('\n'),
-};
-
-const HARNESS_PROFILE_OVERLAYS: Record<KodaXHarnessProfile, string> = {
-  H0_DIRECT: [
-    '[Harness Profile: H0_DIRECT]',
-    '- Keep the task in a single direct pass unless concrete evidence forces escalation.',
-    '- Prefer concise execution without extra discovery scaffolding.',
-  ].join('\n'),
-  H1_EXECUTE_EVAL: [
-    '[Harness Profile: H1_EXECUTE_EVAL]',
-    '- Execute the task, then self-check the result against the request before finalizing.',
-    '- Prefer evidence-backed completion over speculative confidence.',
-  ].join('\n'),
-  H2_PLAN_EXECUTE_EVAL: [
-    '[Harness Profile: H2_PLAN_EXECUTE_EVAL]',
-    '- Start with a short explicit plan or option framing before making changes.',
-    '- After execution, verify the result and call out any residual uncertainty.',
-  ].join('\n'),
-};
-
-const ROUTER_SYSTEM_PROMPT = [
-  'You are a task router for a coding agent.',
-  'Classify the user request into one primary task and an optional secondary task.',
-  'Return valid JSON only.',
-  'Allowed primaryTask and secondaryTask values: conversation, lookup, review, bugfix, edit, refactor, plan, qa, unknown.',
-  'Allowed taskFamily values: conversation, lookup, review, implementation, investigation, planning, ambiguous.',
-  'Allowed actionability values: non_actionable, actionable, ambiguous.',
-  'Allowed mutationSurface values: read-only, docs-only, code, system.',
-  'Allowed assuranceIntent values: default, explicit-check.',
-  'Allowed riskLevel values: low, medium, high.',
-  'Allowed recommendedMode values: conversation, lookup, pr-review, strict-audit, implementation, planning, investigation.',
-  'Allowed recommendedThinkingDepth values: off, low, medium, high.',
-  'Allowed complexity values: simple, moderate, complex, systemic.',
-  'Allowed workIntent values: append, overwrite, new.',
-  'Allowed executionPattern values: direct, checked-direct, coordinated.',
-  'Allowed harnessProfile values: H0_DIRECT, H1_EXECUTE_EVAL, H2_PLAN_EXECUTE_EVAL.',
-  'Allowed topologyCeiling values: H0_DIRECT, H1_EXECUTE_EVAL, H2_PLAN_EXECUTE_EVAL.',
-  'requiresBrainstorm must be a boolean.',
-  'soloBoundaryConfidence must be a number between 0 and 1.',
-  'needsIndependentQA must be a boolean.',
-  'routingNotes, when present, must be an array of short strings.',
-  'Confidence must be a number between 0 and 1.',
-  'Prefer conservative decisions when the request is ambiguous.',
-].join('\n');
-
-const AUTO_REROUTE_SYSTEM_PROMPT = [
-  'You are a reroute judge for a coding agent.',
-  'Decide whether the first-pass response should be rerun with stronger reasoning or investigation mode.',
-  'Return valid JSON only.',
-  'Allowed nextPrimaryTask values: review, bugfix, edit, refactor, plan, qa, unknown.',
-  'Allowed nextRecommendedMode values: pr-review, strict-audit, implementation, planning, investigation.',
-  'Allowed nextThinkingDepth values: low, medium, high.',
-  'Only reroute when there is clear evidence the first pass was mismatched, too uncertain, or too low-value.',
-  'Prefer no reroute unless the evidence is strong.',
-].join('\n');
-
-const STRUCTURED_DECISION_MAX_ATTEMPTS = 3;
 const SOLO_BOUNDARY_DIRECT_THRESHOLD = 0.75;
 
 const UNCERTAINTY_MARKERS = [
@@ -301,8 +198,15 @@ const COMPLEXITY_COMPLEX_THRESHOLD = 4;
 const COMPLEXITY_SYSTEMIC_THRESHOLD = 6;
 
 export interface ReasoningPlan {
-  mode: KodaXReasoningMode;
-  depth: KodaXThinkingDepth;
+  /**
+   * Canonical per-turn reasoning control. Reasoning single-tracking (Phase B)
+   * replaced the V1 `mode` (KodaXReasoningMode) + `depth` (KodaXThinkingDepth)
+   * pair with a single `effort`. `'auto'` defers to the provider's
+   * capability-aware default; `'none'` disables thinking. Providers resolve
+   * the effective effort + any thinking budget from this value via
+   * `resolveReasoningEffort` / `normalizeReasoningRequest`.
+   */
+  effort: KodaXWireReasoningEffort;
   decision: KodaXTaskRoutingDecision;
   promptOverlay: string;
   providerPolicy?: KodaXProviderPolicyDecision;
@@ -315,24 +219,6 @@ export interface RoutingEvidenceInput {
   repoSignals?: KodaXRepoRoutingSignals;
 }
 
-export interface AutoRerouteEvidence {
-  toolEvidence?: string;
-}
-
-export interface AutoRerouteDecision {
-  shouldReroute: boolean;
-  nextPrimaryTask?: KodaXTaskType;
-  nextRecommendedMode?: KodaXExecutionMode;
-  nextThinkingDepth?: Exclude<KodaXThinkingDepth, 'off'>;
-  reason: string;
-}
-
-export type ReasoningFollowUpKind = 'depth-escalation' | 'task-reroute';
-
-export interface ReasoningFollowUpPlan extends ReasoningPlan {
-  kind: ReasoningFollowUpKind;
-}
-
 const REVIEW_LARGE_FILE_THRESHOLD = 10;
 const REVIEW_LARGE_LINE_THRESHOLD = 1200;
 const REVIEW_LARGE_MODULE_THRESHOLD = 3;
@@ -340,6 +226,22 @@ const REVIEW_MASSIVE_FILE_THRESHOLD = 30;
 const REVIEW_MASSIVE_LINE_THRESHOLD = 4000;
 const REVIEW_MASSIVE_MODULE_THRESHOLD = 5;
 
+/**
+ * Resolve the **L1 user ceiling** for reasoning depth.
+ *
+ * In FEATURE_078 (v0.7.29) the semantics of `--reasoning <mode>` /
+ * `options.reasoningMode` shifted from "all roles use this mode" to
+ * "ceiling + bias for default": a hard upper bound on per-role depth
+ * with the same value also serving as the suggested default when an
+ * Agent declaration has no profile of its own.
+ *
+ * This function continues to return the user-supplied mode unchanged —
+ * what changed is how downstream code consumes it. Direct callers that
+ * still treat the return value as the final per-role depth will get
+ * pre-FEATURE_078 behaviour (everything pinned to `userCeiling`); they
+ * are migrated in this same patch to call `resolveRoleReasoning(...)`
+ * instead, which honours the L1-L4 chain.
+ */
 export function resolveReasoningMode(options: KodaXOptions): KodaXReasoningMode {
   if (options.reasoningMode) {
     return options.reasoningMode;
@@ -360,6 +262,314 @@ export function reasoningModeToDepth(
   mode: KodaXReasoningMode,
 ): KodaXThinkingDepth {
   return getDefaultThinkingDepthForMode(mode);
+}
+
+// ---------------------------------------------------------------------------
+// Role-Aware Reasoning Profiles (FEATURE_078, effort-native)
+// ---------------------------------------------------------------------------
+
+const EFFORT_RANK: Record<string, number> = {
+  none: 0,
+  minimal: 0,
+  auto: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6,
+};
+
+function effortRank(effort: KodaXWireReasoningEffort): number {
+  return EFFORT_RANK[effort] ?? EFFORT_RANK.medium;
+}
+
+/**
+ * Compare two efforts by depth on the canonical ladder. Returns -1, 0, or 1
+ * mirroring `Array.prototype.sort`'s comparator contract: lower-rank efforts
+ * (`none`) come first, higher-rank (`max`) last. `auto` ranks just above the
+ * disabled floor — it means "let the provider pick", always >= no thinking.
+ * Unknown custom efforts rank as `medium`.
+ */
+export function compareEfforts(
+  a: KodaXWireReasoningEffort,
+  b: KodaXWireReasoningEffort,
+): -1 | 0 | 1 {
+  const rankA = effortRank(a);
+  const rankB = effortRank(b);
+  if (rankA < rankB) return -1;
+  if (rankA > rankB) return 1;
+  return 0;
+}
+
+/**
+ * Clamp `effort` to be no deeper than `ceiling`. When `effort` is already at
+ * or below the ceiling, it passes through unchanged.
+ */
+export function clampEffort(
+  effort: KodaXWireReasoningEffort,
+  ceiling: KodaXWireReasoningEffort,
+): KodaXWireReasoningEffort {
+  return compareEfforts(effort, ceiling) > 0 ? ceiling : effort;
+}
+
+/**
+ * Resolve the effective per-role reasoning **effort** through the FEATURE_078
+ * decision chain (effort-native single-track form):
+ *
+ *   L1 (`userCeiling`)              — caller-supplied upper bound + bias
+ *   L2 (`profile.default` / `.max`) — Agent declaration's role default
+ *
+ * The chain takes the agent declaration's default as the base, clamps it to
+ * the declaration's `max`, then clamps to the user ceiling as the absolute
+ * hard cap. The Agent profile is still expressed in legacy reasoning modes
+ * (`AgentReasoningProfile`), so its `default`/`max` are mapped onto the effort
+ * ladder. `none` is a hard kill switch. When `profile` is undefined, this
+ * collapses to `userCeiling` — exactly the pre-FEATURE_078 behaviour.
+ *
+ * (FEATURE_193 retired the Scout hint (L3) and the per-role split — the Worker
+ * is the sole agent, so the `role` parameter is gone.)
+ */
+export function resolveRoleEffort(
+  userCeiling: KodaXWireReasoningEffort,
+  profile?: AgentReasoningProfile,
+): KodaXWireReasoningEffort {
+  // Kill switch: `effort none` can never be re-enabled by a role default.
+  if (userCeiling === 'none') return 'none';
+  if (!profile) return userCeiling;
+
+  const base: KodaXWireReasoningEffort = profile.default
+    ? mapLegacyReasoningModeToEffortIntent(profile.default)
+    : userCeiling;
+  const clampedToProfileMax = profile.max
+    ? clampEffort(base, mapLegacyReasoningModeToEffortIntent(profile.max))
+    : base;
+  return clampEffort(clampedToProfileMax, userCeiling);
+}
+
+// ---------------------------------------------------------------------------
+// FEATURE_103 (v0.7.29): L5 user-followup escalate
+//
+// Fifth tier of the FEATURE_078 chain. L4 (`escalateThinkingDepth(_, ceiling)`)
+// catches *system*-detected dissatisfaction (Evaluator returned `revise`).
+// L5 catches *user*-detected dissatisfaction (the user came back with a
+// follow-up containing doubt or deepen markers). Both bump depth one
+// rank; both are clamped by the absolute ceiling.
+//
+// Triggers (single bump):
+//   - Doubt category: prior assistant turn in session AND prompt contains
+//     a doubt marker (`不对` / `错了` / `wrong` / `are you sure`, etc.).
+//     The prior-turn requirement avoids false positives on first-round
+//     prompts that happen to contain the word "wrong" out of context.
+//   - Deepen category: prompt contains a deepen marker (`仔细` / `深入` /
+//     `think harder`, etc.). Fires regardless of round — the user is
+//     explicitly asking for more depth.
+//
+// L5 respects the L1 hard cap: `off` stays `off` (kill switch is sacrosanct),
+// and a bumped value never exceeds `deep`. L5 is purely additive — it never
+// lowers depth and never overrides L4.
+// ---------------------------------------------------------------------------
+
+/**
+ * Doubt markers — short Chinese + English phrases that indicate the user
+ * is pushing back on or questioning a prior answer. Matched substring-wise
+ * against the user's latest prompt. Conservative dictionary: every entry
+ * is unambiguous in context (no `not` or `wrong` standalone — those would
+ * false-positive on quoted text or codenames).
+ */
+const FOLLOWUP_DOUBT_MARKERS: readonly string[] = Object.freeze([
+  // Chinese
+  '不对',
+  '错了',
+  '有问题',
+  '真的吗',
+  '你确定',
+  '不是这样',
+  '弄错了',
+  '搞错了',
+  '搞反了',
+  '这不对',
+  '不正确',
+  '答错',
+  '回答错',
+  // English
+  "that's wrong",
+  'that is wrong',
+  "that's not right",
+  'that is not right',
+  'are you sure',
+  'not really',
+  'this is wrong',
+  'this is incorrect',
+  "that's incorrect",
+  'that is incorrect',
+  "you're wrong",
+  'you are wrong',
+]);
+
+/**
+ * Deepen markers — phrases that explicitly request more thinking depth,
+ * round-independent. A user starting a fresh task with `仔细分析...` is
+ * still requesting depth.
+ */
+const FOLLOWUP_DEEPEN_MARKERS: readonly string[] = Object.freeze([
+  // Chinese
+  '仔细',
+  '深入',
+  '认真',
+  '再看看',
+  '再想想',
+  '想清楚',
+  '用心',
+  '深度分析',
+  '仔细分析',
+  '认真分析',
+  '彻底',
+  // English
+  'think harder',
+  'think more carefully',
+  'look more carefully',
+  'dig deeper',
+  'be thorough',
+  'more careful',
+  'more carefully',
+  'reconsider',
+  'reexamine',
+  're-examine',
+]);
+
+export type FollowupSignalCategory = 'doubt' | 'deepen' | null;
+
+export interface FollowupSignal {
+  /** Which marker category fired, or null when no escalation should happen. */
+  readonly category: FollowupSignalCategory;
+  /** The literal marker substring that matched, for telemetry / logs. */
+  readonly matched: string | null;
+}
+
+/**
+ * Detect L5 follow-up signal in a user prompt. Doubt markers require
+ * `hasPriorAssistantTurn` to be true (otherwise return null even if a
+ * doubt marker is present — first-turn doubt-like text is too noisy);
+ * deepen markers fire unconditionally.
+ *
+ * Match is case-insensitive substring against both the original text and
+ * its lower-cased form (CJK chars unchanged by .toLowerCase, ASCII gets
+ * folded so 'Are You Sure' matches 'are you sure').
+ */
+export function detectFollowupSignal(
+  text: string,
+  hasPriorAssistantTurn: boolean,
+): FollowupSignal {
+  if (!text) return { category: null, matched: null };
+  const lowered = text.toLowerCase();
+
+  if (hasPriorAssistantTurn) {
+    for (const marker of FOLLOWUP_DOUBT_MARKERS) {
+      const lower = marker.toLowerCase();
+      if (lowered.includes(lower) || text.includes(marker)) {
+        return { category: 'doubt', matched: marker };
+      }
+    }
+  }
+
+  for (const marker of FOLLOWUP_DEEPEN_MARKERS) {
+    const lower = marker.toLowerCase();
+    if (lowered.includes(lower) || text.includes(marker)) {
+      return { category: 'deepen', matched: marker };
+    }
+  }
+
+  return { category: null, matched: null };
+}
+
+/**
+ * Single-rank bump for L5 escalation, on the canonical effort ladder. `none`
+ * is sacrosanct (kill switch dominates user pushback — if the user explicitly
+ * disabled thinking, even doubt markers cannot re-enable it). `minimal` is
+ * likewise a disable-ish floor and never bumps. `auto` enters the ladder at
+ * `low`; concrete efforts step up one rank but never past `high` — preserving
+ * the pre-effort behaviour where the deepest legacy mode (`deep`→`high`) did
+ * not escalate further. Efforts already at/above `high` (`xhigh`/`max`) stay.
+ *
+ * Ladder: none/minimal (no bump) | auto → low → medium → high (no bump).
+ */
+export function escalateEffort(
+  effort: KodaXWireReasoningEffort,
+): KodaXWireReasoningEffort {
+  switch (effort) {
+    case 'auto':
+      return 'low';
+    case 'low':
+      return 'medium';
+    case 'medium':
+      return 'high';
+    default:
+      // none / minimal (disabled floor) and high / xhigh / max (already deep):
+      // no bump, matching the legacy `off`-stays-`off` + `deep`-stays-`deep`.
+      return effort;
+  }
+}
+
+export interface FollowupEscalation {
+  /** The effort effective for this round (post-L5 bump if applicable). */
+  readonly effective: KodaXWireReasoningEffort;
+  /** True iff `effective !== input effort`. */
+  readonly escalated: boolean;
+  /** Detected signal that triggered escalation, if any. */
+  readonly signal: FollowupSignal;
+}
+
+/**
+ * Apply L5 escalation to a user effort. Returns the effort unchanged
+ * (with `escalated: false`) when no signal fires or when bumping would
+ * be a no-op (`none`/`minimal` stay; `high`/`xhigh`/`max` stay).
+ *
+ * Pure function — does not mutate inputs. Callers compute this ONCE per
+ * `runKodaX` / `runManagedTaskViaRunner` invocation at the entry point,
+ * then thread the resulting `effective` value through `options.effort`.
+ * Per-iteration sites in the runner loop see the already-bumped value.
+ */
+export function applyFollowupEscalation(
+  effort: KodaXWireReasoningEffort,
+  prompt: string,
+  hasPriorAssistantTurn: boolean,
+): FollowupEscalation {
+  const signal = detectFollowupSignal(prompt, hasPriorAssistantTurn);
+  if (signal.category === null) {
+    return { effective: effort, escalated: false, signal };
+  }
+  const bumped = escalateEffort(effort);
+  if (bumped === effort) {
+    return { effective: effort, escalated: false, signal };
+  }
+  return { effective: bumped, escalated: true, signal };
+}
+
+/**
+ * Convenience wrapper: read the effective effort from `options`, count prior
+ * assistant turns from `options.session?.initialMessages`, apply L5, return
+ * both the escalation result and a fresh `KodaXOptions` with `effort` updated
+ * to the bumped value (when bumped).
+ *
+ * Returns the input options reference unchanged when no escalation fires
+ * — callers can rely on `options === result.options` to skip downstream
+ * re-resolution if they care.
+ */
+export function applyFollowupEscalationToOptions<T extends KodaXOptions>(
+  options: T,
+  prompt: string,
+): { options: T; escalation: FollowupEscalation } {
+  const effort = options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options));
+  const initialMessages = options.session?.initialMessages ?? [];
+  const hasPriorAssistantTurn = initialMessages.some((m) => m?.role === 'assistant');
+  const escalation = applyFollowupEscalation(effort, prompt, hasPriorAssistantTurn);
+  if (!escalation.escalated) {
+    return { options, escalation };
+  }
+  return {
+    options: { ...options, effort: escalation.effective } as T,
+    escalation,
+  };
 }
 
 const TASK_TYPE_KEYWORDS: Record<
@@ -530,7 +740,7 @@ export interface KodaXIntentGateDecision {
   actionability: KodaXTaskActionability;
   executionPattern: KodaXExecutionPattern;
   shouldUseRepoSignals: boolean;
-  shouldUseModelRouter: boolean;
+  requiresRoutingHeuristics: boolean;
   reason: string;
 }
 
@@ -546,8 +756,14 @@ const INVESTIGATION_PATTERN_ZH = /排查|定位问题|根因|为什么|报错|�
 const IMPLEMENTATION_PATTERN = /\b(implement|add|change|modify|update|create|write|fix|refactor|rewrite|replace)\b/i;
 const IMPLEMENTATION_PATTERN_ZH = /实现|新增|修改|创建|写一个|修复|重构|改一下|替换/;
 
-const DOCS_ONLY_PATTERN = /\b(docs?|documentation|readme|changelog|release notes?|spec|proposal|design doc|requirements?|prd|adr|hld|dd|feature list|known issues?)\b/i;
+const DOCS_ONLY_PATTERN = /\b(docs?|documentation|readme|changelog|release notes?|spec|proposal|design doc|requirements?|prd|adr|hld|dd|guide|runbook|playbook|feature list|known issues?)\b/i;
 const DOCS_ONLY_PATTERN_ZH = /\u6587\u6863|\u8bf4\u660e\u6587\u6863|\u8bbe\u8ba1\u6587\u6863|\u9700\u6c42\u6587\u6863|PRD|ADR|HLD|DD|CHANGELOG|README|\u529f\u80fd\u6e05\u5355|\u5df2\u77e5\u95ee\u9898/u;
+const DOCS_QUALIFIED_TECHNICAL_TARGET_PATTERN = /\b(?:api|backend|frontend|service|module|endpoint|component|architecture|package|migration|schema|database|auth|sdk|cli)\s+(?:docs?|documentation|guide|readme|changelog|spec|proposal|design doc|requirements?|prd|adr|hld|dd|runbook|playbook)\b|\b(?:docs?|documentation|guide|readme|changelog|spec|proposal|design doc|requirements?|prd|adr|hld|dd|runbook|playbook)\s+(?:for|about|on)\s+(?:the\s+)?(?:api|backend|frontend|service|module|endpoint|component|architecture|package|migration|schema|database|auth|sdk|cli)\b/i;
+const DOCS_QUALIFIED_TECHNICAL_TARGET_PATTERN_ZH = /(?:API|\u540e\u7aef|\u524d\u7aef|\u670d\u52a1|\u6a21\u5757|\u63a5\u53e3|\u7ec4\u4ef6|\u67b6\u6784|\u5305|\u8fc1\u79fb|\u6570\u636e\u5e93|\u8ba4\u8bc1)(?:[\u4e00-\u9fffA-Za-z0-9_\-\/\\.\s]{0,8})(?:\u6587\u6863|\u8bf4\u660e\u6587\u6863|README|CHANGELOG|PRD|ADR|HLD|DD|\u6307\u5357)/u;
+const EXPLICIT_CODE_MUTATION_ANCHOR_PATTERN = /\b(?:implementation|source code|code comments?|function|class|component|bug|script|tests?|ui)\b/i;
+const EXPLICIT_CODE_MUTATION_ANCHOR_PATTERN_ZH = /\u4ee3\u7801\u6ce8\u91ca|\u5b9e\u73b0|\u51fd\u6570|\u7c7b|\u7ec4\u4ef6|bug|\u811a\u672c|\u6d4b\u8bd5|\u754c\u9762/u;
+const NO_CODE_CHANGE_PATTERN = /\b(?:do not|don't|dont|without|no)\b[\s\S]{0,12}\b(?:change|modify|edit|touch|rewrite|update|mutate)\b[\s\S]{0,8}\bcode\b|\bno code changes?\b/i;
+const NO_CODE_CHANGE_PATTERN_ZH = /\u4e0d\u6539\u4ee3\u7801|\u4e0d\u8981\u6539\u4ee3\u7801|\u4e0d\u4fee\u6539\u4ee3\u7801|\u4e0d\u8981\u4fee\u6539\u4ee3\u7801|\u53ea\u6539\u6587\u6863|\u53ea\u66f4\u65b0\u6587\u6863|\u4ec5\u6539\u6587\u6863|\u4ec5\u66f4\u65b0\u6587\u6863/u;
 const EXPLICIT_ASSURANCE_PATTERN = /\b(double[- ]check|re-check|recheck|second pass|second opinion|cross-check|cross check|independently verify|independent review|independent audit|strict audit|extra scrutiny|verify twice)\b/i;
 const EXPLICIT_ASSURANCE_PATTERN_ZH = /\u518d\u68c0\u67e5|\u518d\u5ba1\u67e5|\u53cc\u91cd\u68c0\u67e5|\u7b2c\u4e8c\u904d|\u7b2c\u4e8c\u8f6e|\u4e8c\u6b21\u5ba1\u67e5|\u4ea4\u53c9\u68c0\u67e5|\u72ec\u7acb\u9a8c\u8bc1|\u72ec\u7acb\u5ba1\u67e5|\u66f4\u5f3a\u5ba1\u67e5/u;
 const CODE_MUTATION_OBJECT_PATTERN = /\b(code|implementation|function|class|component|module|endpoint|service|repo|repository|file|files|test|bug|feature|script|api|ui|backend|frontend)\b/i;
@@ -581,7 +797,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
       reason: 'Empty input is treated as non-actionable conversation.',
     };
   }
@@ -593,7 +809,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
       reason: 'Pure greeting input should stay conversational and must not be escalated by repository state.',
     };
   }
@@ -604,6 +820,12 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
   const hasInvestigationSignal = INVESTIGATION_PATTERN.test(trimmed) || INVESTIGATION_PATTERN_ZH_CLEAN.test(trimmed);
   const hasImplementationSignal = IMPLEMENTATION_PATTERN.test(trimmed) || IMPLEMENTATION_PATTERN_ZH_CLEAN.test(trimmed);
 
+  // Heuristic intent gate. FEATURE_193 (v0.7.43) retired both the LLM task
+  // router and the Scout calibration round; the harness-LLM-judgment refactor
+  // then removed the per-harness prompt overlay for the Worker. Actionable
+  // requests run the keyword routing heuristic below; empty input and greetings
+  // short-circuit as non-actionable (direct H0).
+
   if (hasReviewSignal) {
     return {
       primaryTask: 'review',
@@ -611,8 +833,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: false,
-      reason: 'Explicit review language should stay on the lightweight review path unless later evidence explicitly justifies stronger assurance.',
+      requiresRoutingHeuristics: true,
+      reason: 'Review work is actionable and benefits from harness assessment for accurate scoping.',
     };
   }
 
@@ -623,7 +845,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'coordinated',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Planning and design requests may benefit from coordinated execution.',
     };
   }
@@ -635,7 +857,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Debugging and root-cause work starts as investigation.',
     };
   }
@@ -647,7 +869,7 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
       reason: 'Implementation and editing work is actionable and may later escalate if the evidence warrants it.',
     };
   }
@@ -659,8 +881,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
       actionability: 'actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
-      reason: 'Pure codebase lookup/navigation queries should stay on the direct path.',
+      requiresRoutingHeuristics: true,
+      reason: 'Lookup queries are actionable but lightweight — direct execution unless deeper analysis is requested.',
     };
   }
 
@@ -670,8 +892,8 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
     actionability: 'ambiguous',
     executionPattern: 'direct',
     shouldUseRepoSignals: false,
-    shouldUseModelRouter: false,
-    reason: 'Ambiguous requests stay lightweight until there is stronger task evidence.',
+    requiresRoutingHeuristics: true,
+    reason: 'Ambiguous requests need classification before the work approach is locked in.',
   };
 }
 
@@ -737,6 +959,11 @@ function deriveMutationSurface(
   const normalized = ` ${prompt.toLowerCase()} `;
   const hasCjk = /[\u3400-\u9fff]/u.test(prompt);
   const hasDocsSignal = DOCS_ONLY_PATTERN.test(prompt) || (hasCjk && DOCS_ONLY_PATTERN_ZH_CLEAN.test(prompt));
+  const hasDocQualifiedTechnicalTarget = DOCS_QUALIFIED_TECHNICAL_TARGET_PATTERN.test(prompt)
+    || (hasCjk && DOCS_QUALIFIED_TECHNICAL_TARGET_PATTERN_ZH.test(prompt));
+  const hasExplicitCodeMutationAnchor = EXPLICIT_CODE_MUTATION_ANCHOR_PATTERN.test(prompt)
+    || (hasCjk && EXPLICIT_CODE_MUTATION_ANCHOR_PATTERN_ZH.test(prompt));
+  const hasNoCodeGuard = NO_CODE_CHANGE_PATTERN.test(prompt) || (hasCjk && NO_CODE_CHANGE_PATTERN_ZH.test(prompt));
   const hasSystemSignal = SYSTEM_MUTATION_PATTERN.test(prompt) || (hasCjk && SYSTEM_MUTATION_PATTERN_ZH_CLEAN.test(prompt));
   const hasCodeObjectSignal = CODE_MUTATION_OBJECT_PATTERN.test(normalized) || (hasCjk && CODE_MUTATION_OBJECT_PATTERN_ZH_CLEAN.test(prompt));
   const hasStrongCodeTarget = /\b(code|implementation|function|class|component|module|endpoint|service|bug|script|api|ui|backend|frontend)\b/i.test(normalized)
@@ -751,9 +978,13 @@ function deriveMutationSurface(
     || hasStrongCodeTargetByChinese;
   const safeHasMutationVerb = /\b(implement|add|modify|update|create|write|fix|refactor|rewrite|replace|edit|patch|rename)\b/i.test(normalized)
     || hasMutationVerbByChinese;
+  const effectiveStrongCodeTarget = (safeHasStrongCodeTarget && !hasDocQualifiedTechnicalTarget)
+    || hasExplicitCodeMutationAnchor;
+  const effectiveStructuralRepoTarget = hasStructuralRepoTarget && !hasDocQualifiedTechnicalTarget;
+  const explicitDocsOnlyGuard = hasDocsSignal && !hasSystemSignal && hasNoCodeGuard;
 
   if (decision.primaryTask === 'review' && !safeHasMutationVerb && !hasSystemSignal) {
-    return hasDocsSignal && !safeHasStrongCodeTarget
+    return hasDocsSignal && (explicitDocsOnlyGuard || !effectiveStrongCodeTarget)
       ? 'docs-only'
       : 'read-only';
   }
@@ -762,10 +993,14 @@ function deriveMutationSurface(
     || decision.primaryTask === 'refactor'
     || decision.taskFamily === 'implementation'
     || (decision.primaryTask === 'bugfix' && safeHasMutationVerb)
-    || (safeHasMutationVerb && safeHasStrongCodeTarget)
-    || (hasStructuralMutationVerb && hasStructuralRepoTarget);
+    || (safeHasMutationVerb && effectiveStrongCodeTarget)
+    || (hasStructuralMutationVerb && effectiveStructuralRepoTarget);
 
-  if (hasDocsSignal && !hasSystemSignal && !safeHasStrongCodeTarget && decision.primaryTask !== 'refactor') {
+  if (explicitDocsOnlyGuard && decision.primaryTask !== 'refactor') {
+    return 'docs-only';
+  }
+
+  if (hasDocsSignal && !hasSystemSignal && !effectiveStrongCodeTarget && decision.primaryTask !== 'refactor') {
     return 'docs-only';
   }
 
@@ -795,18 +1030,11 @@ function deriveAssuranceIntent(
   return 'default';
 }
 
-function deriveTopologyCeiling(
-  mutationSurface: KodaXMutationSurface,
-  assuranceIntent: KodaXAssuranceIntent,
-): KodaXHarnessProfile {
-  if (mutationSurface === 'read-only' || mutationSurface === 'docs-only') {
-    return assuranceIntent === 'explicit-check'
-      ? 'H1_EXECUTE_EVAL'
-      : 'H0_DIRECT';
-  }
-
-  return 'H2_PLAN_EXECUTE_EVAL';
-}
+// `deriveTopologyCeiling` (FEATURE_112 read-only/docs → H1, code/system → H2)
+// was removed in ADR-043: the harness tier collapsed to the single H0_DIRECT
+// tier, so the ceiling is a constant. The assurance signal it keyed on stays
+// queryable on the decision (mutationSurface / assuranceIntent / complexity /
+// needsIndependentQA).
 
 function inferTaskSignal(prompt: string): {
   task: KodaXTaskType;
@@ -914,11 +1142,6 @@ export function inferTaskType(prompt: string): KodaXTaskType {
   return inferTaskSignal(prompt).task;
 }
 
-function isRoutingDebugEnabled(): boolean {
-  const value = process.env[ROUTING_DEBUG_ENV_VAR]?.trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
-}
-
 function complexityRank(value: KodaXTaskComplexity): number {
   switch (value) {
     case 'simple':
@@ -944,21 +1167,13 @@ function maxComplexity(
   return complexityRank(right) > complexityRank(left) ? right : left;
 }
 
-function logRoutingDebug(scope: string, error: unknown): void {
-  if (!isRoutingDebugEnabled()) {
-    return;
-  }
-
-  console.error(`[Routing] ${scope} failed:`, error);
-}
-
 export function buildFallbackRoutingDecision(
   prompt: string,
   providerPolicy?: KodaXProviderPolicyDecision,
   routingEvidence?: RoutingEvidenceInput,
 ): KodaXTaskRoutingDecision {
   const gate = inferIntentGate(prompt);
-  if (!gate.shouldUseModelRouter) {
+  if (!gate.requiresRoutingHeuristics) {
     const primaryTask = gate.primaryTask;
     return stabilizeRoutingDecision(prompt, {
       primaryTask,
@@ -993,7 +1208,10 @@ export function buildFallbackRoutingDecision(
     complexity: 'moderate',
     workIntent: 'new',
     requiresBrainstorm: false,
-    harnessProfile: 'H1_EXECUTE_EVAL',
+    // Input harnessProfile is overwritten by selectHarnessProfile (always
+    // H0_DIRECT) in stabilizeRoutingDecision — kept as H0_DIRECT to avoid a
+    // misleading H1 literal that never survives (ADR-043).
+    harnessProfile: 'H0_DIRECT',
     routingSource: 'fallback',
     routingAttempts: 1,
     reason: inferred.reason,
@@ -1018,39 +1236,6 @@ export function buildProviderPolicyHintsForDecision(
   };
 }
 
-export function buildPromptOverlay(
-  decision: KodaXTaskRoutingDecision,
-  extraNotes: string[] = [],
-  _providerPolicy?: KodaXProviderPolicyDecision,
-): string {
-  const routingNotes = decision.routingNotes?.map(
-    (note) => `[Task Routing Note] ${note}`,
-  ) ?? [];
-  const workIntentGuidance = buildWorkIntentGuidance(decision.workIntent);
-  const brainstormGuidance = decision.requiresBrainstorm
-    ? [
-      '[Brainstorm Trigger] Resolve ambiguity with a brief option framing before locking in the implementation path.',
-      '- Make the chosen path explicit before performing irreversible edits.',
-    ].join('\n')
-    : null;
-
-  return [
-    EXECUTION_MODE_OVERLAYS[decision.recommendedMode],
-    HARNESS_PROFILE_OVERLAYS[decision.harnessProfile],
-    `[Task Routing] primary=${decision.primaryTask}; family=${decision.taskFamily ?? 'unknown'}; actionability=${decision.actionability ?? 'unknown'}; mutationSurface=${decision.mutationSurface ?? 'unknown'}; assuranceIntent=${decision.assuranceIntent ?? 'default'}; pattern=${decision.executionPattern ?? 'unknown'}; risk=${decision.riskLevel}; complexity=${decision.complexity}; intent=${decision.workIntent}; brainstorm=${decision.requiresBrainstorm ? 'yes' : 'no'}; harness=${decision.harnessProfile}; topologyCeiling=${decision.topologyCeiling ?? 'none'}; upgradeCeiling=${decision.upgradeCeiling ?? 'none'}; reviewScale=${decision.reviewScale ?? 'unknown'}; confidence=${decision.confidence.toFixed(2)}.`,
-    decision.soloBoundaryConfidence !== undefined
-      ? `[Task Routing Signals] soloBoundaryConfidence=${decision.soloBoundaryConfidence.toFixed(2)}; needsIndependentQA=${decision.needsIndependentQA ? 'yes' : 'no'}; source=${decision.routingSource ?? 'unknown'}; attempts=${decision.routingAttempts ?? 1}.`
-      : undefined,
-    `[Task Routing Reason] ${decision.reason}`,
-    `[Work Intent] ${workIntentGuidance}`,
-    brainstormGuidance,
-    ...routingNotes,
-    ...extraNotes,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 export async function createReasoningPlan(
   options: KodaXOptions,
   prompt: string,
@@ -1068,307 +1253,48 @@ export async function createReasoningPlan(
     reasoningMode: mode,
   });
 
-  if (!intentGate.shouldUseModelRouter) {
-    const decision = buildFallbackRoutingDecision(
-      prompt,
-      providerPolicy,
-      routingEvidence,
-    );
-    const depth = mode === 'off'
-      ? 'off'
-      : mode === 'auto'
-        ? decision.recommendedThinkingDepth
-        : reasoningModeToDepth(mode);
-    const finalDecision = {
-      ...decision,
-      recommendedThinkingDepth: depth,
-      routingNotes: [
-        ...(decision.routingNotes ?? []),
-        intentGate.reason,
-      ],
-    };
-
-    return {
-      mode,
-      depth,
-      promptOverlay: buildPromptOverlay(
-        finalDecision,
-        providerPolicy.routingNotes,
-        providerPolicy,
-      ),
-      decision: finalDecision,
-      providerPolicy,
-    };
-  }
-
-  if (mode === 'auto') {
-    const decision = await routeTaskWithLLM(
-      provider,
-      prompt,
-      options,
-      providerPolicy,
-      routingEvidence,
-    );
-    return {
-      mode,
-      depth: decision.recommendedThinkingDepth,
-      promptOverlay: buildPromptOverlay(
-        decision,
-        providerPolicy.routingNotes,
-        providerPolicy,
-      ),
-      decision,
-      providerPolicy,
-    };
-  }
-
-  const fallbackDecision = buildFallbackRoutingDecision(
+  // FEATURE_061 Phase 1 + FEATURE_193 (v0.7.43): all paths use heuristic
+  // routing only (no LLM router call here, no Scout calibration round
+  // post-routing). The heuristic verdict drives V2 Worker directly.
+  const decision = buildFallbackRoutingDecision(
     prompt,
     providerPolicy,
     routingEvidence,
   );
-  const depth = mode === 'off' ? 'off' : reasoningModeToDepth(mode);
-  const decision: KodaXTaskRoutingDecision = {
-    ...fallbackDecision,
+  // Reasoning single-tracking: the plan carries a single canonical `effort`.
+  // Prefer the user/session-configured effort; fall back to mapping the legacy
+  // reasoning mode (off→none / auto→auto / quick→low / balanced→medium /
+  // deep→high) so pre-effort callers keep their behaviour. `'auto'` defers the
+  // concrete level to the provider's capability-aware resolver.
+  const effort: KodaXWireReasoningEffort =
+    options.effort ?? mapLegacyReasoningModeToEffortIntent(mode);
+  // `decision.recommendedThinkingDepth` stays on the routing decision (it is
+  // part of the router schema); derive it from the legacy mode for back-compat
+  // until the decision schema migrates.
+  const depth = mode === 'off'
+    ? 'off'
+    : mode === 'auto'
+      ? decision.recommendedThinkingDepth
+      : reasoningModeToDepth(mode);
+  const finalDecision = {
+    ...decision,
     recommendedThinkingDepth: depth,
+    routingNotes: [
+      ...(decision.routingNotes ?? []),
+      intentGate.reason,
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
+    ],
   };
 
   return {
-    mode,
-    depth,
-    promptOverlay: buildPromptOverlay(
-      decision,
-      providerPolicy.routingNotes,
-      providerPolicy,
-    ),
-    decision,
+    effort,
+    // Router prompt-overlay retired (ADR-043): the Worker (H3) and SA (P1.7)
+    // paths self-judge from the static EXECUTION GUIDANCE block, so the field
+    // stays on the plan type but no longer carries router-injected text.
+    promptOverlay: '',
+    decision: finalDecision,
     providerPolicy,
   };
-}
-
-export async function maybeCreateAutoReroutePlan(
-  provider: KodaXBaseProvider,
-  options: KodaXOptions,
-  prompt: string,
-  currentPlan: ReasoningPlan,
-  assistantText: string,
-  allowances: {
-    allowDepthEscalation: boolean;
-    allowTaskReroute: boolean;
-  },
-  evidence?: AutoRerouteEvidence,
-): Promise<ReasoningFollowUpPlan | null> {
-  const rerouteEvidenceText = [assistantText.trim(), evidence?.toolEvidence?.trim()]
-    .filter(Boolean)
-    .join('\n\n[Tool Evidence]\n');
-
-  if (currentPlan.mode !== 'auto' || !rerouteEvidenceText.trim()) {
-    return null;
-  }
-
-  if (
-    currentPlan.decision.primaryTask === 'review' &&
-    hasTransientRetryEvidence(rerouteEvidenceText) &&
-    !hasNonTransientRuntimeEvidence(rerouteEvidenceText)
-  ) {
-    return null;
-  }
-
-  const fallback = buildHeuristicAutoRerouteDecision(currentPlan, rerouteEvidenceText);
-  const judged = await judgeAutoRerouteWithLLM(
-    provider,
-    options,
-    prompt,
-    currentPlan,
-    assistantText,
-    evidence,
-  );
-  const normalized = normalizeAutoRerouteDecision(
-    currentPlan,
-    judged ?? fallback,
-    allowances,
-  );
-
-  if (!normalized) {
-    return null;
-  }
-
-  const nextDecision = stabilizeRoutingDecision(prompt, {
-    ...currentPlan.decision,
-    primaryTask: normalized.nextPrimaryTask,
-    confidence: Math.max(currentPlan.decision.confidence, 0.82),
-    riskLevel:
-      normalized.nextRecommendedMode === 'investigation'
-        ? 'high'
-        : currentPlan.decision.riskLevel,
-    recommendedMode: normalized.nextRecommendedMode,
-    recommendedThinkingDepth: normalized.nextThinkingDepth,
-    reason: normalized.reason,
-  } satisfies KodaXTaskRoutingDecision, currentPlan.providerPolicy);
-
-  const followUpLabel =
-    normalized.kind === 'task-reroute' ? '[Auto Reroute]' : '[Auto Depth Escalation]';
-  const followUpGuidance =
-    normalized.kind === 'task-reroute'
-      ? `${followUpLabel} Re-running the request because: ${normalized.reason}`
-      : `${followUpLabel} Keeping the task/mode the same, but using one deeper pass because: ${normalized.reason}`;
-
-  return {
-    kind: normalized.kind,
-    mode: currentPlan.mode,
-    depth: nextDecision.recommendedThinkingDepth,
-    decision: nextDecision,
-    providerPolicy: currentPlan.providerPolicy,
-    promptOverlay: buildPromptOverlay(nextDecision, [
-      followUpGuidance,
-      `${followUpLabel} Focus on high-confidence, high-signal output for this follow-up pass.`,
-    ], currentPlan.providerPolicy),
-  };
-}
-
-export function buildHeuristicAutoRerouteDecision(
-  currentPlan: ReasoningPlan,
-  assistantText: string,
-): AutoRerouteDecision {
-  const text = assistantText.toLowerCase();
-  const hasUncertainty = UNCERTAINTY_MARKERS.some((marker) => text.includes(marker));
-  const hasRuntimeEvidence = hasNonTransientRuntimeEvidence(assistantText);
-  const hasTransientRetryEvidenceOnly =
-    hasTransientRetryEvidence(assistantText) && !hasRuntimeEvidence;
-  const hasLowValueReview = LOW_VALUE_REVIEW_MARKERS.some((marker) => text.includes(marker));
-  const hasHighImpact = HIGH_IMPACT_MARKERS.some((marker) => text.includes(marker));
-
-  if (currentPlan.decision.primaryTask === 'review' && hasTransientRetryEvidenceOnly) {
-    return {
-      shouldReroute: false,
-      reason: 'Transient retry evidence such as a timeout should be retried before rerouting review into investigation.',
-    };
-  }
-
-  if (currentPlan.decision.primaryTask === 'review' && hasRuntimeEvidence) {
-    return {
-      shouldReroute: true,
-      nextPrimaryTask: 'bugfix',
-      nextRecommendedMode: 'investigation',
-      nextThinkingDepth: ensureMinimumDepth(currentPlan.depth, 'medium'),
-      reason: 'The first pass surfaced runtime or test-failure evidence, so the task should switch from review into investigation.',
-    };
-  }
-
-  if (hasUncertainty) {
-    const nextDepth = escalateThinkingDepth(currentPlan.depth);
-    if (nextDepth !== currentPlan.depth) {
-      return {
-        shouldReroute: true,
-        nextPrimaryTask: currentPlan.decision.primaryTask,
-        nextRecommendedMode: currentPlan.decision.recommendedMode,
-        nextThinkingDepth: nextDepth,
-        reason: 'The first pass sounded uncertain and likely needs one deeper pass before returning the final answer.',
-      };
-    }
-  }
-
-  if (
-    currentPlan.decision.primaryTask === 'review' &&
-    hasLowValueReview &&
-    !hasHighImpact
-  ) {
-    const nextDepth = escalateThinkingDepth(currentPlan.depth);
-    if (nextDepth !== currentPlan.depth) {
-      return {
-        shouldReroute: true,
-        nextPrimaryTask: 'review',
-        nextRecommendedMode: 'pr-review',
-        nextThinkingDepth: nextDepth,
-        reason: 'The first pass focused on low-value review nits and should be rerun with a stricter merge-blocking review lens.',
-      };
-    }
-  }
-
-  return {
-    shouldReroute: false,
-    reason: 'No strong reroute signal was detected.',
-  };
-}
-
-export function escalateThinkingDepth(
-  depth: KodaXThinkingDepth,
-): Exclude<KodaXThinkingDepth, 'off'> {
-  switch (depth) {
-    case 'off':
-      return 'low';
-    case 'low':
-      return 'medium';
-    case 'medium':
-    case 'high':
-    default:
-      return 'high';
-  }
-}
-
-async function routeTaskWithLLM(
-  provider: KodaXBaseProvider,
-  prompt: string,
-  options: KodaXOptions,
-  providerPolicy: KodaXProviderPolicyDecision,
-  routingEvidence?: RoutingEvidenceInput,
-): Promise<KodaXTaskRoutingDecision> {
-  const fallback = buildFallbackRoutingDecision(prompt, providerPolicy, routingEvidence);
-  const repoSummary = await buildRepositoryRoutingSummary(
-    options.context?.gitRoot ?? undefined,
-    providerPolicy,
-    routingEvidence,
-  );
-  const decision = await retryStructuredDecision('task router', options, async () => {
-    const messages: KodaXMessage[] = [
-      {
-        role: 'user',
-        content: [
-          'Route this coding-agent request.',
-          '',
-          `User request: ${prompt}`,
-          '',
-          'Repository signals:',
-          repoSummary,
-          '',
-          'Return JSON only.',
-        ].join('\n'),
-      },
-    ];
-
-    const result = await provider.stream(
-      messages,
-      [],
-      ROUTER_SYSTEM_PROMPT,
-      false,
-      {
-        modelOverride: options.modelOverride ?? options.model,
-        signal: options.abortSignal,
-      },
-      options.abortSignal,
-    );
-
-    const raw = result.textBlocks.map((block) => block.text).join('\n').trim();
-    return parseRoutingDecision(raw);
-  });
-
-  if (!decision.value) {
-    return stabilizeRoutingDecision(prompt, {
-      ...fallback,
-      routingSource: decision.retried ? 'retried-fallback' : 'fallback',
-      routingAttempts: decision.attempts,
-      routingNotes: [
-        ...(fallback.routingNotes ?? []),
-        `Structured router fell back after ${decision.attempts} attempt${decision.attempts === 1 ? '' : 's'}.`,
-      ],
-    }, providerPolicy, routingEvidence);
-  }
-
-  return stabilizeRoutingDecision(prompt, {
-    ...decision.value,
-    routingSource: decision.retried ? 'retried-model' : 'model',
-    routingAttempts: decision.attempts,
-  }, providerPolicy, routingEvidence);
 }
 
 function clampUnitInterval(value: number, fallback = 0.5): number {
@@ -1378,604 +1304,6 @@ function clampUnitInterval(value: number, fallback = 0.5): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function createErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-async function waitForStructuredDecisionBackoff(
-  attempt: number,
-  signal?: AbortSignal,
-): Promise<void> {
-  const delayMs = Math.min(1500, 250 * 2 ** Math.max(0, attempt - 1));
-  if (delayMs <= 0) {
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error('Structured decision retry aborted.'));
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, delayMs);
-
-    function onAbort(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
-      reject(new Error('Structured decision retry aborted.'));
-    }
-
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-function isNonRetryableStructuredDecisionError(error: unknown, signal?: AbortSignal): boolean {
-  if (signal?.aborted) {
-    return true;
-  }
-
-  const message = createErrorMessage(error).toLowerCase();
-  return (
-    message.includes('aborted')
-    || message.includes('aborterror')
-    || message.includes('unauthorized')
-    || message.includes('forbidden')
-    || message.includes('authentication')
-    || message.includes('invalid request')
-    || message.includes('not supported')
-    || message.includes('unsupported')
-    || message.includes('policy')
-    || message.includes('refus')
-  );
-}
-
-async function retryStructuredDecision<T>(
-  label: string,
-  options: KodaXOptions,
-  execute: () => Promise<T | null>,
-): Promise<{ value: T | null; attempts: number; retried: boolean }> {
-  let attempts = 0;
-  let lastError: unknown;
-
-  while (attempts < STRUCTURED_DECISION_MAX_ATTEMPTS) {
-    attempts += 1;
-    try {
-      const value = await execute();
-      if (value !== null) {
-        return {
-          value,
-          attempts,
-          retried: attempts > 1,
-        };
-      }
-      lastError = new Error(`${label} returned invalid or incomplete structured output.`);
-    } catch (error) {
-      lastError = error;
-      if (isNonRetryableStructuredDecisionError(error, options.abortSignal)) {
-        break;
-      }
-    }
-
-      if (attempts < STRUCTURED_DECISION_MAX_ATTEMPTS) {
-        if (process.env.KODAX_DEBUG_ROUTING) {
-          options.events?.onRetry?.(`${label} structured decision retry`, attempts, STRUCTURED_DECISION_MAX_ATTEMPTS);
-        }
-        await waitForStructuredDecisionBackoff(attempts, options.abortSignal);
-      }
-  }
-
-  logRoutingDebug(label, lastError);
-  return {
-    value: null,
-    attempts,
-    retried: attempts > 1,
-  };
-}
-
-async function judgeAutoRerouteWithLLM(
-  provider: KodaXBaseProvider,
-  options: KodaXOptions,
-  prompt: string,
-  currentPlan: ReasoningPlan,
-  assistantText: string,
-  evidence?: AutoRerouteEvidence,
-): Promise<AutoRerouteDecision | null> {
-  const decision = await retryStructuredDecision('reroute judge', options, async () => {
-    const messages: KodaXMessage[] = [
-      {
-        role: 'user',
-        content: [
-          'Judge whether the first-pass response should be rerouted.',
-          '',
-          `Original user request: ${prompt}`,
-          `Current primary task: ${currentPlan.decision.primaryTask}`,
-          `Current execution mode: ${currentPlan.decision.recommendedMode}`,
-          `Current thinking depth: ${currentPlan.depth}`,
-          `Current confidence: ${currentPlan.decision.confidence.toFixed(2)}`,
-          '',
-          'First-pass response:',
-          assistantText,
-          evidence?.toolEvidence?.trim()
-            ? ['', 'Tool evidence:', evidence.toolEvidence.trim()].join('\n')
-            : '',
-          '',
-          'Return JSON only.',
-        ].join('\n'),
-      },
-    ];
-
-    const result = await provider.stream(
-      messages,
-      [],
-      AUTO_REROUTE_SYSTEM_PROMPT,
-      false,
-      {
-        modelOverride: options.modelOverride ?? options.model,
-        signal: options.abortSignal,
-      },
-      options.abortSignal,
-    );
-
-    const raw = result.textBlocks.map((block) => block.text).join('\n').trim();
-    return parseAutoRerouteDecision(raw);
-  });
-
-  return decision.value;
-}
-
-function parseRoutingDecision(
-  text: string,
-): KodaXTaskRoutingDecision | null {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0]) as Partial<KodaXTaskRoutingDecision>;
-    const primaryTask = isTaskType(parsed.primaryTask) ? parsed.primaryTask : null;
-    const riskLevel = isRiskLevel(parsed.riskLevel) ? parsed.riskLevel : null;
-    const recommendedMode = isExecutionMode(parsed.recommendedMode)
-      ? parsed.recommendedMode
-      : null;
-    const recommendedThinkingDepth = isThinkingDepth(parsed.recommendedThinkingDepth)
-      ? parsed.recommendedThinkingDepth
-      : null;
-    const confidence =
-      typeof parsed.confidence === 'number' &&
-      parsed.confidence >= 0 &&
-      parsed.confidence <= 1
-        ? parsed.confidence
-        : null;
-    const soloBoundaryConfidence =
-      typeof parsed.soloBoundaryConfidence === 'number'
-      && parsed.soloBoundaryConfidence >= 0
-      && parsed.soloBoundaryConfidence <= 1
-        ? parsed.soloBoundaryConfidence
-        : undefined;
-    const needsIndependentQA =
-      typeof parsed.needsIndependentQA === 'boolean'
-        ? parsed.needsIndependentQA
-        : undefined;
-    const reviewScale =
-      parsed.reviewScale === 'small'
-      || parsed.reviewScale === 'large'
-      || parsed.reviewScale === 'massive'
-        ? parsed.reviewScale
-        : undefined;
-    const taskFamily = isTaskFamily(parsed.taskFamily)
-      ? parsed.taskFamily
-      : undefined;
-    const actionability = isTaskActionability(parsed.actionability)
-      ? parsed.actionability
-      : undefined;
-    const executionPattern = isExecutionPattern(parsed.executionPattern)
-      ? parsed.executionPattern
-      : undefined;
-    const mutationSurface = isMutationSurface(parsed.mutationSurface)
-      ? parsed.mutationSurface
-      : undefined;
-    const assuranceIntent = isAssuranceIntent(parsed.assuranceIntent)
-      ? parsed.assuranceIntent
-      : undefined;
-    const topologyCeiling = isHarnessProfile(parsed.topologyCeiling)
-      ? parsed.topologyCeiling
-      : undefined;
-    const upgradeCeiling = isHarnessProfile(parsed.upgradeCeiling)
-      ? parsed.upgradeCeiling
-      : undefined;
-
-    if (
-      !primaryTask ||
-      !riskLevel ||
-      !recommendedMode ||
-      !recommendedThinkingDepth ||
-      confidence === null
-    ) {
-      return null;
-    }
-
-    return {
-      primaryTask,
-      secondaryTask: isTaskType(parsed.secondaryTask)
-        ? parsed.secondaryTask
-        : undefined,
-      confidence,
-      taskFamily,
-      actionability,
-      executionPattern,
-      mutationSurface,
-      assuranceIntent,
-      riskLevel,
-      recommendedMode,
-      recommendedThinkingDepth,
-      complexity: isTaskComplexity(parsed.complexity)
-        ? parsed.complexity
-        : 'moderate',
-      workIntent: isTaskWorkIntent(parsed.workIntent)
-        ? parsed.workIntent
-        : 'new',
-      requiresBrainstorm: typeof parsed.requiresBrainstorm === 'boolean'
-        ? parsed.requiresBrainstorm
-        : false,
-      harnessProfile: isHarnessProfile(parsed.harnessProfile)
-        ? parsed.harnessProfile
-        : 'H1_EXECUTE_EVAL',
-      topologyCeiling,
-      upgradeCeiling,
-      reviewScale,
-      soloBoundaryConfidence,
-      needsIndependentQA,
-      routingSource: parsed.routingSource === 'model'
-        || parsed.routingSource === 'fallback'
-        || parsed.routingSource === 'retried-model'
-        || parsed.routingSource === 'retried-fallback'
-        ? parsed.routingSource
-        : undefined,
-      routingAttempts: typeof parsed.routingAttempts === 'number' && parsed.routingAttempts > 0
-        ? parsed.routingAttempts
-        : undefined,
-      routingNotes: Array.isArray(parsed.routingNotes)
-        ? parsed.routingNotes.filter((note): note is string =>
-          typeof note === 'string' && note.trim().length > 0,
-        )
-        : undefined,
-      reason:
-        typeof parsed.reason === 'string' && parsed.reason.trim()
-          ? parsed.reason.trim()
-          : 'Router returned a structured routing decision.',
-    };
-  } catch (error) {
-    logRoutingDebug('routing decision parser', error);
-    return null;
-  }
-}
-
-function parseAutoRerouteDecision(
-  text: string,
-): AutoRerouteDecision | null {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0]) as Partial<AutoRerouteDecision>;
-    if (typeof parsed.shouldReroute !== 'boolean') {
-      return null;
-    }
-
-    const nextPrimaryTask = isTaskType(parsed.nextPrimaryTask)
-      ? parsed.nextPrimaryTask
-      : undefined;
-    const nextRecommendedMode = isExecutionMode(parsed.nextRecommendedMode)
-      ? parsed.nextRecommendedMode
-      : undefined;
-    const nextThinkingDepth = isEscalationDepth(parsed.nextThinkingDepth)
-      ? parsed.nextThinkingDepth
-      : undefined;
-    const reason =
-      typeof parsed.reason === 'string' && parsed.reason.trim()
-        ? parsed.reason.trim()
-        : parsed.shouldReroute
-          ? 'The reroute judge recommended a stronger second pass.'
-          : 'The reroute judge found no need to rerun the response.';
-
-    return {
-      shouldReroute: parsed.shouldReroute,
-      nextPrimaryTask,
-      nextRecommendedMode,
-      nextThinkingDepth,
-      reason,
-    };
-  } catch (error) {
-    logRoutingDebug('auto reroute parser', error);
-    return null;
-  }
-}
-
-function normalizeAutoRerouteDecision(
-  currentPlan: ReasoningPlan,
-  decision: AutoRerouteDecision,
-  allowances: {
-    allowDepthEscalation: boolean;
-    allowTaskReroute: boolean;
-  },
-): {
-  kind: ReasoningFollowUpKind;
-  nextPrimaryTask: KodaXTaskType;
-  nextRecommendedMode: KodaXExecutionMode;
-  nextThinkingDepth: Exclude<KodaXThinkingDepth, 'off'>;
-  reason: string;
-} | null {
-  if (!decision.shouldReroute) {
-    return null;
-  }
-
-  if (allowances.allowTaskReroute) {
-    const reroute = normalizeTaskRerouteDecision(currentPlan, decision);
-    if (reroute) {
-      return {
-        kind: 'task-reroute',
-        ...reroute,
-      };
-    }
-  }
-
-  if (allowances.allowDepthEscalation) {
-    const depthEscalation = normalizeDepthEscalationDecision(
-      currentPlan,
-      decision,
-    );
-    if (depthEscalation) {
-      return {
-        kind: 'depth-escalation',
-        ...depthEscalation,
-      };
-    }
-  }
-
-  return null;
-}
-
-function normalizeTaskRerouteDecision(
-  currentPlan: ReasoningPlan,
-  decision: AutoRerouteDecision,
-): {
-  nextPrimaryTask: KodaXTaskType;
-  nextRecommendedMode: KodaXExecutionMode;
-  nextThinkingDepth: Exclude<KodaXThinkingDepth, 'off'>;
-  reason: string;
-} | null {
-  const nextMode = decision.nextRecommendedMode ?? currentPlan.decision.recommendedMode;
-  const nextTask = decision.nextPrimaryTask ?? currentPlan.decision.primaryTask;
-  const nextDepth = decision.nextThinkingDepth ?? escalateThinkingDepth(currentPlan.depth);
-  const currentDepthRank = THINKING_DEPTH_ORDER[currentPlan.depth];
-  const nextDepthRank = THINKING_DEPTH_ORDER[nextDepth];
-  const modeChanged = nextMode !== currentPlan.decision.recommendedMode;
-  const taskChanged = nextTask !== currentPlan.decision.primaryTask;
-
-  if (!taskChanged && !modeChanged) {
-    return null;
-  }
-
-  if (
-    nextMode === 'investigation' &&
-    currentPlan.decision.recommendedMode !== 'pr-review'
-  ) {
-    return null;
-  }
-
-  const stabilizedDepth =
-    nextDepthRank < currentDepthRank
-      ? ensureMinimumDepth(currentPlan.depth, 'low')
-      : nextDepth;
-
-  return {
-    nextPrimaryTask: nextMode === 'investigation' ? 'bugfix' : nextTask,
-    nextRecommendedMode: nextMode,
-    nextThinkingDepth:
-      nextMode === 'investigation'
-        ? ensureMinimumDepth(stabilizedDepth, 'medium')
-        : stabilizedDepth,
-    reason: decision.reason,
-  };
-}
-
-function normalizeDepthEscalationDecision(
-  currentPlan: ReasoningPlan,
-  decision: AutoRerouteDecision,
-): {
-  nextPrimaryTask: KodaXTaskType;
-  nextRecommendedMode: KodaXExecutionMode;
-  nextThinkingDepth: Exclude<KodaXThinkingDepth, 'off'>;
-  reason: string;
-} | null {
-  const nextMode = decision.nextRecommendedMode ?? currentPlan.decision.recommendedMode;
-  const nextTask = decision.nextPrimaryTask ?? currentPlan.decision.primaryTask;
-  const nextDepth = decision.nextThinkingDepth ?? escalateThinkingDepth(currentPlan.depth);
-  const currentDepthRank = THINKING_DEPTH_ORDER[currentPlan.depth];
-  const nextDepthRank = THINKING_DEPTH_ORDER[nextDepth];
-
-  if (
-    nextMode !== currentPlan.decision.recommendedMode ||
-    nextTask !== currentPlan.decision.primaryTask
-  ) {
-    return null;
-  }
-
-  if (nextDepthRank <= currentDepthRank) {
-    return null;
-  }
-
-  return {
-    nextPrimaryTask: nextTask,
-    nextRecommendedMode: nextMode,
-    nextThinkingDepth: nextDepth,
-    reason: decision.reason,
-  };
-}
-
-async function buildRepositoryRoutingSummary(
-  gitRoot?: string,
-  providerPolicy?: KodaXProviderPolicyDecision,
-  routingEvidence?: RoutingEvidenceInput,
-): Promise<string> {
-  const parts: string[] = [];
-  if (!gitRoot) {
-    parts.push('- git: unavailable');
-  } else {
-    const status = await runCommand('git status --short', gitRoot);
-    const diffStat = await runCommand('git diff --stat', gitRoot);
-    const changedFiles = await runCommand('git diff --name-only', gitRoot);
-
-    if (status) {
-      parts.push(`- git status: ${status.split('\n').slice(0, 5).join(' | ')}`);
-    }
-
-    if (diffStat) {
-      parts.push(`- diff stat: ${diffStat.split('\n').slice(0, 3).join(' | ')}`);
-    }
-
-    if (changedFiles) {
-      parts.push(
-        `- changed files: ${changedFiles.split('\n').slice(0, 8).join(', ')}`,
-      );
-    }
-  }
-
-  const recentEvidence = summarizeRoutingEvidence(routingEvidence);
-  if (recentEvidence.length > 0) {
-    parts.push(...recentEvidence);
-  }
-
-  const repoSignalSummary = summarizeRepoRoutingSignals(routingEvidence?.repoSignals);
-  if (repoSignalSummary.length > 0) {
-    parts.push(...repoSignalSummary);
-  }
-
-  if (providerPolicy) {
-    parts.push(
-      [
-        `- provider semantics: ${providerPolicy.snapshot.provider}${providerPolicy.snapshot.model ? `/${providerPolicy.snapshot.model}` : ''}`,
-        `transport=${providerPolicy.snapshot.transport}`,
-        `context=${providerPolicy.snapshot.contextFidelity}`,
-        `toolCalling=${providerPolicy.snapshot.toolCallingFidelity}`,
-        `session=${providerPolicy.snapshot.sessionSupport}`,
-        `longRunning=${providerPolicy.snapshot.longRunningSupport}`,
-        `multimodal=${providerPolicy.snapshot.multimodalSupport}`,
-        `evidence=${providerPolicy.snapshot.evidenceSupport}`,
-        `mcp=${providerPolicy.snapshot.mcpSupport}`,
-        `reasoning=${providerPolicy.snapshot.reasoningCapability}`,
-      ].join('; '),
-    );
-
-    for (const issue of providerPolicy.issues) {
-      parts.push(`- provider constraint (${issue.severity}): ${issue.summary}`);
-    }
-  }
-
-  return parts.length > 0 ? parts.join('\n') : '- git: clean or unavailable';
-}
-
-async function runCommand(
-  command: string,
-  cwd: string,
-): Promise<string> {
-  try {
-    const { stdout } = await execAsync(command, {
-      cwd,
-      timeout: 5000,
-      maxBuffer: 256 * 1024,
-    });
-    return stdout.trim();
-  } catch (error) {
-    logRoutingDebug(`repository command (${command})`, error);
-    return '';
-  }
-}
-
-function summarizeRoutingEvidence(
-  routingEvidence?: RoutingEvidenceInput,
-): string[] {
-  if (!routingEvidence) {
-    return [];
-  }
-
-  const parts = new Set<string>();
-  for (const line of summarizeRecentMessageEvidence(routingEvidence.recentMessages ?? [])) {
-    parts.add(line);
-  }
-
-  const sessionError = routingEvidence.sessionErrorMetadata?.lastError?.trim();
-  if (sessionError && looksLikeRuntimeEvidence(sessionError)) {
-    parts.add(`- recent session error: ${truncateEvidence(sessionError)}`);
-  }
-
-  for (const signal of routingEvidence.additionalSignals ?? []) {
-    const normalized = signal.trim();
-    if (!normalized || !looksLikeRuntimeEvidence(normalized)) {
-      continue;
-    }
-    parts.add(`- runtime evidence: ${truncateEvidence(normalized)}`);
-  }
-
-  return Array.from(parts).slice(0, 6);
-}
-
-function summarizeRecentMessageEvidence(messages: KodaXMessage[]): string[] {
-  const evidence: string[] = [];
-  const recentMessages = messages.slice(-8);
-
-  for (const message of recentMessages) {
-    if (typeof message.content === 'string') {
-      if (looksLikeRuntimeEvidence(message.content)) {
-        evidence.push(`- recent message evidence: ${truncateEvidence(message.content)}`);
-      }
-      continue;
-    }
-
-    for (const block of message.content) {
-      if (block.type === 'tool_result' && looksLikeRuntimeEvidence(block.content)) {
-        evidence.push(`- recent tool result: ${truncateEvidence(block.content)}`);
-      } else if (block.type === 'text' && looksLikeRuntimeEvidence(block.text)) {
-        evidence.push(`- recent assistant evidence: ${truncateEvidence(block.text)}`);
-      }
-    }
-  }
-
-  return Array.from(new Set(evidence)).slice(0, 4);
-}
-
-function looksLikeRuntimeEvidence(text: string): boolean {
-  return looksLikeActionableRuntimeEvidence(text);
-}
-
-function truncateEvidence(text: string, maxLength = 180): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, maxLength - 3)}...`;
-}
-
-function buildWorkIntentGuidance(workIntent: KodaXTaskWorkIntent): string {
-  switch (workIntent) {
-    case 'append':
-      return 'Extend or continue the existing artifact without rewriting stable parts unnecessarily.';
-    case 'overwrite':
-      return 'A substantial rewrite or replacement is expected, but keep the boundaries and consequences explicit.';
-    case 'new':
-    default:
-      return 'Treat this as net-new work unless repo evidence proves the request is really an append or rewrite.';
-  }
-}
 
 function inferWorkIntent(
   prompt: string,
@@ -2078,120 +1406,48 @@ function inferRequiresBrainstorm(
   return false;
 }
 
-const HARNESS_ORDER: KodaXHarnessProfile[] = [
-  'H0_DIRECT',
-  'H1_EXECUTE_EVAL',
-  'H2_PLAN_EXECUTE_EVAL',
-];
-
-function getHarnessRank(harness: KodaXHarnessProfile): number {
-  return HARNESS_ORDER.indexOf(harness);
-}
-
+// FEATURE_061 + FEATURE_193 (v0.7.43): heuristic routing returns a verdict
+// that V2 Worker honours directly. The harnessProfile starts at
+// `H0_DIRECT` and is upgraded only by the heuristic's own
+// `topologyCeiling` derivation — the V1 Scout calibration round that
+// could move H0 → H1/H2 mid-task no longer exists. The returned `notes`
+// are surfaced to Worker via `routingNotes`; their hints are framed as
+// observations the Worker can act on, not as Scout-bound instructions.
 function selectHarnessProfile(
   prompt: string,
   decision: KodaXTaskRoutingDecision,
-  providerPolicy?: KodaXProviderPolicyDecision,
 ): {
   harnessProfile: KodaXHarnessProfile;
   upgradeCeiling?: KodaXHarnessProfile;
   notes: string[];
 } {
-  let harnessProfile: KodaXHarnessProfile;
-  let upgradeCeiling = decision.upgradeCeiling;
   const taskFamily = decision.taskFamily ?? inferTaskFamilyFromPrimaryTask(decision.primaryTask);
-  const actionability = decision.actionability ?? (taskFamily === 'conversation' ? 'non_actionable' : taskFamily === 'ambiguous' ? 'ambiguous' : 'actionable');
   const mutationSurface = deriveMutationSurface(prompt, {
     primaryTask: decision.primaryTask,
     taskFamily,
   });
-  const assuranceIntent = deriveAssuranceIntent(prompt, decision);
-  const topologyCeiling = deriveTopologyCeiling(mutationSurface, assuranceIntent);
 
-  if (actionability !== 'actionable' || taskFamily === 'conversation' || taskFamily === 'lookup') {
-    return {
-      harnessProfile: 'H0_DIRECT',
-      upgradeCeiling: undefined,
-      notes: actionability === 'non_actionable'
-        ? ['Intent gate kept a non-actionable request on the direct path.']
-        : ['Intent gate kept this lightweight lookup/ambiguous request on the direct path.'],
-    };
+  const hints: string[] = [];
+  if (decision.complexity === 'complex' || decision.complexity === 'systemic') {
+    hints.push(`Complexity hint: ${decision.complexity}. Assess whether the recommended harness fits the task scope.`);
   }
-
-  if (mutationSurface === 'read-only' || mutationSurface === 'docs-only') {
-    harnessProfile = assuranceIntent === 'explicit-check'
-      ? 'H1_EXECUTE_EVAL'
-      : 'H0_DIRECT';
-    upgradeCeiling = topologyCeiling;
-  } else {
-    const needsCoordinatedHarness = mutationSurface === 'system'
-      ? (
-        decision.requiresBrainstorm
-        || decision.needsIndependentQA
-        || decision.riskLevel === 'high'
-        || decision.complexity === 'complex'
-        || decision.complexity === 'systemic'
-        || decision.workIntent === 'overwrite'
-      )
-      : (
-        decision.requiresBrainstorm
-        || decision.complexity === 'systemic'
-        || (
-          decision.complexity === 'complex'
-          && (
-            taskFamily === 'implementation'
-            || decision.primaryTask === 'edit'
-            || decision.primaryTask === 'refactor'
-            || decision.workIntent === 'overwrite'
-            || decision.needsIndependentQA
-          )
-        )
-      );
-
-    if (needsCoordinatedHarness) {
-      harnessProfile = 'H2_PLAN_EXECUTE_EVAL';
-    } else if (
-      decision.needsIndependentQA
-      || decision.soloBoundaryConfidence === undefined
-      || decision.soloBoundaryConfidence < SOLO_BOUNDARY_DIRECT_THRESHOLD
-      || decision.riskLevel !== 'low'
-      || decision.complexity === 'moderate'
-      || decision.workIntent === 'overwrite'
-    ) {
-      harnessProfile = 'H1_EXECUTE_EVAL';
-    } else {
-      harnessProfile = 'H0_DIRECT';
-    }
-    upgradeCeiling = topologyCeiling;
+  if (decision.needsIndependentQA) {
+    hints.push('Independent QA was inferred from prompt signals. Verify whether explicit verification artifacts are needed before declaring the task done.');
   }
-
-  const notes: string[] = [];
-  if (getHarnessRank(harnessProfile) > getHarnessRank(topologyCeiling)) {
-    notes.push(`Topology ceiling kept the task at or below ${topologyCeiling} because ${mutationSurface} work should stay lightweight by default.`);
-    harnessProfile = topologyCeiling;
-    upgradeCeiling = topologyCeiling;
+  if (decision.requiresBrainstorm) {
+    hints.push('Brainstorm/planning signal detected. Judge whether to plan-first via todo_update before executing.');
   }
-
-  const snapshot = providerPolicy?.snapshot;
-  if (
-    snapshot
-    && harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-    && (
-      snapshot.contextFidelity === 'lossy'
-      || snapshot.sessionSupport === 'stateless'
-      || snapshot.toolCallingFidelity === 'none'
-      || snapshot.evidenceSupport === 'none'
-    )
-  ) {
-    harnessProfile = 'H1_EXECUTE_EVAL';
-    upgradeCeiling = undefined;
-    notes.push('Downgraded from H2 to H1 because provider semantics are too lossy for coordinated execution.');
+  if (mutationSurface === 'system' && (decision.riskLevel === 'high' || decision.workIntent === 'overwrite')) {
+    hints.push('High-risk system mutation detected. Proceed with caution; consider checkpointing intermediate state.');
   }
 
   return {
-    harnessProfile,
-    upgradeCeiling: harnessProfile === 'H0_DIRECT' ? undefined : upgradeCeiling,
-    notes,
+    // Harness tier retired (ADR-043): both the profile and the ceiling are the
+    // single H0_DIRECT tier. The fields are kept as accurate constants (REPL /
+    // status / checkpoint schema) — they no longer carry H1/H2.
+    harnessProfile: 'H0_DIRECT',
+    upgradeCeiling: 'H0_DIRECT',
+    notes: hints,
   };
 }
 
@@ -2437,12 +1693,6 @@ function isThinkingDepth(value: unknown): value is KodaXThinkingDepth {
   );
 }
 
-function isEscalationDepth(
-  value: unknown,
-): value is Exclude<KodaXThinkingDepth, 'off'> {
-  return value === 'low' || value === 'medium' || value === 'high';
-}
-
 function isRiskLevel(value: unknown): value is 'low' | 'medium' | 'high' {
   return value === 'low' || value === 'medium' || value === 'high';
 }
@@ -2511,7 +1761,14 @@ function applyRepoSignalsToDecision(
   }
 
   if (repoSignals.lowConfidence) {
-    repoNotes.push('Repository intelligence for the active area is low-confidence; validate critical conclusions with direct file evidence.');
+    // FEATURE_163 v0.7.41 — reverse-guidance fix. Previous wording said
+    // "validate critical conclusions with direct file evidence" which
+    // pushed the model toward `read`/`grep` even when a `module_context`
+    // or `symbol_context` refresh would be cheaper AND more accurate
+    // for the low-confidence area. The new wording flips the recovery
+    // path to pull-tools first (matching FEATURE_161 Worker teaching),
+    // with raw read/grep only when a specific claim is load-bearing.
+    repoNotes.push('Repository intelligence for the active area is low-confidence; re-query `module_context` / `symbol_context` (or `impact_estimate` for blast-radius questions) for a refined capsule before falling back to raw `read`/`grep`. Use direct file evidence only when a specific load-bearing claim needs byte-level verification.');
   }
 
   if (
@@ -2666,10 +1923,11 @@ function stabilizeRoutingDecision(
     taskFamily: intentFields.taskFamily,
   });
   const assuranceIntent = deriveAssuranceIntent(prompt, stabilized);
-  const topologyCeiling = deriveTopologyCeiling(
-    mutationSurface,
-    assuranceIntent,
-  );
+  // Harness tier retired (ADR-043): the ceiling collapsed to the single
+  // H0_DIRECT tier. The assurance/complexity signal that used to lift it to
+  // H1/H2 stays queryable on the decision (assuranceIntent / complexity /
+  // mutationSurface / needsIndependentQA); the ceiling field is a constant.
+  const topologyCeiling: KodaXHarnessProfile = 'H0_DIRECT';
   const requiresBrainstorm = inferRequiresBrainstorm(
     prompt,
     {
@@ -2731,7 +1989,6 @@ function stabilizeRoutingDecision(
       assuranceIntent,
       topologyCeiling,
     },
-    providerPolicy,
   );
   const {
     recommendedMode,
@@ -2751,11 +2008,11 @@ function stabilizeRoutingDecision(
 
   let nextRecommendedMode = recommendedMode;
   let nextThinkingDepth = recommendedThinkingDepth;
-  const finalExecutionPattern: KodaXExecutionPattern = harnessDecision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-      ? 'coordinated'
-      : harnessDecision.harnessProfile === 'H1_EXECUTE_EVAL'
-        ? 'checked-direct'
-        : 'direct';
+  // FEATURE_061 + FEATURE_193 (v0.7.43): heuristic routing produces a
+  // binding H0_DIRECT verdict with `direct` execution pattern. The V1
+  // Scout post-analysis upgrade path no longer exists; V2 Worker
+  // executes against this verdict as-is.
+  const finalExecutionPattern: KodaXExecutionPattern = 'direct';
 
   if (intentFields.taskFamily === 'conversation') {
     nextRecommendedMode = 'conversation';
@@ -2792,48 +2049,6 @@ function stabilizeRoutingDecision(
       ...(repoSignalsAllowed ? [] : ['Intent gate ignored repository scaling signals for this request.']),
     ],
   };
-}
-
-function summarizeRepoRoutingSignals(
-  signals?: KodaXRepoRoutingSignals,
-): string[] {
-  if (!signals) {
-    return [];
-  }
-
-  const parts: string[] = [
-    [
-      '- repo intelligence:',
-      `changedFiles=${signals.changedFileCount}`,
-      `changedLines=${signals.changedLineCount}`,
-      `touchedModules=${signals.touchedModuleCount}`,
-      `crossModule=${signals.crossModule ? 'yes' : 'no'}`,
-      `plannerBias=${signals.plannerBias ? 'yes' : 'no'}`,
-      `investigationBias=${signals.investigationBias ? 'yes' : 'no'}`,
-      `lowConfidence=${signals.lowConfidence ? 'yes' : 'no'}`,
-      signals.suggestedComplexity ? `suggestedComplexity=${signals.suggestedComplexity}` : null,
-      signals.reviewScale ? `reviewScale=${signals.reviewScale}` : null,
-      signals.predominantCapabilityTier ? `capability=${signals.predominantCapabilityTier}` : null,
-    ]
-      .filter(Boolean)
-      .join(' '),
-  ];
-
-  if (signals.activeModuleId) {
-    parts.push(
-      `- active module: ${signals.activeModuleId} confidence=${(signals.activeModuleConfidence ?? 0).toFixed(2)} impactedModules=${signals.impactedModuleCount ?? 0} impactedSymbols=${signals.impactedSymbolCount ?? 0}`,
-    );
-  }
-
-  if (signals.changedModules.length > 0) {
-    parts.push(`- touched modules: ${signals.changedModules.slice(0, 6).join(', ')}`);
-  }
-
-  for (const hint of signals.riskHints.slice(0, 4)) {
-    parts.push(`- repo risk hint: ${hint}`);
-  }
-
-  return parts;
 }
 
 function isTaskComplexity(value: unknown): value is KodaXTaskComplexity {

@@ -6,10 +6,12 @@
  */
 
 import React, { useMemo } from "react";
-import { Box, Text } from "ink";
+import { Box, Text } from "../tui.js";
 import { getTheme } from "../themes/index.js";
 import type { Theme } from "../types.js";
 import { ToolCallStatus, type ToolCall } from "../types.js";
+import { containsUnifiedDiff, parseUnifiedDiff } from "../utils/parse-unified-diff.js";
+import { DiffHunk } from "./DiffHunk.js";
 
 // === Types ===
 
@@ -207,11 +209,30 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         </Box>
       )}
 
+      {/* Child agent progress lines - 子代理实时进度行 */}
+      {tool.progressLines && tool.progressLines.length > 0 && tool.status === ToolCallStatus.Executing && (
+        <Box flexDirection="column" marginLeft={2}>
+          {tool.progressLines.slice(-5).map((line, i) => (
+            <Text key={i} dimColor>{line}</Text>
+          ))}
+        </Box>
+      )}
+
       {/* Error message - 错误信息 */}
       {tool.error && (
         <Box marginLeft={2}>
           <Text color={theme.colors.error}>{tool.error}</Text>
         </Box>
+      )}
+
+      {/* Tool output (FEATURE_141 v0.7.37) — first turn-on for transcript output rendering.
+          When the output text contains a unified-diff segment (typical of edit/multi_edit/
+          write tool results), the diff portion is rendered through <DiffHunk /> for
+          per-line colour. Plain-text output renders as a dim Text block. */}
+      {tool.status === ToolCallStatus.Success
+        && typeof tool.output === "string"
+        && tool.output.length > 0 && (
+          <ToolOutputBlock output={tool.output} theme={theme} />
       )}
 
       {/* Duration - 持续时间 */}
@@ -223,6 +244,56 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
     </Box>
   );
 };
+
+/**
+ * FEATURE_141 (v0.7.37) — Tool output rendering with optional unified-diff
+ * detection. Splits the output string into [text|diff] segments via the
+ * Phase 2.1 parser; renders 'diff' segments through <DiffHunk />.
+ *
+ * Memoized so unchanged tool result rows do not re-walk the parser on
+ * every transcript re-render.
+ */
+const ToolOutputBlock: React.FC<{ output: string; theme: Theme }> = React.memo(({
+  output,
+  theme,
+}) => {
+  // Fast gate: if there's no `@@ ... @@` hunk header anywhere, render the
+  // whole output as a dim text block — saves a parser pass.
+  if (!containsUnifiedDiff(output)) {
+    return (
+      <Box marginLeft={2}>
+        <Text dimColor>{output}</Text>
+      </Box>
+    );
+  }
+
+  const segments = parseUnifiedDiff(output);
+  return (
+    <Box flexDirection="column" marginLeft={2}>
+      {segments.map((seg, idx) => {
+        if (seg.kind === "text") {
+          return (
+            <Text key={idx} dimColor>
+              {seg.text}
+            </Text>
+          );
+        }
+        return (
+          <DiffHunk
+            key={idx}
+            text={seg.text}
+            addedLines={seg.addedLines}
+            removedLines={seg.removedLines}
+            filePath={seg.filePath}
+            theme={theme}
+          />
+        );
+      })}
+    </Box>
+  );
+});
+
+ToolOutputBlock.displayName = "ToolOutputBlock";
 
 /**
  * Tool group display component - 工具组显示组件

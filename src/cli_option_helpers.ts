@@ -3,45 +3,93 @@ import {
   KodaXAgentMode,
   KodaXOptions,
   KodaXExtensionRuntime,
+  type KodaXRepoIntelligenceMode,
   KodaXReasoningMode,
   KODAX_REASONING_MODE_SEQUENCE,
-} from '@kodax/coding';
+  normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
+} from '@kodax-ai/coding';
 import {
   createCliEvents,
   createJsonEvents,
   FileSessionStorage,
-  type PermissionMode,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
+import type { AcpPermissionMode } from './acp_server.js';
 
-export const ACP_PERMISSION_MODES: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
+export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
 export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
-export const KODAX_AGENT_MODES = ['ama', 'sa'] as const;
+export const CLI_RUNTIME_MODES = ['embedded', 'daemon'] as const;
+export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
+export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
+  'auto',
+  'off',
+  'light',
+  'full',
+];
+export const KODAX_REPO_INTELLIGENCE_PUBLIC_MODES = ['auto', 'full', 'light', 'off'] as const;
 export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
+export type CliRuntimeMode = typeof CLI_RUNTIME_MODES[number];
 
 export interface CliOptions {
   provider: string;
   model?: string;
+  effort?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   agentMode: KodaXAgentMode;
   outputMode: CliOutputMode;
+  runtimeMode?: CliRuntimeMode;
   extensions?: string[];
   extensionRuntime?: KodaXExtensionRuntime;
   session?: string;
-  parallel: boolean;
-  team?: string;
-  init?: string;
-  append: boolean;
-  overwrite: boolean;
   maxIter?: number;
-  autoContinue: boolean;
-  maxSessions: number;
-  maxHours: number;
   prompt: string[];
   continue?: boolean;
   resume?: string;
   noSession: boolean;
   print?: boolean;
+}
+
+export interface NormalizedCliSessionFlags {
+  session?: string;
+  noSession: boolean;
+}
+
+/** Merge accepted parent options while keeping the selected command authoritative. */
+export function mergeCommandOptionsWithGlobals<T extends object>(
+  localOptions: T,
+  command: Command,
+): T {
+  return { ...command.optsWithGlobals(), ...localOptions };
+}
+
+export function normalizeCliSessionFlags(opts: {
+  session?: unknown;
+  noSession?: unknown;
+}): NormalizedCliSessionFlags {
+  return {
+    session: typeof opts.session === 'string' ? opts.session : undefined,
+    noSession: opts.noSession === true || opts.session === false,
+  };
+}
+
+function resolveRepoIntelligenceModeFromEnv():
+  | 'auto'
+  | 'off'
+  | 'light'
+  | 'full'
+  | undefined {
+  const value = process.env.KODAX_REPO_INTELLIGENCE?.trim();
+  if (value && KODAX_REPO_INTELLIGENCE_MODES.includes(value as KodaXRepoIntelligenceMode)) {
+    return value as KodaXRepoIntelligenceMode;
+  }
+  return undefined;
+}
+
+function resolveRepoIntelligenceTraceFromEnv(): boolean | undefined {
+  return process.env.KODAX_REPO_INTELLIGENCE_TRACE === '1'
+    ? true
+    : undefined;
 }
 
 export function parseOutputModeOption(value: string): CliOutputMode {
@@ -53,6 +101,55 @@ export function parseOutputModeOption(value: string): CliOutputMode {
   throw new InvalidArgumentError(
     `Expected "json". Text mode is the default and does not need --mode.`,
   );
+}
+
+export function parseRuntimeModeOption(value: string): CliRuntimeMode {
+  const normalized = value.trim().toLowerCase();
+  if ((CLI_RUNTIME_MODES as readonly string[]).includes(normalized)) {
+    return normalized as CliRuntimeMode;
+  }
+  throw new InvalidArgumentError(
+    `Expected one of: ${CLI_RUNTIME_MODES.join(', ')}.`,
+  );
+}
+
+export function resolveCliProviderSelection(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string | undefined,
+  defaultValue: string,
+): string {
+  return firstNonEmpty(cliValue, envValue, configValue) ?? defaultValue;
+}
+
+export function resolveCliRuntimeMode(
+  cliValue: string | undefined,
+  envValue: string | undefined,
+  configValue: string | undefined,
+): CliRuntimeMode {
+  const value = firstNonEmpty(cliValue, envValue, configValue);
+  return value === undefined ? 'embedded' : parseRuntimeModeOption(value);
+}
+
+function firstNonEmpty(...values: ReadonlyArray<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function normalizeSessionTitle(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+export function findSessionTitleMatches<T extends { readonly title: string }>(
+  sessions: readonly T[],
+  title: string,
+): T[] {
+  const normalizedTitle = normalizeSessionTitle(title);
+  if (!normalizedTitle) return [];
+  return sessions.filter((session) => normalizeSessionTitle(session.title) === normalizedTitle);
 }
 
 export function validateCliModeSelection(
@@ -67,20 +164,18 @@ export function validateCliModeSelection(
     throw new Error('`--mode json` cannot be combined with `-p/--print`. Pass the prompt as a positional argument instead.');
   }
 
-  if (cliOptions.init || cliOptions.autoContinue || cliOptions.team) {
-    throw new Error('`--mode json` currently supports single non-interactive agent runs only.');
-  }
-
   if (
     cliOptions.session === 'list'
+    || cliOptions.session === 'delete'
     || cliOptions.session === 'delete-all'
+    || cliOptions.session === 'cleanup-acp'
     || cliOptions.session?.startsWith('delete ')
   ) {
     throw new Error('`--mode json` does not support session management sub-modes.');
   }
 
   if (extras.resumeWithoutId) {
-    throw new Error('`--mode json` requires an explicit session id for `--resume`, or use `--continue`.');
+    throw new Error('`--mode json` requires an explicit session ID or exact title for `--resume`, or use `--continue`.');
   }
 
   if (!cliOptions.prompt?.length) {
@@ -88,11 +183,22 @@ export function validateCliModeSelection(
   }
 }
 
-export function parsePermissionModeOption(value: string): PermissionMode {
-  if (ACP_PERMISSION_MODES.includes(value as PermissionMode)) {
-    return value as PermissionMode;
+export function parsePermissionModeOption(value: string): AcpPermissionMode {
+  if (ACP_PERMISSION_MODES.includes(value as AcpPermissionMode)) {
+    return value as AcpPermissionMode;
   }
 
+  // Help users who reasonably expected canonical 'auto' (the FEATURE_092
+  // default for the REPL) to also work over ACP. The classifier path is
+  // currently REPL-only — see ACP_PERMISSION_MODE_IDS in src/acp_server.ts
+  // for the rationale.
+  if (value === 'auto') {
+    throw new InvalidArgumentError(
+      `'auto' mode is not yet supported over the ACP protocol. `
+      + `Use 'auto-in-project' for the rules-only auto path, or one of: `
+      + `${ACP_PERMISSION_MODES.join(', ')}.`,
+    );
+  }
   throw new InvalidArgumentError(
     `Expected one of: ${ACP_PERMISSION_MODES.join(', ')}.`,
   );
@@ -109,6 +215,43 @@ export function parseAgentModeOption(value: string): KodaXAgentMode {
   );
 }
 
+export function parseReasoningModeOption(value: string): KodaXReasoningMode {
+  const normalized = value.trim().toLowerCase();
+  if (KODAX_REASONING_MODE_SEQUENCE.includes(normalized as KodaXReasoningMode)) {
+    return normalized as KodaXReasoningMode;
+  }
+
+  throw new InvalidArgumentError(
+    `Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}.`,
+  );
+}
+
+export function parseEffortOption(value: string): string {
+  try {
+    return normalizeReasoningEffortValue(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new InvalidArgumentError(message);
+  }
+}
+
+export function parseRepoIntelligenceModeOption(value: string): KodaXRepoIntelligenceMode {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'full') {
+    return 'full';
+  }
+  if (normalized === 'light') {
+    return 'light';
+  }
+  if (KODAX_REPO_INTELLIGENCE_MODES.includes(normalized as KodaXRepoIntelligenceMode)) {
+    return normalized as KodaXRepoIntelligenceMode;
+  }
+
+  throw new InvalidArgumentError(
+    `Expected one of: ${KODAX_REPO_INTELLIGENCE_PUBLIC_MODES.join(', ')}.`,
+  );
+}
+
 export function resolveCliReasoningMode(
   program: Command,
   opts: Record<string, unknown>,
@@ -116,12 +259,7 @@ export function resolveCliReasoningMode(
 ): KodaXReasoningMode {
   const reasoningSource = program.getOptionValueSource('reasoning');
   if (reasoningSource === 'cli' && typeof opts.reasoning === 'string') {
-    if (!KODAX_REASONING_MODE_SEQUENCE.includes(opts.reasoning as KodaXReasoningMode)) {
-      throw new Error(
-        `Invalid reasoning mode "${opts.reasoning}". Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}`,
-      );
-    }
-    return opts.reasoning as KodaXReasoningMode;
+    return parseReasoningModeOption(opts.reasoning);
   }
 
   const thinkingSource = program.getOptionValueSource('thinking');
@@ -140,17 +278,26 @@ export function resolveCliReasoningMode(
   return 'auto';
 }
 
-export function resolveCliParallel(
+export function resolveCliEffort(
   program: Command,
   opts: Record<string, unknown>,
-  config: { parallel?: boolean },
-): boolean {
-  const parallelSource = program.getOptionValueSource('parallel');
-  if (parallelSource === 'cli') {
-    return opts.parallel === true;
+  config: { effort?: string },
+): string | undefined {
+  const effortSource = program.getOptionValueSource('effort');
+  if (effortSource === 'cli' && typeof opts.effort === 'string') {
+    return parseEffortOption(opts.effort);
   }
 
-  return config.parallel ?? false;
+  const envEffort = parseReasoningEffortEnv(process.env.KODAX_EFFORT);
+  if (envEffort.kind === 'value') {
+    return envEffort.value;
+  }
+
+  if (config.effort) {
+    return normalizeReasoningEffortValue(config.effort);
+  }
+
+  return undefined;
 }
 
 export function resolveCliAgentMode(
@@ -201,23 +348,6 @@ export function resolveCliModelSelection(
     : undefined;
 }
 
-export function mergeConfiguredExtensions(
-  cliExtensions: string[] = [],
-  configExtensions: string[] = [],
-): string[] {
-  const merged: string[] = [];
-
-  for (const value of [...configExtensions, ...cliExtensions]) {
-    const normalized = value.trim();
-    if (!normalized || merged.includes(normalized)) {
-      continue;
-    }
-    merged.push(normalized);
-  }
-
-  return merged;
-}
-
 export function parseOptionalNonNegativeInt(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -228,34 +358,16 @@ export function parseOptionalNonNegativeInt(value: string | undefined): number |
     return undefined;
   }
 
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  if (!/^\d+$/.test(trimmed)) {
     throw new InvalidArgumentError(
       `Expected a non-negative integer, got "${value}".`,
     );
   }
 
-  return parsed;
-}
-
-export function parseNonNegativeIntWithFallback(value: string | undefined, fallback: number): number {
-  return parseOptionalNonNegativeInt(value) ?? fallback;
-}
-
-export function parsePositiveNumberWithFallback(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-
-  const parsed = Number.parseFloat(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
     throw new InvalidArgumentError(
-      `Expected a positive number, got "${value}".`,
+      `Expected a non-negative integer, got "${value}".`,
     );
   }
 
@@ -266,13 +378,17 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
   return {
     provider: cliOptions.provider,
     model: cliOptions.model,
-    thinking: cliOptions.thinking,
-    reasoningMode: cliOptions.reasoningMode,
+    effort: cliOptions.effort,
+    thinking: cliOptions.effort === 'none' ? false : cliOptions.thinking,
+    reasoningMode: cliOptions.effort === 'none' ? 'off' : cliOptions.reasoningMode,
     agentMode: cliOptions.agentMode,
     maxIter: cliOptions.maxIter,
-    parallel: cliOptions.parallel,
     extensionRuntime: cliOptions.extensionRuntime,
     session: buildSessionOptions(cliOptions),
+    context: {
+      repoIntelligenceMode: resolveRepoIntelligenceModeFromEnv(),
+      repoIntelligenceTrace: resolveRepoIntelligenceTraceFromEnv(),
+    },
     events: cliOptions.outputMode === 'json'
       ? createJsonEvents()
       : createCliEvents(!isPrintMode),
@@ -282,7 +398,7 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
 export function buildSessionOptions(
   cliOptions: CliOptions,
 ): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean; scope: 'user' } | undefined {
-  const storage = new FileSessionStorage();
+  const storage = new FileSessionStorage({ cwd: process.cwd() });
 
   if ((cliOptions.print || cliOptions.outputMode === 'json') && cliOptions.noSession) {
     return undefined;
@@ -303,6 +419,7 @@ export function buildSessionOptions(
   if (
     cliOptions.session
     && cliOptions.session !== 'list'
+    && cliOptions.session !== 'delete'
     && cliOptions.session !== 'delete-all'
     && !cliOptions.session.startsWith('delete ')
   ) {

@@ -2,8 +2,16 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax/coding';
-import { CommandCompleter, FileCompleter, findCommandSlashIndex } from './autocomplete.js';
+import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax-ai/coding';
+import {
+  CommandCompleter,
+  FileCompleter,
+  createCompleter,
+  findCommandSlashIndex,
+  getCompletionSuggestions,
+} from './autocomplete.js';
+import { SkillCompleter } from './completers/skill-completer.js';
+import { getRecentWorkingSetFiles } from './recent-files.js';
 import { getCommandRegistry } from './commands.js';
 
 afterEach(() => {
@@ -30,6 +38,12 @@ describe('CommandCompleter boundaries', () => {
   it('includes newly registered builtin commands', async () => {
     const completions = await completer.getCompletions('/n', 2);
     expect(completions.some((item) => item.display === '/new')).toBe(true);
+  });
+
+  it('does not expose the retired /project shell in command completions', async () => {
+    const completions = await completer.getCompletions('/pro', 4);
+    expect(completions.some((item) => item.display === '/project')).toBe(false);
+    expect(completions.some((item) => item.display === '/proj')).toBe(false);
   });
 
   it('refreshes command completions after runtime registration', async () => {
@@ -128,7 +142,9 @@ describe('FileCompleter boundaries', () => {
 
     try {
       await fs.writeFile(path.join(tempDir, 'alpha.txt'), 'alpha');
-      const scopedCompleter = new FileCompleter(tempDir);
+      // Empty recent provider keeps this dir-cache test hermetic (no real git
+      // I/O under fake timers).
+      const scopedCompleter = new FileCompleter(tempDir, async () => []);
       const internals = scopedCompleter as unknown as {
         cache: Map<string, { entries: string[]; expiresAt: number }>;
       };
@@ -151,6 +167,95 @@ describe('FileCompleter boundaries', () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('can follow a dynamic workspace root after session/runtime changes', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-autocomplete-dynamic-'));
+    const firstRoot = path.join(tempDir, 'first');
+    const secondRoot = path.join(tempDir, 'second');
+
+    try {
+      await fs.mkdir(firstRoot, { recursive: true });
+      await fs.mkdir(secondRoot, { recursive: true });
+      await fs.writeFile(path.join(firstRoot, 'alpha.txt'), 'alpha');
+      await fs.writeFile(path.join(secondRoot, 'beta.txt'), 'beta');
+
+      let currentRoot = firstRoot;
+      const scopedCompleter = new FileCompleter(() => currentRoot, async () => []);
+
+      const firstCompletions = await scopedCompleter.getCompletions('@', 1);
+      expect(firstCompletions.some((item) => item.display === 'alpha.txt')).toBe(true);
+      expect(firstCompletions.some((item) => item.display === 'beta.txt')).toBe(false);
+
+      currentRoot = secondRoot;
+      const secondCompletions = await scopedCompleter.getCompletions('@', 1);
+      expect(secondCompletions.some((item) => item.display === 'alpha.txt')).toBe(false);
+      expect(secondCompletions.some((item) => item.display === 'beta.txt')).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('FileCompleter — FEATURE_207 recent files', () => {
+  const recent = ['src/deep/foo.ts', 'README.md', 'pkg/bar.ts'];
+  const fakeProvider = async () => recent;
+
+  it('surfaces recent files first on a bare @, keeping the cwd listing', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-f207-'));
+    try {
+      await fs.writeFile(path.join(tempDir, 'zeta.txt'), 'z');
+      const completer = new FileCompleter(tempDir, fakeProvider);
+      const out = await completer.getCompletions('@', 1);
+      expect(out.slice(0, 3).map((c) => c.text)).toEqual(['@src/deep/foo.ts', '@README.md', '@pkg/bar.ts']);
+      expect(out[0]!.description).toBe('recent');
+      // cwd listing still present after the recent block
+      expect(out.some((c) => c.display === 'zeta.txt')).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('filters recent files by basename prefix', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-f207-'));
+    try {
+      const completer = new FileCompleter(tempDir, fakeProvider);
+      const out = await completer.getCompletions('@ba', 3);
+      expect(out.filter((c) => c.description === 'recent').map((c) => c.text)).toEqual(['@pkg/bar.ts']);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT surface recent files once navigating a path (@dir/)', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-f207-'));
+    try {
+      await fs.mkdir(path.join(tempDir, 'src'));
+      const completer = new FileCompleter(tempDir, fakeProvider);
+      const out = await completer.getCompletions('@src/', 5);
+      expect(out.some((c) => c.description === 'recent')).toBe(false);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('de-dupes a recent file that is also a direct cwd child', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-f207-'));
+    try {
+      await fs.writeFile(path.join(tempDir, 'README.md'), '#');
+      const completer = new FileCompleter(tempDir, async () => ['README.md']);
+      const out = await completer.getCompletions('@', 1);
+      expect(out.filter((c) => c.text === '@README.md')).toHaveLength(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('yields no recent files on git failure (graceful degradation)', async () => {
+    // A non-existent cwd makes the git spawn fail deterministically, exercising
+    // the try/catch → [] path regardless of where the test tmp lives.
+    const files = await getRecentWorkingSetFiles(path.join(os.tmpdir(), 'kodax-f207-nonexistent-xyz'));
+    expect(files).toEqual([]);
   });
 });
 
@@ -183,5 +288,50 @@ describe('findCommandSlashIndex', () => {
     expect(findCommandSlashIndex('a/b')).toBe(-1);
     expect(findCommandSlashIndex('')).toBe(-1);
     expect(findCommandSlashIndex('no slash here')).toBe(-1);
+  });
+});
+
+describe('legacy completion helpers', () => {
+  it('include /workflow subcommands in UI completion suggestions', async () => {
+    const completions = await getCompletionSuggestions('/workflow ', 10);
+
+    expect(completions.some((item) => item.type === 'argument' && item.display === 'runs')).toBe(true);
+    expect(completions.some((item) => item.type === 'argument' && item.display === 'stop')).toBe(true);
+  });
+
+  it('returns readline-safe full-line workflow argument completions', async () => {
+    const completer = createCompleter();
+    const [completions, original] = await completer('/workflow ');
+
+    expect(original).toBe('/workflow ');
+    expect(completions).toContain('/workflow runs');
+    expect(completions).toContain('/workflow stop');
+  });
+
+  it('keeps the command prefix when completing bare workflow commands', async () => {
+    const completer = createCompleter();
+    const [completions, original] = await completer('/workflow');
+
+    expect(original).toBe('/workflow');
+    expect(completions).toContain('/workflow runs');
+    expect(completions).not.toContain('runs');
+  });
+
+  it('includes skill-name completions in the classic readline completer', async () => {
+    vi.spyOn(SkillCompleter.prototype, 'canComplete').mockReturnValue(true);
+    vi.spyOn(SkillCompleter.prototype, 'getCompletions').mockResolvedValue([
+      {
+        text: '/code-review',
+        display: 'code-review',
+        description: 'Review code',
+        type: 'skill',
+      },
+    ]);
+
+    const completer = createCompleter();
+    const [completions, original] = await completer('/code');
+
+    expect(original).toBe('/code');
+    expect(completions).toContain('/code-review');
   });
 });

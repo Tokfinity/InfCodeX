@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { KodaXMessage } from "@kodax/coding";
+import type { KodaXMessage } from "@kodax-ai/agent";
+import { ToolCallStatus } from "../types.js";
 import {
   type HistorySeedSourceMessage,
   extractHistorySeedsFromMessage,
+  extractHistorySeedsFromMessages,
   extractLastAssistantText,
   extractTitle,
   extractTextContent,
@@ -11,6 +13,7 @@ import {
   resolveAssistantHistoryText,
   resolveCompletedAssistantText,
   sanitizeUserFacingAssistantText,
+  seedToHistoryItem,
 } from "./message-utils.js";
 
 describe("message-utils", () => {
@@ -79,6 +82,79 @@ describe("message-utils", () => {
     ]);
   });
 
+  it("restores a sidecar-verifier synthetic user message as a sidecar item", () => {
+    // The Sidecar Verifier injects its `revise` feedback as a synthetic user
+    // message (_source: 'sidecar-verifier') so the Worker reanimates on it. On
+    // restore it must render under the Sidecar identity, not as a user bubble,
+    // and must NOT be swallowed by the generic _synthetic skip.
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "sidecar-verifier",
+      content: "Your report is not actionable — give the concrete diff.",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      {
+        type: "sidecar",
+        text: "Your report is not actionable — give the concrete diff.",
+        verdict: "revise",
+      },
+    ]);
+  });
+
+  it("still skips a plain synthetic user message (auto-continue / retry prompt)", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      content: "Please continue.",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("restores a task-completed synthetic user message as a task_completed seed (headless recovery)", () => {
+    // dispatch_child_task / run_workflow results are spliced into the transcript
+    // as synthetic user messages (_source: 'task-completed'). A headless SDK host
+    // with no uiHistory must recover them at their transcript position instead of
+    // losing them to the generic _synthetic skip. Distinct seed type — NOT 'user'
+    // (reusing 'user' would corrupt splitCreatableHistoryRounds round boundaries).
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "task-completed",
+      content: '<task-completed task_id="run-abc">\n# Review report\nfindings…\n</task-completed>',
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      {
+        type: "task_completed",
+        text: '<task-completed task_id="run-abc">\n# Review report\nfindings…\n</task-completed>',
+      },
+    ]);
+  });
+
+  it("still skips a synthetic user message tagged with an unrelated _source", () => {
+    // Only the two known value-discriminated sources (sidecar-verifier,
+    // task-completed) are exempted; any other _synthetic message is still dropped.
+    const message: HistorySeedSourceMessage = {
+      role: "user",
+      _synthetic: true,
+      _source: "some-future-internal-source",
+      content: "internal scaffolding",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("maps a task_completed seed to an event history item", () => {
+    expect(seedToHistoryItem({ type: "task_completed", text: "done" })).toEqual({
+      type: "event",
+      text: "done",
+      icon: "tool",
+    });
+  });
+
   it("ignores empty legacy thinking blocks", () => {
     const message: HistorySeedSourceMessage = {
       role: "assistant",
@@ -88,6 +164,219 @@ describe("message-utils", () => {
     expect(extractHistorySeedsFromMessage(message)).toEqual([
       { type: "assistant", text: "final answer" },
     ]);
+  });
+
+  it("filters system messages from restored transcript (LLM-internal scaffolding)", () => {
+    // System messages in KodaX are LLM-internal scaffolding (Scout/Generator/
+    // Planner/Evaluator role-prompts, capability-sections, AMA controller
+    // metadata, repo-intelligence snapshots) — never user-facing. Re-rendering
+    // them as "System [HH:MM]" transcript bubbles on `-c` resume would leak
+    // the entire prior task's role-prompt to the user.
+    const scoutPrompt: HistorySeedSourceMessage = {
+      role: "system",
+      content: [
+        "## Repository Intelligence",
+        "Repository overview for some-prior-cwd",
+        "",
+        "You are Scout — the AMA entry role for a managed KodaX task.",
+        "",
+        "## Environment",
+        "Working Directory: D:/some/prior/cwd",
+        "",
+        "Original user request:",
+        "把当前文件夹做个git初始化",
+      ].join("\n"),
+    };
+    expect(extractHistorySeedsFromMessage(scoutPrompt)).toEqual([]);
+  });
+
+  it("filters system messages even when content is short (defensive)", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "system",
+      content: "any system text",
+    };
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("filters system messages with structured content blocks", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "system",
+      content: [{ type: "text", text: "internal scaffolding" }],
+    };
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("restores paired tool_use and tool_result blocks as a tool group seed", () => {
+    const messages: KodaXMessage[] = [
+      { role: "user", content: "Inspect README" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Need to read the file first." },
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "README.md" } },
+          { type: "text", text: "I found the answer." },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "README contents" },
+        ],
+      },
+    ];
+
+    expect(extractHistorySeedsFromMessages(messages)).toEqual([
+      { type: "user", text: "Inspect README" },
+      { type: "thinking", text: "Need to read the file first." },
+      {
+        type: "tool_group",
+        tools: [
+          {
+            id: "tool-1",
+            name: "read",
+            status: "success",
+            input: { path: "README.md" },
+            output: "README contents",
+          },
+        ],
+      },
+      { type: "assistant", text: "I found the answer." },
+    ]);
+  });
+
+  it("caps restored tool result text when deriving replay seeds", () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tool-1", name: "read", input: { path: "huge.log" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "x".repeat(2100) },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    const output = seed.tools[0]?.output;
+    expect(output).toHaveLength(2000);
+    expect(output?.endsWith("...")).toBe(true);
+  });
+
+  it("bounds and redacts restored tool input when deriving replay seeds", () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-1",
+            name: "bash",
+            input: {
+              command: "x".repeat(2100),
+              password: "plain-password",
+              apiKey: "plain-api-key",
+              cookie: "session-cookie",
+              items: Array.from({ length: 60 }, (_, index) => index),
+              nested: { a: { b: { c: { d: { e: { f: "too deep" } } } } } },
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tool-1", content: "ok" },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    const input = seed.tools[0]?.input;
+    if (!input) {
+      throw new Error("expected restored tool input");
+    }
+    expect(input["password"]).toBe("[redacted]");
+    expect(input["apiKey"]).toBe("[redacted]");
+    expect(input["cookie"]).toBe("[redacted]");
+    expect(typeof input["command"]).toBe("string");
+    expect(String(input["command"])).toHaveLength(2000);
+    expect(String(input["command"]).endsWith("...")).toBe(true);
+    expect(Array.isArray(input["items"])).toBe(true);
+    if (!Array.isArray(input["items"])) {
+      throw new Error("expected bounded input.items array");
+    }
+    expect(input["items"]).toHaveLength(50);
+    const nestedJson = JSON.stringify(input["nested"]);
+    expect(nestedJson).toContain("[truncated]");
+    expect(nestedJson).not.toContain("too deep");
+  });
+
+  it("does not recurse forever on cyclic restored tool inputs", () => {
+    const input: Record<string, unknown> = { command: "npm test" };
+    input.self = input;
+
+    const messages: KodaXMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-1",
+            name: "bash",
+            input,
+          },
+        ],
+      },
+    ];
+
+    const seed = extractHistorySeedsFromMessages(messages).find((item) => item.type === "tool_group");
+    if (seed?.type !== "tool_group") {
+      throw new Error("expected a restored tool group");
+    }
+
+    expect(seed.tools[0]?.input).toEqual({
+      command: "npm test",
+      self: "[truncated]",
+    });
+  });
+
+  it("maps restored tool group seeds to creatable history items", () => {
+    expect(seedToHistoryItem({
+      type: "tool_group",
+      tools: [
+        {
+          id: "tool-1",
+          name: "grep",
+          status: "error",
+          input: { pattern: "TODO" },
+          error: "grep failed",
+        },
+      ],
+    })).toEqual({
+      type: "tool_group",
+      tools: [
+        {
+          id: "tool-1",
+          name: "grep",
+          status: ToolCallStatus.Error,
+          input: { pattern: "TODO" },
+          error: "grep failed",
+          startTime: expect.any(Number),
+        },
+      ],
+    });
   });
 
   it("extracts the latest assistant text from structured content", () => {
@@ -171,6 +460,48 @@ describe("message-utils", () => {
     );
 
     expect(resolved).toBe("managed summary");
+  });
+
+  it("extractLastAssistantText returns '' when the trailing turn is a normal user prompt (no assistant this round)", () => {
+    // Shape [prev assistant, this-turn user]: interrupted / error before the
+    // assistant. Must NOT punch back to the previous turn's answer.
+    const text = extractLastAssistantText([
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "a different new question" },
+    ] satisfies KodaXMessage[]);
+    expect(text).toBe("");
+  });
+
+  it("extractLastAssistantText skips a trailing pure tool_result user turn to reach the real final assistant", () => {
+    const text = extractLastAssistantText([
+      { role: "assistant", content: "the answer" },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "ok" }] },
+    ] satisfies KodaXMessage[]);
+    expect(text).toBe("the answer");
+  });
+
+  it("resolveCompletedAssistantText does NOT punch through a placeholder final assistant", () => {
+    // Latest assistant is a legacy '...'; the completed-round text must be ''
+    // (falls through to empty), never the earlier turn's "old answer".
+    const resolved = resolveCompletedAssistantText(
+      [
+        { role: "assistant", content: "old answer" },
+        { role: "user", content: "new question" },
+        { role: "assistant", content: [{ type: "text", text: "..." }] },
+      ] satisfies KodaXMessage[],
+      "",
+      undefined,
+      ""
+    );
+    expect(resolved).toBe("");
+  });
+
+  it("restore seeds drop a legacy '...' placeholder assistant (no fake bubble)", () => {
+    const seeds = extractHistorySeedsFromMessages([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "text", text: "..." }] },
+    ] as unknown as HistorySeedSourceMessage[]);
+    expect(seeds.some((seed) => seed.type === "assistant")).toBe(false);
   });
 
   it("builds session titles from structured user text blocks", () => {

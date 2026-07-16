@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "feature": "FEATURE_172",
+  "git_sha": "16609427",
+  "node_version": "v24.13.1",
+  "platform": "win32",
+  "arch": "x64",
+  "timestamp": "2026-05-18T12:50:34.050Z",
+  "viewport_width": 120,
+  "scenarios": [
+    {
+      "scenario": "static-render-model",
+      "items": 50,
+      "iterations": 100,
+      "p50_ms": 5.095,
+      "p95_ms": 6.459,
+      "p99_ms": 10.386,
+      "mean_ms": 5.205,
+      "max_ms": 10.386
+    },
+    {
+      "scenario": "streaming-tick",
+      "items": 50,
+      "iterations": 100,
+      "p50_ms": 4.393,
+      "p95_ms": 7.587,
+      "p99_ms": 8.083,
+      "mean_ms": 5.003,
+      "max_ms": 8.083
+    },
+    {
+      "scenario": "static-render-model",
+      "items": 100,
+      "iterations": 100,
+      "p50_ms": 9.034,
+      "p95_ms": 12.099,
+      "p99_ms": 12.8,
+      "mean_ms": 9.946,
+      "max_ms": 12.8
+    },
+    {
+      "scenario": "streaming-tick",
+      "items": 100,
+      "iterations": 100,
+      "p50_ms": 8.509,
+      "p95_ms": 14.973,
+      "p99_ms": 15.34,
+      "mean_ms": 9.738,
+      "max_ms": 15.34
+    },
+    {
+      "scenario": "static-render-model",
+      "items": 200,
+      "iterations": 100,
+      "p50_ms": 18.132,
+      "p95_ms": 23.682,
+      "p99_ms": 29.337,
+      "mean_ms": 19.628,
+      "max_ms": 29.337
+    },
+    {
+      "scenario": "streaming-tick",
+      "items": 200,
+      "iterations": 100,
+      "p50_ms": 16.907,
+      "p95_ms": 28.293,
+      "p99_ms": 34.724,
+      "mean_ms": 19.34,
+      "max_ms": 34.724
+    },
+    {
+      "scenario": "static-render-model",
+      "items": 400,
+      "iterations": 100,
+      "p50_ms": 35.437,
+      "p95_ms": 47.425,
+      "p99_ms": 59.571,
+      "mean_ms": 38.655,
+      "max_ms": 59.571
+    },
+    {
+      "scenario": "streaming-tick",
+      "items": 400,
+      "iterations": 100,
+      "p50_ms": 33.617,
+      "p95_ms": 56.341,
+      "p99_ms": 69.68,
+      "mean_ms": 38.568,
+      "max_ms": 69.68
+    },
+    {
+      "scenario": "static-render-model",
+      "items": 800,
+      "iterations": 100,
+      "p50_ms": 71.706,
+      "p95_ms": 91.377,
+      "p99_ms": 101.723,
+      "mean_ms": 77.015,
+      "max_ms": 101.723
+    },
+    {
+      "scenario": "streaming-tick",
+      "items": 800,
+      "iterations": 100,
+      "p50_ms": 68.743,
+      "p95_ms": 94.744,
+      "p99_ms": 101.046,
+      "mean_ms": 76.344,
+      "max_ms": 101.046
+    }
+  ]
+}

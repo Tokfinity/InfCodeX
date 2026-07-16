@@ -1,11 +1,46 @@
 /**
  * useInputHistory - Input history management Hook - 输入历史管理 Hook
  *
- * Manages command history, supports up/down arrow navigation - 管理命令历史，支持上下键导航
+ * Manages command history, supports up/down arrow navigation.
+ *
+ * Module-scoped history store: the entries array lives at module scope so it
+ * survives PromptComposer unmount+remount (triggered e.g. by Ctrl+O transcript
+ * toggle in InkREPL). historyIndex / tempInput remain component-scoped so the
+ * nav cursor resets on remount, matching pre-existing user-visible behavior.
+ *
+ * Design: docs/features/v0.7.21.md FEATURE_077.
+ *
+ * Issue 121 extension: each entry may carry a `pastedContents` snapshot so
+ * recalled prompts containing `[Pasted text #N]` placeholders still expand
+ * to their original content when resubmitted. The module-scoped store keeps
+ * pasted content references alive across composer remounts within a session.
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useCallback, useRef } from "react";
 import type { HistoryEntry } from "../types.js";
+import type { PastedContent } from "../utils/paste-store.js";
+
+// Module-scoped history: survives component unmount/remount within the REPL
+// process. See FEATURE_077.
+const historyStore: HistoryEntry[] = [];
+
+/** Test-only helper — resets the module-scoped history store between tests. */
+export function __resetInputHistoryForTesting(): void {
+  historyStore.length = 0;
+}
+
+/** Test-only helper — snapshot the current history store. */
+export function __snapshotInputHistoryForTesting(): HistoryEntry[] {
+  return historyStore.map((e) => ({
+    text: e.text,
+    timestamp: e.timestamp,
+    pastedContents: e.pastedContents ? [...e.pastedContents] : undefined,
+  }));
+}
+
+export interface AddHistoryOptions {
+  pastedContents?: PastedContent[];
+}
 
 export interface UseInputHistoryOptions {
   maxSize?: number;
@@ -13,131 +48,84 @@ export interface UseInputHistoryOptions {
 }
 
 export interface UseInputHistoryReturn {
-  history: HistoryEntry[];
-  currentIndex: number;
-  add: (text: string) => void;
-  navigateUp: () => string | null;
-  navigateDown: () => string | null;
+  add: (text: string, options?: AddHistoryOptions) => void;
+  navigateUp: () => HistoryEntry | null;
+  navigateDown: () => HistoryEntry | null;
   reset: () => void;
-  getPrevious: () => string | null;
-  getNext: () => string | null;
   saveTempInput: (text: string) => void;
 }
 
 export function useInputHistory(options: UseInputHistoryOptions = {}): UseInputHistoryReturn {
   const { maxSize = 1000, onSave } = options;
-
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const tempInputRef = useRef<string>("");
 
-  // Add new entry - 添加新条目
   const add = useCallback(
-    (text: string) => {
+    (text: string, addOptions?: AddHistoryOptions) => {
       if (!text.trim()) return;
 
-      const entry: HistoryEntry = {
-        text,
-        timestamp: Date.now(),
-      };
-
-      setHistory((prev) => {
-        // Avoid duplicate consecutive entries - 避免重复连续条目
-        const lastEntry = prev[prev.length - 1];
-        if (lastEntry?.text === text) {
-          return prev;
+      const lastEntry = historyStore[historyStore.length - 1];
+      if (lastEntry?.text !== text) {
+        const entry: HistoryEntry = {
+          text,
+          timestamp: Date.now(),
+          ...(addOptions?.pastedContents && addOptions.pastedContents.length > 0
+            ? { pastedContents: [...addOptions.pastedContents] }
+            : {}),
+        };
+        historyStore.push(entry);
+        if (historyStore.length > maxSize) {
+          historyStore.splice(0, historyStore.length - maxSize);
         }
+        onSave?.(entry);
+      }
 
-        // Limit size - 限制大小
-        const newHistory = [...prev, entry];
-        if (newHistory.length > maxSize) {
-          return newHistory.slice(-maxSize);
-        }
-        return newHistory;
-      });
-
-      // Reset navigation index - 重置导航索引
       historyIndexRef.current = -1;
       tempInputRef.current = "";
-
-      onSave?.(entry);
     },
     [maxSize, onSave]
   );
 
-  // Navigate up (earlier history) - 向上导航 (更早的历史)
-  const navigateUp = useCallback((): string | null => {
-    if (history.length === 0) return null;
+  const navigateUp = useCallback((): HistoryEntry | null => {
+    if (historyStore.length === 0) return null;
 
-    // First navigation, save current input - 第一次导航，保存当前输入
     if (historyIndexRef.current === -1) {
-      historyIndexRef.current = history.length - 1;
-      return history[historyIndexRef.current]?.text ?? null;
+      historyIndexRef.current = historyStore.length - 1;
+      return historyStore[historyIndexRef.current] ?? null;
     }
 
-    // There's earlier history - 还有更早的历史
     if (historyIndexRef.current > 0) {
       historyIndexRef.current--;
-      return history[historyIndexRef.current]?.text ?? null;
+      return historyStore[historyIndexRef.current] ?? null;
     }
 
     return null;
-  }, [history]);
+  }, []);
 
-  // Navigate down (more recent history) - 向下导航 (更近的历史)
-  const navigateDown = useCallback((): string | null => {
+  const navigateDown = useCallback((): HistoryEntry | null => {
     if (historyIndexRef.current === -1) return null;
 
-    // There's more recent history - 还有更近的历史
-    if (historyIndexRef.current < history.length - 1) {
+    if (historyIndexRef.current < historyStore.length - 1) {
       historyIndexRef.current++;
-      return history[historyIndexRef.current]?.text ?? null;
+      return historyStore[historyIndexRef.current] ?? null;
     }
 
-    // Return to current input - always return tempInputRef or empty string - 回到当前输入 - 总是返回 tempInputRef 或空字符串
-    // Reference: Gemini CLI and OpenCode - never return null, return empty string instead - 参考 Gemini CLI 和 OpenCode: 永远不返回 null，而是返回空字符串
+    // Reached the bottom: return to the user's saved draft (may be empty
+    // string, but never null — matches Gemini CLI / OpenCode convention).
     historyIndexRef.current = -1;
-    return tempInputRef.current; // May be empty string, but not null - 可能是空字符串，但不是 null
-  }, [history]);
+    return { text: tempInputRef.current, timestamp: Date.now() };
+  }, []);
 
-  // Reset navigation - 重置导航
   const reset = useCallback(() => {
     historyIndexRef.current = -1;
     tempInputRef.current = "";
   }, []);
 
-  // Save temporary input (before navigation) - 保存临时输入 (导航前)
   const saveTempInput = useCallback((text: string) => {
     if (historyIndexRef.current === -1) {
       tempInputRef.current = text;
     }
   }, []);
 
-  // Get previous - 获取上一个
-  const getPrevious = useCallback(() => {
-    if (historyIndexRef.current === -1) return null;
-    const prevIndex = historyIndexRef.current - 1;
-    if (prevIndex < 0) return null;
-    return history[prevIndex]?.text ?? null;
-  }, [history]);
-
-  // Get next - 获取下一个
-  const getNext = useCallback(() => {
-    if (historyIndexRef.current === -1) return null;
-    const nextIndex = historyIndexRef.current + 1;
-    if (nextIndex >= history.length) return null;
-    return history[nextIndex]?.text ?? null;
-  }, [history]);
-
-  return {
-    history,
-    currentIndex: historyIndexRef.current,
-    add,
-    navigateUp,
-    navigateDown,
-    reset,
-    getPrevious,
-    getNext,
-    saveTempInput,
-  };
+  return { add, navigateUp, navigateDown, reset, saveTempInput };
 }

@@ -1,287 +1,257 @@
-# KodaX 产品需求文档（PRD）
+# KodaX Product Requirements
 
-> Last updated: 2026-03-30
+> Last updated: 2026-07-16
 >
-> 本 PRD 描述当前 `FEATURE_022` 之后的产品语义：
-> KodaX 是一个“极简且智能”的 task engine。
-
-## 中文导读
-
-当前产品承诺可以概括为：
-
-1. 用户直接提出请求，不需要先选 mode。
-2. 简单任务应像单 agent 一样快速完成。
-3. 复杂任务才应逐步增加 planning / verification ceremony。
-4. skill 可以参与复杂任务，但不会把所有角色都污染成同一份 workflow。
-5. 用户主要感知 `Work`、工具目标、最终结果，而不是内部控制面的噪音。
-
----
-
-## 1. 产品定位
-
-KodaX 面向这样一类用户：
-
-- 希望 terminal 体验足够直接
-- 希望复杂代码任务又足够可靠
-- 希望系统能自动判断什么时候该“想得更深”
-- 希望结果有 evidence 和 verification 支撑
-
-外在体验要尽量简单，内部执行模型可以很强，但不应把复杂度直接暴露给用户。
-
----
-
-## 2. 用户承诺
-
-当用户要求 KodaX 完成一项工作时，KodaX 应该：
-
-1. 自动判断任务是否简单
-2. 简单任务直接完成
-3. 复杂任务逐步升级到更强执行形态
-4. 不盲信执行者的自我汇报
-5. 在需要时给出清楚的 contract、evidence 和 final answer
-
-一句话总结：
-
-- 外面尽量简单
-- 中间足够智能
-- 最终结果足够可靠
-
----
-
-## 3. 产品原则
-
-### 3.1 Single-Agent First
-
-默认先按单 agent 体验设计产品。
-
-### 3.2 Harness On Demand
-
-只有证据表明任务复杂度更高时，才升级到 AMA。
-
-### 3.3 Evidence Before Confidence
-
-完成判定依赖 evidence 和 verdict，而不是“模型说 done 了”。
-
-### 3.4 Role Separation Without Role Bloat
-
-复杂任务需要角色分工，但不应堆出过重图。
-
-### 3.5 Skill as Progressive Disclosure
-
-skill 是 invocation/playbook，不是新的产品 mode。
-
-### 3.6 Work-First UX
-
-预算与进度对用户的主要呈现应是：
-
-- `Work used/total`
-- 明确的工具目标
-- 直接面向用户的结果
-
----
-
-## 4. 当前执行形态
-
-### 4.1 SA
-
-`SA` 完全脱离 AMA，单 agent 直接到底。
-
-适用场景：
-
-- 用户明确要求单 agent 成本控制
-- 不需要 AMA ceremony 的任务
-
-### 4.2 AMA-H0
-
-direct path，但 `H0` 的核心不是“完全没有判断阶段”，而是“最终单 agent 收口”。
-
-适合：
-
-- conversation
-- lookup
-- 明显轻量说明
-- 默认的 `read-only / docs-only` 工作
-- 经 `Scout` 少量调研后仍可直接收口的任务（`Scout-complete H0`）
-
-约束：
-
-- 若 `Scout` 确认 `H0_DIRECT` 且证据足够，则由 `Scout` 直接完成
-- 不允许 `Scout` 判定 `H0` 后再 handoff 给第二个 direct agent
-
-### 4.3 AMA-H1
-
-lightweight checked-direct。
-
-适合：
-
-- 用户明确要求 `double-check / second pass / 更强审查` 的 `read-only / docs-only` 任务
-- 中低风险但值得一次轻量独立检查的 mutation 任务
-
-约束：
-
-- 固定为 `Generator + 轻量 Evaluator`
-- 无 `Planner`
-- 无 contract negotiation
-- 无默认多轮 refine
-- `read-only / docs-only` 的 `H1` 最多只允许一次短 revise；失败后返回 `best-effort + limits`，不升级到 `H2`
-
-### 4.4 AMA-H2
-
-coordinated harness。
-
-固定骨架：
-
-```text
-Planner -> Generator <-> Evaluator
-```
-
-适合：
-
-- 真正长时的 `code / system` mutation work
-- 需要明确 deliverable / done criteria / 可执行 QA 的任务
-
-不适合：
-
-- `large review` 本身
-- 文档写作 / 改写
-- 需求分析 / 测试总结等只读任务
-
-约束：
-
-- 默认单主 pass
-- 只有结构化 failure 才开启额外 pass
-
----
-
-## 5. 用户旅程
-
-### 5.1 Quick answer / lookup
-
-用户感受应该是：
-
-- 提问
-- 很快得到答案
-- 不需要理解内部角色
-
-### 5.2 Focused code task
-
-用户感受应该是：
-
-- 系统知道何时需要额外校验
-- 结果说明清楚改了什么、查了什么、证据是什么
-
-### 5.3 Complex review or architecture task
-
-用户感受应该是：
-
-- 系统先判断复杂度
-- 再进入更强的 contract / evidence / evaluation 流程
-- 复杂度增加时是合理的，不是无端 ceremony
-
-### 5.4 Skill-assisted task
-
-用户感受应该是：
-
-- skill 改变了系统对任务的理解与执行方式
-- 但不会让整个系统变得僵硬、脚本化、机械
-
----
-
-## 6. Skill 产品语义
-
-当前 skill 的产品语义是：
-
-- 用户 prompt 的渐进式提示词/工作手册
-- 可在 direct path 中完整生效
-- 进入 AMA 时，通过 `Scout -> skill-map` 做角色投影
-
-用户无需知道 `skill-map` 这个内部名词，但应该感受到：
-
-- Planner 更懂目标与约束
-- Generator 更懂怎么执行
-- Evaluator 更懂怎么验证
-
----
-
-## 7. 可见性与信任
-
-### 7.1 工具披露
-
-用户应该能看出系统到底在做什么：
-
-- `bash` 运行了什么命令
-- diff/read/search 到底看了哪个文件或范围
-
-### 7.2 Budget 披露
-
-默认让用户看到：
-
-- `Work x/200`
-
-只有真实进入额外 pass，才看到 `Round`。
-
-### 7.3 Evaluator 输出
-
-最终用户答案必须直接面向用户，不应是“review 的 review”。
-
----
-
-## 8. 核心能力清单
-
-系统必须支持：
-
-- intent gate
-- scout pre-harness gating
-- `H0 / H1 / H2`
-- contract / handoff / verdict 协议
-- skill-aware managed execution
-- durable artifacts
-- provider-aware policy
-- explicit tool disclosure
-
----
-
-## 9. Transitional UX Policy
-
-### 9.1 `/project`
-
-作为 managed task control surface 保留。
-
-### 9.2 `--agent-mode`
-
-`SA / AMA` 是正式、可见、可切换的产品控制面。
-
-### 9.3 `--team`
-
-不再作为主产品故事的一部分。
-
----
-
-## 10. Success Criteria
-
-### 10.1 用户体验
-
-- 简单问题不被多角色 ceremony 拖慢
-- 复杂问题的 planning / verification 让用户感到“更可靠”，而不是“更乱”
-
-### 10.2 可解释性
-
-- 用户能看懂主要预算语义
-- 用户能看懂系统在操作什么对象
-
-### 10.3 结果可信度
-
-- 复杂任务有 contract / evidence / verdict
-- 最终答案不泄露内部元评估口吻
-
----
-
-## 11. 相关 Feature
-
-- `FEATURE_019`
-- `FEATURE_022`
-- `FEATURE_025`
-- `FEATURE_027`
-- `FEATURE_028`
-- `FEATURE_029`
-- `FEATURE_034`
+> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+>
+> This document describes the current product. Historical pre-v0.7.43
+> chain/harness designs have been removed from this current PRD because they no
+> longer match the code after FEATURE_184, FEATURE_190, and FEATURE_193. Use git
+> history and `docs/features/*.md` for historical rationale.
+
+## 1. Product Positioning
+
+KodaX is a lightweight, local-first coding agent that can be used as:
+
+- a terminal REPL for multi-turn engineering work,
+- a one-shot CLI for scripted tasks,
+- a TypeScript SDK for embedding coding-agent behavior into other products,
+- a Node-free single binary for restricted or air-gapped environments.
+
+The product promise is simple: give a developer an LLM-native engineering
+assistant that can read, edit, test, reason over a repository, coordinate child
+tasks, and preserve useful session context without forcing a heavy IDE or
+server product around it.
+
+## 2. Target Users
+
+- Developers who want a terminal-native agent for code changes, debugging,
+  research, and documentation.
+- SDK embedders who want KodaX's agent loop, tools, providers, sessions, skills,
+  MCP, or session APIs inside their own app.
+- Teams that need first-class support for Anthropic, OpenAI, China-native
+  providers, OpenAI/Anthropic-compatible gateways, Gemini CLI, and Codex CLI.
+- Power users who need auditable local files, branchable sessions, permission
+  control, and scriptable workflows.
+
+## 3. Product Principles
+
+- Minimal surface first. Add product modes only when they carry real use.
+- LLM-friendly structure. Types, docs, prompts, and runtime contracts should be
+  easy for an LLM and a human to inspect.
+- Local control. File edits, shell commands, sessions, config, and credentials
+  stay under the user's local environment and explicit permissions.
+- Evidence over theater. User-facing progress should reflect real work,
+  completed tools, child task state, verifier decisions, and session records.
+- Current docs stay current. Historical architecture belongs in feature docs,
+  ADR history, changelog, and git history, not in the active PRD/HLD/DD body.
+
+## 4. Current Product Surfaces
+
+| Surface | Entry | Requirement |
+|---|---|---|
+| REPL | `kodax` | Streaming terminal UI, sessions, slash commands, permissions, skills, MCP, child task visibility. |
+| One-shot CLI | `kodax "task"` | Non-interactive task execution with the same coding runtime and provider configuration. |
+| SDK root | `@kodax-ai/kodax` | `runKodaX`, `KodaXClient`, events, session storage helpers. |
+| Runtime SDK | `@kodax-ai/kodax/runtime` | Stable sessions/runs/events/permissions/workflows/config/catalog/MCP/artifact/diagnostic facade in inline, Worker, or daemon form. |
+| Daemon operations | `kodax daemon start/status/logs/stop/restart` | One local owner per `homeDir + profile`, shared by REPL, Space, IDE, and SDK clients. |
+| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/experimental-memory` | Smaller import surfaces for embedders; governed memory remains explicitly experimental. |
+| Binary release | `bun --compile` output | Runs without Node.js on the target machine. |
+
+## 5. Current Execution Model
+
+KodaX uses a V2 Worker single-loop model with an out-of-band Sidecar Verifier.
+The Worker owns normal reasoning, tool use, file edits, and final response
+drafting. When the Worker appears to finish by text, the Sidecar Verifier can
+accept, request revision, or mark the run blocked without becoming a visible
+in-chain role.
+
+The retired V1 chain model is not a product requirement:
+
+- no retired pre-v0.7.43 chain entry,
+- no retired multi-role execution chain,
+- no retired harness product surface,
+- no `emit_handoff` terminal tool,
+- no `KODAX_HARNESS_V2` opt-out behavior.
+
+Child work is handled by explicit tools and runtime registries:
+`dispatch_child_task`, `send_message`, `task_stop`, and `task_output`.
+The main Worker remains responsible for final user-facing synthesis.
+
+## 6. Required Capabilities
+
+### Runtime Host API
+
+SDK and product hosts must use one `KodaXRuntime` service contract without
+forking a second coding engine. The supported ownership forms are:
+
+- inline embedded for lowest overhead and process-local integrations;
+- Worker-hosted embedded for private state and deterministic V8 termination;
+- local daemon for durable multi-client sharing across REPL, Space, IDE, and
+  SDK processes.
+
+Runs must serialize within one session and may execute concurrently across
+sessions. Pending permissions and runtime events belong to the Runtime owner,
+not to one UI. Daemon ownership is unique per `homeDir + profile`; concurrent
+starters must converge on the verified owner rather than start competing
+servers. Process-local callbacks and service objects must fail closed at
+Worker/daemon DTO boundaries. `close()` must terminate private inline/Worker
+ownership but only detach a daemon client.
+
+Packaged Electron hosts may auto-start the shared daemon only through a bounded
+Node bootstrap that cannot relaunch the GUI or leak Electron Node mode into
+daemon-owned user processes. Disabling Electron's `RunAsNode` fuse requires an
+ordinary Node/CLI-started daemon and attach-only SDK mode; no silent inline
+fallback is allowed.
+
+Worker resource limits and termination are fault-isolation features, not an
+untrusted-code sandbox. A caller that requires deterministic V8 disposal must
+be able to request `hardDispose` and receive an error from inline or daemon
+forms rather than a silent downgrade.
+
+### Providers
+
+KodaX must support 15 built-in provider aliases plus user-defined compatible
+providers. Provider behavior must be described by capability metadata rather
+than scattered prompt prose. Custom providers must support base URL, protocol,
+model, API key env var, effort-first reasoning profile/preset, request timeout
+normalization, and multimodal capability flags where needed. The current
+provider capability snapshot is maintained in
+`packages/llm/src/providers/provider-capabilities.json` and includes the
+2026-06-14 model refresh for GPT-5.4, Kimi K2.7 Code, GLM-5.2, MiniMax M3/M2.7,
+DeepSeek V4, and Doubao Seed 2.0 routes where supported.
+
+### Tools
+
+The coding runtime must expose a rich but explicit tool surface: file read/write
+and edit tools, shell, search, repo intelligence, web fetch/search, LSP
+navigation, MCP calls, git worktree helpers, child task control, goals, todos,
+construction, and self-modification tools. Tool permissions and side effects
+must be visible to the runtime.
+
+### Media Inputs
+
+SDK and REPL hosts must be able to construct image/file/video input artifact
+metadata without importing REPL internals. The canonical media implementation
+lives in the agent layer and is exposed through `@kodax-ai/kodax/media`; coding
+uses the same validation and queue helpers before provider send.
+
+### Sessions
+
+Users must be able to resume, list, fork, rewind, tag, archive, and inspect
+sessions. Session records are local JSONL data, public session APIs must remain
+stable for SDK consumers, and host-facing reads must distinguish active model
+context from append-order transcript history. Resumed interactive sessions
+should preserve durable terminal tool-card replay where sanitized `uiHistory`
+is available, while canonical `messages` / `lineage` remain the source of
+truth.
+
+### Skills And MCP
+
+Markdown skills and MCP capability integration are first-class KodaX
+capabilities. They are source-code subtrees under `packages/agent`, not separate
+workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
+`@kodax-ai/kodax/mcp`.
+
+### Governed Memory
+
+FEATURE_260 (`v0.7.68`) adds a thin experimental Memory Agent over the existing
+F228 Memory Control Plane. `@kodax-ai/kodax/experimental-memory` exposes scoped
+`MemorySession` lifecycle, zero-wait passive recall, deliberate read-only
+`query()`, bounded observations, and episode outcomes. The coding runtime may
+offer the same deliberate path through `memory_recall`, but the Action LLM
+retains final decision authority and recalled text remains low-authority.
+
+Durable changes must continue through proposal, preview, fingerprint, and apply.
+Identity and applicability checks, secret filtering, poisoning defenses, and
+managed-path mutation guards are deterministic code boundaries. KodaX must not
+add a second memory database, filesystem memory action space, resident Memory
+Specialist, hidden-reasoning storage, or runtime self-modification through this
+surface.
+
+### Dynamic Workflow Harness
+
+FEATURE_217 is the v0.7.49 home for the complete Dynamic Workflow product loop.
+The shipped surface includes Agent-layer `createWorkflowRuntime`,
+`runWorkflow`, `normalizeWorkflowLimits`, workflow capsule helpers, coding
+backend integration, one built-in read-only workflow, durable run graph,
+saved-workflow discovery, capability-routed generated scripts, `/workflow
+create`, background lifecycle management, pause/resume/stop/save/rerun, hard
+budget checks, opt-in worktree routing, and richer workflow pattern templates.
+Generated workflows can be promoted into lightweight capsules that preserve the
+script plus manifest, intent, input examples, requirements, and provenance so
+they remain reusable across sessions and understandable to SDK consumers.
+
+FEATURE_246 (v0.7.58) is the Claude-Code-parity evolution of this surface: the
+Worker can now author and run a workflow inline via a model-callable
+`run_workflow` tool (scout-then-author, ADR-047) instead of only generating
+scripts through `/workflow create`. It adds structured child output
+(`outputSchema`), the no-barrier `wf.pipeline` staged primitive, same-session
+resume (`resumeFromRunId`), and nested `wf.workflow(...)`, and demotes the
+context-blind `sideQuery` generator to a fallback for the explicit `/workflow
+create` command and non-interactive / CI hosts. The neutral
+run-lifecycle manager moves to `@kodax-ai/agent` (ADR-046) and the inline run is
+async / idle-yield (ADR-049).
+
+### Workflow Process Surface
+
+FEATURE_229 (`v0.7.50`) standardizes workflow execution as an Agent-layer
+process contract. SDK hosts must be able to subscribe to
+`WorkflowProcessEvent`, poll `WorkflowProcessSnapshot`, and use lifecycle
+controls for stop, pause, resume, final result reads, artifact reads, terminal
+run delete/prune, identity changes, saved-capsule revision/replace provenance,
+and preflight checks. REPL and future UI hosts render the same snapshots; they
+must not become the source of truth by parsing terminal text, slash-command
+output, or Ink view models. Coding-layer workflow APIs own coding run graphs,
+host policy, source/provenance fields, and result summaries while preserving the
+Agent-layer package boundary.
+
+FEATURE_234 (`v0.7.51`) adds workflow run host attribution through
+`hostMetadata`. SDK hosts can stamp a small string-only ownership map on process
+metadata, have it persisted in `run.json`, and read it back through snapshots
+after restart without KodaX interpreting host-specific meaning.
+
+### Safety And Control
+
+KodaX must keep permission modes, auto-mode guardrails, bash classification,
+content-hash safety checks, session snapshots, verifier fail-open behavior, and
+explicit user confirmation for trusted-local workflow scripts.
+
+## 7. Non-Goals
+
+- Reintroducing the V1 multi-role chain as a product mode.
+- Building a heavy IDE shell inside the REPL.
+- Creating a second engine for non-terminal surfaces.
+- Adding broad configuration for hypothetical future use.
+- Replacing git, package managers, test runners, or the user's own review
+  process.
+- Treating generated workflow scripts as trusted local code; generated
+  workflows must stay on the capability runner path.
+- Treating Worker threads as a security sandbox for malicious code.
+- Exposing arbitrary process-local execution objects through the daemon
+  protocol instead of typed Runtime services and DTOs.
+
+## 8. Success Criteria
+
+- Current docs describe the code that exists today.
+- A new SDK consumer can choose the correct import path without reading source.
+- A Runtime SDK consumer can choose inline, Worker, or daemon ownership and
+  predict close, crash, restart, serialization, and permission behavior from
+  the public guide.
+- A CLI/REPL user can understand providers, sessions, permissions, skills, MCP,
+  and child tasks without learning retired V1 terminology.
+- An experimental-memory consumer can predict scope, read/write authority,
+  recall behavior, and promotion boundaries without reading implementation code.
+- Product changes preserve workspace package independence:
+  `llm -> agent -> coding -> repl`, with no reverse dependency from agent to
+  coding.
+- Prompt or behavior changes that affect the agent loop follow
+  `benchmark/EVAL_GUIDELINES.md`.
+
+## 9. Current Roadmap Links
+
+- Active feature index: [FEATURE_LIST.md](FEATURE_LIST.md)
+- Architecture decisions: [ADR.md](ADR.md)
+- Current high-level design: [HLD.md](HLD.md)
+- Current detailed design: [DD.md](DD.md)
+- Feature design index: [features/README.md](features/README.md)

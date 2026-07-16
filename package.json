@@ -1,34 +1,94 @@
 {
-  "name": "kodax",
-  "version": "0.7.14",
-  "description": "极致轻量化 Coding Agent - TypeScript 实现，支持7种LLM提供商",
+  "name": "@kodax-ai/kodax",
+  "version": "0.7.71",
+  "description": "KodaX lightweight coding agent - TypeScript implementation with 15 built-in LLM provider aliases, published as a Node-free single-file CLI and SDK",
   "type": "module",
   "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "workspaces": [
     "packages/*"
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "kodax": "./dist/kodax_cli.js"
+    "kodax": "scripts/kodax-bin.cjs"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./agent": {
+      "types": "./dist/sdk-agent.d.ts",
+      "import": "./dist/sdk-agent.js"
+    },
+    "./llm": {
+      "types": "./dist/sdk-llm.d.ts",
+      "import": "./dist/sdk-llm.js"
+    },
+    "./coding": {
+      "types": "./dist/sdk-coding.d.ts",
+      "import": "./dist/sdk-coding.js"
+    },
+    "./media": {
+      "types": "./dist/sdk-media.d.ts",
+      "import": "./dist/sdk-media.js"
+    },
+    "./repl": {
+      "types": "./dist/sdk-repl.d.ts",
+      "import": "./dist/sdk-repl.js"
+    },
+    "./skills": {
+      "types": "./dist/sdk-skills.d.ts",
+      "import": "./dist/sdk-skills.js"
+    },
+    "./mcp": {
+      "types": "./dist/sdk-mcp.d.ts",
+      "import": "./dist/sdk-mcp.js"
+    },
+    "./session": {
+      "types": "./dist/sdk-session.d.ts",
+      "import": "./dist/sdk-session.js"
+    },
+    "./runtime": {
+      "types": "./dist/sdk-runtime.d.ts",
+      "import": "./dist/sdk-runtime.js"
+    },
+    "./a2a": {
+      "types": "./dist/sdk-a2a.d.ts",
+      "import": "./dist/sdk-a2a.js"
+    },
+    "./experimental-memory": {
+      "types": "./dist/sdk-experimental-memory.d.ts",
+      "import": "./dist/sdk-experimental-memory.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "npm run build:packages && tsc",
-    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax/skills",
-    "dev": "tsx src/kodax_cli.ts",
-    "dev:cli": "tsx src/kodax_cli.ts",
+    "build": "npm run config:templates:check && npm run build:packages && npm run build:bundle && npm run build:dts",
+    "config:templates:sync": "node scripts/sync-config-templates.mjs",
+    "config:templates:check": "node scripts/sync-config-templates.mjs --check",
+    "build:dts": "node scripts/build-dts.mjs",
+    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/agent && npm run copy:provider-caps -w @kodax-ai/llm",
+    "build:bundle": "node scripts/build-bundle.mjs",
+    "dev": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
+    "dev:cli": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
+    "dev:mem-diag": "node scripts/mem-diag-launch.cjs",
+    "dev:mem-snapshot": "node scripts/mem-diag-launch.cjs 2",
     "probe:reasoning": "tsx scripts/probe-reasoning.ts",
-    "repointel:demo": "node scripts/repointel-demo.mjs",
-    "repointel:doctor": "node scripts/repointel-doctor.mjs",
-    "start": "node dist/kodax_cli.js",
+    "probe:max-tokens": "node scripts/probe-max-tokens.mjs",
+    "start": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs dist/kodax_cli.js",
+    "build:binary": "node scripts/build-binary.mjs",
+    "build:binary:all": "node scripts/build-binary.mjs --all",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:eval": "vitest run -c vitest.eval.config.ts",
+    "test:electron-daemon": "npm run build && node scripts/test-electron-daemon-smoke.mjs",
+    "bench:perf": "tsx benchmark/perf/repl-render-perf.bench.ts",
+    "bench:perf:e2e": "tsx benchmark/perf/repl-render-engine-e2e.bench.ts",
+    "bench:repo-intel": "tsx benchmark/perf/repo-intelligence-index.bench.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "clean:packages": "npm run clean --workspaces"
   },
@@ -41,31 +101,89 @@
     "cli"
   ],
   "author": "",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
-    "@kodax/coding": "*",
-    "@kodax/repl": "*",
-    "@kodax/skills": "*",
+    "@alcalzone/ansi-tokenize": "^0.2.5",
+    "@anthropic-ai/sandbox-runtime": "0.0.65",
+    "@anthropic-ai/sdk": "^0.104.2",
     "aamp-sdk": "^0.1.14",
+    "ansi-escapes": "^7.3.0",
+    "auto-bind": "^5.0.1",
     "chalk": "^5.4.1",
+    "cli-boxes": "^3.0.0",
+    "cli-cursor": "^4.0.0",
+    "cli-truncate": "^5.2.0",
+    "clipboardy": "^4.0.0",
+    "code-excerpt": "^4.0.0",
     "commander": "^13.1.0",
+    "es-toolkit": "^1.46.1",
+    "fflate": "^0.8.2",
     "glob": "^11.0.1",
-    "iconv-lite": "^0.6.3"
+    "iconv-lite": "^0.6.3",
+    "indent-string": "^5.0.0",
+    "ink": "^6.7.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "is-in-ci": "^2.0.0",
+    "jimp": "^1.6.0",
+    "js-tiktoken": "^1.0.12",
+    "openai": "^6.32.0",
+    "partial-json": "^0.1.7",
+    "patch-console": "^2.0.0",
+    "react": ">=19.0.0",
+    "react-devtools-core": "^7.0.1",
+    "react-reconciler": "^0.33.0",
+    "scheduler": "^0.27.0",
+    "signal-exit": "^4.1.0",
+    "slice-ansi": "^8.0.0",
+    "stack-utils": "^2.0.6",
+    "string-width": "^7.0.0",
+    "terminal-size": "^4.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vscode-languageserver-protocol": "^3.17.5",
+    "widest-line": "^6.0.0",
+    "wrap-ansi": "^8.1.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.8.2",
+    "yoga-layout": "^3.2.1",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "esbuild": "^0.27.7",
     "ink-testing-library": "^4.0.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
+    "rollup": "^4.60.4",
+    "rollup-plugin-dts": "^6.4.1",
     "vitest": "^3.2.4"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/icetomoyo/KodaX.git"
-  }
+    "url": "git+https://github.com/icetomoyo/KodaX.git"
+  },
+  "files": [
+    "dist/*.d.ts",
+    "dist/*.js",
+    "dist/builtin",
+    "dist/chunks",
+    "dist/provider-capabilities.json",
+    "dist/semantic-worker.js",
+    "dist/runtime-worker.js",
+    "dist/constructed-handler-worker.js",
+    "dist/types-chunks",
+    "config-templates",
+    "scripts/kodax-bin.cjs",
+    "scripts/production-env.cjs",
+    "README.md",
+    "README_CN.md",
+    "docs/SDK_EMBEDDER_GUIDE.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ]
 }

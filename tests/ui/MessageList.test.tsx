@@ -25,8 +25,9 @@ import {
 import {
   MessageList,
   HistoryItemRenderer,
-  splitMessageHistorySections,
 } from "../../packages/repl/src/ui/components/MessageList.js";
+import { getTheme } from "../../packages/repl/src/ui/themes/index.js";
+import { buildTranscriptRenderModel } from "../../packages/repl/src/ui/utils/transcript-layout.js";
 
 // === Test Helpers ===
 
@@ -124,6 +125,22 @@ function getVisibleViewport(frame: string, rows: number): string {
   return lines.slice(-rows).join("\n");
 }
 
+function splitMessageHistorySectionsForCurrentModel(items: HistoryItem[]) {
+  const renderModel = buildTranscriptRenderModel({
+    items,
+    viewportWidth: 80,
+    windowed: false,
+  });
+  const activeItemCount = renderModel.sections.length;
+  const activeRoundStartIndex = Math.max(0, items.length - activeItemCount);
+
+  return {
+    activeRoundStartIndex,
+    staticItems: items.slice(0, activeRoundStartIndex),
+    activeItems: items.slice(activeRoundStartIndex),
+  };
+}
+
 // === Tests ===
 
 describe("MessageList", () => {
@@ -131,6 +148,27 @@ describe("MessageList", () => {
     it("should render empty state when no messages", () => {
       const { lastFrame } = render(<MessageList items={[]} />);
 
+      expect(lastFrame()).toContain("No messages");
+    });
+
+    it("can transition between empty and populated states without changing hook order", () => {
+      const populatedItems: HistoryItem[] = [createUserItem("Hello after empty state")];
+      const { lastFrame, rerender } = render(
+        <MessageList items={[]} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />
+      );
+
+      expect(lastFrame()).toContain("No messages");
+
+      rerender(
+        <MessageList
+          items={populatedItems}
+          viewportRows={DEFAULT_VIEWPORT_ROWS}
+          viewportWidth={80}
+        />
+      );
+      expect(lastFrame()).toContain("Hello after empty state");
+
+      rerender(<MessageList items={[]} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
       expect(lastFrame()).toContain("No messages");
     });
   });
@@ -202,12 +240,12 @@ describe("MessageList", () => {
       expect(lastFrame()).toContain("Something went wrong");
     });
 
-    it("should render info item", () => {
+    it("should render info item in the compact icon-first format", () => {
       const items: HistoryItem[] = [createInfoItem("Session started")];
       const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
-      expect(lastFrame()).toContain("ℹ");
       expect(lastFrame()).toContain("Session started");
+      expect(lastFrame()).not.toContain(" Info");
     });
 
     it("should render hint item", () => {
@@ -275,7 +313,8 @@ describe("MessageList", () => {
       const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("delete_file");
-      expect(lastFrame()).toContain("Permission denied");
+      // Tool errors render with a generic "failed" indicator rather than the raw error message.
+      expect(lastFrame()).toContain("failed");
     });
 
     it("should render multiple tools in group", () => {
@@ -398,7 +437,7 @@ describe("MessageList", () => {
       const secondThinking = createThinkingItem("Round 2 thinking");
       const secondAssistant = createAssistantItem("Round 2 answer");
 
-      const sections = splitMessageHistorySections([
+      const sections = splitMessageHistorySectionsForCurrentModel([
         firstUser,
         firstAssistant,
         secondUser,
@@ -415,7 +454,7 @@ describe("MessageList", () => {
       const thinking = createThinkingItem("Standalone thinking");
       const assistant = createAssistantItem("Standalone answer");
 
-      const sections = splitMessageHistorySections([thinking, assistant]);
+      const sections = splitMessageHistorySectionsForCurrentModel([thinking, assistant]);
 
       expect(sections.activeRoundStartIndex).toBe(0);
       expect(sections.staticItems).toEqual([]);
@@ -615,6 +654,20 @@ describe("HistoryItemRenderer", () => {
     const { lastFrame } = render(<HistoryItemRenderer item={item} />);
 
     expect(lastFrame()).toContain("Tip: use arrows");
+  });
+
+  it("can transition between implicit and explicit themes without changing hook order", () => {
+    const item = createAssistantItem("Theme-safe assistant message");
+    const theme = getTheme("dark");
+    const { lastFrame, rerender } = render(<HistoryItemRenderer item={item} />);
+
+    expect(lastFrame()).toContain("Theme-safe assistant message");
+
+    rerender(<HistoryItemRenderer item={item} theme={theme} />);
+    expect(lastFrame()).toContain("Theme-safe assistant message");
+
+    rerender(<HistoryItemRenderer item={item} />);
+    expect(lastFrame()).toContain("Theme-safe assistant message");
   });
 });
 

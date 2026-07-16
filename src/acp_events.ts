@@ -96,6 +96,7 @@ export type AcpRuntimeEvent =
       | 'request_rejected'
       | 'request_granted';
     remember?: boolean;
+    error?: string;
   }
   | {
     type: 'permission_requested';
@@ -108,6 +109,17 @@ export type AcpRuntimeEvent =
     sessionId: string;
     label: string;
     error: string;
+  }
+  | {
+    type: 'repo_intelligence_trace';
+    sessionId: string;
+    stage: 'routing' | 'preturn' | 'module' | 'impact' | 'task-snapshot';
+    summary: string;
+    mode?: string;
+    engine?: string;
+    status?: string;
+    cacheHit?: boolean;
+    capsuleEstimatedTokens?: number;
   };
 
 export interface AcpEventSink {
@@ -129,8 +141,9 @@ export class AcpEventEmitter {
     for (const sink of this.sinks) {
       try {
         sink.handleEvent(event);
-      } catch {
+      } catch (error) {
         // Observability sinks must never break the ACP protocol flow.
+        void error;
       }
     }
   }

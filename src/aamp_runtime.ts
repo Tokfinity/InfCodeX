@@ -1,6 +1,6 @@
-import type { KodaXSessionStorage, KodaXResult } from '@kodax/coding';
-import { runKodaX } from '@kodax/coding';
-import { getSkillRegistry, initializeSkillRegistry } from '@kodax/skills';
+import type { KodaXSessionStorage, KodaXResult } from '@kodax-ai/coding';
+import { runKodaX } from '@kodax-ai/coding';
+import { getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
 import type { AampDispatchEnvelope, AampTaskRecord, AampTaskResult } from './aamp_types.js';
 
 export interface KodaXAampRuntimeOptions {

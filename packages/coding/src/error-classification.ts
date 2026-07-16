@@ -4,7 +4,7 @@
  * 错误分类系统 - 决定适当的恢复策略
  */
 
-import { KodaXRateLimitError, KodaXProviderError, KodaXNetworkError, KodaXToolCallIdError } from '@kodax/ai';
+import { KodaXRateLimitError, KodaXProviderError, KodaXNetworkError, KodaXToolCallIdError } from '@kodax-ai/llm';
 
 export enum ErrorCategory {
   TRANSIENT,      // 临时错误，可重试（速率限制、超时、网络错误）
@@ -41,6 +41,23 @@ const TRANSIENT_MESSAGE_PATTERNS = [
   /\beai_again\b/i,
   /\bother side closed\b/i,
   /\baborted\b/i,
+  // Chinese transient patterns (中文 provider 错误消息)
+  /网络错误/,
+  /网络异常/,
+  /连接超时/,
+  /连接错误/,
+  /连接失败/,
+  /连接被拒绝/,
+  /请求超时/,
+  /服务繁忙/,
+  /服务不可用/,
+  /服务器错误/,
+  /服务器内部错误/,
+  /请求过多/,
+  /频率限制/,
+  /限流/,
+  /过载/,
+  /容量不足/,
 ];
 
 function matchesTransientMessage(message: string): boolean {

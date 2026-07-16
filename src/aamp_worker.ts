@@ -6,7 +6,7 @@
  * runs KodaXAampRuntime.execute, then sends the AampTaskExecutionResult back
  * to the parent process via IPC (process.send).
  */
-import { FileSessionStorage, prepareRuntimeConfig } from '@kodax/repl';
+import { FileSessionStorage, prepareRuntimeConfig } from '@kodax-ai/repl';
 import { KodaXAampRuntime } from './aamp_runtime.js';
 import type { AampWorkerInput } from './aamp_types.js';
 

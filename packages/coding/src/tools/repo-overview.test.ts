@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,10 +7,6 @@ import { initGitRepo } from './test-helpers.js';
 
 describe('toolRepoOverview', () => {
   let tempDir = '';
-
-  function getCanonicalTempDir(): string {
-    return realpathSync(tempDir).replace(/\\/g, '/');
-  }
 
   afterEach(() => {
     if (tempDir) {
@@ -38,7 +34,7 @@ describe('toolRepoOverview', () => {
     });
 
     expect(result).toContain('Repository overview for');
-    expect(result).toContain(`Root: ${getCanonicalTempDir()}`);
+    expect(result).toContain(`Root: ${tempDir}`);
     expect(result).toContain('Key manifests:');
     expect(result).toContain('packages/app/package.json');
     expect(result).toContain('@demo/app');

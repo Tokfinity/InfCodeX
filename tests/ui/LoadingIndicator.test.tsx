@@ -14,7 +14,7 @@ import {
   Spinner,
   DotsIndicator,
   ProgressIndicator,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Tests ===
 

@@ -34,8 +34,19 @@ export function buildAutocompleteReplacement(
 
   if (completion.type === "argument") {
     const match = beforeCursor.match(/\S+$/);
+    if (match) {
+      const currentToken = match[0];
+      const tokenStart = safeCursorOffset - currentToken.length;
+      if (currentToken.startsWith("/") && beforeCursor.lastIndexOf("/") === tokenStart) {
+        return {
+          start: safeCursorOffset,
+          end: safeCursorOffset,
+          replacement: ` ${completion.text}`,
+        };
+      }
+    }
     return {
-      start: match ? safeCursorOffset - match[0].length : 0,
+      start: match ? safeCursorOffset - match[0].length : safeCursorOffset,
       end: safeCursorOffset,
       replacement: completion.text,
     };

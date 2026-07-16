@@ -14,8 +14,48 @@ import React, {
   useEffect,
   type ReactNode,
 } from "react";
+import { getMessageQueue, type QueuedMessage } from "@kodax-ai/agent";
 import { StreamingState } from "../types.js";
 import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
+
+/**
+ * FEATURE_159 (v0.7.40) — queue-as-source-of-truth.
+ *
+ * Pre-FEATURE_159 (v0.7.36 FEATURE_115): React `pendingInputs: string[]`
+ * was the canonical source; we drained + re-enqueued the agent-side
+ * MessageQueue after every React mutation (`syncPendingInputsToQueue`).
+ * That direction failed two ways: (1) when idle-yield's
+ * `waitForWakeEvent` drained the queue, React state stayed stale → UI
+ * showed phantom "Queue N"; (2) the next round's `runQueuedPromptSequence`
+ * then re-shifted from React state → duplicate processing of an already-
+ * consumed prompt.
+ *
+ * Post-FEATURE_159: MessageQueue is canonical. React `pendingInputs`
+ * mirrors a filtered slice (main-thread + user priority + mode='prompt')
+ * via a `queue.subscribe` callback. The manager methods write to the
+ * queue directly; the queue's notify triggers the subscribe callback,
+ * which rebuilds the React slice and fires `notify()`. Any consumer
+ * (wake-drain, mid-turn yield, queued-prompt-sequence, test harness)
+ * that mutates the queue automatically updates the UI.
+ *
+ * Predicate `isMainThreadPrompt` is the canonical filter for the REPL's
+ * slice — reused by manager methods that need to know "what's mine".
+ */
+function isMainThreadPrompt(message: QueuedMessage): boolean {
+  return (
+    message.agentId === undefined &&
+    message.priority === "user" &&
+    message.mode === "prompt"
+  );
+}
+
+function getMainThreadPrompts(): readonly QueuedMessage[] {
+  return getMessageQueue().getSnapshot().filter(isMainThreadPrompt);
+}
+
+function getMainThreadPromptContents(): string[] {
+  return getMainThreadPrompts().map((m) => m.content);
+}
 
 // === Types ===
 
@@ -43,13 +83,13 @@ export interface StreamingContextValue {
   /** 当前流式状态 */
   state: StreamingState;
 
-  /** 当前正在流式传输的响应 */
+  /** 褰撳墠姝ｅ湪娴佸紡浼犺緭鐨勫搷搴?*/
   currentResponse: string;
 
   /** 错误信息 */
   error?: string;
 
-  /** 用于取消请求的 AbortController */
+  /** 鐢ㄤ簬鍙栨秷璇锋眰鐨?AbortController */
   abortController?: AbortController;
 
   /** 是否正在 thinking */
@@ -82,10 +122,34 @@ export interface StreamingContextValue {
   /** 是否正在压缩上下文 */
   isCompacting: boolean;
   pendingInputs: string[];
+
+  /**
+   * v0.7.41 — wall-clock timestamp captured when the current streaming
+   * round started (set by `startStreaming()`, cleared to `null` by
+   * `stopStreaming()` / `abort()` / `reset()`). Powers the inline
+   * spinner-row "(Ns · ↓ T tokens)" stats tail (claudecode parity,
+   * `c:/Works/claudecode/src/screens/REPL.tsx:932-953`
+   * `loadingStartTimeRef`).
+   */
+  roundStartedAt: number | null;
 }
 
 /**
- * Streaming actions interface - 流式操作接口
+ * FEATURE_149 Phase 4 (v0.7.38) — `abort()` options.
+ *
+ * The default (no options) preserves the v0.6.0+ contract: abort drops the
+ * queued follow-ups so Esc's "cancel everything" UX stays predictable. The
+ * fast-abort path in `handleSubmit` (when the in-flight tool is tagged
+ * `interruptBehavior: 'cancel'`) passes `{ preservePendingInputs: true }` so
+ * the freshly-submitted prompt sitting in the queue survives the abort and
+ * is picked up by the next `runQueuedPromptSequence` iteration.
+ */
+export interface AbortOptions {
+  readonly preservePendingInputs?: boolean;
+}
+
+/**
+ * Streaming actions interface - 娴佸紡鎿嶄綔鎺ュ彛
  */
 export interface StreamingActions {
   /** 开始流式响应 */
@@ -104,7 +168,7 @@ export interface StreamingActions {
   setError: (error: string | undefined) => void;
 
   /** 取消当前流式响应 */
-  abort: () => void;
+  abort: (options?: AbortOptions) => void;
 
   /** 重置状态 */
   reset: () => void;
@@ -124,7 +188,7 @@ export interface StreamingActions {
   /** 清空 thinking 内容 (响应完成时调用) */
   clearThinkingContent: () => void;
 
-  /** 设置当前工具 */
+  /** 璁剧疆褰撳墠宸ュ叿 */
   setCurrentTool: (tool: string | undefined) => void;
 
   /** 追加工具输入字符数 */
@@ -157,7 +221,7 @@ export interface StreamingActions {
   /** 开始压缩上下文 */
   startCompacting: () => void;
 
-  /** 结束压缩上下文 */
+  /** 缁撴潫鍘嬬缉涓婁笅鏂?*/
   stopCompacting: () => void;
   addPendingInput: (input: string) => void;
   removeLastPendingInput: () => void;
@@ -189,12 +253,13 @@ const DEFAULT_STREAMING_STATE: StreamingContextValue = {
   maxIter: 200, // Default max iterations - 默认最大迭代次数
   isCompacting: false,
   pendingInputs: [],
+  roundStartedAt: null,
 };
 
 // === Streaming Manager ===
 
 /**
- * Streaming manager interface - 流式管理器接口
+ * Streaming manager interface - 娴佸紡绠＄悊鍣ㄦ帴鍙?
  */
 export interface StreamingManager {
   /** 获取当前状态 */
@@ -219,7 +284,7 @@ export interface StreamingManager {
   setError: (error: string | undefined) => void;
 
   /** 取消当前流式响应 */
-  abort: () => void;
+  abort: (options?: AbortOptions) => void;
 
   /** 重置状态 */
   reset: () => void;
@@ -245,7 +310,7 @@ export interface StreamingManager {
   /** 清空 thinking 内容 (响应完成时调用) */
   clearThinkingContent: () => void;
 
-  /** 设置当前工具 */
+  /** 璁剧疆褰撳墠宸ュ叿 */
   setCurrentTool: (tool: string | undefined) => void;
 
   /** 追加工具输入字符数 */
@@ -257,7 +322,7 @@ export interface StreamingManager {
   /** 清空工具输入内容 */
   clearToolInputContent: () => void;
 
-  /** 获取当前的 AbortSignal */
+  /** 鑾峰彇褰撳墠鐨?AbortSignal */
   getSignal: () => AbortSignal | undefined;
 
   /** 获取完整响应内容（包括缓冲区中未刷新的内容） */
@@ -278,35 +343,54 @@ export interface StreamingManager {
   /** Start compacting context - 开始压缩上下文 */
   startCompacting: () => void;
 
-  /** Stop compacting context - 结束压缩上下文 */
+  /** Stop compacting context - 缁撴潫鍘嬬缉涓婁笅鏂?*/
   stopCompacting: () => void;
   addPendingInput: (input: string) => void;
   removeLastPendingInput: () => void;
   shiftPendingInput: () => string | undefined;
   clearPendingInputs: () => void;
   consumePendingInputs: () => string[];
+
+  /**
+   * FEATURE_159 (v0.7.40) — release the queue subscription set up at
+   * construction time. Production providers call this on unmount;
+   * tests call it between cases to prevent stale listeners on the
+   * process-global MessageQueue singleton.
+   */
+  dispose: () => void;
 }
 
 /**
- * Create streaming manager - 创建流式管理器
+ * Create streaming manager - 鍒涘缓娴佸紡绠＄悊鍣?
  *
  * Issue 048 fix: Use batch updates to reduce render frequency - Issue 048 修复: 使用批量更新减少渲染频率
  * - Buffer streaming text and thinking content to 80ms cycle - 流式文本和 thinking 内容缓冲到 80ms 周期
  * - Sync with Spinner animation to avoid race conditions - 与 Spinner 动画同步，避免竞态条件
  */
 export function createStreamingManager(): StreamingManager {
-  let state: StreamingContextValue = { ...DEFAULT_STREAMING_STATE };
+  // FEATURE_159 (v0.7.40) — initial state seeds pendingInputs from queue
+  // snapshot in case the manager is recreated mid-session (queue persists
+  // across React remount; we don't want to lose pending prompts).
+  let state: StreamingContextValue = {
+    ...DEFAULT_STREAMING_STATE,
+    pendingInputs: getMainThreadPromptContents(),
+  };
   const listeners = new Set<StreamingStateListener>();
 
-  // === Batch update buffer (Issue 048) - 批量更新缓冲区 (Issue 048) ===
+  // === Batch update buffer (Issue 048) - 鎵归噺鏇存柊缂撳啿鍖?(Issue 048) ===
   let pendingResponseText = "";
   let pendingThinkingText = "";
+  let pendingThinkingChars = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Issue 116: Guard flag to reject buffer writes after abort.
+  // Prevents residual stream callbacks from leaking text into the next round.
+  let bufferSealed = false;
 
   /**
    * Flush interval (ms) - 刷新间隔
-   * - 80ms syncs with Spinner animation frame - 80ms 与 Spinner 动画帧同步
-   * - User perceives as instant response within 100ms - 100ms 内的用户感知为即时响应
+   * - 80ms syncs with Spinner animation frame - 80ms 涓?Spinner 鍔ㄧ敾甯у悓姝?
+   * - User perceives as instant response within 100ms - 100ms 鍐呯殑鐢ㄦ埛鎰熺煡涓哄嵆鏃跺搷搴?
    */
   const FLUSH_INTERVAL = 80;
 
@@ -314,6 +398,51 @@ export function createStreamingManager(): StreamingManager {
     for (const listener of listeners) {
       listener(state);
     }
+  };
+
+  // FEATURE_159 (v0.7.40) — queue → React mirror. Every queue mutation
+  // (enqueue from `addPendingInput`, dequeue from wake-drain / shift /
+  // consume / Esc-pop, clear from reset) rebuilds the REPL's slice and
+  // fires `notify()`. The earlier React → queue mirror direction is
+  // deleted; the queue is canonical.
+  //
+  // Reference-equality guard: only update state + notify when the
+  // filtered slice's length OR contents changed. Without this guard,
+  // out-of-slice events (subagent task-notifications, sub-agent prompts)
+  // would force a no-op React rerender on every event.
+  const syncReactStateFromQueue = (): void => {
+    const next = getMainThreadPromptContents();
+    if (next.length === state.pendingInputs.length) {
+      let equal = true;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== state.pendingInputs[i]) {
+          equal = false;
+          break;
+        }
+      }
+      if (equal) return;
+    }
+    state = { ...state, pendingInputs: next };
+    notify();
+  };
+
+  const unsubscribeFromQueue = getMessageQueue().subscribe(() => {
+    syncReactStateFromQueue();
+  });
+
+  /**
+   * Drain the REPL's slice of the queue (main-thread user prompts) and
+   * return their contents. Used by `clearPendingInputs` / `consumePendingInputs`
+   * / `abort(preservePendingInputs:false)` / `reset`. Out-of-slice
+   * messages (subagent task-notifications, sub-agent prompts) are
+   * preserved — they're not the REPL's to discard.
+   */
+  const drainOurSlice = (): string[] => {
+    const drained = getMessageQueue().dequeue({
+      maxPriority: "user",
+      mode: "prompt",
+    });
+    return drained.map((m) => m.content);
   };
 
   /**
@@ -325,16 +454,29 @@ export function createStreamingManager(): StreamingManager {
       flushTimer = null;
     }
 
-    const hasUpdates = pendingResponseText || pendingThinkingText;
+    const hasUpdates = pendingResponseText || pendingThinkingText
+      || pendingThinkingChars > 0;
     if (hasUpdates) {
+      const nextThinkingContent = state.thinkingContent + pendingThinkingText;
+      // Char count: when content arrives it is authoritative (length of the
+      // string we now hold); when only char signals arrive (no content body,
+      // e.g. tests or summary-only deltas), accumulate them onto the prior
+      // count so the indicator still advances.
+      const nextThinkingCharCount = pendingThinkingText
+        ? nextThinkingContent.length
+        : state.thinkingCharCount + pendingThinkingChars;
       state = {
         ...state,
         currentResponse: state.currentResponse + pendingResponseText,
-        thinkingContent: state.thinkingContent + pendingThinkingText,
-        thinkingCharCount: state.thinkingContent.length + pendingThinkingText.length,
+        thinkingContent: nextThinkingContent,
+        thinkingCharCount: nextThinkingCharCount,
+        ...((pendingThinkingText || pendingThinkingChars > 0)
+          ? { isThinking: true }
+          : {}),
       };
       pendingResponseText = "";
       pendingThinkingText = "";
+      pendingThinkingChars = 0;
       notify();
     }
   };
@@ -358,12 +500,25 @@ export function createStreamingManager(): StreamingManager {
     },
 
     startStreaming: () => {
-      flushPendingUpdates(); // Flush before starting - 开始前刷新
+      bufferSealed = false; // Issue 116: unseal buffer for the new round
+      // Issue 116: discard any residual buffer from previous aborted round
+      pendingResponseText = "";
+      pendingThinkingText = "";
+      pendingThinkingChars = 0;
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       state = {
         ...state,
         state: StreamingState.Responding,
+        currentResponse: "", // Issue 116: ensure clean slate
         abortController: new AbortController(),
         error: undefined,
+        // v0.7.41 — capture wall-clock for spinner-tail elapsed display.
+        // Always reset on startStreaming, matching the `currentResponse: ""`
+        // round-start semantics (a fresh round starts elapsed from zero).
+        roundStartedAt: Date.now(),
       };
       notify();
     },
@@ -374,17 +529,19 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
+        roundStartedAt: null,
       };
       notify();
     },
 
     appendResponse: (text: string) => {
+      if (bufferSealed) return; // Issue 116: reject writes after abort
       pendingResponseText += text;
       scheduleFlush();
     },
 
     clearResponse: () => {
-      flushPendingUpdates(); // Flush before clearing - 清空前刷新
+      flushPendingUpdates(); // Flush before clearing - 娓呯┖鍓嶅埛鏂?
       state = {
         ...state,
         currentResponse: "",
@@ -402,22 +559,55 @@ export function createStreamingManager(): StreamingManager {
       notify();
     },
 
-    abort: () => {
-      flushPendingUpdates(); // Flush before aborting to ensure received content displays - 中断前刷新，确保已接收内容显示
+    abort: (options?: AbortOptions) => {
+      bufferSealed = true; // Issue 116: seal buffer before flush to block racing callbacks
+      flushPendingUpdates();
       state.abortController?.abort();
+      // Issue 116: explicitly drain residual buffer that may have slipped through
+      pendingResponseText = "";
+      pendingThinkingText = "";
+      pendingThinkingChars = 0;
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      // FEATURE_159 (v0.7.40): queue is canonical. When NOT preserving,
+      // drain the REPL's slice — `syncReactStateFromQueue` will land the
+      // updated `pendingInputs:[]` on the next notify (synchronous via
+      // queue.subscribe). FEATURE_149 (v0.7.38) preserve-queue path
+      // means we leave the slice untouched.
+      if (!options?.preservePendingInputs) {
+        drainOurSlice();
+      }
       state = {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
-        pendingInputs: [],
+        roundStartedAt: null,
       };
       notify();
     },
 
     reset: () => {
-      flushPendingUpdates(); // Flush before resetting - 重置前刷新
+      bufferSealed = true; // Issue 116: seal during reset
+      flushPendingUpdates();
       state.abortController?.abort();
-      state = { ...DEFAULT_STREAMING_STATE };
+      pendingResponseText = "";
+      pendingThinkingText = "";
+      pendingThinkingChars = 0;
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      // FEATURE_159 (v0.7.40): drain our queue slice as part of full
+      // reset. Other agents' queue entries (subagent task-notifications)
+      // are not ours to clear.
+      drainOurSlice();
+      state = {
+        ...DEFAULT_STREAMING_STATE,
+        pendingInputs: getMainThreadPromptContents(),
+      };
+      bufferSealed = false;
       notify();
     },
 
@@ -447,16 +637,13 @@ export function createStreamingManager(): StreamingManager {
     },
 
     appendThinkingChars: (count: number) => {
-      // Character count doesn't need batch update, update directly - 字符计数不需要批量更新，直接更新
-      state = {
-        ...state,
-        isThinking: true,
-        thinkingCharCount: state.thinkingCharCount + count,
-      };
-      notify();
+      if (bufferSealed) return;
+      pendingThinkingChars += count;
+      scheduleFlush();
     },
 
     appendThinkingContent: (text: string) => {
+      if (bufferSealed) return; // Issue 116: reject writes after abort
       pendingThinkingText += text;
       scheduleFlush();
     },
@@ -469,13 +656,13 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         isThinking: false,
         thinkingCharCount: 0,
-        // thinkingContent is preserved for display - thinkingContent 保留用于显示
+        // thinkingContent is preserved for display - thinkingContent 淇濈暀鐢ㄤ簬鏄剧ず
       };
       notify();
     },
 
     clearThinkingContent: () => {
-      flushPendingUpdates(); // Flush before clearing - 清空前刷新
+      flushPendingUpdates(); // Flush before clearing - 娓呯┖鍓嶅埛鏂?
       // Clear thinking content when response completes - 响应完成时清除 thinking 内容
       state = {
         ...state,
@@ -487,7 +674,7 @@ export function createStreamingManager(): StreamingManager {
     },
 
     setCurrentTool: (tool: string | undefined) => {
-      flushPendingUpdates(); // Flush before tool switch - 工具切换前刷新
+      flushPendingUpdates(); // Flush before tool switch - 宸ュ叿鍒囨崲鍓嶅埛鏂?
       state = {
         ...state,
         currentTool: tool,
@@ -498,7 +685,8 @@ export function createStreamingManager(): StreamingManager {
     },
 
     appendToolInputChars: (count: number) => {
-      // Character count doesn't need batch update, update directly - 字符计数不需要批量更新，直接更新
+      // Tool input deltas are infrequent — keep immediate to stay in sync
+      // with appendToolInputContent (which is also immediate with 240-char cap).
       state = {
         ...state,
         toolInputCharCount: state.toolInputCharCount + count,
@@ -547,7 +735,7 @@ export function createStreamingManager(): StreamingManager {
      * 注意：内容已经通过 InkREPL 的 onIterationStart 回调保存到 history
      */
     startNewIteration: (iteration: number) => {
-      flushPendingUpdates(); // Flush before clearing - 清空前刷新
+      flushPendingUpdates(); // Flush before clearing - 娓呯┖鍓嶅埛鏂?
 
       // Just clear current content for next iteration - only clear if there's content
       // 清空当前内容准备下一轮 - 只有在有内容时才清空
@@ -620,7 +808,7 @@ export function createStreamingManager(): StreamingManager {
     },
 
     /**
-     * Stop compacting context - 结束压缩上下文
+     * Stop compacting context - 缁撴潫鍘嬬缉涓婁笅鏂?
      */
     stopCompacting: () => {
       flushPendingUpdates();
@@ -631,74 +819,63 @@ export function createStreamingManager(): StreamingManager {
       notify();
     },
 
+    // FEATURE_159 (v0.7.40) — all five pending-input methods now route
+    // through the queue. The queue's `subscribe` callback handles React
+    // state sync + `notify()`; manager methods don't touch `state`
+    // directly. `flushPendingUpdates()` is still called so any in-flight
+    // streaming buffer doesn't race the user's queue mutation.
+    //
+    // MAX_PENDING_INPUTS gating reads the live snapshot (queue is
+    // canonical) rather than `state.pendingInputs.length`, so a stale
+    // React render in the same tick can't allow over-quota enqueue.
     addPendingInput: (input: string) => {
       const trimmed = input.trim();
-      if (!trimmed || state.pendingInputs.length >= MAX_PENDING_INPUTS) {
-        return;
-      }
+      if (!trimmed) return;
+      if (getMainThreadPrompts().length >= MAX_PENDING_INPUTS) return;
 
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: [...state.pendingInputs, trimmed],
-      };
-      notify();
+      getMessageQueue().enqueue({
+        priority: "user",
+        mode: "prompt",
+        content: trimmed,
+      });
     },
 
     removeLastPendingInput: () => {
-      if (state.pendingInputs.length === 0) {
-        return;
-      }
+      const prompts = getMainThreadPrompts();
+      const last = prompts[prompts.length - 1];
+      if (!last) return;
 
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: state.pendingInputs.slice(0, -1),
-      };
-      notify();
+      getMessageQueue().dequeue({
+        maxPriority: "user",
+        mode: "prompt",
+        id: last.id,
+      });
     },
 
     shiftPendingInput: () => {
-      if (state.pendingInputs.length === 0) {
-        return undefined;
-      }
-
       flushPendingUpdates();
-      const [nextInput, ...rest] = state.pendingInputs;
-      state = {
-        ...state,
-        pendingInputs: rest,
-      };
-      notify();
-      return nextInput;
+      const drained = getMessageQueue().dequeue({
+        maxPriority: "user",
+        mode: "prompt",
+        limit: 1,
+      });
+      return drained[0]?.content;
     },
 
     clearPendingInputs: () => {
-      if (state.pendingInputs.length === 0) {
-        return;
-      }
-
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: [],
-      };
-      notify();
+      drainOurSlice();
     },
 
     consumePendingInputs: () => {
-      if (state.pendingInputs.length === 0) {
-        return [];
-      }
-
       flushPendingUpdates();
-      const pendingInputs = state.pendingInputs;
-      state = {
-        ...state,
-        pendingInputs: [],
-      };
-      notify();
-      return pendingInputs;
+      return drainOurSlice();
+    },
+
+    dispose: () => {
+      unsubscribeFromQueue();
     },
   };
 }
@@ -718,7 +895,7 @@ export interface StreamingProviderProps {
 // === Provider ===
 
 /**
- * StreamingProvider - Provides streaming response management - 提供流式响应管理
+ * StreamingProvider - Provides streaming response management - 鎻愪緵娴佸紡鍝嶅簲绠＄悊
  */
 export function StreamingProvider({
   children,
@@ -736,6 +913,16 @@ export function StreamingProvider({
 
     return unsubscribe;
   }, [onStateChange]);
+
+  // FEATURE_159 (v0.7.40) — release the manager's queue subscription on
+  // provider unmount so the process-global MessageQueue doesn't retain
+  // a stale listener after hot reload / test teardown.
+  useEffect(() => {
+    const manager = managerRef.current;
+    return () => {
+      manager.dispose();
+    };
+  }, []);
 
   // === Actions ===
 
@@ -759,8 +946,8 @@ export function StreamingProvider({
     managerRef.current.setError(error);
   }, []);
 
-  const abort = useCallback(() => {
-    managerRef.current.abort();
+  const abort = useCallback((options?: AbortOptions) => {
+    managerRef.current.abort(options);
   }, []);
 
   const reset = useCallback(() => {

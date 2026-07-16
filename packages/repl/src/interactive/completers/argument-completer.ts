@@ -7,33 +7,18 @@
  * Trigger: After a command name with space (e.g., /mode <cursor>)
  * 触发条件: 命令名称后跟空格（如 /mode <光标>）
  *
- * Example: /mode ac -> suggests accept-edits, auto-in-project
+ * Example: /mode ac -> suggests accept-edits, auto
  */
 
 import type { Completer, Completion } from '../autocomplete.js';
 import { findCommandSlashIndex } from '../autocomplete.js';
-import { COMMAND_ARGUMENTS, getCommandArguments } from './command-arguments.js';
+import { getCommandArguments } from './command-arguments.js';
 
-/**
- * Argument definition for autocomplete
- * 用于自动补全的参数定义
- */
-export interface ArgumentDefinition {
-  /** Argument name/value - 参数名称/值 */
-  name: string;
-  /** Description for display - 显示描述 */
-  description: string;
-  /** Argument type - 参数类型 */
-  type?: 'string' | 'number' | 'boolean' | 'enum';
-  /** Whether this argument is required - 是否必需 */
-  required?: boolean;
-}
-
-/**
- * Command arguments registry type
- * 命令参数注册表类型
- */
-export type CommandArgumentsRegistry = Map<string, ArgumentDefinition[]>;
+// FEATURE_093 (v0.7.24): type declarations moved to `./types.ts` so
+// `command-arguments.ts` can consume them without a back-edge to this file.
+// Re-exported here for backward compatibility with existing consumers.
+export type { ArgumentDefinition, CommandArgumentsRegistry } from './types.js';
+import type { ArgumentDefinition, CommandArgumentsRegistry } from './types.js';
 
 /**
  * Argument Completer implementation
@@ -63,7 +48,7 @@ export class ArgumentCompleter implements Completer {
     }
 
     const commandName = afterSlash.slice(1).toLowerCase();
-    return COMMAND_ARGUMENTS.has(commandName) || getCommandArguments(commandName).length > 0;
+    return getCommandArguments(commandName).length > 0;
   }
 
   /**
@@ -96,10 +81,7 @@ export class ArgumentCompleter implements Completer {
 
     // Get argument definitions for this command
     // 获取此命令的参数定义
-    const staticArgs = COMMAND_ARGUMENTS.get(commandName);
-    const argumentDefs = (staticArgs && staticArgs.length > 0)
-      ? staticArgs
-      : getCommandArguments(commandName, currentPartial);
+    const argumentDefs = getCommandArguments(commandName, currentPartial, argParts);
     if (!argumentDefs || argumentDefs.length === 0) {
       return [];
     }
@@ -133,6 +115,11 @@ export class ArgumentCompleter implements Completer {
         type: 'argument' as const,
       }))
       .sort((a, b) => {
+        // No partial typed yet: preserve the declared argument order instead of
+        // collapsing to a length sort (every name startsWith('') so the prefix
+        // branches below would no-op and reorder by length, pushing entries like
+        // `rerun` out of a predictable position). Stable sort keeps input order.
+        if (!currentPartial) return 0;
         // Prefix matches first - 前缀匹配优先
         const aIsPrefix = a.display.toLowerCase().startsWith(currentPartial);
         const bIsPrefix = b.display.toLowerCase().startsWith(currentPartial);

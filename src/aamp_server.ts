@@ -1,8 +1,8 @@
 import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import type { KodaXSessionStorage } from '@kodax/coding';
-import { FileSessionStorage, prepareRuntimeConfig } from '@kodax/repl';
+import type { KodaXSessionStorage } from '@kodax-ai/coding';
+import { FileSessionStorage, prepareRuntimeConfig } from '@kodax-ai/repl';
 import { createDefaultAampLogger, type AampLogger } from './aamp_logger.js';
 import type { AampTaskExecutionResult } from './aamp_runtime.js';
 import { FileAampTaskStore } from './aamp_store.js';

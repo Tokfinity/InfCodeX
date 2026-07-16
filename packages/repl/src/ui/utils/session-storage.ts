@@ -8,20 +8,23 @@ import type {
   KodaXSessionData,
   KodaXSessionLineage,
   KodaXSessionNavigationOptions,
+  KodaXSessionRuntimeInfo,
   SessionErrorMetadata,
-} from "@kodax/coding";
+} from "@kodax-ai/agent";
 import {
   appendSessionLineageLabel,
   countActiveLineageMessages,
   createSessionLineage,
   forkSessionLineage,
+  findPreviousUserEntryId,
   generateSessionId as generateCoreSessionId,
   getSessionMessagesFromLineage,
+  rewindSessionLineage,
   setSessionLineageActiveEntry,
-} from "@kodax/coding";
+} from "@kodax-ai/agent";
 
 // Re-export SessionErrorMetadata for backward compatibility
-export type { SessionErrorMetadata } from "@kodax/coding";
+export type { SessionErrorMetadata } from "@kodax-ai/agent";
 
 /**
  * Session data structure.
@@ -41,12 +44,19 @@ export interface SessionStorage {
     options?: KodaXSessionNavigationOptions,
   ): Promise<SessionData | null>;
   setLabel?(id: string, selector: string, label?: string): Promise<SessionData | null>;
+  rewind?(id: string, selector?: string): Promise<SessionData | null>;
   fork?(
     id: string,
     selector?: string,
     options?: { sessionId?: string; title?: string },
   ): Promise<{ sessionId: string; data: SessionData } | null>;
-  list(gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>>;
+  list(gitRoot?: string): Promise<Array<{
+    id: string;
+    title: string;
+    msgCount: number;
+    tag?: string;
+    runtimeInfo?: KodaXSessionRuntimeInfo;
+  }>>;
   delete?(id: string): Promise<void>;
   deleteAll?(gitRoot?: string): Promise<void>;
 }
@@ -64,7 +74,9 @@ export class MemorySessionStorage implements SessionStorage {
       scope: data.scope ?? existing?.scope ?? 'user',
       uiHistory: data.uiHistory ?? existing?.uiHistory,
       extensionState: data.extensionState ?? existing?.extensionState,
+      artifactLedger: data.artifactLedger ?? existing?.artifactLedger,
       extensionRecords: data.extensionRecords ?? existing?.extensionRecords,
+      tag: data.tag ?? existing?.tag,
       lineage: createSessionLineage(
         data.messages,
         data.lineage ?? existing?.lineage,
@@ -143,8 +155,15 @@ export class MemorySessionStorage implements SessionStorage {
       messages: getSessionMessagesFromLineage(lineage),
       title: options?.title ?? current.title,
       gitRoot: current.gitRoot,
+      tag: current.tag,
+      uiHistory: current.uiHistory
+        ? current.uiHistory.map((item) => ({ ...item }))
+        : undefined,
       extensionState: current.extensionState
         ? structuredClone(current.extensionState)
+        : undefined,
+      artifactLedger: current.artifactLedger
+        ? structuredClone(current.artifactLedger)
         : undefined,
       extensionRecords: current.extensionRecords
         ? structuredClone(current.extensionRecords)
@@ -158,7 +177,30 @@ export class MemorySessionStorage implements SessionStorage {
     };
   }
 
-  async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>> {
+  async rewind(id: string, selector?: string): Promise<SessionData | null> {
+    const current = this.sessions.get(id);
+    if (!current?.lineage) {
+      return null;
+    }
+
+    const targetId = selector ?? findPreviousUserEntryId(current.lineage);
+    if (!targetId) return null;
+
+    const lineage = rewindSessionLineage(current.lineage, targetId);
+    if (!lineage) {
+      return null;
+    }
+
+    const data: SessionData = {
+      ...current,
+      messages: getSessionMessagesFromLineage(lineage),
+      lineage,
+    };
+    this.sessions.set(id, data);
+    return structuredClone(data);
+  }
+
+  async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number; tag?: string }>> {
     return Array.from(this.sessions.entries())
       .filter(([, data]) => (data.scope ?? 'user') === 'user')
       .map(([id, data]) => ({
@@ -167,6 +209,7 @@ export class MemorySessionStorage implements SessionStorage {
         msgCount: data.lineage
           ? countActiveLineageMessages(data.lineage)
           : data.messages.length,
+        ...(data.tag !== undefined ? { tag: data.tag } : {}),
       }));
   }
 

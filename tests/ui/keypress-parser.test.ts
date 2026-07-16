@@ -11,7 +11,7 @@ import {
   isFunctionKey,
   isPrintable,
   getKeyDisplayName,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 describe("parseKeypress", () => {
   describe("CRLF handling (Issue 075)", () => {

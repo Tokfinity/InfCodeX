@@ -13,20 +13,10 @@ import path from 'path';
 describe('SYSTEM_PROMPT Content Verification', () => {
   const systemPromptPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'system.ts');
 
-  it('should contain Large File Handling section', async () => {
-    const content = await fs.readFile(systemPromptPath, 'utf-8');
-    expect(content).toContain('## Large File Handling (IMPORTANT)');
-    expect(content).toContain('**RECOMMENDED LIMIT: 300 lines per write call**');
-  });
-
-  it('should contain Example approach for large files', async () => {
-    const content = await fs.readFile(systemPromptPath, 'utf-8');
-    expect(content).toContain('Example approach for large files:');
-    expect(content).toContain('1. write file with basic structure/skeleton (under 300 lines)');
-    expect(content).toContain('2. edit to add first major section');
-    expect(content).toContain('3. edit to add second major section');
-    expect(content).toContain('4. continue until complete');
-  });
+  // Note: The standalone "Large File Handling" section was folded into
+  // the broader "Tool Usage" guidance (read offset/limit + edit-over-rewrite
+  // hints) during a prompt-cleanup pass. Tool Usage now carries the
+  // equivalent constraints — verified by the Tool Usage section test below.
 
   it('should contain Error Handling section with Common errors', async () => {
     const content = await fs.readFile(systemPromptPath, 'utf-8');
@@ -98,155 +88,6 @@ describe('SYSTEM_PROMPT Content Verification', () => {
   });
 });
 
-// ============== LONG_RUNNING_PROMPT 测试 ==============
-
-describe('LONG_RUNNING_PROMPT Content Verification', () => {
-  const longRunningPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'long-running.ts');
-
-  it('should contain Long-Running Task Mode section', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('## Long-Running Task Mode');
-    expect(content).toContain('At the start of EACH session, follow these steps:');
-  });
-
-  it('should contain all 6 steps', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('1. Note the Working Directory from context');
-    expect(content).toContain('2. Read git logs');
-    expect(content).toContain('3. Read feature_list.json and pick ONE incomplete feature');
-    expect(content).toContain('4. **Write a session plan**');
-    expect(content).toContain('5. Execute the plan step by step');
-    expect(content).toContain('6. End session with: git commit');
-  });
-
-  it('should contain IMPORTANT Rules', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('IMPORTANT Rules:');
-    // Check for key rule concepts (without exact backticks)
-    expect(content).toContain('passes');
-    expect(content).toContain('Leave codebase in clean state');
-    expect(content).toContain('Work on ONE feature at a time');
-    expect(content).toContain('verify features work end-to-end');
-  });
-
-  it('should contain Session Planning template', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('## Session Planning (CRITICAL for Quality)');
-    expect(content).toContain('# Session Plan');
-    expect(content).toContain('**Date**:');
-    expect(content).toContain('**Feature**:');
-    expect(content).toContain('## Understanding');
-    expect(content).toContain('## Approach');
-    expect(content).toContain('## Steps');
-    expect(content).toContain('## Considerations');
-    expect(content).toContain('## Risks');
-  });
-
-  it('should contain Efficiency Rules', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('## Efficiency Rules (CRITICAL)');
-    expect(content).toContain('Each session MUST complete at least ONE full feature');
-    expect(content).toContain('Minimum meaningful code change per session: 50+ lines');
-    expect(content).toContain('A single-page display task should be completed in ONE session');
-  });
-
-  it('should contain Promise Signals', async () => {
-    const content = await fs.readFile(longRunningPath, 'utf-8');
-    expect(content).toContain('## Promise Signals (Ralph-Loop Style)');
-    expect(content).toContain('<promise>COMPLETE</promise>');
-    expect(content).toContain('<promise>BLOCKED:reason</promise>');
-    expect(content).toContain('<promise>DECIDE:question</promise>');
-  });
-});
-
-// ============== buildInitPrompt 测试 ==============
-
-describe('buildInitPrompt Content Verification', () => {
-  const cliUtilsPath = path.join(process.cwd(), 'packages', 'repl', 'src', 'common', 'utils.ts');
-
-  it('should contain feature definition', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('**What is a Feature?**');
-    expect(content).toContain('A feature is a COMPLETE, TESTABLE functionality');
-    expect(content).toContain('~50-300 lines per feature');
-  });
-
-  it('should contain Feature Count Guidelines', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('Feature Count Guidelines');
-    expect(content).toContain('Simple task');
-    expect(content).toContain('Medium task');
-    expect(content).toContain('Complex task');
-  });
-
-  it('should contain DO/DON\'T sections', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('**DO:**');
-    expect(content).toContain('Split by user-facing features');
-    expect(content).toContain('**DO NOT:**');
-    expect(content).toContain('Split by technical layers');
-  });
-
-  it('should contain GOOD/BAD examples', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('**Examples of GOOD features:**');
-    expect(content).toContain('**Examples of BAD features:**');
-    expect(content).toContain('User authentication (register, login, logout)');
-    expect(content).toContain('Add HTML structure');
-  });
-
-  it('should contain PROGRESS.md template', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('2. **PROGRESS.md**');
-    expect(content).toContain('# Progress Log');
-    expect(content).toContain('### Completed');
-    expect(content).toContain('### Next Steps');
-  });
-
-  it('should contain git commit instructions', async () => {
-    const content = await fs.readFile(cliUtilsPath, 'utf-8');
-    expect(content).toContain('git add .');
-    expect(content).toContain('git commit');
-    expect(content).toContain('Initial commit');
-  });
-});
-
-// ============== --append prompt 测试 ==============
-
-describe('--append Prompt Content Verification', () => {
-  const kodaxCliPath = path.join(process.cwd(), 'src', 'kodax_cli.ts');
-
-  it('should contain existing features warning', async () => {
-    const content = await fs.readFile(kodaxCliPath, 'utf-8');
-    expect(content).toContain('**Existing Features** (DO NOT modify these');
-    expect(content).toContain('Do NOT delete or modify existing features');
-  });
-
-  it('should contain task steps', async () => {
-    const content = await fs.readFile(kodaxCliPath, 'utf-8');
-    expect(content).toContain('**Your Task**:');
-    expect(content).toContain('1. Read the existing feature_list.json');
-    expect(content).toContain('2. Create NEW features');
-    expect(content).toContain('3. Use the EDIT tool to APPEND');
-    expect(content).toContain('4. Add a new section to PROGRESS.md');
-  });
-
-  it('should contain New Feature Guidelines', async () => {
-    const content = await fs.readFile(kodaxCliPath, 'utf-8');
-    expect(content).toContain('**New Feature Guidelines:**');
-    expect(content).toContain('5-10 NEW features');
-    expect(content).toContain('completable in 1 session');
-    expect(content).toContain('"passes": false');
-  });
-
-  it('should contain JSON example', async () => {
-    const content = await fs.readFile(kodaxCliPath, 'utf-8');
-    expect(content).toContain('**Example of appending to feature_list.json:**');
-    expect(content).toContain('Old:');
-    expect(content).toContain('New:');
-  });
-});
-
 // ============== toolBash timeout message 测试 ==============
 
 describe('toolBash Timeout Message Verification', () => {
@@ -264,15 +105,24 @@ describe('toolBash Timeout Message Verification', () => {
 // ============== Retry prompts 测试 ==============
 
 describe('Retry Prompts Content Verification', () => {
-  const agentPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'agent.ts');
+  // FEATURE_100 P2 extracted the incomplete-tool-call retry prompts out
+  // of agent.ts into the dedicated `incomplete-tool-retry.ts` module.
+  const retryPath = path.join(
+    process.cwd(),
+    'packages',
+    'coding',
+    'src',
+    'agent-runtime',
+    'incomplete-tool-retry.ts',
+  );
 
   it('should contain first retry prompt with concise instruction', async () => {
-    const content = await fs.readFile(agentPath, 'utf-8');
+    const content = await fs.readFile(retryPath, 'utf-8');
     expect(content).toContain('For large content, keep it concise (under 50 lines for write operations)');
   });
 
   it('should contain second retry prompt with detailed instructions', async () => {
-    const content = await fs.readFile(agentPath, 'utf-8');
+    const content = await fs.readFile(retryPath, 'utf-8');
     expect(content).toContain('⚠️ CRITICAL: Your response was TRUNCATED again');
     expect(content).toContain('YOU MUST:');
     expect(content).toContain("For 'write' tool: Keep content under 50 lines");
@@ -280,10 +130,12 @@ describe('Retry Prompts Content Verification', () => {
     expect(content).toContain('PROVIDE SHORT, COMPLETE PARAMETERS NOW');
   });
 
-  it('should contain incompleteRetryCount conditional', async () => {
-    const content = await fs.readFile(agentPath, 'utf-8');
-    expect(content).toContain('if (incompleteRetryCount === 1)');
-    expect(content).toContain('} else {');
+  it('should branch on retry count (first attempt vs subsequent)', async () => {
+    const content = await fs.readFile(retryPath, 'utf-8');
+    // Module exposes `buildIncompleteToolRetryMessage(missing, retryCount)`
+    // which branches on `retryCount === 1` for the gentler first prompt
+    // and falls through to the CRITICAL escalation otherwise.
+    expect(content).toContain('retryCount === 1');
   });
 });
 
@@ -291,19 +143,17 @@ describe('Retry Prompts Content Verification', () => {
 
 describe('Source File Consistency', () => {
   const systemPromptPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'system.ts');
-  const longRunningPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'long-running.ts');
-  const kodaxCliPath = path.join(process.cwd(), 'src', 'kodax_cli.ts');
-  const cliUtilsPath = path.join(process.cwd(), 'packages', 'repl', 'src', 'common', 'utils.ts');
 
   it('should have SYSTEM_PROMPT in coding/prompts/system.ts', async () => {
     const systemPromptContent = await fs.readFile(systemPromptPath, 'utf-8');
 
-    // Verify key sections exist
+    // Verify key sections exist. "Large File Handling" was folded into
+    // Tool Usage; the read-bounding / parallel-tool guidance now lives there.
     const keySections = [
-      '## Large File Handling (IMPORTANT)',
-      'Example approach for large files:',
       '5. Common errors:',
       '## Editing Files',
+      '## Tool Usage',
+      'Read is intentionally bounded:',
       '### Cross-Platform Notes',
       '不是内部或外部命令',
       '## Multi-step Tasks',
@@ -312,53 +162,6 @@ describe('Source File Consistency', () => {
 
     for (const section of keySections) {
       expect(systemPromptContent).toContain(section);
-    }
-  });
-
-  it('should have LONG_RUNNING_PROMPT in coding/prompts/long-running.ts', async () => {
-    const longRunningContent = await fs.readFile(longRunningPath, 'utf-8');
-
-    const keySections = [
-      '## Long-Running Task Mode',
-      '## Session Planning (CRITICAL for Quality)',
-      '## Efficiency Rules (CRITICAL)',
-      '## Promise Signals (Ralph-Loop Style)',
-    ];
-
-    for (const section of keySections) {
-      expect(longRunningContent).toContain(section);
-    }
-  });
-
-  it('should have buildInitPrompt in cli/utils.ts', async () => {
-    const cliUtilsContent = await fs.readFile(cliUtilsPath, 'utf-8');
-
-    const keySections = [
-      'What is a Feature?',
-      'Feature Count Guidelines',
-      'DO:',
-      'DO NOT:',
-      'Examples of GOOD features:',
-      'Examples of BAD features:',
-      'PROGRESS.md',
-    ];
-
-    for (const section of keySections) {
-      expect(cliUtilsContent).toContain(section);
-    }
-  });
-
-  it('should have --append prompt in kodax_cli.ts', async () => {
-    const kodaxCliContent = await fs.readFile(kodaxCliPath, 'utf-8');
-
-    const keySections = [
-      '**Existing Features** (DO NOT modify these',
-      '**New Feature Guidelines:**',
-      '**Example of appending to feature_list.json:**',
-    ];
-
-    for (const section of keySections) {
-      expect(kodaxCliContent).toContain(section);
     }
   });
 });

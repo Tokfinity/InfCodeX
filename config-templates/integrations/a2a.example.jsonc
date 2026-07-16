@@ -1,0 +1,54 @@
+// Bidirectional A2A configuration: ~/.kodax/integrations/a2a.json.
+// `agents` calls third-party Agents. The optional singleton `server` exposes
+// one KodaX general task Agent; ACP remains the coding/editor protocol.
+{
+  "version": 1,
+  "agents": {}
+
+  // Outbound example (keep tokens in the named environment variable):
+  // "agents": {
+  //   "reporting": {
+  //     "cardUrl": "https://agents.example.com/.well-known/agent-card.json",
+  //     "credentialEnv": "REPORTING_A2A_TOKEN",
+  //     "effect": "read"
+  //   }
+  // },
+
+  // Create the inbound block with `kodax a2a expose`; do not copy private
+  // Agent instructions, Runtime Skills, model names, or local paths into the
+  // public `published.skills` list. Managed workspaces default below
+  // ~/kodax_a2a_server_workspace/<server>/contexts/<caller-context>/.
+  // Native read/grep/glob remains available according to workspace access.
+  // Arbitrary shell is never exposed. Skill instructions/assets need no
+  // process authority. An exact checked-in scripts/... entry requires
+  // process="isolated", skillScripts admission, and `kodax sandbox doctor`.
+  // ASRT receives no KodaX credentials or ambient ~/.srt-settings.json and its
+  // script quota is observed; hostile tenants also require an outer container/VM.
+  //
+  // "server": {
+  //   "execution": {
+  //     "kind": "local-agent",
+  //     "agentRef": { "source": "markdown:user", "name": "report-agent" },
+  //     "workspace": { "mode": "managed" },
+  //     "toolPolicy": {
+  //       "workspace": "write",
+  //       "process": "deny",
+  //       "network": { "mode": "deny" },
+  //       "tools": [],
+  //       "mcp": {},
+  //       "skillScripts": {},
+  //       "subagents": "deny"
+  //     }
+  //   },
+  //   "published": {
+  //     "name": "KodaX Agent",
+  //     "description": "Completes approved general tasks.",
+  //     "version": "0.7.70",
+  //     "skills": [{ "id": "general", "name": "General", "description": "Complete general tasks.", "tags": [] }],
+  //     "inputModes": ["text/plain"],
+  //     "outputModes": ["text/plain"]
+  //   },
+  //   "authentication": { "type": "bearer-env", "tokenEnv": "KODAX_A2A_TOKEN", "principalId": "configured-client" },
+  //   "dataDir": "~/.kodax/a2a/tasks"
+  // }
+}

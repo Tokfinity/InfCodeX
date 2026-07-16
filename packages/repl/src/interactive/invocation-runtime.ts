@@ -1,6 +1,6 @@
 import { exec as execCallback } from 'child_process';
 import { promisify } from 'util';
-import type { KodaXEvents, KodaXOptions } from '@kodax/coding';
+import type { KodaXEvents, KodaXOptions } from '@kodax-ai/coding';
 import type { CommandHook, CommandHooks, CommandInvocationRequest } from '../commands/types.js';
 
 const execAsync = promisify(execCallback);
@@ -455,7 +455,7 @@ export async function prepareInvocationExecution(
 
   const wrappedEvents: KodaXEvents = {
     ...baseEvents,
-    beforeToolExecute: async (tool, input) => {
+    beforeToolExecute: async (tool, input, meta) => {
       if (!isToolAllowed(allowedToolPolicy, tool, input)) {
         await emitWithNotifications(`[Blocked] Tool '${tool}' is not allowed by ${request.displayName}`);
         return false;
@@ -477,11 +477,11 @@ export async function prepareInvocationExecution(
 
       // Propagate the result from baseEvents.beforeToolExecute (may be true, false, or a string message)
       return baseEvents.beforeToolExecute
-        ? await baseEvents.beforeToolExecute(tool, input)
+        ? await baseEvents.beforeToolExecute(tool, input, meta)
         : true;
     },
-    onToolResult: (result) => {
-      baseEvents.onToolResult?.(result);
+    onToolResult: (result, meta) => {
+      baseEvents.onToolResult?.(result, meta);
       void runHooks(
         request.hooks,
         'PostToolUse',
@@ -522,6 +522,10 @@ export async function prepareInvocationExecution(
     prompt: promptParts.join('\n\n'),
     options: {
       ...baseOptions,
+      // FEATURE_246: per-turn agent-mode elevation (e.g. AMA `/workflow` runs its
+      // authoring turn as amaw so the Worker gets run_workflow). Overrides only
+      // this turn's options; the session config is untouched.
+      ...(request.agentModeOverride ? { agentMode: request.agentModeOverride } : {}),
       modelOverride,
       context: {
         ...baseOptions.context,

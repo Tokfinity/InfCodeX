@@ -6,16 +6,14 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 import {
-  buildHeuristicAutoRerouteDecision,
   buildFallbackRoutingDecision,
   buildProviderPolicyHintsForDecision,
   createReasoningPlan,
   inferIntentGate,
   inferTaskType,
-  maybeCreateAutoReroutePlan,
   type ReasoningPlan,
 } from './reasoning.js';
 import { evaluateProviderPolicy } from './provider-policy.js';
@@ -91,58 +89,7 @@ const CLI_BRIDGE_PROFILE = {
 } as const;
 
 describe('reasoning reroute', () => {
-  const basePlan: ReasoningPlan = {
-    mode: 'auto',
-    depth: 'low',
-    decision: {
-      primaryTask: 'review',
-      confidence: 0.9,
-      riskLevel: 'medium',
-      recommendedMode: 'pr-review',
-      recommendedThinkingDepth: 'low',
-      complexity: 'moderate',
-      workIntent: 'new',
-      requiresBrainstorm: false,
-      harnessProfile: 'H1_EXECUTE_EVAL',
-      reason: 'Initial routing selected review.',
-    },
-    promptOverlay: '[Execution Mode: pr-review]',
-  };
-
-  it('switches review into investigation when runtime evidence appears', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'The diff also shows a failing test and a runtime error in stderr.',
-    );
-
-    expect(decision.shouldReroute).toBe(true);
-    expect(decision.nextRecommendedMode).toBe('investigation');
-    expect(decision.nextPrimaryTask).toBe('bugfix');
-    expect(decision.nextThinkingDepth).toBe('medium');
-  });
-
-  it('does not reroute review into investigation on timeout-only evidence', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'The command hit a timeout and the stream stalled before any concrete failure evidence was collected.',
-    );
-
-    expect(decision.shouldReroute).toBe(false);
-    expect(decision.reason).toContain('retried before rerouting');
-  });
-
-  it('escalates low-value review output into a stricter second pass', () => {
-    const decision = buildHeuristicAutoRerouteDecision(
-      basePlan,
-      'Optional improvements: naming consistency, style cleanup, and a minor readability nit.',
-    );
-
-    expect(decision.shouldReroute).toBe(true);
-    expect(decision.nextRecommendedMode).toBe('pr-review');
-    expect(decision.nextThinkingDepth).toBe('medium');
-  });
-
-  it('uses structured router output and includes runtime evidence in the routing prompt', async () => {
+  it('uses heuristic routing in auto mode without calling the LLM router (FEATURE_061)', async () => {
     const provider = new CapturingProvider(JSON.stringify({
       primaryTask: 'bugfix',
       confidence: 0.91,
@@ -172,18 +119,16 @@ describe('reasoning reroute', () => {
     );
 
     expect(plan.decision.primaryTask).toBe('bugfix');
-    expect(['medium', 'high']).toContain(plan.decision.riskLevel);
     expect(plan.decision.recommendedMode).toBe('investigation');
-    expect(plan.decision.mutationSurface).toBe('code');
-    expect(plan.promptOverlay).toContain('[Execution Mode: investigation]');
+    // Router prompt-overlay retired (ADR-043): the mode lives on the decision,
+    // not in injected prompt text.
+    expect(plan.promptOverlay).toBe('');
+    expect(plan.decision.routingNotes).toContain(
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
+    );
 
-    const routerPrompt = String(provider.lastMessages[0]?.content ?? '');
-    expect(routerPrompt).toContain('- git: unavailable');
-    expect(routerPrompt).toContain('recent session error');
-    expect(routerPrompt).toContain('recent message evidence');
-    expect(routerPrompt).toContain('runtime evidence');
-    expect(routerPrompt).toContain('- provider semantics: capturing-provider');
-    expect(routerPrompt).toContain('transport=native-api');
+    // LLM router should NOT have been called
+    expect(provider.lastMessages).toHaveLength(0);
   });
 
   it('keeps timeout-only routing evidence out of the router prompt', async () => {
@@ -238,165 +183,23 @@ describe('reasoning reroute', () => {
     expect(plan.decision.recommendedMode).toBe('implementation');
   });
 
-  it('logs router fallback failures when routing debug is enabled', async () => {
-    const provider = new ThrowingProvider();
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const previous = process.env.KODAX_DEBUG_ROUTING;
-    process.env.KODAX_DEBUG_ROUTING = '1';
-
-    try {
-      await createReasoningPlan(
-        {
-          provider: 'openai',
-          reasoningMode: 'auto',
-        },
-        'Investigate why npm test is failing and fix it.',
-        provider,
-      );
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[Routing] task router failed:',
-        expect.any(Error),
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.KODAX_DEBUG_ROUTING;
-      } else {
-        process.env.KODAX_DEBUG_ROUTING = previous;
-      }
-      errorSpy.mockRestore();
-    }
-  });
-
-  it('falls back to heuristic reroute when the judge call fails', async () => {
+  it('succeeds with a throwing provider since LLM router is bypassed (FEATURE_061)', async () => {
     const provider = new ThrowingProvider();
 
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
+    const plan = await createReasoningPlan(
       {
         provider: 'openai',
         reasoningMode: 'auto',
       },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'Optional improvements: naming consistency and style cleanup.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-    );
-
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.decision.recommendedMode).toBe('pr-review');
-    expect(reroutedPlan?.decision.recommendedThinkingDepth).toBe('medium');
-    expect(reroutedPlan?.kind).toBe('depth-escalation');
-    expect(reroutedPlan?.promptOverlay).toContain('[Auto Depth Escalation]');
-  });
-
-
-  it('logs reroute judge failures when routing debug is enabled', async () => {
-    const provider = new ThrowingProvider();
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const previous = process.env.KODAX_DEBUG_ROUTING;
-    process.env.KODAX_DEBUG_ROUTING = '1';
-
-    try {
-      await maybeCreateAutoReroutePlan(
-        provider,
-        {
-          provider: 'openai',
-          reasoningMode: 'auto',
-        },
-        'Review this PR for merge blockers.',
-        basePlan,
-        'Optional improvements: naming consistency and style cleanup.',
-        {
-          allowDepthEscalation: true,
-          allowTaskReroute: true,
-        },
-      );
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[Routing] reroute judge failed:',
-        expect.any(Error),
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.KODAX_DEBUG_ROUTING;
-      } else {
-        process.env.KODAX_DEBUG_ROUTING = previous;
-      }
-      errorSpy.mockRestore();
-    }
-  });
-
-  it('uses LLM reroute output when the judge returns valid structured JSON', async () => {
-    const provider = new CapturingProvider(JSON.stringify({
-      shouldReroute: true,
-      nextPrimaryTask: 'bugfix',
-      nextRecommendedMode: 'investigation',
-      nextThinkingDepth: 'high',
-      reason: 'Tool evidence points to a runtime failure instead of a pure review issue.',
-    }));
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
+      'Investigate why npm test is failing and fix it.',
       provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'I am not fully sure yet.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: Command: npm test Exit: 1 [stderr] runtime error',
-      },
     );
 
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.kind).toBe('task-reroute');
-    expect(reroutedPlan?.decision.primaryTask).toBe('bugfix');
-    expect(reroutedPlan?.decision.recommendedMode).toBe('investigation');
-    expect(reroutedPlan?.decision.recommendedThinkingDepth).toBe('high');
-
-    const judgePrompt = String(provider.lastMessages[0]?.content ?? '');
-    expect(judgePrompt).toContain('Tool evidence:');
-    expect(judgePrompt).toContain('runtime error');
-  });
-
-  it('ignores timeout-only review evidence before consulting the reroute judge', async () => {
-    const provider = new CapturingProvider(JSON.stringify({
-      shouldReroute: true,
-      nextPrimaryTask: 'bugfix',
-      nextRecommendedMode: 'investigation',
-      nextThinkingDepth: 'high',
-      reason: 'Timeouts suggest the task should switch into investigation.',
-    }));
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'The run timed out before producing a stable answer.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: timeout after 60s with delayed response and no other failure evidence',
-      },
+    // Heuristic routing succeeds without calling the provider
+    expect(plan.decision.primaryTask).toBe('bugfix');
+    expect(plan.decision.routingNotes).toContain(
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
-
-    expect(reroutedPlan).toBeNull();
-    expect(provider.lastMessages).toEqual([]);
   });
 
   it('treats ambiguous fallback routing as unknown and keeps the initial path direct', () => {
@@ -409,6 +212,24 @@ describe('reasoning reroute', () => {
     expect(decision.recommendedMode).toBe('implementation');
     expect(decision.requiresBrainstorm).toBe(true);
     expect(decision.harnessProfile).toBe('H0_DIRECT');
+  });
+
+  it('collapses topologyCeiling / upgradeCeiling to the single H0_DIRECT tier (ADR-043)', () => {
+    // The harness tier retired: deriveTopologyCeiling (read-only/docs → H1,
+    // code/system → H2) is gone, so the ceiling fields are now accurate
+    // constants. The assurance signal stays on the semantic fields below.
+    for (const prompt of [
+      'Refactor the monorepo architecture across packages.', // was code → H2
+      'Audit this code for security issues and double-check findings.', // was read-only+explicit → H1
+      'Write the PRD and ADR docs.', // was docs-only → H0
+    ]) {
+      const decision = buildFallbackRoutingDecision(prompt);
+      expect(decision.topologyCeiling).toBe('H0_DIRECT');
+      expect(decision.upgradeCeiling).toBe('H0_DIRECT');
+      // Semantic signals that used to feed the ceiling remain queryable:
+      expect(decision.mutationSurface).toBeDefined();
+      expect(decision.complexity).toBeDefined();
+    }
   });
 
   it('supports task inference across review, bugfix, and planning prompts', () => {
@@ -457,14 +278,30 @@ describe('reasoning reroute', () => {
     expect(decision.complexity).toBe('simple');
   });
 
-  it('routes systemic cross-repo refactors into H2 coordinated execution', () => {
+  it('routes systemic cross-repo refactors to H0 with complexity hints for Scout', () => {
     const decision = buildFallbackRoutingDecision(
       'Refactor the monorepo architecture across packages and coordinate the whole repo migration.',
     );
 
     expect(decision.complexity).toBe('systemic');
-    expect(decision.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    // FEATURE_061: Pre-Scout harness is always H0; Scout decides actual harness.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
+    // The surviving advisory hint is the complexity signal for Scout (the
+    // misleading "binding routing decision" note was removed in ADR-043).
+    expect(decision.routingNotes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Complexity hint: systemic'),
+      ]),
+    );
   });
+
+  // NOTE: the former AMA-controller advisory tests (buildAmaControllerDecision
+  // profile/tactics/fanout) were removed in ADR-043 — the advisory became
+  // write-only-unread once the overlay was retired and the whole chain was
+  // deleted. The live successors are covered elsewhere: child fan-out by the
+  // dispatch_child_task tool tests + validateWriteBundles (child-executor),
+  // verification by the Sidecar Verifier gate tests, and approach selection by
+  // the Worker/SA EXECUTION GUIDANCE prompt tests.
 
   it('lets repo-intelligence signals raise routing complexity and planning bias', () => {
     const decision = buildFallbackRoutingDecision(
@@ -495,7 +332,8 @@ describe('reasoning reroute', () => {
     );
 
     expect(decision.complexity).toBe('complex');
-    expect(decision.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    // FEATURE_061: Pre-Scout harness is always H0; Scout decides actual harness.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.recommendedMode).toBe('planning');
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
@@ -505,7 +343,7 @@ describe('reasoning reroute', () => {
     );
   });
 
-  it('downgrades H2 routing to H1 on lossy bridge providers and records the reason', () => {
+  it('starts at H0 even on lossy bridge providers because Scout decides harness post-analysis', () => {
     const providerPolicy = evaluateProviderPolicy({
       providerName: 'gemini-cli',
       capabilityProfile: CLI_BRIDGE_PROFILE,
@@ -519,10 +357,11 @@ describe('reasoning reroute', () => {
       providerPolicy,
     );
 
-    expect(decision.harnessProfile).toBe('H1_EXECUTE_EVAL');
+    // FEATURE_061: Pre-Scout harness is always H0; Scout decides actual harness.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Downgraded from H2 to H1'),
+        expect.stringContaining('Complexity hint: systemic'),
       ]),
     );
   });
@@ -565,7 +404,7 @@ describe('reasoning reroute', () => {
     });
   });
 
-  it('includes repo-intelligence signals in the router prompt', async () => {
+  it('incorporates repo-intelligence signals into heuristic routing without LLM call (FEATURE_061)', async () => {
     const provider = new CapturingProvider(JSON.stringify({
       primaryTask: 'edit',
       confidence: 0.86,
@@ -575,7 +414,7 @@ describe('reasoning reroute', () => {
       reason: 'Implementation request in a cross-module area.',
     }));
 
-    await createReasoningPlan(
+    const plan = await createReasoningPlan(
       {
         provider: 'openai',
         reasoningMode: 'auto',
@@ -606,11 +445,14 @@ describe('reasoning reroute', () => {
       },
     );
 
-    const routerPrompt = String(provider.lastMessages[0]?.content ?? '');
-    expect(routerPrompt).toContain('repo intelligence: changedFiles=6');
-    expect(routerPrompt).toContain('crossModule=yes');
-    expect(routerPrompt).toContain('active module: packages/app');
-    expect(routerPrompt).toContain('repo risk hint: Changed scope crosses package boundaries.');
+    // Repo signals should influence the heuristic routing decision
+    expect(plan.decision.complexity).toBe('complex');
+    expect(plan.decision.routingNotes).toContain(
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
+    );
+
+    // LLM router should NOT have been called
+    expect(provider.lastMessages).toHaveLength(0);
   });
 
   it('keeps massive reviews on the direct path and records their scale for evidence strategy', () => {
@@ -646,11 +488,10 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.needsIndependentQA).toBe(false);
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
     expect(decision.reviewScale).toBe('massive');
   });
 
-  it('does not let prompt-declared massive review scope force H2', () => {
+  it('classifies a massive review as a read-only surface (no escalation tier exists)', () => {
     const decision = buildFallbackRoutingDecision(
       'Please review this 50 file, 7000 lines change set and call out merge blockers.',
     );
@@ -658,11 +499,10 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.mutationSurface).toBe('read-only');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
     expect(decision.reviewScale).toBe('massive');
   });
 
-  it('allows read-only review to opt into H1 only when the user explicitly asks for a second pass', () => {
+  it('allows read-only review to signal explicit-check assurance while keeping H0 for Scout to decide', () => {
     const decision = buildFallbackRoutingDecision(
       'Please review this change set and do a second pass to double-check the important findings.',
     );
@@ -670,30 +510,30 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    expect(decision.needsIndependentQA).toBe(true);
-    expect(decision.harnessProfile).toBe('H1_EXECUTE_EVAL');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
   });
 
-  it('keeps docs-only work out of H2 even when the request is broad', () => {
+  it('classifies broad docs work as a docs-only surface', () => {
     const decision = buildFallbackRoutingDecision(
       'Write the PRD, ADR, and design docs for this feature and keep the docs consistent across the repo.',
     );
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
-  it('lets docs-only work opt into H1 when the user explicitly asks for a second pass', () => {
+  it('lets docs-only work signal explicit-check assurance while keeping H0 for Scout to decide', () => {
     const decision = buildFallbackRoutingDecision(
       'Write the PRD and ADR for this feature, then do a second pass to double-check the docs for gaps.',
     );
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    expect(decision.harnessProfile).toBe('H1_EXECUTE_EVAL');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
   });
 
   it('routes pure Chinese review prompts to read-only H0 by default', () => {
@@ -702,7 +542,6 @@ describe('reasoning reroute', () => {
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
   it('routes pure Chinese docs prompts to docs-only H0 by default', () => {
@@ -710,17 +549,17 @@ describe('reasoning reroute', () => {
 
     expect(decision.mutationSurface).toBe('docs-only');
     expect(decision.harnessProfile).toBe('H0_DIRECT');
-    expect(decision.topologyCeiling).toBe('H0_DIRECT');
   });
 
-  it('lets pure Chinese review prompts opt into H1 only with explicit stronger-check language', () => {
+  it('lets pure Chinese review prompts signal explicit-check while keeping H0 for Scout to decide', () => {
     const decision = buildFallbackRoutingDecision('请评审当前代码改动，并再检查一遍关键结论。');
 
     expect(decision.primaryTask).toBe('review');
     expect(decision.mutationSurface).toBe('read-only');
     expect(decision.assuranceIntent).toBe('explicit-check');
-    expect(decision.harnessProfile).toBe('H1_EXECUTE_EVAL');
-    expect(decision.topologyCeiling).toBe('H1_EXECUTE_EVAL');
+    // Harness tier retired (ADR-043): the harness is always H0_DIRECT; the
+    // explicit-check signal stays on `assuranceIntent` for downstream use.
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
   });
 
   it('prefers explicit review language when review and planning signals are tied', () => {
@@ -754,7 +593,7 @@ describe('reasoning reroute', () => {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
     });
   });
 
@@ -764,16 +603,17 @@ describe('reasoning reroute', () => {
       actionability: 'non_actionable',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: false,
     });
   });
 
-  it('routes pure review prompts to checked-direct without model routing', () => {
+  // FEATURE_067: All actionable tasks now go through model router for accurate harness assessment.
+  it('routes pure review prompts to checked-direct with model routing', () => {
     expect(inferIntentGate('Please review the current changes for merge blockers.')).toMatchObject({
       taskFamily: 'review',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -782,7 +622,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'review',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -791,7 +631,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'planning',
       executionPattern: 'coordinated',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -800,7 +640,7 @@ describe('reasoning reroute', () => {
       taskFamily: 'investigation',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -809,17 +649,18 @@ describe('reasoning reroute', () => {
       taskFamily: 'implementation',
       executionPattern: 'checked-direct',
       shouldUseRepoSignals: true,
-      shouldUseModelRouter: true,
+      requiresRoutingHeuristics: true,
     });
   });
 
-  it('keeps ambiguous prompts on the direct path', () => {
+  // FEATURE_067: Ambiguous tasks now go through model router instead of defaulting to H0.
+  it('routes ambiguous prompts through model router', () => {
     expect(inferIntentGate('Thoughts on this?')).toMatchObject({
       taskFamily: 'ambiguous',
       actionability: 'ambiguous',
       executionPattern: 'direct',
       shouldUseRepoSignals: false,
-      shouldUseModelRouter: false,
+      requiresRoutingHeuristics: true,
     });
   });
 
@@ -829,54 +670,70 @@ describe('reasoning reroute', () => {
     ).toBe('unknown');
   });
 
-  it('can spend one depth escalation without consuming task reroute capability', async () => {
-    const provider = new ThrowingProvider();
-
-    const escalationPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      'This is unclear and I may need more context before making a final call.',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: false,
-      },
+  it('keeps API documentation-only edits on the docs-only path when code changes are forbidden', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Update API docs and README only. Do not change code.',
     );
 
-    expect(escalationPlan).not.toBeNull();
-    expect(escalationPlan?.kind).toBe('depth-escalation');
-    expect(escalationPlan?.decision.primaryTask).toBe('review');
-    expect(escalationPlan?.decision.recommendedThinkingDepth).toBe('medium');
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('docs-only');
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
   });
 
-  it('can reroute from tool evidence even when the assistant text is empty', async () => {
-    const provider = new ThrowingProvider();
-
-    const reroutedPlan = await maybeCreateAutoReroutePlan(
-      provider,
-      {
-        provider: 'openai',
-        reasoningMode: 'auto',
-      },
-      'Review this PR for merge blockers.',
-      basePlan,
-      '',
-      {
-        allowDepthEscalation: true,
-        allowTaskReroute: true,
-      },
-      {
-        toolEvidence: '- bash: Command: npm test Exit: 1 [stderr] failing test stack trace',
-      },
+  it('classifies docs-scoped backend/module rewrites as docs-only surface', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Rewrite the ADR and module documentation only. Do not change code.',
     );
 
-    expect(reroutedPlan).not.toBeNull();
-    expect(reroutedPlan?.kind).toBe('task-reroute');
-    expect(reroutedPlan?.decision.primaryTask).toBe('bugfix');
-    expect(reroutedPlan?.decision.recommendedMode).toBe('investigation');
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('docs-only');
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
+  });
+
+  it('still treats mixed implementation plus docs requests as code work', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Update the backend service implementation and refresh the API docs.',
+    );
+
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('code');
+  });
+
+  it('keeps technical documentation edits on docs-only even without an explicit no-code suffix', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Update backend service docs only.',
+    );
+
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('docs-only');
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
+  });
+
+  it('treats migration guides with explicit no-code constraints as docs-only work', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Only update the migration guide; do not run migrations or change code.',
+    );
+
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('docs-only');
+    expect(decision.harnessProfile).toBe('H0_DIRECT');
+    // A "migration guide" with an explicit no-code constraint stays docs-only
+    // (the complexity signal lives on decision.complexity; there is no longer a
+    // harness ceiling that it lifts — ADR-043).
+  });
+
+  it('does not let code-comment edits hide behind README-only phrasing', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Update code comments and README only.',
+    );
+
+    expect(decision.primaryTask).toBe('edit');
+    expect(decision.mutationSurface).toBe('code');
   });
 });
+
+// NOTE: the former "Phase C: AMA behavior guidance" block tested the
+// [AMA Behavior] text emitted by buildPromptOverlay, which was retired in
+// ADR-043 (the Worker self-judges from static EXECUTION GUIDANCE). The live
+// fanout.admissible signal on buildAmaControllerDecision is covered by the
+// "selects managed AMA profile" / "does not expose child-fanout" tests above.

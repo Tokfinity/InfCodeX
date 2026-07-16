@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
+
+import { getAgentConfigPath } from '@kodax-ai/agent';
+
 import type { KodaXToolExecutionContext } from '../types.js';
 
 export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2000;
@@ -9,8 +11,6 @@ export const DEFAULT_GREP_LINE_MAX_CHARS = 500;
 export const READ_DEFAULT_LIMIT = 2000;
 export const READ_PREFLIGHT_SIZE_BYTES = 256 * 1024;
 export const READ_MAX_LINE_CHARS = 2000;
-export const READ_TRUNCATED_LINE_SUFFIX = `... [line truncated to ${READ_MAX_LINE_CHARS} chars]`;
-export const BASH_CAPTURE_LIMIT_BYTES = 512 * 1024;
 export const TOOL_OUTPUT_DIR_ENV = 'KODAX_TOOL_OUTPUT_DIR';
 
 export interface TruncationOptions {
@@ -234,8 +234,8 @@ export function truncateLine(
   };
 }
 
-function resolveToolOutputDir(): string {
-  return process.env[TOOL_OUTPUT_DIR_ENV] || path.join(os.homedir(), '.kodax', 'tool-results');
+export function resolveToolOutputDir(): string {
+  return process.env[TOOL_OUTPUT_DIR_ENV] || getAgentConfigPath('tool-results');
 }
 
 function sanitizePathSegment(value: string): string {
@@ -259,30 +259,16 @@ export async function persistToolOutput(
   await fs.mkdir(outputDir, { recursive: true });
   await fs.writeFile(filePath, content, 'utf-8');
 
+  // Recovery artifacts are canonical evidence referenced by conversation
+  // history. Age alone cannot prove that a live/resumable session no longer
+  // needs them, so automatic TTL deletion is intentionally disabled. The
+  // explicit cleanup helper remains available for operator-controlled sweeps.
+
   return filePath;
 }
 
 export async function formatDiffPreview({
   diff,
-  toolName,
-  filePath,
-  ctx,
-  maxLines = 200,
-  maxBytes = 24 * 1024,
 }: DiffPreviewOptions): Promise<string> {
-  const preview = truncateHead(diff, { maxLines, maxBytes });
-
-  if (!preview.truncated) {
-    return diff;
-  }
-
-  let outputPath: string | undefined;
-  try {
-    outputPath = await persistToolOutput(`${toolName}-diff`, diff, ctx);
-  } catch {
-    outputPath = undefined;
-  }
-
-  const saved = outputPath ? ` Full diff saved to: ${outputPath}.` : '';
-  return `${preview.content}\n\n[Diff preview truncated: showing ${preview.outputLines} of ${preview.totalLines} lines (${formatSize(preview.outputBytes)} of ${formatSize(preview.totalBytes)}).${saved} Use read on ${filePath} to inspect the current file.]`;
+  return diff;
 }

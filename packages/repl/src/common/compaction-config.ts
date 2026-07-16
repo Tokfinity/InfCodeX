@@ -1,14 +1,12 @@
 /**
- * @kodax/repl Compaction Config
+ * @kodax-ai/repl Compaction Config
  *
  * 压缩配置加载 - 仅从用户级配置文件加载
  */
 
 import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
-import type { CompactionConfig } from '@kodax/agent';
-
+import { getAgentConfigPath } from '@kodax-ai/agent';
+import type { CompactionConfig } from '@kodax-ai/agent';
 /**
  * 默认压缩配置
  */
@@ -28,7 +26,7 @@ const DEFAULT_CONFIG: CompactionConfig = {
 export async function loadCompactionConfig(
   _projectRoot?: string
 ): Promise<CompactionConfig> {
-  const userConfigPath = join(homedir(), '.kodax', 'config.json');
+  const userConfigPath = getAgentConfigPath('config.json');
   try {
     const userConfig = await readConfigFile(userConfigPath);
     if (userConfig?.compaction) {

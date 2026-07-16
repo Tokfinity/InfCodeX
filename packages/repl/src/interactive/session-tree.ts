@@ -1,4 +1,4 @@
-import type { KodaXSessionTreeNode } from '@kodax/coding';
+import type { KodaXSessionTreeNode } from '@kodax-ai/agent';
 
 function summarizeEntry(entry: KodaXSessionTreeNode['entry']): string {
   switch (entry.type) {
@@ -13,6 +13,8 @@ function summarizeEntry(entry: KodaXSessionTreeNode['entry']): string {
       return `compaction: ${entry.summary.slice(0, 48)}${entry.summary.length > 48 ? '...' : ''}`;
     case 'branch_summary':
       return `branch: ${entry.summary.slice(0, 48)}${entry.summary.length > 48 ? '...' : ''}`;
+    case 'archive_marker':
+      return `archived: ${entry.summary.slice(0, 48)}${entry.summary.length > 48 ? '...' : ''}`;
     default: {
       const exhaustiveCheck: never = entry;
       return exhaustiveCheck;

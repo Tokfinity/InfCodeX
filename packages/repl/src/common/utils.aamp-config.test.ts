@@ -26,19 +26,17 @@ describe('AAMP config normalization', () => {
       },
     }));
 
-    expect(loadConfig()).toEqual({
-      aamp: {
-        profiles: {
-          mailboxA: {
-            email: 'agent-a@example.com',
-            mailboxToken: 'token-a',
-            baseUrl: 'https://meshmail.ai/jmap',
-            smtpHost: 'meshmail.ai',
-            smtpPort: 2525,
-            smtpPassword: 'secret-a',
-            allowInsecureTls: true,
-            logLevel: 'debug',
-          },
+    expect(loadConfig().aamp).toEqual({
+      profiles: {
+        mailboxA: {
+          email: 'agent-a@example.com',
+          mailboxToken: 'token-a',
+          baseUrl: 'https://meshmail.ai/jmap',
+          smtpHost: 'meshmail.ai',
+          smtpPort: 2525,
+          smtpPassword: 'secret-a',
+          allowInsecureTls: true,
+          logLevel: 'debug',
         },
       },
     });
@@ -62,16 +60,14 @@ describe('AAMP config normalization', () => {
       },
     }));
 
-    expect(loadConfig()).toEqual({
-      aamp: {
-        profiles: {
-          mailboxA: {
-            email: 'agent-a@example.com',
-            mailboxToken: 'canonical-token',
-            baseUrl: 'https://canonical.meshmail.ai',
-            smtpHost: 'meshmail.ai',
-            smtpPassword: 'secret-a',
-          },
+    expect(loadConfig().aamp).toEqual({
+      profiles: {
+        mailboxA: {
+          email: 'agent-a@example.com',
+          mailboxToken: 'canonical-token',
+          baseUrl: 'https://canonical.meshmail.ai',
+          smtpHost: 'meshmail.ai',
+          smtpPassword: 'secret-a',
         },
       },
     });
@@ -85,10 +81,8 @@ describe('AAMP config normalization', () => {
       },
     }));
 
-    expect(loadConfig()).toEqual({
-      aamp: {
-        _invalidProfiles: true,
-      },
+    expect(loadConfig().aamp).toEqual({
+      _invalidProfiles: true,
     });
   });
 });
