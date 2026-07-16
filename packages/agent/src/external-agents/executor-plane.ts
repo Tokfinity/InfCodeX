@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { serialize } from 'node:v8';
 
 import { createMemoryAgentExecutorPlaneStore } from './memory-store.js';
 import type {
@@ -41,6 +42,8 @@ import type {
 } from './types.js';
 
 const TERMINAL_STATES = new Set(['completed', 'failed', 'canceled', 'rejected']);
+const DEFAULT_CLOSE_TIMEOUT_MS = 30_000;
+const REGISTRATION_REVISION_HISTORY_LIMIT = 4_096;
 const CAPABILITY_KEYS = [
   'streaming',
   'durableTasks',
@@ -81,6 +84,7 @@ interface PlaneRuntimeOptions {
   readonly now: () => Date;
   readonly createTaskId: () => string;
   readonly createIdempotencyKey: () => string;
+  readonly closeTimeoutMs: number;
 }
 
 interface EvaluationResult {
@@ -384,10 +388,17 @@ function normalizeComparableValue(value: unknown): unknown {
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return value;
   const normalized: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
+  for (const [key, entry] of Object.entries(value).sort(([left], [right]) => (
+    left < right ? -1 : left > right ? 1 : 0
+  ))) {
     if (entry !== undefined) normalized[key] = normalizeComparableValue(entry);
   }
   return normalized;
+}
+
+function executionRegistrationFingerprint(registration: ExternalAgentRegistration): string {
+  const serialized = serialize(normalizeComparableValue(taskRouteRegistration(registration)));
+  return createHash('sha256').update(serialized).digest('hex');
 }
 
 function taskRouteRegistration(
@@ -521,7 +532,7 @@ function eventType(event: AgentExecutorEvent): AgentTaskEvent['type'] {
 
 class AgentExecutorPlaneRuntime {
   readonly #registrations = new Map<string, ExternalAgentRegistration>();
-  readonly #registrationRevisionHistory = new Map<string, ExternalAgentRegistration>();
+  readonly #registrationRevisionHistory = new Map<string, string>();
   readonly #taskRegistrationSnapshots = new Map<string, ExternalAgentRegistration>();
   readonly #tasks = new Map<string, AgentTaskSnapshot>();
   readonly #durableTaskStates = new Map<string, AgentTaskSnapshot['state']>();
@@ -642,7 +653,7 @@ class AgentExecutorPlaneRuntime {
     if (factory && factory.protocol !== candidate.protocol) {
       throw new Error(`Executor ${candidate.executorId} uses ${factory.protocol}, not ${candidate.protocol}.`);
     }
-    return this.withRegistrationMutation(async () => {
+    const summary = await this.withRegistrationMutation(async () => {
       const current = this.#registrations.get(candidate.agentId);
       if (!registrationMutationMatches(current, mutationOptions)) {
         throw new ExternalAgentRegistrationConflictError(candidate.agentId);
@@ -658,9 +669,10 @@ class AgentExecutorPlaneRuntime {
       await this.persistRegistrations(next);
       this.#registrations.set(candidate.agentId, clone(candidate));
       this.rememberExecutionRevision(candidate);
-      await this.disposeUnusedExecutors();
       return summaryFromRegistration(candidate);
     });
+    await this.disposeUnusedExecutors();
+    return summary;
   }
 
   private async startTaskSerialized(input: AgentTaskStartInput): Promise<AgentTaskSnapshot> {
@@ -684,16 +696,17 @@ class AgentExecutorPlaneRuntime {
     options?: AgentRegistrationMutationOptions,
   ): Promise<boolean> {
     const mutationOptions = options ? clone(options) : undefined;
-    return this.withRegistrationMutation(async () => {
+    const removed = await this.withRegistrationMutation(async () => {
       const current = this.#registrations.get(agentId);
       if (!current || !registrationMutationMatches(current, mutationOptions)) return false;
       const next = new Map(this.#registrations);
       next.delete(agentId);
       await this.persistRegistrations(next);
       this.#registrations.delete(agentId);
-      await this.disposeUnusedExecutors();
       return true;
     });
+    if (removed) await this.disposeUnusedExecutors();
+    return removed;
   }
 
   async setRegistrationEnabled(
@@ -788,8 +801,24 @@ class AgentExecutorPlaneRuntime {
 
   close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
-    this.#closePromise = this.closeRuntime();
+    this.#closePromise = this.closeWithinDeadline();
     return this.#closePromise;
+  }
+
+  private async closeWithinDeadline(): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(
+          `Agent executor plane close timed out after ${this.options.closeTimeoutMs} ms.`,
+        ));
+      }, this.options.closeTimeoutMs);
+    });
+    try {
+      await Promise.race([this.closeRuntime(), timedOut]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private async closeRuntime(): Promise<void> {
@@ -1895,17 +1924,26 @@ class AgentExecutorPlaneRuntime {
       registration.agentId,
       registration.configurationRevision,
     ));
-    if (current && !sameExecutionRegistration(current, registration)) {
+    if (current !== undefined && current !== executionRegistrationFingerprint(registration)) {
       throw new Error('External agent configuration revision was reused for different execution content.');
     }
   }
 
   private rememberExecutionRevision(registration: ExternalAgentRegistration): void {
-    this.assertExecutionRevisionAvailable(registration);
     const key = taskRegistrationKey(registration.agentId, registration.configurationRevision);
-    if (!this.#registrationRevisionHistory.has(key)) {
-      this.#registrationRevisionHistory.set(key, clone(registration));
+    const fingerprint = executionRegistrationFingerprint(registration);
+    const current = this.#registrationRevisionHistory.get(key);
+    if (current !== undefined) {
+      if (current !== fingerprint) {
+        throw new Error('External agent configuration revision was reused for different execution content.');
+      }
+      return;
     }
+    if (this.#registrationRevisionHistory.size >= REGISTRATION_REVISION_HISTORY_LIMIT) {
+      const oldest = this.#registrationRevisionHistory.keys().next().value;
+      if (oldest !== undefined) this.#registrationRevisionHistory.delete(oldest);
+    }
+    this.#registrationRevisionHistory.set(key, fingerprint);
   }
 
   private async persistRegistrations(
@@ -1997,6 +2035,10 @@ function defaultIdempotencyKey(): string {
 export async function createAgentExecutorPlane(
   options: CreateAgentExecutorPlaneOptions,
 ): Promise<AgentExecutorPlane> {
+  const closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+  if (!Number.isFinite(closeTimeoutMs) || closeTimeoutMs <= 0) {
+    throw new Error('Agent executor plane closeTimeoutMs must be a positive finite number.');
+  }
   const runtime = new AgentExecutorPlaneRuntime({
     factories: buildFactoryMap(options.factories),
     policy: options.policy,
@@ -2007,6 +2049,7 @@ export async function createAgentExecutorPlane(
     now: options.now ?? (() => new Date()),
     createTaskId: options.createTaskId ?? defaultTaskId,
     createIdempotencyKey: options.createIdempotencyKey ?? defaultIdempotencyKey,
+    closeTimeoutMs,
   });
   await runtime.initialize();
   return {

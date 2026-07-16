@@ -32,6 +32,7 @@ Thumbs.db
 .agent/
 .repointel/
 .claude/
+.electron-smoke/
 
 # Logs
 *.log

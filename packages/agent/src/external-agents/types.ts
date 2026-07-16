@@ -492,4 +492,6 @@ export interface CreateAgentExecutorPlaneOptions {
   readonly now?: () => Date;
   readonly createTaskId?: () => string;
   readonly createIdempotencyKey?: () => string;
+  /** Overall bound for draining admitted work and disposing executors during close. */
+  readonly closeTimeoutMs?: number;
 }

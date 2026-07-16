@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -20,6 +20,7 @@ import {
   classifyRuntimeDaemonHealth,
   resolveRuntimeDaemonEndpointScope,
   resolveRuntimeDaemonPathsFromConfigHome,
+  type RuntimeDaemonHealthObservation,
   type RuntimeDaemonPaths,
 } from './state.js';
 import {
@@ -51,6 +52,23 @@ export interface RuntimeDaemonProcessLease {
   close(): Promise<void>;
   shutdown(): Promise<void>;
 }
+
+export interface RuntimeDaemonStartupExit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+}
+
+export interface RuntimeDaemonStartupProcess {
+  readonly pid: number | undefined;
+  readonly exit: Promise<RuntimeDaemonStartupExit>;
+  unref(): void;
+  terminate(): Promise<void>;
+}
+
+type RuntimeDaemonHealthObserver = (
+  paths: RuntimeDaemonPaths,
+  options?: RuntimeDaemonHealthCheckOptions,
+) => Promise<RuntimeDaemonHealthObservation>;
 
 export async function acquireRuntimeDaemonProcessLease(
   options: RuntimeDaemonProcessLeaseOptions,
@@ -86,7 +104,7 @@ export async function acquireRuntimeDaemonProcessLease(
     sessionsDir: options.sessionsDir,
     permissionTimeoutMs: options.permissionTimeoutMs,
   });
-  const observation = await waitForHealthyDaemon(paths, options);
+  const observation = await waitForHealthyDaemonStartup(paths, options, child);
   const endpoint = runtimeDaemonEndpointFromState(observation.state);
   return connectProcessLease(paths, endpoint, observation.state.pid === child.pid, options);
 }
@@ -118,24 +136,85 @@ async function connectProcessLease(
   };
 }
 
-async function waitForHealthyDaemon(
+export async function waitForHealthyDaemonStartup(
   paths: RuntimeDaemonPaths,
   options: RuntimeDaemonProcessLeaseOptions,
-) {
+  child: RuntimeDaemonStartupProcess,
+  observe: RuntimeDaemonHealthObserver = observeRuntimeDaemonHealth,
+): Promise<RuntimeDaemonHealthObservation & { readonly state: NonNullable<RuntimeDaemonHealthObservation['state']> }> {
   const deadline = Date.now() + (options.startupTimeoutMs ?? 60_000);
-  while (Date.now() <= deadline) {
-    const observation = await observeRuntimeDaemonHealth(paths, options.healthCheck);
-    const health = classifyRuntimeDaemonHealth(observation);
-    if (health === 'healthy' && observation.state) return { ...observation, state: observation.state };
-    if (health === 'mismatch') {
-      throw new Error('Runtime daemon endpoint identity does not match its persisted owner state.');
+  try {
+    while (true) {
+      const observation = await observeStartupHealth(paths, options, child, observe);
+      const health = classifyRuntimeDaemonHealth(observation);
+      if (health === 'healthy' && observation.state) {
+        if (observation.state.pid === child.pid) child.unref();
+        else await child.terminate();
+        return { ...observation, state: observation.state };
+      }
+      if (health === 'mismatch') {
+        throw new Error('Runtime daemon endpoint identity does not match its persisted owner state.');
+      }
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw runtimeDaemonStartupTimeout(paths);
+      await waitForStartupPoll(
+        Math.min(Math.max(1, options.pollIntervalMs ?? 100), remainingMs),
+        child,
+      );
     }
-    await delay(options.pollIntervalMs ?? 100);
+  } catch (error: unknown) {
+    try {
+      await child.terminate();
+    } catch (terminationError: unknown) {
+      throw new AggregateError(
+        [error, terminationError],
+        'Runtime daemon startup failed and its child process could not be reclaimed.',
+      );
+    }
+    throw error;
   }
+}
+
+async function observeStartupHealth(
+  paths: RuntimeDaemonPaths,
+  options: RuntimeDaemonProcessLeaseOptions,
+  child: RuntimeDaemonStartupProcess,
+  observe: RuntimeDaemonHealthObserver,
+): Promise<RuntimeDaemonHealthObservation> {
+  const outcome = await Promise.race([
+    observe(paths, options.healthCheck).then((observation) => ({
+      kind: 'health' as const,
+      observation,
+    })),
+    child.exit.then((exit) => ({ kind: 'exit' as const, exit })),
+  ]);
+  if (outcome.kind === 'exit') throw runtimeDaemonExitedEarly(outcome.exit);
+  return outcome.observation;
+}
+
+async function waitForStartupPoll(
+  pollIntervalMs: number,
+  child: RuntimeDaemonStartupProcess,
+): Promise<void> {
+  const outcome = await Promise.race([
+    delay(pollIntervalMs).then(() => undefined),
+    child.exit,
+  ]);
+  if (outcome !== undefined) throw runtimeDaemonExitedEarly(outcome);
+}
+
+function runtimeDaemonExitedEarly(exit: RuntimeDaemonStartupExit): Error {
+  const status = exit.signal !== null
+    ? `signal ${exit.signal}`
+    : `code ${exit.code ?? 'unknown'}`;
+  return new Error(`Runtime daemon child exited before becoming healthy (${status}).`);
+}
+
+function runtimeDaemonStartupTimeout(paths: RuntimeDaemonPaths): Error {
   const electronHint = process.versions.electron === undefined
     ? ''
     : ' Packaged Electron auto-start requires the RunAsNode fuse to remain enabled.';
-  throw new Error(
+  return new Error(
     `Timed out waiting for runtime daemon profile "${paths.profile}" to become ready.${electronHint}`,
   );
 }
@@ -148,7 +227,7 @@ async function spawnRuntimeDaemonServeProcess(input: {
   readonly defaultModel?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
-}): Promise<{ readonly pid: number | undefined }> {
+}): Promise<RuntimeDaemonStartupProcess> {
   const entry = resolveDaemonCliEntry();
   assertRuntimeDaemonCliEntryAvailable(entry);
   const args = [
@@ -184,12 +263,53 @@ async function spawnRuntimeDaemonServeProcess(input: {
     windowsHide: true,
     env: launch.env,
   });
+  const exit = new Promise<RuntimeDaemonStartupExit>((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
   });
-  child.unref();
-  return { pid: child.pid };
+  return createRuntimeDaemonStartupProcess(child, exit);
+}
+
+function createRuntimeDaemonStartupProcess(
+  child: ChildProcess,
+  exit: Promise<RuntimeDaemonStartupExit>,
+): RuntimeDaemonStartupProcess {
+  return {
+    pid: child.pid,
+    exit,
+    unref() {
+      child.unref();
+    },
+    async terminate() {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill();
+      if (await didExitWithin(exit, 1_000)) return;
+      child.kill('SIGKILL');
+      if (!await didExitWithin(exit, 1_000)) {
+        throw new Error(`Runtime daemon child ${child.pid ?? 'unknown'} did not exit after termination.`);
+      }
+    },
+  };
+}
+
+async function didExitWithin(
+  exit: Promise<RuntimeDaemonStartupExit>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      exit.then(() => true),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 export function assertRuntimeDaemonCliEntryAvailable(entry: string | undefined): void {

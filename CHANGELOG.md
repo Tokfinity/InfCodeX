@@ -16,6 +16,22 @@ All notable changes to this project will be documented in this file.
   reasoning, media, cost-tracking, and opt-in real-wire regressions cover all
   three subscription routes.
 
+### Fixed
+
+- **Bounded External Agent and daemon shutdown/startup.** Executor-plane close
+  now has a 30-second default upper bound (overrideable with `closeTimeoutMs`),
+  obsolete-executor cleanup runs outside the serialized registration mutation
+  lane, and revision tombstones are SHA-256 fingerprints capped at 4,096
+  entries. Current registrations and task snapshots continue to enforce exact
+  revision immutability after older, unreferenced tombstones age out. Daemon
+  auto-start now races health checks against the spawned child's exit, keeps
+  the child referenced until readiness, and terminates it on early exit,
+  timeout, identity mismatch, or when another daemon wins ownership.
+- **Faster packaged-Electron gates.** Release jobs build once and reuse that
+  output for both the Windows Electron smoke and binary packaging. CI and
+  release jobs cache the version-pinned Electron smoke toolchain, whose local
+  directory is now explicitly ignored.
+
 ## [0.7.71] - 2026-07-16
 
 ### Added
@@ -29,6 +45,17 @@ All notable changes to this project will be documented in this file.
   enable|disable` lets operators keep many configured third-party Agents while
   controlling which ones admit new orchestration; in-flight tasks are not
   cancelled.
+
+### Changed
+
+- **External Agent SDK migration notes.** `AgentRegistrationService` now
+  requires `setEnabled`; custom implementations must add the same
+  revision/owner-conditional enablement operation. `executorConfig` and
+  executor-reference `metadata` are `AgentJsonObject` values and reject class
+  instances, accessors, circular references, and other non-JSON-safe data at
+  runtime. SDK daemon auto-start without an explicit `homeDir` now follows the
+  resolved `KODAX_HOME`; embedders that intentionally need the OS-home endpoint
+  must pass `homeDir`, while custom endpoints remain attach-only.
 
 ### Fixed
 

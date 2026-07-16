@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-16_
+_Last Updated: 2026-07-17_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-16_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.72 | 2026-07-17 | 2026-07-17 |
 | 168 | High | Resolved | A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 167 | High | Resolved | A2A OAuth and hot-activation closure could leak credentials or mutate stale registrations | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 166 | High | Resolved | Electron daemon bootstrap mode leaks into user child processes | v0.7.71 RC | v0.7.71 | 2026-07-16 | 2026-07-16 |
@@ -78,6 +79,112 @@ _Last Updated: 2026-07-16_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 169: Executor shutdown and daemon auto-start could wait indefinitely or leak startup children
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.67-v0.7.71
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-17
+- **Resolved**: 2026-07-17
+
+#### Original Problem
+
+A post-release review found that `AgentExecutorPlane.close()` waited without an
+upper bound for admitted operations, custom executor disposal, and event-pump
+exit. A custom executor returning a never-settling promise could therefore hang
+host shutdown indefinitely. Registration upsert/removal also awaited obsolete
+executor disposal while holding the global registration mutation lane, so one
+slow disposer could freeze unrelated registration changes. The in-memory map
+of every seen `(agentId, configurationRevision)` retained complete cloned
+registrations forever in a long-running daemon.
+
+Runtime daemon auto-start polled health for up to 60 seconds without observing
+the spawned child's exit. An immediately failing child therefore produced a
+full timeout, while a child still running after timeout or an ownership race
+was detached without deterministic reclamation. The same review identified
+duplicate release builds and uncached Electron smoke dependencies. Its claim
+that `.electron-smoke/` currently appeared as hundreds of megabytes of
+untracked Git content was not reproducible because the contents were already
+covered by `node_modules/`, but the toolchain root was not explicitly ignored.
+
+#### Context
+
+The executor plane must still drain normal short operations and wait for event
+iterators; the fix cannot turn close into immediate best-effort disposal.
+Revision immutability must remain exact for the current registration and every
+route retained by a non-terminal durable task. Daemon cleanup must target only
+the child spawned by the current acquisition attempt, never kill a healthy
+unrelated owner, and must preserve the intended long-lived detached daemon once
+that exact child publishes healthy state.
+
+The review's three SDK compatibility items were intentional v0.7.71
+strictness, not regressions: `AgentRegistrationService.setEnabled` is required,
+executor configuration/reference metadata is JSON-safe, and omitted SDK
+`homeDir` follows `KODAX_HOME`. They required explicit migration notes rather
+than behavioral rollback.
+
+#### Root Cause
+
+Close implemented complete drainage but had no deadline around the aggregate
+operation. Registration mutation and resource cleanup shared one async critical
+section. Revision-reuse protection stored full registrations with no retention
+policy. Daemon spawning discarded the live child handle immediately after the
+`spawn` event and waited only on filesystem/socket health observations.
+Release jobs composed two scripts that each performed the full TypeScript and
+bundle build, and Electron's version-pinned toolchain was reinstalled on every
+Windows job.
+
+#### Resolution
+
+Executor close now uses one idempotent overall deadline with a 30-second default
+and optional positive finite `closeTimeoutMs`; timeout rejects visibly while
+the already-admitted cleanup may still finish in the background. Registration
+persistence/publication remains serialized, but obsolete-executor collection
+is awaited only after releasing that lane. Revision history stores canonical
+SHA-256 execution fingerprints and retains at most 4,096 recent tombstones;
+current registration and durable task-snapshot checks remain independent and
+exact even after an old unreferenced tombstone is evicted.
+
+Daemon auto-start retains a process handle and races every health poll/delay
+against child exit. Early exit reports its code or signal immediately. Timeout,
+identity mismatch, and other startup failure terminate the exact spawned child,
+escalate to forced termination if needed, and surface an aggregate cleanup
+error rather than silently orphaning it. The child is unreferenced only after
+its own PID publishes healthy state; if another daemon wins, the spawned child
+is reclaimed before attaching to the winner.
+
+Release jobs now run `npm run build` once, execute the Electron smoke directly,
+and package with `--skip-tsc`. CI and release cache the exact Electron 42.5.0 /
+electron-builder 25.1.8 toolchain, and `.electron-smoke/` is explicitly ignored.
+The v0.7.71 changelog now calls out all three intentional SDK compatibility
+changes and their migration paths.
+
+#### Files Changed
+
+- `packages/agent/src/external-agents/executor-plane.ts`
+- `packages/agent/src/external-agents/executor-plane.test.ts`
+- `packages/agent/src/external-agents/types.ts`
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+- `tests/release-workflow.test.ts`
+- `.gitignore`
+- `CHANGELOG.md`
+
+#### Tests Added / Verification Coverage
+
+- Executor regressions prove the close deadline, registration-lane release
+  before slow disposal, bounded history eviction, and retained recent revision
+  reuse rejection while preserving the existing full-drain tests.
+- Daemon regressions prove immediate exit-code reporting, timeout cleanup,
+  delayed unref until the spawned PID is healthy, and cleanup when another PID
+  wins startup.
+- Workflow regressions parse both YAML files and require one release build,
+  `--skip-tsc` packaging, direct Electron smoke execution, cache keys/paths, and
+  install-on-cache-miss conditions.
 
 ### 168: A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps
 
@@ -3861,7 +3968,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 55 (24 Open, 31 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 56 (24 Open, 32 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

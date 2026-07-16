@@ -1,11 +1,14 @@
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   assertRuntimeDaemonCliEntryAvailable,
   createRuntimeDaemonServeEnvironment,
+  waitForHealthyDaemonStartup,
+  type RuntimeDaemonStartupProcess,
 } from './process.js';
+import { resolveRuntimeDaemonPathsFromConfigHome } from './state.js';
 
 describe('runtime daemon child process environment', () => {
   it('does not retain the Electron bootstrap variable in the daemon environment', () => {
@@ -64,5 +67,93 @@ describe('runtime daemon child process environment', () => {
     expect(() => assertRuntimeDaemonCliEntryAvailable(missingEntry)).toThrow(
       /Keep the published KodaX dist files external/,
     );
+  });
+});
+
+describe('runtime daemon child startup', () => {
+  const paths = resolveRuntimeDaemonPathsFromConfigHome('runtime-config-home', 'default');
+  const missingHealth = async () => ({
+    pidAlive: false,
+    endpointReachable: false,
+    identityMatches: false,
+  });
+  const healthy = (pid: number) => async () => ({
+    state: {
+      runtimeId: `runtime-${pid}`,
+      profile: 'default',
+      pid,
+      startedAt: '2026-07-17T00:00:00.000Z',
+      endpoint: 'runtime-endpoint',
+      version: '0.7.71',
+      status: 'ready' as const,
+    },
+    pidAlive: true,
+    endpointReachable: true,
+    identityMatches: true,
+  });
+
+  it('fails immediately and reclaims the child when it exits before becoming healthy', async () => {
+    let reportExit: ((exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null }) => void)
+      | undefined;
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 321,
+      exit: new Promise((resolve) => { reportExit = resolve; }),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    const waiting = waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+    }, child, missingHealth);
+    reportExit?.({ code: 17, signal: null });
+
+    await expect(waiting).rejects.toThrow(/exited.*code 17/i);
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
+
+  it('reclaims a still-running child when startup reaches its timeout', async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 654,
+      exit: new Promise(() => undefined),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 0,
+      pollIntervalMs: 1,
+    }, child, missingHealth)).rejects.toThrow(/timed out waiting/i);
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
+
+  it('unrefs the spawned child only after that child publishes healthy state', async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 777,
+      exit: new Promise(() => undefined),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {}, child, healthy(777)))
+      .resolves.toMatchObject({ state: { pid: 777 } });
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.terminate).not.toHaveBeenCalled();
+  });
+
+  it('reclaims its spawned child when another daemon wins the startup race', async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 888,
+      exit: new Promise(() => undefined),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {}, child, healthy(999)))
+      .resolves.toMatchObject({ state: { pid: 999 } });
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
   });
 });

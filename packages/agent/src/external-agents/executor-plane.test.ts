@@ -552,6 +552,35 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     await plane.close();
   });
 
+  it('bounds remembered registration revisions while retaining recent reuse protection', async () => {
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(new FakeExecutor())],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    const historyLimit = 4_096;
+    for (let index = 0; index <= historyLimit; index += 1) {
+      await plane.registrations.upsert(registration({
+        credentialRef: undefined,
+        configurationRevision: `bounded-revision-${index}`,
+        endpointIdentityHash: `sha256:endpoint-${index}`,
+      }));
+    }
+    await plane.registrations.remove('external:risk-reviewer');
+
+    await expect(plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      configurationRevision: 'bounded-revision-0',
+      endpointIdentityHash: 'sha256:reused-after-history-eviction',
+    }))).resolves.toMatchObject({ configurationRevision: 'bounded-revision-0' });
+    await expect(plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      configurationRevision: `bounded-revision-${historyLimit}`,
+      endpointIdentityHash: 'sha256:recent-revision-reused',
+    }))).rejects.toThrow(/revision.*reused/i);
+    await plane.close();
+  });
+
   it('serializes concurrent cross-agent snapshot persistence without losing either revision', async () => {
     const store = createMemoryAgentExecutorPlaneStore();
     const plane = await createAgentExecutorPlane({
@@ -803,6 +832,44 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     expect(oldExecutor.disposeCalls).toBe(1);
   });
 
+  it('does not hold the registration mutation lane while disposing an obsolete executor', async () => {
+    let disposalEntered: (() => void) | undefined;
+    let releaseDisposal: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { disposalEntered = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseDisposal = resolve; });
+    const executor = new FakeExecutor();
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const task = await plane.tasks.start(taskInput({ taskId: 'registration-dispose-lane' }));
+    executor.snapshot = { state: 'completed' };
+    await plane.tasks.reconcile(task.taskId);
+    executor.disposeEntered = disposalEntered;
+    executor.disposeGate = async () => gate;
+
+    const replacing = plane.registrations.upsert(registration({
+      credentialRef: undefined,
+      configurationRevision: 'rev-2',
+    }));
+    await entered;
+    let independentMutationResolved = false;
+    const independentMutation = plane.registrations.upsert(registration({
+      agentId: 'external:independent',
+      credentialRef: undefined,
+      configurationRevision: 'independent-rev-1',
+    })).then(() => { independentMutationResolved = true; });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    const resolvedBeforeDisposal = independentMutationResolved;
+    releaseDisposal?.();
+    await Promise.all([replacing, independentMutation]);
+
+    expect(resolvedBeforeDisposal).toBe(true);
+    await plane.close();
+  });
+
   it('coalesces close with an in-flight unused-executor disposal', async () => {
     let disposalEntered: (() => void) | undefined;
     let releaseDisposal: (() => void) | undefined;
@@ -872,6 +939,40 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     expect(executor.disposeCalls).toBe(1);
     releaseDisposal?.();
     await Promise.all([firstClose, secondClose]);
+  });
+
+  it('rejects close within its configured bound when executor disposal never settles', async () => {
+    let disposalEntered: (() => void) | undefined;
+    let releaseDisposal: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { disposalEntered = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseDisposal = resolve; });
+    const executor = new FakeExecutor();
+    executor.disposeEntered = disposalEntered;
+    executor.disposeGate = async () => gate;
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+      closeTimeoutMs: 20,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    await plane.tasks.start(taskInput({ taskId: 'bounded-close' }));
+
+    const closing = plane.close();
+    await entered;
+    const closeResult = await Promise.race([
+      closing.then(
+        () => new Error('close unexpectedly resolved'),
+        (error: unknown) => error,
+      ),
+      new Promise<Error>((resolve) => {
+        setTimeout(() => resolve(new Error('close remained pending')), 200);
+      }),
+    ]);
+    releaseDisposal?.();
+    await closing.catch(() => undefined);
+    expect(closeResult).toBeInstanceOf(Error);
+    expect((closeResult as Error).message).toMatch(/timed out.*20 ms/i);
   });
 
   it('drains a short executor operation before disposal on close', async () => {
