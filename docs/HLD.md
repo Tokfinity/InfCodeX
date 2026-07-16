@@ -264,9 +264,11 @@ are independently constrained; a stable authentication realm scopes durable
 task ownership; registration revisions and management ownership fence hot
 reloads; immutable internal route snapshots preserve admitted work after
 registration changes. Inbound authentication precedes task/body disclosure,
-and global admission plus bounded SSE resources prevent one client from
-exhausting the server. KodaX consumes externally issued tokens and never owns
-production signing or issuance.
+and synchronous global capacity reservation plus bounded SSE resources prevent
+one client from exhausting the server without serializing slow preparation for
+other principals. Retained pre-realm tasks stay hidden unless a stopped
+operator supplies an exact owner migration. KodaX consumes externally issued
+tokens and never owns production signing or issuance.
 
 ## 10. Governed Memory Runtime
 

@@ -14,6 +14,7 @@ _Last Updated: 2026-07-17_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.72 | 2026-07-17 | 2026-07-17 |
 | 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.72 | 2026-07-17 | 2026-07-17 |
 | 168 | High | Resolved | A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
 | 167 | High | Resolved | A2A OAuth and hot-activation closure could leak credentials or mutate stale registrations | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
@@ -79,6 +80,88 @@ _Last Updated: 2026-07-17_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 170: A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.71
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-17
+- **Resolved**: 2026-07-17
+
+#### Original Problem
+
+The v0.7.71 authority hardening changed durable inbound task ownership from
+`SHA-256(subject + NUL + tenant)` to a canonical
+`SHA-256([securityRealm, subject, tenant])` tuple. This correctly prevented an
+authentication-authority switch from adopting another authority's tasks, but
+the file store retained only the opaque hash and provided no explicit upgrade
+path. After an upgrade, a known v0.7.70 owner could therefore no longer get,
+subscribe to, cancel, or deduplicate its retained tasks. Recovery could still
+finish an in-flight Runtime run, leaving its result inaccessible to that
+client.
+
+The same review found that the global `SendMessage` admission tail remained
+held across workspace preparation, Runtime session creation, and run startup.
+A slow principal could consequently head-of-line block unrelated principals
+even when the server had more than one available concurrency slot.
+
+#### Root Cause
+
+Durable task records had no principal-key scheme marker, and the security fix
+intentionally avoided unsafe automatic legacy fallback without replacing it
+with an operator-supplied offline rekey. Admission fixed the cross-principal
+check-then-act race with a promise mutex, but its protected operation was the
+whole asynchronous preparation path rather than only capacity reservation.
+
+#### Resolution
+
+New task records carry the non-secret `realm-subject-tenant-v1` key-scheme
+marker. Pre-realm records remain fail-closed by default; KodaX never guesses an
+authority and never dual-reads the legacy key during normal RPC handling. With
+the server stopped, `kodax a2a migrate-tasks` performs a byte-preserving dry
+run, while `--apply --confirm-server-stopped` atomically rekeys only the exact
+configured Bearer owner. OAuth requires an explicit `--subject`. The public
+`migrateA2ALegacyTaskOwners()` SDK accepts one or more explicit
+subject/tenant/realm mappings for custom hosts. Ambiguous mappings, unknown key
+schemes, and a live store owner fail closed; unmatched records are preserved.
+
+Global capacity now uses a synchronous pending-admission reservation. The
+active-count check and increment contain no `await`, so JavaScript's run-to-
+completion turn closes the race without a global asynchronous lock. The
+reservation becomes a persisted submitted task before it is released, and a
+`finally` path releases it when preparation fails. Per-principal ordering and
+deduplication remain unchanged, while cross-principal workspace/session/run I/O
+proceeds concurrently up to the configured capacity.
+
+#### Files Changed
+
+- `src/a2a/principal-key.ts`
+- `src/a2a/task-migration.ts`
+- `src/a2a/task-store.ts`
+- `src/a2a/server.ts`
+- `src/a2a/index.ts`
+- `src/integration-cli.ts`
+- `src/a2a/task-migration.test.ts`
+- `src/a2a/a2a.test.ts`
+- `src/integration-cli.test.ts`
+- `src/sdk-a2a.test.ts`
+
+#### Tests Added / Verification Coverage
+
+- Offline-migration tests cover byte-preserving dry-run, atomic exact rekey,
+  current-key marker backfill, unmatched retention, idempotency, ambiguous
+  mappings, and live-store exclusion.
+- End-to-end server coverage proves a pre-realm task is inaccessible before
+  migration, becomes accessible afterward, and a retried message remains
+  deduplicated to the original task.
+- Admission regressions prove a full single-slot server rejects another
+  principal without waiting for slow preparation, two slots prepare
+  concurrently, a third is rejected, and failed preparation releases its
+  reservation.
+- CLI and SDK-surface tests cover dry-run/apply confirmation and the public
+  migration API.
 
 ### 169: Executor shutdown and daemon auto-start could wait indefinitely or leak startup children
 
@@ -3968,7 +4051,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 56 (24 Open, 32 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 57 (24 Open, 33 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

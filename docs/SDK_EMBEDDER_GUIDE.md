@@ -3452,6 +3452,49 @@ validation also cannot observe immediate per-token revocation: use short access
 token lifetimes, signing-key rotation, or an introspecting proxy/adapter when
 that property is required.
 
+#### Upgrade retained pre-realm tasks
+
+Realm-aware task ownership intentionally has no normal-request legacy fallback:
+an authority switch must never adopt tasks merely because it reuses a subject.
+If a v0.7.70 task store must remain addressable after upgrading, stop the A2A
+server and first inspect an exact-owner migration plan:
+
+```bash
+kodax a2a migrate-tasks
+kodax a2a migrate-tasks --apply --confirm-server-stopped
+
+# OAuth identity is token-specific, so provide the known historical subject.
+kodax a2a migrate-tasks --subject trusted-orchestrator
+```
+
+The configured Bearer profile supplies its fixed `principalId`; OAuth requires
+`--subject`. Dry-run does not rewrite `tasks.json`. Apply rekeys only exact
+matches, preserves unmatched records, and refuses a live task-store owner.
+Custom SDK hosts can plan multiple known owners without exposing raw tokens:
+
+```ts
+import { migrateA2ALegacyTaskOwners } from '@kodax-ai/kodax/a2a';
+
+const mappings = [{
+  securityRealm: 'oauth2-jwt:https://identity.example/',
+  subject: 'trusted-orchestrator',
+}] as const;
+const plan = migrateA2ALegacyTaskOwners({
+  dataDir: '/var/lib/kodax/a2a', mappings, apply: false,
+});
+
+// After the host/operator verifies the plan:
+if (plan.matchedLegacyTaskCount > 0) {
+  migrateA2ALegacyTaskOwners({
+    dataDir: '/var/lib/kodax/a2a', mappings, apply: true,
+  });
+}
+```
+
+The SDK also accepts `tenant` when a custom authentication adapter historically
+returned one. Two mappings that claim the same legacy owner for different
+realms are ambiguous and rejected; split or guessed ownership is never applied.
+
 `a2a serve` resolves its Runtime provider in this order: explicit CLI option,
 environment, core configuration, then the built-in default. Provider-compatible
 model selection follows the normal hosted Runtime rule. A selected Markdown

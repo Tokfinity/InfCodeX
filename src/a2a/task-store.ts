@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { A2A_PRINCIPAL_KEY_SCHEME } from './principal-key.js';
 import { isRecord, parseA2AMessage, parseA2ATask } from './schemas.js';
 import type { A2AMessage, A2ATask } from './types.js';
 
@@ -8,6 +9,7 @@ export interface A2AServerTaskRecord {
   readonly taskId: string;
   readonly contextId: string;
   readonly principalKey: string;
+  readonly principalKeyScheme?: typeof A2A_PRINCIPAL_KEY_SCHEME;
   readonly runtimeIdentity: string;
   readonly sessionId: string;
   readonly workspaceRoot?: string;
@@ -49,6 +51,9 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
     throw new Error('A2A task store run IDs are invalid.');
   }
   if (!Array.isArray(value.history)) throw new Error('A2A task store history is invalid.');
+  if (value.principalKeyScheme !== undefined && value.principalKeyScheme !== A2A_PRINCIPAL_KEY_SCHEME) {
+    throw new Error('A2A task store principal key scheme is unsupported.');
+  }
   if (!Number.isSafeInteger(value.eventSeq) || !Number.isSafeInteger(value.lastRuntimeEventSeq)) {
     throw new Error('A2A task store event cursors are invalid.');
   }
@@ -70,6 +75,9 @@ function parseRecord(value: unknown): A2AServerTaskRecord {
     taskId: value.taskId as string,
     contextId: value.contextId as string,
     principalKey: value.principalKey as string,
+    ...(value.principalKeyScheme === A2A_PRINCIPAL_KEY_SCHEME
+      ? { principalKeyScheme: A2A_PRINCIPAL_KEY_SCHEME }
+      : {}),
     runtimeIdentity: value.runtimeIdentity as string,
     sessionId: value.sessionId as string,
     ...(typeof value.workspaceRoot === 'string' ? { workspaceRoot: value.workspaceRoot } : {}),
@@ -152,8 +160,15 @@ export class A2AFileTaskStore {
 
   save(record: A2AServerTaskRecord): A2AServerTaskRecord {
     const next = clone(record);
+    const previous = this.#records.get(record.taskId);
     this.#records.set(record.taskId, next);
-    this.persist();
+    try {
+      this.persist();
+    } catch (error: unknown) {
+      if (previous) this.#records.set(record.taskId, previous);
+      else this.#records.delete(record.taskId);
+      throw error;
+    }
     for (const listener of this.#listeners.get(record.taskId) ?? []) listener(clone(next));
     return clone(next);
   }
@@ -181,6 +196,43 @@ export class A2AFileTaskStore {
     return removed;
   }
 
+  migrateUnversionedPrincipalKeys(input: {
+    readonly legacyToCurrent: ReadonlyMap<string, string>;
+    readonly currentKeys: ReadonlySet<string>;
+    readonly apply: boolean;
+  }): {
+    readonly matchedLegacyTaskCount: number;
+    readonly matchedCurrentTaskCount: number;
+    readonly unmatchedUnversionedTaskCount: number;
+  } {
+    let matchedLegacyTaskCount = 0;
+    let matchedCurrentTaskCount = 0;
+    let unmatchedUnversionedTaskCount = 0;
+    const updates: Array<readonly [string, A2AServerTaskRecord]> = [];
+    for (const [taskId, record] of this.#records) {
+      if (record.principalKeyScheme !== undefined) continue;
+      const currentKey = input.legacyToCurrent.get(record.principalKey);
+      if (currentKey !== undefined) {
+        matchedLegacyTaskCount += 1;
+        updates.push([taskId, {
+          ...record,
+          principalKey: currentKey,
+          principalKeyScheme: A2A_PRINCIPAL_KEY_SCHEME,
+        }]);
+      } else if (input.currentKeys.has(record.principalKey)) {
+        matchedCurrentTaskCount += 1;
+        updates.push([taskId, { ...record, principalKeyScheme: A2A_PRINCIPAL_KEY_SCHEME }]);
+      } else {
+        unmatchedUnversionedTaskCount += 1;
+      }
+    }
+    if (input.apply && updates.length > 0) {
+      for (const [taskId, record] of updates) this.#records.set(taskId, record);
+      this.persist();
+    }
+    return { matchedLegacyTaskCount, matchedCurrentTaskCount, unmatchedUnversionedTaskCount };
+  }
+
   subscribe(taskId: string, listener: TaskListener): () => void {
     const listeners = this.#listeners.get(taskId) ?? new Set<TaskListener>();
     listeners.add(listener);
@@ -192,7 +244,6 @@ export class A2AFileTaskStore {
   }
 
   close(): void {
-    this.persist();
     this.#listeners.clear();
     fs.closeSync(this.#lockFd);
     fs.rmSync(this.#lockPath, { force: true });

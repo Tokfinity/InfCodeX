@@ -666,6 +666,13 @@ MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户�
 `a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
 公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
 或任务存储变更必须显式重启服务。
+
+A2A 配置迁移与历史任务 owner 迁移是两件事。如果升级 realm-aware owner key
+后仍需访问 v0.7.70 的任务库，应先停止 A2A server，执行
+`kodax a2a migrate-tasks` 查看精确 owner 计划，再用
+`--apply --confirm-server-stopped` 应用。OAuth 还必须提供已知历史
+`--subject`；正常服务不会猜测或双读 legacy owner key。
+
 托管 A2A 上下文默认位于 `~/kodax_a2a_server_workspace/<runtime-profile>/contexts/`。
 精确授权的 Skill 脚本必须使用隔离策略，并通过 `kodax sandbox doctor`；
 Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。

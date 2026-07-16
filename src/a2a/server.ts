@@ -17,6 +17,7 @@ import type {
   RuntimeRunResult,
 } from '../sdk-runtime.js';
 import { A2AError, errorMessage } from './errors.js';
+import { A2A_PRINCIPAL_KEY_SCHEME, realmA2APrincipalKey } from './principal-key.js';
 import { isJsonMediaType, isRecord, parseA2AMessage, parseJsonRpcRequest } from './schemas.js';
 import { parseA2ASecurity } from './security.js';
 import { A2AFileTaskStore, type A2AServerTaskRecord } from './task-store.js';
@@ -98,10 +99,6 @@ function securityRealm(authentication: A2AAuthentication): string {
     throw new Error('A2A authentication.securityRealm must be a non-empty stable string.');
   }
   return value;
-}
-
-function principalKey(principal: A2APrincipal, realm: string): string {
-  return sha256(JSON.stringify([realm, principal.subject, principal.tenant ?? null]));
 }
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -521,7 +518,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
   readonly #messageTails = new Map<string, Promise<void>>();
   readonly #requestTails = new Set<Promise<void>>();
   readonly #ready: Promise<void>;
-  #messageAdmissionTail = Promise.resolve();
+  #pendingNewTaskAdmissions = 0;
   #nodeServer: Server | undefined;
   #activeStreamCount = 0;
   #closing = false;
@@ -746,7 +743,11 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     principal: A2APrincipal,
     options: PreparedA2AServerOptions,
   ): Promise<Response> {
-    const key = principalKey(principal, securityRealm(options.authentication));
+    const key = realmA2APrincipalKey({
+      securityRealm: securityRealm(options.authentication),
+      subject: principal.subject,
+      ...(principal.tenant !== undefined ? { tenant: principal.tenant } : {}),
+    });
     switch (rpc.method) {
       case 'SendMessage': return rpcResult(rpc.id, {
         task: await this.sendMessage(rpc.params, key, false, options),
@@ -814,12 +815,12 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         throw new A2AError(-32005, 'No requested output media type is supported.');
       }
     }
-    const admission = await this.withMessageAdmission(() => this.admitMessage(
+    const admission = await this.admitMessage(
       message,
       key,
       options,
       configuration.acceptedOutputModes as readonly string[] | undefined,
-    ));
+    );
     if (admission.runtimeEventsAttached) {
       try {
         await admission.runtimeEventsAttached;
@@ -870,49 +871,51 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     if (!existing && activeForPrincipal >= (options.limits.maxActiveTasksPerPrincipal ?? 4)) {
       throw new A2AError(-32004, 'Principal active task limit reached.');
     }
-    const active = this.#store.all().filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
-    if (!existing && active >= options.limits.maxConcurrentTasks) {
-      throw new A2AError(-32004, 'Server task concurrency limit reached.');
-    }
-    let started: A2AServerTaskRecord;
-    let runtimeEventsAttached: Promise<void> | undefined;
-    if (existing?.task.status.state === 'TASK_STATE_INPUT_REQUIRED') {
-      started = await this.resumeUserInput(existing, message, digest, options);
-    } else {
-      const record = existing ?? await this.createRecord(
-        message,
-        key,
-        options,
-        acceptedOutputModes,
-      );
-      const next = existing ? this.appendMessage(record, message, digest) : record;
-      try {
-        const run = await this.startRun(next, message, options);
-        started = run.record;
-        runtimeEventsAttached = run.runtimeEventsAttached;
-      } catch (error: unknown) {
-        this.failTask(next.taskId, 'Task could not be started.', options);
-        throw error;
+    let reservationHeld = false;
+    if (!existing) {
+      const active = this.#store.all()
+        .filter((record) => !TERMINAL_STATES.has(record.task.status.state)).length;
+      if (active + this.#pendingNewTaskAdmissions >= options.limits.maxConcurrentTasks) {
+        throw new A2AError(-32004, 'Server task concurrency limit reached.');
       }
+      // No await may be introduced between the capacity check and increment. The
+      // JavaScript turn is the admission critical section; slow preparation stays outside it.
+      this.#pendingNewTaskAdmissions += 1;
+      reservationHeld = true;
     }
-    return {
-      record: started,
-      duplicate: false,
-      ...(runtimeEventsAttached ? { runtimeEventsAttached } : {}),
-    };
-  }
-
-  private async withMessageAdmission<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.#messageAdmissionTail;
-    let release = (): void => undefined;
-    const tail = new Promise<void>((resolve) => { release = resolve; });
-    this.#messageAdmissionTail = tail;
-    await previous;
     try {
-      return await operation();
+      let started: A2AServerTaskRecord;
+      let runtimeEventsAttached: Promise<void> | undefined;
+      if (existing?.task.status.state === 'TASK_STATE_INPUT_REQUIRED') {
+        started = await this.resumeUserInput(existing, message, digest, options);
+      } else {
+        const record = existing ?? await this.createRecord(
+          message,
+          key,
+          options,
+          acceptedOutputModes,
+        );
+        if (!existing) {
+          this.#pendingNewTaskAdmissions -= 1;
+          reservationHeld = false;
+        }
+        const next = existing ? this.appendMessage(record, message, digest) : record;
+        try {
+          const run = await this.startRun(next, message, options);
+          started = run.record;
+          runtimeEventsAttached = run.runtimeEventsAttached;
+        } catch (error: unknown) {
+          this.failTask(next.taskId, 'Task could not be started.', options);
+          throw error;
+        }
+      }
+      return {
+        record: started,
+        duplicate: false,
+        ...(runtimeEventsAttached ? { runtimeEventsAttached } : {}),
+      };
     } finally {
-      release();
-      if (this.#messageAdmissionTail === tail) this.#messageAdmissionTail = Promise.resolve();
+      if (reservationHeld) this.#pendingNewTaskAdmissions -= 1;
     }
   }
 
@@ -976,6 +979,7 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
       taskId,
       contextId,
       principalKey: key,
+      principalKeyScheme: A2A_PRINCIPAL_KEY_SCHEME,
       runtimeIdentity: options.runtime.identity.runtimeId,
       sessionId: session.id,
       ...(workspaceRoot ? { workspaceRoot } : {}),

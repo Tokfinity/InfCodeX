@@ -599,6 +599,14 @@ KodaX does not generate or issue it. Disabled entries remain available for
 later re-enable. `a2a serve` loads
 its configured MCP/Extension capability surface before listening and pins that
 execution authority; it hot-reloads publication, authentication, and limits.
+
+A2A configuration migration and retained task ownership are separate. If a
+v0.7.70 task store must remain addressable after the realm-aware upgrade, stop
+the A2A server, run `kodax a2a migrate-tasks` to inspect the exact-owner plan,
+then apply it with `--apply --confirm-server-stopped`. OAuth migration also
+requires the known historical `--subject`; normal serving never guesses or
+dual-reads a legacy owner key.
+
 Agent, Skill, Extension-tool authority, workspace, tool-policy, or task-store
 changes require an explicit server restart. Managed
 A2A contexts default to `~/kodax_a2a_server_workspace/<runtime-profile>/contexts/`.

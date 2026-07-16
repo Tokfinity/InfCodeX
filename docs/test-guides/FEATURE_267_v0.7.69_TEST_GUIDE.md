@@ -210,10 +210,14 @@ npm run build
    切换，以及 `tokenEnv` 名称切换。
 4. 轮换同一 `tokenEnv` 背后的 secret 值和同一 issuer 的 JWKS；随后以同一
    `securityRealm`、同一 `dataDir` 重启并查询新格式任务。
-5. 构造 pre-realm 持久化任务记录；并通过 SDK 创建缺失/空白
-   `securityRealm` 的 custom authentication，再对运行中 server 执行同类
-   `updateHot()`。
-6. 达到并发、活动任务、保留任务、事件字节和工作区字节上限。
+5. 构造 pre-realm 持久化任务记录：先确认正常启动后仍不可见；停服执行
+   `kodax a2a migrate-tasks` dry-run，确认文件字节不变，再使用
+   `--apply --confirm-server-stopped` 精确迁移配置中的 Bearer owner。OAuth
+   profile 额外传入已知 `--subject`。迁移后以原 message ID 重试。
+6. 通过 SDK 创建缺失/空白 `securityRealm` 的 custom authentication，再对
+   运行中 server 执行同类 `updateHot()`。
+7. 达到并发、活动任务、保留任务、事件字节和工作区字节上限；让两个不同
+   principal 的 workspace/session preparation 同时阻塞，并分别测试容量 1 和 2。
 
 **预期结果**：
 
@@ -225,9 +229,14 @@ npm run build
 - [ ] 同 realm 的 secret/JWKS 轮换与同 `dataDir` 重启保留访问；issuer、
   token-env 名称、认证 profile、subject 或 tenant 变化时，即使其他字段相同
   也不能接管旧任务。
-- [ ] pre-realm 任务不会被猜测迁移到当前 realm；custom authentication 在
-  创建或热更新时缺失/空白 `securityRealm` 都立即失败，原热配置保持不变。
-- [ ] 超限只拒绝新工作或后续越界写入，不破坏已有终态记录。
+- [ ] pre-realm 任务不会在正常 RPC 中被猜测或 legacy-key 双读；dry-run
+  byte-preserving，apply 只重写显式 owner mapping，未知记录保持不变。迁移后
+  `GetTask` 恢复且相同 message ID 仍命中原任务；运行中 server、歧义 mapping
+  和未知 key scheme 均 fail closed。
+- [ ] custom authentication 在创建或热更新时缺失/空白 `securityRealm` 都立即
+  失败，原热配置保持不变。
+- [ ] 超限只拒绝新工作或后续越界写入，不破坏已有终态记录；容量检查/预留
+  不跨任何 `await`，慢速 preparation 不会跨 principal 队头阻塞，失败会释放预留。
 
 ### TC-009：A2A 热字段与重启字段
 

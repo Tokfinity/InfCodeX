@@ -12,6 +12,7 @@ export * from './client-auth.js';
 export * from './security.js';
 export * from './server.js';
 export * from './server-auth.js';
+export * from './task-migration.js';
 export {
   classifyA2AServerChange,
   inspectA2AIntegration,

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,11 +21,13 @@ import {
   createKodaXA2AServer,
   discoverA2ARegistration,
   assertSafeA2AUrl,
+  migrateA2ALegacyTaskOwners,
   safeA2AFetch,
   parseA2AAgentCard,
   parseA2ATask,
   type A2AServerEvent,
 } from './index.js';
+import { legacyA2APrincipalKey } from './principal-key.js';
 import { A2AFileTaskStore } from './task-store.js';
 
 const roots: string[] = [];
@@ -640,6 +642,68 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('keeps pre-realm tasks hidden until an explicit offline owner migration restores access', async () => {
+    const dataDir = temporaryRoot();
+    const realm = 'bearer-env:KODAX_A2A_TOKEN';
+    const message = {
+      messageId: 'legacy-owner-retry', role: 'ROLE_USER' as const,
+      parts: [{ text: 'do not duplicate' }],
+    };
+    const firstBase = serverOptions(fakeRuntime(), dataDir);
+    const first = createKodaXA2AServer({
+      ...firstBase,
+      authentication: authenticationForRealm(realm),
+    });
+    await first.whenReady();
+    const sent = await first.handle(directRpcRequest('SendMessage', { message }));
+    const taskId = (await sent.json() as {
+      readonly result: { readonly task: { readonly id: string } };
+    }).result.task.id;
+    await first.close();
+
+    const taskFile = path.join(dataDir, 'tasks.json');
+    const records = JSON.parse(readFileSync(taskFile, 'utf8')) as Array<Record<string, unknown>>;
+    expect(records).toHaveLength(1);
+    records[0]!.principalKey = legacyA2APrincipalKey({ subject: 'caller-1' });
+    delete records[0]!.principalKeyScheme;
+    writeFileSync(taskFile, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
+
+    const hiddenBase = serverOptions(fakeRuntime(), dataDir);
+    const hidden = createKodaXA2AServer({
+      ...hiddenBase,
+      authentication: authenticationForRealm(realm),
+    });
+    await hidden.whenReady();
+    const inaccessible = await hidden.handle(directRpcRequest('GetTask', { id: taskId }));
+    expect((await inaccessible.json() as { readonly error: { readonly code: number } }).error.code)
+      .toBe(-32001);
+    await hidden.close();
+
+    expect(migrateA2ALegacyTaskOwners({
+      dataDir,
+      mappings: [{ subject: 'caller-1', securityRealm: realm }],
+      apply: true,
+    })).toMatchObject({ matchedLegacyTaskCount: 1 });
+
+    const restoredBase = serverOptions(fakeRuntime(), dataDir);
+    const restored = createKodaXA2AServer({
+      ...restoredBase,
+      authentication: authenticationForRealm(realm),
+    });
+    await restored.whenReady();
+    try {
+      const recovered = await restored.handle(directRpcRequest('GetTask', { id: taskId }));
+      expect((await recovered.json() as { readonly result: { readonly id: string } }).result.id)
+        .toBe(taskId);
+      const retried = await restored.handle(directRpcRequest('SendMessage', { message }));
+      expect((await retried.json() as {
+        readonly result: { readonly task: { readonly id: string } };
+      }).result.task.id).toBe(taskId);
+    } finally {
+      await restored.close();
+    }
+  });
+
   it('fails closed when custom SDK authentication omits a stable security realm', () => {
     const base = serverOptions(fakeRuntime(), temporaryRoot());
     const { securityRealm: _securityRealm, ...legacyAuthentication } = base.authentication;
@@ -1036,19 +1100,145 @@ describe('FEATURE_267 bidirectional A2A', () => {
       const first = server.handle(request('principal-one', 'Bearer test-token'));
       await firstCreateEntered;
       const second = server.handle(request('principal-two', 'Bearer other-token'));
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      releaseFirstCreate();
-
-      const responses = await Promise.all([first, second]);
-      const bodies = await Promise.all(responses.map(async (response) => response.json() as Promise<{
-        readonly result?: unknown;
-        readonly error?: { readonly code: number };
-      }>));
-      expect(bodies.filter((body) => body.result !== undefined)).toHaveLength(1);
-      expect(bodies.filter((body) => body.error?.code === -32004)).toHaveLength(1);
+      const secondResponse = await Promise.race([
+        second,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error('Second principal was blocked by slow admission I/O.')), 500);
+        }),
+      ]);
+      const secondBody = await secondResponse.json() as { readonly error?: { readonly code: number } };
+      expect(secondBody.error?.code).toBe(-32004);
       expect(sessionCreates).toBe(1);
+      releaseFirstCreate();
+      expect((await first).status).toBe(200);
     } finally {
       releaseFirstCreate();
+      await server.close();
+    }
+  });
+
+  it('reserves multiple global slots without serializing slow cross-principal preparation', async () => {
+    const controlled = pendingRuntime();
+    let sessionCreates = 0;
+    let releaseCreates!: () => void;
+    const createGate = new Promise<void>((resolve) => { releaseCreates = resolve; });
+    const entered: Array<() => void> = [];
+    const enteredPromises = [0, 1].map(() => new Promise<void>((resolve) => entered.push(resolve)));
+    const runtime = {
+      ...controlled.runtime,
+      sessions: {
+        async create() {
+          const index = sessionCreates;
+          sessionCreates += 1;
+          entered[index]?.();
+          await createGate;
+          return { id: `session-${sessionCreates}`, title: 'admission', surface: 'a2a' };
+        },
+      },
+    } as KodaXRuntime;
+    const base = serverOptions(runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      authentication: {
+        ...base.authentication,
+        async authenticate(request: Request) {
+          if (request.headers.get('authorization') === 'Bearer third-token') {
+            return { subject: 'caller-3', scopes: ['a2a'] };
+          }
+          return base.authentication.authenticate(request);
+        },
+      },
+      limits: { ...base.limits, maxConcurrentTasks: 2, maxActiveTasksPerPrincipal: 1 },
+    });
+    await server.whenReady();
+    const request = (messageId: string, authorization: string) => {
+      const value = directRpcRequest('SendMessage', {
+        message: { messageId, role: 'ROLE_USER', parts: [{ text: messageId }] },
+        configuration: { returnImmediately: true },
+      });
+      value.headers.set('authorization', authorization);
+      return value;
+    };
+    try {
+      const first = server.handle(request('reserved-one', 'Bearer test-token'));
+      const second = server.handle(request('reserved-two', 'Bearer other-token'));
+      await Promise.all(enteredPromises);
+      const third = await server.handle(request('reserved-three', 'Bearer third-token'));
+      expect((await third.json() as { readonly error?: { readonly code: number } }).error?.code).toBe(-32004);
+      expect(sessionCreates).toBe(2);
+      releaseCreates();
+      const responses = await Promise.all([first, second]);
+      expect(responses.every((response) => response.status === 200)).toBe(true);
+    } finally {
+      releaseCreates();
+      await server.close();
+    }
+  });
+
+  it('releases a global reservation when slow task preparation fails', async () => {
+    const controlled = pendingRuntime();
+    let attempts = 0;
+    const runtime = {
+      ...controlled.runtime,
+      sessions: {
+        async create() {
+          attempts += 1;
+          if (attempts === 1) throw new Error('session preparation failed');
+          return { id: `session-${attempts}`, title: 'admission', surface: 'a2a' };
+        },
+      },
+    } as KodaXRuntime;
+    const base = serverOptions(runtime, temporaryRoot());
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxConcurrentTasks: 1, maxActiveTasksPerPrincipal: 1 },
+    });
+    await server.whenReady();
+    const request = (messageId: string, authorization: string) => {
+      const value = directRpcRequest('SendMessage', {
+        message: { messageId, role: 'ROLE_USER', parts: [{ text: messageId }] },
+        configuration: { returnImmediately: true },
+      });
+      value.headers.set('authorization', authorization);
+      return value;
+    };
+    try {
+      const failed = await server.handle(request('failed-reservation', 'Bearer test-token'));
+      expect((await failed.json() as { readonly error?: { readonly code: number } }).error?.code).toBe(-32603);
+      const accepted = await server.handle(request('released-reservation', 'Bearer other-token'));
+      expect((await accepted.json() as { readonly result?: unknown }).result).toBeDefined();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('releases global admission and retains no ghost task when persistence fails', async () => {
+    const controlled = pendingRuntime();
+    const dataDir = temporaryRoot();
+    const base = serverOptions(controlled.runtime, dataDir);
+    const server = createKodaXA2AServer({
+      ...base,
+      limits: { ...base.limits, maxConcurrentTasks: 1, maxActiveTasksPerPrincipal: 1 },
+    });
+    await server.whenReady();
+    const taskFile = path.join(dataDir, 'tasks.json');
+    mkdirSync(taskFile);
+    try {
+      const failed = await server.handle(directRpcRequest('SendMessage', {
+        message: { messageId: 'failed-persistence', role: 'ROLE_USER', parts: [{ text: 'fail' }] },
+        configuration: { returnImmediately: true },
+      }));
+      expect((await failed.json() as { readonly error?: { readonly code: number } }).error?.code)
+        .toBe(-32603);
+      rmSync(taskFile, { recursive: true, force: true });
+
+      const accepted = await server.handle(directRpcRequest('SendMessage', {
+        message: { messageId: 'after-persistence', role: 'ROLE_USER', parts: [{ text: 'pass' }] },
+        configuration: { returnImmediately: true },
+      }));
+      expect((await accepted.json() as { readonly result?: unknown }).result).toBeDefined();
+    } finally {
+      rmSync(taskFile, { recursive: true, force: true });
       await server.close();
     }
   });

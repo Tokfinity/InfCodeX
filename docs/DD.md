@@ -370,11 +370,14 @@ A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
 - `server-auth.ts` validates external-issuer RFC 9068 JWT access tokens/JWKS;
   the compatibility Bearer profile and custom authentication adapters expose a
   stable `securityRealm` for task ownership.
+- `task-migration.ts` provides an explicit offline exact-owner rekey for
+  retained pre-realm tasks. Normal serving never dual-reads the legacy key.
 - `runtime-config.ts` applies disables/removals before discovery and mutates
   only source-owned registrations with revision/owner preconditions.
-- `server.ts` authenticates before body/task lookup, reserves global admission,
-  replays after subscription, drains admitted handlers on close, and enforces
-  fixed per-task/per-server/per-stream SSE limits.
+- `server.ts` authenticates before body/task lookup, reserves global capacity
+  synchronously before slow preparation, replays after subscription, drains
+  admitted handlers on close, and enforces fixed per-task/per-server/per-stream
+  SSE limits.
 
 The external-Agent plane persists an internal immutable registration snapshot
 for each admitted route. It is not part of the public task DTO and contains no

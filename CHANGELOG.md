@@ -22,6 +22,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A2A durable-owner upgrade and admission concurrency.** New inbound tasks
+  persist a non-secret principal-key scheme marker. Pre-realm tasks remain
+  inaccessible during normal serving, but stopped operators can use
+  `kodax a2a migrate-tasks` to dry-run and explicitly apply the configured
+  owner mapping; custom hosts can use the public
+  `migrateA2ALegacyTaskOwners()` SDK with exact mappings. Ambiguous or live-
+  store migration fails closed. Global task capacity now uses a synchronous
+  pending reservation, keeping slow workspace/session/run preparation outside
+  any global lock while preserving exact limits and per-principal ordering.
 - **Bounded External Agent and daemon shutdown/startup.** Executor-plane close
   now has a 30-second default upper bound (overrideable with `closeTimeoutMs`),
   obsolete-executor cleanup runs outside the serialized registration mutation

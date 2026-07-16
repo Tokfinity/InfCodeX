@@ -1,6 +1,12 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-16
+> Last updated: 2026-07-17
+>
+> **v0.7.72 A2A durable-owner/admission correction:** normal RPC handling never
+> dual-reads pre-realm task keys; a stopped operator may explicitly rekey exact
+> known owners through the CLI or focused SDK migration. New records carry a
+> key-scheme marker. Global capacity uses a synchronous pending reservation, so
+> workspace/session/run preparation is outside any global asynchronous lock.
 >
 > **v0.7.71 packaged-Electron patch addendum:** SDK daemon auto-start uses a
 > bootstrap-only Electron Node boundary, scrubs `ELECTRON_RUN_AS_NODE` before

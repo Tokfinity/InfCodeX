@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -40,6 +41,36 @@ async function runCommand(args: readonly string[]): Promise<string> {
   } finally {
     writer.mockRestore();
   }
+}
+
+function legacyTaskRecord(taskId: string, subject: string): Readonly<Record<string, unknown>> {
+  const timestamp = '2026-07-16T00:00:00.000Z';
+  const contextId = `context-${taskId}`;
+  const message = {
+    messageId: `message-${taskId}`, taskId, contextId,
+    role: 'ROLE_USER', parts: [{ text: taskId }],
+  };
+  return {
+    taskId,
+    contextId,
+    principalKey: createHash('sha256').update(`${subject}\0`).digest('hex'),
+    runtimeIdentity: 'legacy-runtime',
+    sessionId: `session-${taskId}`,
+    messageDigests: { [message.messageId]: `digest-${taskId}` },
+    runIds: [],
+    task: {
+      id: taskId, contextId,
+      status: { state: 'TASK_STATE_COMPLETED', timestamp },
+      history: [message],
+    },
+    history: [message],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    eventSeq: 1,
+    lastRuntimeEventSeq: 0,
+    runtimeEventCount: 0,
+    runtimeEventBytes: 0,
+  };
 }
 
 describe('integration CLI', () => {
@@ -164,6 +195,77 @@ describe('integration CLI', () => {
     } finally {
       if (previous === undefined) rmSync(file, { force: true });
       else writeFileSync(file, previous, 'utf8');
+    }
+  });
+
+  it('dry-runs and explicitly applies configured bearer task-owner migration offline', async () => {
+    const configFile = path.join(configHome, 'integrations', 'a2a.json');
+    const previous = existsSync(configFile) ? readFileSync(configFile, 'utf8') : undefined;
+    const dataDir = path.join(configHome, 'legacy-a2a-tasks');
+    const taskFile = path.join(dataDir, 'tasks.json');
+    mkdirSync(dataDir, { recursive: true });
+    const original = `${JSON.stringify([legacyTaskRecord('legacy-cli-task', 'configured-client')], null, 2)}\n`;
+    writeFileSync(taskFile, original, 'utf8');
+    try {
+      await runCommand([
+        'a2a', 'expose', '--token-env', 'KODAX_A2A_TOKEN',
+        '--principal', 'configured-client', '--data-dir', dataDir,
+      ]);
+      const plan = JSON.parse(await runCommand(['a2a', 'migrate-tasks'])) as {
+        readonly applied: boolean;
+        readonly matchedLegacyTaskCount: number;
+      };
+      expect(plan).toMatchObject({ applied: false, matchedLegacyTaskCount: 1 });
+      expect(readFileSync(taskFile, 'utf8')).toBe(original);
+      await expect(runCommand(['a2a', 'migrate-tasks', '--apply']))
+        .rejects.toThrow(/confirm-server-stopped/i);
+
+      const applied = JSON.parse(await runCommand([
+        'a2a', 'migrate-tasks', '--apply', '--confirm-server-stopped',
+      ])) as typeof plan;
+      expect(applied).toMatchObject({ applied: true, matchedLegacyTaskCount: 1 });
+      expect(JSON.parse(readFileSync(taskFile, 'utf8'))).toEqual([
+        expect.objectContaining({
+          taskId: 'legacy-cli-task',
+          principalKeyScheme: 'realm-subject-tenant-v1',
+        }),
+      ]);
+    } finally {
+      if (previous === undefined) rmSync(configFile, { force: true });
+      else writeFileSync(configFile, previous, 'utf8');
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires the exact historical OAuth subject for task-owner migration', async () => {
+    const configFile = path.join(configHome, 'integrations', 'a2a.json');
+    const previous = existsSync(configFile) ? readFileSync(configFile, 'utf8') : undefined;
+    const dataDir = path.join(configHome, 'legacy-oauth-a2a-tasks');
+    const taskFile = path.join(dataDir, 'tasks.json');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(taskFile, `${JSON.stringify([
+      legacyTaskRecord('legacy-oauth-task', 'oauth-client'),
+    ], null, 2)}\n`, 'utf8');
+    try {
+      await runCommand([
+        'a2a', 'expose', '--auth', 'oauth2-jwt',
+        '--oauth-scheme', 'enterprise-oauth',
+        '--oauth-issuer', 'https://identity.example.com/',
+        '--oauth-audience', 'https://agent.example.com/',
+        '--oauth-jwks-url', 'https://identity.example.com/jwks',
+        '--oauth-token-url', 'https://identity.example.com/token',
+        '--required-scope', 'a2a.invoke', '--data-dir', dataDir,
+      ]);
+      await expect(runCommand(['a2a', 'migrate-tasks']))
+        .rejects.toThrow(/requires --subject/i);
+      const plan = JSON.parse(await runCommand([
+        'a2a', 'migrate-tasks', '--subject', 'oauth-client',
+      ])) as { readonly applied: boolean; readonly matchedLegacyTaskCount: number };
+      expect(plan).toMatchObject({ applied: false, matchedLegacyTaskCount: 1 });
+    } finally {
+      if (previous === undefined) rmSync(configFile, { force: true });
+      else writeFileSync(configFile, previous, 'utf8');
+      rmSync(dataDir, { recursive: true, force: true });
     }
   });
 

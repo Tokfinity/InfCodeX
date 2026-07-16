@@ -169,6 +169,10 @@ an explicit migration while every owning daemon is stopped. Per-Agent
 cancelling in-flight work. Durable task routes, authentication realms,
 registration ownership/revisions, metadata limits, and SSE resource ceilings
 must remain fail-closed across reload, daemon restart, and shutdown.
+Retained pre-realm task owners require an explicit stopped-server identity
+mapping; normal A2A requests must neither guess nor dual-read legacy ownership.
+Cross-principal capacity reservation must not hold a global lock across
+workspace, session, or Runtime preparation.
 
 ### Governed Memory
 

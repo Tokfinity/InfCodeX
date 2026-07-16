@@ -52,6 +52,7 @@ import {
   createA2AAgentExecutorFactory,
   discoverA2ARegistration,
   inspectA2AIntegration,
+  migrateA2ALegacyTaskOwners,
   parseA2AIntegrationDocument,
   prepareKodaXA2AServer,
   readA2AIntegration,
@@ -672,6 +673,38 @@ function configureA2ACommands(program: Command, version: string): void {
         path: result.snapshot.path,
         version: result.snapshot.document.version,
       });
+    });
+  a2a.command('migrate-tasks')
+    .description('Plan or apply the offline pre-realm A2A task-owner migration')
+    .option('--subject <id>', 'OAuth subject whose existing tasks should be migrated')
+    .option('--apply', 'Apply the planned task-store changes')
+    .option('--confirm-server-stopped', 'Confirm the A2A server using this task store has been stopped')
+    .action((options: { subject?: string; apply?: boolean; confirmServerStopped?: boolean }) => {
+      if (options.apply === true && options.confirmServerStopped !== true) {
+        throw new Error('A2A task-owner migration requires --confirm-server-stopped when --apply is used.');
+      }
+      const server = readA2AIntegration(KODAX_DIR).document.server;
+      if (!server) throw new Error('A2A task-owner migration requires a configured server.');
+      let subject: string;
+      let securityRealm: string;
+      if (server.authentication.type === 'bearer-env') {
+        subject = server.authentication.principalId;
+        if (options.subject !== undefined && options.subject !== subject) {
+          throw new Error('A2A bearer task-owner migration subject must match server.authentication.principalId.');
+        }
+        securityRealm = `bearer-env:${server.authentication.tokenEnv}`;
+      } else {
+        subject = options.subject?.trim() ?? '';
+        if (subject.length === 0) {
+          throw new Error('OAuth A2A task-owner migration requires --subject.');
+        }
+        securityRealm = `oauth2-jwt:${server.authentication.issuer}`;
+      }
+      json(migrateA2ALegacyTaskOwners({
+        dataDir: server.dataDir,
+        mappings: [{ subject, securityRealm }],
+        apply: options.apply === true,
+      }));
     });
   a2a.command('list').action(() => json(readA2AIntegration(KODAX_DIR).document));
   a2a.command('add <name> <cardUrl>')

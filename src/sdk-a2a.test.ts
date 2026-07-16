@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as a2aSdk from './sdk-a2a.js';
 
 describe('@kodax-ai/kodax/a2a public surface', () => {
-  it('keeps raw persistent config mutations behind the owner-fenced CLI boundary', () => {
+  it('keeps live config mutations owner-fenced and exposes offline task-owner migration', () => {
     const rawMutations = [
       'migrateA2AIntegrationV1',
       'removeA2AOutboundAgent',
@@ -17,5 +17,6 @@ describe('@kodax-ai/kodax/a2a public surface', () => {
     }
     expect(a2aSdk.readA2AIntegration).toBeTypeOf('function');
     expect(a2aSdk.inspectA2AIntegration).toBeTypeOf('function');
+    expect(a2aSdk.migrateA2ALegacyTaskOwners).toBeTypeOf('function');
   });
 });
