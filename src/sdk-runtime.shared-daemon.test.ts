@@ -27,13 +27,13 @@ describe('F269 shared Runtime contracts', () => {
 
     const applied = await runtime.sessions.updateSettingsVersioned(
       session.id,
-      { model: 'model-a', agentMode: 'amaw', autoModeEngine: 'rules' },
+      { model: 'model-a', agentMode: 'ama', autoModeEngine: 'rules' },
       { expectedRevision: initial.revision },
     );
 
     expect(applied).toEqual({
       revision: 1,
-      value: { model: 'model-a', agentMode: 'amaw', autoModeEngine: 'rules' },
+      value: { model: 'model-a', agentMode: 'ama', autoModeEngine: 'rules' },
     });
     await expect(runtime.sessions.updateSettingsVersioned(
       session.id,

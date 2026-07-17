@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import {
   getActiveExtensionRuntime,
+  CodingActorSession,
   generateSessionId,
   listCodingDispatchableAgents,
   registerCustomProviders,
@@ -91,6 +92,17 @@ import {
 } from '@kodax-ai/agent';
 import type {
   AgentArtifactPolicy,
+  AgentActorClient,
+  AgentActorSnapshot,
+  AgentActorStore,
+  AgentDataClassification,
+  AgentDetail,
+  AgentEvent,
+  AgentFollowupResult,
+  AgentOutput,
+  AgentSpawnInput,
+  AgentTreeSnapshot,
+  AgentTurnRef,
   AgentCredentialBroker,
   AgentDispatchContext,
   AgentDispatchPolicy,
@@ -629,6 +641,20 @@ export interface RuntimeAgentService {
     query: DispatchableAgentQuery,
   ): Promise<DispatchableAgentListing | undefined>;
   preflight(input: AgentPreflightInput): Promise<AgentPreflightResult>;
+  tree(sessionId: string): Promise<AgentTreeSnapshot>;
+  detail(sessionId: string, actorPath: string): Promise<AgentDetail>;
+  spawn(sessionId: string, input: AgentSpawnInput): Promise<AgentTurnRef>;
+  send(
+    sessionId: string,
+    actorPath: string,
+    content: string,
+    classification?: AgentDataClassification,
+  ): Promise<void>;
+  followup(sessionId: string, actorPath: string, objective: string): Promise<AgentFollowupResult>;
+  interrupt(sessionId: string, actorPath: string, reason?: string): Promise<void>;
+  output(sessionId: string, actorPath: string, turnId?: string): Promise<AgentOutput>;
+  events(sessionId: string, afterSequence?: number): Promise<readonly AgentEvent[]>;
+  wait(sessionId: string, afterSequence?: number, timeoutMs?: number): Promise<AgentEvent | undefined>;
 }
 
 export type RuntimeAgentTaskService = Pick<
@@ -1841,6 +1867,7 @@ interface RuntimeRunRecord {
   providerCredential?: string;
   readonly hadProviderCredential: boolean;
   readonly agentContext?: AgentDispatchContext;
+  readonly actorSession?: CodingActorSession;
   start?: PendingRunStart;
   terminalEmitted: boolean;
 }
@@ -2073,6 +2100,7 @@ export async function createKodaXRuntime(
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
   const agentTasks = createRuntimeAgentTaskService(agentPlane);
+  const actorRegistry = createRuntimeAgentActorRegistry(sessionManager);
   const runs = new Map<string, RuntimeRunRecord>();
   const recoveredSessionOrders = new Map<string, number>();
   const persistedStatuses = [...recentRunStatuses(persistence.loadRunStatuses())]
@@ -2115,6 +2143,7 @@ export async function createKodaXRuntime(
     sessionAdmission,
     agentPlane,
     defaultAgentContext: options.externalAgents?.defaultContext,
+    actorRegistry,
   });
   const sessionService = createRuntimeSessionService(
     identity,
@@ -2195,7 +2224,7 @@ export async function createKodaXRuntime(
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
     admin: createRuntimeAdminService(agentPlane),
-    agents: createRuntimeAgentService(agentPlane, bindingService),
+    agents: createRuntimeAgentService(agentPlane, bindingService, actorRegistry, sessionAdmission),
     agentTasks,
     async close() {
       if (closed) return;
@@ -2203,6 +2232,7 @@ export async function createKodaXRuntime(
       runService.closeAll('runtime closed');
       permissions.rejectAll('runtime closed');
       userInputs.rejectAll('runtime closed');
+      await actorRegistry.close('runtime closed');
       await agentPlane?.close();
       bus.close();
     },
@@ -2784,6 +2814,7 @@ function createRuntimeSessionService(
           ...source,
           title: input.title ?? source.title,
           messages: source.messages.map(cloneMessage),
+          actorSnapshot: undefined,
         };
         await manager.storage.save(sessionId, data);
         const session = toRuntimeSession(sessionId, data);
@@ -2948,6 +2979,7 @@ function createRuntimeSessionService(
 }
 
 function createRuntimeRunService(deps: {
+  readonly actorRegistry: RuntimeAgentActorRegistry;
   readonly agentPlane?: AgentExecutorPlane;
   readonly artifacts: RuntimeArtifactStore;
   readonly bus: RuntimeEventBus;
@@ -3197,6 +3229,12 @@ function createRuntimeRunService(deps: {
         settings,
         normalizedInput.inputArtifacts,
       );
+      const actorSession = options.agentMode === 'sa'
+        ? undefined
+        : await deps.actorRegistry.forSession(
+            input.sessionId,
+            options.maxConcurrentThreadsPerSession,
+          );
       const provider = options.provider ?? deps.defaultProvider;
       if (!provider) {
         throw new Error('runtime.runs.start requires input.options.provider or runtime defaultProvider');
@@ -3272,6 +3310,7 @@ function createRuntimeRunService(deps: {
         ...(input.agentContext ?? deps.defaultAgentContext
           ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
           : {}),
+        ...(actorSession ? { actorSession } : {}),
         result,
         start: {
           prompt: normalizedInput.prompt,
@@ -3794,11 +3833,14 @@ function buildRunOptions(input: {
       storage: sessionManager.storage,
     },
     events,
-    ...(agentPlane && record.agentContext
+    ...((record.actorSession || (agentPlane && record.agentContext))
       ? {
           context: {
             ...(options.context ?? {}),
-            agentExecutorPlane: { plane: agentPlane, context: record.agentContext },
+            ...(record.actorSession ? { actorSession: record.actorSession } : {}),
+            ...(agentPlane && record.agentContext
+              ? { agentExecutorPlane: { plane: agentPlane, context: record.agentContext } }
+              : {}),
           },
         }
       : {}),
@@ -3848,9 +3890,85 @@ function runtimeLocalListings(query: DispatchableAgentQuery): readonly Dispatcha
     .filter((listing) => listing.dispatchability.status === 'dispatchable');
 }
 
+interface RuntimeAgentActorRegistry {
+  forSession(sessionId: string, maxConcurrentThreads?: number): Promise<CodingActorSession>;
+  root(sessionId: string): Promise<AgentActorClient>;
+  close(reason: string): Promise<void>;
+}
+
+function createRuntimeAgentActorRegistry(sessionManager: SessionManager): RuntimeAgentActorRegistry {
+  const sessions = new Map<string, Promise<CodingActorSession>>();
+
+  const forSession = (
+    sessionId: string,
+    maxConcurrentThreads?: number,
+  ): Promise<CodingActorSession> => {
+    const existing = sessions.get(sessionId);
+    if (existing) {
+      return existing.then((session) => {
+        const actual = session.rootControl().list().maxConcurrentThreads;
+        if (maxConcurrentThreads !== undefined && maxConcurrentThreads !== actual) {
+          throw new Error(
+            `Actor concurrency for ${sessionId} is already ${actual}; cannot change it to ${maxConcurrentThreads}.`,
+          );
+        }
+        return session;
+      });
+    }
+    const created = (async () => {
+      const data = await sessionManager.storage.load(sessionId);
+      if (!data) throw new Error(`Session not found: ${sessionId}`);
+      const persistedMax = data.actorSnapshot?.maxConcurrentThreads;
+      if (
+        persistedMax !== undefined
+        && maxConcurrentThreads !== undefined
+        && persistedMax !== maxConcurrentThreads
+      ) {
+        throw new Error(
+          `Persisted Actor concurrency for ${sessionId} is ${persistedMax}; requested ${maxConcurrentThreads}.`,
+        );
+      }
+      const store: AgentActorStore = {
+        async load(): Promise<AgentActorSnapshot | undefined> {
+          return (await sessionManager.storage.load(sessionId))?.actorSnapshot;
+        },
+        save(snapshot, expectedRevision) {
+          return sessionManager.storage.saveActorSnapshot(sessionId, snapshot, expectedRevision);
+        },
+      };
+      const session = new CodingActorSession({
+        sessionId,
+        store,
+        maxConcurrentThreadsPerSession: maxConcurrentThreads ?? persistedMax,
+      });
+      await session.initialize();
+      return session;
+    })();
+    sessions.set(sessionId, created);
+    void created.catch(() => sessions.delete(sessionId));
+    return created;
+  };
+
+  return {
+    forSession,
+    async root(sessionId) {
+      return (await forSession(sessionId)).rootControl();
+    },
+    async close(reason) {
+      const settled = await Promise.allSettled([...sessions.values()]);
+      await Promise.all(settled.flatMap((result) => (
+        result.status === 'fulfilled' ? [result.value.close(reason)] : []
+      )));
+      sessions.clear();
+    },
+  };
+}
+
 function createRuntimeAgentService(
   plane: AgentExecutorPlane | undefined,
   bindings: RuntimeAgentBindingService,
+  actors: RuntimeAgentActorRegistry,
+  admission: RuntimeSessionAdmission,
 ): RuntimeAgentService {
   return {
     execution: bindings,
@@ -3888,6 +4006,42 @@ function createRuntimeAgentService(
         },
         reasons,
       };
+    },
+    async tree(sessionId) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).list();
+    },
+    async detail(sessionId, actorPath) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).get(actorPath);
+    },
+    async spawn(sessionId, input) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).spawn(input);
+    },
+    async send(sessionId, actorPath, content, classification) {
+      await admission.loadRequired(sessionId);
+      await (await actors.root(sessionId)).send(actorPath, content, classification);
+    },
+    async followup(sessionId, actorPath, objective) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).followup(actorPath, objective);
+    },
+    async interrupt(sessionId, actorPath, reason) {
+      await admission.loadRequired(sessionId);
+      await (await actors.root(sessionId)).interrupt(actorPath, reason);
+    },
+    async output(sessionId, actorPath, turnId) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).output(actorPath, turnId);
+    },
+    async events(sessionId, afterSequence) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).eventSnapshot(afterSequence);
+    },
+    async wait(sessionId, afterSequence, timeoutMs) {
+      await admission.loadRequired(sessionId);
+      return (await actors.root(sessionId)).wait(afterSequence, timeoutMs);
     },
   };
 }

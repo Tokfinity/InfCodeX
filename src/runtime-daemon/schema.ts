@@ -478,6 +478,57 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     result: nullableSchema(objectAnySchema),
   },
   'agents.preflight': { params: objectAnySchema, result: objectAnySchema },
+  'agents.tree': {
+    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    result: objectAnySchema,
+  },
+  'agents.detail': {
+    params: objectSchema({ sessionId: stringSchema, actorPath: stringSchema }, ['sessionId', 'actorPath']),
+    result: objectAnySchema,
+  },
+  'agents.spawn': {
+    params: objectSchema({ sessionId: stringSchema, input: objectAnySchema }, ['sessionId', 'input']),
+    result: objectAnySchema,
+  },
+  'agents.send': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      actorPath: stringSchema,
+      content: stringSchema,
+      classification: { enum: ['public', 'internal', 'sensitive'] },
+    }, ['sessionId', 'actorPath', 'content'], true),
+    result: okSchema,
+  },
+  'agents.followup': {
+    params: objectSchema({
+      sessionId: stringSchema, actorPath: stringSchema, objective: stringSchema,
+    }, ['sessionId', 'actorPath', 'objective']),
+    result: objectAnySchema,
+  },
+  'agents.interrupt': {
+    params: objectSchema({
+      sessionId: stringSchema, actorPath: stringSchema, reason: stringSchema,
+    }, ['sessionId', 'actorPath'], true),
+    result: okSchema,
+  },
+  'agents.output': {
+    params: objectSchema({
+      sessionId: stringSchema, actorPath: stringSchema, turnId: stringSchema,
+    }, ['sessionId', 'actorPath'], true),
+    result: objectAnySchema,
+  },
+  'agents.events': {
+    params: objectSchema({
+      sessionId: stringSchema, afterSequence: integerSchema,
+    }, ['sessionId'], true),
+    result: arrayAnySchema,
+  },
+  'agents.wait': {
+    params: objectSchema({
+      sessionId: stringSchema, afterSequence: integerSchema, timeoutMs: integerSchema,
+    }, ['sessionId'], true),
+    result: nullableSchema(objectAnySchema),
+  },
   'agentTasks.list': { params: objectAnySchema, result: arrayAnySchema },
   'agentTasks.start': { params: objectAnySchema, result: objectAnySchema },
   'agentTasks.get': {

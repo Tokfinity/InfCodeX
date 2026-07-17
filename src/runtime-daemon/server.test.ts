@@ -1551,6 +1551,22 @@ const METHOD_SMOKE_PARAMS = {
     agentId: 'external:smoke',
     query: { actorId: 'actor-smoke' },
   },
+  'agents.tree': { sessionId: 'session-1' },
+  'agents.detail': { sessionId: 'session-1', actorPath: '/root' },
+  'agents.spawn': {
+    sessionId: 'session-1',
+    input: { taskName: 'smoke', objective: 'Smoke test' },
+  },
+  'agents.send': {
+    sessionId: 'session-1', actorPath: '/root/smoke', content: 'continue',
+  },
+  'agents.followup': {
+    sessionId: 'session-1', actorPath: '/root/smoke', objective: 'Continue',
+  },
+  'agents.interrupt': { sessionId: 'session-1', actorPath: '/root/smoke' },
+  'agents.output': { sessionId: 'session-1', actorPath: '/root/smoke' },
+  'agents.events': { sessionId: 'session-1', afterSequence: 0 },
+  'agents.wait': { sessionId: 'session-1', afterSequence: 0, timeoutMs: 1 },
   'agentTasks.list': {},
   'agentTasks.start': {
     agentId: 'external:smoke',
@@ -2037,6 +2053,57 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           reasons: [],
         };
       },
+      async tree() {
+        return {
+          rootPath: '/root' as const,
+          actors: [],
+          activeNonRootTurns: 0,
+          maxConcurrentThreads: 4,
+          revision: 0,
+        };
+      },
+      async detail() {
+        return {
+          actor: {
+            path: '/root',
+            taskName: 'root',
+            kind: 'native' as const,
+            state: 'idle' as const,
+            capabilities: {
+              tools: [], filesystem: 'write' as const, network: true, providers: [], canAskUser: true,
+            },
+            turnIds: [],
+            mailboxCursor: 0,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            revision: 0,
+          },
+          turns: [],
+          mailbox: [],
+        };
+      },
+      async spawn() {
+        return { actorPath: '/root/smoke', turnId: 'turn-smoke', state: 'accepted' as const };
+      },
+      async send() {},
+      async followup() {
+        return {
+          delivery: 'started_turn' as const,
+          turn: { actorPath: '/root/smoke', turnId: 'turn-smoke', state: 'accepted' as const },
+        };
+      },
+      async interrupt() {},
+      async output() {
+        return {
+          actorPath: '/root/smoke',
+          turnId: 'turn-smoke',
+          state: 'completed' as const,
+          output: 'done',
+          artifacts: [],
+        };
+      },
+      async events() { return []; },
+      async wait() { return undefined; },
     },
     agentTasks: {
       async start() { return agentTask; },

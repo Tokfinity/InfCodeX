@@ -255,6 +255,34 @@ describe('F270 actor tree and scheduler', () => {
     expect(executor.pending[1]?.input.signal.aborted).toBe(true);
   });
 
+  it('interrupts unfinished turns on shutdown without permanently closing reusable actors', async () => {
+    let snapshot: AgentActorSnapshot | undefined;
+    const store: AgentActorStore = {
+      async load() { return snapshot; },
+      async save(next) { snapshot = next; },
+    };
+    const firstExecutor = new DeferredExecutor();
+    const first = await createAgentActorController({ executor: firstExecutor, store });
+    await first.spawn('/root', { taskName: 'worker', objective: 'First pass.' });
+
+    await first.shutdown('runtime stopped');
+
+    expect(firstExecutor.pending[0]?.input.signal.aborted).toBe(true);
+    expect(first.get('/root', '/root').actor.state).toBe('running');
+    expect(first.get('/root', '/root/worker').actor.state).toBe('idle');
+    expect(first.output('/root', '/root/worker')).toMatchObject({
+      state: 'interrupted', error: 'runtime stopped',
+    });
+
+    const restartedExecutor = new DeferredExecutor();
+    const restarted = await createAgentActorController({ executor: restartedExecutor, store });
+    await expect(restarted.followup('/root', '/root/worker', 'Resume.')).resolves.toMatchObject({
+      delivery: 'started_turn',
+      turn: { actorPath: '/root/worker' },
+    });
+    expect(restartedExecutor.pending).toHaveLength(1);
+  });
+
   it('restores abort handles when a durable mutation is rolled back', async () => {
     let failSave = false;
     const store: AgentActorStore = {

@@ -631,6 +631,60 @@ export function createRuntimeDaemonClient(
       preflight(input) {
         return request('agents.preflight', input) as ReturnType<KodaXRuntime['agents']['preflight']>;
       },
+      tree(sessionId) {
+        return request('agents.tree', { sessionId }) as ReturnType<KodaXRuntime['agents']['tree']>;
+      },
+      detail(sessionId, actorPath) {
+        return request('agents.detail', { sessionId, actorPath }) as ReturnType<
+          KodaXRuntime['agents']['detail']
+        >;
+      },
+      spawn(sessionId, input) {
+        assertRuntimeTransportSafe(input, 'agents.spawn');
+        return request('agents.spawn', { sessionId, input }) as ReturnType<
+          KodaXRuntime['agents']['spawn']
+        >;
+      },
+      async send(sessionId, actorPath, content, classification) {
+        await request('agents.send', {
+          sessionId,
+          actorPath,
+          content,
+          ...(classification !== undefined ? { classification } : {}),
+        });
+      },
+      followup(sessionId, actorPath, objective) {
+        return request('agents.followup', { sessionId, actorPath, objective }) as ReturnType<
+          KodaXRuntime['agents']['followup']
+        >;
+      },
+      async interrupt(sessionId, actorPath, reason) {
+        await request('agents.interrupt', {
+          sessionId,
+          actorPath,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      },
+      output(sessionId, actorPath, turnId) {
+        return request('agents.output', {
+          sessionId,
+          actorPath,
+          ...(turnId !== undefined ? { turnId } : {}),
+        }) as ReturnType<KodaXRuntime['agents']['output']>;
+      },
+      events(sessionId, afterSequence) {
+        return request('agents.events', {
+          sessionId,
+          ...(afterSequence !== undefined ? { afterSequence } : {}),
+        }) as ReturnType<KodaXRuntime['agents']['events']>;
+      },
+      wait(sessionId, afterSequence, timeoutMs) {
+        return request('agents.wait', {
+          sessionId,
+          ...(afterSequence !== undefined ? { afterSequence } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        }).then(nullToUndefined<Awaited<ReturnType<KodaXRuntime['agents']['wait']>>>);
+      },
     },
     agentTasks: {
       start(input) {

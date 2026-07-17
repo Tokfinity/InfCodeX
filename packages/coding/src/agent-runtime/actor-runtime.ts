@@ -92,6 +92,10 @@ export class CodingActorSession {
   rootControl(): AgentActorClient {
     return this.controller.bind('/root');
   }
+
+  async close(reason = 'runtime closed'): Promise<void> {
+    await this.controller.shutdown(reason);
+  }
 }
 
 export function createLocalCodingActorControl(

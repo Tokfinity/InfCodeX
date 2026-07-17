@@ -219,6 +219,21 @@ export class AgentActorController {
     for (const abort of aborts) abort.abort(reason);
   }
 
+  /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */
+  async shutdown(reason = 'runtime stopped'): Promise<void> {
+    const aborts = await this.mutate(() => {
+      const pendingAborts: AbortController[] = [];
+      for (const turn of this.turns.values()) {
+        if (isTerminal(turn.state)) continue;
+        const abort = this.abortControllers.get(turn.turnId);
+        if (abort) pendingAborts.push(abort);
+        this.finishTurn(turn.turnId, 'interrupted', { error: reason });
+      }
+      return pendingAborts;
+    });
+    for (const abort of aborts) abort.abort(reason);
+  }
+
   list(callerPath: string): AgentTreeSnapshot {
     this.requireActor(callerPath);
     return {

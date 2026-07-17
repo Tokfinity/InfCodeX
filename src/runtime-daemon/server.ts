@@ -180,6 +180,8 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'agentRegistrations.list', 'agentRegistrations.upsert', 'agentRegistrations.setEnabled',
     'agentRegistrations.remove',
     'agents.listDispatchable', 'agents.describe', 'agents.preflight',
+    'agents.tree', 'agents.detail', 'agents.spawn', 'agents.send', 'agents.followup',
+    'agents.interrupt', 'agents.output', 'agents.events', 'agents.wait',
     'agentTasks.list', 'agentTasks.get', 'agentTasks.events', 'agentTasks.wait', 'agentTasks.start',
     'agentTasks.sendInput', 'agentTasks.cancel', 'agentTasks.reconcile',
   ]),
@@ -788,6 +790,79 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.agents.preflight(
         requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agents']['preflight']>[0],
       );
+    case 'agents.tree':
+      return runtime.agents.tree(requireStringParam(request.params, 'sessionId'));
+    case 'agents.detail': {
+      const params = requireRecord(request.params);
+      return runtime.agents.detail(
+        requireStringField(params, 'sessionId'),
+        requireStringField(params, 'actorPath'),
+      );
+    }
+    case 'agents.spawn': {
+      const params = requireRecord(request.params);
+      return runtime.agents.spawn(
+        requireStringField(params, 'sessionId'),
+        requireRecord(params.input) as unknown as Parameters<KodaXRuntime['agents']['spawn']>[1],
+      );
+    }
+    case 'agents.send': {
+      const params = requireRecord(request.params);
+      const classification = optionalStringField(params, 'classification');
+      if (
+        classification !== undefined
+        && classification !== 'public'
+        && classification !== 'internal'
+        && classification !== 'sensitive'
+      ) throw daemonError('invalid_params', 'Invalid Agent message classification.');
+      await runtime.agents.send(
+        requireStringField(params, 'sessionId'),
+        requireStringField(params, 'actorPath'),
+        requireStringField(params, 'content'),
+        classification,
+      );
+      return { ok: true };
+    }
+    case 'agents.followup': {
+      const params = requireRecord(request.params);
+      return runtime.agents.followup(
+        requireStringField(params, 'sessionId'),
+        requireStringField(params, 'actorPath'),
+        requireStringField(params, 'objective'),
+      );
+    }
+    case 'agents.interrupt': {
+      const params = requireRecord(request.params);
+      await runtime.agents.interrupt(
+        requireStringField(params, 'sessionId'),
+        requireStringField(params, 'actorPath'),
+        optionalStringField(params, 'reason'),
+      );
+      return { ok: true };
+    }
+    case 'agents.output': {
+      const params = requireRecord(request.params);
+      return runtime.agents.output(
+        requireStringField(params, 'sessionId'),
+        requireStringField(params, 'actorPath'),
+        optionalStringField(params, 'turnId'),
+      );
+    }
+    case 'agents.events': {
+      const params = requireRecord(request.params);
+      return runtime.agents.events(
+        requireStringField(params, 'sessionId'),
+        optionalIntegerField(params, 'afterSequence'),
+      );
+    }
+    case 'agents.wait': {
+      const params = requireRecord(request.params);
+      return runtime.agents.wait(
+        requireStringField(params, 'sessionId'),
+        optionalIntegerField(params, 'afterSequence'),
+        optionalIntegerField(params, 'timeoutMs'),
+      );
+    }
     case 'agentTasks.list':
       requireExternalAgentsEnabled(runtime);
       return runtime.agentTasks.list(optionalRecord(request.params) as Parameters<KodaXRuntime['agentTasks']['list']>[0]);

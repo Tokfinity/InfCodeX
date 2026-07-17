@@ -119,6 +119,15 @@ export type RuntimeDaemonMethod =
   | 'agents.listDispatchable'
   | 'agents.describe'
   | 'agents.preflight'
+  | 'agents.tree'
+  | 'agents.detail'
+  | 'agents.spawn'
+  | 'agents.send'
+  | 'agents.followup'
+  | 'agents.interrupt'
+  | 'agents.output'
+  | 'agents.events'
+  | 'agents.wait'
   | 'agentTasks.list'
   | 'agentTasks.start'
   | 'agentTasks.get'
@@ -185,6 +194,10 @@ export type RuntimeDaemonMutationMethod =
   | 'agentRegistrations.upsert'
   | 'agentRegistrations.setEnabled'
   | 'agentRegistrations.remove'
+  | 'agents.spawn'
+  | 'agents.send'
+  | 'agents.followup'
+  | 'agents.interrupt'
   | 'agentTasks.start'
   | 'agentTasks.sendInput'
   | 'agentTasks.cancel'
@@ -387,6 +400,15 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'agents.listDispatchable',
   'agents.describe',
   'agents.preflight',
+  'agents.tree',
+  'agents.detail',
+  'agents.spawn',
+  'agents.send',
+  'agents.followup',
+  'agents.interrupt',
+  'agents.output',
+  'agents.events',
+  'agents.wait',
   'agentTasks.list',
   'agentTasks.start',
   'agentTasks.get',
@@ -454,6 +476,10 @@ export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMeth
   'agentRegistrations.upsert',
   'agentRegistrations.setEnabled',
   'agentRegistrations.remove',
+  'agents.spawn',
+  'agents.send',
+  'agents.followup',
+  'agents.interrupt',
   'agentTasks.start',
   'agentTasks.sendInput',
   'agentTasks.cancel',

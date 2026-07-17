@@ -589,6 +589,23 @@ function makeRuntime(
       async listDispatchable() { return []; },
       async describe() { return undefined; },
       async preflight() { throw new Error('External agents are disabled in this test runtime.'); },
+      async tree() {
+        return {
+          rootPath: '/root' as const,
+          actors: [],
+          activeNonRootTurns: 0,
+          maxConcurrentThreads: 4,
+          revision: 0,
+        };
+      },
+      async detail() { throw new Error('Actor not found.'); },
+      async spawn() { throw new Error('Actor execution is disabled in this test runtime.'); },
+      async send() { throw new Error('Actor execution is disabled in this test runtime.'); },
+      async followup() { throw new Error('Actor execution is disabled in this test runtime.'); },
+      async interrupt() { throw new Error('Actor execution is disabled in this test runtime.'); },
+      async output() { throw new Error('Actor execution is disabled in this test runtime.'); },
+      async events() { return []; },
+      async wait() { return undefined; },
     },
     agentTasks: {
       async start() { throw new Error('External agents are disabled in this test runtime.'); },
