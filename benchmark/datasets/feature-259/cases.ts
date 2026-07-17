@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import ts from 'typescript';
 
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
@@ -131,9 +133,31 @@ export function buildBaselineGenerationPrompt(request: string): string {
 }
 
 function tool(name: string): KodaXToolDefinition {
-  const definition = getToolDefinition(name);
+  const definition = getToolDefinition(name)
+    ?? (name === 'dispatch_child_task' ? retiredDispatchTool() : undefined);
   if (!definition) throw new Error(`missing production tool definition: ${name}`);
   return definition;
+}
+
+function retiredDispatchTool(): KodaXToolDefinition {
+  const raw = JSON.parse(
+    readFileSync(new URL('../feature-270/fixtures/baseline-tools.json', import.meta.url), 'utf8'),
+  ) as unknown;
+  if (!Array.isArray(raw)) throw new Error('feature-270 baseline tools fixture must be an array');
+  const value = raw.find((entry) => isRecord(entry) && entry.name === 'dispatch_child_task');
+  if (!isRecord(value) || typeof value.name !== 'string'
+    || typeof value.description !== 'string' || !isRecord(value.input_schema)) {
+    throw new Error('frozen dispatch_child_task definition is missing or malformed');
+  }
+  return {
+    name: value.name,
+    description: value.description,
+    input_schema: value.input_schema as KodaXToolDefinition['input_schema'],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function workflowTool(description: string): KodaXToolDefinition {

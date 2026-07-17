@@ -10,7 +10,11 @@ import {
   PROPOSED_RUN_WORKFLOW_DESCRIPTION,
 } from './cases.js';
 
-describe('FEATURE_259 executable eval cases', () => {
+// Historical prompt-reconstruction suite: FEATURE_270 intentionally replaced
+// the production collaboration prompt and retired dispatch_child_task. Keep
+// the frozen dataset importable for result analysis, but do not treat current
+// production bytes as an executable FEATURE_259 regression gate.
+describe.skip('FEATURE_259 executable eval cases', () => {
   const frozenBaselineVariantHashes = [
     '70648230afc0955f995e1c8a18043c05b43c9ffade2e4658f39bc5ee0f4e25c3',
     '05672311509067d291c841bfeb83614c44334d0a4f58bbbf1db113eed536a856',
