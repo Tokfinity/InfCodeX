@@ -54,6 +54,7 @@ export interface AgentTurn {
   readonly completedAt?: string;
   readonly output?: string;
   readonly artifacts?: readonly string[];
+  readonly structured?: AgentMetadataValue;
   readonly error?: string;
   readonly revision: number;
 }
@@ -128,6 +129,7 @@ export interface AgentOutput {
   readonly state: AgentTurnState;
   readonly output?: string;
   readonly artifacts: readonly string[];
+  readonly structured?: AgentMetadataValue;
   readonly error?: string;
 }
 
@@ -174,6 +176,7 @@ export interface AgentExecutionInput {
 export interface AgentExecutionResult {
   readonly output: string;
   readonly artifacts?: readonly string[];
+  readonly structured?: AgentMetadataValue;
 }
 
 export interface AgentTurnExecutor {

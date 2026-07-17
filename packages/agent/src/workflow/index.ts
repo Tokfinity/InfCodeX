@@ -35,8 +35,16 @@ export type {
   WorkflowModule,
   WorkflowAgentBackend,
   WorkflowRunStatus,
+  WorkflowOutcomeStatus,
+  WorkflowOutcomeResult,
+  WorkflowOutcomeError,
+  WorkflowOutcomeUsage,
+  WorkflowOutcome,
   WorkflowRunState,
 } from './types.js';
+
+export { buildWorkflowOutcome } from './outcome.js';
+export type { BuildWorkflowOutcomeInput } from './outcome.js';
 
 export type { WorkflowEvent, WorkflowEventType } from './events.js';
 export { WorkflowEventRecorder } from './events.js';

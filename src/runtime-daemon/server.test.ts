@@ -1567,21 +1567,6 @@ const METHOD_SMOKE_PARAMS = {
   'agents.output': { sessionId: 'session-1', actorPath: '/root/smoke' },
   'agents.events': { sessionId: 'session-1', afterSequence: 0 },
   'agents.wait': { sessionId: 'session-1', afterSequence: 0, timeoutMs: 1 },
-  'agentTasks.list': {},
-  'agentTasks.start': {
-    agentId: 'external:smoke',
-    objective: 'Smoke test',
-    context: { actorId: 'actor-smoke' },
-  },
-  'agentTasks.get': { taskId: 'agent-task-smoke' },
-  'agentTasks.events': { taskId: 'agent-task-smoke', cursor: 0 },
-  'agentTasks.wait': { taskId: 'agent-task-smoke', timeoutMs: 10 },
-  'agentTasks.sendInput': {
-    taskId: 'agent-task-smoke',
-    input: { content: 'continue' },
-  },
-  'agentTasks.cancel': { taskId: 'agent-task-smoke', reason: 'stop' },
-  'agentTasks.reconcile': { taskId: 'agent-task-smoke' },
   'context.budget.get': { sessionId: 'session-1', runId: 'run-1' },
   'tool.exposure.preview': { sessionId: 'session-1', runId: 'run-1' },
 } satisfies Record<RuntimeDaemonMethod, unknown>;
@@ -1632,29 +1617,6 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       reasons: [],
     },
   } as const;
-  const agentTask = {
-    taskId: 'agent-task-smoke',
-    route: 'external',
-    agentId: externalRegistration.agentId,
-    objective: 'Smoke test',
-    state: 'working',
-    cancellation: 'none',
-    registration: {
-      agentId: externalRegistration.agentId,
-      origin: 'external',
-      executorId: externalRegistration.executorId,
-      protocol: 'http',
-      configurationRevision: externalRegistration.configurationRevision,
-      endpointIdentityHash: externalRegistration.endpointIdentityHash,
-      capabilities: externalCapabilities,
-      effects: externalRegistration.effects,
-    },
-    idempotencyKey: 'agent-task-smoke-idempotency',
-    dispatchAttempt: 1,
-    createdAt: '2026-07-09T00:00:00.000Z',
-    updatedAt: '2026-07-09T00:00:00.000Z',
-  } as const;
-
   const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
     identity: {
       runtimeId: 'runtime-test',
@@ -2105,26 +2067,6 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       async events() { return []; },
       async wait() { return undefined; },
     },
-    agentTasks: {
-      async start() { return agentTask; },
-      async list() { return [agentTask]; },
-      async get() { return agentTask; },
-      async events() {
-        return [{
-          taskId: agentTask.taskId,
-          seq: 1,
-          timestamp: agentTask.createdAt,
-          type: 'submitted',
-          state: 'submitted',
-        }];
-      },
-      async wait() { return agentTask; },
-      async sendInput() { return agentTask; },
-      async cancel() {
-        return { ...agentTask, state: 'canceled', cancellation: 'confirmed' };
-      },
-      async reconcile() { return agentTask; },
-    },
     status: {
       async snapshot() {
         return {
@@ -2142,7 +2084,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           activeRuns: [],
           queuedRuns: [],
           activeWorkflows: [],
-          activeAgentTasks: [],
+          activeAgentTurns: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

@@ -144,6 +144,8 @@ export interface WorkflowTaskResult {
    *  spawn carried `outputSchema` and a JSON value was parsed from the child's
    *  output. The workflow script consumes it directly (e.g. `result.structured`). */
   readonly structured?: unknown;
+  /** Durable artifacts produced by this Agent turn. */
+  readonly artifacts?: readonly string[];
   /** Short user-facing digest, separate from the full finalText used for synthesis/audit. */
   readonly digest?: string;
   /** True when a digest was attempted but failed (error/timeout/empty); the UI then labels the excerpt fallback. */
@@ -382,11 +384,47 @@ export interface WorkflowAgentBackend {
 
 export type WorkflowRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
+export type WorkflowOutcomeStatus = 'completed' | 'partial' | 'failed' | 'interrupted';
+
+export interface WorkflowOutcomeResult {
+  readonly taskId: string;
+  readonly name: string;
+  readonly status: WorkflowTaskStatus;
+  readonly summary: string;
+  readonly structured?: unknown;
+  readonly artifacts: readonly string[];
+  readonly usage?: WorkflowTaskUsage;
+}
+
+export interface WorkflowOutcomeError {
+  readonly taskId?: string;
+  readonly name?: string;
+  readonly message: string;
+}
+
+export interface WorkflowOutcomeUsage extends WorkflowTaskUsage {
+  readonly totalSpawned: number;
+}
+
+/** Stable terminal payload exposed through the Workflow protocol owner's Agent output. */
+export interface WorkflowOutcome {
+  readonly runId: string;
+  readonly status: WorkflowOutcomeStatus;
+  readonly summary: string;
+  readonly results: readonly WorkflowOutcomeResult[];
+  readonly artifacts: readonly WorkflowArtifactRef[];
+  readonly coverage: readonly string[];
+  readonly unresolved: readonly string[];
+  readonly errors: readonly WorkflowOutcomeError[];
+  readonly usage: WorkflowOutcomeUsage;
+}
+
 /** Immutable snapshot of a workflow run's accumulated state. */
 export interface WorkflowRunState {
   readonly runId: string;
   readonly status: WorkflowRunStatus;
   readonly totalSpawned: number;
+  readonly results: readonly WorkflowTaskResult[];
   readonly events: readonly import('./events.js').WorkflowEvent[];
   readonly artifacts: readonly WorkflowArtifactRef[];
 }

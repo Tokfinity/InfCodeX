@@ -63,7 +63,7 @@ export const SIDECAR_SYSTEM_PROMPT: string = [
   '',
   'Call the `report_stall_judgment` tool exactly once. Do not narrate. Do not call any other tool.',
   '',
-  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop). Keep the nudge short and focused on one action.',
+  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, interrupt_agent). Keep the nudge short and focused on one action.',
   '',
   'If isStuck=false, leave nudge empty.',
 ].join('\n');
@@ -93,7 +93,7 @@ export const REPORT_TOOL: KodaXToolDefinition = {
       suggestedTool: {
         type: 'string',
         description:
-          'The specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop. Required when isStuck=true; pass empty string when isStuck=false.',
+          'The specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, interrupt_agent. Required when isStuck=true; pass empty string when isStuck=false.',
       },
       nudge: {
         type: 'string',

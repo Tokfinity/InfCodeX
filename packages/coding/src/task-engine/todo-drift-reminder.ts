@@ -32,8 +32,11 @@ const NON_WORK_TOOL_NAMES: ReadonlySet<string> = new Set([
   'exit_plan_mode',
   'get_goal',
   'send_message',
-  'task_output',
-  'task_stop',
+  'followup_task',
+  'wait_agent',
+  'interrupt_agent',
+  'list_agents',
+  'agent_output',
   'update_goal',
 ]);
 
@@ -70,7 +73,7 @@ export function hasPendingTodoWithoutActive(todoStore: TodoStore): boolean {
     && !items.some((item) => item.status === 'in_progress');
 }
 
-function isWriteDispatchChildTask(input: Record<string, unknown>): boolean {
+function isWriteAgentSpawn(input: Record<string, unknown>): boolean {
   return (input.read_only ?? input.readOnly) === false;
 }
 
@@ -86,8 +89,8 @@ export function isRealWorkToolCall(call: RunnerToolCall): boolean {
   const normalized = call.name.toLowerCase();
   if (!isVisibleToolName(normalized)) return false;
   if (NON_WORK_TOOL_NAMES.has(normalized)) return false;
-  if (normalized === 'dispatch_child_task') {
-    return isWriteDispatchChildTask(call.input);
+  if (normalized === 'spawn_agent') {
+    return isWriteAgentSpawn(call.input);
   }
   if (normalized === 'bash') {
     return isBashWorkSignal(call.input);

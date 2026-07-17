@@ -166,11 +166,15 @@ export const defaultManagedDispatchDeps: ManagedDispatchDeps = {
 // worktree_*, exit_plan_mode), plus run_workflow. send_message is excluded too —
 // a solo agent has no peers or Worker to address.
 const SA_SOLO_EXCLUDE_TOOLS: readonly string[] = [
-  'dispatch_child_task',
+  'list_dispatchable_agents',
+  'spawn_agent',
   'run_workflow',
-  'task_output',
-  'task_stop',
   'send_message',
+  'followup_task',
+  'wait_agent',
+  'interrupt_agent',
+  'list_agents',
+  'agent_output',
   'emit_managed_protocol',
 ];
 

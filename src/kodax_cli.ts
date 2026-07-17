@@ -585,7 +585,6 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
     mutationTracker: _mutationTracker,
     toolVisibilityPolicy: _toolVisibilityPolicy,
     planModeBlockCheck: _planModeBlockCheck,
-    inheritedChildTaskRegistry: _inheritedChildTaskRegistry,
     goalRuntime: _goalRuntime,
     lspService: _lspService,
     ...wireContext
@@ -622,7 +621,6 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
     ['context.mutationTracker', options.context?.mutationTracker],
     ['context.toolVisibilityPolicy', options.context?.toolVisibilityPolicy],
     ['context.planModeBlockCheck', options.context?.planModeBlockCheck],
-    ['context.inheritedChildTaskRegistry', options.context?.inheritedChildTaskRegistry],
     ['context.goalRuntime', options.context?.goalRuntime],
     ['context.lspService', options.context?.lspService],
   ];

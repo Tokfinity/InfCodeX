@@ -84,7 +84,7 @@ export const ALLOWED_SUGGESTED_TOOLS: readonly string[] = [
   'grep',
   'glob',
   'bash',
-  'task_stop',
+  'interrupt_agent',
 ];
 
 /**

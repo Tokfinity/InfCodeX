@@ -40,7 +40,6 @@ import { composeIdleYieldUserMessage, type EnvelopeAggregateEnforcer } from './i
 import { detectIdleYield } from './idle-yield.js';
 import { waitForWakeEvent } from './idle-yield.js';
 import type { IdleYieldSnapshot } from './idle-yield.js';
-import type { ChildTaskRegistry } from './task-registry.js';
 
 /** Default iteration cap matches the legacy `IDLE_YIELD_MAX_ITERATIONS` constant. */
 export const DEFAULT_IDLE_YIELD_MAX_ITERATIONS = 64;
@@ -57,7 +56,6 @@ export interface RunWithIdleYieldRunResult {
 
 export interface RunWithIdleYieldOptions<
   TRunResult extends RunWithIdleYieldRunResult,
-  TChildResult,
 > {
   /** Agent that executes the first iteration of the loop. */
   readonly initialAgent: Agent;
@@ -89,7 +87,6 @@ export interface RunWithIdleYieldOptions<
    * `registry` arm. Mutations to this map between iterations are
    * visible to the next wake.
    */
-  readonly registry: ChildTaskRegistry<TChildResult>;
   /** Process-global message queue. Passed verbatim to `waitForWakeEvent`. */
   readonly messageQueue: MessageQueue;
   /**
@@ -198,8 +195,7 @@ export interface RunWithIdleYieldOptions<
  */
 export async function runWithIdleYield<
   TRunResult extends RunWithIdleYieldRunResult,
-  TChildResult,
->(opts: RunWithIdleYieldOptions<TRunResult, TChildResult>): Promise<TRunResult> {
+>(opts: RunWithIdleYieldOptions<TRunResult>): Promise<TRunResult> {
   const maxIterations = opts.maxIterations ?? DEFAULT_IDLE_YIELD_MAX_ITERATIONS;
 
   let currentAgent: Agent = opts.initialAgent;
@@ -227,8 +223,7 @@ export async function runWithIdleYield<
 
     opts.onIdleWaiting?.(currentAgent, runResult);
 
-    const wakeEvent = await waitForWakeEvent<TChildResult>({
-      registry: opts.registry,
+    const wakeEvent = await waitForWakeEvent({
       messageQueue: opts.messageQueue,
       agentId: opts.agentId,
       abortSignal: opts.abortSignal,

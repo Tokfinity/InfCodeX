@@ -90,8 +90,6 @@ import type {
   MemoryContextIdentity,
   MemoryPack,
   SessionErrorMetadata,
-  ChildTaskRegistry,
-  TaskAbortRegistry,
   WorkflowIsolation,
   WorkflowEvent,
   WorkflowEventCorrelation,
@@ -100,6 +98,7 @@ import type {
   ISkillRegistry,
   AgentExecutorPlaneBinding,
   AgentActorClient,
+  AgentExecutionResult,
   AgentTurnExecutor,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
@@ -1310,6 +1309,12 @@ export interface KodaXSkillScriptRunner {
 /** Trusted coding host bridge; lifecycle state remains owned by the Agent controller. */
 export interface KodaXActorHost {
   createWorkflowOwner(parentPath: string, runId: string): Promise<AgentActorClient>;
+  workflowOwnerSignal(ownerPath: string): AbortSignal;
+  settleWorkflowOwner(
+    ownerPath: string,
+    state: 'completed' | 'failed' | 'interrupted',
+    result: AgentExecutionResult & { readonly error?: string },
+  ): Promise<void>;
   bindActor(actorPath: string): AgentActorClient;
   registerTurnExecutor(key: string, executor: AgentTurnExecutor): () => void;
   waitForAgentCapacity(signal?: AbortSignal): Promise<boolean>;
@@ -1465,15 +1470,6 @@ export interface KodaXContextOptions {
    * than the top-level Worker.
    */
   parentAgentId?: string;
-  /**
-   * FEATURE_123 v0.7.44 — when set, the spawned runtime's
-   * `ctx.childTaskRegistry` reuses this Map instead of allocating a
-   * fresh one. Children pass the parent's registry through so peer
-   * routing (`send_message` to a sibling task_id) finds the target.
-   * Children remain unable to mutate the registry because
-   * `dispatch_child_task` stays in `CHILD_EXCLUDE_TOOLS_BASE`.
-   */
-  inheritedChildTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
   /**
    * FEATURE_192 v0.7.44 Phase F — `/goal` runtime binding.
    *
@@ -2103,21 +2099,12 @@ export interface KodaXToolExecutionContext {
     readonly repoIntelligenceMode?: KodaXRepoIntelligenceMode;
     readonly repoIntelligenceTrace?: boolean;
   };
-  /**
-   * Parent SDK/REPL callback surface available to child-dispatch tools.
-   * `dispatch_child_task` uses this to preserve live child telemetry without
-   * copying every callback onto KodaXToolExecutionContext as a separate field.
-   */
+  /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */
   parentEvents?: KodaXEvents;
   /**
    * FEATURE_123 v0.7.44 — agentId of the agent whose tool call this
    * context backs. `undefined` for the top-level Worker (main runtime
    * loop); set to the child's `bundle.id` for sub-agent runtimes.
-   *
-   * Consumed by `send_message` to:
-   *   - know who "self" is for broadcast self-exclusion and for the
-   *     `from=...` framing tag,
-   *   - reject self-targeted sends as a single-hop cycle guard.
    *
    * Wired by `child-executor.executeReadChild` / `executeWriteChild`
    * via `options.context.currentAgentId`.
@@ -2130,31 +2117,13 @@ export interface KodaXToolExecutionContext {
    * `'worker'` sentinel rather than an agentId). Set for grand-child
    * runtimes whose parent is itself a child.
    *
-   * Consumed by `send_message` when `to === 'worker'`:
-   *   - If `parentAgentId` is set, route to that specific id.
-   *   - If `parentAgentId` is undefined, route to `agentId: undefined`
-   *     (the main loop / top Worker).
    */
   parentAgentId?: string;
   /**
    * FEATURE_123 v0.7.44 — per-turn `send_message` flood throttle counter.
    *
-   * Mutable ref that the `send_message` tool increments on every
-   * outbound enqueue (broadcast counts as N — one per recipient).
-   * `runner-driven.ts`' `beforeNextTurn` resets `count = 0` at every
-   * turn boundary so the limit is "per LLM turn", matching the
-   * design's "≤5 per child-turn / ≤20 per Worker-turn".
-   *
-   * The cap chosen by `send_message` is per-call:
-   *   - Worker (`currentAgentId === undefined`): 20 outbound enqueues
-   *     per turn — Worker is the coordinator + has the higher fan-out
-   *     budget.
-   *   - Child (`currentAgentId !== undefined`): 5 outbound enqueues
-   *     per turn — peer chatter that goes over this is almost always
-   *     a misfire (storm vs coordination).
-   *
-   * When undefined (sync-mode dispatch, no async substrate), the
-   * throttle is bypassed.
+   * Legacy-compatible per-turn collaboration throttle counter. Actor controls
+   * enforce their own topology and permission limits.
    */
   sendMessageTurnCounter?: { count: number };
   /**
@@ -2176,9 +2145,8 @@ export interface KodaXToolExecutionContext {
   planModeBlockCheck?: (tool: string, input: Record<string, unknown>) => string | null;
 
   /**
-   * FEATURE_092 phase 2b.7b slice D: parent-Runner guardrails surfaced into the
-   * tool-execution context so `dispatch_child_task` can forward them to the
-   * child's `Runner.run` via `KodaXOptions.guardrails`. Sharing the SAME
+   * Parent-Runner guardrails surfaced into the tool-execution context so nested
+   * Agent turns share the same mutable safety state. Sharing the SAME
    * guardrail instance means the auto-mode `engine` + `denialTracker` +
    * `circuitBreaker` state is observed across the parent/child boundary —
    * rate-limit by hitting the threshold from a fresh tracker).
@@ -2263,76 +2231,6 @@ export interface KodaXToolExecutionContext {
   siblingSnapshot?: readonly import('@kodax-ai/agent').DiscoveredInstance[];
 
   /**
-   * FEATURE_119 v0.7.36 Pattern B: registry of in-flight async child
-   * dispatches. When set, `dispatch_child_task` runs in fire-and-forget
-   * mode (returns a `task_id` immediately without awaiting). The Worker
-   * launches multiple children in parallel; under FEATURE_155 (v0.7.39)
-   * idle-yield, the runner-driven outer loop awaits the registered
-   * promises on the Worker's behalf and splices a `<task-completed>`
-   * banner into the next user turn — the Worker no longer pulls results
-   * itself (the legacy `await_child_task` tool was removed in Slice C1).
-   *
-   * The map's value is the executor's full result promise, identical to
-   * what the legacy synchronous dispatch returned.
-   *
-   * When `undefined`, dispatch falls back to the legacy synchronous path
-   * (await inline, return finding text). The registry is populated by
-   * `runner-driven.ts` per turn so each agent run has its own registry
-   * scope.
-   *
-   * **v0.7.39 FEATURE_120 Step 0**: the type alias is now imported from
-   * `@kodax-ai/agent`'s orchestration layer (`ChildTaskRegistry<T>`).
-   * Structure-compatible with the previous `Map<string, Promise<…>>`
-   * inline shape — the rename is a packaging-only change per ADR-021.
-   * Coding-flavor consumers should keep using
-   * `registerChildTask(registry, id, promise)` (also from
-   * `@kodax-ai/agent`) to get the FEATURE_155 Bug A cleanup chain
-   * built-in.
-   */
-  childTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
-
-  /**
-   * FEATURE_120 v0.7.39 Phase 3b: per-child AbortController registry.
-   * Provisioned alongside `childTaskRegistry` by `runner-driven.ts`
-   * when async dispatch is enabled. `dispatch_child_task` allocates
-   * a fresh `AbortController` per child and registers it here under
-   * the child's task id; the child's executor receives the controller's
-   * signal (chained with the parent's `abortSignal` so EITHER source
-   * can cancel the child). The `task_stop` tool looks up the
-   * controller and calls `requestTaskStop` to fire the signal.
-   *
-   * The map is cleaned in the dispatch handler's `.finally` chain
-   * alongside the child-task registry cleanup so an aborted or
-   * settled child does not leak its controller reference.
-   *
-   * Undefined in legacy sync-mode dispatch (same gate as
-   * `childTaskRegistry`).
-   */
-  childAbortControllers?: TaskAbortRegistry;
-
-  /**
-   * FEATURE_177 v0.7.45 substrate for the `task_output` tool. Per-child
-   * runtime snapshot a parent agent can query mid-flight to peek at
-   * iteration count + recent tool-call breadcrumbs without waiting for
-   * the child's `<task-completed>` banner.
-   *
-   * Populated by `dispatch_child_task` at launch (`initChildSnapshot`)
-   * and at terminal (`finalizeChildSnapshot` in the child promise's
-   * inner-IIFE `.finally`). The `task_output` tool reads from this map.
-   *
-   * Snapshots survive the child task settling (so post-completion peeks
-   * work) and are bounded by `CHILD_PROGRESS_SNAPSHOT_CAP` (FIFO prune
-   * by `startedAt` when the cap is exceeded). No TTL — snapshots are
-   * cleared with the ctx itself when the parent runner exits.
-   *
-   * Undefined in legacy sync-mode dispatch (same gate as
-   * `childTaskRegistry`). Children's own SA contexts do NOT inherit
-   * this map (verified by `buildToolExecutionContext` not forwarding
-   * it into child `runKodaX` calls).
-   */
-  childProgressSnapshots?: Map<string, import('./child-progress-snapshot.js').ChildProgressSnapshot>;
-
-  /**
    * FEATURE_192 v0.7.44 — `/goal` Persistent Goal runtime hook.
    *
    * Wired by the REPL adapter for every session with a lineage. When
@@ -2352,15 +2250,6 @@ export interface KodaXToolExecutionContext {
    */
   workflowHost?: WorkflowToolHost;
 
-  /**
-   * Gap A — run-level progress getters keyed by a background workflow's runId.
-   * The async `run_workflow` path registers a getter here on start and removes
-   * it when the run settles, so `task_output(runId)` can render live workflow
-   * progress (phase + active/finished agents) while it is in flight, instead of
-   * `not_found`. Same lifetime as `childAbortControllers` (per ctx). Undefined
-   * outside the async/idle-yield path.
-   */
-  workflowRunProgress?: Map<string, () => WorkflowRunProgressView | undefined>;
 }
 
 /** Result of a model-launched workflow run (FEATURE_246 Part A2). */
@@ -2399,42 +2288,13 @@ export interface WorkflowToolHostInlineInput {
   readonly source: string;
   readonly args?: unknown;
   readonly resumeFromRunId?: string;
-  /**
-   * Per-run abort signal, combined with the session signal. Lets the Worker stop
-   * THIS running workflow (via task_stop on its task_id) without aborting the
-   * whole session — so it can change the goal, stop, and re-run an improved script.
-   */
+  /** Per-run abort signal, combined with the session signal. */
   readonly signal?: AbortSignal;
 }
 
-/**
- * Compact live view of a running workflow. Surfaced so the Worker can peek at a
- * background `run_workflow`'s progress via `task_output(runId)` while it is still
- * in flight (gap A) — otherwise it only ever sees the final `<task-completed>`.
- * Derived on demand from the run's process snapshot; deliberately free of any
- * workflow-layer type import so this module stays dependency-light.
- */
-export interface WorkflowRunProgressView {
-  readonly status: 'running' | 'completed' | 'failed' | 'stopped';
-  readonly workflowName: string;
-  /** Active phase title (e.g. "Verify"), when the script uses phases. */
-  readonly phase?: string;
-  readonly phaseIndex?: number;
-  readonly phaseTotal?: number;
-  /** Names of the agents currently running. */
-  readonly activeAgents: readonly string[];
-  readonly completedAgents: number;
-  readonly failedAgents: number;
-  readonly stoppedAgents: number;
-  readonly totalSpawned: number;
-  readonly plannedAgents?: number;
-  readonly elapsedMs?: number;
-}
-
 /** ADR-049: a started-but-not-awaited workflow handle. `done` resolves with the
- *  terminal result when the run settles — the async run_workflow path registers it
- *  in the Worker's childTaskRegistry so the idle-yield loop resumes the Worker with
- *  the synthesis instead of blocking the turn. */
+ * terminal result when the run settles. The Workflow owner Actor exposes that
+ * result without blocking the launching turn. */
 export type WorkflowToolHostStartResult =
   | { readonly kind: 'declined'; readonly reason?: string }
   | {
@@ -2443,9 +2303,6 @@ export type WorkflowToolHostStartResult =
       readonly done: Promise<WorkflowToolHostResult>;
       /** Non-blocking diagnostic preflight warnings available immediately at start. */
       readonly workflowQualityWarnings?: readonly string[];
-      /** Gap A: on-demand live progress for a `task_output(runId)` peek while the
-       *  run is in flight. Absent when the host cannot snapshot the run. */
-      readonly getProgress?: () => WorkflowRunProgressView | undefined;
     };
 
 export interface WorkflowToolHost {

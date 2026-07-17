@@ -94,7 +94,13 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     // Subagent dispatch + construction-staircase tools that gate
     // tool-registry mutations through ConstructionRuntime — strictest
     // tier so deployments must explicitly allow-list them.
-    case 'dispatch_child_task':
+    case 'spawn_agent':
+    case 'send_message':
+    case 'followup_task':
+    case 'wait_agent':
+    case 'interrupt_agent':
+    case 'list_agents':
+    case 'agent_output':
     // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed; idle-
     // yield is the canonical wait mechanic. The case branch is dropped;
     // any leftover allow-list entry referencing it is a no-op (tool

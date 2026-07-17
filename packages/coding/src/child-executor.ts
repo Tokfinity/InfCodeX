@@ -1,8 +1,7 @@
 /**
  * Child Agent Executor — FEATURE_067
  *
- * Core execution engine for parallel child agents.
- * Called by dispatch_child_tasks tool (v2) or directly by orchestration layer.
+ * Core execution engine for nested and Workflow child agents.
  * Read children share parent cwd; write children share parent cwd as well
  * (FEATURE_188 v0.7.42 dropped forced worktree — per-file `backups` Map is
  * the per-child rollback substrate; prompt-level peer coordination handles
@@ -54,7 +53,7 @@ import {
 } from '@kodax-ai/agent';
 import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
-// returns `Agent | undefined`; the dispatch-child-tasks layer has already
+// returns `Agent | undefined`; the Actor adapter has already
 // rejected unknown names before bundle construction, so a re-resolve here is
 // expected to succeed for any bundle that carries `specialistName`.
 // `getAllRegisteredTools` powers the complementary excludeTools computation
@@ -69,9 +68,7 @@ import {
 import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
-// → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
-// `dispatch_child_tasks` is a coarse-grained tool that spins up a fresh
-// KodaX agent per child; the runtime import defers agent module resolution
+// → child-executor.ts → agent.ts`. The runtime import defers agent resolution
 // until a child is actually spawned, by which point the parent module graph
 // has fully initialised. No top-level `import ... from './agent.js'` or
 // `typeof import('./agent.js')` references — both count as edges in madge.
@@ -86,7 +83,7 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
     // specifier (e.g. `const spec = './agent.js'; import(spec)`) is left as a
     // raw runtime import that resolves relative to the *bundle* location
     // (dist/kodax_cli.js → dist/agent.js, which does not exist) and breaks
-    // every dispatch_child_task in the packaged CLI. The dynamic import still
+    // every nested Agent turn in the packaged CLI. The dynamic import still
     // breaks the require cycle (FEATURE_093) because it defers agent-module
     // initialisation to first child spawn — esbuild wraps the inlined target
     // in a lazily-evaluated factory, so the literal does not re-introduce an
@@ -119,7 +116,7 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
         }
         const detail = err instanceof Error ? err.message : String(err);
         throw new Error(
-          `[child-executor] Failed to lazy-load agent module (\`${spec}\`) for dispatch_child_task. ` +
+          `[child-executor] Failed to lazy-load agent module (\`${spec}\`) for a nested Agent turn. ` +
           `This usually means the @kodax-ai/coding build is broken or out of date. ` +
           `Underlying cause: ${detail}`,
         );
@@ -229,16 +226,6 @@ export interface ChildExecutorOptions {
    */
   readonly guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
 
-  /**
-   * FEATURE_177 v0.7.45: optional bridge that feeds per-child events
-   * (iteration start, tool-use start) into the parent's snapshot map.
-   * Closes over `ctx.childProgressSnapshots` at the dispatch site so
-   * the writer and `task_output` reader share one Map instance. Absent
-   * on the sync-dispatch path (no in-flight state to peek at).
-   */
-  readonly snapshotUpdater?: (
-    event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
-  ) => void;
   /** Runtime-minted principal inherited by the child runtime for recursive collaboration. */
   readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
   /** Trusted host bridge inherited beside the principal for nested Workflow owners. */
@@ -753,7 +740,6 @@ async function createWorkflowChildDigest(
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
           currentAgentId: input.bundle.id,
           parentAgentId: input.scopeCtx.currentAgentId,
-          inheritedChildTaskRegistry: input.scopeCtx.childTaskRegistry,
         },
       },
       WORKFLOW_CHILD_DIGEST_PROMPT,
@@ -889,7 +875,6 @@ async function resolveChildStructuredOutput(input: {
           agentScope: input.scopeCtx.agentScope,
           currentAgentId: input.bundle.id,
           parentAgentId: input.scopeCtx.currentAgentId,
-          inheritedChildTaskRegistry: input.scopeCtx.childTaskRegistry,
         },
       },
       buildStructuredOutputRepairPrompt(first.errors, schema),
@@ -1085,7 +1070,7 @@ async function runReadChildBody(
     bundle.id,
     options.onProgress,
     options.planModeBlockCheck,
-    options.snapshotUpdater,
+    undefined,
     options.parentOptions.events,
     options.workflowCorrelation,
     options.childActivityName,
@@ -1188,7 +1173,6 @@ async function runReadChildBody(
           // dispatch_child_task tool).
           currentAgentId: bundle.id,
           parentAgentId: scope.ctx.currentAgentId,
-          inheritedChildTaskRegistry: scope.ctx.childTaskRegistry,
           ...(scope.ctx.skillInvocation ? { skillInvocation: scope.ctx.skillInvocation } : {}),
         },
         events: childEvents,
@@ -1317,7 +1301,7 @@ async function runWriteChildBody(
     bundle.id,
     options.onProgress,
     options.planModeBlockCheck,
-    options.snapshotUpdater,
+    undefined,
     options.parentOptions.events,
     options.workflowCorrelation,
     options.childActivityName,
@@ -1422,7 +1406,6 @@ async function runWriteChildBody(
           // propagation rules).
           currentAgentId: bundle.id,
           parentAgentId: childCtx.currentAgentId,
-          inheritedChildTaskRegistry: childCtx.childTaskRegistry,
           ...(childCtx.skillInvocation ? { skillInvocation: childCtx.skillInvocation } : {}),
         },
         events: childEvents,
@@ -1926,9 +1909,7 @@ export function buildChildEvents(
   childId: string,
   onProgress?: (status: string) => void,
   planModeBlockCheck?: PlanModeBlockCheck,
-  snapshotUpdater?: (
-    event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
-  ) => void,
+  _retiredProgressBridge?: unknown,
   parentEvents?: KodaXEvents,
   workflowCorrelation?: WorkflowEventCorrelation,
   childName?: string,
@@ -2062,9 +2043,6 @@ export function buildChildEvents(
       // FEATURE_177: feed iteration into snapshot. Not throttled — one
       // event per iteration is at most a few times per second and we
       // want the snapshot iteration count to be exact, not approximate.
-      if (snapshotUpdater) {
-        snapshotUpdater({ kind: 'iteration', iteration: iter, maxIterations: maxIter });
-      }
     },
     // Combined progress: "sec-coding [3/200] → read src/foo.ts" (throttled)
     onIterationEnd: (info) => {
@@ -2091,15 +2069,6 @@ export function buildChildEvents(
       // of the REPL throttle — breadcrumbs are bounded by the
       // ring-buffer cap, so emitting one per tool call cannot grow the
       // snapshot unbounded.
-      if (snapshotUpdater) {
-        snapshotUpdater({
-          kind: 'tool-start',
-          iteration: iterationCount,
-          toolName: tool.name,
-          inputHint: hintStr,
-          startedAt: Date.now(),
-        });
-      }
     },
     onToolInputDelta: (toolName, partialJson, meta) => {
       parentEvents?.onToolInputDelta?.(

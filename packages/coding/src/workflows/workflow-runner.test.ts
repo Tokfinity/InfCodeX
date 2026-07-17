@@ -22,6 +22,7 @@ import type {
 import { WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
 import type { KodaXEvents, KodaXOptions, KodaXWorkflowAgentDigestEvent } from '../types.js';
+import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
 import { buildApprovalSummary, emitWorkflowAgentDigest, runWorkflowFromOptions, runWorkflowModule } from './workflow-runner.js';
 
@@ -389,6 +390,53 @@ describe('runWorkflowModule', () => {
     expect(outcome.kind).toBe('completed');
     expect(childExecutorMock.calls).toHaveLength(1);
     expect(childExecutorMock.calls[0]?.bundles[0]?.readOnly).toBe(true);
+  });
+
+  it('settles the zero-slot Workflow owner with a structured terminal outcome', async () => {
+    const actorSession = new CodingActorSession();
+    await actorSession.initialize();
+    const root = actorSession.rootControl();
+    const module: WorkflowModule<unknown, { readonly summary: string }> = {
+      meta: {
+        name: 'owner-outcome',
+        description: 'Exposes a stable Workflow owner result',
+        readOnly: true,
+      },
+      run: async (wf) => {
+        await wf.runAgent({ name: 'review', prompt: 'review' });
+        return { summary: 'Review complete.' };
+      },
+    };
+
+    const outcome = await runWorkflowFromOptions({
+      module,
+      args: {},
+      options: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        context: { actorControl: root, actorHost: actorSession },
+      } as KodaXOptions,
+      runId: 'run-owner-outcome',
+      runDir: dir,
+    });
+
+    expect(outcome.kind).toBe('completed');
+    expect(root.output('/root/workflow:run-owner-outcome')).toMatchObject({
+      state: 'completed',
+      structured: {
+        runId: 'run-owner-outcome',
+        status: 'completed',
+        summary: 'Review complete.',
+        coverage: ['review'],
+        unresolved: [],
+        usage: { totalSpawned: 1 },
+      },
+    });
+    expect(root.get('/root').mailbox.filter((message) => (
+      message.senderPath === '/root/workflow:run-owner-outcome'
+      && message.kind === 'completion'
+    ))).toHaveLength(1);
+    await actorSession.close();
   });
 
   it('forwards each child agent completion to options.events.onWorkflowAgentDigest (ADR-049, end-to-end)', async () => {

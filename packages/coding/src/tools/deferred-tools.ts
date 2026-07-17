@@ -49,7 +49,7 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
 
   // FEATURE_259 — workflow authoring is a resident identity/activation hint;
   // the full orchestration guide remains available through tool_search.
-  run_workflow: 'Partitioned multi-agent work needing synthesis/verification: if plan is recorded, call instead of todo/dispatch. Runs manifest + source with structured output/resume; returns background task_id—idle-yield. `tool_search("run_workflow")` for contract.',
+  run_workflow: 'Explicitly requested Workflow execution: runs manifest + source with structured output/resume and returns a canonical Workflow actor path. `tool_search("run_workflow")` for contract.',
 
   // FEATURE_192 v0.7.44 — /goal Persistent Goal tools.
   // Hint-only on turn-1 to keep no-goal sessions context-clean; full

@@ -5,11 +5,12 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
-import type { AgentTaskSnapshot, ManagedWorkflowSnapshot } from '@kodax-ai/agent';
+import type { ManagedWorkflowSnapshot } from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
   RuntimeCompactSessionResult,
+  RuntimeActiveAgentTurn,
   RuntimeDaemonPreflight,
   RuntimeEvent,
   RuntimeEventFilter,
@@ -244,7 +245,7 @@ describe('runtime daemon host', () => {
 
   it('advances management revision for daemon-owned background lifecycle changes', async () => {
     let activeWorkflow: ManagedWorkflowSnapshot | undefined;
-    let activeAgentTask: AgentTaskSnapshot | undefined;
+    let activeAgentTurn: RuntimeActiveAgentTurn | undefined;
     const backgroundWorkflow: ManagedWorkflowSnapshot = {
       runId: 'workflow-background',
       workflow: 'background-review',
@@ -256,17 +257,17 @@ describe('runtime daemon host', () => {
     const runtime = makeRuntime({
       async preflight() {
         const activeWorkflows = activeWorkflow ? [activeWorkflow] : [];
-        const activeAgentTasks = activeAgentTask ? [activeAgentTask] : [];
+        const activeAgentTurns = activeAgentTurn ? [activeAgentTurn] : [];
         const blockers: RuntimeDaemonPreflight['blockers'][number][] = [];
         if (activeWorkflows.length > 0) blockers.push('active_workflows');
-        if (activeAgentTasks.length > 0) blockers.push('active_agent_tasks');
+        if (activeAgentTurns.length > 0) blockers.push('active_agent_turns');
         return {
           runtimeId: 'runtime-host-test',
           clientCount: 0,
           activeRuns: [],
           queuedRuns: [],
           activeWorkflows,
-          activeAgentTasks,
+          activeAgentTurns,
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers,
@@ -309,7 +310,7 @@ describe('runtime daemon host', () => {
     });
 
     activeWorkflow = backgroundWorkflow;
-    activeAgentTask = backgroundAgentTask();
+    activeAgentTurn = backgroundAgentTurn();
     await expect(client.request('daemon.rollbackToInline', {
       expectedRuntimeId: first.runtimeId,
       expectedRevision: first.revision,
@@ -322,15 +323,14 @@ describe('runtime daemon host', () => {
     };
     expect(changed.revision).toBeGreaterThan(first.revision);
     expect(changed.preflight).toMatchObject({
-      blockers: expect.arrayContaining(['active_workflows', 'active_agent_tasks']),
+      blockers: expect.arrayContaining(['active_workflows', 'active_agent_turns']),
       canStop: false,
     });
 
     activeWorkflow = { ...backgroundWorkflow, eventCount: 2 };
-    activeAgentTask = {
-      ...activeAgentTask,
-      progress: { percent: 50 },
-      updatedAt: '2026-07-15T00:00:01.000Z',
+    activeAgentTurn = {
+      ...activeAgentTurn,
+      turnId: 'turn-background-followup',
     };
     const progressed = await client.request('daemon.management.get') as {
       revision: number;
@@ -339,7 +339,7 @@ describe('runtime daemon host', () => {
     expect(progressed.revision).toBeGreaterThan(changed.revision);
 
     activeWorkflow = undefined;
-    activeAgentTask = undefined;
+    activeAgentTurn = undefined;
     const settled = await client.request('daemon.management.get') as {
       revision: number;
       preflight: RuntimeDaemonPreflight;
@@ -347,7 +347,7 @@ describe('runtime daemon host', () => {
     expect(settled.revision).toBeGreaterThan(progressed.revision);
     expect(settled.preflight).toMatchObject({
       activeWorkflows: [],
-      activeAgentTasks: [],
+      activeAgentTurns: [],
       blockers: [],
       canStop: true,
     });
@@ -981,16 +981,6 @@ function makeRuntime(options: {
       async events() { return []; },
       async wait() { return undefined; },
     },
-    agentTasks: {
-      async start() { throw new Error('External agents are disabled in this test runtime.'); },
-      async list() { return []; },
-      async get() { throw new Error('External agents are disabled in this test runtime.'); },
-      async events() { throw new Error('External agents are disabled in this test runtime.'); },
-      async wait() { throw new Error('External agents are disabled in this test runtime.'); },
-      async sendInput() { throw new Error('External agents are disabled in this test runtime.'); },
-      async cancel() { throw new Error('External agents are disabled in this test runtime.'); },
-      async reconcile() { throw new Error('External agents are disabled in this test runtime.'); },
-    },
     status: {
       async snapshot() {
         return {
@@ -1009,7 +999,7 @@ function makeRuntime(options: {
           activeRuns: [],
           queuedRuns: [],
           activeWorkflows: [],
-          activeAgentTasks: [],
+          activeAgentTurns: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],
@@ -1032,33 +1022,12 @@ function makeRuntime(options: {
   return runtime;
 }
 
-function backgroundAgentTask(): AgentTaskSnapshot {
+function backgroundAgentTurn(): RuntimeActiveAgentTurn {
   return {
-    taskId: 'agent-task-background',
-    route: 'external',
-    agentId: 'external:background',
-    objective: 'Background task',
-    state: 'working',
-    cancellation: 'none',
-    registration: {
-      agentId: 'external:background',
-      origin: 'external',
-      executorId: 'background-executor',
-      protocol: 'http',
-      configurationRevision: 'rev-1',
-      capabilities: {
-        streaming: 'supported',
-        durableTasks: 'supported',
-        inputRequired: 'supported',
-        cancellation: 'supported',
-        artifacts: 'supported',
-      },
-      effects: { remote: 'read', workspace: 'proposal' },
-    },
-    idempotencyKey: 'background-idempotency',
-    dispatchAttempt: 1,
-    createdAt: '2026-07-15T00:00:00.000Z',
-    updatedAt: '2026-07-15T00:00:00.000Z',
+    sessionId: 'session-background',
+    actorPath: '/root/background',
+    turnId: 'turn-background',
+    kind: 'external',
   };
 }
 

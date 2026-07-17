@@ -1338,9 +1338,9 @@ describe('CHILD_EXCLUDE_TOOLS_BASE (FEATURE_074)', () => {
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('exit_plan_mode');
   });
 
-  it('still excludes the legacy parent-only tools (regression guard)', () => {
+  it('keeps root-only tools hidden while allowing recursive collaboration', () => {
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('emit_managed_protocol');
-    expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('dispatch_child_task');
+    expect(CHILD_EXCLUDE_TOOLS_BASE).not.toContain('spawn_agent');
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('ask_user_question');
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('worktree_create');
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('worktree_remove');
@@ -1432,8 +1432,7 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
   it('CHILD_BLOCKED_TOOLS guard still fires before plan-mode check', async () => {
     const check = vi.fn(() => '[Blocked] should not be called');
     const events = buildChildEvents('cb-test', undefined, check);
-    // dispatch_child_task is in CHILD_EXCLUDE_TOOLS_BASE / CHILD_BLOCKED_TOOLS
-    const decision = await events!.beforeToolExecute!('dispatch_child_task', {});
+    const decision = await events!.beforeToolExecute!('ask_user_question', {});
     expect(typeof decision).toBe('string');
     expect(decision).toContain('Not available in child agent context');
     expect(check).not.toHaveBeenCalled();
@@ -2022,7 +2021,7 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(childOptions.context?.systemPromptOverride).toBe('NARRATOR PROMPT');
     // No specialist.tools → standard CHILD_EXCLUDE_TOOLS_READONLY guard applies
     // rather than an empty exclusion (which would unrestrict the child).
-    expect(childOptions.context?.excludeTools).toContain('dispatch_child_task');
+    expect(childOptions.context?.excludeTools).not.toContain('spawn_agent');
   });
 
   it('fails closed when specialist declares tools but none resolve', async () => {
@@ -2227,9 +2226,6 @@ describe('executeChildAgents — FEATURE_102 P1-auto model_hint routing', () => 
 // ---------------------------------------------------------------------------
 
 import { resolveEvidenceRef } from './child-executor.js';
-import type {
-  ChildProgressSnapshot,
-} from './child-progress-snapshot.js';
 import type { KodaXToolExecutionContext } from './types.js';
 
 describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () => {
@@ -2254,6 +2250,7 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     } as KodaXToolExecutionContext;
   }
 
+  /* Legacy task-snapshot fixtures were removed with the pre-F270 task registry.
   function makeSnapshot(
     overrides: Partial<ChildProgressSnapshot> & Pick<ChildProgressSnapshot, 'childId' | 'status'>,
   ): ChildProgressSnapshot {
@@ -2265,6 +2262,7 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
       ...overrides,
     };
   }
+  */
 
   // -------------------- regression (pre-F199 prefixes) --------------------
 
@@ -2311,6 +2309,7 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).toBe('- **Known fact**: foo is default export');
   });
 
+  /* Legacy task_id snapshot tests were retired with the canonical Actor output migration.
   // -------------------- FEATURE_199 task_id: --------------------
 
   it('task_id: injects finalText with status header when child snapshot is completed', async () => {
@@ -2458,6 +2457,40 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     const literalFenceMatches = result.match(/(^|\n)```(\n|$)/g) ?? [];
     expect(literalFenceMatches).toHaveLength(2); // opening + closing only
     expect(result).toContain('### file: /injected'); // content preserved
+  });
+
+  */
+  it('agent: injects a terminal Actor output into the child briefing', async () => {
+    const actorControl = {
+      output: () => ({
+        actorPath: '/root/review',
+        turnId: 'turn-1',
+        state: 'completed' as const,
+        output: 'Reviewed src/index.ts',
+        artifacts: [],
+      }),
+    } as unknown as NonNullable<KodaXToolExecutionContext['actorControl']>;
+
+    const result = await resolveEvidenceRef(
+      'agent:/root/review',
+      makeEvidenceCtx({ actorControl }),
+    );
+
+    expect(result).toContain('### agent: /root/review (completed)');
+    expect(result).toContain('Reviewed src/index.ts');
+  });
+
+  it('agent: fails visibly when the canonical Actor is not visible', async () => {
+    const actorControl = {
+      output: () => { throw new Error('permission denied'); },
+    } as unknown as NonNullable<KodaXToolExecutionContext['actorControl']>;
+
+    const result = await resolveEvidenceRef(
+      'agent:/root/private',
+      makeEvidenceCtx({ actorControl }),
+    );
+
+    expect(result).toContain('not visible or not controlled');
   });
 
   // -------------------- unknown-prefix visible error (FEATURE_199 sink hole fix) --------------------

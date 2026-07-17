@@ -333,7 +333,7 @@ const TOPICS: readonly KodaXManualTopic[] = [
       'tools, model) + a body prompt. KodaX loads:',
       '  - user agents:    ~/.kodax/agents/*.md',
       '  - project agents: <repo>/.kodax/agents/*.md  (override user agents of the same name)',
-      'The main agent dispatches one as a child via dispatch_child_task(subagent_type="<name>").',
+      'The main Agent starts one through spawn_agent(agent_id="<name>").',
       'Difference from skills: an agent is a full sub-agent (own prompt/tools); a skill is',
       'reference knowledge injected into the current agent.',
     ].join('\n'),

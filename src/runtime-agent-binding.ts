@@ -189,7 +189,16 @@ interface BindingResources {
 const NATIVE_READ_TOOLS = ['read', 'grep', 'glob'] as const;
 const NATIVE_WRITE_TOOLS = ['write', 'edit', 'multi_edit', 'insert_after_anchor'] as const;
 const MCP_TOOLS = ['mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt'] as const;
-const SUBAGENT_TOOLS = ['list_dispatchable_agents', 'dispatch_child_task', 'task_output', 'task_stop', 'send_message'] as const;
+const SUBAGENT_TOOLS = [
+  'list_dispatchable_agents',
+  'spawn_agent',
+  'send_message',
+  'followup_task',
+  'wait_agent',
+  'interrupt_agent',
+  'list_agents',
+  'agent_output',
+] as const;
 const PATH_TOOLS = new Set<string>([...NATIVE_READ_TOOLS, ...NATIVE_WRITE_TOOLS]);
 const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
 const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);

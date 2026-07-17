@@ -34,7 +34,6 @@ import {
   resolveCodingDispatchableAgent,
 } from '../external-agents/local-catalog.js';
 import { assertSupportedOutputSchema } from './structured-output.js';
-import type { ChildProgressStatus } from '../child-progress-snapshot.js';
 import type {
   KodaXChildContextBundle,
   KodaXChildExecutionResult,
@@ -45,6 +44,8 @@ import type {
   KodaXWireReasoningEffort,
 } from '../types.js';
 
+type WorkflowChildSnapshotStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
 const execFileAsync = promisify(execFile);
 const GIT_STATUS_TIMEOUT_MS = 10_000;
 const DEFAULT_VERIFICATION_REPAIR_ATTEMPTS = 2;
@@ -53,14 +54,11 @@ const READING_TOOL_NAMES = new Set(['read']);
 const PREPARATORY_FINAL_TEXT_RE =
   /^\s*(?:let me|i will|i'll|i am going to)\b[\s\S]{0,120}\b(?:start|create|implement|write|build|plan)\b|^\s*(?:我将|让我|接下来)[\s\S]{0,80}(?:开始|创建|编写|实现|制定)/i;
 
-/** The subset of `ChildExecutorOptions` the caller fixes once per run;
- *  the adapter adds `maxParallel` / `abortSignal` / `snapshotUpdater`
- *  per spawn. */
+/** The subset of `ChildExecutorOptions` the caller fixes once per run. */
 export type WorkflowChildOptions = Omit<
   ChildExecutorOptions,
   | 'maxParallel'
   | 'abortSignal'
-  | 'snapshotUpdater'
   | 'workflowChild'
   | 'workflowDigestMode'
   | 'onWorkflowChildDigest'
@@ -490,6 +488,7 @@ function buildBundle(
   childId: string,
   input: WorkflowSpawnAgentInput,
   knownTaskIds?: ReadonlySet<string>,
+  actorPathByTaskId?: ReadonlyMap<string, string>,
   kodaxAuthored = false,
 ): KodaXChildContextBundle {
   // FEATURE_246 Phase 2: fail fast at spawn if the declared outputSchema uses a
@@ -510,7 +509,13 @@ function buildBundle(
     objective: input.prompt,
     ...(input.scopeSummary ? { scopeSummary: input.scopeSummary } : {}),
     readOnly: input.readOnly ?? false,
-    evidenceRefs: input.evidenceRefs ? [...input.evidenceRefs] : [],
+    evidenceRefs: input.evidenceRefs?.map((ref) => {
+      if (!ref.startsWith('task_id:')) return ref;
+      const taskId = ref.slice('task_id:'.length).trim();
+      const actorPath = actorPathByTaskId?.get(taskId);
+      if (!actorPath) throw new Error(`Workflow task ${taskId} has no Actor path.`);
+      return `agent:${actorPath}`;
+    }) ?? [],
     constraints: input.constraints ? [...input.constraints] : [],
     ...(input.modelHint ? { modelHint: input.modelHint } : {}),
     ...(input.isolation ? { isolation: input.isolation } : {}),
@@ -535,7 +540,7 @@ function deriveTerminal(
   taskId: string,
 ): {
   status: WorkflowTaskStatus;
-  snapStatus: ChildProgressStatus;
+  snapStatus: WorkflowChildSnapshotStatus;
   finalText: string;
   digest?: string;
   digestFailed?: boolean;
@@ -806,6 +811,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       childId,
       effectiveInput,
       new Set(stepBindings.keys()),
+      new Map([...stepBindings].map(([taskId, binding]) => [taskId, binding.actorPath])),
       deps.kodaxAuthored === true,
     );
     const resolvedVerification = resolveVerificationForInput(effectiveInput);
@@ -986,6 +992,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
           ? 'completed'
           : output.state === 'interrupted' ? 'stopped' : 'failed',
         finalText: output.output ?? output.error ?? '',
+        ...(output.structured === undefined ? {} : { structured: output.structured }),
+        ...(output.artifacts.length === 0 ? {} : { artifacts: output.artifacts }),
       };
     }
     let result = await waitForAttempt(entry.promise);
@@ -1033,7 +1041,9 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       const repairBundle = buildBundle(taskId, {
         ...entry.input,
         prompt: repairPrompt,
-      }, undefined, deps.kodaxAuthored === true);
+      }, new Set(stepBindings.keys()), new Map(
+        [...stepBindings].map(([knownTaskId, binding]) => [knownTaskId, binding.actorPath]),
+      ), deps.kodaxAuthored === true);
       const registered = registerExecution(
         taskId,
         repairBundle,
@@ -1115,6 +1125,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.provider ? { provider: term.provider } : {}),
       ...(term.model ? { model: term.model } : {}),
       ...(term.structured !== undefined ? { structured: term.structured } : {}),
+      ...(result.mergedArtifacts.length > 0 ? { artifacts: result.mergedArtifacts.filter(Boolean) } : {}),
       ...(digestTokensUsed > 0 ? { digestUsage: digestUsage ?? { totalTokens: digestTokensUsed } } : {}),
       ...(term.routeFacts ? {
         requestedTier: initialRouteFacts?.requestedTier ?? term.routeFacts.requestedTier,

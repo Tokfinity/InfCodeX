@@ -128,14 +128,6 @@ export type RuntimeDaemonMethod =
   | 'agents.output'
   | 'agents.events'
   | 'agents.wait'
-  | 'agentTasks.list'
-  | 'agentTasks.start'
-  | 'agentTasks.get'
-  | 'agentTasks.events'
-  | 'agentTasks.wait'
-  | 'agentTasks.sendInput'
-  | 'agentTasks.cancel'
-  | 'agentTasks.reconcile'
   | 'context.budget.get'
   | 'tool.exposure.preview';
 
@@ -197,11 +189,7 @@ export type RuntimeDaemonMutationMethod =
   | 'agents.spawn'
   | 'agents.send'
   | 'agents.followup'
-  | 'agents.interrupt'
-  | 'agentTasks.start'
-  | 'agentTasks.sendInput'
-  | 'agentTasks.cancel'
-  | 'agentTasks.reconcile';
+  | 'agents.interrupt';
 
 export type RuntimeDaemonNotificationMethod =
   | 'event'
@@ -409,14 +397,6 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'agents.output',
   'agents.events',
   'agents.wait',
-  'agentTasks.list',
-  'agentTasks.start',
-  'agentTasks.get',
-  'agentTasks.events',
-  'agentTasks.wait',
-  'agentTasks.sendInput',
-  'agentTasks.cancel',
-  'agentTasks.reconcile',
   'context.budget.get',
   'tool.exposure.preview',
 ];
@@ -480,10 +460,6 @@ export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMeth
   'agents.send',
   'agents.followup',
   'agents.interrupt',
-  'agentTasks.start',
-  'agentTasks.sendInput',
-  'agentTasks.cancel',
-  'agentTasks.reconcile',
 ];
 
 const REQUEST_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMethod>(RUNTIME_DAEMON_METHODS);

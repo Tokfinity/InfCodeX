@@ -36,7 +36,7 @@ export const WORKER_INSTRUCTIONS_FALLBACK = [
   'text-only summary when done — no tool call is needed to terminate. An ',
   'independent Sidecar Verifier reads your work and decides accept / revise ',
   '/ blocked. You may call: read, grep, glob, bash, write, edit, multi_edit, ',
-  'todo_update, todo_list, dispatch_child_task, exit_plan_mode.',
+  'todo_update, todo_list, spawn_agent, send_message, followup_task, wait_agent, interrupt_agent, list_agents, agent_output, exit_plan_mode.',
 ].join('\n');
 
 // FEATURE_193 (v0.7.43): `renderScoutSkillMapBlock` removed — fed

@@ -87,7 +87,7 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
         });
       },
       getSessionId: () => undefined,
-      getChildTaskRegistrySize: () => 0,
+      getActiveDescendantTurnCount: () => 0,
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -147,7 +147,7 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       observer,
       onVerdict: () => {},
       getSessionId: () => undefined,
-      getChildTaskRegistrySize: () => 0,
+      getActiveDescendantTurnCount: () => 0,
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -192,7 +192,7 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       observer,
       onVerdict: () => {},
       getSessionId: () => undefined,
-      getChildTaskRegistrySize: () => 0,
+      getActiveDescendantTurnCount: () => 0,
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });

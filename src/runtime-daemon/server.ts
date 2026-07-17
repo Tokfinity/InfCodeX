@@ -182,8 +182,6 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'agents.listDispatchable', 'agents.describe', 'agents.preflight',
     'agents.tree', 'agents.detail', 'agents.spawn', 'agents.send', 'agents.followup',
     'agents.interrupt', 'agents.output', 'agents.events', 'agents.wait',
-    'agentTasks.list', 'agentTasks.get', 'agentTasks.events', 'agentTasks.wait', 'agentTasks.start',
-    'agentTasks.sendInput', 'agentTasks.cancel', 'agentTasks.reconcile',
   ]),
   ...scopeEntries('owner:admin', ['daemon.rollbackToInline']),
   ...scopeEntries('daemon:admin', [
@@ -863,53 +861,6 @@ async function dispatchRuntimeDaemonRequest(
         optionalIntegerField(params, 'timeoutMs'),
       );
     }
-    case 'agentTasks.list':
-      requireExternalAgentsEnabled(runtime);
-      return runtime.agentTasks.list(optionalRecord(request.params) as Parameters<KodaXRuntime['agentTasks']['list']>[0]);
-    case 'agentTasks.start':
-      requireExternalAgentsEnabled(runtime);
-      return runtime.agentTasks.start(
-        requireRecord(request.params) as unknown as Parameters<KodaXRuntime['agentTasks']['start']>[0],
-      );
-    case 'agentTasks.get':
-      requireExternalAgentsEnabled(runtime);
-      return runtime.agentTasks.get(requireStringParam(request.params, 'taskId'));
-    case 'agentTasks.events': {
-      requireExternalAgentsEnabled(runtime);
-      const params = requireRecord(request.params);
-      return runtime.agentTasks.events(
-        requireStringField(params, 'taskId'),
-        optionalIntegerField(params, 'cursor'),
-      );
-    }
-    case 'agentTasks.wait': {
-      requireExternalAgentsEnabled(runtime);
-      const params = requireRecord(request.params);
-      return runtime.agentTasks.wait(
-        requireStringField(params, 'taskId'),
-        optionalIntegerField(params, 'timeoutMs'),
-      );
-    }
-    case 'agentTasks.sendInput': {
-      requireExternalAgentsEnabled(runtime);
-      const params = requireRecord(request.params);
-      return runtime.agentTasks.sendInput(
-        requireStringField(params, 'taskId'),
-        requireRecord(params.input) as unknown as Parameters<KodaXRuntime['agentTasks']['sendInput']>[1],
-      );
-    }
-    case 'agentTasks.cancel': {
-      requireExternalAgentsEnabled(runtime);
-      const params = requireRecord(request.params);
-      return runtime.agentTasks.cancel(
-        requireStringField(params, 'taskId'),
-        optionalStringField(params, 'reason'),
-      );
-    }
-    case 'agentTasks.reconcile':
-      requireExternalAgentsEnabled(runtime);
-      return runtime.agentTasks.reconcile(requireStringParam(request.params, 'taskId'));
-
     case 'session.create':
       return runtime.sessions.create(optionalRecord(request.params) as RuntimeCreateSessionInput | undefined);
     case 'session.load':

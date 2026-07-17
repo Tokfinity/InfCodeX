@@ -607,16 +607,6 @@ function makeRuntime(
       async events() { return []; },
       async wait() { return undefined; },
     },
-    agentTasks: {
-      async start() { throw new Error('External agents are disabled in this test runtime.'); },
-      async list() { return []; },
-      async get() { throw new Error('External agents are disabled in this test runtime.'); },
-      async events() { throw new Error('External agents are disabled in this test runtime.'); },
-      async wait() { throw new Error('External agents are disabled in this test runtime.'); },
-      async sendInput() { throw new Error('External agents are disabled in this test runtime.'); },
-      async cancel() { throw new Error('External agents are disabled in this test runtime.'); },
-      async reconcile() { throw new Error('External agents are disabled in this test runtime.'); },
-    },
     status: {
       async snapshot() {
         return {
@@ -634,7 +624,7 @@ function makeRuntime(
           activeRuns: [],
           queuedRuns: [],
           activeWorkflows: [],
-          activeAgentTasks: [],
+          activeAgentTurns: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

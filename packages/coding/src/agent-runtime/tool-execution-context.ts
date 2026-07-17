@@ -33,13 +33,12 @@
 
 import { join } from 'node:path';
 
-import { emitKodaXDiagnostic, type WorkflowProcessSnapshot } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 import type {
   KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXToolExecutionContext,
-  WorkflowRunProgressView,
   WorkflowToolHost,
   WorkflowToolHostResult,
 } from '../types.js';
@@ -151,13 +150,9 @@ export function buildToolExecutionContext(
         }
       : undefined,
     mutationTracker: options.context?.mutationTracker,
-    // FEATURE_074: forward parent's plan-mode predicate so
-    // dispatch_child_task can enforce plan mode on child tool calls.
+    // Forward the parent's plan-mode predicate to nested Agent turns.
     planModeBlockCheck: options.context?.planModeBlockCheck,
-    // FEATURE_092 phase 2b.7b slice D: forward parent-Runner guardrails so
-    // dispatch_child_task can register the SAME instances on the child's
-    // Runner — auto-mode state (engine + denial tracker + circuit breaker)
-    // propagates across parent/child without per-child reset.
+    // Forward parent guardrails so nested Agent turns share auto-mode state.
     guardrails: options.guardrails,
     parentAgentConfig: {
       provider: options.provider,
@@ -171,18 +166,6 @@ export function buildToolExecutionContext(
     // FEATURE_067: onChildProgress removed — progress flows through
     // reportToolProgress → onToolProgress instead.
     onChildProgress: undefined,
-    // FEATURE_119 v0.7.36 Pattern B — async child registry, scoped to one
-    // run. Both SA (single-agent loop) and AMA (managed-task harness)
-    // build their ctx through this helper, so both surfaces get the
-    // launch-and-await split. The dispatch tool gates async-vs-sync on
-    // `KODAX_ASYNC_DISPATCH !== '0'`; the registry only reaches the tool
-    // when async dispatch is enabled.
-    //
-    // FEATURE_123 v0.7.44 — child runtimes pass the parent's registry
-    // through `options.context.inheritedChildTaskRegistry` so peer
-    // `send_message` lookups find sibling task_ids. Children stay
-    // unable to mutate the registry because `dispatch_child_task` is
-    // still in CHILD_EXCLUDE_TOOLS_BASE.
     // FEATURE_123 v0.7.44 — agent identity propagation. Top-level
     // Worker leaves both undefined; child-executor forwards
     // `bundle.id` (self) + the parent's currentAgentId (parent) when
@@ -195,21 +178,6 @@ export function buildToolExecutionContext(
     // FEATURE_123 v0.7.44 — per-turn send_message flood throttle
     // counter. Allocated once per runtime; runner-driven.ts resets
     // `count = 0` at each turn boundary via beforeNextTurn.
-    // FEATURE_120 v0.7.39 Phase 3b — per-child AbortController registry,
-    // populated by `dispatch_child_task` at launch time and drained
-    // when the child settles. The `task_stop` tool reads this map to
-    // request graceful exit of a specific child. Paired lifetime with
-    // `childTaskRegistry` — same async-mode gating.
-    // FEATURE_177 v0.7.45 — per-child progress snapshot map backing the
-    // `task_output` tool. Initialised here so dispatch + tool both see
-    // the same Map instance. Lifecycle paired with `childTaskRegistry`
-    // (one map per parent runner). Children's SA contexts do not
-    // inherit this field — `child-executor.executeReadChild/WriteChild`
-    // pass a fresh `KodaXOptions` to `runKodaX` and only forward
-    // workspace/system-prompt context, not the parent's registries.
-    // Gap A — run-level workflow progress getters keyed by runId. The async
-    // run_workflow path registers one on start so task_output(runId) can render
-    // live workflow progress while it runs (removed on settle).
     // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
     // when the host configured a runs dir AND the turn runs as AMA. The prompt and
     // tool description limit activation to explicit user Workflow intent. SA (solo)
@@ -258,41 +226,6 @@ export function buildWorkflowHostMetadata(
   };
 }
 
-/** Gap A: distil a workflow's process snapshot into the compact live view a
- *  task_output(runId) peek renders. Mirrors the REPL's workflowLiveSnapshotFromProcess
- *  (per-agent items collapsed to running-names + terminal counts) so the Worker-facing
- *  peek and the human-facing strip stay consistent. Exported for direct unit testing. */
-export function toWorkflowRunProgressView(s: WorkflowProcessSnapshot): WorkflowRunProgressView {
-  const agents = s.items.filter((item) => item.kind === 'agent');
-  const activeAgents = agents.filter((item) => item.status === 'running').map((item) => item.title);
-  const activePhaseTitle =
-    s.activePhaseId === undefined
-      ? undefined
-      : s.items.find((item) => item.id === s.activePhaseId)?.title;
-  const status: WorkflowRunProgressView['status'] =
-    s.status === 'completed'
-      ? 'completed'
-      : s.status === 'failed'
-        ? 'failed'
-        : s.status === 'cancelled'
-          ? 'stopped'
-          : 'running';
-  return {
-    status,
-    workflowName: s.displayName ?? s.workflowName,
-    ...(activePhaseTitle !== undefined ? { phase: activePhaseTitle } : {}),
-    ...(s.activePhaseIndex !== undefined ? { phaseIndex: s.activePhaseIndex } : {}),
-    ...(s.phaseCount !== undefined ? { phaseTotal: s.phaseCount } : {}),
-    activeAgents,
-    completedAgents: agents.filter((item) => item.status === 'completed').length,
-    failedAgents: agents.filter((item) => item.status === 'failed').length,
-    stoppedAgents: agents.filter((item) => item.status === 'cancelled').length,
-    totalSpawned: s.progress.spawnedAgents,
-    ...(s.progress.plannedItems !== undefined ? { plannedAgents: s.progress.plannedItems } : {}),
-    ...(s.elapsedMs !== undefined ? { elapsedMs: s.elapsedMs } : {}),
-  };
-}
-
 function buildWorkflowToolHost(
   options: KodaXOptions,
   sessionId?: string,
@@ -328,10 +261,7 @@ function buildWorkflowToolHost(
   // run_workflow surface: agentMode 'sa' fails this gate, and SA_SOLO_EXCLUDE_TOOLS
   // (task-engine.ts) excludes run_workflow regardless.
   if (options.agentMode !== 'ama') return undefined;
-  // ADR-049: `startInline` starts the run and returns a `done` promise WITHOUT
-  // awaiting it, so the async run_workflow path can register `done` in the Worker's
-  // childTaskRegistry and idle-yield. `runInline` (the blocking path, kept for
-  // SDK/headless and as a fallback) is just `startInline` + `await done`.
+  // `startInline` starts the run and returns a handle without awaiting it.
   const startInline: WorkflowToolHost['startInline'] = async ({ manifest, source, args, resumeFromRunId, signal }) => {
     // Lazy literal imports break the static cycle: workflow-runner imports
     // buildToolExecutionContext, so agent-runtime must not statically import
@@ -340,8 +270,7 @@ function buildWorkflowToolHost(
       import('../workflows/host.js'),
       import('../workflows/run-manager.js'),
     ]);
-    // Stop signal = the session signal AND the per-run signal (from task_stop),
-    // whichever fires first. AbortSignal.any needs Node >= 20 (KodaX baseline).
+    // Stop when either the session or the Workflow owner is interrupted.
     const abortSignals = [options.abortSignal, signal].filter(
       (s): s is AbortSignal => s !== undefined,
     );
@@ -414,18 +343,11 @@ function buildWorkflowToolHost(
         ...(workflowQualityWarnings && workflowQualityWarnings.length > 0 ? { workflowQualityWarnings } : {}),
       };
     });
-    // Gap A: expose the run's live process snapshot as a compact progress view so
-    // the async run_workflow path can register it for task_output(runId) peeks.
-    const getProgress = (): WorkflowRunProgressView | undefined => {
-      const process = started.managed.getProcessSnapshot?.();
-      return process ? toWorkflowRunProgressView(process) : undefined;
-    };
     return {
       kind: 'started',
       runId: started.runId,
       done,
       ...(workflowQualityWarnings && workflowQualityWarnings.length > 0 ? { workflowQualityWarnings } : {}),
-      getProgress,
     };
   };
   return {

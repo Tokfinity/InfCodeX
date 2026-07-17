@@ -804,7 +804,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 34 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45, + relationship_scan/semantic_lookup v0.7.57, + tool_search/goal tools v0.7.60 F250)', () => {
+  it('contains the canonical members exactly', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -814,10 +814,14 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         // User-interaction + plan
         'ask_user_question',
         'exit_plan_mode',
-        // Task delegation / control flow
-        'dispatch_child_task',
-        'task_stop',
+        // Actor control flow
+        'spawn_agent',
         'send_message',
+        'followup_agent',
+        'wait_agent',
+        'interrupt_agent',
+        'list_agents',
+        'agent_output',
         // Control plane
         'emit_managed_protocol',
         // v0.7.60 FEATURE_250 — progressive-disclosure meta-tool. Its result
@@ -861,7 +865,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'semantic_lookup',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(34);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(38);
   });
 
   it('keeps a recoverable artifact pointer when pruning a capacity-limited result', async () => {

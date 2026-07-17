@@ -56,7 +56,7 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  * **Categories**:
  *   - skill content (1)        — already protected pre-F183
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
- *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
+ *   - actor control (7)        — spawn/send/followup/wait/interrupt/list/output
  *   - control plane (1)        — emit_managed_protocol
  *   - progressive disclosure (1) — tool_search — its result carries the full
  *                                description a model fetched for a deferred
@@ -87,10 +87,14 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // User-interaction + plan
   'ask_user_question',
   'exit_plan_mode',
-  // Task delegation / control flow
-  'dispatch_child_task',
-  'task_stop',
+  // Actor control flow
+  'spawn_agent',
   'send_message',
+  'followup_agent',
+  'wait_agent',
+  'interrupt_agent',
+  'list_agents',
+  'agent_output',
   // Control plane
   'emit_managed_protocol',
   // FEATURE_250 — progressive disclosure. A `tool_search` result is the
@@ -974,7 +978,8 @@ function pruneToolResults(
     // Let the summary model see the complete, recoverable envelope once; the
     // generic user-message head/tail crop can otherwise erase a middle child
     // banner or its artifact reference before summarization.
-    if (msg.role === 'user' && msg._source === 'task-completed') {
+    if (msg.role === 'user'
+      && (msg._source === 'agent-completed' || msg._source === 'task-completed')) {
       return msg;
     }
 

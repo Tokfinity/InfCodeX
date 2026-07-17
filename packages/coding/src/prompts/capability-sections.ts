@@ -209,7 +209,7 @@ export async function buildCapabilityContextSections(
       createPromptSection(
         'specialist-agents',
         specialistBlock,
-        'List registered specialist agents the Worker can dispatch via dispatch_child_task(subagent_type) so curated prompts and tool whitelists get reused instead of duplicated.',
+        'List registered specialist executors the Worker can select with spawn_agent(agent_id) so curated prompts and tool whitelists get reused instead of duplicated.',
       ),
     );
   }
@@ -417,7 +417,7 @@ function buildSpecialistAgentsBlock(agentScope: KodaXAgentScope | undefined): st
     '=== Available specialist agents ===',
     lines,
     '',
-    'Dispatch via dispatch_child_task(subagent_type="<name>").',
+    'Start one with spawn_agent(agent_id="<name>").',
   ].join('\n');
 }
 

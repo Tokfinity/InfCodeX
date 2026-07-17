@@ -686,42 +686,6 @@ export function createRuntimeDaemonClient(
         }).then(nullToUndefined<Awaited<ReturnType<KodaXRuntime['agents']['wait']>>>);
       },
     },
-    agentTasks: {
-      start(input) {
-        assertRuntimeTransportSafe(input, 'agentTasks.start');
-        return request('agentTasks.start', input) as ReturnType<KodaXRuntime['agentTasks']['start']>;
-      },
-      list(filter) {
-        return request('agentTasks.list', filter) as ReturnType<KodaXRuntime['agentTasks']['list']>;
-      },
-      get(taskId) {
-        return request('agentTasks.get', { taskId }) as ReturnType<KodaXRuntime['agentTasks']['get']>;
-      },
-      events(taskId, cursor) {
-        return request('agentTasks.events', {
-          taskId,
-          ...(cursor !== undefined ? { cursor } : {}),
-        }) as ReturnType<KodaXRuntime['agentTasks']['events']>;
-      },
-      wait(taskId, timeoutMs) {
-        return request('agentTasks.wait', {
-          taskId,
-          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        }) as ReturnType<KodaXRuntime['agentTasks']['wait']>;
-      },
-      sendInput(taskId, input) {
-        return request('agentTasks.sendInput', { taskId, input }) as ReturnType<KodaXRuntime['agentTasks']['sendInput']>;
-      },
-      cancel(taskId, reason) {
-        return request('agentTasks.cancel', {
-          taskId,
-          ...(reason !== undefined ? { reason } : {}),
-        }) as ReturnType<KodaXRuntime['agentTasks']['cancel']>;
-      },
-      reconcile(taskId) {
-        return request('agentTasks.reconcile', { taskId }) as ReturnType<KodaXRuntime['agentTasks']['reconcile']>;
-      },
-    },
     status: {
       snapshot() {
         return request('daemon.status') as Promise<RuntimeStatusSnapshot>;

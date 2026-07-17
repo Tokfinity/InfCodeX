@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   getActiveExtensionRuntime,
   CodingActorSession,
+  createExternalActorTurnExecutor,
   generateSessionId,
   listCodingDispatchableAgents,
   registerCustomProviders,
@@ -98,6 +99,7 @@ import type {
   AgentDataClassification,
   AgentDetail,
   AgentEvent,
+  AgentExecutionKind,
   AgentFollowupResult,
   AgentOutput,
   AgentSpawnInput,
@@ -111,10 +113,6 @@ import type {
   AgentPreflightInput,
   AgentPreflightResult,
   AgentRegistrationService,
-  AgentTaskFilter,
-  AgentTaskService,
-  AgentTaskSnapshot,
-  AgentTaskStartInput,
   DispatchableAgentListing,
   DispatchableAgentQuery,
   ManagedWorkflowSnapshot,
@@ -619,7 +617,6 @@ export interface KodaXRuntime {
   readonly connection?: RuntimeConnectionService;
   readonly admin: RuntimeAdminService;
   readonly agents: RuntimeAgentService;
-  readonly agentTasks: RuntimeAgentTaskService;
   /**
    * Release this facade. Inline closes its private Runtime, Worker mode shuts
    * down and terminates its Worker, and daemon mode only detaches this client.
@@ -656,11 +653,6 @@ export interface RuntimeAgentService {
   events(sessionId: string, afterSequence?: number): Promise<readonly AgentEvent[]>;
   wait(sessionId: string, afterSequence?: number, timeoutMs?: number): Promise<AgentEvent | undefined>;
 }
-
-export type RuntimeAgentTaskService = Pick<
-  AgentTaskService,
-  'start' | 'list' | 'get' | 'events' | 'wait' | 'sendInput' | 'cancel' | 'reconcile'
->;
 
 export type RuntimeConfigPatch = Partial<Pick<ReplRuntimeConfigPatch, RuntimeConfigPatchKey>>;
 
@@ -1793,7 +1785,7 @@ export interface RuntimeDaemonPreflight {
   readonly activeRuns: readonly RuntimeRunStatus[];
   readonly queuedRuns: readonly RuntimeRunStatus[];
   readonly activeWorkflows: readonly RuntimeWorkflowSummary[];
-  readonly activeAgentTasks: readonly AgentTaskSnapshot[];
+  readonly activeAgentTurns: readonly RuntimeActiveAgentTurn[];
   readonly pendingPermissions: readonly RuntimePermissionRequest[];
   readonly pendingUserInputs: readonly RuntimeUserInputRequest[];
   readonly blockers: readonly (
@@ -1801,10 +1793,17 @@ export interface RuntimeDaemonPreflight {
     | 'active_runs'
     | 'queued_runs'
     | 'active_workflows'
-    | 'active_agent_tasks'
+    | 'active_agent_turns'
     | 'pending_interactions'
   )[];
   readonly canStop: boolean;
+}
+
+export interface RuntimeActiveAgentTurn {
+  readonly sessionId: string;
+  readonly actorPath: string;
+  readonly turnId: string;
+  readonly kind: AgentExecutionKind;
 }
 
 export interface RuntimeDaemonManagementState {
@@ -2099,8 +2098,11 @@ export async function createKodaXRuntime(
   );
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
-  const agentTasks = createRuntimeAgentTaskService(agentPlane);
-  const actorRegistry = createRuntimeAgentActorRegistry(sessionManager);
+  const actorRegistry = createRuntimeAgentActorRegistry(
+    sessionManager,
+    agentPlane,
+    options.externalAgents?.defaultContext,
+  );
   const runs = new Map<string, RuntimeRunRecord>();
   const recoveredSessionOrders = new Map<string, number>();
   const persistedStatuses = [...recentRunStatuses(persistence.loadRunStatuses())]
@@ -2220,12 +2222,11 @@ export async function createKodaXRuntime(
       sessionManager,
       sessionAdmission,
       workflows,
-      agentTasks,
+      actors: actorRegistry,
     }),
     diagnostics: createRuntimeDiagnosticsService(bus.service),
     admin: createRuntimeAdminService(agentPlane),
     agents: createRuntimeAgentService(agentPlane, bindingService, actorRegistry, sessionAdmission),
-    agentTasks,
     async close() {
       if (closed) return;
       closed = true;
@@ -3893,10 +3894,15 @@ function runtimeLocalListings(query: DispatchableAgentQuery): readonly Dispatcha
 interface RuntimeAgentActorRegistry {
   forSession(sessionId: string, maxConcurrentThreads?: number): Promise<CodingActorSession>;
   root(sessionId: string): Promise<AgentActorClient>;
+  activeTurns(sessionIds: readonly string[]): Promise<readonly RuntimeActiveAgentTurn[]>;
   close(reason: string): Promise<void>;
 }
 
-function createRuntimeAgentActorRegistry(sessionManager: SessionManager): RuntimeAgentActorRegistry {
+function createRuntimeAgentActorRegistry(
+  sessionManager: SessionManager,
+  plane?: AgentExecutorPlane,
+  defaultContext?: AgentDispatchContext,
+): RuntimeAgentActorRegistry {
   const sessions = new Map<string, Promise<CodingActorSession>>();
 
   const forSession = (
@@ -3940,6 +3946,12 @@ function createRuntimeAgentActorRegistry(sessionManager: SessionManager): Runtim
         sessionId,
         store,
         maxConcurrentThreadsPerSession: maxConcurrentThreads ?? persistedMax,
+        ...(plane ? {
+          executor: createExternalActorTurnExecutor({
+            plane,
+            context: defaultContext ?? { actorId: `runtime:${sessionId}` },
+          }),
+        } : {}),
       });
       await session.initialize();
       return session;
@@ -3953,6 +3965,17 @@ function createRuntimeAgentActorRegistry(sessionManager: SessionManager): Runtim
     forSession,
     async root(sessionId) {
       return (await forSession(sessionId)).rootControl();
+    },
+    async activeTurns(sessionIds) {
+      const roots = await Promise.all(sessionIds.map(async (sessionId) => ({
+        sessionId,
+        root: (await forSession(sessionId)).rootControl(),
+      })));
+      return roots.flatMap(({ sessionId, root }) => root.list().actors.flatMap((actor) => (
+        actor.currentTurnId && actor.path !== '/root'
+          ? [{ sessionId, actorPath: actor.path, turnId: actor.currentTurnId, kind: actor.kind }]
+          : []
+      )));
     },
     async close(reason) {
       const settled = await Promise.allSettled([...sessions.values()]);
@@ -4063,22 +4086,6 @@ function createRuntimeAdminService(
   };
 }
 
-function createRuntimeAgentTaskService(
-  plane: AgentExecutorPlane | undefined,
-): RuntimeAgentTaskService {
-  if (plane) return plane.tasks;
-  return {
-    async start() { throw externalAgentsDisabled(); },
-    async list() { return []; },
-    async get() { throw externalAgentsDisabled(); },
-    async events() { throw externalAgentsDisabled(); },
-    async wait() { throw externalAgentsDisabled(); },
-    async sendInput() { throw externalAgentsDisabled(); },
-    async cancel() { throw externalAgentsDisabled(); },
-    async reconcile() { throw externalAgentsDisabled(); },
-  };
-}
-
 function createRuntimeStatusService(deps: {
   readonly identity: RuntimeIdentity;
   readonly permissions: RuntimePermissionRegistry;
@@ -4087,7 +4094,7 @@ function createRuntimeStatusService(deps: {
   readonly sessionManager: SessionManager;
   readonly sessionAdmission: RuntimeSessionAdmission;
   readonly workflows: RuntimeWorkflowService;
-  readonly agentTasks: RuntimeAgentTaskService;
+  readonly actors: RuntimeAgentActorRegistry;
 }): RuntimeStatusService {
   return {
     async snapshot() {
@@ -4125,19 +4132,17 @@ function createRuntimeStatusService(deps: {
         && workflow.status !== 'denied'
         && workflow.status !== 'stopped'
       ));
-      const activeAgentTasks = (await deps.agentTasks.list()).filter((task) => (
-        task.state !== 'completed'
-        && task.state !== 'failed'
-        && task.state !== 'canceled'
-        && task.state !== 'rejected'
-      ));
+      const admittedSessionIds = (await deps.sessionManager.listSessions({ includeArchived: true }))
+        .filter(deps.sessionAdmission.admitsSummary)
+        .map((session) => session.id);
+      const activeAgentTurns = await deps.actors.activeTurns(admittedSessionIds);
       const pendingPermissions = await deps.permissions.service.listPending();
       const pendingUserInputs = await deps.userInputs.service.listPending();
       const blockers: RuntimeDaemonPreflight['blockers'][number][] = [];
       if (activeRuns.length > 0) blockers.push('active_runs');
       if (queuedRuns.length > 0) blockers.push('queued_runs');
       if (activeWorkflows.length > 0) blockers.push('active_workflows');
-      if (activeAgentTasks.length > 0) blockers.push('active_agent_tasks');
+      if (activeAgentTurns.length > 0) blockers.push('active_agent_turns');
       if (pendingPermissions.length > 0 || pendingUserInputs.length > 0) {
         blockers.push('pending_interactions');
       }
@@ -4147,7 +4152,7 @@ function createRuntimeStatusService(deps: {
         activeRuns,
         queuedRuns,
         activeWorkflows,
-        activeAgentTasks,
+        activeAgentTurns,
         pendingPermissions,
         pendingUserInputs,
         blockers,

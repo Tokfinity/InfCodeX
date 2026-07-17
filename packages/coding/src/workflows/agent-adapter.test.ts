@@ -89,7 +89,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     const tree = ctx.actorControl.list();
     expect(tree.activeNonRootTurns).toBe(3);
     expect(tree.actors.filter((actor) => actor.kind === 'workflow')).toHaveLength(1);
-    expect(tree.actors.filter((actor) => actor.currentTurnId !== undefined)).toHaveLength(3);
+    expect(tree.actors.filter((actor) => actor.currentTurnId !== undefined)).toHaveLength(4);
     expect(tree.actors.some((actor) => actor.taskName.includes('four'))).toBe(false);
 
     await vi.waitFor(() => expect(releases).toHaveLength(3));

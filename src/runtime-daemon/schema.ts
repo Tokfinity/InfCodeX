@@ -529,33 +529,6 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     }, ['sessionId'], true),
     result: nullableSchema(objectAnySchema),
   },
-  'agentTasks.list': { params: objectAnySchema, result: arrayAnySchema },
-  'agentTasks.start': { params: objectAnySchema, result: objectAnySchema },
-  'agentTasks.get': {
-    params: objectSchema({ taskId: stringSchema }, ['taskId']),
-    result: objectAnySchema,
-  },
-  'agentTasks.events': {
-    params: objectSchema({ taskId: stringSchema, cursor: integerSchema }, ['taskId'], true),
-    result: arrayAnySchema,
-  },
-  'agentTasks.wait': {
-    params: objectSchema({ taskId: stringSchema, timeoutMs: integerSchema }, ['taskId'], true),
-    result: objectAnySchema,
-  },
-  'agentTasks.sendInput': {
-    params: objectSchema({ taskId: stringSchema, input: objectAnySchema }, ['taskId', 'input']),
-    result: objectAnySchema,
-  },
-  'agentTasks.cancel': {
-    params: objectSchema({ taskId: stringSchema, reason: stringSchema }, ['taskId'], true),
-    result: objectAnySchema,
-  },
-  'agentTasks.reconcile': {
-    params: objectSchema({ taskId: stringSchema }, ['taskId']),
-    result: objectAnySchema,
-  },
-
   'context.budget.get': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
   'tool.exposure.preview': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
 } satisfies Record<RuntimeDaemonMethod, RuntimeDaemonMethodSchema>;

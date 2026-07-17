@@ -119,7 +119,6 @@ export type {
   WorkflowToolHostResult,
   WorkflowToolHostInlineInput,
   WorkflowToolHostStartResult,
-  WorkflowRunProgressView,
   WorkflowEventCorrelation,
   KodaXWorkflowEventMeta,
   KodaXActivityEventMeta,
@@ -1358,6 +1357,7 @@ export * from './workflows/index.js';
 export {
   CodingActorSession,
   actorQueueId,
+  createExternalActorTurnExecutor,
   createLocalCodingActorControl,
 } from './agent-runtime/actor-runtime.js';
 export type { CodingActorSessionOptions } from './agent-runtime/actor-runtime.js';

@@ -114,8 +114,13 @@ function deferredExternalAgentFixture() {
 async function assertRuntimeAgentServiceConformance(
   runtime: KodaXRuntime,
   actorId: string,
-  parentTaskId: string,
-): Promise<{ readonly taskId: string; readonly registrationJson: string }> {
+  _parentTaskId: string,
+): Promise<{
+  readonly sessionId: string;
+  readonly actorPath: string;
+  readonly turnId: string;
+  readonly registrationJson: string;
+}> {
   const summary = await runtime.admin.agentRegistrations.upsert(registration());
   expect(summary.credentialConfigured).toBe(false);
   const listed = await runtime.agents.listDispatchable({ actorId });
@@ -128,22 +133,33 @@ async function assertRuntimeAgentServiceConformance(
     query: { actorId, readOnly: true },
   })).ok).toBe(true);
 
-  const started = await runtime.agentTasks.start({
-    agentId: 'external:runtime-reference',
+  const session = await runtime.sessions.create({
+    sessionId: `external-${actorId.replace(/[^a-zA-Z0-9_-]/g, '-')}`,
+    title: 'External Agent conformance',
+  });
+  const started = await runtime.agents.spawn(session.id, {
+    taskName: 'reference',
+    kind: 'external',
     objective: 'Run reference conformance',
-    context: { actorId, parentTaskId },
+    metadata: { agentId: 'external:runtime-reference' },
   });
-  expect(await runtime.agentTasks.wait(started.taskId, 1_000)).toMatchObject({
-    state: 'completed',
-    output: 'runtime-ok',
-    parentTaskId,
+  const output = await waitForActorTerminal(
+    runtime, session.id, '/root/reference', started.turnId,
+  );
+  expect(output).toMatchObject({
+    state: 'completed', output: 'runtime-ok',
   });
-  expect(await runtime.agentTasks.events(started.taskId, 0)).not.toHaveLength(0);
-  return { taskId: started.taskId, registrationJson: JSON.stringify(summary) };
+  expect(await runtime.agents.events(session.id, 0)).not.toHaveLength(0);
+  return {
+    sessionId: session.id,
+    actorPath: '/root/reference',
+    turnId: started.turnId,
+    registrationJson: JSON.stringify(summary),
+  };
 }
 
 describe('FEATURE_258 Embedded Runtime agent services', () => {
-  it('blocks stop preflight while an external AgentTask is active or unknown', async () => {
+  it('blocks stop preflight while an external Actor turn is active', async () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-agent-preflight-'));
     const fixture = deferredExternalAgentFixture();
     const runtime = await createKodaXRuntime({
@@ -152,30 +168,34 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     });
     try {
       await runtime.admin.agentRegistrations.upsert(fixture.registration);
-      const started = await runtime.agentTasks.start({
-        agentId: fixture.registration.agentId,
-        objective: 'Remain active during stop preflight',
-        context: { actorId: 'runtime-host' },
+      const session = await runtime.sessions.create({
+        sessionId: 'external-preflight', title: 'External preflight',
       });
-      await waitForAgentTaskState(runtime, started.taskId, 'unknown');
+      const started = await runtime.agents.spawn(session.id, {
+        taskName: 'deferred',
+        kind: 'external',
+        objective: 'Remain active during stop preflight',
+        metadata: { agentId: fixture.registration.agentId },
+      });
 
       await expect(runtime.status.preflight()).resolves.toMatchObject({
         activeWorkflows: [],
-        activeAgentTasks: [expect.objectContaining({
-          taskId: started.taskId,
-          state: 'unknown',
+        activeAgentTurns: [expect.objectContaining({
+          sessionId: session.id,
+          actorPath: '/root/deferred',
+          turnId: started.turnId,
         })],
-        blockers: expect.arrayContaining(['active_agent_tasks']),
+        blockers: expect.arrayContaining(['active_agent_turns']),
         canStop: false,
       });
 
       fixture.finish();
-      await expect(runtime.agentTasks.wait(started.taskId, 1_000)).resolves.toMatchObject({
-        state: 'completed',
-      });
+      await expect(waitForActorTerminal(
+        runtime, session.id, '/root/deferred', started.turnId,
+      )).resolves.toMatchObject({ state: 'completed' });
       const settled = await runtime.status.preflight();
-      expect(settled.activeAgentTasks).toEqual([]);
-      expect(settled.blockers).not.toContain('active_agent_tasks');
+      expect(settled.activeAgentTurns).toEqual([]);
+      expect(settled.blockers).not.toContain('active_agent_turns');
     } finally {
       fixture.finish();
       await runtime.close();
@@ -198,9 +218,9 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
       externalAgents: externalAgentOptions(),
     });
     expect(await reopened.admin.agentRegistrations.list()).toHaveLength(1);
-    expect(await reopened.agentTasks.get(result.taskId)).toMatchObject({
-      state: 'completed',
-      output: 'runtime-ok',
+    await reopened.sessions.load(result.sessionId);
+    expect(await reopened.agents.output(result.sessionId, result.actorPath, result.turnId)).toMatchObject({
+      state: 'completed', output: 'runtime-ok',
     });
     await reopened.close();
   });
@@ -274,11 +294,19 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     const runtime = await createKodaXRuntime({ homeDir });
     expect((await runtime.agents.listDispatchable({ actorId: 'runtime-host' }))
       .map((entry) => entry.descriptor.agentId)).toEqual(['native:kodax-child']);
-    await expect(runtime.agentTasks.start({
-      agentId: 'external:missing',
+    const session = await runtime.sessions.create({ sessionId: 'no-plane', title: 'No plane' });
+    const failed = await runtime.agents.spawn(session.id, {
+      taskName: 'missing',
+      kind: 'external',
       objective: 'No plane',
-      context: { actorId: 'runtime-host' },
-    })).rejects.toThrow(/not enabled/i);
+      metadata: { agentId: 'external:missing' },
+    });
+    await expect(runtime.agents.wait(session.id, 2, 1_000)).resolves.toMatchObject({
+      kind: 'turn_failed', turnId: failed.turnId,
+    });
+    await expect(runtime.agents.output(session.id, '/root/missing', failed.turnId)).resolves.toMatchObject({
+      state: 'failed', error: expect.stringMatching(/only supports external actors|not attached|not bound/i),
+    });
     const dispatcher = createRuntimeDaemonDispatcher({ runtime });
     const initialized = await dispatcher.handle(createRuntimeDaemonRequest(
       'disabled-init',
@@ -348,15 +376,17 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
   });
 });
 
-async function waitForAgentTaskState(
+async function waitForActorTerminal(
   runtime: KodaXRuntime,
-  taskId: string,
-  expected: AgentTaskState,
-): Promise<void> {
+  sessionId: string,
+  actorPath: string,
+  turnId: string,
+): Promise<Awaited<ReturnType<KodaXRuntime['agents']['output']>>> {
   const deadline = Date.now() + 2_000;
-  while (Date.now() <= deadline) {
-    if ((await runtime.agentTasks.get(taskId)).state === expected) return;
+  for (;;) {
+    const output = await runtime.agents.output(sessionId, actorPath, turnId);
+    if (output.state !== 'accepted' && output.state !== 'running') return output;
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for Actor turn ${turnId}.`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Timed out waiting for AgentTask ${taskId} state ${expected}.`);
 }

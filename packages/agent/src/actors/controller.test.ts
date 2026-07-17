@@ -55,6 +55,37 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', child.actorPath).turns[0]?.state).toBe('completed');
   });
 
+  it('completes an artifact-only turn with a non-empty parent notification', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const child = await controller.spawn('/root', { taskName: 'artifact', objective: 'Create it.' });
+
+    executor.pending[0]?.resolve({ output: '', artifacts: ['artifact://report'] });
+    await settle();
+
+    expect(controller.output('/root', child.actorPath, child.turnId)).toMatchObject({
+      state: 'completed', artifacts: ['artifact://report'],
+    });
+    expect(controller.get('/root', '/root').mailbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ senderPath: child.actorPath, content: 'completed' }),
+    ]));
+  });
+
+  it('does not persist an empty mailbox drain', async () => {
+    const save = vi.fn(async () => undefined);
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: { async load() { return undefined; }, save },
+    });
+    await controller.spawn('/root', { taskName: 'waiting', objective: 'Wait.' });
+    const savesAfterSpawn = save.mock.calls.length;
+
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([]);
+
+    expect(save).toHaveBeenCalledTimes(savesAfterSpawn);
+  });
+
   it('registers trusted Workflow protocol owners without consuming an Agent slot', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
@@ -64,12 +95,44 @@ describe('F270 actor tree and scheduler', () => {
     expect(owner.callerPath).toBe('/root/workflow:run-1');
     expect(controller.list('/root')).toMatchObject({ activeNonRootTurns: 0 });
     expect(controller.get('/root', owner.callerPath).actor).toMatchObject({
-      taskName: 'workflow:run-1', kind: 'workflow', state: 'idle', parentPath: '/root',
+      taskName: 'workflow:run-1', kind: 'workflow', state: 'running', parentPath: '/root',
     });
-    await expect(owner.spawn({ taskName: 'review', objective: 'Review.' })).resolves.toMatchObject({
+    const review = await owner.spawn({ taskName: 'review', objective: 'Review.' });
+    expect(review).toMatchObject({
       actorPath: '/root/workflow:run-1/review',
     });
     expect(controller.list('/root').activeNonRootTurns).toBe(1);
+    const ownerSignal = controller.protocolOwnerSignal(owner.callerPath);
+    expect(ownerSignal.aborted).toBe(false);
+    executor.pending[0]?.resolve({ output: 'reviewed' });
+    await settle();
+    await controller.settleProtocolOwner(owner.callerPath, 'completed', {
+      output: '{"status":"completed"}',
+      structured: { status: 'completed', coverage: ['review'] },
+    });
+    expect(controller.output('/root', owner.callerPath)).toMatchObject({
+      state: 'completed',
+      structured: { status: 'completed', coverage: ['review'] },
+    });
+    expect(controller.get('/root', '/root').mailbox.filter((message) => (
+      message.senderPath === owner.callerPath && message.kind === 'completion'
+    ))).toHaveLength(1);
+    await expect(controller.settleProtocolOwner(owner.callerPath, 'completed', {
+      output: 'duplicate terminal callback',
+    })).resolves.toBeUndefined();
+  });
+
+  it('aborts a Workflow protocol owner when its parent interrupts it', async () => {
+    const controller = await createAgentActorController();
+    const owner = await controller.createProtocolOwner('/root', 'run-abort');
+    const signal = controller.protocolOwnerSignal(owner.callerPath);
+
+    await controller.interrupt('/root', owner.callerPath, 'goal changed');
+
+    expect(signal).toMatchObject({ aborted: true, reason: 'goal changed' });
+    expect(controller.output('/root', owner.callerPath)).toMatchObject({
+      state: 'interrupted', error: 'goal changed',
+    });
   });
 
   it('uses four total slots by default and leaves no ghost actor on saturation', async () => {
@@ -298,6 +361,28 @@ describe('F270 actor tree and scheduler', () => {
       turn: { actorPath: '/root/worker' },
     });
     expect(restartedExecutor.pending).toHaveLength(1);
+  });
+
+  it('fails an unmatched external turn with an explicit unknown-state recovery error', async () => {
+    let snapshot: AgentActorSnapshot | undefined;
+    const store: AgentActorStore = {
+      async load() { return snapshot; },
+      async save(next) { snapshot = next; },
+    };
+    const executor = new DeferredExecutor();
+    const first = await createAgentActorController({ executor, store });
+    await first.spawn('/root', {
+      taskName: 'remote-review',
+      objective: 'Review remotely.',
+      kind: 'external',
+    });
+
+    const recovered = await createAgentActorController({ store });
+
+    expect(recovered.get('/root', '/root/remote-review').actor.state).toBe('idle');
+    expect(recovered.output('/root', '/root/remote-review')).toMatchObject({
+      state: 'failed', error: 'external_state_unknown',
+    });
   });
 
   it('restores abort handles when a durable mutation is rolled back', async () => {

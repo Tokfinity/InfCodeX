@@ -9,12 +9,14 @@
  */
 
 import {
+  buildWorkflowOutcome,
   createWorkflowProcessTracker,
   runWorkflow,
 } from '@kodax-ai/agent';
 import { resolveWorkflowMaxConcurrency } from '@kodax-ai/llm';
 import type {
   WorkflowAgentBackend,
+  AgentMetadataValue,
   WorkflowApproval,
   WorkflowApprovalSummary,
   WorkflowEvent,
@@ -23,6 +25,7 @@ import type {
   WorkflowModule,
   WorkflowProcessEvent,
   WorkflowRunState,
+  WorkflowOutcome,
 } from '@kodax-ai/agent';
 
 import { basename, dirname } from 'node:path';
@@ -462,6 +465,8 @@ export async function runWorkflowFromOptions(
     throw new Error('Workflow execution requires the Runtime-owned Actor control plane.');
   }
   const ownerControl = await actorHost.createWorkflowOwner(parentControl.callerPath, input.runId);
+  const ownerSignal = actorHost.workflowOwnerSignal(ownerControl.callerPath);
+  const workflowSignal = combineAbortSignals(input.signal, ownerSignal);
   ctx.actorControl = ownerControl;
   ctx.actorHost = actorHost;
   const workflowOptions: KodaXOptions = {
@@ -515,7 +520,7 @@ export async function runWorkflowFromOptions(
         }
       : undefined;
   try {
-    return await runWorkflowModule({
+    const moduleOutcome = await runWorkflowModule({
       module: input.module,
       args: input.args,
       runId: input.runId,
@@ -523,7 +528,7 @@ export async function runWorkflowFromOptions(
       ctx,
       childOptions,
       ...(input.approval ? { approval: input.approval } : {}),
-      ...(input.signal ? { signal: input.signal } : {}),
+      signal: workflowSignal,
       ...(onEvent ? { onEvent } : {}),
       ...(onWorkflowProcessEvent ? { onWorkflowProcessEvent } : {}),
       ...(workflowOptions.workflowHostPolicy ? { hostPolicy: workflowOptions.workflowHostPolicy } : {}),
@@ -533,7 +538,92 @@ export async function runWorkflowFromOptions(
       ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
       ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
     });
+    const protocolOutcome = workflowProtocolOutcome(input.runId, moduleOutcome);
+    await actorHost.settleWorkflowOwner(
+      ownerControl.callerPath,
+      protocolOwnerState(protocolOutcome),
+      {
+        output: JSON.stringify(protocolOutcome),
+        structured: toAgentMetadata(protocolOutcome),
+        artifacts: protocolOutcome.artifacts
+          .map((artifact) => artifact.path ?? artifact.name)
+          .filter(Boolean),
+        ...(moduleOutcome.kind === 'failed' ? { error: moduleOutcome.error.message } : {}),
+      },
+    );
+    return moduleOutcome;
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    const protocolOutcome = buildWorkflowOutcome({
+      state: {
+        runId: input.runId,
+        status: ownerSignal.aborted ? 'stopped' : 'failed',
+        totalSpawned: 0,
+        results: [],
+        events: [],
+        artifacts: [],
+      },
+      error: failure,
+    });
+    try {
+      await actorHost.settleWorkflowOwner(
+        ownerControl.callerPath,
+        protocolOwnerState(protocolOutcome),
+        {
+          output: JSON.stringify(protocolOutcome),
+          structured: toAgentMetadata(protocolOutcome),
+          error: failure.message,
+        },
+      );
+    } catch (settlementError) {
+      throw new AggregateError([failure, settlementError], 'Workflow execution and owner settlement failed.');
+    }
+    throw failure;
   } finally {
     await ownedActorSession?.close('workflow run finished');
   }
+}
+
+function workflowProtocolOutcome(
+  runId: string,
+  outcome: RunWorkflowModuleOutcome,
+): WorkflowOutcome {
+  if (outcome.kind === 'denied') {
+    return buildWorkflowOutcome({
+      state: {
+        runId,
+        status: 'stopped',
+        totalSpawned: 0,
+        results: [],
+        events: [],
+        artifacts: [],
+      },
+      summary: `Workflow ${runId} was declined.`,
+    });
+  }
+  return buildWorkflowOutcome({
+    state: outcome.state,
+    ...(outcome.kind === 'completed'
+      ? { summary: workflowResultSummary(outcome.result) }
+      : { error: outcome.error }),
+  });
+}
+
+function protocolOwnerState(
+  outcome: WorkflowOutcome,
+): 'completed' | 'failed' | 'interrupted' {
+  if (outcome.status === 'failed') return 'failed';
+  if (outcome.status === 'interrupted') return 'interrupted';
+  return 'completed';
+}
+
+function combineAbortSignals(
+  supplied: AbortSignal | undefined,
+  owner: AbortSignal,
+): AbortSignal {
+  return supplied ? AbortSignal.any([supplied, owner]) : owner;
+}
+
+function toAgentMetadata(value: WorkflowOutcome): AgentMetadataValue {
+  return JSON.parse(JSON.stringify(value)) as AgentMetadataValue;
 }

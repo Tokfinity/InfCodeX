@@ -33,7 +33,7 @@ function completedOutcome(runId: string): RunWorkflowModuleOutcome {
   return {
     kind: 'completed',
     result: { synthesis: 'ok' },
-    state: { runId, status: 'completed', totalSpawned: 0, events: [], artifacts: [] },
+    state: { runId, status: 'completed', totalSpawned: 0, results: [], events: [], artifacts: [] },
   };
 }
 

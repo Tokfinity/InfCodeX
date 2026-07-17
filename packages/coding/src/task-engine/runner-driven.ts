@@ -1688,7 +1688,7 @@ async function runManagedTaskViaRunnerInner(
       }).catch(() => undefined);
     },
     getSessionId: () => sessionIdRef.current,
-    getChildTaskRegistrySize: () => activeDescendantTurnCount(baseCtx),
+    getActiveDescendantTurnCount: () => activeDescendantTurnCount(baseCtx),
     getRoundCount: () => roundRef.current,
     getHasPlan: () => todoStore.getAll().length > 0,
   });
@@ -1944,7 +1944,6 @@ async function runManagedTaskViaRunnerInner(
         }),
       };
     },
-    registry: new Map(),
     messageQueue: getMessageQueue(),
     // Worker runs as the main thread; the dispatch handler enqueues
     // child notifications with `parentAgentId: undefined` (default

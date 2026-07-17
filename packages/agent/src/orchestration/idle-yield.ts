@@ -60,7 +60,6 @@ import type {
   QueuedInputArtifact,
   QueuedMessage,
 } from '../messaging/index.js';
-import type { ChildTaskRegistry } from './task-registry.js';
 
 interface PromptFragment {
   readonly content: string;
@@ -263,24 +262,14 @@ export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
  * reads `taskId` (for the fallback banner) and `error` — `result` is
  * opaque pass-through.
  */
-export type WakeEvent<TChildResult = unknown> =
-  | {
-      readonly kind: 'child-completed';
-      readonly taskId: string;
-      readonly result: TChildResult;
-    }
-  | {
-      readonly kind: 'child-failed';
-      readonly taskId: string;
-      readonly error: Error;
-    }
+export type WakeEvent =
   | {
       readonly kind: 'messages-arrived';
       readonly messages: readonly QueuedMessage[];
     }
   | { readonly kind: 'aborted' };
 
-export interface WaitForWakeEventOptions<TChildResult = unknown> {
+export interface WaitForWakeEventOptions {
   /**
    * Live ChildTaskRegistry snapshot. The waiter wraps each entry's
    * promise so the FIRST settling child wins the race.
@@ -289,7 +278,6 @@ export interface WaitForWakeEventOptions<TChildResult = unknown> {
    * registry's normal cleanup path (`registerChildTask`'s built-in
    * `.finally` chain) owns deletion. Wrapping doesn't double-consume.
    */
-  readonly registry: ChildTaskRegistry<TChildResult>;
   /** Process-global message queue surface (FEATURE_115 substrate). */
   readonly messageQueue: MessageQueue;
   /**
@@ -335,13 +323,13 @@ export interface WaitForWakeEventOptions<TChildResult = unknown> {
  *     next Runner.run input. The waiter does not itself construct
  *     synthetic user-message bytes — that's the runner-layer's job.
  */
-export function waitForWakeEvent<TChildResult = unknown>(
-  options: WaitForWakeEventOptions<TChildResult>,
-): Promise<WakeEvent<TChildResult>> {
-  const { registry, messageQueue, agentId, abortSignal, pollIntervalMs = 100 } =
+export function waitForWakeEvent(
+  options: WaitForWakeEventOptions,
+): Promise<WakeEvent> {
+  const { messageQueue, agentId, abortSignal, pollIntervalMs = 100 } =
     options;
 
-  return new Promise<WakeEvent<TChildResult>>((resolve) => {
+  return new Promise<WakeEvent>((resolve) => {
     let settled = false;
     let intervalId: ReturnType<typeof setInterval> | undefined;
     // v0.7.38 FEATURE_155 Bug F hotfix — abort listener leak. Without
@@ -356,7 +344,7 @@ export function waitForWakeEvent<TChildResult = unknown>(
     const abortHandler = (): void => {
       settle({ kind: 'aborted' });
     };
-    const settle = (event: WakeEvent<TChildResult>): void => {
+    const settle = (event: WakeEvent): void => {
       if (settled) return;
       settled = true;
       if (intervalId !== undefined) {
@@ -380,18 +368,6 @@ export function waitForWakeEvent<TChildResult = unknown>(
     // synchronously in the microtask queue and resolves this wake with
     // a spurious `child-completed` event — the FEATURE_155 v0.7.38
     // Bug A hotfix landed the dispatch-side fix.
-    for (const [taskId, promise] of registry.entries()) {
-      promise.then(
-        (result) => {
-          settle({ kind: 'child-completed', taskId, result });
-        },
-        (err: unknown) => {
-          const error = err instanceof Error ? err : new Error(String(err));
-          settle({ kind: 'child-failed', taskId, error });
-        },
-      );
-    }
-
     // Queue arm — poll. The MessageQueue is currently poll-based
     // (no event-emitter surface yet); 100 ms is the perception
     // budget. If queue ever grows a `wait()` API we can swap this
@@ -434,15 +410,6 @@ export function waitForWakeEvent<TChildResult = unknown>(
  *     drain anything that arrived between settle and this call (a
  *     tight race with the dispatch handler's enqueue is possible) and
  *     concatenate.
- *
- *   - `child-completed` / `child-failed` wake: the dispatch handler's
- *     in-IIFE `enqueueChildTaskNotification` is a precondition of the
- *     promise settling, so the queue holds the canonical
- *     `<task-completed>` banner. Drain to capture it. If for any
- *     reason the banner is missing (defensive — a misbehaving
- *     dispatch path that resolved without enqueuing), synthesize a
- *     minimal one from the wake event so the agent still observes
- *     the resolution rather than silently looping again.
  *
  *   - `aborted`: caller is expected to break out before reaching this
  *     helper. If reached anyway, returns `undefined` so the outer
@@ -506,8 +473,8 @@ export type EnvelopeAggregateEnforcer = (
  * `readonly KodaXMessage[]` (possibly empty). Callers must spread the
  * result into their next-iteration input.
  */
-export async function composeIdleYieldUserMessage<TChildResult = unknown>(
-  wakeEvent: WakeEvent<TChildResult>,
+export async function composeIdleYieldUserMessage(
+  wakeEvent: WakeEvent,
   drainBackgroundQueue: () => readonly QueuedMessage[],
   enforceAggregate?: EnvelopeAggregateEnforcer,
   // FEATURE_213 (v0.7.45) — reports the user-typed `mode:'prompt'` fragments
@@ -520,9 +487,8 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: PromptFragment[] = [];
   const syntheticFragments: string[] = [];
-  // GOAL 1 (Space resume recoverability): tag the composed synthetic message
-  // `_source: 'task-completed'` when a task-notification banner was drained
-  // (dispatch_child_task / run_workflow result), so restore can recover it. A
+  // Tag the composed synthetic message when an actor result notification was
+  // drained so restore can recover it at the original transcript position. A
   // pure system-reminder drain stays untagged. In the rare mixed drain (a
   // task-notification AND a system-reminder settle on the same wake), both are
   // concatenated into one message and the whole message is tagged — content is
@@ -561,34 +527,6 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   // resolved the promise without enqueuing; surface a minimal banner
   // (synthetic, not user-visible) so the agent still observes the
   // resolution rather than silently looping again.
-  if (promptFragments.length === 0 && syntheticFragments.length === 0) {
-    if (wakeEvent.kind === 'child-completed') {
-      hadTaskNotification = true;
-      taskResults.push({
-        type: 'task_result',
-        source: 'child_task',
-        taskId: wakeEvent.taskId,
-        status: 'completed',
-        summary: '(child task completed; no summary available)',
-      });
-      syntheticFragments.push(
-        `<task-completed task_id="${wakeEvent.taskId}">\n(child task completed; no summary available)\n</task-completed>`,
-      );
-    } else if (wakeEvent.kind === 'child-failed') {
-      hadTaskNotification = true;
-      taskResults.push({
-        type: 'task_result',
-        source: 'child_task',
-        taskId: wakeEvent.taskId,
-        status: 'failed',
-        summary: `failed: ${wakeEvent.error.message}`,
-      });
-      syntheticFragments.push(
-        `<task-completed task_id="${wakeEvent.taskId}">\nfailed: ${wakeEvent.error.message}\n</task-completed>`,
-      );
-    }
-  }
-
   const messages: KodaXMessage[] = [];
   const promptTurnId = promptFragments.length > 0 ? resolveTurnId?.() : undefined;
   const promptMessage: KodaXMessage | undefined = promptFragments.length > 0
@@ -615,10 +553,9 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
         content: enforced.join('\n\n'),
         // Hidden in REPL display — agent-only context.
         _synthetic: true,
-        // GOAL 1: mark task-completion banners so restore recovers them at their
-        // transcript position (message-utils.ts exemption). Only when an actual
-        // task-notification drained — a pure system-reminder stays untagged.
-        ...(hadTaskNotification ? { _source: 'task-completed' } : {}),
+        // Only an actual task notification receives the provenance marker; a
+        // pure system reminder stays untagged.
+        ...(hadTaskNotification ? { _source: 'agent-completed' } : {}),
         ...(taskResults.length === 1 ? { _taskResult: taskResults[0] } : {}),
         ...(taskResults.length > 1 ? { _taskResults: taskResults } : {}),
         // GOAL 2: stamp finalize-time (when the parent observed the wake) so the

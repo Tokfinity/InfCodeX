@@ -223,13 +223,6 @@ export function buildWorkerInstructions(
     '- `bash git …` is reserved for NON-review git ops: status, commit, tag, push, log (commit history), branch operations.',
   ].join('\n');
 
-  const fanOutPlanGranularity = [
-    'FAN-OUT PLAN GRANULARITY:',
-    '- When you are about to dispatch several children in parallel, first emit a `todo_create` call for each one so the user sees per-child progress instead of a 30-60s black box. One todo per child — use the child\'s objective as the subject.',
-    '- Mark each item `in_progress` just before its `dispatch_child_task` call, and `completed` when the matching `<task-completed>` block arrives.',
-    '- If mid fan-out you decide to dispatch another child, add the matching todo before the new dispatch.',
-  ].join('\n');
-
   // Static EXECUTION GUIDANCE (shared with the SA path) replaces the
   // router-injected EXECUTION_MODE / HARNESS_PROFILE overlays — the Worker
   // self-judges the kind of work instead of being told by a keyword router.
@@ -238,7 +231,8 @@ export function buildWorkerInstructions(
   const handoffRules = [
     'TERMINATION:',
     '- Before writing that final summary, mark every finished item `completed` as your closing tool calls — this is the only way the plan reflects your progress in real time. The runner force-completes any still-open items on an accept verdict, but that correction is invisible to you and lands only after the user has already watched the list sit stale.',
-    '- When all non-cancelled plan items are `completed` AND every dispatched child has produced its matching `<task-completed>` block, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
+    '- Before finishing, wait for or interrupt every live child you still own; if descendants intentionally remain active, report their canonical paths and unresolved ownership explicitly.',
+    '- When all non-cancelled plan items are `completed`, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
     '- If you cannot proceed (e.g. user-input blocker, irrecoverable failure), end your turn with a text-only summary of the blocker. Mark the affected plan items `failed` with a note BEFORE the final summary turn so the dashboard reflects the blocked state.',
     '- After your terminal turn, an independent Sidecar Verifier reads your work in a fresh read-only session and decides accept (success) / revise (your turn again, fix the called-out issues) / blocked (terminal failure). You do not call the verifier — it runs automatically.',
   ].join('\n');
@@ -261,7 +255,6 @@ export function buildWorkerInstructions(
     repoIntelligenceTools,
     dispatchRules,
     childSteeringRules,
-    fanOutPlanGranularity,
     EXECUTION_GUIDANCE,
     handoffRules,
   ]

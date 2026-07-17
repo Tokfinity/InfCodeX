@@ -448,7 +448,6 @@ export {
 // so KodaX simplifies to 2 tiers.
 export type {
   DequeueFilter,
-  EnqueueChildTaskNotificationInput,
   EnqueueInput,
   MaybeDrainMidTurnInput,
   MessageMode,
@@ -460,7 +459,6 @@ export {
   MessageQueue,
   YIELD_TOOL_NAMES,
   _resetMessageQueueForTests,
-  enqueueChildTaskNotification,
   getMessageQueue,
   maybeDrainMidTurn,
   midTurnDrainPriority,
@@ -479,21 +477,15 @@ export * from './media/index.js';
 // (`KodaXChildExecutionResult` shape, AGENTS.md injection, etc.) stay
 // in `@kodax-ai/coding` and consume these as generics.
 export type {
-  ChildTaskRegistry,
   EnvelopeAggregateEnforcer,
   EnvelopeAggregateCapacityContext,
   FanOutOutcome,
   FanOutProgressEvent,
   IdleYieldSnapshot,
-  RequestTaskStopOptions,
-  RequestTaskStopResult,
-  RouteMessageOptions,
-  RouteMessageResult,
   RunFanOutOptions,
   RunFanOutResult,
   RunWithIdleYieldOptions,
   RunWithIdleYieldRunResult,
-  TaskAbortRegistry,
   WaitForWakeEventOptions,
   WakeEvent,
 } from './orchestration/index.js';
@@ -504,9 +496,6 @@ export {
   detectIdleYield,
   isIdleYieldEnabled,
   QueuedInputArtifactError,
-  registerChildTask,
-  requestTaskStop,
-  routeMessage,
   runFanOut,
   runWithIdleYield,
   waitForWakeEvent,

@@ -5,6 +5,7 @@ import {
   emitKodaXDiagnostic,
   getMessageQueue,
   type AgentActorClient,
+  type AgentExecutorPlaneBinding,
   type AgentActorStore,
   type AgentEvent,
   type AgentExecutionInput,
@@ -29,6 +30,7 @@ export interface CodingActorSessionOptions {
   readonly maxConcurrentThreadsPerSession?: number;
   readonly sessionId?: string;
   readonly store?: AgentActorStore;
+  readonly executor?: AgentTurnExecutor;
 }
 
 interface CodingActorEnvironment {
@@ -48,6 +50,7 @@ export class CodingActorSession {
         const executionKey = metadataString(input.turn.metadata?.executionKey);
         const registered = executionKey ? this.turnExecutors.get(executionKey) : undefined;
         if (registered) return registered.execute(input);
+        if (sessionOptions.executor) return sessionOptions.executor.execute(input);
         const environment = this.environment;
         if (!environment) throw new Error('Actor session is not attached to an active KodaX run.');
         return executeCodingActorTurn(
@@ -101,6 +104,18 @@ export class CodingActorSession {
     return this.controller.createProtocolOwner(parentPath, runId);
   }
 
+  workflowOwnerSignal(ownerPath: string): AbortSignal {
+    return this.controller.protocolOwnerSignal(ownerPath);
+  }
+
+  settleWorkflowOwner(
+    ownerPath: string,
+    state: 'completed' | 'failed' | 'interrupted',
+    result: AgentExecutionResult & { readonly error?: string },
+  ): Promise<void> {
+    return this.controller.settleProtocolOwner(ownerPath, state, result);
+  }
+
   bindActor(actorPath: string): AgentActorClient {
     return this.controller.bind(actorPath);
   }
@@ -141,6 +156,20 @@ export function createLocalCodingActorControl(
     sessionId: parentCtx.sessionId,
   });
   return session.attach(parentCtx, options);
+}
+
+/** Runtime adapter for detached external Actor turns. The executor plane stays internal. */
+export function createExternalActorTurnExecutor(
+  binding: AgentExecutorPlaneBinding,
+): AgentTurnExecutor {
+  return {
+    execute(input) {
+      if (input.actor.kind !== 'external') {
+        throw new Error('Detached Runtime Actor execution only supports external actors.');
+      }
+      return executeExternalActorTurn(input, binding);
+    },
+  };
 }
 
 function publishActorCompletion(
@@ -189,7 +218,7 @@ async function executeCodingActorTurn(
   actorControl: AgentActorClient,
 ): Promise<AgentExecutionResult> {
   if (input.actor.kind === 'external') {
-    return executeExternalActorTurn(input, parentCtx);
+    return executeExternalActorTurn(input, parentCtx.agentExecutorPlane);
   }
   const bundle = actorBundle(input);
   const parentConfig = parentCtx.parentAgentConfig;
@@ -230,9 +259,8 @@ async function executeCodingActorTurn(
 
 async function executeExternalActorTurn(
   input: AgentExecutionInput,
-  parentCtx: KodaXToolExecutionContext,
+  binding: AgentExecutorPlaneBinding | undefined,
 ): Promise<AgentExecutionResult> {
-  const binding = parentCtx.agentExecutorPlane;
   const agentId = metadataString(input.turn.metadata?.agentId);
   if (!binding || !agentId) throw new Error('External Agent execution is not bound to this Runtime.');
   const taskId = externalTaskId(binding.context.actorId, input.turn.turnId);
@@ -252,7 +280,7 @@ async function executeExternalActorTurn(
       ? { expectedConfigurationRevision: metadataString(input.turn.metadata?.expectedConfigurationRevision) }
       : {}),
   });
-  if (task.state === 'failed' || task.state === 'rejected' || task.state === 'unknown') {
+  if (task.state === 'failed' || task.state === 'rejected') {
     throw new Error(task.error ?? `External Agent entered ${task.state}.`);
   }
   const cancel = (): void => {
@@ -271,7 +299,10 @@ async function executeExternalActorTurn(
           task = await binding.plane.tasks.sendInput(taskId, { content: message.content });
         }
       }
-      if (!isExternalTerminal(task.state)) task = await binding.plane.tasks.wait(taskId, 1_000);
+      if (!isExternalTerminal(task.state)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        task = await binding.plane.tasks.get(taskId);
+      }
     }
   } finally {
     input.signal.removeEventListener('abort', cancel);
@@ -291,8 +322,7 @@ function isExternalTerminal(state: AgentTaskSnapshot['state']): boolean {
   return state === 'completed'
     || state === 'failed'
     || state === 'canceled'
-    || state === 'rejected'
-    || state === 'unknown';
+    || state === 'rejected';
 }
 
 function externalTaskId(actorId: string, turnId: string): string {

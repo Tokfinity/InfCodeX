@@ -407,10 +407,10 @@ export interface HistorySeedSourceMessage {
   /**
    * Provenance marker persisted on host-injected messages. `'sidecar-verifier'`
    * tags the synthetic user message the Sidecar Verifier injects on a `revise`
-   * verdict; `'task-completed'` tags the synthetic user message carrying a
-   * dispatch_child_task / run_workflow `<task-completed>` result banner. Both are
-   * rendered under their own identity on restore instead of being swallowed by
-   * the generic `_synthetic` skip.
+   * verdict; `'agent-completed'` tags a synthetic actor-result notification.
+   * Legacy `'task-completed'` values are still accepted while restoring older
+   * sessions. Both render under their own identity instead of being swallowed
+   * by the generic `_synthetic` skip.
    */
   _source?: string;
 }
@@ -468,13 +468,11 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
           ? [{ type: "sidecar", text: sidecarText, verdict: "revise" }]
           : [];
       }
-      // dispatch_child_task / run_workflow results are spliced into the transcript
-      // as synthetic user messages (_source: 'task-completed', content = a
-      // <task-completed task_id=…>…</task-completed> banner). A headless SDK host
+      // Actor results are synthetic transcript messages. A headless SDK host
       // (no uiHistory) must recover them at their transcript position instead of
-      // losing them to the generic _synthetic skip below. Distinct seed type so
-      // splitCreatableHistoryRounds does not treat it as a user round boundary.
-      if (message._source === "task-completed") {
+      // losing them to the generic _synthetic skip below. Accept the old marker
+      // for persisted sessions created before Actor unification.
+      if (message._source === "agent-completed" || message._source === "task-completed") {
         const completedText = extractTextContent(message.content).trim();
         return completedText ? [{ type: "task_completed", text: completedText }] : [];
       }

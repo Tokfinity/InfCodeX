@@ -392,6 +392,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   // identical input map to distinct cache keys (<hash>#0, <hash>#1, ...).
   const occurrenceByHash = new Map<string, number>();
   const artifacts: WorkflowArtifactRef[] = [];
+  const taskResults = new Map<string, WorkflowTaskResult>();
   const releaseByTask = new Map<string, () => void>();
   const taskNames = new Map<string, string>();
   const pendingTaskSummaries = new Map<string, string>();
@@ -663,6 +664,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
             }
           : {}),
       })) {
+        taskResults.set(result.taskId, result);
         accrue(result);
       }
       return result;
@@ -742,6 +744,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         cacheKey = `${hash}#${occurrence}`;
         const cached = cache.get(cacheKey);
         if (cached !== undefined) {
+          taskResults.set(cached.taskId, cached);
           recorder.emit('agent_replayed', {
             taskId: cached.taskId,
             name: input.name,
@@ -942,6 +945,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       runId: opts.runId,
       status,
       totalSpawned,
+      results: [...taskResults.values()],
       events: recorder.snapshot(),
       artifacts: [...artifacts],
     }),
@@ -1024,6 +1028,7 @@ export async function runWorkflow<T>(
         runId: opts.runId,
         status: 'failed',
         totalSpawned: 0,
+        results: [],
         events: [],
         artifacts: [],
       },

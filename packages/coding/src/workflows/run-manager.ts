@@ -99,6 +99,7 @@ function failedOutcome(runId: string, error: unknown): RunWorkflowModuleOutcome 
     runId,
     status: 'failed',
     totalSpawned: 0,
+    results: [],
     events: [],
     artifacts: [],
   };

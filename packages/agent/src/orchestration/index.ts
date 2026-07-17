@@ -15,9 +15,6 @@
  * `child-executor.ts` fan-out helper.
  */
 
-export type { ChildTaskRegistry } from './task-registry.js';
-export { registerChildTask } from './task-registry.js';
-
 export type {
   EnvelopeAggregateEnforcer,
   EnvelopeAggregateCapacityContext,
@@ -50,16 +47,3 @@ export type {
   RunFanOutResult,
 } from './fan-out.js';
 export { runFanOut } from './fan-out.js';
-
-export type {
-  RouteMessageOptions,
-  RouteMessageResult,
-} from './send-message-router.js';
-export { routeMessage } from './send-message-router.js';
-
-export type {
-  RequestTaskStopOptions,
-  RequestTaskStopResult,
-  TaskAbortRegistry,
-} from './task-stop.js';
-export { requestTaskStop } from './task-stop.js';

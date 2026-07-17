@@ -165,17 +165,27 @@ describe('configured A2A Runtime integration', () => {
     });
     const handle = await integration.start(runtime);
     try {
-      const started = await runtime.agentTasks.start({
-        agentId: 'external:documents',
-        objective: 'Create a presentation and report.',
-        context: { actorId: 'runtime-config-test' },
+      const session = await runtime.sessions.create({
+        sessionId: 'runtime-config-test', title: 'A2A artifact test',
       });
-      const completed = await runtime.agentTasks.wait(started.taskId, 1_000);
+      const started = await runtime.agents.spawn(session.id, {
+        taskName: 'documents',
+        kind: 'external',
+        objective: 'Create a presentation and report.',
+        metadata: { agentId: 'external:documents' },
+      });
+      const deadline = Date.now() + 2_000;
+      let completed = await runtime.agents.output(session.id, '/root/documents', started.turnId);
+      while (completed.state === 'accepted' || completed.state === 'running') {
+        if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${started.turnId}.`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        completed = await runtime.agents.output(session.id, '/root/documents', started.turnId);
+      }
       expect(completed).toMatchObject({
         state: 'completed',
         artifacts: [
-          { name: 'deck.pptx', size: Buffer.byteLength('presentation-content') },
-          { name: 'report.pdf', uri: 'https://files.example/report.pdf' },
+          expect.stringContaining('data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,'),
+          'https://files.example/report.pdf',
         ],
       });
       expect(fetchImpl.mock.calls.some(([called]) => String(called).includes('files.example'))).toBe(false);

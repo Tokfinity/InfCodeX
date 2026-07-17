@@ -14,6 +14,7 @@ import type {
   AgentDetail,
   AgentEvent,
   AgentExecutionKind,
+  AgentExecutionResult,
   AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
@@ -141,19 +142,84 @@ export class AgentActorController {
       if (this.actors.has(path)) {
         throw new AgentControlError('name_collision', `actor already exists: ${path}`);
       }
-      const actor = this.createActor(
+      const idleActor = this.createActor(
         path,
         taskName,
         callerPath,
         'workflow',
         deriveCapabilities(parent.capabilities, undefined),
       );
-      this.actors.set(path, actor);
+      const turn = this.createTurn(idleActor, `Run Workflow ${ownerId}`, 'none', {
+        protocolOwner: true,
+      });
+      const timestamp = this.now();
+      this.actors.set(path, {
+        ...idleActor,
+        state: 'running',
+        turnIds: [turn.turnId],
+        currentTurnId: turn.turnId,
+        updatedAt: timestamp,
+        revision: idleActor.revision + 1,
+      });
+      this.turns.set(turn.turnId, {
+        ...turn,
+        state: 'running',
+        startedAt: timestamp,
+        revision: turn.revision + 1,
+      });
+      this.abortControllers.set(turn.turnId, new AbortController());
       this.mailboxes.set(path, []);
-      this.appendEvent('actor_spawned', path, undefined, callerPath);
+      this.appendEvent('actor_spawned', path, turn.turnId, callerPath);
+      this.appendEvent('turn_started', path, turn.turnId, callerPath);
       return path;
     });
     return this.bind(ownerPath);
+  }
+
+  /** Trusted host API: settle a zero-slot Workflow protocol owner. */
+  async settleProtocolOwner(
+    ownerPath: string,
+    state: 'completed' | 'failed' | 'interrupted',
+    result: AgentExecutionResult & { readonly error?: string },
+  ): Promise<void> {
+    await this.mutate(() => {
+      const actor = this.requireActor(ownerPath);
+      if (actor.kind !== 'workflow') {
+        throw new AgentControlError('invalid_actor_path', `${ownerPath} is not a Workflow owner`);
+      }
+      if (!actor.currentTurnId) {
+        const latestTurnId = actor.turnIds.at(-1);
+        const latestTurn = latestTurnId ? this.requireTurn(latestTurnId) : undefined;
+        if (latestTurn && isTerminal(latestTurn.state)) {
+          if (latestTurn.structured === undefined && result.structured !== undefined) {
+            this.turns.set(latestTurn.turnId, {
+              ...latestTurn,
+              ...(result.output === undefined ? {} : { output: result.output }),
+              ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+              structured: result.structured,
+              ...(latestTurn.error === undefined && result.error !== undefined
+                ? { error: result.error }
+                : {}),
+              revision: latestTurn.revision + 1,
+            });
+          }
+          return;
+        }
+        throw new AgentControlError('no_active_turn', `${ownerPath} has no active protocol turn`);
+      }
+      this.finishTurn(actor.currentTurnId, state, result);
+    });
+  }
+
+  /** Trusted host API: cancellation signal for a zero-slot Workflow protocol owner. */
+  protocolOwnerSignal(ownerPath: string): AbortSignal {
+    const actor = this.requireActor(ownerPath);
+    if (actor.kind !== 'workflow' || !actor.currentTurnId) {
+      throw new AgentControlError('no_active_turn', `${ownerPath} has no active protocol turn`);
+    }
+    const abort = this.abortControllers.get(actor.currentTurnId);
+    if (!abort) throw new AgentControlError('no_active_turn', `${ownerPath} has no cancellation signal`);
+    return abort.signal;
   }
 
   async spawn(callerPath: string, input: AgentSpawnInput): Promise<AgentTurnRef> {
@@ -306,6 +372,7 @@ export class AgentActorController {
       state: turn.state,
       ...(turn.output === undefined ? {} : { output: turn.output }),
       artifacts: turn.artifacts ?? [],
+      ...(turn.structured === undefined ? {} : { structured: turn.structured }),
       ...(turn.error === undefined ? {} : { error: turn.error }),
     };
   }
@@ -417,7 +484,12 @@ export class AgentActorController {
         drainMailbox: () => this.drainMailbox(plan.actor.path),
       }))
       .then(
-        (result) => this.completeExecution(plan.turn.turnId, result.output, result.artifacts),
+        (result) => this.completeExecution(
+          plan.turn.turnId,
+          result.output,
+          result.artifacts,
+          result.structured,
+        ),
         (error: unknown) => this.failExecution(plan.turn.turnId, error),
       )
       .catch((error: unknown) => this.reportBackgroundError(error));
@@ -427,8 +499,13 @@ export class AgentActorController {
     turnId: string,
     output: string,
     artifacts: readonly string[] = [],
+    structured?: AgentMetadataValue,
   ): Promise<void> {
-    await this.mutate(() => this.finishTurn(turnId, 'completed', { output, artifacts }));
+    await this.mutate(() => this.finishTurn(turnId, 'completed', {
+      output,
+      artifacts,
+      ...(structured === undefined ? {} : { structured }),
+    }));
   }
 
   private async failExecution(turnId: string, error: unknown): Promise<void> {
@@ -442,7 +519,12 @@ export class AgentActorController {
   private finishTurn(
     turnId: string,
     state: 'completed' | 'failed' | 'interrupted',
-    result: { readonly output?: string; readonly artifacts?: readonly string[]; readonly error?: string },
+    result: {
+      readonly output?: string;
+      readonly artifacts?: readonly string[];
+      readonly structured?: AgentMetadataValue;
+      readonly error?: string;
+    },
   ): void {
     const turn = this.requireTurn(turnId);
     if (isTerminal(turn.state)) return;
@@ -464,15 +546,18 @@ export class AgentActorController {
     state: 'completed' | 'failed' | 'interrupted',
     result: { readonly output?: string; readonly error?: string },
   ): void {
-    const summary = result.output ?? result.error ?? state;
+    const rawSummary = nonEmptyText(result.output) ?? nonEmptyText(result.error) ?? state;
+    const summary = rawSummary.length > MAX_MESSAGE_LENGTH
+      ? `${rawSummary.slice(0, MAX_MESSAGE_LENGTH - 3).trimEnd()}...`
+      : rawSummary;
     this.appendMessage(actor.path, actor.parentPath ?? ROOT_PATH, summary, 'completion', 'internal', turnId);
   }
 
   private async drainMailbox(actorPath: string): Promise<readonly AgentMailboxMessage[]> {
+    if (this.unreadMailbox(actorPath).length === 0) return [];
     return this.mutate(() => {
       const actor = this.requireActor(actorPath);
-      const mailbox = this.mailboxes.get(actorPath) ?? [];
-      const unread = mailbox.filter((message) => message.sequence > actor.mailboxCursor);
+      const unread = this.unreadMailbox(actorPath);
       if (unread.length > 0) {
         this.actors.set(actorPath, {
           ...actor,
@@ -483,6 +568,12 @@ export class AgentActorController {
       }
       return unread;
     });
+  }
+
+  private unreadMailbox(actorPath: string): readonly AgentMailboxMessage[] {
+    const actor = this.requireActor(actorPath);
+    return (this.mailboxes.get(actorPath) ?? [])
+      .filter((message) => message.sequence > actor.mailboxCursor);
   }
 
   private appendMessage(
@@ -674,7 +765,10 @@ export class AgentActorController {
     replaceMap(this.turns, snapshot.turns.map((turn) => [turn.turnId, turn]));
     replaceMap(this.mailboxes, Object.entries(snapshot.mailboxes).map(([path, messages]) => [path, [...messages]]));
     this.eventsLog.splice(0, this.eventsLog.length, ...snapshot.events);
-    this.scheduler.restore(snapshot.turns.filter((turn) => !isTerminal(turn.state)).map((turn) => turn.turnId));
+    const kindByPath = new Map(snapshot.actors.map((actor) => [actor.path, actor.kind]));
+    this.scheduler.restore(snapshot.turns
+      .filter((turn) => !isTerminal(turn.state) && kindByPath.get(turn.actorPath) !== 'workflow')
+      .map((turn) => turn.turnId));
   }
 
   private async recoverUnmatchedTurns(): Promise<void> {
@@ -682,6 +776,11 @@ export class AgentActorController {
     if (active.length === 0) return;
     await this.mutate(() => {
       for (const turn of active) {
+        const actor = this.requireActor(turn.actorPath);
+        if (actor.kind === 'external') {
+          this.finishTurn(turn.turnId, 'failed', { error: 'external_state_unknown' });
+          continue;
+        }
         this.finishTurn(turn.turnId, 'interrupted', { error: 'runtime_recovered_without_executor' });
       }
     });
@@ -714,6 +813,10 @@ export class AgentActorController {
     }
     setTimeout(() => { throw error; }, 0);
   }
+}
+
+function nonEmptyText(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim().length > 0 ? value : undefined;
 }
 
 export async function createAgentActorController(

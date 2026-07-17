@@ -78,7 +78,7 @@ export interface RunnerSidecarVerifierAdapterDeps {
    * task-notification is queued) the Worker is mid idle-yield, not at a real
    * terminal turn, so the sidecar is deferred to the next stop-hook fire.
    */
-  readonly getChildTaskRegistrySize: () => number;
+  readonly getActiveDescendantTurnCount: () => number;
   /** Total rounds (LLM turns) the Worker ran this task — `roundRef.current`. */
   readonly getRoundCount: () => number;
   /** Whether the Worker committed a Todolist — `todoStore.getAll().length > 0`. */
@@ -163,7 +163,7 @@ export function buildRunnerSidecarVerifierAdapter(
         // set recorder.verdict synchronously, flipping
         // `hasEmittedTerminalVerdict` true and stranding the outer loop.
         const isIdleYieldTurn =
-          deps.getChildTaskRegistrySize() > 0 ||
+          deps.getActiveDescendantTurnCount() > 0 ||
           getMessageQueue().has({
             agentId: undefined,
             maxPriority: 'background',

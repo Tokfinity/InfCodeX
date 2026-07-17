@@ -3097,7 +3097,7 @@ describe('createKodaXRuntime', () => {
 
     await expect(runtime.status.preflight()).resolves.toMatchObject({
       activeWorkflows: [expect.objectContaining({ runId, status: 'running' })],
-      activeAgentTasks: [],
+      activeAgentTurns: [],
       blockers: expect.arrayContaining(['active_workflows']),
       canStop: false,
     });
