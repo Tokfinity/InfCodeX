@@ -78,6 +78,7 @@ export class AgentActorController {
   private readonly now: () => string;
   private mutationTail: Promise<void> = Promise.resolve();
   private revision = 0;
+  private committedSnapshot: AgentActorSnapshot;
 
   constructor(private readonly options: AgentControllerOptions = {}) {
     const max = options.maxConcurrentThreadsPerSession ?? DEFAULT_MAX_CONCURRENT_THREADS;
@@ -86,6 +87,7 @@ export class AgentActorController {
     this.now = options.now ?? (() => new Date().toISOString());
     if (max >= 8) options.warn?.(`Agent concurrency is ${max}; available slots include the current Agent.`);
     this.installRoot(options.rootCapabilities ?? defaultRootCapabilities());
+    this.committedSnapshot = this.snapshot();
   }
 
   async initialize(): Promise<void> {
@@ -93,11 +95,12 @@ export class AgentActorController {
     if (!snapshot) return;
     validateSnapshot(snapshot, this.scheduler.maxConcurrentThreads);
     this.restore(snapshot);
+    this.committedSnapshot = this.snapshot();
     await this.recoverUnmatchedTurns();
   }
 
   bind(callerPath: string): AgentActorClient {
-    this.requireActor(callerPath);
+    this.requireCommittedActor(callerPath);
     return Object.freeze({
       callerPath,
       spawn: (input: AgentSpawnInput) => this.spawn(callerPath, input),
@@ -338,13 +341,18 @@ export class AgentActorController {
   }
 
   list(callerPath: string): AgentTreeSnapshot {
-    this.requireActor(callerPath);
+    this.requireCommittedActor(callerPath);
+    const kindByPath = new Map(
+      this.committedSnapshot.actors.map((actor) => [actor.path, actor.kind]),
+    );
     return {
       rootPath: ROOT_PATH,
       actors: this.visibleActors(callerPath),
-      activeNonRootTurns: this.scheduler.activeNonRootTurns,
-      maxConcurrentThreads: this.scheduler.maxConcurrentThreads,
-      revision: this.revision,
+      activeNonRootTurns: this.committedSnapshot.turns.filter((turn) => (
+        !isTerminal(turn.state) && kindByPath.get(turn.actorPath) !== 'workflow'
+      )).length,
+      maxConcurrentThreads: this.committedSnapshot.maxConcurrentThreads,
+      revision: this.committedSnapshot.revision,
     };
   }
 
@@ -352,20 +360,20 @@ export class AgentActorController {
     if (!this.isVisible(callerPath, targetPath)) {
       throw new AgentControlError('permission_denied', `${callerPath} cannot inspect ${targetPath}`);
     }
-    const actor = this.requireActor(targetPath);
+    const actor = this.requireCommittedActor(targetPath);
     return {
       actor,
-      turns: actor.turnIds.map((turnId) => this.requireTurn(turnId)),
-      mailbox: [...(this.mailboxes.get(targetPath) ?? [])],
+      turns: actor.turnIds.map((turnId) => this.requireCommittedTurn(turnId)),
+      mailbox: [...(this.committedSnapshot.mailboxes[targetPath] ?? [])],
     };
   }
 
   output(callerPath: string, targetPath: string, turnId?: string): AgentOutput {
-    this.requireControl(callerPath, targetPath);
-    const actor = this.requireActor(targetPath);
+    this.requireCommittedControl(callerPath, targetPath);
+    const actor = this.requireCommittedActor(targetPath);
     const selected = turnId ?? actor.turnIds.at(-1);
     if (!selected) throw new AgentControlError('no_active_turn', `${targetPath} has no turns`);
-    const turn = this.requireTurn(selected);
+    const turn = this.requireCommittedTurn(selected);
     return {
       actorPath: actor.path,
       turnId: turn.turnId,
@@ -378,8 +386,8 @@ export class AgentActorController {
   }
 
   eventSnapshot(callerPath: string, afterSequence = 0): readonly AgentEvent[] {
-    this.requireActor(callerPath);
-    return this.eventsLog.filter((event) => (
+    this.requireCommittedActor(callerPath);
+    return this.committedSnapshot.events.filter((event) => (
       event.sequence > afterSequence && this.isVisible(callerPath, event.actorPath)
     ));
   }
@@ -639,8 +647,8 @@ export class AgentActorController {
   }
 
   private isVisible(callerPath: string, targetPath: string): boolean {
-    const caller = this.requireActor(callerPath);
-    const target = this.requireActor(targetPath);
+    const caller = this.requireCommittedActor(callerPath);
+    const target = this.requireCommittedActor(targetPath);
     if (caller.path === ROOT_PATH) return true;
     if (target.path === caller.path || target.path.startsWith(`${caller.path}/`)) return true;
     return target.path === caller.parentPath
@@ -648,7 +656,7 @@ export class AgentActorController {
   }
 
   private visibleActors(callerPath: string): readonly AgentActor[] {
-    return [...this.actors.values()]
+    return this.committedSnapshot.actors
       .filter((actor) => this.isVisible(callerPath, actor.path))
       .sort((left, right) => left.path.localeCompare(right.path));
   }
@@ -706,6 +714,27 @@ export class AgentActorController {
     return turn;
   }
 
+  private requireCommittedActor(path: string): AgentActor {
+    const actor = this.committedSnapshot.actors.find((candidate) => candidate.path === path);
+    if (!actor) throw new AgentControlError('actor_not_found', `actor not found: ${path}`);
+    return actor;
+  }
+
+  private requireCommittedTurn(turnId: string): AgentTurn {
+    const turn = this.committedSnapshot.turns.find((candidate) => candidate.turnId === turnId);
+    if (!turn) throw new AgentControlError('no_active_turn', `turn not found: ${turnId}`);
+    return turn;
+  }
+
+  private requireCommittedControl(callerPath: string, targetPath: string): AgentActor {
+    const caller = this.requireCommittedActor(callerPath);
+    const target = this.requireCommittedActor(targetPath);
+    if (caller.path !== ROOT_PATH && target.parentPath !== caller.path) {
+      throw new AgentControlError('permission_denied', `${callerPath} cannot control ${targetPath}`);
+    }
+    return target;
+  }
+
   private installRoot(capabilities: AgentCapabilities): void {
     const timestamp = this.now();
     this.actors.set(ROOT_PATH, {
@@ -736,6 +765,7 @@ export class AgentActorController {
       const expectedRevision = this.revision;
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);
+      this.committedSnapshot = this.snapshot();
       for (const event of this.eventsLog.slice(eventCount)) this.publishCommittedEvent(event);
       return result;
     } catch (error) {

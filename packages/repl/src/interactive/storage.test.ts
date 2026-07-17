@@ -1,6 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { existsSync } from 'fs';
+import fsPromises from 'fs/promises';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applySessionCompaction, createSessionLineage } from '@kodax-ai/agent';
@@ -56,6 +57,36 @@ describe('FileSessionStorage', () => {
   });
 
   const testSessionsDir = (): string => path.join(tempHome, '.kodax', 'sessions');
+
+  it('retries a transient Windows atomic-replace failure', async () => {
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    let targetAttempts = 0;
+    const rename = vi.spyOn(fsPromises, 'rename');
+    rename.mockImplementation(async (oldPath, newPath) => {
+      if (String(newPath).endsWith('rename-retry.jsonl')) {
+        targetAttempts += 1;
+        if (targetAttempts === 1) {
+          throw Object.assign(new Error('file temporarily locked'), { code: 'EPERM' });
+        }
+      }
+      await originalRename(oldPath, newPath);
+    });
+    try {
+      const { FileSessionStorage } = await import('./storage.js');
+      const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+
+      await storage.save('rename-retry', {
+        messages: [{ role: 'user', content: 'persist despite a transient lock' }],
+        title: 'Rename retry',
+        gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      });
+
+      expect(targetAttempts).toBe(2);
+      expect(await storage.load('rename-retry')).toMatchObject({ title: 'Rename retry' });
+    } finally {
+      rename.mockRestore();
+    }
+  });
 
   it('persists the Runtime-owned Actor snapshot without a private sidecar journal', async () => {
     const { FileSessionStorage } = await import('./storage.js');

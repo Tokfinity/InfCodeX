@@ -95,7 +95,7 @@ describe('FEATURE_178 (v0.7.42): createStallOrchestrator', () => {
       const detector = createStallDetector({ disabled: false });
       const provider = new CannedSidecarProvider({
         isStuck: true,
-        nudge: 'Call task_stop and report.',
+        nudge: 'Call interrupt_agent and report.',
       });
       const orch = createStallOrchestrator({
         detector,
@@ -125,7 +125,7 @@ describe('FEATURE_178 (v0.7.42): createStallOrchestrator', () => {
       // Nudge is queued for consumption.
       expect(orch.debug.hasPendingNudge()).toBe(true);
       const consumed = orch.consumePendingNudge();
-      expect(consumed).toBe('Call task_stop and report.');
+      expect(consumed).toBe('Call interrupt_agent and report.');
       // Consuming clears the ref.
       expect(orch.debug.hasPendingNudge()).toBe(false);
       expect(orch.consumePendingNudge()).toBeUndefined();

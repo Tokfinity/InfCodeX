@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createLearningCenterService } from '@kodax-ai/agent';
+import { createRuntimeLearningOwner } from './runtime-learning.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 
 const tempDirs: string[] = [];
@@ -32,6 +33,19 @@ async function seedReadyCapability(homeDir: string): Promise<void> {
 }
 
 describe('runtime.learning inline facade', () => {
+  it('defers storage initialization until the learning facade is used', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-lazy-'));
+    tempDirs.push(homeDir);
+    const rootDir = join(homeDir, '.kodax', 'learned');
+
+    createRuntimeLearningOwner({
+      rootDir,
+      defaultClientIdentity: 'unused-client',
+    });
+
+    await expect(access(rootDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('persists a stable client cursor independently from other clients', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-'));
     tempDirs.push(homeDir);

@@ -101,9 +101,18 @@ describe('resolveToolCapability', () => {
     expect(resolveToolCapability('mcp_call')).toBe('bash:network');
   });
 
-  it('maps subagent dispatch tools to "subagent"', () => {
-    expect(resolveToolCapability('dispatch_child_task')).toBe('subagent');
-    expect(resolveToolCapability('emit_managed_protocol')).toBe('subagent');
+  it('maps canonical Actor collaboration tools to "subagent"', () => {
+    for (const toolName of [
+      'spawn_agent',
+      'send_message',
+      'followup_task',
+      'wait_agent',
+      'interrupt_agent',
+      'list_agents',
+      'agent_output',
+    ]) {
+      expect(resolveToolCapability(toolName)).toBe('subagent');
+    }
   });
 
   it('maps unknown tools to "subagent" (strictest default)', () => {

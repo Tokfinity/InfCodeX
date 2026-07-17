@@ -52,7 +52,7 @@ describe('GlobalShortcuts', () => {
     ]);
   });
 
-  it('lets Alt+M cycle agent mode AMA -> AMAW -> SA -> AMA and persist each change', () => {
+  it('lets Alt+M cycle agent mode AMA -> SA -> AMA and persist each change', () => {
     let currentConfig: CurrentConfig = {
       provider: 'openai',
       model: 'gpt-5.4',
@@ -91,12 +91,6 @@ describe('GlobalShortcuts', () => {
     let handler = renderShortcuts();
     expect(handler).toBeDefined();
     expect(handler?.()).toBe(true);
-    expect(currentConfig.agentMode).toBe('amaw');
-    expect(saveConfigMock).toHaveBeenLastCalledWith({ agentMode: 'amaw' });
-    expect(onSetAgentMode).toHaveBeenLastCalledWith('amaw');
-
-    handler = renderShortcuts();
-    expect(handler?.()).toBe(true);
     expect(currentConfig.agentMode).toBe('sa');
     expect(saveConfigMock).toHaveBeenLastCalledWith({ agentMode: 'sa' });
     expect(onSetAgentMode).toHaveBeenLastCalledWith('sa');
@@ -109,7 +103,7 @@ describe('GlobalShortcuts', () => {
     expect(setShowHelp).toHaveBeenCalledWith(false);
   });
 
-  it('lets Alt+M leave AMAW mode by switching to SA', () => {
+  it('normalizes a persisted AMAW value before cycling to AMA', () => {
     let currentConfig: CurrentConfig = {
       provider: 'openai',
       model: 'gpt-5.4',
@@ -142,9 +136,9 @@ describe('GlobalShortcuts', () => {
     });
 
     expect(shortcutHandlers.get('toggleAgentMode')?.()).toBe(true);
-    expect(currentConfig.agentMode).toBe('sa');
-    expect(saveConfigMock).toHaveBeenCalledWith({ agentMode: 'sa' });
-    expect(onSetAgentMode).toHaveBeenCalledWith('sa');
+    expect(currentConfig.agentMode).toBe('ama');
+    expect(saveConfigMock).toHaveBeenCalledWith({ agentMode: 'ama' });
+    expect(onSetAgentMode).toHaveBeenCalledWith('ama');
   });
 
   it('lets Ctrl+O toggle transcript mode without persisting config', () => {

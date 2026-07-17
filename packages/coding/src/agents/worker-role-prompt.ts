@@ -32,11 +32,8 @@ import type {
   KodaXTaskVerificationContract,
 } from '../types.js';
 import { EXECUTION_GUIDANCE } from '../prompts/execution-guidance.js';
-// FEATURE_155 (v0.7.39) — Worker prompt teaches idle-yield as the
-// canonical wait mechanic. Slice C3 retired the flag-gated OFF branch
-// (the v0.7.38 `await_child_task` wording) because Slice C1 removed
-// the underlying tool — any prompt that mentioned it would point at
-// a non-existent capability.
+// F270 keeps the prompt on the canonical Actor wait/completion vocabulary;
+// the runner may still use its generic wake loop internally.
 
 export const WORKER_AGENT_NAME = 'kodax-worker';
 
@@ -102,7 +99,7 @@ export function buildWorkerInstructions(
   // and `TaskCreateTool/`).
   const planListHygiene = [
     'PLAN-LIST HYGIENE (staleness + dedup):',
-    '- BEFORE `todo_update` on an item you have NOT recently touched (e.g. just resumed from idle-yield, or mid-fan-out after children finished, or after a long thinking stretch), call `todo_get(id)` first to read the item\'s CURRENT state. Runner-side auto-handlers can flip statuses between your turns; mutating on a stale view produces silent no-op patches or surprising overwrites. `todo_get` is cheap — one tool call per uncertain item — and the JSON it returns is authoritative.',
+    '- BEFORE `todo_update` on an item you have NOT recently touched (e.g. just resumed after `wait_agent` or an Actor completion, or after a long thinking stretch), call `todo_get(id)` first to read the item\'s CURRENT state. Runner-side auto-handlers can flip statuses between your turns; mutating on a stale view produces silent no-op patches or surprising overwrites. `todo_get` is cheap — one tool call per uncertain item — and the JSON it returns is authoritative.',
     '- BEFORE `todo_create` mid-task, scan the existing plan list (it is visible at the top of every throttle reminder, OR call `todo_list` for an explicit snapshot) and confirm no item with the same subject is already present. Duplicate items split the user\'s progress dashboard into parallel branches of the same work — confusing and easy to over-count.',
     '- DEDUP HEURISTIC: two items are duplicates when their `subject` describes the same concrete artifact / file path / module. They are NOT duplicates when one is a parent-level summary ("Audit packages/auth") and the other a leaf ("Write test for handleLogin in packages/auth") — those are legitimately distinct rows.',
     '- INITIAL PLAN COMMITMENT (first batch of `todo_create` at the start of the task) is exempt from the dedup check — the list is empty so duplicates are impossible.',

@@ -194,11 +194,9 @@ describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_09
     expect(planText).not.toContain("[LLM]");
   });
 
-  it("renders AMAW as the short status-bar agent label", () => {
-    const text = getStatusBarText(baseProps({ agentMode: "amaw" }));
-    expect(text).toContain("KodaX - AMAW");
-    expect(text).not.toContain("AMA-workflow");
-    expect(text).not.toContain("AMA Workflow");
+  it("renders AMA as the managed-agent label", () => {
+    const text = getStatusBarText(baseProps({ agentMode: "ama" }));
+    expect(text).toContain("KodaX - AMA");
   });
 });
 

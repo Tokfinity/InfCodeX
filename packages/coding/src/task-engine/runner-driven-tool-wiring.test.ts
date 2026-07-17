@@ -103,23 +103,21 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     }
   });
 
-  it('FEATURE_246: run_workflow is host-conditional — present with a workflow host (amaw / elevated AMA command turn), absent without one (plain AMA)', () => {
+  it('run_workflow is host-conditional for an explicit Workflow request', () => {
     expect(getAgentToolNames('worker', true, true)).toContain('run_workflow');
     expect(getAgentToolNames('worker', true, false)).not.toContain('run_workflow');
   });
 
-  it('FEATURE_246: the dispatch_child_task → run_workflow nudge appears only when a workflow host is wired (no dangling pointer to an absent tool in plain AMA)', () => {
-    const dispatchDescription = (hasWorkflowHost: boolean): string => {
+  it('exposes the explicit Workflow activation policy only with a Workflow host', () => {
+    const workflowDescription = (hasWorkflowHost: boolean): string => {
       const chain = buildRunnerAgentChain(makeCtx(true, hasWorkflowHost), makeRecorder());
-      const dispatch = (chain.worker.tools ?? []).find(
-        (t) => (t as { name?: string }).name === 'dispatch_child_task',
+      const workflow = (chain.worker.tools ?? []).find(
+        (t) => (t as { name?: string }).name === 'run_workflow',
       ) as { description?: string } | undefined;
-      return dispatch?.description ?? '';
+      return workflow?.description ?? '';
     };
-    expect(dispatchDescription(true)).toContain('prefer run_workflow');
-    expect(dispatchDescription(false)).not.toContain('run_workflow');
-    // The base sub-task guidance is present in both.
-    expect(dispatchDescription(false)).toContain('Execute a single child agent');
+    expect(workflowDescription(true)).toContain('Explicitly requested Workflow execution');
+    expect(workflowDescription(false)).toBe('');
   });
 
   it('worker has no V1 emit tools (F193 V1 chain retired) and no emit_handoff (F190)', () => {
@@ -130,16 +128,23 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
   });
 });
 
-describe('FEATURE_168 — coordinator-class tools (send_message, task_stop) are wired', () => {
-  it('worker has send_message + task_stop in schema (FEATURE_120 v0.7.39 wiring fix)', () => {
+describe('F270 — canonical Agent collaboration tools are wired', () => {
+  it('worker exposes the unified Actor control surface', () => {
     const names = getAgentToolNames('worker');
-    expect(names).toContain('send_message');
-    expect(names).toContain('task_stop');
-  });
-
-  it('worker has task_output for child status snapshots', () => {
-    const names = getAgentToolNames('worker');
-    expect(names).toContain('task_output');
+    for (const name of [
+      'spawn_agent',
+      'send_message',
+      'followup_task',
+      'wait_agent',
+      'interrupt_agent',
+      'list_agents',
+      'agent_output',
+    ]) {
+      expect(names).toContain(name);
+    }
+    for (const retired of ['dispatch_child_task', 'task_stop', 'task_output']) {
+      expect(names).not.toContain(retired);
+    }
   });
 });
 

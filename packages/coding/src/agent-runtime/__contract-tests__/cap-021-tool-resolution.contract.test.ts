@@ -58,7 +58,7 @@ describe('FEATURE_247 (R2): applyToolVisibilityPolicy', () => {
 
   it('keeps only tools the policy accepts, predicating on sideEffect', () => {
     const readOnlyish = applyToolVisibilityPolicy(
-      ['read', 'glob', 'write', 'bash', 'web_search', 'web_fetch', 'dispatch_child_task'],
+      ['read', 'glob', 'write', 'bash', 'web_search', 'web_fetch', 'spawn_agent'],
       (t) => t.sideEffect === 'readonly' || t.sideEffect === 'reads-network',
     );
     // readonly + reads-network survive; mutating tools are hidden.
@@ -68,7 +68,7 @@ describe('FEATURE_247 (R2): applyToolVisibilityPolicy', () => {
     expect(readOnlyish).not.toContain('write'); // mutates-fs
     expect(readOnlyish).not.toContain('bash'); // mutates-shell
     expect(readOnlyish).not.toContain('web_fetch'); // mutates-network
-    expect(readOnlyish).not.toContain('dispatch_child_task'); // mutates-state
+    expect(readOnlyish).not.toContain('spawn_agent'); // mutates-state
   });
 
   it('can distinguish MCP reads from mcp_call via sideEffect', () => {

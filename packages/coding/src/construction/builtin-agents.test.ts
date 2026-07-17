@@ -48,7 +48,7 @@ describe('built-in repo-explorer specialist', () => {
     expect(resolveConstructedAgentSource(REPO_EXPLORER_AGENT_NAME)).toBe('built-in');
     expect(names(agent?.tools ?? [])).toEqual([...REPO_EXPLORER_TOOL_NAMES].sort());
     expect(agent?.tools?.map((tool) => tool.name)).not.toEqual(
-      expect.arrayContaining(['write', 'edit', 'multi_edit', 'bash', 'dispatch_child_task']),
+      expect.arrayContaining(['write', 'edit', 'multi_edit', 'bash', 'spawn_agent']),
     );
   });
 

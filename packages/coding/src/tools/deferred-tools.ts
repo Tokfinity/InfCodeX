@@ -20,8 +20,8 @@
  * NOT in the deferred set:
  *   - Core tools always-loaded: bash, read, edit, write, multi_edit, grep, glob,
  *     todo_create, todo_update, todo_get, todo_list, ask_user_question,
- *     dispatch_child_task, exit_plan_mode, task_output, task_stop,
- *     send_message, insert_after_anchor,
+ *     spawn_agent, send_message, followup_task, wait_agent, list_agents,
+ *     interrupt_agent, agent_output, exit_plan_mode, insert_after_anchor,
  *     changed_diff, changed_diff_bundle, undo, worktree_*
  *   - `tool_search` itself (must always be available to unlock the rest)
  */

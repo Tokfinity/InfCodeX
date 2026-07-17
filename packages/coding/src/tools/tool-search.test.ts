@@ -55,7 +55,8 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
   it('does NOT classify core tools as deferred', () => {
     for (const name of [
       'read', 'write', 'edit', 'bash', 'grep', 'glob', 'todo_create', 'todo_update',
-      'dispatch_child_task', 'tool_search',
+      'spawn_agent', 'send_message', 'followup_task', 'wait_agent', 'list_agents',
+      'interrupt_agent', 'agent_output', 'tool_search',
       'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
     ]) {
       expect(isDeferredTool(name)).toBe(false);
@@ -196,7 +197,8 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(TOOL_SEARCH_DEFINITION.sideEffect).toBe('readonly');
     expect(TOOL_SEARCH_DEFINITION.planModeAllowed).toBe(true);
     expect(TOOL_SEARCH_DEFINITION.description).toContain('get_goal / create_goal / update_goal');
-    expect(TOOL_SEARCH_DEFINITION.description).toContain('AMA/AMAW managed paths');
+    expect(TOOL_SEARCH_DEFINITION.description).toContain('AMA managed path');
+    expect(TOOL_SEARCH_DEFINITION.description).not.toContain('AMAW');
   });
 });
 

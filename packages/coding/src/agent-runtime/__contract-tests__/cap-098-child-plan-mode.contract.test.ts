@@ -78,13 +78,13 @@ describe('CAP-098: child-executor plan-mode block-check propagation contract', (
   });
 
   it('CAP-CHILD-PLAN-MODE-EXTRA: CHILD_BLOCKED_TOOLS gate runs BEFORE planModeBlockCheck — recursion-prevention contract', async () => {
-    // dispatch_child_task is in CHILD_BLOCKED_TOOLS regardless of plan
-    // mode; the predicate should NEVER be consulted for it.
+    // ask_user_question is parent-only regardless of plan mode; the
+    // predicate should never be consulted for it.
     const predicate: PlanModeBlockCheck = () => {
       throw new Error('predicate must not be invoked for blocked tools');
     };
     const events = buildChildEvents('block-test', undefined, predicate);
-    const result = await events!.beforeToolExecute!('dispatch_child_task', {});
+    const result = await events!.beforeToolExecute!('ask_user_question', {});
     expect(typeof result).toBe('string');
     expect(result as string).toContain('Not available in child agent context');
   });

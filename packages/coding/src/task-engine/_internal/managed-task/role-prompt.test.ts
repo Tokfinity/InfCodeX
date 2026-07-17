@@ -264,10 +264,10 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('EXECUTION GUIDANCE');
   });
 
-  it('teaches language continuity across idle-yield resumes', () => {
+  it('teaches language continuity across Actor-event resumes', () => {
     const rendered = renderWorker();
     expect(rendered).toContain('Language continuity: Match the primary natural language');
-    expect(rendered).toContain('idle-yield resume summaries');
+    expect(rendered).toContain('Actor-event resume summaries');
     expect(rendered).toContain('Tool outputs, code identifiers, and quoted evidence may remain');
   });
 
@@ -285,7 +285,7 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).not.toContain('"emit_verdict"');
   });
 
-  it('splices buildWorkerInstructions content (plan-first + scope commitment + dispatch + TERMINATION fragments)', () => {
+  it('splices buildWorkerInstructions content and canonical Agent policies', () => {
     const rendered = renderWorker();
     // Pinned tokens from `buildWorkerInstructions` — if the entry
     // wire breaks, these disappear and the V2 path silently falls
@@ -293,7 +293,13 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('PLAN-FIRST CONTRACT:');
     expect(rendered).toContain('SCOPE COMMITMENT:');
     expect(rendered).toContain('MUTATION DISCIPLINE');
-    expect(rendered).toContain('DISPATCH RULES');
+    expect(rendered).toContain('AGENT COLLABORATION:');
+    expect(rendered).toContain(
+      'Use sub-agents when parallel work would materially improve speed or quality.',
+    );
+    expect(rendered).toContain(
+      'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow.',
+    );
     // FEATURE_190 (v0.7.43): legacy `EVALUATOR HANDOFF` replaced by
     // positive text-only termination block.
     expect(rendered).toContain('TERMINATION');
@@ -466,16 +472,7 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
   });
 });
 
-// FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive gating.
-// The `ORCHESTRATION DEFAULT` standing directive is spliced into the Worker
-// system prompt ONLY when `run_workflow` is on the tool surface
-// (`amawOrchestrationAvailable === true`, i.e. agentMode === 'amaw'). It must
-// NOT appear for plain AMA (field omitted / false) — that is the leak-proof
-// guarantee, since AMA has no `run_workflow` tool. It must also read BEFORE the
-// PLAN-FIRST CONTRACT so the model weighs orchestrate-vs-solo while forming its
-// plan, and must NOT downgrade the run_workflow/dispatch equivalence to a
-// run_workflow-only mandate.
-describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () => {
+describe('F270 — explicit Workflow activation policy', () => {
   function renderWorker(
     overrides: Partial<ManagedRolePromptContext> = {},
   ): string {
@@ -498,49 +495,16 @@ describe('FEATURE_248 — AMAW mode-level orchestration directive gating', () =>
     );
   }
 
-  it('splices ORCHESTRATION DEFAULT when amawOrchestrationAvailable is true', () => {
-    const rendered = renderWorker({ amawOrchestrationAvailable: true });
-    expect(rendered).toContain('ORCHESTRATION DEFAULT:');
-    // tier-1 (orchestrate-vs-solo) + tier-2 (which primitive) both present.
-    expect(rendered).toContain('default to orchestrating multiple agents that cross-check each other');
-    expect(rendered).toContain('`run_workflow` is the first thing to reach for');
-    // Over-activation guard sentence.
-    expect(rendered).toContain('Solo, single-threaded work stays the right call');
-    // FEATURE_248 flow-fix (v0.7.59): the plan-time commitment ships as part of the
-    // directive, read at task inception, right after ORCHESTRATION DEFAULT.
-    expect(rendered).toContain('PLAN-TIME COMMITMENT');
-    expect(rendered).toContain('let your plan items BE the agents or workflow stages you will dispatch');
-    expect(rendered.indexOf('ORCHESTRATION DEFAULT:'))
-      .toBeLessThan(rendered.indexOf('PLAN-TIME COMMITMENT'));
-  });
-
-  it('omits ORCHESTRATION DEFAULT + PLAN-TIME COMMITMENT for plain AMA (field omitted) — leak-proof guarantee', () => {
+  it('exposes proactive Agent collaboration without complexity-driven Workflow orchestration', () => {
     const rendered = renderWorker();
+    expect(rendered).toContain(
+      'Use sub-agents when parallel work would materially improve speed or quality.',
+    );
+    expect(rendered).toContain(
+      'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow.',
+    );
     expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
     expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
-    // Sanity: the rest of the Worker prompt still renders (clean undefined drop).
-    expect(rendered).toContain('PLAN-FIRST CONTRACT:');
-    expect(rendered).toContain('## Environment');
-  });
-
-  it('omits ORCHESTRATION DEFAULT + PLAN-TIME COMMITMENT when explicitly false (AMA parity)', () => {
-    const rendered = renderWorker({ amawOrchestrationAvailable: false });
-    expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
-    expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
-  });
-
-  it('places the directive before PLAN-FIRST CONTRACT so it is read while forming the plan', () => {
-    const rendered = renderWorker({ amawOrchestrationAvailable: true });
-    const directiveIdx = rendered.indexOf('ORCHESTRATION DEFAULT:');
-    const planFirstIdx = rendered.indexOf('PLAN-FIRST CONTRACT:');
-    expect(directiveIdx).toBeGreaterThanOrEqual(0);
-    expect(planFirstIdx).toBeGreaterThanOrEqual(0);
-    expect(directiveIdx).toBeLessThan(planFirstIdx);
-  });
-
-  it('keeps dispatch_child_task as an equally-valid orchestration path (no run_workflow-only mandate)', () => {
-    const rendered = renderWorker({ amawOrchestrationAvailable: true });
-    expect(rendered).toContain('`dispatch_child_task` fan-out is an equally valid way to satisfy this default');
-    expect(rendered).toContain('not which tool you dispatched it through');
+    expect(rendered).not.toContain('dispatch_child_task');
   });
 });

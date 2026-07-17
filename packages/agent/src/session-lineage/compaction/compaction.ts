@@ -57,7 +57,6 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *   - skill content (1)        — already protected pre-F183
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
  *   - actor control (7)        — spawn/send/followup/wait/interrupt/list/output
- *   - control plane (1)        — emit_managed_protocol
  *   - progressive disclosure (1) — tool_search — its result carries the full
  *                                description a model fetched for a deferred
  *                                tool; on the managed path that description is
@@ -90,13 +89,11 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // Actor control flow
   'spawn_agent',
   'send_message',
-  'followup_agent',
+  'followup_task',
   'wait_agent',
   'interrupt_agent',
   'list_agents',
   'agent_output',
-  // Control plane
-  'emit_managed_protocol',
   // FEATURE_250 — progressive disclosure. A `tool_search` result is the
   // `<function>…</function>` block carrying the full schema/description a model
   // fetched for a deferred tool. On the managed path deferred tools are

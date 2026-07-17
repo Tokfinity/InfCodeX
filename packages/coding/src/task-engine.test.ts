@@ -400,11 +400,14 @@ describe('runManagedTask', () => {
 
     const passedExclude = mockRunDirectKodaX.mock.calls.at(-1)?.[0].context?.excludeTools ?? [];
     // Solo agent: no sub-agents, no workflow.
-    expect(passedExclude).toContain('dispatch_child_task');
+    expect(passedExclude).toContain('spawn_agent');
     expect(passedExclude).toContain('run_workflow');
-    expect(passedExclude).toContain('task_output');
-    expect(passedExclude).toContain('task_stop');
     expect(passedExclude).toContain('send_message');
+    expect(passedExclude).toContain('followup_task');
+    expect(passedExclude).toContain('wait_agent');
+    expect(passedExclude).toContain('interrupt_agent');
+    expect(passedExclude).toContain('list_agents');
+    expect(passedExclude).toContain('agent_output');
     // Pre-existing excludeTools are preserved, not clobbered.
     expect(passedExclude).toContain('some_preexisting_tool');
   });

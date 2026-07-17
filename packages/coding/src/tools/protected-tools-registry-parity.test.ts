@@ -20,6 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import { PROTECTED_TOOL_NAMES } from '@kodax-ai/agent';
 import {
+  listBuiltinToolDefinitions,
   MCP_TOOL_NAMES,
   REPO_INTELLIGENCE_WORKING_TOOL_NAMES,
 } from './registry.js';
@@ -56,10 +57,13 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'skill',
       'ask_user_question',
       'exit_plan_mode',
-      'dispatch_child_task',
-      'task_stop',
+      'spawn_agent',
       'send_message',
-      'emit_managed_protocol',
+      'followup_task',
+      'wait_agent',
+      'interrupt_agent',
+      'list_agents',
+      'agent_output',
       // Goal state / lifecycle receipts.
       'get_goal',
       'create_goal',
@@ -108,36 +112,9 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
     // or removed registry entries without breaking any test. Reverse check
     // closes the gap.
     //
-    // Strategy: assemble the full set of known registry tool names by
-    // unioning every "name source" coding exposes (registry constants
-    // for MCP / repo-intel, plus a literal list for individually
-    // registered tools). If a future tool gets added/renamed and is in
-    // PROTECTED_TOOL_NAMES but not here, this test fails — flagging
-    // the missing-source as a registry-introspection gap to fix.
-    //
-    // This is necessarily imperfect because session-lineage can't reach
-    // into coding's runtime registry (circular dep). The literal list is
-    // the source of truth for orphan detection until we hoist a shared
-    // constant table.
-    const knownRegistryNames = new Set<string>([
-      ...MCP_TOOL_NAMES,
-      ...REPO_INTELLIGENCE_WORKING_TOOL_NAMES,
-      // Individually registered + present in coding/src/tools/registry.ts
-      // (snapshot 2026-05-20).
-      'read', 'skill', 'write', 'edit', 'multi_edit', 'insert_after_anchor',
-      'bash', 'glob', 'grep',
-      'emit_managed_protocol', 'dispatch_child_task',
-      'send_message', 'task_stop',
-      'web_search', 'web_fetch',
-      'code_search', 'semantic_lookup',
-      'worktree_create', 'worktree_remove', 'undo',
-      'ask_user_question', 'exit_plan_mode',
-      'get_goal', 'create_goal', 'update_goal',
-      'todo_update', 'todo_create', 'todo_list', 'todo_get',
-      // FEATURE_250 — progressive-disclosure meta-tool; its result carries a
-      // deferred tool's full schema and is protected from microcompaction.
-      'tool_search',
-    ]);
+    const knownRegistryNames = new Set(
+      listBuiltinToolDefinitions().map((definition) => definition.name),
+    );
     for (const name of PROTECTED_TOOL_NAMES) {
       expect(
         knownRegistryNames.has(name),

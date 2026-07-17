@@ -102,7 +102,7 @@ export function createRolePrompt(
   const sharedClosingRule = [
     'Preserve any exact machine-readable closing contract requested by the original task.',
     'Do not claim completion authority unless your role explicitly owns final judgment — a premature complete signal from a non-authoritative role causes the runner to terminate the task before the owning role validates the result.',
-    'Language continuity: Match the primary natural language of the original user request for user-visible progress, idle-yield resume summaries, and final answers. Tool outputs, code identifiers, and quoted evidence may remain in their source language.',
+    'Language continuity: Match the primary natural language of the original user request for user-visible progress, Actor-event resume summaries, and final answers. Tool outputs, code identifiers, and quoted evidence may remain in their source language.',
     'When proposing shell commands or command examples, match the current host OS and shell. Do not assume Unix-only tools such as head on Windows.',
   ].join('\n');
 

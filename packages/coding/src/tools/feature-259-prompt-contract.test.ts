@@ -24,12 +24,18 @@ describe('FEATURE_259 prompt contracts', () => {
       Math.floor(Buffer.byteLength(full, 'utf8') * 0.4),
     );
     expect(resident).toContain('manifest + source');
-    expect(resident).toContain('background task_id');
-    expect(resident).toContain('idle-yield');
+    expect(resident).toContain('canonical Workflow actor path');
+    expect(resident).not.toContain('background task_id');
+    expect(resident).not.toContain('idle-yield');
     expect(resident).toContain('tool_search');
     expect(full).toContain('wf.pipeline');
     expect(full).toContain('outputSchema');
     expect(full).toContain('wf.workflow');
+    expect(full).toContain('list_agents');
+    expect(full).toContain('wait_agent');
+    expect(full).toContain('interrupt_agent');
+    expect(full).not.toContain('task_output');
+    expect(full).not.toContain('task_stop');
   });
 
   it('keeps implementation metadata out of Worker-visible prose', () => {

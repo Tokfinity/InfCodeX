@@ -209,7 +209,7 @@ describe('FEATURE_178 (v0.7.42): invokeStallSidecar — happy path', () => {
         makeToolBlock('report_stall_judgment', {
           isStuck: true,
           reason: 'same read called 3 times with no new info',
-          suggestedTool: 'task_stop',
+          suggestedTool: 'interrupt_agent',
           nudge: 'Stop and report what you have.',
         }),
       ]),
@@ -222,7 +222,7 @@ describe('FEATURE_178 (v0.7.42): invokeStallSidecar — happy path', () => {
     });
     expect(verdict.isStuck).toBe(true);
     expect(verdict.reason).toBe('same read called 3 times with no new info');
-    expect(verdict.suggestedTool).toBe('task_stop');
+    expect(verdict.suggestedTool).toBe('interrupt_agent');
     expect(verdict.nudge).toBe('Stop and report what you have.');
     expect(verdict.trace).toBe('sidecar_ok');
   });
@@ -420,7 +420,7 @@ describe('FEATURE_178 (v0.7.42): invokeStallSidecar — failure-mode safe defaul
         makeToolBlock('report_stall_judgment', {
           isStuck: true,
           reason: 'r',
-          suggestedTool: 'task_stop',
+          suggestedTool: 'interrupt_agent',
           nudge: 'n',
         }),
       ]),
@@ -452,7 +452,7 @@ describe('FEATURE_178 (v0.7.42) + FEATURE_190 (v0.7.43): ALLOWED_SUGGESTED_TOOLS
       'grep',
       'glob',
       'bash',
-      'task_stop',
+      'interrupt_agent',
     ]);
   });
 

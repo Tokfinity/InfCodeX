@@ -1853,7 +1853,6 @@ function buildWriteSystemPrompt(gitRoot: string): string {
  * Exported for unit-testing the security contract. Treat as read-only at runtime.
  */
 export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
-  'emit_managed_protocol',  // Root managed protocol; descendants use actor tools.
   'ask_user_question',      // Children cannot prompt the user
   'worktree_create',        // Worktree lifecycle managed by parent
   'worktree_remove',        // Worktree lifecycle managed by parent

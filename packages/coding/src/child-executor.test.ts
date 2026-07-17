@@ -1339,7 +1339,6 @@ describe('CHILD_EXCLUDE_TOOLS_BASE (FEATURE_074)', () => {
   });
 
   it('keeps root-only tools hidden while allowing recursive collaboration', () => {
-    expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('emit_managed_protocol');
     expect(CHILD_EXCLUDE_TOOLS_BASE).not.toContain('spawn_agent');
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('ask_user_question');
     expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('worktree_create');

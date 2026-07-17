@@ -62,17 +62,17 @@ describe('real work tool classification', () => {
     expect(isRealWorkToolCall(call('todo_update', { id: 'todo_1' }))).toBe(false);
     expect(isRealWorkToolCall(call('todo_create', { subject: 'Step' }))).toBe(false);
     expect(isRealWorkToolCall(call('send_message', { task_id: 'worker' }))).toBe(false);
-    expect(isRealWorkToolCall(call('task_stop', { task_id: 'child-1' }))).toBe(false);
+    expect(isRealWorkToolCall(call('interrupt_agent', { target: '/root/child-1' }))).toBe(false);
     expect(isRealWorkToolCall(call('ask_user_question', { question: 'Continue?' }))).toBe(false);
   });
 
-  it('counts dispatch_child_task only when the child may write', () => {
-    expect(isRealWorkToolCall(call('dispatch_child_task', { objective: 'Inspect' }))).toBe(false);
-    expect(isRealWorkToolCall(call('dispatch_child_task', {
+  it('counts spawn_agent only when the child may write', () => {
+    expect(isRealWorkToolCall(call('spawn_agent', { objective: 'Inspect' }))).toBe(false);
+    expect(isRealWorkToolCall(call('spawn_agent', {
       objective: 'Patch bug',
       readOnly: false,
     }))).toBe(true);
-    expect(isRealWorkToolCall(call('dispatch_child_task', {
+    expect(isRealWorkToolCall(call('spawn_agent', {
       objective: 'Patch bug',
       read_only: false,
     }))).toBe(true);

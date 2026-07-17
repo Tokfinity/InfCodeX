@@ -430,6 +430,38 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', '/root/worker').actor.state).toBe('running');
   });
 
+  it('never exposes a terminal turn before its durable commit succeeds', async () => {
+    let rejectCompletion: ((error: Error) => void) | undefined;
+    let saveCount = 0;
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      save() {
+        saveCount += 1;
+        if (saveCount === 1) return Promise.resolve();
+        return new Promise<void>((_resolve, reject) => { rejectCompletion = reject; });
+      },
+    };
+    const executor = new DeferredExecutor();
+    const onBackgroundError = vi.fn();
+    const controller = await createAgentActorController({ executor, store, onBackgroundError });
+    const turn = await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+
+    executor.pending[0]?.resolve({ output: 'uncommitted result' });
+    await settle();
+
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({ state: 'running' });
+    expect(controller.eventSnapshot('/root').some((event) => event.kind === 'turn_completed')).toBe(false);
+
+    rejectCompletion?.(new Error('completion save failed'));
+    await settle();
+    await settle();
+
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({ state: 'running' });
+    expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'completion save failed',
+    }));
+  });
+
   it('publishes terminal events only after durable commit and isolates callback failures', async () => {
     const order: string[] = [];
     const onBackgroundError = vi.fn();

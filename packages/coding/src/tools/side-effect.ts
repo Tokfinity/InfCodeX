@@ -10,7 +10,7 @@
  * Required field on every {@link import('./types.js').LocalToolDefinition}. Used by:
  *   - Plan mode: tools with `sideEffect !== 'readonly'` are blocked unless
  *     they explicitly opt in via `planModeAllowed: true` (e.g.
- *     `exit_plan_mode`, `task_stop`).
+ *     `exit_plan_mode`, `interrupt_agent`).
  *   - SDK embedders (KodaX Space etc.): iterate `getAllRegisteredTools()`
  *     and build their own blocklist by category — replaces the previous
  *     practice of hardcoding a `Set<string>` of tool names, which silently
@@ -41,12 +41,12 @@
  *                            state (web_fetch with a mutating method, mcp_call).
  *   - `'mutates-state'`   — changes internal session/agent state without
  *                            FS or shell side effects (todo_update,
- *                            send_message, dispatch_child_task,
+ *                            send_message, spawn_agent, followup_task,
  *                            exit_plan_mode, emit_managed_protocol).
  *
- * Pick the dominant effect when a tool touches multiple. e.g. `dispatch_
- * child_task` may transitively run any tool, but its own direct effect is
- * spawning a child agent (`mutates-state`).
+ * Pick the dominant effect when a tool touches multiple. For example,
+ * `spawn_agent` may transitively run any tool, but its own direct effect is
+ * starting an Actor turn (`mutates-state`).
  */
 export type ToolSideEffect =
   | 'readonly'

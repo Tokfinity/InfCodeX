@@ -167,7 +167,7 @@ describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
     expect(c.agentMode).toBe('sa');
     expect(c.agentProfile?.surface).toBe('partner');
     expect(c.toolScope).not.toContain('read'); // caller-excluded
-    expect(c.toolScope).not.toContain('dispatch_child_task'); // SA-solo excluded
+    expect(c.toolScope).not.toContain('spawn_agent'); // SA-solo excluded
     expect(c.toolScope).toContain('glob'); // a normal readonly tool stays visible
     // per-task wins over the profile default; profile default fills the gap.
     expect(c.verification?.summary).toBe('per-task-wins');
@@ -196,7 +196,8 @@ describe('FEATURE_247 R4: onEffectiveConfig snapshot', () => {
     );
     expect(configs).toHaveLength(1);
     expect(configs[0]!.agentMode).toBe('ama');
-    expect(configs[0]!.toolScope).toContain('dispatch_child_task'); // AMA keeps the cluster
+    expect(configs[0]!.toolScope).toContain('spawn_agent');
+    expect(configs[0]!.toolScope).toContain('wait_agent');
   });
 
   it('does not fire (and never throws) when no subscriber is set', async () => {

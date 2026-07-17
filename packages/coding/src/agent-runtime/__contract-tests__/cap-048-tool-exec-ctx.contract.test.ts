@@ -224,23 +224,18 @@ describe('CAP-048: tool execution context construction contract', () => {
     );
   });
 
-  // FEATURE_246 (ADR-047) + FEATURE_249: the model-callable run_workflow tool is
-  // hosted for both AMA and AMAW (gate widened by FEATURE_249). AMAW self-activates
-  // on complexity (ORCHESTRATION DEFAULT directive); AMA activates on an explicit
-  // natural-language request (tool available, no standing directive). SA (solo) never
-  // hosts a workflow. The runs dir is wired by the REPL.
+  // F270: the model-callable run_workflow tool is hosted for AMA only. Prompt
+  // policy limits activation to explicit Workflow requests; SA never hosts it.
   const baseDir = path.resolve('cap-048-workflow-runs');
 
-  it('CAP-TOOL-CTX-009: workflowHost is wired when workflowRunsBaseDir is set AND the turn runs as ama or amaw (FEATURE_249)', () => {
-    for (const agentMode of ['amaw', 'ama'] as const) {
-      const ctx = buildToolExecutionContext({
-        options: { workflowRunsBaseDir: baseDir, agentMode } as KodaXOptions,
-        runtime: undefined,
-        managedProtocolPayloadRef: makeRef(),
-      });
-      expect(ctx.workflowHost, `agentMode=${agentMode}`).toBeDefined();
-      expect(typeof ctx.workflowHost?.runInline, `agentMode=${agentMode}`).toBe('function');
-    }
+  it('CAP-TOOL-CTX-009: workflowHost is wired when an AMA turn has a runs directory', () => {
+    const ctx = buildToolExecutionContext({
+      options: { workflowRunsBaseDir: baseDir, agentMode: 'ama' } as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(ctx.workflowHost).toBeDefined();
+    expect(typeof ctx.workflowHost?.runInline).toBe('function');
   });
 
   it('FEATURE_247 (R7/R8): buildWorkflowHostMetadata carries sessionId / surface / taskSurface / projectRoot for host attribution', () => {
@@ -274,10 +269,10 @@ describe('CAP-048: tool execution context construction contract', () => {
   });
 
   it('CAP-TOOL-CTX-010: workflowHost is undefined without a runs dir, or for SA / unset mode (FEATURE_249 leaves only these hostless)', () => {
-    // No runs dir → no host even in amaw.
+    // No runs dir → no host even in AMA.
     expect(
       buildToolExecutionContext({
-        options: { agentMode: 'amaw' } as KodaXOptions,
+        options: { agentMode: 'ama' } as KodaXOptions,
         runtime: undefined,
         managedProtocolPayloadRef: makeRef(),
       }).workflowHost,

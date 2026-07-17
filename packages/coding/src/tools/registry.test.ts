@@ -39,12 +39,8 @@ describe('tool registry', () => {
     expect(desc).toMatch(/phases|split/i);
   });
 
-  it('FEATURE_191 A.1: dispatch_child_task schema exposes optional subagent_type field', () => {
-    // User-Authored Custom Agents — Worker selects a registered specialist
-    // by name to route the child through that agent's instructions/tools.
-    // Optional so existing dispatch sites (no subagent_type) remain
-    // byte-identical with v0.7.42 baseline.
-    const def = getToolDefinition('dispatch_child_task');
+  it('F270: spawn_agent schema exposes optional specialist and effort fields', () => {
+    const def = getToolDefinition('spawn_agent');
     const props = (def?.input_schema as {
       properties?: Record<string, { type?: string; description?: string }>;
       required?: readonly string[];
@@ -52,25 +48,10 @@ describe('tool registry', () => {
     const required = (def?.input_schema as { required?: readonly string[] } | undefined)?.required ?? [];
 
     expect(props).toBeDefined();
-    expect(props?.subagent_type).toBeDefined();
-    expect(props?.subagent_type?.type).toBe('string');
-    expect(required).not.toContain('subagent_type');
-    // Qualitative description per ADR-033 §1 — no enumerated agent names,
-    // no ✗ anti-pattern, no FEATURE_xxx version tag in LLM-facing surface.
-    expect(props?.subagent_type?.description).toBeTruthy();
-    expect(props?.subagent_type?.description).not.toMatch(/✗|FEATURE_\d/);
-  });
-
-  it('FEATURE_233: dispatch_child_task schema exposes optional effort field', () => {
-    const def = getToolDefinition('dispatch_child_task');
-    const props = (def?.input_schema as {
-      properties?: Record<string, { type?: string; description?: string }>;
-      required?: readonly string[];
-    } | undefined)?.properties;
-    const required = (def?.input_schema as { required?: readonly string[] } | undefined)?.required ?? [];
-
+    expect(props?.agent_id?.type).toBe('string');
     expect(props?.effort?.type).toBe('string');
     expect(props?.effort?.description).toMatch(/Reasoning effort/);
+    expect(required).not.toContain('agent_id');
     expect(required).not.toContain('effort');
   });
 
@@ -242,8 +223,10 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
   it('marks plan-loop tools planModeAllowed: true', () => {
     const planLoopTools = [
       'exit_plan_mode',
-      'task_stop',
-      'task_output',
+      'wait_agent',
+      'interrupt_agent',
+      'list_agents',
+      'agent_output',
       'todo_update',
       'todo_create',
       'todo_list',
@@ -302,7 +285,8 @@ describe('v0.7.42 — query API for SDK embedders', () => {
   it('isToolPlanModeAllowed: explicit planModeAllowed:true overrides non-readonly', () => {
     expect(isToolPlanModeAllowed('exit_plan_mode')).toBe(true);
     expect(isToolPlanModeAllowed('todo_update')).toBe(true);
-    expect(isToolPlanModeAllowed('task_stop')).toBe(true);
+    expect(isToolPlanModeAllowed('wait_agent')).toBe(true);
+    expect(isToolPlanModeAllowed('interrupt_agent')).toBe(true);
     expect(isToolPlanModeAllowed('web_search')).toBe(true);
   });
 
@@ -312,7 +296,7 @@ describe('v0.7.42 — query API for SDK embedders', () => {
     expect(isToolPlanModeAllowed('multi_edit')).toBe(false);
     expect(isToolPlanModeAllowed('bash')).toBe(false);
     expect(isToolPlanModeAllowed('worktree_create')).toBe(false);
-    expect(isToolPlanModeAllowed('dispatch_child_task')).toBe(false);
+    expect(isToolPlanModeAllowed('spawn_agent')).toBe(false);
     expect(isToolPlanModeAllowed('web_fetch')).toBe(false);
     expect(isToolPlanModeAllowed('mcp_call')).toBe(false);
   });
@@ -333,14 +317,14 @@ describe('v0.7.42 — query API for SDK embedders', () => {
     expect(isToolFileMutation('read')).toBe(false);
     expect(isToolFileMutation('bash')).toBe(false); // mutates-shell, not mutates-fs
     expect(isToolFileMutation('web_search')).toBe(false);
-    expect(isToolFileMutation('dispatch_child_task')).toBe(false);
+    expect(isToolFileMutation('spawn_agent')).toBe(false);
   });
 
   it('isToolMutation: anything non-readonly returns true', () => {
     expect(isToolMutation('write')).toBe(true);
     expect(isToolMutation('bash')).toBe(true);
     expect(isToolMutation('web_fetch')).toBe(true);
-    expect(isToolMutation('dispatch_child_task')).toBe(true);
+    expect(isToolMutation('spawn_agent')).toBe(true);
     expect(isToolMutation('exit_plan_mode')).toBe(true); // mutates-state
 
     expect(isToolMutation('read')).toBe(false);

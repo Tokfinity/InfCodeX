@@ -108,7 +108,7 @@ describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
     expect(getPlanModeBlockReason('exit_plan_mode', { plan: 'x' }, projectRoot)).toBeNull();
     expect(getPlanModeBlockReason('todo_update', { id: 'todo_1', status: 'completed' }, projectRoot)).toBeNull();
     expect(getPlanModeBlockReason('todo_create', { subject: 'Audit auth' }, projectRoot)).toBeNull();
-    expect(getPlanModeBlockReason('task_stop', { task_id: 't_1' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('interrupt_agent', { target: '/root/child' }, projectRoot)).toBeNull();
     expect(getPlanModeBlockReason('ask_user_question', { question: 'X?' }, projectRoot)).toBeNull();
   });
 
@@ -163,11 +163,11 @@ describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
     expect(reason2).toContain("Tool 'worktree_remove'");
   });
 
-  it('dispatch_child_task / send_message block outright (mutates-state, newly gated)', () => {
+  it('spawn_agent / send_message block outright as state mutations', () => {
     const projectRoot = createProjectRoot();
     expect(
-      getPlanModeBlockReason('dispatch_child_task', { objective: 'investigate' }, projectRoot),
-    ).toContain("Tool 'dispatch_child_task'");
+      getPlanModeBlockReason('spawn_agent', { objective: 'investigate' }, projectRoot),
+    ).toContain("Tool 'spawn_agent'");
     expect(
       getPlanModeBlockReason('send_message', { to: 't_1', content: 'hi' }, projectRoot),
     ).toContain("Tool 'send_message'");

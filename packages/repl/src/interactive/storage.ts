@@ -82,6 +82,28 @@ interface PersistedMetaUpdateLine {
   scope?: string;
 }
 
+const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const;
+let sessionTempSequence = 0;
+
+async function replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (error: unknown) {
+      const delay = ATOMIC_RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isTransientRenameError(error)) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+function isTransientRenameError(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
 function isPersistedMetaUpdateLine(value: unknown): value is PersistedMetaUpdateLine {
   if (!isRecord(value) || value._type !== 'meta_update') {
     return false;
@@ -878,7 +900,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     await fs.mkdir(dir, { recursive: true });
 
     const targetPath = path.join(dir, `${id}.jsonl`);
-    const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+    const tempPath = `${targetPath}.${process.pid}.${Date.now()}.${sessionTempSequence++}.tmp`;
     const lineage = data.lineage ?? createSessionLineage(data.messages);
     const meta = createSessionMeta(id, data, lineage, createdAt);
 
@@ -898,7 +920,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       } finally {
         await handle.close();
       }
-      await fs.rename(tempPath, targetPath);
+      await replaceSessionFile(tempPath, targetPath);
       await this.ensureProjectJson(dir, deriveProjectKeyFromData(data));
       // Lazy migrate-on-write: a legacy flat copy is now superseded by the
       // per-project file. Remove it (and relocate its sidecar) so the locator

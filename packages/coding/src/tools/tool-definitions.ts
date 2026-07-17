@@ -141,6 +141,15 @@ function mcpCapabilityPreview(capabilityId: string | undefined, args: unknown): 
   }
 }
 
+const RUN_WORKFLOW_DESCRIPTION = [
+  EXPLICIT_WORKFLOW_POLICY,
+  'Author and start a bounded deterministic JavaScript protocol over the Runtime-owned Actor tree. The call returns a run_id and Workflow actor path immediately; observe it with wait_agent/list_agents, read its structured WorkflowOutcome with agent_output, and stop it with interrupt_agent.',
+  'Inspect the real scope first, then give child Agents concrete paths, constraints, evidence, and outputSchema values. Write child prompts in the same natural language as the user\'s request. Declared fields live on result.structured: read your declared fields off result.structured, never off the top-level result, where they are undefined and can produce an empty report.',
+  'The run(wf, args) body may use wf.runAgent, wf.parallel, wf.pipeline, wf.synthesize, wf.workflow, and wf.artifact. Use wf.pipeline for streaming stages and wf.parallel as a barrier only when a stage needs every prior result.',
+  "Available single-phase shapes include classify-and-act, fan-out-and-synthesize, adversarial-verification, generate-and-filter, tournament, and loop-until-done. A review or audit combines fan-out-and-synthesize with adversarial-verification: declare ['fan-out-and-synthesize', 'adversarial-verification'], then have verifiers attack findings from a distinct failure-mode angle and keep only those a majority cannot refute. Chain more than one pattern when the protocol has more than one shape, match the effort to the request, and disclose every bounded or silent cap.",
+  'Workflow-local limits can only narrow the shared session scheduler and work budget. The script receives no direct filesystem, shell, network, import, or require access.',
+].join('\n\n');
+
 const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'read',
@@ -573,11 +582,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'run_workflow',
-    /* Pre-F270 complexity-driven Workflow description retained only in source history.
-    description:
-      "Author and run a multi-agent workflow inline: you write a small JavaScript orchestration script that runs as child agents under the workflow runtime. run_workflow is ASYNCHRONOUS — the call returns immediately with a task_id and the workflow runs in the background; its synthesized result arrives later as a <task-completed task_id=…> block, so after calling it you idle-yield (end your turn with no tool calls) or do other work rather than waiting inline, exactly like dispatch_child_task. Reach for this when independent agents working in parallel and then cross-checking each other beat a single linear pass — comparing several codebases or options, reviewing a diff from multiple independent angles and adversarially verifying each finding, or fanning many files out and synthesizing what they return; common single-phase shapes are understand (parallel readers over subsystems), design (a judge panel of approaches), review (find then verify each), research (a multi-angle sweep), and migrate (discover the sites, then transform each). First investigate with your own tools (read / grep / glob) to find the real files, the actual sub-problems, and the shape of the data; then bake those concrete findings into the child prompts — exact paths, the specific dimensions to compare, a real outputSchema. Write those child prompts in the same natural language as the user's request, so each child's report and the synthesized result come back in that language. A script that only says \"investigate X\" and re-delegates all the scouting to its children produces shallow, duplicated work, because each child starts from nothing; the value of the workflow is that its children start from what you already discovered. The run(wf, args) body coordinates agents through wf only: wf.runAgent({name, prompt, readOnly, phase?, modelHint?, outputSchema?}) returns the child's result, or null if it failed or was stopped (so you can .filter(Boolean) instead of guarding every call); modelHint is a tier — 'deep' for an agent that needs a stronger model, 'fast' for a cheap read-only pass — not a concrete model name; the operator maps tiers to real models, and an unconfigured tier just inherits your model, and with outputSchema — a JSON-Schema subset of type/enum/required/properties/items/additionalProperties — the parsed validated object comes back on result.structured, so read your declared fields off result.structured (e.g. result.structured.findings) and never off the top-level result, which is undefined for those fields and yields an empty report; wf.parallel([thunks]) runs thunks concurrently and nulls any that fail rather than rejecting; wf.pipeline(items, stage1, stage2) streams each item through the stages without waiting for the slowest and is the default for staged work — reach for wf.parallel as a barrier only when a stage genuinely needs every prior result before it can start, such as a dedup or merge across all of them; wf.synthesize({inputs, rubric}) folds results into one; wf.workflow(name, args) runs a saved or built-in workflow as a sub-step; a shared phase tag groups agents in the progress view. Patterns worth composing (these are examples, not a fixed menu): adversarially verify a finding by spawning a few independent agents that each attack it from a distinct failure-mode angle, keeping it only if the majority cannot refute it; run a judge panel by generating several independent attempts from different angles and synthesizing from the strongest; loop until dry by spawning finders until a couple of rounds surface nothing new rather than stopping at a fixed count; sweep multi-modally by pointing agents at one target through different routes (by file, by symbol, by test) so a single blind spot does not sink the search; end with a completeness critic that asks what is still missing. Reach for more than one of these in a single script when the task has more than one shape, and name every pattern you use in manifest.patterns — chaining them is the norm, not the exception. A review or audit, for instance, combines fan-out-and-synthesize with adversarial-verification as pipeline(findings, find, verify): fan independent reviewers out to surface findings, then pipe each finding straight into an independent verifier that tries to refute it, keeping only the ones it cannot dismiss and ending with .filter(Boolean); weaving verification in this way is what lets you skip a separate re-audit pass afterward. Research that must be exhaustive chains loop-until-done with a completeness critic; a design task chains generate-and-filter with a tournament judge. Declare each pattern the script actually uses, e.g. ['fan-out-and-synthesize', 'adversarial-verification']. Match the effort to the request: a quick 'find any bugs' wants a few finders and one check, while 'thoroughly audit this' wants a larger pool and several independent verifiers before synthesis. If you bound coverage — top-N, no retry, sampling — say so in the result, because a silent cap reads as covered-everything when it was not. Prefer dispatch_child_task for a single focused sub-task — a whole workflow's coordination overhead is wasted on one agent — and just read files yourself for a quick lookup.",
-    */
-    description: `${EXPLICIT_WORKFLOW_POLICY} Author and start a bounded JavaScript protocol over the Runtime-owned Actor tree. The call returns a run_id and Workflow actor path immediately; observe it with wait_agent/list_agents, read its structured WorkflowOutcome with agent_output, and stop it with interrupt_agent. The run(wf, args) body may use wf.runAgent, wf.parallel, wf.pipeline, wf.synthesize, wf.workflow, and wf.artifact. Child outputSchema values are available on result.structured. The script receives no direct filesystem, shell, network, import, or require access.`,
+    description: RUN_WORKFLOW_DESCRIPTION,
     input_schema: {
       type: 'object',
       properties: {
@@ -625,12 +630,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       return `RunWorkflow: ${String(label).slice(0, 160)}`;
     },
   },
-  // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` registry entry
-  // removed. Idle-yield is the canonical wait mechanic (Slice B1.D
-  // default flip); the runner-driven outer loop in
-  // `runManagedTaskViaRunnerInner` resumes any agent that exits
-  // text-only with pending children when a `<task-completed>`
-  // notification lands on the message queue.
+  // Actor messaging and lifecycle controls share the Runtime-owned tree.
   {
     name: 'send_message',
     description:
@@ -2064,14 +2064,5 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   TOOL_SEARCH_DEFINITION,
 ];
 
-const RUN_WORKFLOW_DESCRIPTION = [
-  EXPLICIT_WORKFLOW_POLICY,
-  'Author and run a deterministic multi-Agent protocol macro. The call returns a run id while the Workflow host advances declared steps and durable checkpoints. First inspect the real scope, then provide a bounded JavaScript run(wf, args) body and manifest. Use wf.runAgent for declared steps, wf.parallel only for genuine barriers, wf.pipeline for streaming stages, and wf.synthesize for the final protocol result. Child prompts must use the user\'s language and include concrete paths, constraints, evidence, and output schemas. Workflow-local limits can only narrow the session-wide Agent scheduler and work budget.',
-].join('\n\n');
-
 export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] =
-  BUILTIN_TOOL_DEFINITION_SOURCE.map((definition) => (
-    definition.name === 'run_workflow'
-      ? { ...definition, description: RUN_WORKFLOW_DESCRIPTION }
-      : definition
-  ));
+  BUILTIN_TOOL_DEFINITION_SOURCE;

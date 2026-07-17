@@ -817,13 +817,11 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         // Actor control flow
         'spawn_agent',
         'send_message',
-        'followup_agent',
+        'followup_task',
         'wait_agent',
         'interrupt_agent',
         'list_agents',
         'agent_output',
-        // Control plane
-        'emit_managed_protocol',
         // v0.7.60 FEATURE_250 — progressive-disclosure meta-tool. Its result
         // carries the full schema/description a model fetched for a deferred
         // tool; on the managed path the description is hint-only and never
@@ -865,7 +863,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'semantic_lookup',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(38);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(37);
   });
 
   it('keeps a recoverable artifact pointer when pruning a capacity-limited result', async () => {
@@ -1059,7 +1057,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
       ...buildToolPair(6, 10000),
       ...buildToolPair(7, 10000),
       ...buildToolPair(8, 10000),
-      ...buildProtectedPair('ctrl_1', 'emit_managed_protocol', PROTECTED_MARKER_CTRL),
+      ...buildProtectedPair('ctrl_1', 'spawn_agent', PROTECTED_MARKER_CTRL),
       ...buildToolPair(9, 10000),
       ...buildToolPair(10, 10000),
       ...buildToolPair(11, 10000),
@@ -1085,7 +1083,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
     const protectedExpectations = [
       { id: 'mcp_1', name: 'mcp_call', marker: PROTECTED_MARKER_MCP },
       { id: 'ri_1', name: 'changed_scope', marker: PROTECTED_MARKER_RI },
-      { id: 'ctrl_1', name: 'emit_managed_protocol', marker: PROTECTED_MARKER_CTRL },
+      { id: 'ctrl_1', name: 'spawn_agent', marker: PROTECTED_MARKER_CTRL },
     ];
     for (const c of protectedExpectations) {
       const matching = toolResults.find((b) => b.tool_use_id === c.id);

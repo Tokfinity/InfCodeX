@@ -73,21 +73,25 @@ export function learningClientFileKey(identity: string): string {
 function createInitializedFacade(
   service: ReturnType<typeof createLearningCenterService>,
 ): RuntimeLearningService {
-  const ready = service.initialize();
+  let ready: Promise<void> | undefined;
+  const ensureReady = (): Promise<void> => {
+    ready ??= service.initialize();
+    return ready;
+  };
   return {
-    list: async (query) => { await ready; return service.list(query); },
-    get: async (nameOrSlug) => { await ready; return service.get(nameOrSlug); },
-    getSnapshot: async () => { await ready; return service.getSnapshot(); },
-    events: async (afterRevision) => { await ready; return service.events(afterRevision); },
-    subscribe: (options) => subscribeAfter(ready, service, options),
-    acknowledge: async (nameOrSlug) => { await ready; await service.acknowledge(nameOrSlug); },
-    snooze: async (nameOrSlug, until) => { await ready; await service.snooze(nameOrSlug, until); },
-    reject: async (nameOrSlug) => { await ready; await service.reject(nameOrSlug); },
-    disable: async (nameOrSlug) => { await ready; await service.disable(nameOrSlug); },
-    rollback: async (nameOrSlug) => { await ready; await service.rollback(nameOrSlug); },
-    promote: async (nameOrSlug, scope) => { await ready; await service.promote(nameOrSlug, scope); },
-    review: async (nameOrSlug) => { await ready; await service.review(nameOrSlug); },
-    trust: async (nameOrSlug) => { await ready; await service.trust(nameOrSlug); },
+    list: async (query) => { await ensureReady(); return service.list(query); },
+    get: async (nameOrSlug) => { await ensureReady(); return service.get(nameOrSlug); },
+    getSnapshot: async () => { await ensureReady(); return service.getSnapshot(); },
+    events: async (afterRevision) => { await ensureReady(); return service.events(afterRevision); },
+    subscribe: (options) => subscribeAfter(ensureReady(), service, options),
+    acknowledge: async (nameOrSlug) => { await ensureReady(); await service.acknowledge(nameOrSlug); },
+    snooze: async (nameOrSlug, until) => { await ensureReady(); await service.snooze(nameOrSlug, until); },
+    reject: async (nameOrSlug) => { await ensureReady(); await service.reject(nameOrSlug); },
+    disable: async (nameOrSlug) => { await ensureReady(); await service.disable(nameOrSlug); },
+    rollback: async (nameOrSlug) => { await ensureReady(); await service.rollback(nameOrSlug); },
+    promote: async (nameOrSlug, scope) => { await ensureReady(); await service.promote(nameOrSlug, scope); },
+    review: async (nameOrSlug) => { await ensureReady(); await service.review(nameOrSlug); },
+    trust: async (nameOrSlug) => { await ensureReady(); await service.trust(nameOrSlug); },
   };
 }
 
