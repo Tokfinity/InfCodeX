@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 36 | `269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `267`, `268`, and `269` shipped together in v0.7.69 (2026-07-15): bidirectional A2A 1.0, split hot-reloadable integrations, and the authoritative shared Coder daemon. `260` shipped in v0.7.68; `261`, `259`, and `258` shipped in v0.7.67. Earlier completion history is unchanged. |
-| InProgress | 3 | `266, 270, 225` | `266` and `270` started together on 2026-07-17 for v0.7.72; `225` remains the bounded v0.7.100 cleanup. |
+| InProgress | 3 | `266, 270, 225` | `270` engineering review/eval is complete and awaits manual/release sign-off; `266` awaits release sign-off; `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -352,20 +352,25 @@ Skill discovery, daemon/Worker facade, `/learn`/status surfaces, notification
 cursors, and hard-dispose persistence are covered by deterministic tests. It
 remains InProgress until the v0.7.72 release gate is signed off.
 
-`270` implementation is complete and under post-review release verification:
+`270` engineering implementation and release eval are complete:
 native, Workflow-owned, and external Agent work share the Runtime-owned
 Actor/Turn tree, scheduler, durable snapshot, canonical collaboration tools,
 and output events. AMAW and the parallel legacy task lifecycles are retired. A
 deletion/replacement review found and fixed native/external executor selection,
 durable mailbox/history projection, capability-ceiling, shared-budget, and
-stale-follow-up concurrency gaps. It also corrected an unsafe migration premise:
+stale-follow-up concurrency gaps, then closed accidental Workflow activation and
+speculative Actor-output-read behavior found by the frozen eval. It also
+corrected an unsafe migration premise:
 pre-F270 native/default-Workflow active state was process-local and F258 records
 lack exact session ownership, so recovery never guesses or re-parents legacy
 work. The frozen Layer 2/3 driver, exact historical/current production-byte
 fixtures, manifest-only gate, budget enforcement, raw-cell integrity checks,
-and blind evidence packs are complete. The owner authorized the preregistered
-eval up to `$18` on 2026-07-17; the clean-worktree Layer 1 rerun and paid eval
-remain pending.
+and blind evidence packs are complete. The final isolated 87/87 focused suite
+and full build pass. The authorized Layer 2 treatment is non-inferior in 29/30
+blind pairs; Layer 3 is non-inferior in 5/6 journeys with no invalid-plan replay.
+Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
+is `recommend-ship`. F270 remains InProgress only for release sign-off and the
+separate manual test guide.
 
 Recent completion notes:
 

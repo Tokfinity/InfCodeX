@@ -108,6 +108,7 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 ## 自动化与评测基线（2026-07-17）
 
 - `npm run build`：通过。
+- 最终隔离聚焦回归：9 个测试文件，87/87 通过。
 - 本次变更集合：55 个测试文件，999/999 通过。
 - F266/F270 扩展 Layer 1：61 个测试文件，1097/1097 通过。
 - changed-code coverage：2294/2780 statements，82.52%。
@@ -115,11 +116,15 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
   dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。
 - manifest-only eval：2/2 通过，三个付费 stage 默认跳过；raw root 位于 OS
   临时目录 `kodax-eval-dumps/feature-270/<revision>/`。
-- 全量分片中 Actor/Workflow 测试通过；剩余失败/挂起均定位到紧急发版遗留的
-  未提交 CLI/auto-mode/schema/KNOWN_ISSUES 改动，不属于 F270 提交。
-- 付费 Layer 2/3 尚未运行：冻结预算上限为 `$18`，必须获得 owner 明确授权；
-  driver 还要求调用方同时提供 `allowGeneration=true`、
-  `KODAX_F270_ALLOW_GENERATION=1` 和可归因的 `KODAX_F270_AUTHORIZATION`。
+- 清洁隔离工作树的全量 suite：10,053 通过、52 跳过、12 失败。12 项来自
+  Windows/并发负载下 daemon/SDK 超时、memory lock `EPERM` 和既存 tracker
+  summary 不一致；SDK 67/67、memory 32/32、daemon smoke 11/11 的隔离复跑均
+  通过。F270 产品路径没有可复现失败。
+- Owner 已授权冻结预算上限 `$18`。付费 Layer 2 完成 60/60 cells：treatment
+  盲审 10 胜/1 负/19 平，29/30 不劣；Layer 3 完成 24/24 calls：3 胜/1 负/2
+  平，5/6 不劣且无无效计划重放。两层均无 timeout/provider error/truncation。
+- Layer 2/3 共 678,203 tokens，评估修订估算费用 `$0.02550684`。最终工程建议
+  为 `recommend-ship`；发布决定与本指南的人工签字保持独立。
 
 零成本 manifest 检查：
 
@@ -127,8 +132,9 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
 ```
 
-获得 owner 授权后，先只运行四调用 pilot；主会话盲审通过后，才按顺序选择
-`layer2` 和 `layer3`。不要一次性预设三个付费 stage，也不要添加自动重试。
+本次已按顺序完成四调用 pilot、Layer 2 盲审/解盲、Layer 3 盲审/解盲；未添加
+自动重试。原始证据位于
+`kodax-eval-dumps/feature-270/cd9f0e4168a02279/`。
 
 ## 测试总结
 
@@ -136,8 +142,13 @@ npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
 |---:|---:|---:|---:|
 | 6 | - | - | - |
 
-**测试结论**：待填写
+**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 6
+个人工用例仍待发布测试人员执行并签字。
 
-**发现的问题**：待填写
+**发现的问题**：自动化未发现可复现的 F270 产品回退；已知残余行为是部分模型
+会先读取具体 diff/file 再启动并行 Agent，以及一个 Layer 3 旅程多一次树检查。
+二者均未越过容量、误启 Workflow 或重放已否定计划。
 
-**证据位置**：待填写（自动化日志、actor snapshot/event、迁移前后配置、评测 raw dump）
+**证据位置**：评测 raw dump 位于
+`kodax-eval-dumps/feature-270/cd9f0e4168a02279/`；人工 actor
+snapshot/event、迁移前后配置与终端记录待执行时补充。
