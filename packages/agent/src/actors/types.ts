@@ -257,5 +257,9 @@ export interface AgentActorClient {
   get(targetPath: string): AgentDetail;
   output(targetPath: string, turnId?: string): AgentOutput;
   eventSnapshot(afterSequence?: number): readonly AgentEvent[];
-  wait(afterSequence?: number, timeoutMs?: number): Promise<AgentEvent | undefined>;
+  wait(
+    afterSequence?: number,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<AgentEvent | undefined>;
 }

@@ -139,8 +139,8 @@ export class AgentActorController {
       get: (targetPath: string) => this.get(callerPath, targetPath),
       output: (targetPath: string, turnId?: string) => this.output(callerPath, targetPath, turnId),
       eventSnapshot: (afterSequence?: number) => this.eventSnapshot(callerPath, afterSequence),
-      wait: (afterSequence?: number, timeoutMs?: number) => (
-        this.wait(callerPath, afterSequence, timeoutMs)
+      wait: (afterSequence?: number, timeoutMs?: number, signal?: AbortSignal) => (
+        this.wait(callerPath, afterSequence, timeoutMs, signal)
       ),
     });
   }
@@ -450,20 +450,31 @@ export class AgentActorController {
     callerPath: string,
     afterSequence = 0,
     timeoutMs = 30_000,
+    signal?: AbortSignal,
   ): Promise<AgentEvent | undefined> {
     const existing = this.eventSnapshot(callerPath, afterSequence)[0];
     if (existing) return existing;
+    if (signal?.aborted) return undefined;
     return new Promise<AgentEvent | undefined>((resolve) => {
-      const waiter: EventWaiter = {
+      let waiter: EventWaiter | undefined;
+      const settle = (event: AgentEvent | undefined): void => {
+        if (!waiter) return;
+        clearTimeout(waiter.timer);
+        this.waiters.delete(waiter);
+        signal?.removeEventListener('abort', abortHandler);
+        waiter = undefined;
+        resolve(event);
+      };
+      const abortHandler = (): void => settle(undefined);
+      waiter = {
         callerPath,
         afterSequence,
-        resolve,
-        timer: setTimeout(() => {
-          this.waiters.delete(waiter);
-          resolve(undefined);
-        }, Math.max(0, timeoutMs)),
+        resolve: settle,
+        timer: setTimeout(() => settle(undefined), Math.max(0, timeoutMs)),
       };
       this.waiters.add(waiter);
+      signal?.addEventListener('abort', abortHandler, { once: true });
+      if (signal?.aborted) abortHandler();
     });
   }
 
@@ -964,8 +975,6 @@ export class AgentActorController {
   private notify(event: AgentEvent): void {
     for (const waiter of [...this.waiters]) {
       if (event.sequence <= waiter.afterSequence || !this.isVisible(waiter.callerPath, event.actorPath)) continue;
-      clearTimeout(waiter.timer);
-      this.waiters.delete(waiter);
       waiter.resolve(event);
     }
   }

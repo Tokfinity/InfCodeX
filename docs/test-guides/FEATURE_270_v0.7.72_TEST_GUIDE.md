@@ -115,6 +115,8 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 3. 让 native 与 external actor 连续产生超过 6 条 tool/status 进度和超过 8,192
    字符的输出，在窄终端和宽终端观察 Ink/Classic 活动面，并调用
    `list_agents`/`agent_output`。
+4. root 正在 `wait_agent` 时提交新的用户输入，并确认该输入在下一 root turn
+   继续处理；同时验证等待中的 Runtime waiter 已立即清理。
 
 预期：
 
@@ -127,6 +129,8 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
   保留首尾且不拆分 emoji/组合字符。
 - [ ] native、Workflow-owned、constructed、external 进度进入同一现有活动面；状态
   色彩、前缀和省略号在 80 列终端仍清楚，无重复行、布局抖动或第二进度存储。
+- [ ] root 用户输入中断当前 wait/round 后不会丢失，并在下一 turn 恢复；child 不会
+  直接看到用户输入，已中断 wait 不残留 timer、listener 或 waiter。
 
 ## 自动化与评测基线（2026-07-17）
 
@@ -135,9 +139,9 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - 本次变更集合：55 个测试文件，999/999 通过。
 - F266/F270 扩展 Layer 1：61 个测试文件，1097/1097 通过。
 - changed-code coverage：2294/2780 statements，82.52%。
-- post-review 控制面聚焦回归：5 个测试文件，57/57 通过；跨层 Actor、Workflow、
-  child executor、storage 与 Ink/view-model 回归：12 个测试文件，282/282 通过。
-- post-review 五个核心实现文件 coverage：statements/lines 87.75%，branches
+- post-review 控制面聚焦回归：5 个测试文件，62/62 通过；跨层 Actor、Workflow、
+  child executor、storage 与 Ink/view-model 回归：12 个测试文件，286/286 通过。
+- post-review 五个核心实现文件 coverage：statements/lines 88.79%，branches
   80.05%；完整 package、bundle、Worker sidecar 与 DTS 构建通过。
 - F270 eval harness + shared one-shot boundary：65/65 通过；新
   dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。

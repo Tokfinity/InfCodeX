@@ -693,7 +693,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'wait_agent',
-    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot.',
+    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot; root user input interrupts the wait and resumes the next turn.',
     input_schema: {
       type: 'object',
       properties: {

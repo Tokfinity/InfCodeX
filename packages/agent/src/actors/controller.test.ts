@@ -724,4 +724,27 @@ describe('F270 actor tree and scheduler', () => {
       message: 'observer failed',
     }));
   });
+
+  it('cancels an actor event waiter promptly when its owning round is interrupted', async () => {
+    const controller = await createAgentActorController();
+    const root = controller.bind('/root');
+    const cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
+    const abort = new AbortController();
+
+    const waiting = root.wait(cursor, 30_000, abort.signal);
+    abort.abort('user input');
+
+    await expect(waiting).resolves.toBeUndefined();
+  });
+
+  it('returns an already committed visible event without installing a waiter', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const root = controller.bind('/root');
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+    const existing = root.eventSnapshot()[0];
+
+    expect(existing).toBeDefined();
+    await expect(root.wait(0, 30_000)).resolves.toEqual(existing);
+  });
 });

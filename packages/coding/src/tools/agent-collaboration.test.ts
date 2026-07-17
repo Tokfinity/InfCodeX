@@ -215,6 +215,27 @@ describe('F270 canonical collaboration tools', () => {
     expect(ctx.sendMessageTurnCounter.count).toBe(19);
   });
 
+  it('broadcasts once per visible recipient and returns Runtime message ids', async () => {
+    const { ctx } = await context();
+    ctx.sendMessageTurnCounter = { count: 0 };
+    await executeTool('spawn_agent', { task_name: 'a', objective: 'A' }, ctx);
+    await executeTool('spawn_agent', { task_name: 'b', objective: 'B' }, ctx);
+
+    const delivered = JSON.parse(await executeTool('send_message', {
+      to: '*', content: 'Shared evidence.',
+    }, ctx)) as { readonly messageIds?: readonly string[] } & Record<string, unknown>;
+
+    expect(delivered).toMatchObject({
+      ok: true,
+      delivery: 'broadcast',
+      recipients: ['/root/a', '/root/b'],
+    });
+    expect(delivered.messageIds).toHaveLength(2);
+    expect(ctx.actorControl?.get('/root/a').mailbox.at(-1)?.content).toBe('Shared evidence.');
+    expect(ctx.actorControl?.get('/root/b').mailbox.at(-1)?.content).toBe('Shared evidence.');
+    expect(ctx.sendMessageTurnCounter?.count).toBe(2);
+  });
+
   it('uses the smaller per-turn send cap for non-root Agents', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
@@ -237,6 +258,47 @@ describe('F270 canonical collaboration tools', () => {
     expect(rejected).toMatchObject({
       ok: false,
       error: { code: 'message_rate_limited', limit: 5, sent: 5 },
+    });
+  });
+
+  it('reports an interrupted wait when the owning root round is canceled', async () => {
+    const { ctx } = await context();
+    const abort = new AbortController();
+    ctx.abortSignal = abort.signal;
+    abort.abort('new user input');
+    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
+
+    const result = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 1,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ ok: true, status: 'interrupted' });
+  });
+
+  it('distinguishes a committed actor event from an expired wait', async () => {
+    const { ctx } = await context();
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
+
+    const expired = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 0,
+    }, ctx)) as Record<string, unknown>;
+    const waiting = executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 1_000,
+    }, ctx);
+    await Promise.resolve();
+    await ctx.actorControl?.send('/root/worker', 'Wake the waiter.');
+    const event = JSON.parse(await waiting) as Record<string, unknown>;
+
+    expect(expired).toMatchObject({ ok: true, status: 'wait_expired' });
+    expect(event).toMatchObject({
+      ok: true,
+      status: 'event',
+      nextSequence: expect.any(Number),
+      event: expect.objectContaining({ kind: 'message_delivered' }),
     });
   });
 });

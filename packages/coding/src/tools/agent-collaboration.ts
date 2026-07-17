@@ -119,10 +119,11 @@ export async function toolWaitAgent(
   const afterSequence = nonNegativeInteger(input.after_sequence, 0, 'after_sequence');
   const timeoutMs = boundedInteger(input.timeout_ms, 30_000, 0, MAX_WAIT_MS, 'timeout_ms');
   try {
-    const event = await client.wait(afterSequence, timeoutMs);
+    const event = await client.wait(afterSequence, timeoutMs, ctx.abortSignal);
+    const interrupted = event === undefined && ctx.abortSignal?.aborted === true;
     return render({
       ok: true,
-      status: event ? 'event' : 'wait_expired',
+      status: event ? 'event' : interrupted ? 'interrupted' : 'wait_expired',
       afterSequence,
       ...(event ? { event, nextSequence: event.sequence } : {}),
     });
