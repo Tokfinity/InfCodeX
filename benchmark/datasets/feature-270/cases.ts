@@ -117,7 +117,8 @@ const LAYER_2_MESSAGES: Readonly<Record<Exclude<Feature270Layer2CaseId, 'capacit
 };
 
 export function feature270BaselinePrompt(): string {
-  return readFileSync(new URL('./fixtures/baseline-worker-prompt.txt', import.meta.url), 'utf8');
+  return readFileSync(new URL('./fixtures/baseline-worker-prompt.txt', import.meta.url), 'utf8')
+    .replaceAll('\r\n', '\n');
 }
 
 export function buildFeature270TreatmentPrompt(): string {

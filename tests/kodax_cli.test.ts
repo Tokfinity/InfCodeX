@@ -365,7 +365,7 @@ describe('CLI Entry Point', () => {
   it('should load the bounded resume picker dataset in one list pass', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     const loader = source.match(
-      /async function loadResumableSessions[\s\S]*?\n}\n\nasync function main/,
+      /async function loadResumableSessions[\s\S]*?\r?\n}\r?\n\r?\nasync function main/,
     )?.[0] ?? '';
 
     expect(loader).not.toBe('');
@@ -551,7 +551,7 @@ describe('CLI Option Parsing', () => {
       '--mode',
       'json',
       '--agent-mode',
-      'amaw',
+      'ama',
       '--repo-intelligence',
       'full',
       '--repo-intelligence-trace',
@@ -560,7 +560,7 @@ describe('CLI Option Parsing', () => {
     ]);
     const opts = program.opts();
     expect(opts.mode).toBe('json');
-    expect(opts.agentMode).toBe('amaw');
+    expect(opts.agentMode).toBe('ama');
     expect(opts.repoIntelligence).toBe('full');
     expect(opts.repoIntelligenceTrace).toBe(true);
     expect(opts.maxIter).toBe('12');

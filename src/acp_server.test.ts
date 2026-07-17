@@ -17,7 +17,6 @@ const originalEffort = process.env.KODAX_EFFORT;
 
 const acpServerState = vi.hoisted(() => ({
   capturedOptions: [] as unknown[],
-  sessions: new Map<string, { title: string; messages: unknown[] }>(),
   startKodaX: vi.fn((options: { session?: { id?: string } }) => {
     acpServerState.capturedOptions.push(options);
     const sessionId = options.session?.id ?? 'missing-session';
@@ -46,109 +45,95 @@ const acpServerState = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('@kodax-ai/coding', () => ({
-  KODAX_DEFAULT_PROVIDER: 'openai',
-  buildMcpReverseCapabilities: vi.fn(() => ({})),
-  combineExtensionRuntimes: vi.fn((primary: unknown) => primary),
-  createBashPrefixExtractor: vi.fn(() => ({})),
-  createExtensionRuntime: vi.fn(() => ({
-    activate: vi.fn(),
-    dispose: vi.fn(async () => undefined),
-  })),
-  dedupeExtensionPathsByEntrypoint: vi.fn((paths: string[]) => paths),
-  discoverDefaultExtensions: vi.fn(async () => []),
-  excludeExtensionPathsByEntrypoint: vi.fn((paths: string[]) => paths),
-  isToolFileMutation: vi.fn(() => false),
-  normalizeReasoningEffortValue: (value: string): string => {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) {
-      throw new Error('Reasoning effort cannot be empty.');
-    }
-    return normalized;
-  },
-  parseReasoningEffortEnv: (raw: string | undefined) => {
-    const normalized = raw?.trim().toLowerCase();
-    if (!normalized) return { kind: 'unset' };
-    if (normalized === 'auto' || normalized === 'unset') return { kind: 'clear' };
-    return { kind: 'value', value: normalized };
-  },
-  registerConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
-  registerCustomProviders: vi.fn(),
-  resolveProvider: vi.fn(() => ({})),
-  generateSessionId: vi.fn(async () => 'generated-session'),
-  runManagedTask: vi.fn(),
-  startKodaX: acpServerState.startKodaX,
-  shutdownDefaultLspService: vi.fn(async () => undefined),
-}));
-
-vi.mock('@kodax-ai/repl', () => ({
-  KODAX_CONFIG_FILE: 'C:/Users/test/.kodax/config.json',
-  FileSessionStorage: class FileSessionStorage {
-    getSessionsDir(): string {
-      return path.join(os.homedir(), '.kodax', 'sessions');
-    }
-  },
-  collectBashWriteTargets: vi.fn(() => []),
-  computeConfirmTools: vi.fn(() => []),
-  generateSavePattern: vi.fn(() => ''),
-  getBashOutsideProjectWriteRisk: vi.fn(() => ({ risky: false })),
-  getPlanModeBlockReason: vi.fn(() => null),
-  isAlwaysConfirmPath: vi.fn(() => false),
-  isBashReadCommand: vi.fn(() => true),
-  isPathInsideProject: vi.fn(() => true),
-  isToolCallAllowed: vi.fn(() => ({ allowed: true })),
-  prepareRuntimeConfig: acpServerState.prepareRuntimeConfig,
-  resolveRuntimeProviderSelection: (input: {
-    explicitProvider?: string;
-    environmentProvider?: string;
-    configuredProvider?: string;
-    defaultProvider: string;
-  }) => input.explicitProvider
-    ?? input.environmentProvider
-    ?? input.configuredProvider
-    ?? input.defaultProvider,
-  resolveRuntimeModelSelection: (input: {
-    explicitProvider?: string;
-    environmentProvider?: string;
-    explicitModel?: string;
-    configuredProvider?: string;
-    configuredModel?: string;
-  }) => {
-    if (input.explicitModel) return input.explicitModel;
-    const providerOverride = input.explicitProvider ?? input.environmentProvider;
-    if (!providerOverride) return input.configuredModel;
-    return providerOverride === input.configuredProvider ? input.configuredModel : undefined;
-  },
-  resolveRuntimeEffortSelection: (input: {
-    explicitEffort?: string;
-    environmentEffort?: string;
-    configuredEffort?: string;
-  }) => {
-    if (input.explicitEffort !== undefined) return input.explicitEffort;
-    const environmentEffort = input.environmentEffort?.trim().toLowerCase();
-    if (environmentEffort && environmentEffort !== 'auto' && environmentEffort !== 'unset') {
-      return environmentEffort;
-    }
-    return input.configuredEffort;
-  },
-  createSessionManager: vi.fn(() => ({
-    storage: {
-      save: vi.fn(async (sessionId: string, data: { title?: string; messages?: unknown[] }) => {
-        acpServerState.sessions.set(sessionId, {
-          title: data.title ?? '',
-          messages: data.messages ?? [],
-        });
-      }),
+vi.mock('@kodax-ai/coding', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
+  return {
+    ...actual,
+    KODAX_DEFAULT_PROVIDER: 'openai',
+    buildMcpReverseCapabilities: vi.fn(() => ({})),
+    combineExtensionRuntimes: vi.fn((primary: unknown) => primary),
+    createBashPrefixExtractor: vi.fn(() => ({})),
+    createExtensionRuntime: vi.fn(() => ({
+      activate: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    })),
+    dedupeExtensionPathsByEntrypoint: vi.fn((paths: string[]) => paths),
+    discoverDefaultExtensions: vi.fn(async () => []),
+    excludeExtensionPathsByEntrypoint: vi.fn((paths: string[]) => paths),
+    isToolFileMutation: vi.fn(() => false),
+    normalizeReasoningEffortValue: (value: string): string => {
+      const normalized = value.trim().toLowerCase();
+      if (!normalized) {
+        throw new Error('Reasoning effort cannot be empty.');
+      }
+      return normalized;
     },
-    loadSession: vi.fn(async (sessionId: string) => acpServerState.sessions.get(sessionId) ?? null),
-    listSessions: vi.fn(async () => []),
-    loadFullTranscript: vi.fn(async () => ({ transcriptEntries: [] })),
-    forkSession: vi.fn(async () => null),
-    archiveSession: vi.fn(async () => true),
-    unarchiveSession: vi.fn(async () => true),
-    deleteSession: vi.fn(async () => ({ ok: true })),
-  })),
-}));
+    parseReasoningEffortEnv: (raw: string | undefined) => {
+      const normalized = raw?.trim().toLowerCase();
+      if (!normalized) return { kind: 'unset' };
+      if (normalized === 'auto' || normalized === 'unset') return { kind: 'clear' };
+      return { kind: 'value', value: normalized };
+    },
+    registerConfiguredMcpCapabilityProvider: vi.fn(async () => undefined),
+    registerCustomProviders: vi.fn(),
+    resolveProvider: vi.fn(() => ({})),
+    generateSessionId: vi.fn(async () => 'generated-session'),
+    runManagedTask: vi.fn(),
+    startKodaX: acpServerState.startKodaX,
+    shutdownDefaultLspService: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock('@kodax-ai/repl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/repl')>();
+  return {
+    ...actual,
+    KODAX_CONFIG_FILE: 'C:/Users/test/.kodax/config.json',
+    collectBashWriteTargets: vi.fn(() => []),
+    computeConfirmTools: vi.fn(() => []),
+    generateSavePattern: vi.fn(() => ''),
+    getBashOutsideProjectWriteRisk: vi.fn(() => ({ risky: false })),
+    getPlanModeBlockReason: vi.fn(() => null),
+    isAlwaysConfirmPath: vi.fn(() => false),
+    isBashReadCommand: vi.fn(() => true),
+    isPathInsideProject: vi.fn(() => true),
+    isToolCallAllowed: vi.fn(() => ({ allowed: true })),
+    prepareRuntimeConfig: acpServerState.prepareRuntimeConfig,
+    resolveRuntimeProviderSelection: (input: {
+      explicitProvider?: string;
+      environmentProvider?: string;
+      configuredProvider?: string;
+      defaultProvider: string;
+    }) => input.explicitProvider
+      ?? input.environmentProvider
+      ?? input.configuredProvider
+      ?? input.defaultProvider,
+    resolveRuntimeModelSelection: (input: {
+      explicitProvider?: string;
+      environmentProvider?: string;
+      explicitModel?: string;
+      configuredProvider?: string;
+      configuredModel?: string;
+    }) => {
+      if (input.explicitModel) return input.explicitModel;
+      const providerOverride = input.explicitProvider ?? input.environmentProvider;
+      if (!providerOverride) return input.configuredModel;
+      return providerOverride === input.configuredProvider ? input.configuredModel : undefined;
+    },
+    resolveRuntimeEffortSelection: (input: {
+      explicitEffort?: string;
+      environmentEffort?: string;
+      configuredEffort?: string;
+    }) => {
+      if (input.explicitEffort !== undefined) return input.explicitEffort;
+      const environmentEffort = input.environmentEffort?.trim().toLowerCase();
+      if (environmentEffort && environmentEffort !== 'auto' && environmentEffort !== 'unset') {
+        return environmentEffort;
+      }
+      return input.configuredEffort;
+    },
+  };
+});
 
 import { KodaXAcpServer, type KodaXAcpServerOptions } from './acp_server.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
@@ -186,7 +171,6 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     delete process.env.KODAX_PROVIDER;
     delete process.env.KODAX_EFFORT;
     acpServerState.capturedOptions = [];
-    acpServerState.sessions.clear();
     acpServerState.startKodaX.mockClear();
     acpServerState.prepareRuntimeConfig.mockClear();
     acpServerState.prepareRuntimeConfig.mockReturnValue({
@@ -221,7 +205,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     } as SetSessionModeRequest);
   }
 
-  it('forwards the configured server effort to runKodaX', async () => {
+  it('forwards the configured server effort to the Runtime run', async () => {
     const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
@@ -370,7 +354,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     await server.dispose();
   });
 
-  it('rejects invalid prompt effort before calling runKodaX', async () => {
+  it('rejects invalid prompt effort before starting a Runtime run', async () => {
     const server = createTestServer({ provider: 'openai', effort: 'medium', logLevel: 'off' });
     const sessionId = await createSession(server);
 
