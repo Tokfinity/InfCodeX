@@ -67,6 +67,7 @@ import type {
 } from '../sdk-runtime.js';
 import { parseRuntimeEvent } from '../runtime-event.js';
 import type {
+  LearningEvent,
   McpServerConfig,
   McpServerToolList,
 } from '@kodax-ai/agent';
@@ -454,6 +455,49 @@ export function createRuntimeDaemonClient(
         return request('workflow.stop', { runId }) as Promise<boolean>;
       },
     },
+    learning: {
+      list(query) {
+        return request('learning.list', query ?? {}) as ReturnType<KodaXRuntime['learning']['list']>;
+      },
+      get(nameOrSlug) {
+        return request('learning.get', { nameOrSlug }) as ReturnType<KodaXRuntime['learning']['get']>;
+      },
+      getSnapshot() {
+        return request('learning.snapshot') as ReturnType<KodaXRuntime['learning']['getSnapshot']>;
+      },
+      events(afterRevision) {
+        return request('learning.events', {
+          ...(afterRevision !== undefined ? { afterRevision } : {}),
+        }) as ReturnType<KodaXRuntime['learning']['events']>;
+      },
+      subscribe(subscribeOptions) {
+        return pollRuntimeLearningEvents(request, subscribeOptions?.afterRevision ?? 0);
+      },
+      async acknowledge(nameOrSlug) {
+        await request('learning.acknowledge', { nameOrSlug });
+      },
+      async snooze(nameOrSlug, until) {
+        await request('learning.snooze', { nameOrSlug, until });
+      },
+      async reject(nameOrSlug) {
+        await request('learning.reject', { nameOrSlug });
+      },
+      async disable(nameOrSlug) {
+        await request('learning.disable', { nameOrSlug });
+      },
+      async rollback(nameOrSlug) {
+        await request('learning.rollback', { nameOrSlug });
+      },
+      async promote(nameOrSlug, scope) {
+        await request('learning.promote', { nameOrSlug, scope });
+      },
+      async review(nameOrSlug) {
+        await request('learning.review', { nameOrSlug });
+      },
+      async trust(nameOrSlug) {
+        await request('learning.trust', { nameOrSlug });
+      },
+    },
     config: {
       read() {
         return request('config.read');
@@ -677,6 +721,24 @@ export function createRuntimeDaemonClient(
       await options.transport.close?.();
     },
   };
+}
+
+async function* pollRuntimeLearningEvents(
+  request: (method: RuntimeDaemonMethod, params?: unknown) => Promise<unknown>,
+  initialRevision: number,
+): AsyncIterable<LearningEvent> {
+  let revision = initialRevision;
+  while (true) {
+    const events = await request('learning.events', { afterRevision: revision }) as readonly LearningEvent[];
+    if (events.length === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    for (const event of events) {
+      revision = event.sequence;
+      yield event;
+    }
+  }
 }
 
 function reportReverseBridgeFailure(kind: string): void {

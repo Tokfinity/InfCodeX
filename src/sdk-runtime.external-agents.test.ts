@@ -205,6 +205,23 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     await reopened.close();
   });
 
+  it('publishes externalAgentAdmin capability metadata on the embedded runtime facade', async () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-agent-caps-'));
+    const runtime = await createKodaXRuntime({
+      homeDir,
+      requirements: { externalAgents: true, externalAgentAdmin: 1 },
+      externalAgents: externalAgentOptions(),
+    });
+    expect(runtime.capabilities).toMatchObject({
+      externalAgents: true,
+      externalAgentAdmin: { version: 1 },
+    });
+    await runtime.close();
+
+    const plain = await createKodaXRuntime({ homeDir });
+    expect(plain.capabilities?.externalAgentAdmin).toBeUndefined();
+    await plain.close();
+  });
   it('installs executor factories inside a public in-process daemon host', async () => {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-runtime-hosted-agents-'));
     const profile = `external-agent-${process.pid}-${Date.now()}`;

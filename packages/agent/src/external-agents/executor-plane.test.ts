@@ -1850,6 +1850,102 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
       .resolves.toMatchObject({ state: 'completed', output: 'done' });
   });
 
+  it('advances to terminal after sendInput without a host reconcile when the event stream ended at input-required', async () => {
+    // A2A-style executor: the event stream closes when the task pauses for input,
+    // so the plane must restart the event pump after a successful sendInput.
+    let sent = false;
+    let streams = 0;
+    const executor: AgentExecutor = {
+      async start(input) {
+        return { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-input' };
+      },
+      async *events() {
+        streams += 1;
+        if (!sent) {
+          yield { state: 'input-required' as const };
+          return;
+        }
+        yield { state: 'working' as const };
+        yield { state: 'completed' as const, output: 'continued' };
+      },
+      async get() {
+        return sent
+          ? { state: 'completed' as const, output: 'continued' }
+          : { state: 'input-required' as const };
+      },
+      async sendInput() { sent = true; },
+      async cancel() { return { state: 'canceled' as const }; },
+      async reconcile() {
+        return sent
+          ? { state: 'completed' as const, output: 'continued' }
+          : { state: 'input-required' as const };
+      },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'send-input-restarts-pump' }));
+    await expect(plane.tasks.get(started.taskId)).resolves.toMatchObject({ state: 'input-required' });
+
+    await plane.tasks.sendInput(started.taskId, { content: 'continue' });
+
+    await expect(plane.tasks.wait(started.taskId, 1_000))
+      .resolves.toMatchObject({ state: 'completed', output: 'continued' });
+    expect(streams).toBe(2);
+    await plane.close();
+  });
+
+  it('does not start a duplicate event pump when one is still consuming after sendInput', async () => {
+    // Reference-style executor: its stream stays open across input-required, so the
+    // original pump is still alive and sendInput must not fork a second consumer.
+    let streams = 0;
+    let releaseContinuation: (() => void) | undefined;
+    const continuation = new Promise<void>((resolve) => { releaseContinuation = resolve; });
+    const executor: AgentExecutor = {
+      async start(input) {
+        return { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-held' };
+      },
+      async *events() {
+        streams += 1;
+        yield { state: 'input-required' as const };
+        await continuation;
+        yield { state: 'completed' as const, output: 'held-continued' };
+      },
+      async get() { return { state: 'input-required' as const }; },
+      async sendInput() {},
+      async cancel() { return { state: 'canceled' as const }; },
+      async reconcile() { return { state: 'input-required' as const }; },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const started = await plane.tasks.start(taskInput({ taskId: 'send-input-keeps-pump' }));
+
+    const sending = plane.tasks.sendInput(started.taskId, { content: 'continue' });
+    releaseContinuation?.();
+
+    await sending;
+    await expect(plane.tasks.wait(started.taskId, 1_000))
+      .resolves.toMatchObject({ state: 'completed', output: 'held-continued' });
+    expect(streams).toBe(1);
+    await plane.close();
+  });
   it('persists the accepted remote handle before refreshing remote state', async () => {
     const executor = new FakeExecutor();
     let enterGet: (() => void) | undefined;

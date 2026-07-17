@@ -88,6 +88,8 @@ import {
   type HistoryItem,
   type ToolCall,
   type PromptSubmitPayload,
+  type LearningBinding,
+  type LearningSurfaceSnapshot,
   KeypressHandlerPriority,
 } from "./types.js";
 import { getActivePasteStore, type PastedContent } from "./utils/paste-store.js";
@@ -161,6 +163,8 @@ import {
   type AskUserSelectionAnswer,
   type TeamModeHandle,
   type WorkflowProcessEvent,
+  type LearnedCapabilityRecord,
+  type LearningEvent,
 } from "@kodax-ai/agent";
 import { deriveProjectKeyFromRoot } from "../interactive/project-key.js";
 import {
@@ -434,6 +438,7 @@ import {
 } from "./utils/ask-user.js";
 import { buildHelpMenuSections } from "./constants/layout.js";
 import { buildStatusBarViewModel } from "./view-models/status-bar.js";
+import { formatLearningRecoverySummary } from "./view-models/learning-summary.js";
 import {
   buildPromptActivityViewModel,
   buildPromptPlaceholderText,
@@ -442,6 +447,7 @@ import {
 import { resolveEffectiveCompactionInfo } from "./view-models/compaction-info.js";
 import { buildSurfaceStatusBarProps } from "./view-models/surface-status.js";
 import { buildTranscriptSearchChrome } from "./view-models/transcript-search.js";
+
 import {
   buildBaseFooterNotices,
   buildFooterNotifications,
@@ -477,6 +483,45 @@ import {
 import { buildHostSessionPayload } from "./utils/session-payload.js";
 
 const DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS = 500;
+
+function learningCenterActions(record: LearnedCapabilityRecord): SelectOption[] {
+  const actions: SelectOption[] = [{ label: "Acknowledge notification", value: "acknowledge" }];
+  if (record.lifecycle === "ready") {
+    actions.push(
+      { label: "Review", value: "review" },
+      { label: "Review & Trust", value: "trust" },
+      { label: "Snooze for 24 hours", value: "snooze" },
+      { label: "Reject", value: "reject" },
+    );
+  } else if (record.lifecycle === "active_learned") {
+    actions.push(
+      { label: "Disable", value: "disable" },
+      { label: "Promote to user catalog", value: "promote" },
+    );
+  } else if (record.lifecycle === "quarantined") {
+    actions.push(
+      { label: "Rollback", value: "rollback" },
+      { label: "Disable", value: "disable" },
+    );
+  }
+  return actions;
+}
+
+async function applyLearningCenterAction(
+  binding: LearningBinding,
+  slug: string,
+  action: string,
+): Promise<void> {
+  if (action === "acknowledge") await binding.acknowledge(slug);
+  else if (action === "snooze") {
+    await binding.snooze(slug, new Date(Date.now() + 24 * 60 * 60_000).toISOString());
+  } else if (action === "reject") await binding.reject(slug);
+  else if (action === "disable") await binding.disable(slug);
+  else if (action === "rollback") await binding.rollback(slug);
+  else if (action === "promote") await binding.promote(slug, "user");
+  else if (action === "review") await binding.review(slug);
+  else if (action === "trust") await binding.trust(slug);
+}
 
 type AppendSessionDeltaStorage = SessionStorage & {
   appendSessionDelta(id: string, data: SessionData): Promise<void>;
@@ -521,6 +566,7 @@ export interface InkREPLOptions extends KodaXOptions {
   hardExitOnClose?: boolean;
   runtimeRunner?: InkRuntimeRunner;
   getRuntimeStatus?: InkRuntimeStatusProvider;
+  learning?: LearningBinding;
 }
 
 // Ink REPL Props
@@ -1527,6 +1573,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [showBanner, setShowBanner] = useState(true); // Show banner in Ink UI
   const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
   const [canQueueFollowUps, setCanQueueFollowUps] = useState(false);
+  const [learningSnapshot, setLearningSnapshot] = useState<LearningSurfaceSnapshot | undefined>(undefined);
+  const [learningNotices, setLearningNotices] = useState<readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly tone: "warning" | "accent";
+  }[]>([]);
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const workflowIntentBoundaryQueueLockedRef = useRef(false);
   const terminalHostProfile = useMemo(() => detectTerminalHostProfile(), []);
@@ -1544,6 +1596,61 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const appendHistoryItemsWithPersistenceRef = useRef<((items: readonly CreatableHistoryItem[]) => void) | null>(null);
   const interruptPersistenceQueuedRef = useRef(false);
   const gracefulExitRunnerRef = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    const binding = options.learning;
+    if (!binding) return undefined;
+    let active = true;
+    let subscription: ReturnType<LearningBinding['subscribe']> | undefined;
+    const refresh = async (): Promise<LearningSurfaceSnapshot> => {
+      const snapshot = await binding.getSnapshot();
+      if (!active) return snapshot;
+      setLearningSnapshot((current) => (
+        current !== undefined && current.revision > snapshot.revision ? current : snapshot
+      ));
+      return snapshot;
+    };
+    const reportRefreshFailure = (error: unknown): void => {
+      emitKodaXDiagnostic({
+        source: "repl:learning",
+        level: "warn",
+        message: "Failed to refresh the Learning Center snapshot.",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    };
+    const onEvent = (event: LearningEvent): void => {
+      if (!active) return;
+      if (event.kind === "ready" || event.kind === "activated" || event.kind === "attention") {
+        const action = event.kind === "ready"
+          ? "is ready for review"
+          : event.kind === "activated" ? "became active" : "requires attention";
+        setLearningNotices((current) => [{
+          id: event.eventId,
+          text: `A learned ${event.carrier} ${action}: ${event.displayName}  [/learn]`,
+          tone: event.kind === "activated" ? "accent" as const : "warning" as const,
+        }, ...current.filter((notice) => notice.id !== event.eventId)].slice(0, 2));
+      }
+      void refresh().catch(reportRefreshFailure);
+    };
+    void refresh().then((snapshot) => {
+      if (!active) return;
+      const recovery = formatLearningRecoverySummary(snapshot);
+      if (recovery) {
+        const tone: 'warning' | 'accent' = snapshot.attention > 0 || snapshot.ready > 0
+          ? 'warning'
+          : 'accent';
+        setLearningNotices((current) => [{
+          id: 'learning-recovery',
+          text: recovery,
+          tone,
+        }, ...current.filter((notice) => notice.id !== 'learning-recovery')].slice(0, 2));
+      }
+      subscription = binding.subscribe(onEvent, { afterRevision: snapshot.revision });
+    }).catch(reportRefreshFailure);
+    return () => {
+      active = false;
+      subscription?.close();
+    };
+  }, [options.learning]);
   const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
   const [inputText, setInputText] = useState("");
   const [transcriptDisplayState, setTranscriptDisplayState] = useState(() => (
@@ -3748,6 +3855,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         streamingState: statusBarStreamingState,
         maxIter: streamingState.maxIter,
         contextUsage,
+        learning: learningSnapshot,
         isLoading: statusBarIsLoading,
         managedState: {
           phase: managedTaskStatus?.phase,
@@ -3777,6 +3885,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       statusBarStreamingState,
       streamingState.maxIter,
       contextUsage,
+      learningSnapshot,
       statusBarIsLoading,
       managedTaskStatus?.phase,
       managedTaskStatus?.harnessProfile,
@@ -3903,17 +4012,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     });
   }, [historySearchQuery, streamingState.pendingInputs.length]);
   const footerNotifications = useMemo(() => {
-    return buildFooterNotifications({
+    const base = buildFooterNotifications({
       historySearchQuery,
       isHistorySearchActive,
       historySearchMatchCount: historySearchMatches.length,
       pendingInputCount: streamingState.pendingInputs.length,
       maxPendingInputs: MAX_PENDING_INPUTS,
     });
+    return [...base, ...learningNotices];
   }, [
     historySearchMatches.length,
     historySearchQuery,
     isHistorySearchActive,
+    learningNotices,
     streamingState.pendingInputs.length,
   ]);
   const footerNotificationSummary = useMemo(
@@ -5658,6 +5769,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       options.map((option) => ({ label: option, value: option })),
     ).then((value) => (Array.isArray(value) ? value[0] : value));
   }, [showSelectDialogWithOptions]);
+
+  const openLearningCenter = useCallback(async (requested?: string): Promise<void> => {
+    const binding = options.learning;
+    if (!binding) return;
+    let slug = requested;
+    if (!slug) {
+      const page = await binding.list({ limit: 200 });
+      if (page.items.length === 0) {
+        setLearningNotices([{
+          id: "learning-center-empty",
+          text: "Learning Center has no learned capabilities.",
+          tone: "accent",
+        }]);
+        return;
+      }
+      const selected = await showSelectDialogWithOptions(
+        "Learning Center — type to search",
+        page.items.map((record) => ({
+          label: `${record.displayName} · ${record.carrier} · ${record.lifecycle}`,
+          value: record.slug,
+        })),
+      );
+      slug = Array.isArray(selected) ? selected[0] : selected;
+    }
+    if (!slug) return;
+    const detail = await binding.get(slug);
+    const selectedAction = await showSelectDialogWithOptions(
+      `${detail.displayName} · ${detail.carrier} · ${detail.lifecycle}`,
+      learningCenterActions(detail),
+    );
+    const action = Array.isArray(selectedAction) ? selectedAction[0] : selectedAction;
+    if (!action) return;
+    await applyLearningCenterAction(binding, detail.slug, action);
+    setLearningSnapshot(await binding.getSnapshot());
+  }, [options.learning, showSelectDialogWithOptions]);
 
   // FEATURE_087/088 (v0.7.28): bind a stable askUser implementation to the
   // ConstructionRuntime policy module. The policy needs an interactive
@@ -8462,6 +8608,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Create command callbacks
         const callbacks: CommandCallbacks = {
           getRuntimeStatus: options.getRuntimeStatus,
+          learning: options.learning,
+          getLearningSummary: options.learning ? () => options.learning!.getSnapshot() : undefined,
+          openLearningCenter,
           exit: requestGracefulExit,
           saveSession: async () => {
             if (context.messages.length > 0) {

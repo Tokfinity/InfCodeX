@@ -117,7 +117,8 @@ export type SkillSource =
   | 'project' // <projectRoot>/.kodax/skills/
   | 'user' // ~/.kodax/skills/ or ~/.agent/skills/
   | 'plugin' // Plugin-provided skills
-  | 'builtin'; // Built-in skills
+  | 'builtin' // Built-in skills
+  | 'learned'; // Active Skills governed by the Learning Center
 
 // === Skill Registry ===
 
@@ -258,6 +259,7 @@ export interface SkillPathsConfig {
   userPaths: string[];
   pluginPaths: string[];
   builtinPath: string;
+  learnedPath?: string;
 }
 
 // === Default Skill Paths ===
@@ -267,6 +269,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { listPluginSkillPaths } from './plugin-paths.js';
+import { getAgentConfigPath } from '../../runtime/agent-home.js';
 
 // ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -298,6 +301,7 @@ function resolveBuiltinPath(): string {
  * 3. User - ~/.agents/skills/ (AgentSkills standard)
  * 4. Plugin - (dynamic)
  * 5. Builtin - packages/skills/src/builtin/
+ * 6. Learned - ~/.kodax/learned/skills/ (never shadows a formal source)
  */
 export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
   const home = homedir();
@@ -321,17 +325,20 @@ export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
 
     // Built-in skills
     builtinPath: resolveBuiltinPath(),
+
+    learnedPath: getAgentConfigPath('learned', 'skills'),
   };
 }
 
 /**
  * All skill paths in priority order (highest to lowest)
  *
- * Priority: Project > User > Plugin > Builtin
+ * Priority: Project > User > Plugin > Builtin > Learned
  * - Project: Project-specific skills override everything else
  * - User: User preferences (~/.kodax/ and ~/.agents/)
  * - Plugin: Third-party plugins
  * - Builtin: Default skills shipped with KodaX
+ * - Learned: Runtime-governed Skills, always lower precedence than formal sources
  */
 export function getSkillPathsFlat(config: SkillPathsConfig): Array<{ path: string; source: SkillSource }> {
   const result: Array<{ path: string; source: SkillSource }> = [];
@@ -347,6 +354,9 @@ export function getSkillPathsFlat(config: SkillPathsConfig): Array<{ path: strin
     result.push({ path: p, source: 'plugin' });
   }
   result.push({ path: config.builtinPath, source: 'builtin' });
+  if (config.learnedPath !== undefined) {
+    result.push({ path: config.learnedPath, source: 'learned' });
+  }
 
   return result;
 }

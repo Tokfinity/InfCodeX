@@ -424,6 +424,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     currentIteration,
     maxIter,
     contextUsage,
+    learning,
     showBusyStatus = true,
     managedPhase,
     managedHarnessProfile,
@@ -537,6 +538,20 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
         contextUsage.triggerPercent,
         contextUsage.reservedResponseTokens,
       ),
+    });
+  }
+
+  if (learning && (learning.ready > 0 || learning.newlyActive > 0 || learning.attention > 0)) {
+    const parts = [
+      ...(learning.ready > 0 ? [`${learning.ready}R`] : []),
+      ...(learning.newlyActive > 0 ? [`${learning.newlyActive}N`] : []),
+      ...(learning.attention > 0 ? [`${learning.attention}!`] : []),
+    ];
+    segments.push({
+      id: "learning",
+      text: `Learn:${parts.join("/")}`,
+      color: learning.attention > 0 || learning.ready > 0 ? "yellow" : "cyan",
+      tone: learning.attention > 0 || learning.ready > 0 ? "warning" : "accent",
     });
   }
 

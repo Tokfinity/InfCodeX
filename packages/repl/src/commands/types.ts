@@ -17,6 +17,7 @@ import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
 import type { PermissionMode } from '../permission/types.js';
 import type { UIContext } from '../ui/context.js';
+import type { LearningBinding, LearningSurfaceSnapshot } from '../ui/types.js';
 
 export type CommandSource = 'builtin' | 'extension' | 'skill' | 'prompt';
 
@@ -160,6 +161,9 @@ export interface CommandCallbacks {
   rewindSession?: (selector?: string) => Promise<SessionRewindStatus>;
   getCostReport?: () => string | null;
   getRuntimeStatus?: () => Promise<RuntimeSurfaceStatus | undefined>;
+  learning?: LearningBinding;
+  getLearningSummary?: () => Promise<LearningSurfaceSnapshot>;
+  openLearningCenter?: (nameOrSlug?: string) => Promise<void>;
   /**
    * FEATURE_092 phase 2b.8: read-only stats accessor for the auto-mode
    * classifier guardrail. Returns undefined when the guardrail hasn't been

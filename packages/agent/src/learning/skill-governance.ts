@@ -8,6 +8,7 @@ import type {
 const READONLY_SOURCES: ReadonlySet<GovernedSkillSource> = new Set([
   'builtin',
   'plugin',
+  'learned',
   'external',
 ]);
 

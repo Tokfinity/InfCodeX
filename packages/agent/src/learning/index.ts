@@ -104,3 +104,50 @@ export type {
 export {
   recordCompletedTurnLearning,
 } from './completed-turn.js';
+
+export type {
+  LearnedCapabilityCarrier,
+  LearnedCapabilityLifecycle,
+  LearnedCapabilityRecord,
+  LearnedCapabilitySource,
+  LearningAction,
+  LearningActionDriver,
+  LearningCapabilityErrorCode,
+  LearningClientEventState,
+  LearningClientRecord,
+  LearningEvent,
+  LearningEventKind,
+  LearningNotificationState,
+  LearningPage,
+  LearningQuery,
+  LearningSubscribeOptions,
+  LearningSurfaceSnapshot,
+} from './center-types.js';
+export {
+  LearningCapabilityError,
+  assertLearnedCapabilityTransition,
+  canTransitionLearnedCapability,
+  learningEventIdFor,
+  learningEventKindForLifecycle,
+  slugifyLearnedCapabilityName,
+} from './center-types.js';
+export type {
+  CreateLearningCenterServiceOptions,
+  LearningCenterService,
+} from './learning-center-service.js';
+export {
+  FileLearningCenterService,
+  createLearningCenterService,
+} from './learning-center-service.js';
+export type { LearnedAreaPaths } from './learned-area-store.js';
+export {
+  LearnedAreaStore,
+  eventFromCapability,
+  resolveLearnedAreaPaths,
+} from './learned-area-store.js';
+export type { LearningProposalProjection } from './proposal-projection.js';
+export { projectLearningProposals } from './proposal-projection.js';
+export {
+  getLearnedExtensionToolName,
+  isLearnedExtensionCommandAllowed,
+} from './extension-policy.js';

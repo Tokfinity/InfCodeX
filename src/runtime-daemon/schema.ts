@@ -322,6 +322,49 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'workflow.resume': { params: runIdParamsSchema(), result: booleanSchema },
   'workflow.stop': { params: runIdParamsSchema(), result: booleanSchema },
 
+  'learning.list': { params: learningQuerySchema(), result: learningPageSchema() },
+  'learning.get': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: learnedCapabilitySchema(),
+  },
+  'learning.snapshot': { params: noParamsSchema, result: learningSnapshotSchema() },
+  'learning.events': {
+    params: objectSchema({ afterRevision: integerSchema }, [], true),
+    result: arraySchema(learningEventSchema()),
+  },
+  'learning.acknowledge': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+  'learning.snooze': {
+    params: objectSchema({ nameOrSlug: stringSchema, until: stringSchema }, ['nameOrSlug', 'until']),
+    result: okSchema,
+  },
+  'learning.reject': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+  'learning.disable': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+  'learning.rollback': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+  'learning.promote': {
+    params: objectSchema({ nameOrSlug: stringSchema, scope: stringSchema }, ['nameOrSlug', 'scope']),
+    result: okSchema,
+  },
+  'learning.review': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+  'learning.trust': {
+    params: objectSchema({ nameOrSlug: stringSchema }, ['nameOrSlug']),
+    result: okSchema,
+  },
+
   'config.read': { params: noParamsSchema, result: objectAnySchema },
   'config.patch': { params: objectSchema({ patch: objectAnySchema }, ['patch']), result: objectAnySchema },
   'config.reload': { params: noParamsSchema, result: objectSchema({ ok: booleanSchema, config: objectAnySchema }, ['ok', 'config']) },
@@ -661,6 +704,97 @@ function sessionFilterSchema(): RuntimeDaemonJsonSchema {
     surface: stringSchema,
     cursor: stringSchema,
   });
+}
+
+function learningQuerySchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    search: stringSchema,
+    carrier: { enum: ['skill', 'extension', 'workflow_handoff'] },
+    lifecycle: {
+      enum: [
+        'opportunity', 'drafting', 'ready', 'testing', 'active_learned',
+        'promoted_user', 'quarantined', 'archived', 'rejected',
+      ],
+    },
+    limit: integerSchema,
+    cursor: stringSchema,
+  });
+}
+
+function learnedCapabilitySchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    schemaVersion: { type: 'integer', enum: [1] },
+    capabilityId: stringSchema,
+    displayName: stringSchema,
+    slug: stringSchema,
+    carrier: { enum: ['skill', 'extension', 'workflow_handoff'] },
+    lifecycle: learningLifecycleSchema(),
+    revision: integerSchema,
+    createdAt: stringSchema,
+    updatedAt: stringSchema,
+    source: objectSchema({
+      kind: { enum: ['learning_controller', 'f224_proposal'] },
+      proposalId: stringSchema,
+    }, ['kind']),
+    lastAction: {
+      enum: ['review', 'trust', 'reject', 'disable', 'rollback', 'archive', 'restore', 'promote'],
+    },
+    artifactPath: stringSchema,
+    previousGoodRevision: integerSchema,
+    previousLifecycle: learningLifecycleSchema(),
+    diagnostics: arraySchema(stringSchema),
+  }, [
+    'schemaVersion', 'capabilityId', 'displayName', 'slug', 'carrier', 'lifecycle',
+    'revision', 'createdAt', 'updatedAt', 'source',
+  ]);
+}
+
+function learningLifecycleSchema(): RuntimeDaemonJsonSchema {
+  return {
+    enum: [
+      'opportunity', 'drafting', 'ready', 'testing', 'active_learned',
+      'promoted_user', 'quarantined', 'archived', 'rejected',
+    ],
+  };
+}
+
+function learningEventSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    schemaVersion: { type: 'integer', enum: [1] },
+    sequence: integerSchema,
+    eventId: stringSchema,
+    capabilityId: stringSchema,
+    capabilityRevision: integerSchema,
+    kind: {
+      enum: ['opportunity', 'drafting', 'ready', 'testing', 'activated', 'promoted', 'attention', 'archived', 'rejected'],
+    },
+    lifecycle: learningLifecycleSchema(),
+    displayName: stringSchema,
+    slug: stringSchema,
+    carrier: { enum: ['skill', 'extension', 'workflow_handoff'] },
+    createdAt: stringSchema,
+  }, [
+    'schemaVersion', 'sequence', 'eventId', 'capabilityId', 'capabilityRevision',
+    'kind', 'lifecycle', 'displayName', 'slug', 'carrier', 'createdAt',
+  ]);
+}
+
+function learningSnapshotSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    ready: integerSchema,
+    newlyActive: integerSchema,
+    attention: integerSchema,
+    active: integerSchema,
+    revision: integerSchema,
+  }, ['ready', 'newlyActive', 'attention', 'active', 'revision']);
+}
+
+function learningPageSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    items: arraySchema(learnedCapabilitySchema()),
+    nextCursor: stringSchema,
+    revision: integerSchema,
+  }, ['items', 'revision']);
 }
 
 function ownerPolicySchema(mode?: 'daemon' | 'inline'): RuntimeDaemonJsonSchema {

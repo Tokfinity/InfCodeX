@@ -669,6 +669,44 @@ export {
   updateSkillTrustLedger,
   upsertLearningProposal,
 } from './learning/index.js';
+export type {
+  CreateLearningCenterServiceOptions,
+  LearnedAreaPaths,
+  LearnedCapabilityCarrier,
+  LearnedCapabilityLifecycle,
+  LearnedCapabilityRecord,
+  LearnedCapabilitySource,
+  LearningAction,
+  LearningActionDriver,
+  LearningCapabilityErrorCode,
+  LearningCenterService,
+  LearningClientEventState,
+  LearningClientRecord,
+  LearningEvent,
+  LearningEventKind,
+  LearningNotificationState,
+  LearningPage,
+  LearningProposalProjection,
+  LearningQuery,
+  LearningSubscribeOptions,
+  LearningSurfaceSnapshot,
+} from './learning/index.js';
+export {
+  FileLearningCenterService,
+  LearnedAreaStore,
+  LearningCapabilityError,
+  assertLearnedCapabilityTransition,
+  canTransitionLearnedCapability,
+  createLearningCenterService,
+  eventFromCapability,
+  getLearnedExtensionToolName,
+  isLearnedExtensionCommandAllowed,
+  learningEventIdFor,
+  learningEventKindForLifecycle,
+  projectLearningProposals,
+  resolveLearnedAreaPaths,
+  slugifyLearnedCapabilityName,
+} from './learning/index.js';
 
 // ============== FEATURE_194 v0.7.43 — MCP capability (inlined from @kodax-ai/mcp) ==============
 // Originally a standalone package, inlined per ADR-036 to consolidate single-consumer

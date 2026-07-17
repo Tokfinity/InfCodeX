@@ -39,7 +39,7 @@ export interface RuntimeUserMarkdownAgentRef {
 
 export interface RuntimeEffectiveSkillRef {
   readonly name: string;
-  readonly source: 'workspace' | 'user' | 'plugin' | 'builtin';
+  readonly source: 'workspace' | 'user' | 'plugin' | 'builtin' | 'learned';
   readonly revision: string;
 }
 

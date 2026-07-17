@@ -8,6 +8,14 @@ import type { CursorPosition } from "./utils/text-buffer.js";
 import type { PastedContent, PasteStore } from "./utils/paste-store.js";
 import type { PermissionMode } from "../permission/types.js";
 import type { KodaXAgentMode, KodaXReasoningMode } from "@kodax-ai/coding";
+import type {
+  LearnedCapabilityRecord,
+  LearningEvent,
+  LearningPage,
+  LearningQuery,
+  LearningSubscribeOptions,
+  LearningSurfaceSnapshot as AgentLearningSurfaceSnapshot,
+} from "@kodax-ai/agent";
 
 // === Keyboard Events - 键盘事件 ===
 
@@ -203,6 +211,26 @@ export interface InputPromptProps {
   onPopPendingInputs?: () => string | undefined;
 }
 
+export type LearningSurfaceSnapshot = AgentLearningSurfaceSnapshot;
+
+export interface LearningBinding {
+  getSnapshot(): Promise<LearningSurfaceSnapshot>;
+  list(query?: LearningQuery): Promise<LearningPage>;
+  get(nameOrSlug: string): Promise<LearnedCapabilityRecord>;
+  subscribe(
+    listener: (event: LearningEvent) => void,
+    options?: LearningSubscribeOptions,
+  ): { close(): void };
+  acknowledge(nameOrSlug: string): Promise<void>;
+  snooze(nameOrSlug: string, until: string): Promise<void>;
+  reject(nameOrSlug: string): Promise<void>;
+  disable(nameOrSlug: string): Promise<void>;
+  rollback(nameOrSlug: string): Promise<void>;
+  promote(nameOrSlug: string, scope: 'user'): Promise<void>;
+  review(nameOrSlug: string): Promise<void>;
+  trust(nameOrSlug: string): Promise<void>;
+}
+
 export interface StatusBarProps {
   sessionId: string;
   permissionMode: PermissionMode;
@@ -246,6 +274,8 @@ export interface StatusBarProps {
     /** Provider output capacity reserved from the physical context window. */
     reservedResponseTokens?: number;
   };
+  /** Client-specific Learning Center projection. Inventory alone stays hidden. */
+  learning?: LearningSurfaceSnapshot;
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;
   managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";

@@ -39,6 +39,7 @@ import {
   countActiveLineageMessages,
   createSessionLineage,
   estimateTokens,
+  emitKodaXDiagnostic,
   forkSessionLineage,
   generateSessionId as generateCoreSessionId,
   findPreviousUserEntryId,
@@ -64,6 +65,7 @@ import {
   normalizePermissionMode,
 } from '../permission/types.js';
 import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
+import { formatLearningRecoverySummary } from '../ui/view-models/learning-summary.js';
 import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
 import { bootstrapTeamMode, type TeamModeHandle, type WorkflowProcessEvent } from '@kodax-ai/agent';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
@@ -98,6 +100,7 @@ import type {
   RuntimeSurfaceStatus,
   SessionRecoverStatus,
 } from '../commands/types.js';
+import type { LearningBinding } from '../ui/types.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import { loadAlwaysAllowTools, loadAutoModeSettings, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import {
@@ -400,6 +403,7 @@ export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
   runtimeRunner?: ReplRuntimeRunner;
   getRuntimeStatus?: ReplRuntimeStatusProvider;
+  learning?: LearningBinding;
 }
 
 function resolveInitialReasoningMode(
@@ -581,6 +585,19 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     enabled: compactionConfig.enabled,
   }, agentsFiles);
   printWorkspaceEntryNotice(startupRuntime);
+  if (options.learning) {
+    try {
+      const recovery = formatLearningRecoverySummary(await options.learning.getSnapshot());
+      if (recovery) console.log(chalk.yellow(`\n${recovery}\n`));
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'repl:learning',
+        level: 'warn',
+        message: 'Failed to recover the Learning Center startup summary.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   // Detect and show project hint - 检测并显示项目提示
 
@@ -858,6 +875,8 @@ Keyboard Shortcuts:
   // Command callbacks - 命令回调
   const callbacks: CommandCallbacks = {
     getRuntimeStatus: options.getRuntimeStatus,
+    learning: options.learning,
+    getLearningSummary: options.learning ? () => options.learning!.getSnapshot() : undefined,
     exit: () => {
       isRunning = false;
       // FEATURE_125 — release the instance directory + clear the

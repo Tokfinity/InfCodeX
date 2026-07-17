@@ -1477,6 +1477,18 @@ const METHOD_SMOKE_PARAMS = {
   'workflow.pause': { runId: 'run-1' },
   'workflow.resume': { runId: 'run-1' },
   'workflow.stop': { runId: 'run-1' },
+  'learning.list': {},
+  'learning.get': { nameOrSlug: 'runtime-test-skill' },
+  'learning.snapshot': undefined,
+  'learning.events': { afterRevision: 0 },
+  'learning.acknowledge': { nameOrSlug: 'runtime-test-skill' },
+  'learning.snooze': { nameOrSlug: 'runtime-test-skill', until: '2026-07-18T00:00:00.000Z' },
+  'learning.reject': { nameOrSlug: 'runtime-test-skill' },
+  'learning.disable': { nameOrSlug: 'runtime-test-skill' },
+  'learning.rollback': { nameOrSlug: 'runtime-test-skill' },
+  'learning.promote': { nameOrSlug: 'runtime-test-skill', scope: 'user' },
+  'learning.review': { nameOrSlug: 'runtime-test-skill' },
+  'learning.trust': { nameOrSlug: 'runtime-test-skill' },
   'config.read': undefined,
   'config.patch': { patch: { model: 'mock-model' } },
   'config.reload': undefined,
@@ -1815,6 +1827,38 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       async stop() {
         return false;
       },
+    },
+    learning: {
+      async list() {
+        return { items: [], revision: 0 };
+      },
+      async get(nameOrSlug) {
+        return {
+          schemaVersion: 1,
+          capabilityId: 'lc_runtime_test',
+          displayName: 'Runtime test Skill',
+          slug: nameOrSlug,
+          carrier: 'skill',
+          lifecycle: 'ready',
+          revision: 1,
+          createdAt: '2026-07-17T00:00:00.000Z',
+          updatedAt: '2026-07-17T00:00:00.000Z',
+          source: { kind: 'learning_controller' },
+        };
+      },
+      async getSnapshot() {
+        return { ready: 0, newlyActive: 0, attention: 0, active: 0, revision: 0 };
+      },
+      async events() { return []; },
+      async *subscribe() {},
+      async acknowledge() {},
+      async snooze() {},
+      async reject() {},
+      async disable() {},
+      async rollback() {},
+      async promote() {},
+      async review() {},
+      async trust() {},
     },
     config: {
       async read() {

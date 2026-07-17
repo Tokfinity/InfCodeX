@@ -545,6 +545,7 @@ class AgentExecutorPlaneRuntime {
   readonly #executorOperationCounts = new Map<AgentExecutor, number>();
   readonly #executorOperationTails = new Set<Promise<void>>();
   readonly #eventPumpTails = new Set<Promise<void>>();
+  readonly #eventPumpTasks = new Set<string>();
   readonly #taskExecutors = new Map<string, AgentExecutor>();
   readonly #waiters = new Map<string, Set<{
     readonly resolve: (task: AgentTaskSnapshot) => void;
@@ -1233,6 +1234,8 @@ class AgentExecutorPlaneRuntime {
     executor: AgentExecutor,
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): void {
+    if (this.#eventPumpTasks.has(taskId)) return;
+    this.#eventPumpTasks.add(taskId);
     void this.pumpEvents(taskId, executor, reference)
       .catch(async (error: unknown) => {
         if (this.#closed) return;
@@ -1284,12 +1287,19 @@ class AgentExecutorPlaneRuntime {
     reference: NonNullable<AgentTaskSnapshot['executorReference']>,
   ): Promise<void> {
     await this.withExecutorOperation(executor, async () => {
-      for await (const event of executor.events(reference)) {
-        if (this.#closed) return;
-        const next = await this.mutateTask(taskId, eventType(event), (current) => (
-          isTerminal(current.state) ? undefined : this.applyExecutorEvent(current, event)
-        ), event);
-        if (isTerminal(next.state)) return;
+      try {
+        for await (const event of executor.events(reference)) {
+          if (this.#closed) return;
+          const next = await this.mutateTask(taskId, eventType(event), (current) => (
+            isTerminal(current.state) ? undefined : this.applyExecutorEvent(current, event)
+          ), event);
+          if (isTerminal(next.state)) return;
+        }
+      } finally {
+        // Mark the pump as consumed as soon as the event loop ends (executors such as
+        // A2A legitimately close the stream on input-required) so a later sendInput
+        // can restart it without waiting for executor-operation cleanup.
+        this.#eventPumpTasks.delete(taskId);
       }
     }, 'event-pump');
   }
@@ -1381,11 +1391,18 @@ class AgentExecutorPlaneRuntime {
     if (isTerminal(task.state)) throw new Error(`Agent task is already terminal: ${taskId}`);
     const { executor, reference } = await this.executorRoute(task);
     await this.withExecutorOperation(executor, () => executor.sendInput(reference, input));
-    return this.mutateTask(taskId, 'state', (current) => (
+    const updated = await this.mutateTask(taskId, 'state', (current) => (
       isTerminal(current.state)
         ? undefined
         : { ...current, state: 'working' as const, updatedAt: this.nowIso() }
     ));
+    // Executors such as A2A end their event stream while the task waits for input, so
+    // the original pump may be gone. Restart it (no-op while one is still consuming) to
+    // keep advancing the lifecycle without a host-driven reconcile. This runs strictly
+    // after the serialized state mutation so a concurrently draining pump has already
+    // released its per-task marker.
+    if (!isTerminal(updated.state)) this.startEventPump(taskId, executor, reference);
+    return updated;
   }
 
   private async cancelTask(taskId: string, reason?: string): Promise<AgentTaskSnapshot> {

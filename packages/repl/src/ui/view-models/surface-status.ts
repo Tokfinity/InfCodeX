@@ -49,6 +49,7 @@ export interface BuildSurfaceStatusBarPropsOptions {
   streamingState: SurfaceStatusStreamingState;
   maxIter?: number;
   contextUsage?: SurfaceStatusContextUsage;
+  learning?: StatusBarProps["learning"];
   isLoading: boolean;
   managedState?: SurfaceStatusManagedState;
   autoModeEngine?: StatusBarProps["autoModeEngine"];
@@ -83,6 +84,7 @@ export function buildSurfaceStatusBarProps(
     currentIteration: options.streamingState.currentIteration,
     maxIter: options.maxIter,
     contextUsage: options.contextUsage,
+    learning: options.learning,
     isCompacting: options.streamingState.isCompacting,
     showBusyStatus: false,
     managedPhase: options.isLoading ? options.managedState?.phase : undefined,

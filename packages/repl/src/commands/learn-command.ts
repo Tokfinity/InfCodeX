@@ -156,20 +156,84 @@ async function approveProposal(
 }
 
 function printHelp(): void {
-  writeOutput(chalk.cyan('\n/learn - Review procedural learning suggestions'));
-  writeOutput(chalk.dim('  /learn pending              List pending suggestions'));
-  writeOutput(chalk.dim('  /learn diff <proposalId>    Preview proposal and apply plan'));
-  writeOutput(chalk.dim('  /learn approve <proposalId> [--ack-impact]'));
-  writeOutput(chalk.dim('  /learn reject <proposalId> [reason]'));
+  writeOutput(chalk.cyan('\n/learn - Inspect and control learned capabilities'));
+  writeOutput(chalk.dim('  /learn                      Open the Learning Center'));
+  writeOutput(chalk.dim('  /learn list [search]        List learned capabilities'));
+  writeOutput(chalk.dim('  /learn show <name|slug>     Inspect a capability'));
+  writeOutput(chalk.dim('  /learn trust|reject|disable|rollback|promote <name|slug>'));
+  writeOutput(chalk.dim('  Compatibility: pending, diff, approve and reject remain accepted.'));
   writeOutput(chalk.dim('  /learn help\n'));
+}
+
+async function runLearningCenterCommand(
+  args: readonly string[],
+  callbacks: Parameters<Command['handler']>[2],
+): Promise<boolean> {
+  const learning = callbacks.learning;
+  if (!learning) return false;
+  const subcommand = (args[0] ?? '').toLowerCase();
+  if (subcommand === '' && callbacks.openLearningCenter) {
+    await callbacks.openLearningCenter();
+    return true;
+  }
+  if (subcommand === '' || subcommand === 'list' || subcommand === 'pending') {
+    const page = await learning.list({
+      search: args.slice(1).join(' ').trim() || undefined,
+      ...(subcommand === 'pending' ? { lifecycle: 'ready' as const } : {}),
+      limit: 200,
+    });
+    writeOutput(chalk.cyan('\n[learn] Learning Center'));
+    if (page.items.length === 0) writeOutput(chalk.dim('  (none)'));
+    for (const item of page.items) {
+      writeOutput(`  ${chalk.cyan(item.slug)} ${chalk.dim(`[${item.carrier}/${item.lifecycle}]`)} ${item.displayName}`);
+    }
+    writeOutput();
+    return true;
+  }
+  const requestedName = args[1];
+  const nameOrSlug = requestedName
+    ? await resolveLearningCapabilityName(learning, requestedName)
+    : undefined;
+  if ((subcommand === 'show' || subcommand === 'diff') && nameOrSlug) {
+    if (callbacks.openLearningCenter) await callbacks.openLearningCenter(nameOrSlug);
+    else writeOutput(`${JSON.stringify(await learning.get(nameOrSlug), null, 2)}\n`);
+    return true;
+  }
+  if (!nameOrSlug) return false;
+  if (subcommand === 'trust' || subcommand === 'approve') await learning.trust(nameOrSlug);
+  else if (subcommand === 'reject') await learning.reject(nameOrSlug);
+  else if (subcommand === 'disable') await learning.disable(nameOrSlug);
+  else if (subcommand === 'rollback') await learning.rollback(nameOrSlug);
+  else if (subcommand === 'promote') await learning.promote(nameOrSlug, 'user');
+  else if (subcommand === 'review') await learning.review(nameOrSlug);
+  else return false;
+  writeOutput(chalk.dim(`\n[learn] ${subcommand} accepted for ${nameOrSlug}.\n`));
+  return true;
+}
+
+async function resolveLearningCapabilityName(
+  learning: NonNullable<Parameters<Command['handler']>[2]['learning']>,
+  nameOrSlugOrLegacyId: string,
+): Promise<string> {
+  try {
+    return (await learning.get(nameOrSlugOrLegacyId)).slug;
+  } catch (error: unknown) {
+    const page = await learning.list({ limit: 200 });
+    const legacyMatch = page.items.find((item) => (
+      item.source.kind === 'f224_proposal'
+      && item.source.proposalId === nameOrSlugOrLegacyId
+    ));
+    if (legacyMatch) return legacyMatch.slug;
+    throw error;
+  }
 }
 
 export const learnCommand: Command = {
   name: 'learn',
-  description: 'Review procedural learning suggestions (FEATURE_224)',
-  usage: '/learn [pending|diff|approve|reject|help] [proposalId]',
-  argumentHint: 'pending | diff <id> | approve <id> | reject <id> [reason] | help',
-  handler: async (args, context) => {
+  description: 'Inspect and control the Learning Center',
+  usage: '/learn [list|show|review|trust|reject|disable|rollback|promote|help] [name|slug]',
+  argumentHint: 'list | show <slug> | trust <slug> | disable <slug> | help',
+  handler: async (args, context, callbacks) => {
     const cwd = resolveCwd(context);
     const subcommand = (args[0] ?? 'pending').toLowerCase();
 
@@ -177,6 +241,8 @@ export const learnCommand: Command = {
       printHelp();
       return;
     }
+
+    if (await runLearningCenterCommand(args, callbacks)) return;
 
     const { storePath, store } = await readStore(cwd);
 

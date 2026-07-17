@@ -36,6 +36,7 @@ import type {
   RuntimeSubscription,
   RuntimeWorkflowFilter,
 } from '../sdk-runtime.js';
+import { bindRuntimeLearningClient } from '../runtime-learning.js';
 import {
   createRuntimeDaemonErrorResponse,
   createRuntimeDaemonNotification,
@@ -116,6 +117,8 @@ const ALL_RUNTIME_GRANTED_SCOPES = [
   'permission:grant-admin',
   'integration:admin',
   'workflow:control',
+  'learning:read',
+  'learning:control',
   'artifact:write',
   'agent:control',
   'credential:register',
@@ -165,6 +168,13 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'extension.reload',
   ]),
   ...scopeEntries('workflow:control', ['workflow.pause', 'workflow.resume', 'workflow.stop']),
+  ...scopeEntries('learning:read', [
+    'learning.list', 'learning.get', 'learning.snapshot', 'learning.events',
+  ]),
+  ...scopeEntries('learning:control', [
+    'learning.acknowledge', 'learning.snooze', 'learning.reject', 'learning.disable',
+    'learning.rollback', 'learning.promote', 'learning.review', 'learning.trust',
+  ]),
   ...scopeEntries('artifact:write', ['artifact.create', 'artifact.delete']),
   ...scopeEntries('agent:control', [
     'agentRegistrations.list', 'agentRegistrations.upsert', 'agentRegistrations.setEnabled',
@@ -1168,6 +1178,58 @@ async function dispatchRuntimeDaemonRequest(
     case 'workflow.stop':
       return runtime.workflows.stop(requireStringParam(request.params, 'runId'));
 
+    case 'learning.list':
+      return bindRuntimeLearningClient(runtime.learning, principalId).list(
+        optionalRecord(request.params) as Parameters<KodaXRuntime['learning']['list']>[0],
+      );
+    case 'learning.get':
+      return bindRuntimeLearningClient(runtime.learning, principalId).get(
+        requireStringParam(request.params, 'nameOrSlug'),
+      );
+    case 'learning.snapshot':
+      return bindRuntimeLearningClient(runtime.learning, principalId).getSnapshot();
+    case 'learning.events':
+      return bindRuntimeLearningClient(runtime.learning, principalId).events(
+        optionalIntegerField(optionalRecord(request.params) ?? {}, 'afterRevision'),
+      );
+    case 'learning.acknowledge':
+      await bindRuntimeLearningClient(runtime.learning, principalId).acknowledge(
+        requireStringParam(request.params, 'nameOrSlug'),
+      );
+      return { ok: true };
+    case 'learning.snooze': {
+      const params = requireRecord(request.params);
+      await bindRuntimeLearningClient(runtime.learning, principalId).snooze(
+        requireStringField(params, 'nameOrSlug'),
+        requireStringField(params, 'until'),
+      );
+      return { ok: true };
+    }
+    case 'learning.reject':
+    case 'learning.disable':
+    case 'learning.rollback':
+    case 'learning.review':
+    case 'learning.trust': {
+      const learning = bindRuntimeLearningClient(runtime.learning, principalId);
+      const nameOrSlug = requireStringParam(request.params, 'nameOrSlug');
+      if (request.method === 'learning.reject') await learning.reject(nameOrSlug);
+      else if (request.method === 'learning.disable') await learning.disable(nameOrSlug);
+      else if (request.method === 'learning.rollback') await learning.rollback(nameOrSlug);
+      else if (request.method === 'learning.review') await learning.review(nameOrSlug);
+      else await learning.trust(nameOrSlug);
+      return { ok: true };
+    }
+    case 'learning.promote': {
+      const params = requireRecord(request.params);
+      const scope = requireStringField(params, 'scope');
+      if (scope !== 'user') throw daemonError('invalid_params', 'Learning promotion scope must be user.');
+      await bindRuntimeLearningClient(runtime.learning, principalId).promote(
+        requireStringField(params, 'nameOrSlug'),
+        scope,
+      );
+      return { ok: true };
+    }
+
     case 'context.budget.get':
       requireContextDiagnosticsCapability(getClientCapabilities());
       await assertAdmittedSessionId(
@@ -1367,6 +1429,7 @@ function runtimeDaemonCapabilities(
         }
       : {}),
     afterTurnInput: { version: 1 },
+    learningCenter: { version: 1 },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },
     providerCredentialBroker: {

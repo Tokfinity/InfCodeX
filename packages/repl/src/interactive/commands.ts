@@ -78,6 +78,7 @@ import {
   type SkillContext,
 } from '@kodax-ai/agent';
 import { CommandRegistry } from '../commands/registry.js';
+import { formatLearningStatus } from '../ui/view-models/learning-summary.js';
 import { copyCommand } from '../commands/copy-command.js';
 import { learnCommand } from '../commands/learn-command.js';
 import { memoryCommand } from '../commands/memory-command.js';
@@ -2613,9 +2614,21 @@ async function printStatus(
   if (detailMode === 'runtime') {
     await printRuntimeSurfaceStatus(callbacks);
   }
+  await printLearningSurfaceStatus(callbacks);
   console.log(chalk.dim(`  Created:     ${context.createdAt}`));
   console.log(chalk.dim(`  Last Active: ${context.lastAccessed}`));
   console.log();
+}
+
+async function printLearningSurfaceStatus(callbacks: CommandCallbacks | undefined): Promise<void> {
+  if (!callbacks?.getLearningSummary) return;
+  try {
+    console.log(chalk.dim(`  Learning:    ${formatLearningStatus(await callbacks.getLearningSummary())}`));
+  } catch (error: unknown) {
+    console.log(chalk.dim(
+      `  Learning:    unavailable (${error instanceof Error ? error.message : String(error)})`,
+    ));
+  }
 }
 
 async function printRuntimeSurfaceStatus(callbacks: CommandCallbacks | undefined): Promise<void> {

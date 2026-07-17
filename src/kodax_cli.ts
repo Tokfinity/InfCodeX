@@ -166,6 +166,7 @@ import {
   type ConfiguredA2ARuntimeHandle,
 } from './a2a/runtime-config.js';
 import { runAsrtBrokerProcess } from './sandbox-runtime.js';
+import { createReplLearningBinding } from './repl-learning-binding.js';
 export {
   ACP_PERMISSION_MODES,
   getDefaultCommandDir,
@@ -3273,6 +3274,7 @@ complete -c kodax -l version -d 'Show version'`);
           configHome: KODAX_DIR,
           profile: runtimeProfile,
         }),
+        learning: createReplLearningBinding(interactiveRuntime),
         hardExitOnClose: false,
       };
 

@@ -486,6 +486,7 @@ function makeRuntime(
         return false;
       },
     },
+    learning: {} as KodaXRuntime['learning'],
     config: {
       async read() {
         return {};
