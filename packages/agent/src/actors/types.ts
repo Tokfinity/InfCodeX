@@ -179,6 +179,11 @@ export interface AgentExecutionResult {
   readonly structured?: AgentMetadataValue;
 }
 
+export interface AgentMutationOptions {
+  /** Optimistic Actor revision checked inside the serialized durable mutation. */
+  readonly expectedRevision?: number;
+}
+
 export interface AgentTurnExecutor {
   execute(input: AgentExecutionInput): Promise<AgentExecutionResult>;
 }
@@ -211,6 +216,7 @@ export interface AgentActorClient {
     targetPath: string,
     objective: string,
     metadata?: Readonly<Record<string, AgentMetadataValue>>,
+    options?: AgentMutationOptions,
   ): Promise<AgentFollowupResult>;
   interrupt(targetPath: string, reason?: string): Promise<void>;
   list(): AgentTreeSnapshot;

@@ -501,8 +501,11 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   },
   'agents.followup': {
     params: objectSchema({
-      sessionId: stringSchema, actorPath: stringSchema, objective: stringSchema,
-    }, ['sessionId', 'actorPath', 'objective']),
+      sessionId: stringSchema,
+      actorPath: stringSchema,
+      objective: stringSchema,
+      expectedRevision: integerSchema,
+    }, ['sessionId', 'actorPath', 'objective'], true),
     result: objectAnySchema,
   },
   'agents.interrupt': {

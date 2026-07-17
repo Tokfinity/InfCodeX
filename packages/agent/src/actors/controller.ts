@@ -1,6 +1,7 @@
 import {
   AgentBudgetExhaustedError,
   AgentControlError,
+  AgentRevisionConflictError,
 } from './errors.js';
 import { AgentTurnScheduler } from './scheduler.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   AgentForkTurns,
   AgentMailboxMessage,
   AgentMetadataValue,
+  AgentMutationOptions,
   AgentOutput,
   AgentSpawnInput,
   AgentTreeSnapshot,
@@ -115,8 +117,9 @@ export class AgentActorController {
         targetPath: string,
         objective: string,
         metadata?: Readonly<Record<string, AgentMetadataValue>>,
+        options?: AgentMutationOptions,
       ) => (
-        this.followup(callerPath, targetPath, objective, metadata)
+        this.followup(callerPath, targetPath, objective, metadata, options)
       ),
       interrupt: (targetPath: string, reason?: string) => (
         this.interrupt(callerPath, targetPath, reason)
@@ -268,11 +271,18 @@ export class AgentActorController {
     targetPath: string,
     objective: string,
     metadata?: Readonly<Record<string, AgentMetadataValue>>,
+    options?: AgentMutationOptions,
   ): Promise<AgentFollowupResult> {
     let admittedTurnId: string | undefined;
     try {
       const result = await this.mutate(async () => {
         const actor = this.requireControl(callerPath, targetPath);
+        if (
+          options?.expectedRevision !== undefined
+          && actor.revision !== options.expectedRevision
+        ) {
+          throw new AgentRevisionConflictError(options.expectedRevision, actor.revision);
+        }
         if (actor.state === 'closed') throw new AgentControlError('actor_closed', `${targetPath} is closed`);
         if (actor.capabilities.control?.followup === false) {
           throw new AgentControlError('unsupported_operation', `${targetPath} does not support follow-up`);

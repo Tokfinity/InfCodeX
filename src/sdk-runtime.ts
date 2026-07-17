@@ -647,7 +647,12 @@ export interface RuntimeAgentService {
     content: string,
     classification?: AgentDataClassification,
   ): Promise<void>;
-  followup(sessionId: string, actorPath: string, objective: string): Promise<AgentFollowupResult>;
+  followup(
+    sessionId: string,
+    actorPath: string,
+    objective: string,
+    options?: { readonly expectedRevision?: number },
+  ): Promise<AgentFollowupResult>;
   interrupt(sessionId: string, actorPath: string, reason?: string): Promise<void>;
   output(sessionId: string, actorPath: string, turnId?: string): Promise<AgentOutput>;
   events(sessionId: string, afterSequence?: number): Promise<readonly AgentEvent[]>;
@@ -4046,9 +4051,9 @@ function createRuntimeAgentService(
       await admission.loadRequired(sessionId);
       await (await actors.root(sessionId)).send(actorPath, content, classification);
     },
-    async followup(sessionId, actorPath, objective) {
+    async followup(sessionId, actorPath, objective, options) {
       await admission.loadRequired(sessionId);
-      return (await actors.root(sessionId)).followup(actorPath, objective);
+      return (await actors.root(sessionId)).followup(actorPath, objective, undefined, options);
     },
     async interrupt(sessionId, actorPath, reason) {
       await admission.loadRequired(sessionId);

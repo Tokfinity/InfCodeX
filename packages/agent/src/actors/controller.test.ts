@@ -360,6 +360,40 @@ describe('F270 actor tree and scheduler', () => {
     expect(executor.pending[1]?.input.signal.aborted).toBe(true);
   });
 
+  it('conflicts a distinct concurrent follow-up submitted against the same idle revision', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const firstTurn = await controller.spawn('/root', { taskName: 'worker', objective: 'First.' });
+    executor.pending[0]?.resolve({ output: 'first done' });
+    await settle();
+    const idleRevision = controller.get('/root', firstTurn.actorPath).actor.revision;
+
+    const accepted = controller.followup(
+      '/root',
+      firstTurn.actorPath,
+      'Accepted follow-up.',
+      undefined,
+      { expectedRevision: idleRevision },
+    );
+    const stale = controller.followup(
+      '/root',
+      firstTurn.actorPath,
+      'Distinct stale follow-up.',
+      undefined,
+      { expectedRevision: idleRevision },
+    );
+
+    await expect(accepted).resolves.toMatchObject({ delivery: 'started_turn' });
+    await expect(stale).rejects.toMatchObject({
+      code: 'revision_conflict',
+      expectedRevision: idleRevision,
+      currentRevision: idleRevision + 1,
+    });
+    expect(controller.get('/root', firstTurn.actorPath).mailbox.some((message) => (
+      message.content === 'Distinct stale follow-up.'
+    ))).toBe(false);
+  });
+
   it('interrupts unfinished turns on shutdown without permanently closing reusable actors', async () => {
     let snapshot: AgentActorSnapshot | undefined;
     const store: AgentActorStore = {

@@ -38,6 +38,46 @@ import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 import type { RuntimeDaemonManagementController } from './management.js';
 
 describe('runtime daemon dispatcher', () => {
+  it('passes Agent revision fences and maps stale follow-ups to conflict', async () => {
+    const runtime = makeRuntime();
+    const followup = vi.spyOn(runtime.agents, 'followup').mockRejectedValue(Object.assign(
+      new Error('Actor revision 4 is stale; current revision is 5.'),
+      { code: 'revision_conflict' as const, expectedRevision: 4, currentRevision: 5 },
+    ));
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-agent-followup-conflict',
+      'agents.followup',
+      {
+        sessionId: 'session-1',
+        actorPath: '/root/worker',
+        objective: 'Distinct stale follow-up.',
+        expectedRevision: 4,
+      },
+    ));
+
+    expect(followup).toHaveBeenCalledWith(
+      'session-1',
+      '/root/worker',
+      'Distinct stale follow-up.',
+      { expectedRevision: 4 },
+    );
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.error).toMatchObject({
+        code: 'conflict',
+        data: {
+          conflict: 'revision_conflict',
+          expectedRevision: 4,
+          currentRevision: 5,
+        },
+      });
+    }
+    dispatcher.close();
+  });
+
   it('maps fenced external Agent registration conflicts to the stable daemon conflict code', async () => {
     const runtime = makeRuntime();
     vi.spyOn(runtime.admin.agentRegistrations, 'upsert')

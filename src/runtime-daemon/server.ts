@@ -823,10 +823,14 @@ async function dispatchRuntimeDaemonRequest(
     }
     case 'agents.followup': {
       const params = requireRecord(request.params);
+      const expectedRevision = optionalIntegerField(params, 'expectedRevision');
       return runtime.agents.followup(
         requireStringField(params, 'sessionId'),
         requireStringField(params, 'actorPath'),
         requireStringField(params, 'objective'),
+        expectedRevision === undefined
+          ? undefined
+          : { expectedRevision },
       );
     }
     case 'agents.interrupt': {
@@ -1999,6 +2003,25 @@ function normalizeRuntimeDaemonError(error: unknown): {
   readonly message: string;
   readonly data?: unknown;
 } {
+  if (
+    error instanceof Error
+    && 'code' in error
+    && error.code === 'revision_conflict'
+  ) {
+    const conflict = error as Error & {
+      readonly expectedRevision?: number;
+      readonly currentRevision?: number;
+    };
+    return {
+      code: 'conflict',
+      message: error.message,
+      data: {
+        conflict: 'revision_conflict',
+        expectedRevision: conflict.expectedRevision,
+        currentRevision: conflict.currentRevision,
+      },
+    };
+  }
   if (error instanceof ExternalAgentRegistrationConflictError) {
     return {
       code: 'conflict',

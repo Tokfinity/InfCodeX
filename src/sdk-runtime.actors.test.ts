@@ -76,4 +76,36 @@ describe('F270 Runtime Actor facade', () => {
     expect((await runtime.agents.tree(forked.id)).actors.map((actor) => actor.path)).toEqual(['/root']);
     await runtime.close();
   });
+
+  it('rejects a distinct stale follow-up submitted against an idle Actor revision', async () => {
+    const runtime = await createKodaXRuntime({ homeDir: await makeHome() });
+    const session = await runtime.sessions.create({ sessionId: 'revision', title: 'Revision' });
+    const initial = await runtime.agents.spawn(session.id, {
+      taskName: 'worker',
+      objective: 'Create a reusable Actor.',
+    });
+    await runtime.agents.wait(session.id, 2, 1_000);
+    const idleRevision = (await runtime.agents.detail(session.id, initial.actorPath)).actor.revision;
+
+    const accepted = runtime.agents.followup(
+      session.id,
+      initial.actorPath,
+      'Accepted follow-up.',
+      { expectedRevision: idleRevision },
+    );
+    const stale = runtime.agents.followup(
+      session.id,
+      initial.actorPath,
+      'Distinct stale follow-up.',
+      { expectedRevision: idleRevision },
+    );
+
+    await expect(accepted).resolves.toMatchObject({ delivery: 'started_turn' });
+    await expect(stale).rejects.toMatchObject({
+      code: 'revision_conflict',
+      expectedRevision: idleRevision,
+      currentRevision: idleRevision + 1,
+    });
+    await runtime.close();
+  });
 });

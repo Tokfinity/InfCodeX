@@ -24,6 +24,18 @@ export class AgentBudgetExhaustedError extends Error implements AgentBudgetExhau
   }
 }
 
+export class AgentRevisionConflictError extends Error {
+  readonly code = 'revision_conflict' as const;
+
+  constructor(
+    readonly expectedRevision: number,
+    readonly currentRevision: number,
+  ) {
+    super(`Actor revision ${expectedRevision} is stale; current revision is ${currentRevision}.`);
+    this.name = 'AgentRevisionConflictError';
+  }
+}
+
 export type AgentControlErrorCode =
   | 'actor_closed'
   | 'actor_not_found'

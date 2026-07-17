@@ -653,8 +653,15 @@ export function createRuntimeDaemonClient(
           ...(classification !== undefined ? { classification } : {}),
         });
       },
-      followup(sessionId, actorPath, objective) {
-        return request('agents.followup', { sessionId, actorPath, objective }) as ReturnType<
+      followup(sessionId, actorPath, objective, options) {
+        return request('agents.followup', {
+          sessionId,
+          actorPath,
+          objective,
+          ...(options?.expectedRevision !== undefined
+            ? { expectedRevision: options.expectedRevision }
+            : {}),
+        }) as ReturnType<
           KodaXRuntime['agents']['followup']
         >;
       },
