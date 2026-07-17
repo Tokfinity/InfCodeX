@@ -41,7 +41,7 @@ export const ULTRA_AGENT_POLICY =
   'Use sub-agents when parallel work would materially improve speed or quality.';
 
 export const EXPLICIT_WORKFLOW_POLICY =
-  'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone. A review, audit, parallel topology, or synthesis request is not explicit Workflow intent unless the user says Workflow or names a Workflow.';
+  'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone.';
 
 /**
  * Pure builder. Returns the system prompt the role-prompt entry point
@@ -123,7 +123,6 @@ export function buildWorkerInstructions(
   const dispatchRules = [
     'AGENT COLLABORATION:',
     '- `spawn_agent` creates a named direct child and returns its canonical actor path. Use multiple calls only when their scopes can proceed independently.',
-    '- On a fresh request with independent lanes and no reported descendants, start the useful lanes directly with `spawn_agent`; do not call `list_agents` or `agent_output` for actors that have not been created.',
     '- Read-only investigations use `read_only:true`; non-conflicting file-level edits may use `read_only:false`. Keep the task name stable and the objective specific.',
     '- Children may recursively spawn descendants. Every turn shares the same root concurrency and work budget, so recursion never creates extra capacity.',
     '- Continue useful local work after spawning. When an Agent result is required, call `wait_agent`; use its event sequence as the next `after_sequence` cursor.',

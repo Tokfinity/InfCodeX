@@ -52,9 +52,7 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('Children may recursively spawn descendants');
     expect(output).toContain('same root concurrency and work budget');
     expect(output).toContain('canonical `agent_id` from `list_dispatchable_agents`');
-    expect(output).toContain(
-      'do not call `list_agents` or `agent_output` for actors that have not been created',
-    );
+    expect(output).not.toContain('On a fresh request with independent lanes');
   });
 
   it('does not teach retired task lifecycle tools or complexity-driven Workflow activation', () => {
@@ -74,7 +72,7 @@ describe('buildWorkerInstructions', () => {
       'Use sub-agents when parallel work would materially improve speed or quality.',
     );
     expect(EXPLICIT_WORKFLOW_POLICY).toBe(
-      'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone. A review, audit, parallel topology, or synthesis request is not explicit Workflow intent unless the user says Workflow or names a Workflow.',
+      'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone.',
     );
   });
 

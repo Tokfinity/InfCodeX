@@ -34,6 +34,18 @@ describe('FEATURE_270 frozen behavioral cases', () => {
     expect(JSON.stringify(treatment.priorMessages)).not.toContain('queued-for-capacity');
   });
 
+  it.each(['parallel', 'explicit_workflow', 'no_workflow'] as const)(
+    'seeds %s after scope acquisition so Layer 2 isolates collaboration policy',
+    (caseId) => {
+      const baseline = buildFeature270Layer2Input(caseId, 'baseline');
+      const treatment = buildFeature270Layer2Input(caseId, 'treatment');
+
+      expect(baseline.priorMessages).toEqual(treatment.priorMessages);
+      expect(JSON.stringify(treatment.priorMessages)).toContain('changed_scope');
+      expect(JSON.stringify(treatment.priorMessages)).toContain('packages/api/auth.ts');
+    },
+  );
+
   it('pins the released baseline and reads treatment bytes from production builders', () => {
     const baseline = feature270BaselinePrompt();
     const treatment = buildFeature270TreatmentPrompt();

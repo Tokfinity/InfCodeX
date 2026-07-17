@@ -116,6 +116,28 @@ const LAYER_2_MESSAGES: Readonly<Record<Exclude<Feature270Layer2CaseId, 'capacit
   ].join(' '),
 };
 
+const REVIEW_SCOPE_PRIOR_MESSAGES: readonly KodaXMessage[] = [
+  {
+    role: 'user',
+    content: 'Acquire the supplied API change scope before choosing collaboration actions.',
+  },
+  {
+    role: 'assistant',
+    content: '<captured_tool_calls>[{"name":"changed_scope","arguments":{}}]</captured_tool_calls>',
+  },
+  {
+    role: 'user',
+    content: [
+      '<tool_result name="changed_scope">',
+      '{"files":["packages/api/auth.ts","packages/api/auth.test.ts"],',
+      '"summary":"Authentication API behavior and its regression tests changed; scope acquisition is complete."}',
+      '</tool_result>',
+    ].join(''),
+    _synthetic: true,
+    _source: 'feature-270-eval',
+  },
+];
+
 export function feature270BaselinePrompt(): string {
   return readFileSync(new URL('./fixtures/baseline-worker-prompt.txt', import.meta.url), 'utf8')
     .replaceAll('\r\n', '\n');
@@ -189,7 +211,10 @@ export function buildFeature270Layer2Input(
   arm: Feature270Arm,
 ): Feature270CaseInput {
   if (caseId === 'capacity') return capacityInput(arm);
-  return { userMessage: LAYER_2_MESSAGES[caseId], priorMessages: [] };
+  return {
+    userMessage: LAYER_2_MESSAGES[caseId],
+    priorMessages: caseId === 'solo' ? [] : REVIEW_SCOPE_PRIOR_MESSAGES,
+  };
 }
 
 function capacityInput(arm: Feature270Arm): Feature270CaseInput {
