@@ -4183,3 +4183,78 @@ separate security review. A database replaces JSONL only after measured
 retention/compaction or atomicity evidence shows the single-owner control
 journal is insufficient. Automatic side-effect replay requires an end-to-end
 provider/tool idempotency proof, not a descriptor claim.
+
+---
+
+## ADR-055: One Actor Control Plane and Evidence-Based Legacy Recovery
+
+**Status**: Accepted (2026-07-17)
+
+**Driver**: `FEATURE_270`, deletion/replacement and recovery review
+
+**Context**: F270 retires the one-shot native child registry, Workflow-local
+execution authority, and parallel external-task projection in favor of one
+Runtime-owned Actor/Turn tree. Reviewing the large deletion set confirmed that
+the old authorities were intentionally replaced, but also exposed two classes
+of risk. First, replacement wiring must preserve mailbox delivery, history,
+capability ceilings, one root budget, and concurrent-mutation fencing. Second,
+the preregistered design assumed that all active pre-F270 Workflow and F258
+records could be imported and protected by a pre-migration checkpoint. That
+assumption is not supported by the released data: native children and the
+default Workflow manager held active execution only in process memory, F258
+task snapshots lack exact session ownership, and F269 owner-policy records have
+no Actor schema marker that can change the behavior of already-shipped binaries.
+
+**Decision**:
+
+1. Runtime owns one durable Actor identity tree with separate Turn lifecycles,
+   one scheduler, mailbox/event stream, and canonical collaboration tool
+   vocabulary. Removed task registries and tool aliases do not remain as a
+   compatibility authority.
+2. Native, constructed, Workflow-owned, recursive, and external Turns share the
+   root-derived concurrency limit and root-owned managed work budget.
+   Capabilities are ceilings: descendants may narrow but never widen filesystem,
+   tool, network, provider, or user-interaction authority.
+3. A mailbox mutation is projected into execution only after durable commit.
+   Actor history is reconstructed from durable prior Turns according to
+   `fork_turns`. Root and non-root message delivery use the same committed
+   mailbox boundary.
+4. F269 operation receipts deduplicate transport retries. The Actor revision
+   independently fences distinct stale mutations: a follow-up against an idle
+   revision cannot silently join a Turn started by another operation.
+5. Legacy migration requires an exact durable owner and session correlation.
+   Process-local native/default-Workflow execution is not fabricated after
+   restart. Existing F258 records without session ownership remain immutable
+   backend history or orphan diagnostics; Runtime never guesses, reparents, or
+   exposes them as reusable live actors.
+6. Actor snapshots use schema version 1 and compare-and-swap persistence.
+   F270-and-newer readers reject newer schemas without saving over them. Active
+   Turns block daemon rollback/stop. Because new code cannot retroactively make
+   old binaries understand a new marker, downgrade uses an offline whole-profile
+   or whole-session backup restore under the owner fence, not a synthetic
+   in-place checkpoint promise.
+
+**Consequences**:
+
+- The large deletion is acceptable only together with structural absence tests,
+  replacement behavior tests, full Layer 1 verification, and the preregistered
+  behavioral eval; deletion count alone is not evidence of safety.
+- Recovery is deliberately conservative. Some orphaned legacy external records
+  remain visible only in their original backend rather than being attached to a
+  possibly wrong user session.
+- Current binaries fail safely on future Actor schemas, but already-released old
+  binaries still require operational owner fencing and backups during downgrade.
+- Workflow retains its explicit product surface and deterministic protocol
+  semantics while its Agent execution uses the shared Actor control plane.
+
+**Rejected alternatives**: keeping both registries behind aliases, guessing
+session ownership from parent/run names, converting process-local tasks into
+synthetic failed actors, adding a second migration journal, claiming a
+checkpoint that released F269 never wrote, or weakening compare-and-swap to
+permit best-effort concurrent updates.
+
+**Reconsideration gates**: automatic legacy attachment requires a released
+durable record with exact session/owner correlation and at least three real
+recovery cases. In-place cross-version downgrade requires a versioned owner
+schema understood by both versions plus a tested reversible migration; backups
+and active-turn fencing remain mandatory until then.

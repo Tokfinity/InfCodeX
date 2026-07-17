@@ -100,7 +100,7 @@ export interface Guardrail {
  *     the caller exits. Mirrors the Scout → Generator upgrade path.
  *   - `as-tool`: `target` is invoked like a tool from within the caller loop;
  *     only the generated input is passed, and control returns on completion.
- *     Mirrors FEATURE_067 `dispatch_child_task`.
+ *     Mirrors the bounded handoff used by an Actor Turn.
  *
  * `inputFilter` is applied to the visible history before the target runs;
  * default is no filtering.
@@ -132,8 +132,8 @@ export interface Agent<TContext = unknown> {
   readonly guardrails?: readonly Guardrail[];
   /**
    * FEATURE_191 — one-sentence human-readable summary surfaced to
-   * other agents that may dispatch this one (e.g., via the
-   * `dispatch_child_task(subagent_type=<name>)` Worker SP block). The
+   * other agents that may select this one (e.g., via
+   * `spawn_agent(agent_id=<name>)`). The
    * field propagates from `AgentContent.description` when the agent is
    * built via the construction substrate; built-in / SDK-created
    * agents may set it directly. Optional for backward compatibility

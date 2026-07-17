@@ -1009,7 +1009,7 @@ async function genericRun<TData>(
     // v0.7.26 parity (C2): execute tool calls with the legacy concurrency
     // model — non-bash tools run in parallel (Promise.all), bash tools
     // run serially. Legacy coding path: agent.ts:2533-2589. Parallelism
-    // matters for scout-emitted fan-outs (3 dispatch_child_task in a
+    // matters for scout-emitted fan-outs (3 Actor spawns in a
     // single turn should run concurrently, not 3x serial latency).
     // Bash stays serial because shell side-effects can interfere
     // (git checkout followed by git diff, etc.).

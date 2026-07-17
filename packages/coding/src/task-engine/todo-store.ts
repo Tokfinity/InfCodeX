@@ -91,7 +91,7 @@ export interface TodoAddSeed {
  *                                       for atomic "rename a flag" patches.
  *
  * `owner` and `sourceObligationIndex` are intentionally NOT patchable
- * post-creation — they identify provenance (which dispatch_child_task
+ * post-creation — they identify provenance (which child-Actor
  * branch / which Scout obligation produced the item) and must stay
  * stable for downstream consumers. Pass them via `add()` or `init()`
  * seed and treat them as immutable thereafter.

@@ -116,7 +116,7 @@ daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程�
       <h3>🤖 默认多 agent</h3>
       <sub>V2 Worker 单循环 + Sidecar Verifier + 异步子 agent</sub>
       <br><br>
-      <code>dispatch_child_task</code>、<code>send_message</code>、<code>task_stop</code>，多实例自动协调（content-hash safety net）。
+      <code>spawn_agent</code>、<code>send_message</code>、<code>followup_task</code>、<code>interrupt_agent</code>，多实例自动协调（content-hash safety net）。
     </td>
     <td align="center" valign="top">
       <h3>🧩 Skills + 自构造</h3>
@@ -533,9 +533,13 @@ KodaX 有 50+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 
 | 工具 | 说明 |
 |------|------|
-| `dispatch_child_task` | 派发子 agent 跑独立调研 / 改动任务。可选 `model_hint: 'fast' \| 'balanced' \| 'deep'`（advisory 标记，routing 在 FEATURE_102 v0.7.45 之前是 no-op） |
-| `send_message` | 给在跑 child 队列追加一条 `<coordinator-instruction>` 指令，child 下一个 turn 边界看到。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
-| `task_stop` | 请求指定 child 优雅退出。当前 tool 原子结束后 child 看到 `<coordinator-stop-request>` 并 emit 最终摘要。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
+| `spawn_agent` | 创建命名子 Actor，并在继承权限、会话并发和根工作预算约束下启动首个 Turn。 |
+| `send_message` | 向 Actor 的持久 mailbox 提交有界信息，不启动新 Turn。 |
+| `followup_task` | 在安全边界加入运行中的 Actor，或为 idle Actor 原子启动新 Turn。 |
+| `wait_agent` | 等待一个或多个 Actor 状态变化，不轮询第二套任务注册表。 |
+| `interrupt_agent` | 请求中断 active Turn，同时保留 Actor 身份。 |
+| `list_agents` | 查看调用方有权访问的 Actor 子树与 Turn 状态。 |
+| `agent_output` | 读取有权限的 Actor/Turn 有界持久输出。 |
 | `ask_user_question` | 向用户发起单选 / 多选 / 自由文本提问 |
 | `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
 | `emit_managed_protocol` | managed-task 协议侧信道（verdict role payload）。v0.7.42 FEATURE_184 起默认走 V2 Worker 单循环 + Sidecar Verifier；v0.7.43 FEATURE_193 退役 V1 chain。 |
@@ -558,8 +562,8 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
 | `@kodax-ai/llm` | LLM 抽象层（15 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
-| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
-| `@kodax-ai/coding` | Coding Agent:50+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / AgentActorController / AgentTurnScheduler + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
+| `@kodax-ai/coding` | Coding Agent:50+ 工具（含 canonical Actor 协作工具）、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
 根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
@@ -681,11 +685,11 @@ Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。
 
 **成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
 
-**Inline workflow authoring（FEATURE_246，v0.7.58）**：AMA/AMAW 下 Worker 现在可通过 model-callable 的 `run_workflow` 工具在会话内直接编写并运行工作流——先用自己的工具 scout 代码库，再把具体发现烤进每个 child prompt，然后走**不变的** sandbox + 静态校验 + postcondition 验证流水线。它取代 context-blind 的 `sideQuery` generator 成为主交互路径（generator 仅作为显式 `/workflow create` 命令与无 investigating Worker 的 non-interactive/CI 主机的 fallback 保留）；新增结构化 child 输出（`outputSchema`）、无 barrier 的 `wf.pipeline` 分阶段原语、同会话 resume（`resumeFromRunId`）、嵌套 `wf.workflow(...)`，`/workflow create` 重定向到 Worker 的 scout-then-author；`run_workflow` 为 async / idle-yield，不阻塞当前轮。中立的 run-lifecycle manager（`createWorkflowRunManager`）已移入 `@kodax-ai/kodax/agent` 供非 coding SDK 宿主使用。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md) 与 [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049。
+**Inline workflow authoring（FEATURE_246，v0.7.58；F270 于 v0.7.72 更新）**：Worker 在明确表达 Workflow 意图时，可通过 model-callable 的 `run_workflow` 工具在会话内编写并运行工作流。F270 退役 AMAW 与复杂度驱动激活；AMA 保留显式 `/workflow`、named/SDK 和自然语言 Workflow 请求。Workflow 子 Agent 统一运行在 Actor 控制面。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md)、[docs/features/v0.7.72.md](docs/features/v0.7.72.md) 与 ADR-044/046/047/048/049/055。
 
-**工作流激活分层（FEATURE_248 + FEATURE_249，v0.7.59）**：三种 agent 模式现在有一致的工作流姿态。**AMAW** 携带 mode-level 的 `ORCHESTRATION DEFAULT` 常驻指令（对齐参考实现的 "ultracode" 姿态）：实质性工作——多文件调查、设计决策、任何做错代价高的任务——默认编排多个交叉验证的 agent，并有 PLAN-TIME COMMITMENT 流程修正把 orchestrate-vs-solo 决策前置到第 0 轮。**AMA** 同样 host `run_workflow` 工具但没有常驻指令——当你用自然语言请求编排时才激活，绝不因复杂度独自触发。**SA** 保持单独作业。该指令通过 `amawOrchestrationAvailable` 关闭泄漏，因此 AMA 与 SA 的 prompt 保持逐字节一致。详见 [docs/features/v0.7.59.md](docs/features/v0.7.59.md)。
+**历史工作流激活分层（FEATURE_248 + FEATURE_249，v0.7.59；F270 于 v0.7.72 取代）**：v0.7.59 引入 AMAW 和 AMA 的显式请求行为。F270 退役 AMAW 及其复杂度驱动指令；SA 保持单独作业，AMA 成为唯一自适应多 Agent 模式，并且只在明确 Workflow 意图下激活 Workflow。详见 [docs/features/v0.7.59.md](docs/features/v0.7.59.md) 与 [docs/features/v0.7.72.md](docs/features/v0.7.72.md)。
 
-**managed 工具路径的渐进披露（FEATURE_250，v0.7.60）**：deferred-tool 渐进披露机制——此前仅 SA path 拥有——现在也应用于 AMA/AMAW 的 **managed** path。缓存冷启的 managed 轮次对 13 个 non-mcp 延迟工具（repo-intelligence + web/code + goal）携带一行 search hint 而非完整描述；每个工具的 `input_schema` 不变，因此仍可直接调用，完整描述按需通过 `tool_search` 拉取。`mcp_*` 保持常驻，`run_workflow` 不动。对用户透明；由两个 5-alias eval panel 验证（DEFER_SAFE 5/5，0% read/grep 回退）。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
+**managed 工具路径的渐进披露（FEATURE_250，v0.7.60；F270 模式更新于 v0.7.72）**：deferred-tool 渐进披露机制应用于 AMA 的 managed path。缓存冷启轮次以一行 search hint 替代 13 个 non-mcp 延迟工具的完整描述；F270 退役原 AMAW 模式，但不改变这项披露行为。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
 
 **上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史压缩使用同一物理容量规则：容量内不做默认有损 microcompaction，真实压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删消息；静态提前百分比仅为显式 opt-in。FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
 

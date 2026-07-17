@@ -225,9 +225,9 @@ export interface ExtensionTurnSettleHookContext {
  * the chain (matches `tool:before` semantics).
  *
  * Scope note: this hook fires on the AMA `runner-driven` path only
- * (main loop, B1 retry, V2 worker). SA-path child agents dispatched
- * via `dispatch_child_task` go through `runKodaX` and do NOT trigger
- * this hook — observe their lifecycle via `turn:settle` on the SA
+ * (main loop, B1 retry, V2 worker). Native child Actor turns go through
+ * `runKodaX` and do NOT trigger this hook — observe their lifecycle via
+ * `turn:settle` on the SA
  * path. Extensions wanting "every agent termination" semantics must
  * register both hooks.
  */

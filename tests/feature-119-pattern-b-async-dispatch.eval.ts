@@ -1,5 +1,9 @@
 /**
- * Eval: FEATURE_119 Pattern B async dispatch — structural ship gate (v0.7.36).
+ * Historical eval: FEATURE_119 Pattern B async dispatch (v0.7.36).
+ *
+ * Superseded by FEATURE_270 in v0.7.72. The retired tool surface remains here
+ * as release evidence, but this suite is skipped because it must not constrain
+ * or dynamically import the current Actor collaboration implementation.
  *
  * ## Why this exists
  *
@@ -59,7 +63,7 @@ const baseDecision: KodaXTaskRoutingDecision = {
   requiresBrainstorm: false,
 };
 
-describe('FEATURE_119 — Pattern B async dispatch (structural ship gate)', () => {
+describe.skip('FEATURE_119 — superseded Pattern B async dispatch evidence', () => {
   describe('tool surface', () => {
     it('registers both dispatch_child_task AND await_child_task', () => {
       const dispatch = getToolDefinition('dispatch_child_task');

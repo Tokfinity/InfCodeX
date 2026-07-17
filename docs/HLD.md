@@ -202,8 +202,8 @@ Major tool families include:
   semantic lookup, LSP navigation;
 - repo intelligence: overview, changed scope, diff bundles, module/symbol/
   process context, impact estimates, cyclic dependency checks;
-- coordination: `dispatch_child_task`, `send_message`, `task_stop`,
-  `task_output`;
+- coordination: `spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
+  `interrupt_agent`, `list_agents`, `agent_output`;
 - product state: goals, todos, sessions, manual lookup;
 - extension capabilities: MCP calls, MCP resources, MCP prompts;
 - construction: tool generation, agent generation, self-modify staging.

@@ -1194,10 +1194,8 @@ async function runReadChildBody(
           actorControl: options.actorControl,
           actorHost: options.actorHost,
           managedWorkBudget: scope.ctx.managedWorkBudget,
-          // FEATURE_123 v0.7.44 — propagate agentId + registry so the
-          // child runtime can answer peer `send_message` calls. The
-          // child stays unable to mutate the registry (no
-          // dispatch_child_task tool).
+          // Propagate Actor identity/control so the child runtime can receive
+          // messages and recursively collaborate within its inherited ceiling.
           currentAgentId: bundle.id,
           parentAgentId: scope.ctx.currentAgentId,
           ...(scope.ctx.skillInvocation ? { skillInvocation: scope.ctx.skillInvocation } : {}),

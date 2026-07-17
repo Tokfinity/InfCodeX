@@ -265,18 +265,19 @@ the tool layer or an existing capability API.
 
 ## 8. Child Task Coordination
 
-Child tasks are controlled through:
+Child Agents are controlled through one Runtime-owned Actor/Turn tree:
 
-- `dispatch_child_task`,
-- `send_message`,
-- `task_stop`,
-- `task_output`,
-- `ChildTaskRegistry`,
-- task abort/progress registries,
-- idle-yield waiting.
+- `spawn_agent`, `send_message`, and `followup_task` start or steer work;
+- `wait_agent`, `list_agents`, and `agent_output` observe durable state;
+- `interrupt_agent` requests active-turn cancellation;
+- one scheduler, mailbox, event stream, and root-owned work budget cover native,
+  constructed, Workflow-owned, and external turns.
 
-The main Worker uses children for bounded parallel investigation or specialist
-work. Children do not own final response. When pending children remain and the
+Actor identity outlives an individual Turn. Capability ceilings are inherited,
+concurrency and budget admission are atomic, and stale mutations conflict on
+the Actor revision instead of silently joining newer work. The main Worker uses
+children for bounded parallel investigation or specialist work. Children do
+not own final response. When pending children remain and the
 main Worker has no useful work, idle-yield is the wait mechanism.
 
 ## 9. Stop Hooks And Sidecar Verifier

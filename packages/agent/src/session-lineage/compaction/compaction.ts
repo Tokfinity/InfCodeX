@@ -1008,7 +1008,7 @@ function pruneToolResults(
       // FEATURE_183 (v0.7.42): protected tools are immune to BOTH
       // structured-prune AND oversize-prune. Pre-F183 the oversize path
       // ignored the protected set entirely — meaning a single >50K-token
-      // result from `skill` / `mcp_call` / `dispatch_child_task` would still
+      // result from `skill` / `mcp_call` / child-Agent output would still
       // be replaced with `[Pruned: ...]`. That's exactly the failure mode
       // PROTECTED is supposed to prevent. The structured-prune layer already
       // skips protected tools in `collectStructuredPruneIds`; this same

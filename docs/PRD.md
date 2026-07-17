@@ -74,9 +74,10 @@ The retired V1 chain model is not a product requirement:
 - no `emit_handoff` terminal tool,
 - no `KODAX_HARNESS_V2` opt-out behavior.
 
-Child work is handled by explicit tools and runtime registries:
-`dispatch_child_task`, `send_message`, `task_stop`, and `task_output`.
-The main Worker remains responsible for final user-facing synthesis.
+Child work is handled by one Runtime-owned Actor/Turn tree and the canonical
+collaboration tools: `spawn_agent`, `send_message`, `followup_task`,
+`wait_agent`, `interrupt_agent`, `list_agents`, and `agent_output`. The main
+Worker remains responsible for final user-facing synthesis.
 
 ## 6. Required Capabilities
 

@@ -536,7 +536,7 @@ export interface KodaXEvents {
    * (`agent_completed` / `agent_unverified` / `agent_failed` /
    * `agent_summary_updated`). The REPL formats each via `formatWorkflowAgentDigest`
    * and writes it to the transcript — matching the slash `/workflow` path and
-   * `dispatch_child_task` children, whose summaries persist in scrollback.
+   * Actor children, whose summaries persist in scrollback.
    */
   onWorkflowAgentDigest?: (event: KodaXWorkflowAgentDigestEvent & Partial<KodaXLiveEventMeta>) => void;
   /**

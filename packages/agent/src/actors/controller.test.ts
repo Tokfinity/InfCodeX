@@ -444,6 +444,27 @@ describe('F270 actor tree and scheduler', () => {
     });
   });
 
+  it('fails closed on a newer Actor snapshot schema without overwriting it', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    const first = await createAgentActorController({
+      executor: new DeferredExecutor(),
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) { saved = snapshot; },
+      },
+    });
+    await first.spawn('/root', { taskName: 'worker', objective: 'Persist.' });
+    if (!saved) throw new Error('Expected an Actor snapshot to be persisted.');
+    const incompatible = { ...saved, schemaVersion: 2 } as unknown as AgentActorSnapshot;
+    const save = vi.fn(async () => undefined);
+    const recovered = new AgentActorController({
+      store: { async load() { return incompatible; }, save },
+    });
+
+    await expect(recovered.initialize()).rejects.toThrow('Unsupported actor snapshot schema');
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it('restores abort handles when a durable mutation is rolled back', async () => {
     let failSave = false;
     const store: AgentActorStore = {

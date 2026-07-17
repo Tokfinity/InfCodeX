@@ -17,7 +17,7 @@
  *   - Session continuity — `options.session.initialMessages` threaded into `Runner.run`'s `runnerInput`
  *   - Role prompts — `_internal/managed-task/role-prompt.ts` restores the full v0.7.22 prompt surface
  *     (decision summary, contract, metadata, verification, tool-policy, evidence strategies,
- *     dispatch_child_task guidance, H0/H1/H2 framework, handoff/verdict/contract block specs)
+ *     collaboration guidance, H0/H1/H2 framework, handoff/verdict/contract block specs)
  *   - Tool observability — Runner `toolObserver` forwards `onToolCall` / `onToolResult`
  *     / `beforeToolExecute` / `onToolProgress`, and per-call `reportToolProgress` injection
  *   - Compaction — `_internal/managed-task/compaction.ts` wraps `intelligentCompact` behind
@@ -842,10 +842,9 @@ async function runManagedTaskViaRunnerInner(
   //     exit_plan_mode (FEATURE_074) fail silently
   //   - extensionRuntime: all MCP tools (mcp-call / describe / get-prompt /
   //     read-resource / search), web_fetch, web_search, code_search fail
-  //   - parentAgentConfig: dispatch_child_task's child-executor falls back
-  //     to hardcoded 'anthropic' provider, breaking non-anthropic runs
-  //   - reportToolProgress: async-generator tools (dispatch_child_task)
-  //     lose their internal progress events
+  //   - parentAgentConfig: native Actor execution inherits the selected
+  //     provider instead of falling back to 'anthropic'
+  //   - reportToolProgress: async-generator tools retain progress events
   //   - planModeBlockCheck: child tool calls bypass FEATURE_074 plan-mode
   //     safety boundary
   //   - exitPlanMode: FEATURE_074 exit_plan_mode tool fails
@@ -982,15 +981,9 @@ async function runManagedTaskViaRunnerInner(
     ...substrateBaseCtx,
     mutationTracker,
     todoStore,
-    // FEATURE_119 v0.7.36 Pattern B — substrate now creates the registry
-    // (shared between SA and AMA paths). The spread above already carries
-    // `substrateBaseCtx.childTaskRegistry`; the dispatch tool gates the
-    // async-vs-sync branch on `KODAX_ASYNC_DISPATCH !== '0'`.
-    //
-    // FEATURE_121 v0.7.40 follow-up — last-resort LLM blob summarizer
-    // bound to the Worker's own provider/model. Triggered only by
-    // `dispatch-child-tasks` when `applyToolResultGuardrail` returns
-    // `spillFailed:true` AND raw content > 100KB.
+    // Last-resort LLM blob summarizer bound to the Worker's own
+    // provider/model. Used only when result spill fails and raw content is
+    // larger than 100KB.
     summarizeBlob,
     contentHashCache,
     readFileStateCache,
@@ -1179,7 +1172,7 @@ async function runManagedTaskViaRunnerInner(
   // Build the full role-prompt context so every role's
   // system prompt carries the full surface (decision summary + contract
   // + metadata + verification + tool policy + evidence strategies +
-  // dispatch_child_task guidance + H0/H1/H2 quality framework +
+  // collaboration guidance + H0/H1/H2 quality framework +
   // handoff/verdict/contract block specs). The context factory closes over
   // the recorder so Scout's post-emit `skillMap` / `scope` reach
   // downstream Generator / Evaluator prompts at invocation time.

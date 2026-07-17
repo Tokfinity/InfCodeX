@@ -349,8 +349,8 @@ function buildAgentToolsFromRegistry(
       continue;
     }
 
-    // Streaming tools (async-generator handlers, currently only
-    // `dispatch_child_task`) require role-specific drain wraps and MUST
+    // Streaming tools (async-generator handlers) require role-specific drain
+    // wraps and MUST
     // be supplied via overrides — otherwise the generator never resolves
     // and the tool call hangs.
     const registration = getRegisteredToolDefinition(def.name);
@@ -440,12 +440,12 @@ export function buildRunnerAgentChain(
   // metadata, tool policy, skill / scope factory). When provided, every
   // role's `instructions` resolves through `createRolePrompt`: decision
   // summary, contract, metadata, verification contract, tool policy, evidence
-  // strategies, dispatch_child_task guidance, and shared closing rules. When
+  // strategies, collaboration guidance, and shared closing rules. When
   // absent (test paths), the fallback minimal instructions are used.
   promptContext?: RunnerChainPromptContext,
   // Events bus so coding-tool wrappers can attach
   // `reportToolProgress` per tool_use call. Without this wiring,
-  // async-generator tools (dispatch_child_task) fire progress events
+  // async-generator tools fire progress events
   // that vanish silently — the REPL transcript's "Running: ..." line
   // never updates mid-run.
   events?: KodaXEvents,
@@ -650,9 +650,9 @@ export function buildRunnerAgentChain(
       return resolved;
     },
     // FEATURE_168 (v0.7.40 hotfix) — Worker's tool surface is derived from the
-    // registry minus `AMA_BASELINE_EXCLUDE`; dispatch is role-wrapped for
-    // streaming progress and write fan-out. FEATURE_120 send_message /
-    // task_stop now land in the schema (previously missing — see CHANGELOG /
+    // registry minus `AMA_BASELINE_EXCLUDE`; collaboration is role-wrapped for
+    // streaming progress and write fan-out. Collaboration controls now land in
+    // the schema (previously missing — see CHANGELOG /
     // commit log). FEATURE_161
     // module_context / symbol_context / process_context / impact_estimate
     // pull tools also now land in the schema (previously missing).

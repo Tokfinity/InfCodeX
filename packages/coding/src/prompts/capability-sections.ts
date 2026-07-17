@@ -196,7 +196,7 @@ export async function buildCapabilityContextSections(
   }
 
   // FEATURE_191 — registered specialist agents available for
-  // `dispatch_child_task(subagent_type=<name>)` routing. Conditional
+  // `spawn_agent(agent_id=<name>)` routing. Conditional
   // include matches the mcp-capability-context pattern: empty registry
   // → not injected (saves tokens + keeps prompt cache stable for
   // single-user runs that never register a specialist). When non-empty,

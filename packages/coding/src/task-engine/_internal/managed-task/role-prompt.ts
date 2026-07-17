@@ -14,7 +14,7 @@
  * regression found: the Runner-driven `SCOUT_INSTRUCTIONS` / etc constants
  * in `runner-driven.ts` were 10-15 lines of static text; the v0.7.22 prompt
  * was ~480 lines of context-aware guidance. Without this file the LLM did
- * not know to call `dispatch_child_task` for complex tasks (user report),
+ * did not receive collaboration guidance for complex tasks (user report),
  * did not receive the decision summary / contract / metadata / verification
  * / tool-policy context, and was not given evidence-strategy guidance per
  * role.

@@ -352,15 +352,20 @@ Skill discovery, daemon/Worker facade, `/learn`/status surfaces, notification
 cursors, and hard-dispose persistence are covered by deterministic tests. It
 remains InProgress until the v0.7.72 release gate is signed off.
 
-`270` implementation and its zero-provider Layer 1 gate are complete: native,
-Workflow-owned, and external Agent work now share the Runtime-owned Actor/Turn
-tree, scheduler, durable snapshot, canonical collaboration tools, and output
-events. AMAW and the parallel legacy task lifecycles are retired. Its frozen
-Layer 2/3 driver, exact historical/current production-byte fixtures,
-manifest-only gate, budget enforcement, raw-cell integrity checks, and blind
-evidence packs are also complete at zero provider cost. Generation is
-intentionally not started without explicit owner authorization for the
-preregistered `$18` maximum external spend.
+`270` implementation is complete and under post-review release verification:
+native, Workflow-owned, and external Agent work share the Runtime-owned
+Actor/Turn tree, scheduler, durable snapshot, canonical collaboration tools,
+and output events. AMAW and the parallel legacy task lifecycles are retired. A
+deletion/replacement review found and fixed native/external executor selection,
+durable mailbox/history projection, capability-ceiling, shared-budget, and
+stale-follow-up concurrency gaps. It also corrected an unsafe migration premise:
+pre-F270 native/default-Workflow active state was process-local and F258 records
+lack exact session ownership, so recovery never guesses or re-parents legacy
+work. The frozen Layer 2/3 driver, exact historical/current production-byte
+fixtures, manifest-only gate, budget enforcement, raw-cell integrity checks,
+and blind evidence packs are complete. The owner authorized the preregistered
+eval up to `$18` on 2026-07-17; the clean-worktree Layer 1 rerun and paid eval
+remain pending.
 
 Recent completion notes:
 

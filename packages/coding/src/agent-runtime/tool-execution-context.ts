@@ -10,9 +10,8 @@
  *     extension runtime, working directory + git root.
  *   - declarative wiring forwarded from `options.context`:
  *     mutationTracker, planModeBlockCheck, managedProtocolRole.
- *   - parent agent config snapshot (provider/model/reasoningMode) so
- *     `dispatch_child_task` can spawn children with the parent's
- *     declaration.
+ *   - parent agent config snapshot (provider/model/reasoningMode) so native
+ *     Actor turns inherit the root declaration.
  *   - REPL callbacks: askUser, askUserInput, exitPlanMode.
  *   - `emitManagedProtocol` closure that mutates a shared payload ref
  *     so multiple emissions accumulate across the turn loop.

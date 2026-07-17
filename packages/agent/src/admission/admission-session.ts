@@ -139,8 +139,8 @@ export interface SessionDispatchResult {
  *     functions of the immutable event payload + read-only context.
  *   - `assertTerminal` must be called exactly once at run end. The
  *     Runner is responsible for honoring this.
- *   - The session is single-run; spawning a sub-run (handoff /
- *     dispatch_child_task) creates a fresh session for the target.
+ *   - The session is single-run; spawning a sub-run (handoff / Actor Turn)
+ *     creates a fresh session for the target.
  *
  * The session is never exposed across module boundaries — it lives in
  * the Runner closure and dies when the run ends. WeakMap is overkill

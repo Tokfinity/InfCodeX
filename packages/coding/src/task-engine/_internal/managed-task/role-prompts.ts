@@ -49,7 +49,7 @@ export const WORKER_INSTRUCTIONS_FALLBACK = [
  * Resolve the system prompt for a role. When the full `promptContext`
  * (prompt + decision) is present, delegate to `createRolePrompt` for the
  * v0.7.22-parity prompt (decision summary, contract, metadata,
- * verification, tool-policy, evidence strategies, and dispatch_child_task
+ * verification, tool-policy, evidence strategies, and collaboration
  * guidance).
  * Otherwise fall back to the minimal static constants — keeps test
  * fixtures that call `buildRunnerAgentChain(ctx, {})` working.

@@ -94,7 +94,7 @@ That's it. You're in the REPL — ask anything in natural language.
       <h3>🤖 Multi-agent by default</h3>
       <sub>V2 Worker single-loop + Sidecar Verifier + async children</sub>
       <br><br>
-      <code>dispatch_child_task</code>, <code>send_message</code>, <code>task_stop</code>, multi-instance auto-coordination with content-hash safety net.
+      <code>spawn_agent</code>, <code>send_message</code>, <code>followup_task</code>, <code>interrupt_agent</code>, multi-instance auto-coordination with content-hash safety net.
     </td>
     <td align="center" valign="top">
       <h3>🧩 Skills + self-construction</h3>
@@ -408,7 +408,7 @@ KodaX/
 │   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
-│   │   ├── orchestration/   # Runner, runFanOut, runWithIdleYield, ChildTaskRegistry
+│   │   ├── actors/          # Runtime-owned Actor tree, scheduler, mailbox, events
 │   │   ├── session-lineage/ # branchable session tree (inline v0.7.43)
 │   │   ├── capabilities/
 │   │   │   ├── mcp/         # MCP integration (inline v0.7.43)
@@ -417,7 +417,7 @@ KodaX/
 │   │
 │   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
 │   │   ├── tools/           # 50+ tools: read, write, edit, bash, glob, grep, undo,
-│   │   │                    #   dispatch_child_task, send_message, task_stop,
+│   │   │                    #   spawn_agent, send_message, followup_task, wait_agent,
 │   │   │                    #   ask_user_question, repo-intelligence, …
 │   │   └── repo-intelligence/ # incl. protocol.ts (inline v0.7.43)
 │   │
@@ -466,7 +466,7 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 |---------|---------|------------------|
 | `@kodax-ai/llm` | LLM abstraction (15 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
 | `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, media/input artifacts, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/media`, `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, jimp, yaml |
-| `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
+| `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. canonical Actor collaboration tools) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
 ### Source-side vs npm-published surface
@@ -500,11 +500,11 @@ KodaX has two layers that consumers should understand separately:
 
 **Host Reads Persisted History (FEATURE_230 + FEATURE_234, v0.7.51; v0.7.63 hardening)**: additive closures for hosts that read persisted state. **Durable tool transcript replay** — a resumed session now replays the tool cards the assistant used instead of degrading to text-only. `messages` / `lineage` stay canonical; `SessionData.uiHistory` becomes a bounded, sanitized, terminal-only replay cache. The SDK transcript contract is explicit: `loadSession()` = active model context, `loadFullTranscript()` = append-order host scrollback with typed entries (`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`) plus clone provenance (`logicalId` / `sourceEntryId`), `uiHistory` = optional replay cache, and tool cards can always be reconstructed from canonical messages. Hosts can persist local slash output with `appendClientNotice()` without entering model context, and workflow/child completions expose structured `taskResults[]` instead of requiring `<task-completed>` parsing. `rewind_marker` is an audit entry for host scrollback only and is excluded from model-context messages. **Workflow run host attribution** — `WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` gain a host-owned opaque `hostMetadata?: Record<string, string>` that the SDK stores, persists to `run.json`, and echoes back (including after a restart) without interpreting it, so a host can map a run to the session/surface that launched it with zero side table. Unstamped/legacy runs honestly echo `hostMetadata === undefined`. See [docs/features/v0.7.51.md](docs/features/v0.7.51.md).
 
-**Inline Workflow Authoring (FEATURE_246, v0.7.58)**: in AMA/AMAW the Worker can now author and run a workflow inline via a model-callable `run_workflow` tool — it scouts the codebase with its own tools first, then bakes concrete findings into each child prompt, and runs the script through the **unchanged** sandbox + static-validation + postcondition-verification pipeline. This replaces the context-blind `sideQuery` generator as the primary interactive path (the generator survives only as a fallback for the explicit `/workflow create` command and non-interactive / CI hosts that have no investigating Worker). It adds structured child output (`outputSchema`), the no-barrier `wf.pipeline` staged primitive, same-session resume (`resumeFromRunId`), nested `wf.workflow(...)`, and a `/workflow create` redirect to Worker-authored scouting; `run_workflow` is async / idle-yield so the turn is not blocked. The neutral run-lifecycle manager (`createWorkflowRunManager` / `getDefaultWorkflowRunManager`) now lives in `@kodax-ai/kodax/agent` for non-coding SDK hosts. See [docs/features/v0.7.58.md](docs/features/v0.7.58.md) and [docs/ADR.md](docs/ADR.md) ADR-044/046/047/048/049.
+**Inline Workflow Authoring (FEATURE_246, v0.7.58; F270 update in v0.7.72)**: the Worker can author and run a workflow inline via the model-callable `run_workflow` tool when Workflow intent is explicit. It scouts the codebase first, bakes concrete findings into child prompts, and runs the script through the sandbox, static-validation, and postcondition-verification pipeline. F270 retires AMAW and complexity-driven activation; AMA keeps explicit `/workflow`, named/SDK, and natural-language Workflow requests. Workflow child Agents now run on the unified Actor control plane. See [docs/features/v0.7.58.md](docs/features/v0.7.58.md), [docs/features/v0.7.72.md](docs/features/v0.7.72.md), and ADR-044/046/047/048/049/055.
 
-**Workflow Activation Tiers (FEATURE_248 + FEATURE_249, v0.7.59)**: the three agent modes now have a coherent workflow posture. **AMAW** carries a mode-level `ORCHESTRATION DEFAULT` standing directive (mirroring the reference "ultracode" posture): substantive work — a multi-file investigation, a design decision, anything costly to get wrong — defaults to orchestrating multiple cross-checking agents, with a PLAN-TIME COMMITMENT flow-fix that front-loads the orchestrate-vs-solo call to turn 0. **AMA** hosts the same `run_workflow` tool but with no standing directive — it activates a workflow when you ask for orchestration in natural language, never on complexity alone. **SA** stays solo. The directive is leak-closed via `amawOrchestrationAvailable`, so AMA and SA prompts stay byte-identical. See [docs/features/v0.7.59.md](docs/features/v0.7.59.md).
+**Historical Workflow Activation Tiers (FEATURE_248 + FEATURE_249, v0.7.59; superseded by F270 in v0.7.72)**: v0.7.59 introduced AMAW and explicit-request AMA behavior. F270 retires AMAW and its complexity-driven directive. SA remains solo; AMA is the single adaptive multi-Agent mode and activates Workflow only from explicit Workflow intent. See [docs/features/v0.7.59.md](docs/features/v0.7.59.md) and [docs/features/v0.7.72.md](docs/features/v0.7.72.md).
 
-**Progressive Disclosure on the Managed Tool Path (FEATURE_250, v0.7.60)**: the deferred-tool progressive-disclosure mechanism — previously SA-path-only — now applies to the AMA/AMAW **managed** path too. Cache-cold managed turns carry one-line search hints instead of full descriptions for the 13 non-mcp deferred tools (repo-intelligence + web/code + goal); each tool's `input_schema` is unchanged, so it stays directly callable and the full description is fetched on demand via `tool_search`. `mcp_*` stay resident and `run_workflow` is untouched. Transparent to users; validated by two 5-alias eval panels (DEFER_SAFE 5/5, 0% read/grep fallback). See [docs/features/v0.7.60.md](docs/features/v0.7.60.md).
+**Progressive Disclosure on the Managed Tool Path (FEATURE_250, v0.7.60; F270 mode update in v0.7.72)**: the deferred-tool progressive-disclosure mechanism applies to the managed AMA path. Cache-cold managed turns carry one-line search hints instead of full descriptions for the 13 non-mcp deferred tools (repo-intelligence + web/code + goal); each tool's `input_schema` is unchanged, so it stays directly callable and the full description is fetched on demand via `tool_search`. `mcp_*` stay resident and `run_workflow` is untouched. F270 retires the former AMAW mode without changing this disclosure behavior. See [docs/features/v0.7.60.md](docs/features/v0.7.60.md).
 
 **Context-Efficient Tool Results + Workflow Quality Preflight (FEATURE_251 + FEATURE_252, v0.7.61; corrected 2026-07-14)**: local tools collect complete output and apply only contract-equivalent normalization that is strictly shorter; command-specific lossy Bash filters are off by default, and compound Bash uses no semantic adapter. One owner evaluates the complete parallel-result batch against the final provider request: it solves the largest final input `Pmax` for which `Pmax + output reserve + max(2048, 3% of Pmax) <= context window`, then admits only the remaining physical capacity. Results stay verbatim whenever they fit; only real overflow persists the complete value and emits `KODAX_RESULT_INCOMPLETE`. History follows the same physical-capacity rule: no default lossy microcompaction below capacity, summary-first at actual pressure, and typed failure without silent message deletion when a recoverable request cannot be formed. Static early percentages are explicit opt-ins. FEATURE_252's deterministic pre-start workflow contract lint is unchanged. See [docs/features/v0.7.61.md](docs/features/v0.7.61.md) and [docs/ADR.md ADR-050](docs/ADR.md).
 
@@ -621,7 +621,7 @@ one-time provisioning).
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
 - **15 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, Zai Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
 - **Dynamic Workflows + SDK Process Surface** - Generate/reuse capability-routed workflows, observe live progress through `WorkflowProcessSnapshot`, and control workflow lifecycle from SDK hosts without parsing REPL output
-- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Async child steering uses `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait; specialist routing uses `subagent_type`.
+- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Adaptive child steering uses the canonical Actor collaboration tools with idle-yield waiting; specialist routing uses `spawn_agent(agent_id=...)`.
 - **Reasoning Effort** - Effort-first control (`off/auto/low/medium/high` plus model-supported extras) across providers
 - **Streaming Output** - Real-time response display
 - **Session Management** - JSONL format with branchable session lineage tree
@@ -1088,8 +1088,7 @@ import {
   Runner,
   runFanOut,
   runWithIdleYield,
-  registerChildTask,
-  type ChildTaskRegistry,
+  createAgentActorController,
   generateSessionId,
   estimateTokens,
   DefaultSummaryCompaction,
@@ -1102,14 +1101,15 @@ const result = await runFanOut({
   run: async (bundle) => doWork(bundle),
 });
 
-// Idle-yield wait — pause when out of useful work, resume when a wake event arrives
-await runWithIdleYield({ runOnce, computeSnapshot, registry, messageQueue, agentId });
+// Runtime-owned Actor identity tree (inject an executor before starting Turns)
+const actors = await createAgentActorController();
+const tree = actors.list('/root');
 
 // Pluggable compaction policy (FEATURE_081)
 const policy = new DefaultSummaryCompaction({ thresholdRatio: 0.8, keepRecent: 10 });
 ```
 
-**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `ChildTaskRegistry` / `TaskAbortRegistry` · session-id generation · tiktoken-based token estimation · `CompactionPolicy` interface.
+**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `AgentActorController` / `AgentTurnScheduler` · session-id generation · tiktoken-based token estimation · `CompactionPolicy` interface.
 
 ### `@kodax-ai/kodax/skills` — Skills System
 
@@ -1138,7 +1138,7 @@ const result = await executeSkill({
 
 ### `@kodax-ai/kodax/coding` — Coding Agent
 
-Complete coding agent: 50+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
+Complete coding agent: 50+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob` plus `spawn_agent`/`send_message`/`followup_task`/`wait_agent`/`interrupt_agent`/`list_agents`/`agent_output`) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
 
 ```typescript
 import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
@@ -1160,7 +1160,7 @@ await client.send('Create a new file');
 await client.send('Add a function to it'); // Has context from previous message
 ```
 
-**Key Features**: 50+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · specialist routing via `subagent_type` (FEATURE_191, v0.7.43) · auto-continue · session lineage.
+**Key Features**: 50+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · Runtime-owned Actor collaboration and safe-boundary steering (FEATURE_270, v0.7.72) · idle-yield waiting · specialist routing via `spawn_agent(agent_id=...)` · auto-continue · session lineage.
 
 ### `@kodax-ai/kodax/repl` — Interactive Terminal UI
 
@@ -1246,7 +1246,7 @@ kodax --session list
 # Parallel tool execution
 kodax --parallel "Read package.json and tsconfig.json"
 
-# Adaptive multi-agent (AMA) mode — V2 Worker single-loop with `dispatch_child_task` fan-out
+# Adaptive multi-agent (AMA) mode — V2 Worker single-loop with Actor collaboration
 kodax --agent-mode ama "Analyze code structure, check test coverage, find bugs"
 ```
 
@@ -1304,12 +1304,16 @@ KodaX ships 50+ built-in tools, grouped below. They are registered as a single f
 ### Agent control & UX
 | Tool | Description |
 |------|-------------|
-| `dispatch_child_task` | Spawn a sub-agent for an independent investigation/edit task. Optional `model_hint: 'fast' \| 'balanced' \| 'deep'` (advisory; routing no-op until FEATURE_102 v0.7.45). |
-| `send_message` | Append an instruction to an in-flight child's queue — surfaces as `<coordinator-instruction>` at the child's next turn boundary. Coordinator-only. (FEATURE_120, v0.7.39) |
-| `task_stop` | Request graceful exit of a specific child. Current tool finishes atomically, then the child sees a `<coordinator-stop-request>` and emits a final summary. Coordinator-only. (FEATURE_120, v0.7.39) |
+| `spawn_agent` | Create a named child Actor and start its first Turn under inherited capabilities, session capacity, and root work budget. |
+| `send_message` | Commit bounded information to an Actor mailbox without starting a new Turn. |
+| `followup_task` | Join a running Actor at a safe boundary or atomically start a new Turn for an idle Actor. |
+| `wait_agent` | Wait for one or more Actor state changes without polling a second task registry. |
+| `interrupt_agent` | Request interruption of an active Turn while preserving Actor identity. |
+| `list_agents` | Inspect the caller-visible Actor subtree and Turn states. |
+| `agent_output` | Read bounded durable output for an authorized Actor/Turn. |
 | `ask_user_question` | Single/multi-select or free-text prompt back to the user |
 | `exit_plan_mode` | Present a finalized plan for approval (REPL only) |
-| `run_workflow` | Author and run a workflow script inline. Hosted in AMAW (self-activates on complexity via the ORCHESTRATION DEFAULT directive) and AMA (activates on an explicit natural-language request); not in SA. Scouts the codebase first, then bakes findings into child prompts; structured output via `outputSchema`, same-session `resumeFromRunId`, nested `wf.workflow(...)`. Async / idle-yield. (FEATURE_246 v0.7.58; FEATURE_248/249 v0.7.59) |
+| `run_workflow` | Author and run a deterministic Workflow protocol in AMA only when Workflow intent is explicit; complexity alone never activates it. Child Agents share the Actor control plane. Async / idle-yield. (FEATURE_246; FEATURE_270 v0.7.72) |
 | `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (verdict). V2 Worker single-loop + Sidecar Verifier is the default since v0.7.42 (FEATURE_184); V1 chain retired in v0.7.43 (FEATURE_193). |
 
 ---

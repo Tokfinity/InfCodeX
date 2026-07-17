@@ -58,7 +58,7 @@ The generic `Runner` path can be used with a caller-provided `llm` callback. The
 ## 常用公开能力
 
 - Agent primitives: `createAgent`, `createHandoff`, `Runner`, `DefaultSummaryCompaction`
-- Runtime helpers: `runFanOut`, `runWithIdleYield`, `ChildTaskRegistry`
+- Runtime helpers: `runFanOut`, `runWithIdleYield`, `AgentActorController`, `AgentTurnScheduler`
 - Session lineage: session tree, compaction, archive markers, persistence types
 - Skills: `SkillRegistry`, `loadFullSkill`, `expandSkillForLLM`
 - MCP: `McpCapabilityProvider`, `createMcpTransport`, catalog helpers

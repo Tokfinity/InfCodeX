@@ -10,7 +10,7 @@ KodaX Coding Agent 的核心实现，包含 coding preset、tool registry、role
 
 - 文件与搜索：`read`, `write`, `edit`, `multi_edit`, `insert_after_anchor`, `glob`, `grep`, `undo`
 - Shell / Web：`bash`, `web_search`, `web_fetch`
-- 子任务与任务控制：`dispatch_child_task`, `send_message`, `task_stop`, `task_output`
+- Agent 协作与控制：`spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, `list_agents`, `agent_output`
 - MCP：`mcp_search`, `mcp_describe`, `mcp_call`, resource / prompt helpers
 - Worktree / user interaction / goal / todo：`worktree_create`, `ask_user_question`, `get_goal`, `todo_update`, ...
 - Repo intelligence / LSP：`repo_overview`, `changed_scope`, `module_context`, `lsp_definition`, `symbol_context`, `impact_estimate`, ...

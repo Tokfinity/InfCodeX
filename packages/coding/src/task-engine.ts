@@ -325,7 +325,7 @@ export async function buildManagedReasoningPlan(options: KodaXOptions, prompt: s
     // must not abort the AMA run. Previously returned `undefined` on
     // provider-resolution failure, which forced runner-driven.ts:4127 to
     // skip `chainPromptContext` and fall back to SCOUT_INSTRUCTIONS_FALLBACK
-    // — a minimal prompt that omits dispatch_child_task guidance and
+    // — a minimal prompt that omits collaboration guidance and
     // evidence strategies. Instead, build a prompt-only heuristic plan so
     // downstream role prompts still receive the full v0.7.22-parity
     // context (decision summary, tool-policy, dispatch rules).

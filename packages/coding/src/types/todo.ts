@@ -48,8 +48,8 @@ export type TodoEvaluatorHint = 'build' | 'test' | 'lint';
  * steps don't need it; weaker models reach the API more easily without
  * the forced second-string burden.
  *
- * `owner` partitions the list when child agents run in parallel under
- * `dispatch_child_task`; "main" is the parent thread.
+ * `owner` partitions the list when child Actors run in parallel;
+ * "main" is the parent thread.
  */
 export interface TodoItem {
   readonly id: string;

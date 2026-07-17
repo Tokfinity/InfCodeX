@@ -90,9 +90,8 @@ export interface RuntimeRemoteToolContract {
  * immediately) or queues the prompt to run after the tool resolves.
  *
  *   - `'cancel'` — long-running tools whose work the user is likely to want
- *     to abandon when they redirect (e.g., `bash` running a 30s script,
- *     `dispatch_child_task` synchronously awaiting a child, sleep-style
- *     tools). InkREPL submit handler aborts the round immediately.
+ *     to abandon when they redirect (e.g., `bash` running a 30s script or
+ *     sleep-style tools). InkREPL submit handler aborts the round immediately.
  *
  *   - `'wait'` (default) — atomic / fast tools (read, grep, glob, write,
  *     edit, …) where waiting for completion is cheaper than aborting and
@@ -123,7 +122,7 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
    *     'readonly'` tools.
    *   - `true`: explicitly permitted in plan mode even when sideEffect is
    *     not `'readonly'`. Reserve for tools whose effect is itself part of
-   *     the planning loop (`exit_plan_mode`, `task_stop`, `todo_update`,
+   *     the planning loop (`exit_plan_mode`, `interrupt_agent`, `todo_update`,
    *     `todo_create`, `ask_user_question`).
    *   - `false`: explicitly blocked in plan mode even when sideEffect is
    *     `'readonly'`. Rare — useful for read-only tools whose output would
@@ -189,7 +188,7 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
    *      Examples: semantic_lookup (refresh: true rebuilds index)
    *
    * KEEP IT SHORT: ≤ 100 chars typical. Variable-length user-provided fields
-   * (bash command, URL, dispatch_child_task objective) may legitimately
+   * (bash command, URL, `spawn_agent` objective) may legitimately
    * exceed this — the projection's job is to make the risk visible, not to
    * fit a fixed budget at the cost of hiding it.
    *

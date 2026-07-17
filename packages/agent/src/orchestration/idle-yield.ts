@@ -270,14 +270,6 @@ export type WakeEvent =
   | { readonly kind: 'aborted' };
 
 export interface WaitForWakeEventOptions {
-  /**
-   * Live ChildTaskRegistry snapshot. The waiter wraps each entry's
-   * promise so the FIRST settling child wins the race.
-   *
-   * **NOTE**: the waiter does NOT delete entries on settlement — the
-   * registry's normal cleanup path (`registerChildTask`'s built-in
-   * `.finally` chain) owns deletion. Wrapping doesn't double-consume.
-   */
   /** Process-global message queue surface (FEATURE_115 substrate). */
   readonly messageQueue: MessageQueue;
   /**

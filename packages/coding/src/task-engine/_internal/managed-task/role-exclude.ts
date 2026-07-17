@@ -14,7 +14,7 @@
  *
  * Why exclude-based: prior include-based wiring (each role's tools array
  * manually push'd) silently dropped 17 registered tools across multiple
- * features — FEATURE_120 (send_message / task_stop), FEATURE_161 (4 of
+ * features — FEATURE_120 collaboration controls, FEATURE_161 (4 of
  * 8 repo-intel pull tools the Worker prompt teaches), and the four web
  * tools (web_search / web_fetch / code_search / semantic_lookup). The
  * AMA path is shielded from SA-path defaults so wiring drift went
