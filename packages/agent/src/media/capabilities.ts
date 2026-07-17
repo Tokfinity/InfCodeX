@@ -57,7 +57,11 @@ export const KODAX_FILE_MEDIA_TYPES: readonly string[] = [];
 
 const OFFICIAL_IMAGE_PROVIDERS = new Set(['anthropic', 'openai']);
 const SOURCE_BACKED_IMAGE_ROUTES = new Set([
+  'ark-coding/doubao-seed-2.0-code',
+  'ark-coding/doubao-seed-2.0-pro',
   'ark-coding/kimi-k2.6',
+  'ark-coding/kimi-k2.7-code',
+  'ark-coding/minimax-m3',
 ]);
 const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',

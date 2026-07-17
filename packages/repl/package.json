@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/repl",
-  "version": "0.7.71",
+  "version": "0.7.72-hotfix.0",
   "description": "KodaX REPL - 完整的交互式终端体验",
   "private": true,
   "type": "module",

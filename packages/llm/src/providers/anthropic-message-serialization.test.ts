@@ -10,6 +10,13 @@ import type {
 } from '../types.js';
 
 const TOOLS: KodaXToolDefinition[] = [];
+const ARK_CODING_IMAGE_MODELS = [
+  'doubao-seed-2.0-code',
+  'doubao-seed-2.0-pro',
+  'kimi-k2.7-code',
+  'kimi-k2.6',
+  'MiniMax-M3',
+] as const;
 const REPORT_TOOL: KodaXToolDefinition = {
   name: 'emit_verdict',
   description: 'Report verdict.',
@@ -68,11 +75,16 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
 
 class TestArkCodingProvider extends TestAnthropicProvider {
   override readonly name = 'ark-coding';
-  protected override readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'TEST_API_KEY',
-    model: 'kimi-k2.6',
-    supportsThinking: false,
-  };
+  protected override readonly config: KodaXProviderConfig;
+
+  constructor(client: unknown, model: string) {
+    super(client);
+    this.config = {
+      apiKeyEnv: 'TEST_API_KEY',
+      model,
+      supportsThinking: false,
+    };
+  }
 }
 
 describe('anthropic message serialization', () => {
@@ -699,42 +711,45 @@ describe('anthropic message serialization', () => {
     expect(lastUser.content).toEqual([{ type: 'text', text: '...' }]);
   });
 
-  it('serializes ark-coding/kimi-k2.6 image input as an Anthropic base64 block', async () => {
-    const cwd = await createTempDir('kodax-anthropic-images-');
-    const imagePath = path.join(cwd, 'diagram.png');
-    await writeFile(imagePath, 'fake-image');
-    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
-    const provider = new TestArkCodingProvider({
-      messages: { create },
-    });
-    const messages: KodaXMessage[] = [
-      {
+  it.each(ARK_CODING_IMAGE_MODELS)(
+    'serializes ark-coding/%s image input as an Anthropic base64 block',
+    async (model) => {
+      const cwd = await createTempDir('kodax-anthropic-images-');
+      const imagePath = path.join(cwd, 'diagram.png');
+      await writeFile(imagePath, 'fake-image');
+      const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+      const provider = new TestArkCodingProvider({
+        messages: { create },
+      }, model);
+      const messages: KodaXMessage[] = [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Please inspect this image.' },
+            { type: 'image', path: imagePath, mediaType: 'image/png' },
+          ],
+        },
+      ];
+
+      await provider.stream(messages, TOOLS, 'Base system prompt');
+
+      const kwargs = create.mock.calls[0]?.[0];
+      expect(kwargs.model).toBe(model);
+      expect(kwargs.messages).toHaveLength(1);
+      expect(kwargs.messages[0]).toMatchObject({
         role: 'user',
         content: [
           { type: 'text', text: 'Please inspect this image.' },
-          { type: 'image', path: imagePath, mediaType: 'image/png' },
-        ],
-      },
-    ];
-
-    await provider.stream(messages, TOOLS, 'Base system prompt');
-
-    const kwargs = create.mock.calls[0]?.[0];
-    expect(kwargs.model).toBe('kimi-k2.6');
-    expect(kwargs.messages).toHaveLength(1);
-    expect(kwargs.messages[0]).toMatchObject({
-      role: 'user',
-      content: [
-        { type: 'text', text: 'Please inspect this image.' },
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: 'image/png',
-            data: expect.any(String),
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: expect.any(String),
+            },
           },
-        },
-      ],
-    });
-  });
+        ],
+      });
+    },
+  );
 });
