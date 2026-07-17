@@ -39,6 +39,10 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
     );
     expect(description).toContain('Do not call this tool for an ordinary review');
     expect(description).not.toContain('A review or audit combines');
+    expect(description).toContain(
+      'Make the Workflow acquire and inspect the real scope before analysis',
+    );
+    expect(description).not.toContain('Inspect the real scope first');
     // Teaches declaring BOTH patterns together (multi-value patterns[]).
     expect(description).toMatch(/\['fan-out-and-synthesize',\s*'adversarial-verification'\]/);
     // Teaches the GENERAL composition principle, not only the review instance.
