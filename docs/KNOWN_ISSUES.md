@@ -14,7 +14,7 @@ _Last Updated: 2026-07-17_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 171 | High | Resolved | Ark Coding Kimi K2.6 image input was rejected before provider dispatch | v0.7.57 | v0.7.71 | 2026-07-17 | 2026-07-17 |
+| 171 | High | Resolved | Verified Ark Coding image inputs were rejected before provider dispatch | v0.7.57 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-17 |
 | 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
 | 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
 | 168 | High | Resolved | A2A post-closure review found executor shutdown, daemon ownership, and server admission gaps | v0.7.69 | v0.7.71 | 2026-07-16 | 2026-07-16 |
@@ -82,40 +82,40 @@ _Last Updated: 2026-07-17_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
-### 171: Ark Coding Kimi K2.6 image input was rejected before provider dispatch
+### 171: Verified Ark Coding image inputs were rejected before provider dispatch
 
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.57
-- **Fixed**: v0.7.71
+- **Fixed**: v0.7.72-hotfix.0
 - **Created**: 2026-07-17
 - **Resolved**: 2026-07-17
 
 #### Original Problem
 
-`getModelInputCapabilities({ provider: 'ark-coding', model: 'kimi-k2.6' })`
-reported image input as unsupported, and `validateInputArtifactsForModel()`
-therefore raised `MODEL_INPUT_UNSUPPORTED` before the request reached the
-provider. The same model passed validation through the direct `kimi` route.
+KodaX SDK 0.7.71 reported image input as unsupported for all five documented
+Ark Coding image routes and `validateInputArtifactsForModel()` therefore
+raised `MODEL_INPUT_UNSUPPORTED` before requests reached the provider. The
+affected models were `doubao-seed-2.0-code`, `doubao-seed-2.0-pro`,
+`kimi-k2.7-code`, `kimi-k2.6`, and `MiniMax-M3`.
 
-The upstream Kimi K2.6 model supports image input, and a live probe against the
-Ark Coding Anthropic-compatible endpoint confirmed that the exact
-`ark-coding/kimi-k2.6` route accepts a base64 image content block and returns a
-normal response. The SDK capability result was therefore a false negative.
+Live probes against the Ark Coding Anthropic-compatible endpoint confirmed
+that every exact route accepts a base64 16×16 PNG content block and returns a
+normal response. The SDK capability results were therefore false negatives.
 
 #### Root Cause
 
-The source-backed native-media allowlist contained `kimi/kimi-k2.6` but omitted
-the separately verified `ark-coding/kimi-k2.6` gateway route. A negative test
-encoded that omission as intended behavior even though the shared Anthropic
-provider serializer already preserved image blocks correctly.
+The source-backed native-media allowlist omitted the separately routed Ark
+Coding provider/model pairs. Negative tests encoded some of those omissions as
+intended behavior even though the shared Anthropic provider serializer already
+preserved image blocks correctly.
 
 #### Resolution
 
-Added only `ark-coding/kimi-k2.6` to the source-backed image route set. No
-provider-wide Ark Coding capability or video capability was enabled, and a
-neighboring Ark model remains explicitly unsupported until independently
-verified.
+Added only the five normalized `ark-coding/<model>` pairs listed above to the
+source-backed image route set. No provider-wide Ark Coding capability or video
+capability was enabled; unlisted Ark models remain unsupported until
+independently verified.
 
 #### Files Changed
 
@@ -125,18 +125,21 @@ verified.
 - `packages/coding/src/media/capabilities.test.ts`
 - `packages/coding/src/media/validation.test.ts`
 - `packages/llm/src/providers/anthropic-message-serialization.test.ts`
+- `packages/llm/src/providers/ark-coding-image-routes.integration.test.ts`
 - `docs/KNOWN_ISSUES.md`
 
 #### Tests Added / Verification Coverage
 
-- Capability tests require Ark Coding Kimi K2.6 image support while preserving
-  the fail-closed result for an unverified neighboring Ark route.
+- Capability tests require image support and video rejection for all five exact
+  routes while preserving fail-closed results for nearby unverified routes.
 - Validation tests require image artifacts to pass for the exact route through
   both the Agent owner package and the Coding compatibility surface.
-- Provider serialization coverage binds the route to `kimi-k2.6` and verifies
-  an Anthropic base64 image content block reaches the final request payload.
-- A live 1x1 PNG probe against the configured Ark Coding endpoint completed
-  successfully before the metadata change.
+- Provider serialization coverage binds all five models to their exact wire ids
+  and verifies an Anthropic base64 image content block reaches each final
+  request payload.
+- An opt-in real-gateway integration smoke sends one bounded 16×16 PNG request
+  per route, runs sequentially, and preserves raw responses under the OS temp
+  directory. All five live probes completed successfully before release.
 
 ### 170: A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation
 
