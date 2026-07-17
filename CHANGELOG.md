@@ -6,6 +6,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Learning Center and learned-capability Runtime control plane
+  (FEATURE_266).** KodaX now owns learned capability lifecycle, notification
+  cursors, lower-precedence learned Skill discovery, F224 proposal projection,
+  promotion/rollback actions, and inline/Worker/daemon SDK parity through one
+  agent-layer service. `/learn`, status summaries, and the Ink learning segment
+  expose the same durable state without creating a second runtime engine.
+- **Unified adaptive Actor/Turn control plane (FEATURE_270).** AMA collaboration
+  now uses one Runtime-owned actor tree and scheduler across native, recursive,
+  Workflow-owned, constructed, and external Agent work. The canonical
+  `spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
+  `interrupt_agent`, `list_agents`, and `agent_output` surface supports reusable
+  Actor identities, durable Turn history, direct-parent completion, recursive
+  delegation, shared capacity, and SDK/daemon recovery.
+
+### Changed
+
+- **AMA and Workflow orchestration cutover.** AMAW and the old model-visible
+  child-task vocabulary are retired. Persisted `amaw`/`ama-workflow` settings
+  migrate once to AMA, while new inputs fail with a migration hint. Workflow
+  remains available for explicit natural-language, command, named-pattern, and
+  SDK requests, but its child Agents now use the unified Actor scheduler and
+  task complexity alone no longer activates Workflow.
+
 ## [0.7.72-hotfix.0] - 2026-07-17
 
 ### Fixed

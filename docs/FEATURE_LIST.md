@@ -11,11 +11,11 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.70` |
-| Current package version | `@kodax-ai/kodax@0.7.71` release candidate; npm registry publication has not occurred |
+| Current released version | `v0.7.72-hotfix.0` |
+| Current package version | `@kodax-ai/kodax@0.7.72-hotfix.0` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `55` |
-| InProgress | `1` |
+| Total tracked features | `57` |
+| InProgress | `3` |
 | Planned | `11` |
 | Completed | `36` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
@@ -343,6 +343,21 @@
 | `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
 | `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+
+Current v0.7.72 progress:
+
+`266` implementation and its zero-provider Layer 1 gate are complete: the
+Runtime-owned Learning Center, learned-area store, lower-precedence learned
+Skill discovery, daemon/Worker facade, `/learn`/status surfaces, notification
+cursors, and hard-dispose persistence are covered by deterministic tests. It
+remains InProgress until the v0.7.72 release gate is signed off.
+
+`270` implementation and its zero-provider Layer 1 gate are complete: native,
+Workflow-owned, and external Agent work now share the Runtime-owned Actor/Turn
+tree, scheduler, durable snapshot, canonical collaboration tools, and output
+events. AMAW and the parallel legacy task lifecycles are retired. The bounded
+Layer 2/3 behavioral eval is intentionally not started without explicit owner
+authorization for its preregistered `$18` maximum external spend.
 
 Recent completion notes:
 
