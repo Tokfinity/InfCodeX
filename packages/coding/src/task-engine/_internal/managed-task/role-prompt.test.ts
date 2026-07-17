@@ -514,6 +514,7 @@ describe('F270 — explicit Workflow activation policy', () => {
     const rendered = renderWorker();
     expect(rendered).toContain('<agent-completed path="..." turn_id="..." state="completed">');
     expect(rendered).toContain('use the inline result directly');
+    expect(rendered).toContain('Do not call `agent_output` speculatively');
     expect(rendered).toContain('do not retry `spawn_agent` while the reported capacity is still full');
   });
 });

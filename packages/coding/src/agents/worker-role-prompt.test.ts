@@ -53,6 +53,8 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('same root concurrency and work budget');
     expect(output).toContain('<agent-completed path="..." turn_id="..." state="completed">');
     expect(output).toContain('its body is the authoritative terminal result');
+    expect(output).toContain('Do not call `agent_output` speculatively');
+    expect(output).toContain('only after a preceding `<agent-completed>` supplies the target');
     expect(output).toContain('After `AgentLimitReached`');
     expect(output).toContain('do not retry `spawn_agent` while the reported capacity is still full');
     expect(output).toContain('canonical `agent_id` from `list_dispatchable_agents`');
