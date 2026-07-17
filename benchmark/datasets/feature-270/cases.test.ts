@@ -60,6 +60,10 @@ describe('FEATURE_270 frozen behavioral cases', () => {
       .toContain('prefer run_workflow instead');
     expect(treatment.find((tool) => tool.name === 'spawn_agent')?.description)
       .not.toContain('prefer run_workflow instead');
+    const workflowDescription = treatment.find((tool) => tool.name === 'run_workflow')?.description;
+    expect(workflowDescription).toContain('Do not call this tool for an ordinary review');
+    expect(workflowDescription).toContain('For an explicitly requested review or audit Workflow');
+    expect(workflowDescription).not.toContain('A review or audit combines');
   });
 });
 
