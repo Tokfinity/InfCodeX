@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.72-hotfix.0] - 2026-07-17
+
+### Fixed
+
+- **Ark Coding image input routing.** The SDK now recognizes the five verified
+  Ark Coding routes (`doubao-seed-2.0-code`, `doubao-seed-2.0-pro`,
+  `kimi-k2.7-code`, `kimi-k2.6`, and `MiniMax-M3`) as image-capable instead of
+  raising `MODEL_INPUT_UNSUPPORTED` before provider dispatch. The change is
+  scoped to those exact provider/model pairs; other Ark models and all Ark
+  video input remain fail-closed. Capability, validation, final Anthropic
+  base64 serialization, and opt-in real-gateway regressions cover all five.
+
 ## [0.7.71] - 2026-07-17
 
 ### Added
@@ -2614,7 +2626,7 @@ repl            → coding, skills
 ### Tests
 - Added / expanded tests for `task-engine`, `reasoning`, `tool-display`, `live-streaming`, `StatusBar`, `invocation-runtime`, `types-legacy`, and `InkREPL.interrupted`
 
-<!-- last-sync: cf5f273b -->
+<!-- last-sync: a8c9c283 -->
 
 ### Added
 - **Repository intelligence substrate (FEATURE_018)**: Task-aware repository intelligence layer under `.agent/repo-intelligence/` with durable artifacts — `repo-overview.json`, `changed-scope.json`, `module-index.json`, `symbol-index.json`, `process-index.json`, `repo-intelligence-manifest.json` — supporting incremental refresh, freshness metadata, and language-tiered extraction (TS/JS via AST, Python, Go, Rust, Java, C++)
