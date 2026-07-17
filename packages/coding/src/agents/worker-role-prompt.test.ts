@@ -51,6 +51,10 @@ describe('buildWorkerInstructions', () => {
     }
     expect(output).toContain('Children may recursively spawn descendants');
     expect(output).toContain('same root concurrency and work budget');
+    expect(output).toContain('<agent-completed path="..." turn_id="..." state="completed">');
+    expect(output).toContain('its body is the authoritative terminal result');
+    expect(output).toContain('After `AgentLimitReached`');
+    expect(output).toContain('do not retry `spawn_agent` while the reported capacity is still full');
     expect(output).toContain('canonical `agent_id` from `list_dispatchable_agents`');
     expect(output).not.toContain('On a fresh request with independent lanes');
   });

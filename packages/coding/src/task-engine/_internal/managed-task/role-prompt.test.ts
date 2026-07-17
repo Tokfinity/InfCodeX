@@ -300,6 +300,8 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain(
       'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow.',
     );
+    expect(rendered).toContain('its body is the authoritative terminal result');
+    expect(rendered).toContain('After `AgentLimitReached`');
     // FEATURE_190 (v0.7.43): legacy `EVALUATOR HANDOFF` replaced by
     // positive text-only termination block.
     expect(rendered).toContain('TERMINATION');
@@ -506,5 +508,12 @@ describe('F270 — explicit Workflow activation policy', () => {
     expect(rendered).not.toContain('ORCHESTRATION DEFAULT');
     expect(rendered).not.toContain('PLAN-TIME COMMITMENT');
     expect(rendered).not.toContain('dispatch_child_task');
+  });
+
+  it('teaches Actor completion and capacity recovery semantics', () => {
+    const rendered = renderWorker();
+    expect(rendered).toContain('<agent-completed path="..." turn_id="..." state="completed">');
+    expect(rendered).toContain('use the inline result directly');
+    expect(rendered).toContain('do not retry `spawn_agent` while the reported capacity is still full');
   });
 });

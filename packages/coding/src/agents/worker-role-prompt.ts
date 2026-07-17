@@ -126,6 +126,8 @@ export function buildWorkerInstructions(
     '- Read-only investigations use `read_only:true`; non-conflicting file-level edits may use `read_only:false`. Keep the task name stable and the objective specific.',
     '- Children may recursively spawn descendants. Every turn shares the same root concurrency and work budget, so recursion never creates extra capacity.',
     '- Continue useful local work after spawning. When an Agent result is required, call `wait_agent`; use its event sequence as the next `after_sequence` cursor.',
+    '- A host-delivered `<agent-completed path="..." turn_id="..." state="completed">` block already contains the completed turn summary; its body is the authoritative terminal result, so use the inline result directly to revise follow-up objectives or topology. Call `agent_output` only for exact structured output or artifact refs not present inline.',
+    '- After `AgentLimitReached` or another full-capacity result, do not retry `spawn_agent` while the reported capacity is still full. Wait/list, continue useful local work, or replan through an existing Agent.',
     '- `send_message` delivers bounded evidence without waking an idle actor. Use `followup_task` when an idle actor must start another turn or a running actor needs an objective update.',
     '- Use `list_agents` for tree/capacity state and `agent_output` for a completed turn result. Use `interrupt_agent` only when continued work is no longer useful.',
     '- A parent may not silently abandon live descendants: wait for them, interrupt them, or explicitly report their canonical paths and unresolved ownership.',

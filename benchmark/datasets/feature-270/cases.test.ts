@@ -6,6 +6,7 @@ import {
   FEATURE_270_LAYER_2_CASE_IDS,
   FEATURE_270_LAYER_3_CASE_IDS,
   buildFeature270Layer2Input,
+  buildFeature270Layer3Round2,
   buildFeature270TreatmentPrompt,
   feature270BaselinePrompt,
   feature270ToolsForArm,
@@ -85,6 +86,28 @@ describe('FEATURE_270 frozen behavioral cases', () => {
     expect(workflowDescription).toContain('Do not call this tool for an ordinary review');
     expect(workflowDescription).toContain('For an explicitly requested review or audit Workflow');
     expect(workflowDescription).not.toContain('A review or audit combines');
+  });
+
+  it('injects arm-native production completion envelopes in Layer 3', () => {
+    const treatment = buildFeature270Layer3Round2(
+      'contradictory_finding',
+      'treatment',
+      '',
+      [{ name: 'spawn_agent', input: { task_name: 'cache-review', objective: 'test' } }],
+    );
+    const baseline = buildFeature270Layer3Round2(
+      'contradictory_finding',
+      'baseline',
+      '',
+      [{ name: 'dispatch_child_task', input: { id: 'cache-review', objective: 'test' } }],
+    );
+
+    expect(treatment.userMessage).toContain(
+      '<agent-completed path="/root/cache-review" turn_id="eval-turn-1" state="completed">',
+    );
+    expect(treatment.userMessage).toContain('token invalidation ordering');
+    expect(treatment.userMessage).not.toContain('controlled-agent-event');
+    expect(baseline.userMessage).toContain('<task-completed task_id="cache-review">');
   });
 });
 

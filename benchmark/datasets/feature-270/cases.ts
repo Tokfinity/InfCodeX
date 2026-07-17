@@ -298,13 +298,27 @@ export function buildFeature270Layer3Round2(
         ].filter(Boolean).join('\n\n'),
       },
     ],
-    userMessage: layer3Injection(caseId, arm),
+    userMessage: layer3Injection(caseId, arm, firstToolCalls),
   };
 }
 
-function layer3Injection(caseId: Feature270Layer3CaseId, arm: Feature270Arm): string {
+function layer3Injection(
+  caseId: Feature270Layer3CaseId,
+  arm: Feature270Arm,
+  firstToolCalls: ReadonlyArray<{ readonly name: string; readonly input: unknown }>,
+): string {
   if (caseId === 'contradictory_finding') {
-    return '<controlled-agent-event status="completed">The cache keys are distinct; the failure instead begins after token invalidation ordering. Revise the next objective or topology.</controlled-agent-event>';
+    const startTool = arm === 'treatment' ? 'spawn_agent' : 'dispatch_child_task';
+    const identifier = arm === 'treatment' ? 'task_name' : 'id';
+    const start = firstToolCalls.find((call) => call.name === startTool);
+    const taskName = isRecord(start?.input)
+      ? stringField(start.input, identifier) || 'eval-investigator'
+      : 'eval-investigator';
+    const finding = 'The cache keys are distinct; the failure instead begins after token invalidation ordering. Revise the next objective or topology.';
+    if (arm === 'treatment') {
+      return `<agent-completed path="/root/${escapeXml(taskName)}" turn_id="eval-turn-1" state="completed">\n${finding}\n</agent-completed>`;
+    }
+    return `<task-completed task_id="${escapeXml(taskName)}">\n${finding}\n</task-completed>`;
   }
   if (caseId === 'unavailable_specialist') {
     return arm === 'treatment'
@@ -312,6 +326,14 @@ function layer3Injection(caseId: Feature270Layer3CaseId, arm: Feature270Arm): st
       : '<tool_result name="dispatch_child_task">[Tool Error] compatibility-reviewer unavailable while three children are active</tool_result>Revise the next lane without replaying the rejected start.';
   }
   return '<user-change>The change is no longer read-only: one isolated package must now be fixed and verified. Revise the specialist mix or collaboration topology.</user-change>';
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 export function normalizeFeature270Actions(
