@@ -241,6 +241,8 @@ export interface ChildExecutorOptions {
   ) => void;
   /** Runtime-minted principal inherited by the child runtime for recursive collaboration. */
   readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
+  /** Trusted host bridge inherited beside the principal for nested Workflow owners. */
+  readonly actorHost?: import('./types.js').KodaXActorHost;
 }
 
 function inheritRepoIntelligenceContext(
@@ -1179,6 +1181,7 @@ async function runReadChildBody(
           excludeTools,
           agentScope: scope.ctx.agentScope,
           actorControl: options.actorControl,
+          actorHost: options.actorHost,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
           // child runtime can answer peer `send_message` calls. The
           // child stays unable to mutate the registry (no
@@ -1413,6 +1416,7 @@ async function runWriteChildBody(
           excludeTools,
           agentScope: childCtx.agentScope,
           actorControl: options.actorControl,
+          actorHost: options.actorHost,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).

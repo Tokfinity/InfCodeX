@@ -100,6 +100,7 @@ import type {
   ISkillRegistry,
   AgentExecutorPlaneBinding,
   AgentActorClient,
+  AgentTurnExecutor,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1306,6 +1307,14 @@ export interface KodaXSkillScriptRunner {
   dispose(): Promise<void>;
 }
 
+/** Trusted coding host bridge; lifecycle state remains owned by the Agent controller. */
+export interface KodaXActorHost {
+  createWorkflowOwner(parentPath: string, runId: string): Promise<AgentActorClient>;
+  bindActor(actorPath: string): AgentActorClient;
+  registerTurnExecutor(key: string, executor: AgentTurnExecutor): () => void;
+  waitForAgentCapacity(signal?: AbortSignal): Promise<boolean>;
+}
+
 export interface KodaXContextOptions {
   /** FEATURE_260 runtime-owned identity used for scoped memory reads. */
   memoryIdentity?: MemoryContextIdentity;
@@ -1313,6 +1322,8 @@ export interface KodaXContextOptions {
   memoryPack?: MemoryPack;
   /** Runtime-minted collaboration principal for this actor execution. */
   actorControl?: AgentActorClient;
+  /** Trusted host operations that are intentionally absent from model-facing clients. */
+  actorHost?: KodaXActorHost;
   /** Runtime-owned session Actor tree; attached when a root run builds its tool context. */
   actorSession?: import('./agent-runtime/actor-runtime.js').CodingActorSession;
   /** Trusted host attribution for an explicit Workflow command/SDK request. */
@@ -1969,6 +1980,8 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Runtime-minted collaboration principal; model inputs cannot replace its caller path. */
   actorControl?: AgentActorClient;
+  /** Trusted host operations that are intentionally absent from model-facing clients. */
+  actorHost?: KodaXActorHost;
   /** FEATURE_260: current exactly-scoped read-only MemorySession query binding. */
   memoryRecall?: (need: string) => Promise<{
     readonly content: string;

@@ -265,7 +265,7 @@ export interface WorkflowApi {
   /** Snapshot a (possibly running) agent.
    *  @deprecated Prefer `snapshot(taskId)`; `output` is kept as a compatibility alias. */
   output(taskId: string): Promise<WorkflowTaskSnapshot>;
-  /** Send a message to a running agent (via MessageQueue routing). */
+  /** Send a message to a running Agent through its Actor mailbox. */
   send(taskId: string, content: string): Promise<void>;
   /** Stop a running agent (graceful abort). */
   stop(taskId: string, reason: string): Promise<void>;
@@ -361,14 +361,11 @@ export interface WorkflowModule<TArgs = unknown, TResult = unknown> {
   readonly run: WorkflowRun<TArgs, TResult>;
 }
 
-/**
- * Injected execution backend. The coding layer implements this over its
- * child-dispatch substrate (ChildTaskRegistry / childProgressSnapshots /
- * MessageQueue / executeChildAgents); tests inject a fake. The agent
- * runtime depends ONLY on this interface — never on coding.
- */
+/** Injected execution backend over the host's Runtime-owned Actor plane. */
 export interface WorkflowAgentBackend {
   spawn(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle>;
+  /** Wait until the global Actor scheduler can admit a step. False means no slot can ever exist. */
+  waitForAgentCapacity?(signal?: AbortSignal): Promise<boolean>;
   wait(taskId: string, opts?: WorkflowWaitOptions): Promise<WorkflowTaskResult>;
   output(taskId: string): Promise<WorkflowTaskSnapshot>;
   send(taskId: string, content: string): Promise<void>;

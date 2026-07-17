@@ -55,6 +55,23 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', child.actorPath).turns[0]?.state).toBe('completed');
   });
 
+  it('registers trusted Workflow protocol owners without consuming an Agent slot', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+
+    const owner = await controller.createProtocolOwner('/root', 'run-1');
+
+    expect(owner.callerPath).toBe('/root/workflow:run-1');
+    expect(controller.list('/root')).toMatchObject({ activeNonRootTurns: 0 });
+    expect(controller.get('/root', owner.callerPath).actor).toMatchObject({
+      taskName: 'workflow:run-1', kind: 'workflow', state: 'idle', parentPath: '/root',
+    });
+    await expect(owner.spawn({ taskName: 'review', objective: 'Review.' })).resolves.toMatchObject({
+      actorPath: '/root/workflow:run-1/review',
+    });
+    expect(controller.list('/root').activeNonRootTurns).toBe(1);
+  });
+
   it('uses four total slots by default and leaves no ghost actor on saturation', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });

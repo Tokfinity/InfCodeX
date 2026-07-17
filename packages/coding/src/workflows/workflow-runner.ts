@@ -43,9 +43,10 @@ import {
   type WorktreeSweepDeps,
 } from './worktree-sweep.js';
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
+import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
-/** Mirrors the private `dispatch-child-tasks.ts` constant. */
+/** Default turn budget for one Workflow step Agent. */
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 
 // maxAgents (lifetime spawn cap) and tokenBudget are fixed system ceilings.
@@ -436,33 +437,59 @@ export function emitWorkflowAgentDigest(
 export async function runWorkflowFromOptions(
   input: RunWorkflowFromOptionsInput,
 ): Promise<RunWorkflowModuleOutcome> {
-  const ctx: KodaXToolExecutionContext = {
-    ...buildToolExecutionContext({
-      options: input.options,
-      runtime: input.options.extensionRuntime,
-      managedProtocolPayloadRef: { current: undefined },
-    }),
+  const suppliedControl = input.options.context?.actorControl;
+  const suppliedHost = input.options.context?.actorHost;
+  if ((suppliedControl === undefined) !== (suppliedHost === undefined)) {
+    throw new Error('Workflow Runtime requires actorControl and actorHost together.');
+  }
+  const ownedActorSession = suppliedControl ? undefined : new CodingActorSession({
+    maxConcurrentThreadsPerSession: input.options.maxConcurrentThreadsPerSession,
+  });
+  const sessionOptions: KodaXOptions = ownedActorSession
+    ? {
+        ...input.options,
+        context: { ...input.options.context, actorSession: ownedActorSession },
+      }
+    : input.options;
+  const ctx = buildToolExecutionContext({
+    options: sessionOptions,
+    runtime: sessionOptions.extensionRuntime,
+    managedProtocolPayloadRef: { current: undefined },
+  });
+  const parentControl = ctx.actorControl;
+  const actorHost = ctx.actorHost;
+  if (!parentControl || !actorHost) {
+    throw new Error('Workflow execution requires the Runtime-owned Actor control plane.');
+  }
+  const ownerControl = await actorHost.createWorkflowOwner(parentControl.callerPath, input.runId);
+  ctx.actorControl = ownerControl;
+  ctx.actorHost = actorHost;
+  const workflowOptions: KodaXOptions = {
+    ...sessionOptions,
+    context: { ...sessionOptions.context, actorControl: ownerControl, actorHost },
+  };
+  Object.assign(ctx, {
     // FEATURE_217 Layer B — workflow child worktrees nest under the run dir so
     // they are reclaimable and never pollute the user's project tree.
     workflowWorktreeBaseDir: workflowWorktreeBaseDir(input.runDir),
-  };
+  });
   const childOptions: WorkflowChildOptions = {
     maxIterationsPerChild: DEFAULT_MAX_ITERATIONS_PER_CHILD,
     parentRole: 'worker',
     // 'tool-dispatch' (not 'workflow') so write-capable children are NOT
     // silently dropped by `validateWriteBundles` — workflows dispatch
-    // children exactly like `dispatch_child_task`. Read-only children are
+    // children through the same Actor child executor. Read-only children are
     // unaffected; the per-agent `readOnly` flag still controls write access.
     parentHarness: 'tool-dispatch',
     parentOptions: {
-      provider: input.options.provider,
-      model: input.options.modelOverride ?? input.options.model,
-      effort: input.options.effort,
-      reasoningMode: input.options.reasoningMode,
-      repoIntelligenceMode: input.options.context?.repoIntelligenceMode,
-      repoIntelligenceTrace: input.options.context?.repoIntelligenceTrace,
-      extensionRuntime: input.options.extensionRuntime,
-      events: input.options.events,
+      provider: workflowOptions.provider,
+      model: workflowOptions.modelOverride ?? workflowOptions.model,
+      effort: workflowOptions.effort,
+      reasoningMode: workflowOptions.reasoningMode,
+      repoIntelligenceMode: workflowOptions.context?.repoIntelligenceMode,
+      repoIntelligenceTrace: workflowOptions.context?.repoIntelligenceTrace,
+      extensionRuntime: workflowOptions.extensionRuntime,
+      events: workflowOptions.events,
     },
     ...(input.options.guardrails ? { guardrails: input.options.guardrails } : {}),
     ...(ctx.planModeBlockCheck
@@ -473,36 +500,40 @@ export async function runWorkflowFromOptions(
     input.onWorkflowProcessEvent || input.options.events?.onWorkflowProcessEvent
       ? (event: WorkflowProcessEvent): void => {
           input.onWorkflowProcessEvent?.(event);
-          input.options.events?.onWorkflowProcessEvent?.(event);
+          workflowOptions.events?.onWorkflowProcessEvent?.(event);
         }
       : undefined;
   // ADR-049: alongside the aggregate process strip, forward each child agent's
   // terminal/summary event to the REPL so its digest lands in the transcript
-  // (parity with the slash path + dispatch_child_task). Preserves any caller
+  // (parity with the slash path + adaptive Agent completion). Preserves any caller
   // `input.onEvent` (the run-manager's snapshot tracking) by always calling it.
   const onEvent =
-    input.onEvent || input.options.events?.onWorkflowAgentDigest
+    input.onEvent || workflowOptions.events?.onWorkflowAgentDigest
       ? (event: WorkflowEvent): void => {
           input.onEvent?.(event);
-          emitWorkflowAgentDigest(input.options.events, input.runId, event);
+          emitWorkflowAgentDigest(workflowOptions.events, input.runId, event);
         }
       : undefined;
-  return runWorkflowModule({
-    module: input.module,
-    args: input.args,
-    runId: input.runId,
-    runDir: input.runDir,
-    ctx,
-    childOptions,
-    ...(input.approval ? { approval: input.approval } : {}),
-    ...(input.signal ? { signal: input.signal } : {}),
-    ...(onEvent ? { onEvent } : {}),
-    ...(onWorkflowProcessEvent ? { onWorkflowProcessEvent } : {}),
-    ...(input.options.workflowHostPolicy ? { hostPolicy: input.options.workflowHostPolicy } : {}),
-    ...(input.now ? { now: input.now } : {}),
-    ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
-    ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
-    ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
-    ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
-  });
+  try {
+    return await runWorkflowModule({
+      module: input.module,
+      args: input.args,
+      runId: input.runId,
+      runDir: input.runDir,
+      ctx,
+      childOptions,
+      ...(input.approval ? { approval: input.approval } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(onEvent ? { onEvent } : {}),
+      ...(onWorkflowProcessEvent ? { onWorkflowProcessEvent } : {}),
+      ...(workflowOptions.workflowHostPolicy ? { hostPolicy: workflowOptions.workflowHostPolicy } : {}),
+      ...(input.now ? { now: input.now } : {}),
+      ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
+      ...(input.resumeFromRunDir ? { resumeFromRunDir: input.resumeFromRunDir } : {}),
+      ...(input.processMetadata ? { processMetadata: input.processMetadata } : {}),
+      ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
+    });
+  } finally {
+    await ownedActorSession?.close('workflow run finished');
+  }
 }

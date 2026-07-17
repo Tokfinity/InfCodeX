@@ -204,7 +204,11 @@ export interface AgentActorClient {
     content: string,
     classification?: AgentDataClassification,
   ): Promise<void>;
-  followup(targetPath: string, objective: string): Promise<AgentFollowupResult>;
+  followup(
+    targetPath: string,
+    objective: string,
+    metadata?: Readonly<Record<string, AgentMetadataValue>>,
+  ): Promise<AgentFollowupResult>;
   interrupt(targetPath: string, reason?: string): Promise<void>;
   list(): AgentTreeSnapshot;
   get(targetPath: string): AgentDetail;

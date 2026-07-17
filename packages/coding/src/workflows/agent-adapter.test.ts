@@ -1,20 +1,20 @@
 /**
  * FEATURE_217 (v0.7.49) Phase B — Coding workflow backend tests.
  *
- * Injects a fake `runChild` + minimal ctx + fake queue so no real child
- * agents run. Validates spawn → wait mapping, snapshot output, graceful
- * stop (abort), MessageQueue send routing, and synthesize.
+ * Injects a fake child executor into an in-memory Actor session. No provider
+ * calls run; lifecycle, mailbox, output, and interruption remain real.
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { MessageQueue, WorkflowTaskSummaryEventUpdate } from '@kodax-ai/agent';
+import type { WorkflowTaskSummaryEventUpdate } from '@kodax-ai/agent';
 
 import {
   createCodingWorkflowBackend,
   type WorkflowChildOptions,
 } from './agent-adapter.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
+import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 import type {
   KodaXChildAgentResult,
   KodaXChildExecutionResult,
@@ -46,24 +46,18 @@ function execResult(
 }
 
 function fakeCtx(): KodaXToolExecutionContext {
-  return {
-    childAbortControllers: new Map<string, AbortController>(),
-    childProgressSnapshots: new Map(),
-  } as unknown as KodaXToolExecutionContext;
+  return actorContext().ctx;
 }
 
-function fakeQueue(): {
-  queue: MessageQueue;
-  enqueued: Array<{ agentId?: string; content: string; priority: string; mode: string }>;
+function actorContext(maxConcurrentThreadsPerSession = 4): {
+  readonly ctx: KodaXToolExecutionContext;
+  readonly session: CodingActorSession;
 } {
-  const enqueued: Array<{ agentId?: string; content: string; priority: string; mode: string }> = [];
-  const queue = {
-    enqueue: (input: { agentId?: string; content: string; priority: string; mode: string }) => {
-      enqueued.push(input);
-      return 'msg-1';
-    },
-  } as unknown as MessageQueue;
-  return { queue, enqueued };
+  const ctx = { backups: new Map<string, string>() } as KodaXToolExecutionContext;
+  const session = new CodingActorSession({ maxConcurrentThreadsPerSession });
+  ctx.actorHost = session;
+  ctx.actorControl = session.attach(ctx, { provider: 'anthropic' });
+  return { ctx, session };
 }
 
 const childOptions: WorkflowChildOptions = {
@@ -74,6 +68,35 @@ const childOptions: WorkflowChildOptions = {
 };
 
 describe('createCodingWorkflowBackend — spawn + wait', () => {
+  it('registers a zero-slot Workflow owner and leaves no ghost on global-cap rejection', async () => {
+    const { ctx, session } = actorContext(4);
+    ctx.actorControl = await session.createWorkflowOwner('/root', 'run-cap');
+    const releases: Array<(result: KodaXChildExecutionResult) => void> = [];
+    const backend = createCodingWorkflowBackend({
+      ctx,
+      childOptions,
+      runChild: () => new Promise<KodaXChildExecutionResult>((resolve) => releases.push(resolve)),
+    });
+
+    const handles = await Promise.all([
+      backend.spawn({ name: 'one', prompt: 'x', readOnly: true }),
+      backend.spawn({ name: 'two', prompt: 'x', readOnly: true }),
+      backend.spawn({ name: 'three', prompt: 'x', readOnly: true }),
+    ]);
+    await expect(backend.spawn({ name: 'four', prompt: 'x', readOnly: true }))
+      .rejects.toMatchObject({ code: 'agent_limit_reached', retryable: true });
+
+    const tree = ctx.actorControl.list();
+    expect(tree.activeNonRootTurns).toBe(3);
+    expect(tree.actors.filter((actor) => actor.kind === 'workflow')).toHaveLength(1);
+    expect(tree.actors.filter((actor) => actor.currentTurnId !== undefined)).toHaveLength(3);
+    expect(tree.actors.some((actor) => actor.taskName.includes('four'))).toBe(false);
+
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    for (const release of releases) release(execResult());
+    await Promise.all(handles.map((handle) => backend.wait(handle.taskId)));
+  });
+
   it('spawns and maps a completed child result', async () => {
     const ctx = fakeCtx();
     const backend = createCodingWorkflowBackend({
@@ -664,14 +687,16 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     vi.useFakeTimers();
     try {
       let attempts = 0;
+      let latestSignal: AbortSignal | undefined;
       const ctx = fakeCtx();
       const backend = createCodingWorkflowBackend({
         ctx,
         childOptions,
         generateId: () => 'task-repair-timeout',
         listChangedFiles: async () => [],
-        runChild: () => {
+        runChild: (_bundles, _ctx, options) => {
           attempts += 1;
+          latestSignal = options.abortSignal;
           return new Promise<KodaXChildExecutionResult>((resolve) => {
             setTimeout(() => {
               resolve(execResult({
@@ -697,7 +722,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
 
       await waitRejection;
       expect(attempts).toBe(2);
-      expect(ctx.childAbortControllers?.get(handle.taskId)?.signal.aborted).toBe(true);
+      expect(latestSignal?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(10);
     } finally {
       vi.useRealTimers();
@@ -1030,20 +1055,27 @@ describe('createCodingWorkflowBackend — stop + send', () => {
     await backend.wait(handle.taskId);
   });
 
-  it('send routes a user-priority prompt to the child via the queue', async () => {
-    const { queue, enqueued } = fakeQueue();
+  it('send delivers an internal message through the child Actor mailbox', async () => {
+    const ctx = fakeCtx();
     let release: (r: KodaXChildExecutionResult) => void = () => {};
     const backend = createCodingWorkflowBackend({
-      ctx: fakeCtx(),
+      ctx,
       childOptions,
-      queue,
       generateId: () => 'task-m',
       runChild: () => new Promise<KodaXChildExecutionResult>((r) => { release = r; }),
     });
     const handle = await backend.spawn({ name: 'a', prompt: 'x', readOnly: true });
     await backend.send(handle.taskId, 'keep going');
-    expect(enqueued).toHaveLength(1);
-    expect(enqueued[0]).toMatchObject({ agentId: 'task-m', content: 'keep going', priority: 'user', mode: 'prompt' });
+    const actor = ctx.actorControl?.list().actors.find((candidate) => candidate.path !== '/root');
+    expect(actor).toBeDefined();
+    expect(ctx.actorControl?.get(actor?.path ?? '').mailbox).toEqual([
+      expect.objectContaining({
+        senderPath: '/root',
+        content: 'keep going',
+        classification: 'internal',
+        kind: 'message',
+      }),
+    ]);
     release(execResult());
     await backend.wait(handle.taskId);
   });

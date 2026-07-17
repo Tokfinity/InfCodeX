@@ -39,11 +39,15 @@ interface CodingActorEnvironment {
 /** One Runtime-owned Actor tree for one KodaX session. */
 export class CodingActorSession {
   private readonly controller: AgentActorController;
+  private readonly turnExecutors = new Map<string, AgentTurnExecutor>();
   private environment?: CodingActorEnvironment;
 
   constructor(private readonly sessionOptions: CodingActorSessionOptions = {}) {
     const executor: AgentTurnExecutor = {
       execute: (input) => {
+        const executionKey = metadataString(input.turn.metadata?.executionKey);
+        const registered = executionKey ? this.turnExecutors.get(executionKey) : undefined;
+        if (registered) return registered.execute(input);
         const environment = this.environment;
         if (!environment) throw new Error('Actor session is not attached to an active KodaX run.');
         return executeCodingActorTurn(
@@ -93,8 +97,38 @@ export class CodingActorSession {
     return this.controller.bind('/root');
   }
 
+  createWorkflowOwner(parentPath: string, runId: string): Promise<AgentActorClient> {
+    return this.controller.createProtocolOwner(parentPath, runId);
+  }
+
+  bindActor(actorPath: string): AgentActorClient {
+    return this.controller.bind(actorPath);
+  }
+
+  registerTurnExecutor(key: string, executor: AgentTurnExecutor): () => void {
+    if (this.turnExecutors.has(key)) throw new Error(`Actor turn executor is already registered: ${key}`);
+    this.turnExecutors.set(key, executor);
+    return () => {
+      if (this.turnExecutors.get(key) === executor) this.turnExecutors.delete(key);
+    };
+  }
+
+  async waitForAgentCapacity(signal?: AbortSignal): Promise<boolean> {
+    const root = this.controller.bind('/root');
+    let cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
+    for (;;) {
+      if (signal?.aborted) return false;
+      const tree = root.list();
+      if (tree.maxConcurrentThreads <= 1) return false;
+      if (tree.activeNonRootTurns < tree.maxConcurrentThreads - 1) return true;
+      const event = await root.wait(cursor, 250);
+      if (event) cursor = event.sequence;
+    }
+  }
+
   async close(reason = 'runtime closed'): Promise<void> {
     await this.controller.shutdown(reason);
+    this.turnExecutors.clear();
   }
 }
 
@@ -178,6 +212,7 @@ async function executeCodingActorTurn(
     planModeBlockCheck: parentCtx.planModeBlockCheck,
     guardrails: parentCtx.guardrails,
     actorControl,
+    actorHost: parentCtx.actorHost,
     onProgress: (message) => parentCtx.reportToolProgress?.(
       `[agent ${input.actor.path}] ${message}`,
     ),
@@ -208,8 +243,14 @@ async function executeExternalActorTurn(
     context: {
       ...binding.context,
       parentTaskId: input.actor.parentPath ?? binding.context.parentTaskId,
+      ...(metadataString(input.turn.metadata?.workflowRunId)
+        ? { workflowId: metadataString(input.turn.metadata?.workflowRunId) }
+        : {}),
     },
     readOnly: input.turn.metadata?.readOnly !== false,
+    ...(metadataString(input.turn.metadata?.expectedConfigurationRevision)
+      ? { expectedConfigurationRevision: metadataString(input.turn.metadata?.expectedConfigurationRevision) }
+      : {}),
   });
   if (task.state === 'failed' || task.state === 'rejected' || task.state === 'unknown') {
     throw new Error(task.error ?? `External Agent entered ${task.state}.`);

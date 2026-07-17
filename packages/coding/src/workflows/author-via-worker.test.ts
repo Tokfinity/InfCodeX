@@ -49,7 +49,7 @@ describe('authorWorkflowViaWorker', () => {
     expect(runKodaXMock).not.toHaveBeenCalled();
   });
 
-  it('forces agentMode:amaw and submits the scout-then-author prompt', async () => {
+  it('uses AMA with explicit Workflow intent and submits the scout-then-author prompt', async () => {
     const handle = authorWorkflowViaWorker({
       request: 'Audit the auth module',
       options: { provider: 'anthropic', agentMode: 'ama', workflowRunsBaseDir: '/tmp/runs' } as KodaXOptions,
@@ -57,7 +57,8 @@ describe('authorWorkflowViaWorker', () => {
     await handle.session.result;
     expect(runKodaXMock).toHaveBeenCalledTimes(1);
     const [passedOptions, passedPrompt] = runKodaXMock.mock.calls[0]!;
-    expect(passedOptions.agentMode).toBe('amaw');
+    expect(passedOptions.agentMode).toBe('ama');
+    expect(passedOptions.context?.workflowIntent).toBe('explicit');
     expect(passedOptions.workflowRunsBaseDir).toBe('/tmp/runs');
     expect(passedPrompt).toBe(buildScoutThenAuthorPrompt('Audit the auth module'));
   });

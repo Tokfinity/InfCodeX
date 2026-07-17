@@ -94,7 +94,7 @@ export class WorkflowLimitError extends Error {
 
 /**
  * Upper bound on the number of items a single `wf.parallel` / `wf.pipeline` call
- * may take. Live concurrency is separately bounded by the Semaphore and the
+ * may take. Live concurrency is separately bounded by the resource scope and the
  * maxAgents lifetime cap; this guard only rejects an obviously-oversized array
  * up front with a clear message instead of letting it fail deep in the run.
  */
@@ -145,8 +145,16 @@ function isWorkflowRunControlError(error: unknown): boolean {
   return (
     error instanceof WorkflowAbortError ||
     error instanceof WorkflowLimitError ||
-    error instanceof WorkflowBudgetError
+    error instanceof WorkflowBudgetError ||
+    isAgentLimitReached(error)
   );
+}
+
+function isAgentLimitReached(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'agent_limit_reached';
 }
 
 const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
@@ -157,13 +165,13 @@ type StopActiveTaskOutcome =
   | 'timed-out'
   | { readonly error: string };
 
-interface SemaphoreAcquireOptions {
+interface WorkflowResourceAcquireOptions {
   readonly deadlockCheckMs?: number;
   shouldRejectWait(): boolean;
   createRejection(): Error;
 }
 
-interface SemaphoreWaiter {
+interface WorkflowPendingStep {
   resolve(): void;
   reject(error: Error): void;
 }
@@ -217,23 +225,23 @@ export function normalizeWorkflowLimits(limits?: WorkflowLimits): WorkflowLimits
   };
 }
 
-/** Capacity-bounded async semaphore. `Infinity` capacity never blocks. */
-class Semaphore {
+/** Protocol-local resource scope. It never admits work into the global scheduler. */
+class WorkflowResourceScope {
   private available: number;
-  private readonly waiters: SemaphoreWaiter[] = [];
+  private readonly waiters: WorkflowPendingStep[] = [];
 
   constructor(capacity: number) {
     this.available = capacity;
   }
 
-  async acquire(options?: SemaphoreAcquireOptions): Promise<void> {
+  async acquire(options?: WorkflowResourceAcquireOptions): Promise<void> {
     if (this.available > 0) {
       this.available -= 1;
       return;
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     await new Promise<void>((resolve, reject) => {
-      const waiter: SemaphoreWaiter = {
+      const waiter: WorkflowPendingStep = {
         resolve: () => {
           if (timer) clearTimeout(timer);
           resolve();
@@ -375,7 +383,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   // workflow can never fan out unbounded.
   const maxConcurrency = limits.maxConcurrency ?? resolveWorkflowMaxConcurrency();
   const tokenBudget = limits.tokenBudget ?? null;
-  const concurrency = new Semaphore(maxConcurrency);
+  const concurrency = new WorkflowResourceScope(maxConcurrency);
 
   let totalSpawned = 0;
   let spentOutputTokens = 0;
@@ -468,7 +476,17 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       checkAbort();
       checkBudget();
       checkAgentCap();
-      handle = await opts.backend.spawn(input);
+      for (;;) {
+        try {
+          handle = await opts.backend.spawn(input);
+          break;
+        } catch (error) {
+          if (!isAgentLimitReached(error) || !opts.backend.waitForAgentCapacity) throw error;
+          const canRetry = await opts.backend.waitForAgentCapacity(opts.signal);
+          checkAbort();
+          if (!canRetry) throw error;
+        }
+      }
       totalSpawned += 1;
       taskNames.set(handle.taskId, handle.name);
       activeTaskIds.add(handle.taskId);
@@ -792,7 +810,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       );
       // No barrier between stages: every item advances its own chain as soon
       // as its previous stage resolves. Actual agent spawns inside stages stay
-      // bounded by the shared concurrency Semaphore (acquired in doSpawn), so
+      // bounded by the shared Workflow resource scope (acquired in doSpawn), so
       // launching all item-chains at once does not exceed maxConcurrency.
       return Promise.all(
         items.map(async (item, index) => {

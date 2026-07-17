@@ -18,6 +18,7 @@ import type {
   AgentFollowupResult,
   AgentForkTurns,
   AgentMailboxMessage,
+  AgentMetadataValue,
   AgentOutput,
   AgentSpawnInput,
   AgentTreeSnapshot,
@@ -104,8 +105,12 @@ export class AgentActorController {
         content: string,
         classification?: AgentDataClassification,
       ) => this.send(callerPath, targetPath, content, classification),
-      followup: (targetPath: string, objective: string) => (
-        this.followup(callerPath, targetPath, objective)
+      followup: (
+        targetPath: string,
+        objective: string,
+        metadata?: Readonly<Record<string, AgentMetadataValue>>,
+      ) => (
+        this.followup(callerPath, targetPath, objective, metadata)
       ),
       interrupt: (targetPath: string, reason?: string) => (
         this.interrupt(callerPath, targetPath, reason)
@@ -118,6 +123,37 @@ export class AgentActorController {
         this.wait(callerPath, afterSequence, timeoutMs)
       ),
     });
+  }
+
+  /** Trusted host API: register a zero-slot Workflow protocol owner in this tree. */
+  async createProtocolOwner(callerPath: string, ownerId: string): Promise<AgentActorClient> {
+    const ownerPath = await this.mutate(() => {
+      const parent = this.requireActor(callerPath);
+      if (parent.path !== ROOT_PATH && parent.kind !== 'workflow') {
+        throw new AgentControlError('permission_denied', `${callerPath} cannot own a Workflow protocol`);
+      }
+      if (parent.state === 'closed') {
+        throw new AgentControlError('actor_closed', `${callerPath} is closed`);
+      }
+      validateProtocolOwnerId(ownerId);
+      const taskName = `workflow:${ownerId}`;
+      const path = `${callerPath}/${taskName}`;
+      if (this.actors.has(path)) {
+        throw new AgentControlError('name_collision', `actor already exists: ${path}`);
+      }
+      const actor = this.createActor(
+        path,
+        taskName,
+        callerPath,
+        'workflow',
+        deriveCapabilities(parent.capabilities, undefined),
+      );
+      this.actors.set(path, actor);
+      this.mailboxes.set(path, []);
+      this.appendEvent('actor_spawned', path, undefined, callerPath);
+      return path;
+    });
+    return this.bind(ownerPath);
   }
 
   async spawn(callerPath: string, input: AgentSpawnInput): Promise<AgentTurnRef> {
@@ -153,6 +189,7 @@ export class AgentActorController {
     callerPath: string,
     targetPath: string,
     objective: string,
+    metadata?: Readonly<Record<string, AgentMetadataValue>>,
   ): Promise<AgentFollowupResult> {
     let admittedTurnId: string | undefined;
     try {
@@ -167,7 +204,7 @@ export class AgentActorController {
           const turn = this.requireTurn(actor.currentTurnId);
           return { delivery: 'current_turn' as const, turn: turnRef(turn) };
         }
-        const plan = await this.prepareExistingTurn(actor, objective);
+        const plan = await this.prepareExistingTurn(actor, objective, metadata);
         admittedTurnId = plan.turn.turnId;
         return { delivery: 'started_turn' as const, turn: turnRef(plan.turn), plan };
       });
@@ -313,8 +350,12 @@ export class AgentActorController {
     return this.admitTurn(actor, input.objective, input.forkTurns ?? 'all', true, input.metadata);
   }
 
-  private prepareExistingTurn(actor: AgentActor, objective: string): Promise<StartPlan> {
-    return this.admitTurn(actor, objective, 'all', false);
+  private prepareExistingTurn(
+    actor: AgentActor,
+    objective: string,
+    metadata?: Readonly<Record<string, AgentMetadataValue>>,
+  ): Promise<StartPlan> {
+    return this.admitTurn(actor, objective, 'all', false, metadata);
   }
 
   private async admitTurn(
@@ -698,6 +739,12 @@ function validateTaskName(taskName: string): void {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(taskName)
     || /^(?:root|workflow|external)(?:[-_]|$)/i.test(taskName)) {
     throw new AgentControlError('invalid_task_name', `invalid actor task_name: ${taskName}`);
+  }
+}
+
+function validateProtocolOwnerId(ownerId: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(ownerId)) {
+    throw new AgentControlError('invalid_task_name', `invalid Workflow owner id: ${ownerId}`);
   }
 }
 

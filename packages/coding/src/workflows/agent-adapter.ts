@@ -1,30 +1,20 @@
-/**
- * FEATURE_217 (v0.7.49) Phase B — Coding workflow agent backend.
- *
- * Bridges the domain-neutral `WorkflowAgentBackend` (from
- * `@kodax-ai/agent/workflow`) onto KodaX's existing child-dispatch
- * substrate: `executeChildAgents` + per-child AbortController registry +
- * `childProgressSnapshots` + `MessageQueue` routing. It does NOT
- * duplicate the child state model — spawn/wait/output/stop/send all
- * reuse the same primitives `dispatch_child_task` / `task_output` /
- * `task_stop` / `send_message` already use.
- *
- * Each `spawn` launches one bundle through `executeChildAgents`
- * (maxParallel:1) without awaiting; the workflow runtime owns the
- * concurrency gate (Semaphore) so each backend spawn is a single child.
- *
- * Test seams (DI): `runChild` (defaults to `executeChildAgents`),
- * `queue`, `generateId`, `now`. Tests inject a fake `runChild` + a
- * minimal ctx so no real agents run.
- */
+/** Coding Workflow adapter over the Runtime-owned Actor control plane. */
 
-import { registerChildTask, routeMessage, getMessageQueue } from '@kodax-ai/agent';
-import type { ChildTaskRegistry, MessageQueue } from '@kodax-ai/agent';
+import type {
+  AgentActorClient,
+  AgentCapabilities,
+  AgentEvent,
+  AgentExecutionInput,
+  AgentExecutionKind,
+  AgentExecutionResult,
+  AgentMetadataValue,
+  AgentTurnExecutor,
+} from '@kodax-ai/agent';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type {
-  AgentTaskSnapshot,
   WorkflowAgentBackend,
   WorkflowSpawnAgentInput,
   WorkflowTaskHandle,
@@ -39,18 +29,17 @@ import type {
 
 import { executeChildAgents, assertValidWorkflowEvidenceRefs } from '../child-executor.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
-import { resolveCodingDispatchableAgent } from '../external-agents/local-catalog.js';
-import { assertSupportedOutputSchema } from './structured-output.js';
 import {
-  initChildSnapshot,
-  applyChildSnapshotEvent,
-  finalizeChildSnapshot,
-} from '../child-progress-snapshot.js';
+  listCodingDispatchableAgents,
+  resolveCodingDispatchableAgent,
+} from '../external-agents/local-catalog.js';
+import { assertSupportedOutputSchema } from './structured-output.js';
 import type { ChildProgressStatus } from '../child-progress-snapshot.js';
 import type {
   KodaXChildContextBundle,
   KodaXChildExecutionResult,
   KodaXChildRouteFacts,
+  KodaXActorHost,
   KodaXEvents,
   KodaXToolExecutionContext,
   KodaXWireReasoningEffort,
@@ -79,7 +68,7 @@ export type WorkflowChildOptions = Omit<
 >;
 
 export interface CodingWorkflowBackendDeps {
-  /** Parent tool-execution context (carries abort + snapshot registries). */
+  /** Parent tool-execution context carrying the Workflow owner's Actor binding. */
   readonly ctx: KodaXToolExecutionContext;
   /** Fixed per-run child options (parentRole / parentHarness / parentOptions
    *  / maxIterationsPerChild / guardrails / …). */
@@ -90,12 +79,8 @@ export interface CodingWorkflowBackendDeps {
     ctx: KodaXToolExecutionContext,
     options: ChildExecutorOptions,
   ) => Promise<KodaXChildExecutionResult>;
-  /** Seam: message queue. Defaults to the process-global singleton. */
-  readonly queue?: MessageQueue;
   /** Seam: unique child id generator. */
   readonly generateId?: () => string;
-  /** Seam: clock for snapshot timestamps. */
-  readonly now?: () => number;
   /** Workflow run id for correlating child-agent SDK callbacks. */
   readonly runId?: string;
   /** Default child write policy from the workflow manifest. */
@@ -107,12 +92,19 @@ export interface CodingWorkflowBackendDeps {
   readonly kodaxAuthored?: boolean;
 }
 
-interface TaskEntry {
+interface WorkflowStepBinding {
   readonly name: string;
   readonly input: WorkflowSpawnAgentInput;
   readonly bundle: KodaXChildContextBundle;
-  promise: Promise<KodaXChildExecutionResult>;
-  readonly runBundle: (bundle: KodaXChildContextBundle) => Promise<KodaXChildExecutionResult>;
+  readonly actorPath: string;
+  turnId: string;
+  promise?: Promise<KodaXChildExecutionResult>;
+  readonly runBundle: (
+    bundle: KodaXChildContextBundle,
+    execution: AgentExecutionInput,
+    actorControl: AgentActorClient,
+  ) => Promise<KodaXChildExecutionResult>;
+  readonly external: boolean;
   readonly verification?: WorkflowTaskVerification;
   readonly changedPathBaseline: Promise<ChangedPathSnapshot>;
   readonly mutationRecorder: MutationRecorder;
@@ -192,10 +184,6 @@ function resolveVerificationForInput(
     };
   }
   return { verification: writeDefault };
-}
-
-interface ExternalTaskEntry {
-  readonly name: string;
 }
 
 function resolveSpawnAgentInput(
@@ -446,42 +434,6 @@ function appendVerificationFailure(
   return finalText.trim().length > 0 ? `${finalText}\n\n${suffix}` : suffix;
 }
 
-function externalWorkflowStatus(task: AgentTaskSnapshot): WorkflowTaskStatus {
-  if (task.state === 'completed') return 'completed';
-  if (task.state === 'canceled') return 'stopped';
-  if (task.state === 'failed' || task.state === 'rejected' || task.state === 'unknown') {
-    return 'failed';
-  }
-  return 'running';
-}
-
-function externalWorkflowResult(
-  task: AgentTaskSnapshot,
-  name: string,
-): WorkflowTaskResult {
-  return {
-    taskId: task.taskId,
-    name,
-    status: externalWorkflowStatus(task),
-    finalText: task.output ?? task.error ?? '',
-    ...(task.usage ? { usage: task.usage } : {}),
-  };
-}
-
-function externalWorkflowSnapshot(
-  task: AgentTaskSnapshot,
-  name: string,
-): WorkflowTaskSnapshot {
-  const status = externalWorkflowStatus(task);
-  return {
-    taskId: task.taskId,
-    name,
-    status,
-    ...(task.output !== undefined ? { lastText: task.output } : {}),
-    ...(task.output === undefined && task.error !== undefined ? { lastText: task.error } : {}),
-  };
-}
-
 function limitReachedWarningVerification(): WorkflowTaskVerificationResult {
   return {
     ok: false,
@@ -492,7 +444,7 @@ function limitReachedWarningVerification(): WorkflowTaskVerificationResult {
 }
 
 function shouldRepairVerificationFailure(input: {
-  readonly entry: TaskEntry;
+  readonly entry: WorkflowStepBinding;
   readonly term: ReturnType<typeof deriveTerminal>;
   readonly verification: WorkflowTaskVerificationResult | undefined;
 }): boolean {
@@ -532,31 +484,6 @@ function buildVerificationRepairPrompt(input: {
     'Previous terminal response:',
     input.previousFinalText.trim() || '(empty)',
   ].join('\n');
-}
-
-async function waitForChildPromise(
-  promise: Promise<KodaXChildExecutionResult>,
-  taskId: string,
-  timeoutMs: number | undefined,
-  ctx: KodaXToolExecutionContext,
-  timeoutLabelMs: number | undefined = timeoutMs,
-): Promise<KodaXChildExecutionResult> {
-  if (timeoutMs === undefined) return promise;
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<KodaXChildExecutionResult>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          ctx.childAbortControllers?.get(taskId)?.abort();
-          reject(new Error(`workflow task ${taskId} timed out after ${timeoutLabelMs ?? timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function buildBundle(
@@ -656,27 +583,94 @@ function deriveTerminal(
   };
 }
 
+interface PendingChildResult {
+  readonly promise: Promise<KodaXChildExecutionResult>;
+  resolve(result: KodaXChildExecutionResult): void;
+  reject(error: unknown): void;
+}
+
+function createPendingChildResult(): PendingChildResult {
+  let resolvePromise: (result: KodaXChildExecutionResult) => void = () => {};
+  let rejectPromise: (error: unknown) => void = () => {};
+  const promise = new Promise<KodaXChildExecutionResult>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  void promise.catch(() => undefined);
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+function workflowActorTaskName(name: string, sequence: number): string {
+  const normalized = name
+    .normalize('NFKD')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  const base = /^[A-Za-z]/.test(normalized) && !/^(?:root|workflow|external)(?:[-_]|$)/i.test(normalized)
+    ? normalized
+    : 'step';
+  return `${base}-${sequence}`;
+}
+
+function workflowActorMetadata(input: {
+  readonly workflow: WorkflowSpawnAgentInput;
+  readonly executionKey?: string;
+  readonly agentId?: string;
+  readonly specialistName?: string;
+  readonly workflowRunId?: string;
+}): Readonly<Record<string, AgentMetadataValue>> {
+  const workflow = input.workflow;
+  return {
+    readOnly: workflow.readOnly !== false,
+    constraints: [...(workflow.constraints ?? [])],
+    evidenceRefs: [...(workflow.evidenceRefs ?? [])],
+    ...(workflow.scopeSummary ? { scope: workflow.scopeSummary } : {}),
+    ...(workflow.modelHint ? { modelHint: workflow.modelHint } : {}),
+    ...(workflow.isolation ? { isolation: workflow.isolation } : {}),
+    ...(workflow.effort ? { effort: workflow.effort } : {}),
+    ...(input.executionKey ? { executionKey: input.executionKey } : {}),
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.specialistName ? { specialistName: input.specialistName } : {}),
+    ...(input.workflowRunId ? { workflowRunId: input.workflowRunId } : {}),
+    ...(workflow.target?.expectedConfigurationRevision
+      ? { expectedConfigurationRevision: workflow.target.expectedConfigurationRevision }
+      : {}),
+  };
+}
+
+function actorExecutionResult(result: KodaXChildExecutionResult, taskId: string): AgentExecutionResult {
+  const terminal = deriveTerminal(result, taskId);
+  if (terminal.status !== 'completed' && terminal.status !== 'completed_unverified') {
+    throw new Error(terminal.finalText || `Workflow Agent ${taskId} ${terminal.status}.`);
+  }
+  const artifacts = result.mergedArtifacts.filter(Boolean);
+  return {
+    output: terminal.finalText,
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+  };
+}
+
 /**
  * Build a `WorkflowAgentBackend` over the coding child-dispatch substrate.
  */
 export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): WorkflowAgentBackend {
   const { ctx, childOptions } = deps;
   const runChild = deps.runChild ?? executeChildAgents;
-  const queue = deps.queue ?? getMessageQueue();
+  const actorControl = ctx.actorControl;
+  const actorHost = ctx.actorHost;
+  if (!actorControl || !actorHost) {
+    throw new Error('Workflow execution requires the Runtime-owned Actor control plane.');
+  }
   const listChangedFiles = deps.listChangedFiles ?? listGitChangedFiles;
-  const now = deps.now ?? (() => Date.now());
   let counter = 0;
+  let actorSequence = 0;
   const genId = deps.generateId ?? (() => `wf-child-${(counter += 1)}`);
 
-  const tasks = new Map<string, TaskEntry>();
-  const externalTasks = new Map<string, ExternalTaskEntry>();
+  const stepBindings = new Map<string, WorkflowStepBinding>();
   const summarySubscribers = new Set<(
     taskId: string,
     update: WorkflowTaskSummaryEventUpdate,
   ) => void>();
-  // Registry used ONLY for routeMessage target validation; auto-cleared on
-  // settle by registerChildTask. `tasks` (above) persists for wait/output.
-  const registry: ChildTaskRegistry<KodaXChildExecutionResult> = new Map();
 
   const hasTaskSummaryObservers = (): boolean =>
     deps.onTaskSummary !== undefined || summarySubscribers.size > 0;
@@ -687,20 +681,63 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   ): void => {
     try {
       deps.onTaskSummary?.(taskId, update);
-    } catch {
-      // Late digest subscribers are observers.
+    } catch (error) {
+      emitKodaXDiagnostic({
+        source: 'coding:workflow-summary',
+        level: 'warn',
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
     for (const subscriber of summarySubscribers) {
       try {
         subscriber(taskId, update);
-      } catch {
-        // Late digest subscribers are observers.
+      } catch (error) {
+        emitKodaXDiagnostic({
+          source: 'coding:workflow-summary',
+          level: 'warn',
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   };
 
+  const registerExecution = (
+    taskId: string,
+    bundle: KodaXChildContextBundle,
+    runBundle: WorkflowStepBinding['runBundle'],
+    attempt: number,
+  ): { readonly key: string; readonly promise: Promise<KodaXChildExecutionResult>; cancel(): void } => {
+    const key = `workflow:${deps.runId ?? 'inline'}:${taskId}:${attempt}`;
+    const pending = createPendingChildResult();
+    let unregister = (): void => {};
+    const executor: AgentTurnExecutor = {
+      async execute(execution): Promise<AgentExecutionResult> {
+        try {
+          const result = await runBundle(
+            bundle,
+            execution,
+            actorHost.bindActor(execution.actor.path),
+          );
+          pending.resolve(result);
+          return actorExecutionResult(result, taskId);
+        } catch (error) {
+          pending.reject(error);
+          throw error;
+        } finally {
+          unregister();
+        }
+      },
+    };
+    unregister = actorHost.registerTurnExecutor(key, executor);
+    return { key, promise: pending.promise, cancel: unregister };
+  };
+
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     let effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
+    let kind: AgentExecutionKind = effectiveInput.subagentType ? 'constructed' : 'native';
+    let specialistName = effectiveInput.subagentType;
+    let externalControl: AgentCapabilities['control'] | undefined;
+    let externalAgentId: string | undefined;
     if (effectiveInput.target && effectiveInput.subagentType) {
       throw new Error('Workflow target and subagentType are mutually exclusive.');
     }
@@ -726,6 +763,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
           ...untargetedInput,
           ...(localRoute.subagentType ? { subagentType: localRoute.subagentType } : {}),
         };
+        kind = localRoute.kind;
+        specialistName = localRoute.subagentType;
       } else {
         if (effectiveInput.modelHint !== undefined || effectiveInput.effort !== undefined) {
           throw new Error(
@@ -735,29 +774,40 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         if (effectiveInput.verification?.requiresMutation === true) {
           throw new Error('External Workflow targets cannot directly satisfy workspace mutation verification.');
         }
-        const childId = genId();
-        await binding.plane.tasks.start({
-          taskId: childId,
-          agentId: effectiveInput.target.agentId,
-          objective: effectiveInput.prompt,
-          context: {
-            ...binding.context,
-            ...(deps.runId ? { workflowId: deps.runId } : {}),
-          },
-          readOnly: effectiveInput.readOnly,
-          ...(effectiveInput.target.expectedConfigurationRevision
-            ? { expectedConfigurationRevision: effectiveInput.target.expectedConfigurationRevision }
-            : {}),
-        });
-        externalTasks.set(childId, { name: effectiveInput.name });
-        return { taskId: childId, name: effectiveInput.name };
+        const described = await binding.plane.describe(
+          effectiveInput.target.agentId,
+          { ...binding.context, readOnly: effectiveInput.readOnly },
+          listCodingDispatchableAgents(binding.context, ctx.agentScope),
+        );
+        if (!described || described.descriptor.origin !== 'external') {
+          throw new Error(`Workflow target is not dispatchable: ${effectiveInput.target.agentId}`);
+        }
+        if (
+          effectiveInput.target.expectedConfigurationRevision !== undefined
+          && effectiveInput.target.expectedConfigurationRevision
+            !== described.descriptor.configurationRevision
+        ) throw new Error('Workflow target configuration revision changed.');
+        const capabilities = described.descriptor.capabilities;
+        kind = 'external';
+        externalAgentId = effectiveInput.target.agentId;
+        externalControl = {
+          followup: capabilities.inputRequired !== 'unsupported',
+          interrupt: capabilities.cancellation !== 'unsupported',
+          streaming: capabilities.streaming !== 'unsupported',
+          artifacts: capabilities.artifacts !== 'unsupported',
+        };
       }
     }
     const childId = genId();
-    // `tasks` holds every agent spawned earlier in this run (the current one is
-    // added at the end of spawn, line ~682) — so this is exactly the set a
+    // Step bindings hold every Agent spawned earlier in this run, so this is
+    // exactly the set a
     // `task_id:` evidence ref may legitimately point back to.
-    const bundle = buildBundle(childId, effectiveInput, new Set(tasks.keys()), deps.kodaxAuthored === true);
+    const bundle = buildBundle(
+      childId,
+      effectiveInput,
+      new Set(stepBindings.keys()),
+      deps.kodaxAuthored === true,
+    );
     const resolvedVerification = resolveVerificationForInput(effectiveInput);
     const verification = resolvedVerification.verification;
     const mutationRecorder = createMutationRecorder();
@@ -765,20 +815,11 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const changedPathBaseline = hasVerificationWork(verification)
       ? captureChangedPaths(ctx, listChangedFiles)
       : Promise.resolve({ paths: [] });
-    const snapshotMap = ctx.childProgressSnapshots;
-    const runBundle = async (runBundleInput: KodaXChildContextBundle): Promise<KodaXChildExecutionResult> => {
-      const abort = new AbortController();
-      ctx.childAbortControllers?.set(childId, abort);
-    if (snapshotMap) {
-      initChildSnapshot(snapshotMap, {
-        childId,
-        startedAt: now(),
-        maxIterations: childOptions.maxIterationsPerChild,
-        parentRole: childOptions.parentRole,
-        readOnly: runBundleInput.readOnly,
-        specialistName: runBundleInput.specialistName,
-      });
-    }
+    const runBundle: WorkflowStepBinding['runBundle'] = async (
+      runBundleInput,
+      execution,
+      childActorControl,
+    ) => {
     const perChild: ChildExecutorOptions = {
       ...childOptions,
       parentOptions: {
@@ -826,88 +867,127 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
             },
           }
         : {}),
-      abortSignal: abort.signal,
-      snapshotUpdater: snapshotMap
-        ? (event) => applyChildSnapshotEvent(snapshotMap, childId, event)
-        : undefined,
+      abortSignal: execution.signal,
+      // Workflow steps are protocol leaves by default. The Actor controller
+      // retains lifecycle authority without granting recursive model tools.
+      actorControl: undefined,
+      actorHost: undefined,
     };
 
-      let result: KodaXChildExecutionResult | undefined;
-      try {
-        await changedPathBaseline;
-        result = await runChild([runBundleInput], ctx, perChild);
-        return result;
-      } finally {
-        ctx.childAbortControllers?.delete(childId);
-        if (snapshotMap) {
-          const term = result
-            ? deriveTerminal(result, childId)
-            : { snapStatus: 'failed' as ChildProgressStatus, finalText: '' };
-          finalizeChildSnapshot(snapshotMap, childId, {
-            status: term.snapStatus,
-            finalText: term.finalText,
-            endedAt: now(),
-          });
-        }
-      }
+      await changedPathBaseline;
+      void childActorControl;
+      return runChild([runBundleInput], ctx, perChild);
     };
 
-    const promise = runBundle(bundle);
-
-    tasks.set(childId, {
+    const registered = kind === 'external'
+      ? undefined
+      : registerExecution(childId, bundle, runBundle, 1);
+    actorSequence += 1;
+    let turn;
+    try {
+      turn = await actorControl.spawn({
+        taskName: workflowActorTaskName(effectiveInput.name, actorSequence),
+        objective: effectiveInput.prompt,
+        kind,
+        capabilities: {
+          ...(effectiveInput.readOnly !== false ? { filesystem: 'read' as const } : {}),
+          canAskUser: false,
+          ...(externalControl ? { control: externalControl } : {}),
+        },
+        metadata: workflowActorMetadata({
+          workflow: effectiveInput,
+          ...(registered ? { executionKey: registered.key } : {}),
+          ...(externalAgentId ? { agentId: externalAgentId } : {}),
+          ...(specialistName ? { specialistName } : {}),
+          ...(deps.runId ? { workflowRunId: deps.runId } : {}),
+        }),
+      });
+    } catch (error) {
+      registered?.cancel();
+      throw error;
+    }
+    stepBindings.set(childId, {
       name: effectiveInput.name,
       input: effectiveInput,
       bundle,
-      promise,
+      actorPath: turn.actorPath,
+      turnId: turn.turnId,
+      ...(registered ? { promise: registered.promise } : {}),
       runBundle,
+      external: kind === 'external',
       verification,
       changedPathBaseline,
       mutationRecorder,
       acceptToolMutationEvidence,
       repairAttempts: 0,
     });
-    registerChildTask(registry, childId, promise);
     return { taskId: childId, name: effectiveInput.name };
+  };
+
+  const waitForActorTurn = async (
+    entry: WorkflowStepBinding,
+    timeoutMs: number | undefined,
+    timeoutLabelMs: number | undefined = timeoutMs,
+  ): Promise<void> => {
+    const isTerminalEvent = (event: AgentEvent): boolean => (
+      event.turnId === entry.turnId
+      && (event.kind === 'turn_completed'
+        || event.kind === 'turn_failed'
+        || event.kind === 'turn_interrupted')
+    );
+    const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+    let cursor = 0;
+    for (;;) {
+      const events = actorControl.eventSnapshot(cursor);
+      const terminal = events.find(isTerminalEvent);
+      if (terminal) return;
+      cursor = events.at(-1)?.sequence ?? cursor;
+      const remaining = deadline === undefined ? undefined : deadline - Date.now();
+      if (remaining !== undefined && remaining <= 0) {
+        await actorControl.interrupt(entry.actorPath, 'workflow wait timeout');
+        throw new Error(`workflow task ${entry.name} timed out after ${timeoutLabelMs ?? timeoutMs}ms`);
+      }
+      const event = await actorControl.wait(cursor, remaining);
+      if (!event) {
+        await actorControl.interrupt(entry.actorPath, 'workflow wait timeout');
+        throw new Error(`workflow task ${entry.name} timed out after ${timeoutLabelMs ?? timeoutMs}ms`);
+      }
+      if (isTerminalEvent(event)) return;
+      cursor = event.sequence;
+    }
   };
 
   const wait = async (
     taskId: string,
     opts?: WorkflowWaitOptions,
   ): Promise<WorkflowTaskResult> => {
-    const external = externalTasks.get(taskId);
-    if (external) {
-      const binding = ctx.agentExecutorPlane;
-      if (!binding) throw new Error('Workflow external-agent binding was removed.');
-      const timeoutMs = normalizeWaitTimeoutMs(opts);
-      return externalWorkflowResult(
-        await binding.plane.tasks.wait(taskId, timeoutMs),
-        external.name,
-      );
-    }
-    const entry = tasks.get(taskId);
+    const entry = stepBindings.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
     const totalWaitTimeoutMs = normalizeWaitTimeoutMs(opts);
     const waitStartedAt = Date.now();
     const waitForAttempt = async (
-      promise: Promise<KodaXChildExecutionResult>,
+      promise: Promise<KodaXChildExecutionResult> | undefined,
     ): Promise<KodaXChildExecutionResult> => {
-      if (totalWaitTimeoutMs === undefined) {
-        return waitForChildPromise(promise, taskId, undefined, ctx);
-      }
       const elapsedMs = Date.now() - waitStartedAt;
-      const remainingMs = totalWaitTimeoutMs - elapsedMs;
-      if (remainingMs <= 0) {
-        ctx.childAbortControllers?.get(taskId)?.abort();
-        throw new Error(`workflow task ${taskId} timed out after ${totalWaitTimeoutMs}ms`);
-      }
-      return waitForChildPromise(
-        promise,
-        taskId,
-        Math.max(1, Math.floor(remainingMs)),
-        ctx,
-        totalWaitTimeoutMs,
-      );
+      const remainingMs = totalWaitTimeoutMs === undefined
+        ? undefined
+        : Math.max(0, totalWaitTimeoutMs - elapsedMs);
+      await waitForActorTurn(entry, remainingMs, totalWaitTimeoutMs);
+      if (!promise) throw new Error(`workflow task ${taskId} has no local execution result`);
+      return promise;
     };
+    if (entry.external) {
+      await waitForActorTurn(entry, totalWaitTimeoutMs);
+      const output = actorControl.output(entry.actorPath, entry.turnId);
+      return {
+        taskId,
+        name: entry.name,
+        status: output.state === 'completed'
+          ? 'completed'
+          : output.state === 'interrupted' ? 'stopped' : 'failed',
+        finalText: output.output ?? output.error ?? '',
+      };
+    }
     let result = await waitForAttempt(entry.promise);
     let totalTokensUsed = result.totalTokensUsed;
     let term = deriveTerminal(result, taskId);
@@ -944,17 +1024,34 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     }
     while (shouldRepairVerificationFailure({ entry, term, verification })) {
       entry.repairAttempts += 1;
+      const repairPrompt = buildVerificationRepairPrompt({
+        originalPrompt: entry.input.prompt,
+        previousFinalText: term.finalText,
+        verification: verification!,
+        attempt: entry.repairAttempts,
+      });
       const repairBundle = buildBundle(taskId, {
         ...entry.input,
-        prompt: buildVerificationRepairPrompt({
-          originalPrompt: entry.input.prompt,
-          previousFinalText: term.finalText,
-          verification: verification!,
-          attempt: entry.repairAttempts,
-        }),
+        prompt: repairPrompt,
       }, undefined, deps.kodaxAuthored === true);
-      entry.promise = entry.runBundle(repairBundle);
-      registerChildTask(registry, taskId, entry.promise);
+      const registered = registerExecution(
+        taskId,
+        repairBundle,
+        entry.runBundle,
+        entry.repairAttempts + 1,
+      );
+      entry.promise = registered.promise;
+      try {
+        const followup = await actorControl.followup(
+          entry.actorPath,
+          repairPrompt,
+          { executionKey: registered.key },
+        );
+        entry.turnId = followup.turn.turnId;
+      } catch (error) {
+        registered.cancel();
+        throw error;
+      }
       result = await waitForAttempt(entry.promise);
       totalTokensUsed += result.totalTokensUsed;
       term = deriveTerminal(result, taskId);
@@ -1005,11 +1102,6 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         finalText: appendVerificationFailure(term.finalText, verification),
       };
     }
-    finalizeChildSnapshot(ctx.childProgressSnapshots, taskId, {
-      status: term.snapStatus,
-      finalText: term.finalText,
-      endedAt: now(),
-    });
     return {
       taskId,
       name: entry.name,
@@ -1054,50 +1146,37 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   };
 
   const output = async (taskId: string): Promise<WorkflowTaskSnapshot> => {
-    const external = externalTasks.get(taskId);
-    if (external) {
-      const binding = ctx.agentExecutorPlane;
-      if (!binding) throw new Error('Workflow external-agent binding was removed.');
-      return externalWorkflowSnapshot(await binding.plane.tasks.get(taskId), external.name);
+    // Unknown protocol step ids fail loudly; known steps project Actor state.
+    const entry = stepBindings.get(taskId);
+    if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
+    const actor = actorControl.get(entry.actorPath).actor;
+    if (actor.currentTurnId === entry.turnId) {
+      return { taskId, name: entry.name, status: 'running' };
     }
-    // FEATURE_246 (review A2): mirror wait()'s guard — an unknown (never-spawned)
-    // id must fail loudly, not return a fabricated { status: 'running' } snapshot
-    // that downstream logic would branch on. A KNOWN task that is merely in-flight
-    // (in `tasks`, not yet in childProgressSnapshots) still returns 'running'.
-    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
-    const name = tasks.get(taskId)?.name ?? taskId;
-    const snap = ctx.childProgressSnapshots?.get(taskId);
-    if (!snap) return { taskId, name, status: 'running' };
-    const status: WorkflowTaskStatus = snap.status === 'aborted' ? 'stopped' : snap.status;
-    return snap.finalText !== undefined
-      ? { taskId, name, status, lastText: snap.finalText }
-      : { taskId, name, status };
+    const result = actorControl.output(entry.actorPath, entry.turnId);
+    const status: WorkflowTaskStatus = result.state === 'completed'
+      ? 'completed'
+      : result.state === 'interrupted' ? 'stopped' : 'failed';
+    const lastText = result.output ?? result.error;
+    return lastText === undefined
+      ? { taskId, name: entry.name, status }
+      : { taskId, name: entry.name, status, lastText };
   };
 
   const send = async (taskId: string, content: string): Promise<void> => {
-    if (externalTasks.has(taskId)) {
-      const binding = ctx.agentExecutorPlane;
-      if (!binding) throw new Error('Workflow external-agent binding was removed.');
-      await binding.plane.tasks.sendInput(taskId, { content });
-      return;
-    }
     // FEATURE_246 (review A2): fail loudly on an unknown target rather than
     // silently dropping the message (the smoke api's send asserts the same).
-    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
-    routeMessage({ to: taskId, priority: 'user', mode: 'prompt', content, registry, queue });
+    const entry = stepBindings.get(taskId);
+    if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
+    await actorControl.send(entry.actorPath, content);
   };
 
   const stop = async (taskId: string, reason: string): Promise<void> => {
-    if (externalTasks.has(taskId)) {
-      const binding = ctx.agentExecutorPlane;
-      if (!binding) throw new Error('Workflow external-agent binding was removed.');
-      await binding.plane.tasks.cancel(taskId, reason);
-      return;
-    }
     // FEATURE_246 (review A2): fail loudly on an unknown target rather than a
     // silent no-op (optional chaining would otherwise swallow it).
-    if (!tasks.has(taskId)) throw new Error(`unknown workflow task: ${taskId}`);
-    ctx.childAbortControllers?.get(taskId)?.abort();
+    const entry = stepBindings.get(taskId);
+    if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
+    await actorControl.interrupt(entry.actorPath, reason);
   };
 
   // NOTE: no `synthesize` here — `wf.synthesize` runs as a gated agent in
@@ -1105,6 +1184,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   // concurrency / budget and emits run-graph events.
   return {
     spawn,
+    waitForAgentCapacity: (signal) => actorHost.waitForAgentCapacity(signal),
     wait,
     output,
     send,

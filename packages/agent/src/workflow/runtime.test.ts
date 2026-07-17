@@ -786,6 +786,38 @@ describe('wf.pipeline — no-barrier staged scheduling', () => {
 });
 
 describe('maxConcurrency / parallel in-flight gate', () => {
+  it('keeps a globally rejected step pending in protocol state and retries after capacity', async () => {
+    const base = fakeBackend();
+    let spawnAttempts = 0;
+    let capacityWaits = 0;
+    const backend: WorkflowAgentBackend = {
+      ...base.backend,
+      spawn: async (input) => {
+        spawnAttempts += 1;
+        if (spawnAttempts === 1) {
+          throw Object.assign(new Error('Agent concurrency limit reached.'), {
+            code: 'agent_limit_reached' as const,
+            retryable: true as const,
+          });
+        }
+        return base.backend.spawn(input);
+      },
+      waitForAgentCapacity: async () => {
+        capacityWaits += 1;
+        return true;
+      },
+    };
+
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => (
+      wf.runAgent({ name: 'pending-step', prompt: 'retry after a real slot is released' })
+    ));
+
+    expect(outcome.ok).toBe(true);
+    expect(spawnAttempts).toBe(2);
+    expect(capacityWaits).toBe(1);
+    expect(base.spawnCount()).toBe(1);
+  });
+
   it('fails fast on invalid maxConcurrency instead of hanging spawned agents', async () => {
     const { backend, spawnCount } = fakeBackend();
     const outcome = await runWorkflow(

@@ -48,7 +48,7 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import { getDefaultLspService } from '../lsp/service.js';
-import { createLocalCodingActorControl } from './actor-runtime.js';
+import { CodingActorSession } from './actor-runtime.js';
 
 /**
  * Resolve the on-disk run directory for a `resumeFromRunId`, or undefined when
@@ -105,6 +105,7 @@ export function buildToolExecutionContext(
   const context: KodaXToolExecutionContext = {
     backups: new Map(),
     actorControl: options.context?.actorControl,
+    actorHost: options.context?.actorHost,
     gitRoot: options.context?.gitRoot ?? undefined,
     // FEATURE_247 (R7) — session/profile attribution for host-registered tools
     // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't
@@ -214,13 +215,21 @@ export function buildToolExecutionContext(
     // tool description limit activation to explicit user Workflow intent. SA (solo)
     // never hosts a workflow (fails the agentMode gate + SA_SOLO_EXCLUDE_TOOLS). The
     // lazy import keeps the static graph acyclic (workflows -> agent-runtime).
-    workflowHost: buildWorkflowToolHost(options, sessionId),
   };
-  if (!context.actorControl && options.agentMode === 'ama') {
-    context.actorControl = options.context?.actorSession
-      ? options.context.actorSession.attach(context, options)
-      : createLocalCodingActorControl(context, options);
+  if (!context.actorControl && (options.agentMode === 'ama' || options.context?.actorSession)) {
+    const actorSession = options.context?.actorSession ?? new CodingActorSession({
+      maxConcurrentThreadsPerSession: options.maxConcurrentThreadsPerSession,
+      sessionId,
+    });
+    context.actorHost = actorSession;
+    context.actorControl = actorSession.attach(context, options);
   }
+  context.workflowHost = buildWorkflowToolHost(
+    options,
+    sessionId,
+    context.actorControl,
+    context.actorHost,
+  );
   return context;
 }
 
@@ -287,6 +296,8 @@ export function toWorkflowRunProgressView(s: WorkflowProcessSnapshot): WorkflowR
 function buildWorkflowToolHost(
   options: KodaXOptions,
   sessionId?: string,
+  actorControl?: KodaXToolExecutionContext['actorControl'],
+  actorHost?: KodaXToolExecutionContext['actorHost'],
 ): WorkflowToolHost | undefined {
   const runsBaseDir = options.workflowRunsBaseDir;
   // Opt-in diagnostic for "the Worker has no run_workflow" reports: shows the
@@ -345,10 +356,16 @@ function buildWorkflowToolHost(
     // that would deliver every process event twice (the gap was the REPL not
     // *consuming* the hook, not the host not *emitting* it). The REPL renders it
     // with the same work-strip the slash path uses.
+    const workflowOptions: KodaXOptions = actorControl && actorHost
+      ? {
+          ...options,
+          context: { ...options.context, actorControl, actorHost },
+        }
+      : options;
     const started = await startManagedWorkflow({
       source: { kind: 'inline', manifest, source },
       args,
-      options,
+      options: workflowOptions,
       runsBaseDir,
       manager: getDefaultWorkflowRunManager(),
       // FEATURE_246 Part D: resume seeds the result cache from the prior run.

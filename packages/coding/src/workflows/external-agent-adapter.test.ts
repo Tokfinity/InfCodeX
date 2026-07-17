@@ -8,6 +8,7 @@ import {
 import type { AgentJsonObject, ExternalAgentRegistration } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 import { createCodingWorkflowBackend } from './agent-adapter.js';
 
 function registration(
@@ -48,16 +49,17 @@ async function context(): Promise<KodaXToolExecutionContext> {
     inputRequired: true,
     inputPrefix: 'continued:',
   }));
-  return {
+  const ctx = {
     backups: new Map(),
-    childTaskRegistry: new Map(),
-    childAbortControllers: new Map(),
-    childProgressSnapshots: new Map(),
     agentExecutorPlane: {
       plane,
       context: { actorId: 'actor-1', projectId: 'project-1' },
     },
-  };
+  } as KodaXToolExecutionContext;
+  const actorSession = new CodingActorSession();
+  ctx.actorHost = actorSession;
+  ctx.actorControl = actorSession.attach(ctx, { provider: 'anthropic' });
+  return ctx;
 }
 
 describe('FEATURE_258 Workflow external target', () => {
@@ -93,7 +95,7 @@ describe('FEATURE_258 Workflow external target', () => {
       finalText: 'workflow-ok',
     });
     expect(runChild).not.toHaveBeenCalled();
-    expect(await ctx.agentExecutorPlane!.plane.tasks.get(handle.taskId)).toMatchObject({
+    expect((await ctx.agentExecutorPlane!.plane.tasks.list())[0]).toMatchObject({
       workflowId: 'workflow-run-1',
       agentId: 'external:workflow',
     });
@@ -216,10 +218,10 @@ describe('FEATURE_258 Workflow external target', () => {
     });
 
     await expect(backend.wait(handle.taskId, { timeoutMs: 10 }))
-      .rejects.toThrow(/did not finish within 10ms/i);
+      .rejects.toThrow(/timed out after 10ms/i);
     await expect(backend.wait(handle.taskId, { timeoutMs: 0 }))
       .rejects.toThrow(/workflow wait timeoutMs must be a positive number/i);
-    await backend.stop(handle.taskId, 'test cleanup');
+    await expect(backend.output(handle.taskId)).resolves.toMatchObject({ status: 'stopped' });
   });
 
   it('rejects local tier selectors at the external target boundary', async () => {
