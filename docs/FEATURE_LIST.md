@@ -365,7 +365,7 @@ pre-F270 native/default-Workflow active state was process-local and F258 records
 lack exact session ownership, so recovery never guesses or re-parents legacy
 work. The frozen Layer 2/3 driver, exact historical/current production-byte
 fixtures, manifest-only gate, budget enforcement, raw-cell integrity checks,
-and blind evidence packs are complete. The final isolated 87/87 focused suite
+and blind evidence packs are complete. The final isolated 227/227 focused suite
 and full build pass. The authorized Layer 2 treatment is non-inferior in 29/30
 blind pairs; Layer 3 is non-inferior in 5/6 journeys with no invalid-plan replay.
 Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
