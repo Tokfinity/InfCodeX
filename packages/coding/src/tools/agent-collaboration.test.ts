@@ -1,5 +1,6 @@
 import {
   createAgentActorController,
+  type AgentActorController,
   type AgentExecutionInput,
   type AgentExecutionResult,
   type AgentTurnExecutor,
@@ -25,9 +26,10 @@ class DeferredExecutor implements AgentTurnExecutor {
 async function context(executor = new DeferredExecutor()): Promise<{
   readonly ctx: KodaXToolExecutionContext;
   readonly executor: DeferredExecutor;
+  readonly controller: AgentActorController;
 }> {
   const controller = await createAgentActorController({ executor });
-  return { ctx: { backups: new Map(), actorControl: controller.bind('/root') }, executor };
+  return { ctx: { backups: new Map(), actorControl: controller.bind('/root') }, executor, controller };
 }
 
 describe('F270 canonical collaboration tools', () => {
@@ -102,6 +104,78 @@ describe('F270 canonical collaboration tools', () => {
       },
     });
     expect(listed.actors.some((actor) => actor.path === '/root/d')).toBe(false);
+  });
+
+  it('filters and paginates only the caller-visible actor projection', async () => {
+    const { ctx } = await context();
+    for (const taskName of ['a', 'b', 'c']) {
+      await executeTool('spawn_agent', { task_name: taskName, objective: taskName }, ctx);
+    }
+
+    const first = JSON.parse(await executeTool('list_agents', {
+      path_prefix: '/root/',
+      state: 'running',
+      limit: 2,
+    }, ctx)) as {
+      readonly actors: readonly { readonly path: string }[];
+      readonly hasMore?: boolean;
+      readonly nextAfterPath?: string;
+    };
+    const second = JSON.parse(await executeTool('list_agents', {
+      path_prefix: '/root/',
+      state: 'running',
+      limit: 2,
+      after_path: first.nextAfterPath,
+    }, ctx)) as {
+      readonly actors: readonly { readonly path: string }[];
+      readonly hasMore?: boolean;
+    };
+
+    expect(first).toMatchObject({
+      hasMore: true,
+      nextAfterPath: '/root/b',
+      actors: [{ path: '/root/a' }, { path: '/root/b' }],
+    });
+    expect(second).toMatchObject({ hasMore: false, actors: [{ path: '/root/c' }] });
+  });
+
+  it('applies list filters after authorization without leaking a peer descendant count', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'caller', objective: 'Caller.' });
+    await controller.spawn('/root', { taskName: 'peer', objective: 'Peer.' });
+    await controller.spawn('/root/peer', { taskName: 'private-child', objective: 'Private.' });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root/caller'),
+    };
+
+    const listed = JSON.parse(await executeTool('list_agents', {
+      path_prefix: '/root/peer/private-child',
+    }, ctx)) as Record<string, unknown>;
+
+    expect(listed).toMatchObject({ ok: true, matchedActorCount: 0, actors: [] });
+  });
+
+  it('rejects observation requests above the Runtime-owned bounds', async () => {
+    const { ctx } = await context();
+
+    const listResult = JSON.parse(
+      await executeTool('list_agents', { limit: 51 }, ctx),
+    ) as Record<string, unknown>;
+    const waitResult = JSON.parse(await executeTool('wait_agent', {
+      timeout_ms: 0,
+      max_events: 21,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(listResult).toMatchObject({
+      ok: false,
+      error: { message: 'limit must be an integer between 1 and 50.' },
+    });
+    expect(waitResult).toMatchObject({
+      ok: false,
+      error: { message: 'max_events must be an integer between 1 and 20.' },
+    });
   });
 
   it('cannot escalate a read-only Actor to a write child', async () => {
@@ -274,6 +348,58 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({ ok: true, status: 'interrupted' });
+  });
+
+  it('returns a bounded event batch without skipping the remaining committed events', async () => {
+    const { ctx } = await context();
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
+    await ctx.actorControl?.send('/root/worker', 'First update.');
+    await ctx.actorControl?.send('/root/worker', 'Second update.');
+
+    const first = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 0,
+      max_events: 1,
+    }, ctx)) as {
+      readonly events?: readonly { readonly sequence: number; readonly actorPath: string }[];
+      readonly nextSequence?: number;
+      readonly hasMore?: boolean;
+      readonly updatedActors?: readonly string[];
+    };
+    const second = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: first.nextSequence,
+      timeout_ms: 0,
+      max_events: 8,
+    }, ctx)) as {
+      readonly events?: readonly { readonly sequence: number }[];
+      readonly hasMore?: boolean;
+    };
+
+    expect(first).toMatchObject({
+      events: [expect.objectContaining({ actorPath: '/root/worker' })],
+      updatedActors: ['/root/worker'],
+      hasMore: true,
+    });
+    expect(second.events).toHaveLength(1);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it('interrupts an invalidated actor branch without permanently closing its identities', async () => {
+    const { ctx, controller } = await context();
+    await executeTool('spawn_agent', { task_name: 'parent', objective: 'Parent.' }, ctx);
+    await controller.bind('/root/parent').spawn({ taskName: 'child', objective: 'Child.' });
+
+    const result = JSON.parse(await executeTool('interrupt_agent', {
+      target: 'parent',
+      scope: 'subtree',
+      reason: 'premise invalidated',
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ ok: true, scope: 'subtree' });
+    expect(controller.output('/root', '/root/parent')).toMatchObject({ state: 'interrupted' });
+    expect(controller.output('/root', '/root/parent/child')).toMatchObject({ state: 'interrupted' });
+    expect(controller.get('/root', '/root/parent').actor.state).toBe('idle');
   });
 
   it('distinguishes a committed actor event from an expired wait', async () => {

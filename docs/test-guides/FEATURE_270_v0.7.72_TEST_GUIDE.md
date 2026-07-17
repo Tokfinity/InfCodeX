@@ -132,7 +132,35 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - [ ] root 用户输入中断当前 wait/round 后不会丢失，并在下一 turn 恢复；child 不会
   直接看到用户输入，已中断 wait 不残留 timer、listener 或 waiter。
 
-## 自动化与评测基线（2026-07-17）
+### TC-008：完整观察面、分支取消与宿主边界
+
+1. 创建超过 20 个可见 Actor，并使用 `path_prefix`、`state`、`after_path` 和
+   `limit` 分页调用 `list_agents`；再让非 root Actor 查询 sibling 路径前缀。
+2. 在一个游标之后连续提交多条 Actor 事件，以 `max_events: 1` 等待，再用返回的
+   `nextSequence` 继续等待直至 `hasMore: false`。
+3. 创建 parent/child 两个 active Turn，对 parent 调用
+   `interrupt_agent(scope='subtree')`；随后对 parent 发起 `followup_task`。另创建一个
+   不支持 interrupt 的 active external child，验证同一操作不会部分中断其 parent。
+4. 让 external Agent 返回带 URI、MIME、大小、hash、provenance、producing Agent 和
+   remote task 的制品，再调用 `agent_output`。对本地路径使用普通受权限控制的读取
+   工具；确认 collaboration 工具不会自动下载远程 URI。
+5. 创建名为 `parent` 的 root child 并从 root 操作它；再从普通 child 使用 `parent`
+   别名。检查 model-visible schema，并从可信 Runtime host 执行永久 subtree close。
+
+预期：
+
+- [ ] 每页最多返回 `limit` 个可见 Actor，游标无重复或遗漏；非 root 查询不泄露
+  sibling 的路径、数量或状态。
+- [ ] `event` 保持向后兼容并等于批次首项；`events` 有界，`nextSequence` 指向已返回
+  的最后一项，继续等待不会跳过剩余已提交事件。
+- [ ] 可中断子树按 child-first 顺序一次提交并保留 idle/reusable identity；任一 active
+  descendant 不支持 interrupt 时整棵目标分支保持运行。
+- [ ] `artifacts` 字符串数组继续可用，`artifactDetails` 保留结构化元数据；读取、网络
+  与凭据仍经过原有权限面，没有隐式 SSRF 或第二文件读取实现。
+- [ ] root 可准确操作名为 `parent` 的 child，非 root 的 `parent` 仍解析为直接父级；
+  模型仍只看到 7 个 canonical collaboration tools，永久 close 只存在于可信宿主。
+
+## 自动化与评测基线（2026-07-18）
 
 - `npm run build`：通过。
 - 最终隔离聚焦回归：15 个测试文件，227/227 通过。
@@ -143,6 +171,9 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
   child executor、storage 与 Ink/view-model 回归：12 个测试文件，286/286 通过。
 - post-review 五个核心实现文件 coverage：statements/lines 88.79%，branches
   80.05%；完整 package、bundle、Worker sidecar 与 DTS 构建通过。
+- completeness audit：聚焦实现 62/62、Actor/Workflow/storage/UI 跨层
+  285/285、SDK/protocol 252/252 通过；五个核心实现文件 statements/lines
+  89.47%、branches 82.01%；完整 build 与 2/2 零付费 manifest eval 通过。
 - F270 eval harness + shared one-shot boundary：65/65 通过；新
   dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。
 - manifest-only eval：2/2 通过，三个付费 stage 默认跳过；raw root 位于 OS
@@ -171,9 +202,9 @@ npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 7 | - | - | - |
+| 8 | - | - | - |
 
-**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 7
+**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 8
 个人工用例仍待发布测试人员执行并签字。
 
 **发现的问题**：自动化未发现可复现的 F270 产品回退；已知残余行为是部分模型

@@ -699,6 +699,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       properties: {
         after_sequence: { type: 'number', description: 'Last event sequence already observed. Defaults to 0.' },
         timeout_ms: { type: 'number', description: 'Bounded wait window, 0-120000 ms. Defaults to 30000.' },
+        max_events: { type: 'number', description: 'Maximum committed events returned together, 1-20. Defaults to 8.' },
       },
     },
     handler: toolWaitAgent,
@@ -709,8 +710,20 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'list_agents',
-    description: 'List the caller-visible live actor tree, capabilities, state, parent, active turn, bounded result summary, recent activity, and shared session capacity.',
-    input_schema: { type: 'object', properties: {} },
+    description: 'List a bounded page of the caller-visible actor tree, including capabilities, state, parent, active turn, bounded result summary, recent activity, and shared session capacity.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path_prefix: { type: 'string', description: 'Optional canonical or caller-relative Actor path prefix.' },
+        state: {
+          type: 'string',
+          enum: ['running', 'idle', 'closed'],
+          description: 'Optional Actor state filter.',
+        },
+        after_path: { type: 'string', description: 'Exclusive canonical path cursor returned as nextAfterPath.' },
+        limit: { type: 'number', description: 'Page size, 1-50. Defaults to 20.' },
+      },
+    },
     handler: toolListAgents,
     sideEffect: 'readonly',
     planModeAllowed: true,
@@ -733,6 +746,12 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
           description:
             'Optional attributable interruption reason.',
         },
+        scope: {
+          type: 'string',
+          enum: ['turn', 'subtree'],
+          description:
+            'Interrupt only the target Turn (default) or every active Turn in its controlled subtree. Actors remain reusable.',
+        },
       },
       required: ['target'],
     },
@@ -749,7 +768,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'agent_output',
     description:
-      'Retrieve the current or terminal bounded output preview, recent activity, and artifact references for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
+      'Retrieve the current or terminal bounded output preview, recent activity, legacy artifact references, and structured artifact metadata for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
     input_schema: {
       type: 'object',
       properties: {

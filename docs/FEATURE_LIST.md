@@ -383,6 +383,25 @@ The post-review and interruption-cleanup gate passes 62/62 focused and 286/286
 cross-layer tests, 88.79% core statement/line and 80.05% branch coverage, the
 complete build, and the 2/2 zero-provider manifest check.
 
+A final completeness audit keeps the seven-tool model command plane but makes
+its observation and reversible-control semantics complete: `list_agents` now
+offers visibility-safe filtering and bounded cursor pagination; `wait_agent`
+returns a bounded, cursor-safe event batch; `agent_output` preserves legacy
+artifact strings while adding executor-neutral metadata; and
+`interrupt_agent(scope='subtree')` atomically cancels an invalidated branch
+without retiring reusable Actor identities. Permanent subtree close is exposed
+only through the trusted Runtime host. Pause, reopen, reparent, resource-budget
+changes, and capability grants remain intentionally outside the model surface
+because they respectively require a portable checkpoint, administrative
+identity migration, user cost authority, or host security authority. The audit
+also fixes the root-only ambiguity between the non-root `parent` alias and a
+valid root child named `parent`.
+The completeness-audit gate passes 62/62 focused, 285/285 Actor/Workflow/
+storage/UI cross-layer, and 252/252 SDK/protocol regression tests. The five
+core implementation files reach 89.47% statements/lines and 82.01% branches;
+the complete package/bundle/Worker/DTS build and 2/2 zero-provider manifest
+eval also pass.
+
 Recent completion notes:
 
 `267`, `268`, and `269` shipped together in `v0.7.69`. The release provides the

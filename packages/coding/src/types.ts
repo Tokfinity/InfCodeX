@@ -1316,6 +1316,7 @@ export interface KodaXActorHost {
     result: AgentExecutionResult & { readonly error?: string },
   ): Promise<void>;
   bindActor(actorPath: string): AgentActorClient;
+  closeActor(targetPath: string, reason?: string): Promise<void>;
   registerTurnExecutor(key: string, executor: AgentTurnExecutor): () => void;
   waitForAgentCapacity(signal?: AbortSignal): Promise<boolean>;
 }

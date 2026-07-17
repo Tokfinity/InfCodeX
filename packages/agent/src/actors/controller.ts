@@ -7,6 +7,7 @@ import { AgentTurnScheduler } from './scheduler.js';
 import type {
   AgentActor,
   AgentActorClient,
+  AgentArtifactDescriptor,
   AgentActorSnapshot,
   AgentActorStore,
   AgentBudgetPort,
@@ -19,6 +20,7 @@ import type {
   AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
+  AgentInterruptScope,
   AgentListEntry,
   AgentMailboxMessage,
   AgentMetadataValue,
@@ -132,8 +134,8 @@ export class AgentActorController {
       ) => (
         this.followup(callerPath, targetPath, objective, metadata, options)
       ),
-      interrupt: (targetPath: string, reason?: string) => (
-        this.interrupt(callerPath, targetPath, reason)
+      interrupt: (targetPath: string, reason?: string, scope?: AgentInterruptScope) => (
+        this.interrupt(callerPath, targetPath, reason, scope)
       ),
       list: () => this.list(callerPath),
       get: (targetPath: string) => this.get(callerPath, targetPath),
@@ -215,6 +217,8 @@ export class AgentActorController {
               ...latestTurn,
               ...(result.output === undefined ? {} : { output: result.output }),
               ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+              ...(result.artifactDetails === undefined
+                ? {} : { artifactDetails: result.artifactDetails }),
               structured: result.structured,
               ...(latestTurn.error === undefined && result.error !== undefined
                 ? { error: result.error }
@@ -329,19 +333,33 @@ export class AgentActorController {
     }
   }
 
-  async interrupt(callerPath: string, targetPath: string, reason = 'interrupted'): Promise<void> {
-    const interrupted = await this.mutate(() => {
-      const actor = this.requireControl(callerPath, targetPath);
-      if (actor.capabilities.control?.interrupt === false) {
-        throw new AgentControlError('unsupported_operation', `${targetPath} does not support interruption`);
+  async interrupt(
+    callerPath: string,
+    targetPath: string,
+    reason = 'interrupted',
+    scope: AgentInterruptScope = 'turn',
+  ): Promise<void> {
+    const aborts = await this.mutate(() => {
+      const target = this.requireControl(callerPath, targetPath);
+      const actors = scope === 'subtree'
+        ? this.descendantsInclusive(targetPath).reverse()
+        : [target];
+      const active = actors.filter((actor) => actor.currentTurnId !== undefined);
+      if (active.length === 0) throw new AgentControlError('no_active_turn', `${targetPath} is idle`);
+      for (const actor of active) {
+        if (actor.capabilities.control?.interrupt === false) {
+          throw new AgentControlError('unsupported_operation', `${actor.path} does not support interruption`);
+        }
       }
-      if (!actor.currentTurnId) throw new AgentControlError('no_active_turn', `${targetPath} is idle`);
-      const turnId = actor.currentTurnId;
-      const abort = this.abortControllers.get(turnId);
-      this.finishTurn(turnId, 'interrupted', { error: reason });
-      return { abort };
+      return active.flatMap((actor) => {
+        const turnId = actor.currentTurnId;
+        if (!turnId) return [];
+        const abort = this.abortControllers.get(turnId);
+        this.finishTurn(turnId, 'interrupted', { error: reason });
+        return abort ? [abort] : [];
+      });
     });
-    interrupted.abort?.abort(reason);
+    for (const abort of aborts) abort.abort(reason);
   }
 
   async close(callerPath: string, targetPath: string, reason = 'closed by owner'): Promise<void> {
@@ -424,6 +442,7 @@ export class AgentActorController {
     const output = turn.output === undefined
       ? undefined
       : boundedTextEdges(turn.output, MAX_OUTPUT_PREVIEW_LENGTH, '\n... [truncated] ...\n');
+    const descriptors = artifactDetails(turn);
     return {
       actorPath: actor.path,
       turnId: turn.turnId,
@@ -433,6 +452,7 @@ export class AgentActorController {
         ...(output.truncated ? { outputTruncated: true } : {}),
       }),
       artifacts: turn.artifacts ?? [],
+      ...(descriptors.length === 0 ? {} : { artifactDetails: descriptors }),
       progress: turn.progress ?? [],
       ...(turn.structured === undefined ? {} : { structured: turn.structured }),
       ...(turn.error === undefined ? {} : { error: turn.error }),
@@ -562,6 +582,7 @@ export class AgentActorController {
           plan.turn.turnId,
           result.output,
           result.artifacts,
+          result.artifactDetails,
           result.structured,
         ),
         (error: unknown) => this.failExecution(plan.turn.turnId, error),
@@ -573,11 +594,13 @@ export class AgentActorController {
     turnId: string,
     output: string,
     artifacts: readonly string[] = [],
+    artifactDetails?: readonly AgentArtifactDescriptor[],
     structured?: AgentMetadataValue,
   ): Promise<void> {
     await this.mutate(() => this.finishTurn(turnId, 'completed', {
       output,
       artifacts,
+      ...(artifactDetails === undefined ? {} : { artifactDetails }),
       ...(structured === undefined ? {} : { structured }),
     }));
   }
@@ -596,6 +619,7 @@ export class AgentActorController {
     result: {
       readonly output?: string;
       readonly artifacts?: readonly string[];
+      readonly artifactDetails?: readonly AgentArtifactDescriptor[];
       readonly structured?: AgentMetadataValue;
       readonly error?: string;
     },
@@ -1011,6 +1035,11 @@ export class AgentActorController {
 
 function nonEmptyText(value: string | undefined): string | undefined {
   return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+function artifactDetails(turn: AgentTurn): readonly AgentArtifactDescriptor[] {
+  if (turn.artifactDetails) return turn.artifactDetails;
+  return (turn.artifacts ?? []).map((reference) => ({ name: reference }));
 }
 
 function boundedText(value: string, maxLength: number): { readonly text: string; readonly truncated: boolean } {

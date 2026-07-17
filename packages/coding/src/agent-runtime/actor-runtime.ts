@@ -137,6 +137,10 @@ export class CodingActorSession {
     return this.controller.bind(actorPath);
   }
 
+  closeActor(targetPath: string, reason?: string): Promise<void> {
+    return this.controller.close('/root', targetPath, reason);
+  }
+
   registerTurnExecutor(key: string, executor: AgentTurnExecutor): () => void {
     if (this.turnExecutors.has(key)) throw new Error(`Actor turn executor is already registered: ${key}`);
     this.turnExecutors.set(key, executor);
@@ -378,7 +382,10 @@ async function executeExternalActorTurn(
   return {
     output: task.output ?? '',
     ...(task.artifacts && task.artifacts.length > 0
-      ? { artifacts: task.artifacts.map((artifact) => artifact.uri ?? artifact.name) }
+      ? {
+          artifacts: task.artifacts.map((artifact) => artifact.uri ?? artifact.name),
+          artifactDetails: task.artifacts.map((artifact) => ({ ...artifact })),
+        }
       : {}),
   };
 }

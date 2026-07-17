@@ -64,7 +64,9 @@ describe('F270 actor tree and scheduler', () => {
     await settle();
 
     expect(controller.output('/root', child.actorPath, child.turnId)).toMatchObject({
-      state: 'completed', artifacts: ['artifact://report'],
+      state: 'completed',
+      artifacts: ['artifact://report'],
+      artifactDetails: [{ name: 'artifact://report' }],
     });
     expect(controller.get('/root', '/root').mailbox).toEqual(expect.arrayContaining([
       expect.objectContaining({ senderPath: child.actorPath, content: 'completed' }),
@@ -260,6 +262,52 @@ describe('F270 actor tree and scheduler', () => {
     });
     await expect(controller.interrupt('/root', '/root/a/a1')).resolves.toBeUndefined();
     expect(controller.get('/root', '/root/a/a1').actor.state).toBe('idle');
+  });
+
+  it('atomically interrupts a controlled subtree while preserving reusable identities', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Parent.' });
+    await controller.spawn('/root/parent', { taskName: 'child', objective: 'Child.' });
+    await controller.interrupt('/root', '/root/parent', 'branch invalidated', 'subtree');
+
+    expect(controller.output('/root', '/root/parent')).toMatchObject({
+      state: 'interrupted', error: 'branch invalidated',
+    });
+    expect(controller.output('/root', '/root/parent/child')).toMatchObject({
+      state: 'interrupted', error: 'branch invalidated',
+    });
+    expect(controller.eventSnapshot('/root')
+      .filter((event) => event.kind === 'turn_interrupted')
+      .slice(-2)
+      .map((event) => event.actorPath))
+      .toEqual(['/root/parent/child', '/root/parent']);
+    await expect(controller.followup('/root', '/root/parent', 'Use the corrected premise.'))
+      .resolves.toMatchObject({ delivery: 'started_turn' });
+  });
+
+  it('rejects subtree interruption atomically when one active descendant cannot interrupt', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Parent.' });
+    await controller.spawn('/root/parent', {
+      taskName: 'remote-child',
+      objective: 'Child.',
+      kind: 'external',
+      capabilities: {
+        control: { followup: true, interrupt: false, streaming: true, artifacts: true },
+      },
+    });
+
+    await expect(controller.interrupt(
+      '/root',
+      '/root/parent',
+      'branch invalidated',
+      'subtree',
+    )).rejects.toMatchObject({ code: 'unsupported_operation' });
+
+    expect(controller.output('/root', '/root/parent').state).toBe('running');
+    expect(controller.output('/root', '/root/parent/remote-child').state).toBe('running');
   });
 
   it('derives forwarding lineage from a Runtime message id and rejects cycles and self-send', async () => {

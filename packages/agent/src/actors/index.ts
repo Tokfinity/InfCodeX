@@ -10,6 +10,7 @@ export type { AgentControlErrorCode } from './errors.js';
 export { AgentTurnScheduler } from './scheduler.js';
 export type {
   AgentActor,
+  AgentArtifactDescriptor,
   AgentActorClient,
   AgentActorSnapshot,
   AgentActorState,
@@ -29,6 +30,7 @@ export type {
   AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
+  AgentInterruptScope,
   AgentLimitReached,
   AgentListEntry,
   AgentMailboxMessage,

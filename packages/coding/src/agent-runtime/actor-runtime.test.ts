@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   KodaXChildExecutionResult,
+  KodaXActorHost,
   KodaXOptions,
   KodaXToolExecutionContext,
 } from '../types.js';
@@ -47,6 +48,7 @@ function completedChild(summary: string): KodaXChildExecutionResult {
 function externalTask(
   state: AgentTaskSnapshot['state'],
   progress?: AgentTaskSnapshot['progress'],
+  artifacts?: AgentTaskSnapshot['artifacts'],
 ): AgentTaskSnapshot {
   return {
     taskId: 'external-turn',
@@ -76,6 +78,7 @@ function externalTask(
     updatedAt: '2026-07-17T00:00:00.000Z',
     ...(progress === undefined ? {} : { progress }),
     ...(state === 'completed' ? { output: 'external done' } : {}),
+    ...(artifacts === undefined ? {} : { artifacts }),
   };
 }
 
@@ -245,6 +248,72 @@ describe('F270 coding Actor runtime adapter', () => {
       }),
     );
     expect(onChildActivityEnd).toHaveBeenCalledOnce();
+  });
+
+  it('preserves structured external artifact metadata through agent_output', async () => {
+    const tasks = {
+      start: vi.fn(async () => externalTask('completed', undefined, [{
+        name: 'report.pdf',
+        uri: 'https://remote.example/report.pdf',
+        mimeType: 'application/pdf',
+        size: 42,
+        hash: 'sha256:report',
+        provenance: 'external:fixture',
+        producingAgentId: 'external:reviewer',
+        remoteTaskId: 'remote-1',
+      }])),
+      get: vi.fn(),
+      sendInput: vi.fn(),
+      cancel: vi.fn(),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(root.output(turn.actorPath, turn.turnId).state).toBe('completed'));
+    const output = root.output(turn.actorPath, turn.turnId) as unknown as {
+      readonly artifactDetails?: readonly Record<string, unknown>[];
+    };
+
+    expect(output.artifactDetails).toEqual([{
+      name: 'report.pdf',
+      uri: 'https://remote.example/report.pdf',
+      mimeType: 'application/pdf',
+      size: 42,
+      hash: 'sha256:report',
+      provenance: 'external:fixture',
+      producingAgentId: 'external:reviewer',
+      remoteTaskId: 'remote-1',
+    }]);
+  });
+
+  it('exposes permanent subtree close only through the trusted Actor host', async () => {
+    const executor: AgentTurnExecutor = {
+      execute: () => new Promise<AgentExecutionResult>(() => undefined),
+    };
+    const session = new CodingActorSession({ executor, sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+    await root.spawn({ taskName: 'parent', objective: 'Parent.' });
+    await session.bindActor('/root/parent').spawn({ taskName: 'child', objective: 'Child.' });
+    const trustedHost: KodaXActorHost = session;
+
+    expect('close' in root).toBe(false);
+    await trustedHost.closeActor('/root/parent', 'session owner retired branch');
+
+    expect(root.get('/root/parent').actor.state).toBe('closed');
+    expect(root.get('/root/parent/child').actor.state).toBe('closed');
   });
 
   it('derives write authority from Actor capabilities instead of mutable metadata', async () => {

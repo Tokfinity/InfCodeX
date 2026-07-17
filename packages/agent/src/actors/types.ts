@@ -4,6 +4,7 @@ export type AgentExecutionKind = 'native' | 'constructed' | 'workflow' | 'extern
 export type AgentForkTurns = 'all' | 'none' | number;
 export type AgentDataClassification = 'public' | 'internal' | 'sensitive';
 export type AgentProgressKind = 'status' | 'tool' | 'assistant';
+export type AgentInterruptScope = 'turn' | 'subtree';
 export type AgentMetadataValue =
   | string
   | number
@@ -42,6 +43,18 @@ export interface AgentActor {
   readonly revision: number;
 }
 
+/** Executor-neutral artifact metadata retained beside the legacy string reference. */
+export interface AgentArtifactDescriptor {
+  readonly name: string;
+  readonly uri?: string;
+  readonly mimeType?: string;
+  readonly size?: number;
+  readonly hash?: string;
+  readonly provenance?: string;
+  readonly producingAgentId?: string;
+  readonly remoteTaskId?: string;
+}
+
 export interface AgentTurn {
   readonly turnId: string;
   readonly actorPath: string;
@@ -55,6 +68,7 @@ export interface AgentTurn {
   readonly completedAt?: string;
   readonly output?: string;
   readonly artifacts?: readonly string[];
+  readonly artifactDetails?: readonly AgentArtifactDescriptor[];
   readonly structured?: AgentMetadataValue;
   readonly error?: string;
   /** Bounded Runtime-owned activity projection; full transcripts remain executor-owned. */
@@ -160,6 +174,7 @@ export interface AgentOutput {
   readonly output?: string;
   readonly outputTruncated?: boolean;
   readonly artifacts: readonly string[];
+  readonly artifactDetails?: readonly AgentArtifactDescriptor[];
   readonly progress: readonly AgentProgressItem[];
   readonly structured?: AgentMetadataValue;
   readonly error?: string;
@@ -209,6 +224,7 @@ export interface AgentExecutionInput {
 export interface AgentExecutionResult {
   readonly output: string;
   readonly artifacts?: readonly string[];
+  readonly artifactDetails?: readonly AgentArtifactDescriptor[];
   readonly structured?: AgentMetadataValue;
 }
 
@@ -252,7 +268,7 @@ export interface AgentActorClient {
     metadata?: Readonly<Record<string, AgentMetadataValue>>,
     options?: AgentMutationOptions,
   ): Promise<AgentFollowupResult>;
-  interrupt(targetPath: string, reason?: string): Promise<void>;
+  interrupt(targetPath: string, reason?: string, scope?: AgentInterruptScope): Promise<void>;
   list(): AgentTreeSnapshot;
   get(targetPath: string): AgentDetail;
   output(targetPath: string, turnId?: string): AgentOutput;

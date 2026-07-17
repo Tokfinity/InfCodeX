@@ -1,9 +1,11 @@
 import type {
   AgentActor,
   AgentActorClient,
+  AgentActorState,
   AgentCapabilities,
   AgentDataClassification,
   AgentForkTurns,
+  AgentInterruptScope,
   AgentMetadataValue,
   AgentSpawnInput,
 } from '@kodax-ai/agent';
@@ -15,6 +17,10 @@ import {
 } from '../external-agents/local-catalog.js';
 
 const MAX_BROADCAST_RECIPIENTS = 20;
+const DEFAULT_LIST_PAGE_SIZE = 20;
+const MAX_LIST_PAGE_SIZE = 50;
+const DEFAULT_WAIT_EVENTS = 8;
+const MAX_WAIT_EVENTS = 20;
 const MAX_WAIT_MS = 120_000;
 const ROOT_SENDS_PER_TURN = 20;
 const CHILD_SENDS_PER_TURN = 5;
@@ -116,16 +122,33 @@ export async function toolWaitAgent(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const client = requireActorControl(ctx);
-  const afterSequence = nonNegativeInteger(input.after_sequence, 0, 'after_sequence');
-  const timeoutMs = boundedInteger(input.timeout_ms, 30_000, 0, MAX_WAIT_MS, 'timeout_ms');
   try {
-    const event = await client.wait(afterSequence, timeoutMs, ctx.abortSignal);
-    const interrupted = event === undefined && ctx.abortSignal?.aborted === true;
+    const afterSequence = nonNegativeInteger(input.after_sequence, 0, 'after_sequence');
+    const timeoutMs = boundedInteger(input.timeout_ms, 30_000, 0, MAX_WAIT_MS, 'timeout_ms');
+    const maxEvents = boundedInteger(
+      input.max_events,
+      DEFAULT_WAIT_EVENTS,
+      1,
+      MAX_WAIT_EVENTS,
+      'max_events',
+    );
+    const first = await client.wait(afterSequence, timeoutMs, ctx.abortSignal);
+    const interrupted = first === undefined && ctx.abortSignal?.aborted === true;
+    const pending = first === undefined ? [] : client.eventSnapshot(afterSequence);
+    const events = (pending.length === 0 && first ? [first] : pending).slice(0, maxEvents);
+    const event = events[0];
+    const nextSequence = events.at(-1)?.sequence;
     return render({
       ok: true,
       status: event ? 'event' : interrupted ? 'interrupted' : 'wait_expired',
       afterSequence,
-      ...(event ? { event, nextSequence: event.sequence } : {}),
+      ...(event ? {
+        event,
+        events,
+        updatedActors: [...new Set(events.map((item) => item.actorPath))],
+        nextSequence,
+        hasMore: pending.length > events.length,
+      } : {}),
     });
   } catch (error) {
     return renderActorError('wait_agent', error);
@@ -139,27 +162,56 @@ export async function toolInterruptAgent(
   const client = requireActorControl(ctx);
   try {
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
-    await client.interrupt(actorPath, optionalString(input.reason));
-    return render({ ok: true, actorPath, state: 'interrupted' });
+    const scope = parseInterruptScope(input.scope);
+    await client.interrupt(actorPath, optionalString(input.reason), scope);
+    return render({ ok: true, actorPath, state: 'interrupted', scope });
   } catch (error) {
     return renderActorError('interrupt_agent', error);
   }
 }
 
 export async function toolListAgents(
-  _input: Record<string, unknown>,
+  input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const client = requireActorControl(ctx);
   try {
     const snapshot = client.list();
+    const pathPrefix = normalizeActorPath(client, optionalString(input.path_prefix));
+    const state = parseActorState(input.state);
+    const afterPath = normalizeActorPath(client, optionalString(input.after_path));
+    const limit = boundedInteger(
+      input.limit,
+      DEFAULT_LIST_PAGE_SIZE,
+      1,
+      MAX_LIST_PAGE_SIZE,
+      'limit',
+    );
+    const matched = snapshot.actors.filter((actor) => (
+      (pathPrefix === undefined || actor.path.startsWith(pathPrefix))
+      && (state === undefined || actor.state === state)
+    ));
+    const remaining = afterPath === undefined
+      ? matched
+      : matched.filter((actor) => actor.path.localeCompare(afterPath) > 0);
+    const page = remaining.slice(0, limit);
+    const hasMore = remaining.length > page.length;
     return render({
       ok: true,
       callerPath: client.callerPath,
       activeNonRootTurns: snapshot.activeNonRootTurns,
       maxConcurrentThreads: snapshot.maxConcurrentThreads,
       revision: snapshot.revision,
-      actors: snapshot.actors.map((actor) => ({
+      query: {
+        ...(pathPrefix === undefined ? {} : { pathPrefix }),
+        ...(state === undefined ? {} : { state }),
+        ...(afterPath === undefined ? {} : { afterPath }),
+        limit,
+      },
+      matchedActorCount: matched.length,
+      hasMore,
+      ...(hasMore && page.at(-1) ? { nextAfterPath: page.at(-1)?.path } : {}),
+      actors: page.map((actor) => ({
         path: actor.path,
         taskName: actor.taskName,
         parentPath: actor.parentPath,
@@ -199,7 +251,7 @@ function requireActorControl(ctx: KodaXToolExecutionContext): AgentActorClient {
 function resolveTarget(client: AgentActorClient, value: string): string {
   const actors = client.list().actors;
   if (value.startsWith('/root')) return value;
-  if (value === 'parent') {
+  if (value === 'parent' && client.callerPath !== '/root') {
     const parentPath = actors.find((actor) => actor.path === client.callerPath)?.parentPath;
     if (!parentPath) throw new Error('The root Agent has no parent.');
     return parentPath;
@@ -330,6 +382,27 @@ function parseClassification(value: unknown): AgentDataClassification {
   if (value === undefined) return 'internal';
   if (value === 'public' || value === 'internal' || value === 'sensitive') return value;
   throw new Error('classification must be public, internal, or sensitive.');
+}
+
+function parseInterruptScope(value: unknown): AgentInterruptScope {
+  if (value === undefined || value === 'turn') return 'turn';
+  if (value === 'subtree') return value;
+  throw new Error('scope must be turn or subtree.');
+}
+
+function parseActorState(value: unknown): AgentActorState | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'running' || value === 'idle' || value === 'closed') return value;
+  throw new Error('state must be running, idle, or closed.');
+}
+
+function normalizeActorPath(
+  client: AgentActorClient,
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === '/root' || value.startsWith('/root/')) return value;
+  return `${client.callerPath}/${value.replace(/^\/+/, '')}`;
 }
 
 function requiredString(input: Record<string, unknown>, key: string): string {
