@@ -66,6 +66,15 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
   }
 }
 
+class TestArkCodingProvider extends TestAnthropicProvider {
+  override readonly name = 'ark-coding';
+  protected override readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'TEST_API_KEY',
+    model: 'kimi-k2.6',
+    supportsThinking: false,
+  };
+}
+
 describe('anthropic message serialization', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -690,12 +699,12 @@ describe('anthropic message serialization', () => {
     expect(lastUser.content).toEqual([{ type: 'text', text: '...' }]);
   });
 
-  it('serializes image input blocks as base64 image parts', async () => {
+  it('serializes ark-coding/kimi-k2.6 image input as an Anthropic base64 block', async () => {
     const cwd = await createTempDir('kodax-anthropic-images-');
     const imagePath = path.join(cwd, 'diagram.png');
     await writeFile(imagePath, 'fake-image');
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
-    const provider = new TestAnthropicProvider({
+    const provider = new TestArkCodingProvider({
       messages: { create },
     });
     const messages: KodaXMessage[] = [
@@ -711,6 +720,7 @@ describe('anthropic message serialization', () => {
     await provider.stream(messages, TOOLS, 'Base system prompt');
 
     const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.model).toBe('kimi-k2.6');
     expect(kwargs.messages).toHaveLength(1);
     expect(kwargs.messages[0]).toMatchObject({
       role: 'user',

@@ -22,6 +22,19 @@ describe('validateInputArtifactsForModel', () => {
     })).not.toThrow();
   });
 
+  it('accepts image artifacts for the verified Ark Coding Kimi K2.6 route', () => {
+    expect(() => validateInputArtifactsForModel([
+      {
+        kind: 'image',
+        path: '/tmp/shot.png',
+        mediaType: 'image/png',
+      },
+    ], {
+      provider: 'ark-coding',
+      model: 'kimi-k2.6',
+    })).not.toThrow();
+  });
+
   it('accepts direct-path image/gif when the model route supports images', () => {
     expect(() => validateInputArtifactsForModel([
       {

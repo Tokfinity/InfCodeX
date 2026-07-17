@@ -56,6 +56,9 @@ export const KODAX_VIDEO_MEDIA_TYPES: readonly KodaXVideoMediaType[] = [
 export const KODAX_FILE_MEDIA_TYPES: readonly string[] = [];
 
 const OFFICIAL_IMAGE_PROVIDERS = new Set(['anthropic', 'openai']);
+const SOURCE_BACKED_IMAGE_ROUTES = new Set([
+  'ark-coding/kimi-k2.6',
+]);
 const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',
   'kimi-code/kimi-for-coding-highspeed',
@@ -154,6 +157,12 @@ function hasSourceBackedNativeMedia(provider: string, model: string | undefined)
   return SOURCE_BACKED_NATIVE_MEDIA_ROUTES.has(route);
 }
 
+function hasSourceBackedImage(provider: string, model: string | undefined): boolean {
+  const normalizedModel = normalizeModel(provider, model);
+  if (!normalizedModel) return false;
+  return SOURCE_BACKED_IMAGE_ROUTES.has(`${provider}/${normalizedModel}`);
+}
+
 function resolveImageCapabilityRoute(
   provider: string,
   officialImageSupported: boolean,
@@ -186,10 +195,11 @@ export function getModelInputCapabilities(
   const model = input.model?.trim() || resolveProviderDefaultModel(provider);
   const officialImageSupported = hasOfficialImageSupport(provider);
   const sourceBackedNativeMedia = hasSourceBackedNativeMedia(provider, model);
+  const sourceBackedImage = sourceBackedNativeMedia || hasSourceBackedImage(provider, model);
   const imageCapabilityRoute = resolveImageCapabilityRoute(
     provider,
     officialImageSupported,
-    sourceBackedNativeMedia,
+    sourceBackedImage,
   );
   const imageSupported = imageCapabilityRoute !== undefined;
   const videoNative = sourceBackedNativeMedia;
