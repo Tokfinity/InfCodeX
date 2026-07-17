@@ -292,7 +292,7 @@ async function runCell(
   const systemPrompt = spec.arm === 'baseline'
     ? feature270BaselinePrompt()
     : buildFeature270TreatmentPrompt();
-  const tools = feature270ToolsForArm(spec.arm);
+  const tools = feature270ToolsForArm(spec.arm, spec.userMessage);
   const limits = FEATURE_270_LIMITS[spec.stage];
   const target = MODEL_ALIASES[spec.alias];
   const request = {
@@ -389,7 +389,7 @@ function cellInputHash(spec: Feature270CellSpec): string {
   return sha256(JSON.stringify({
     ...spec,
     systemPrompt,
-    tools: feature270ToolsForArm(spec.arm),
+    tools: feature270ToolsForArm(spec.arm, spec.userMessage),
   }));
 }
 

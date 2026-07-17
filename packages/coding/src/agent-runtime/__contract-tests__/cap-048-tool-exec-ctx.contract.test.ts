@@ -230,7 +230,11 @@ describe('CAP-048: tool execution context construction contract', () => {
 
   it('CAP-TOOL-CTX-009: workflowHost is wired when an AMA turn has a runs directory', () => {
     const ctx = buildToolExecutionContext({
-      options: { workflowRunsBaseDir: baseDir, agentMode: 'ama' } as KodaXOptions,
+      options: {
+        workflowRunsBaseDir: baseDir,
+        agentMode: 'ama',
+        context: { workflowIntent: 'explicit' },
+      } as KodaXOptions,
       runtime: undefined,
       managedProtocolPayloadRef: makeRef(),
     });
@@ -291,5 +295,14 @@ describe('CAP-048: tool execution context construction contract', () => {
         `agentMode=${String(agentMode)}`,
       ).toBeUndefined();
     }
+  });
+
+  it('CAP-TOOL-CTX-011: workflowHost is hidden from AMA without explicit Workflow intent', () => {
+    const ctx = buildToolExecutionContext({
+      options: { workflowRunsBaseDir: baseDir, agentMode: 'ama' } as KodaXOptions,
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(ctx.workflowHost).toBeUndefined();
   });
 });

@@ -23,6 +23,17 @@ export interface WorkflowInvocationPolicyDecision {
 }
 
 /**
+ * Decide whether a natural-language turn should receive the model-callable
+ * Workflow surface. This does not launch or generate anything: the Worker still
+ * scouts and authors the protocol. Requiring the standalone product word keeps
+ * ordinary parallel/review requests from acquiring `run_workflow`; the code
+ * identifier `run_workflow` alone is deliberately not an activation signal.
+ */
+export function hasExplicitNaturalLanguageWorkflowIntent(input: string): boolean {
+  return /\bworkflows?\b/i.test(input);
+}
+
+/**
  * Decide whether the REPL host should launch a workflow before the agent runs.
  *
  * FEATURE_246 A5 (ADR-047): the host only launches workflows for an explicit

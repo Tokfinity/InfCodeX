@@ -24,6 +24,7 @@ import { mapLegacyReasoningModeToEffortIntent, runWithScopedConfig } from '@koda
 import { runKodaX } from './agent.js';
 import { deriveRunScopedConfig } from './run-scoped-config.js';
 import { listToolDefinitions } from './tools/index.js';
+import { hasExplicitNaturalLanguageWorkflowIntent } from './workflows/invocation-policy.js';
 import { emitEffectiveTaskConfig } from './agent-runtime/effective-config.js';
 import {
   applyToolVisibilityPolicy,
@@ -230,12 +231,21 @@ export async function dispatchManagedTask(
   // worker's prompt. We thread it into the Runner chain so Scout/Planner/
   // Generator/Evaluator see the same contextual overlay as legacy workers.
   // FEATURE_247 (R4): report the effective config for the AMA/AMAW path too.
-  emitEffectiveTaskConfig(options, {
+  const naturalLanguageInput = options.context?.rawUserInput ?? prompt;
+  const workflowIntent = options.context?.workflowIntent
+    ?? (hasExplicitNaturalLanguageWorkflowIntent(naturalLanguageInput) ? 'explicit' : undefined);
+  const amaOptions: KodaXOptions = workflowIntent === undefined
+    ? options
+    : {
+        ...options,
+        context: { ...options.context, workflowIntent },
+      };
+  emitEffectiveTaskConfig(amaOptions, {
     agentMode,
-    toolScope: computeVisibleToolScope(options, options.context?.excludeTools ?? []),
+    toolScope: computeVisibleToolScope(amaOptions, amaOptions.context?.excludeTools ?? []),
   });
-  const plan = await deps.buildPlan(options, prompt);
-  return deps.runAMA(options, prompt, undefined, plan);
+  const plan = await deps.buildPlan(amaOptions, prompt);
+  return deps.runAMA(amaOptions, prompt, undefined, plan);
 }
 
 /**
@@ -258,7 +268,11 @@ function computeVisibleToolScope(
   const afterExcludeAndPolicy = applyToolVisibilityPolicy(
     listToolDefinitions()
       .map((tool) => tool.name)
-      .filter((name) => !excluded.has(name)),
+      .filter((name) => !excluded.has(name))
+      // The managed agent-chain applies the same host-backed gate when it
+      // builds the real model surface. Keep the start-of-run effective-config
+      // snapshot honest instead of reporting a tool the model cannot call.
+      .filter((name) => name !== 'run_workflow' || options.context?.workflowIntent === 'explicit'),
     options.context?.toolVisibilityPolicy,
   );
   return getRuntimeActiveToolNames(

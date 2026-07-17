@@ -60,11 +60,19 @@ describe('FEATURE_270 frozen behavioral cases', () => {
 
   it('uses exact released and current production tool definitions', () => {
     const baseline = feature270ToolsForArm('baseline');
-    const treatment = feature270ToolsForArm('treatment');
+    const treatment = feature270ToolsForArm('treatment', 'Review three independent dimensions.');
+    const explicitTreatment = feature270ToolsForArm(
+      'treatment',
+      'Use the named scoped-review Workflow.',
+    );
     expect(baseline.map((tool) => tool.name)).toEqual([
       'dispatch_child_task', 'run_workflow', 'send_message', 'task_stop', 'task_output',
     ]);
     expect(treatment.map((tool) => tool.name)).toEqual([
+      'spawn_agent', 'send_message', 'followup_task', 'wait_agent',
+      'list_agents', 'interrupt_agent', 'agent_output',
+    ]);
+    expect(explicitTreatment.map((tool) => tool.name)).toEqual([
       'spawn_agent', 'run_workflow', 'send_message', 'followup_task', 'wait_agent',
       'list_agents', 'interrupt_agent', 'agent_output',
     ]);
@@ -72,7 +80,8 @@ describe('FEATURE_270 frozen behavioral cases', () => {
       .toContain('prefer run_workflow instead');
     expect(treatment.find((tool) => tool.name === 'spawn_agent')?.description)
       .not.toContain('prefer run_workflow instead');
-    const workflowDescription = treatment.find((tool) => tool.name === 'run_workflow')?.description;
+    const workflowDescription = explicitTreatment
+      .find((tool) => tool.name === 'run_workflow')?.description;
     expect(workflowDescription).toContain('Do not call this tool for an ordinary review');
     expect(workflowDescription).toContain('For an explicitly requested review or audit Workflow');
     expect(workflowDescription).not.toContain('A review or audit combines');

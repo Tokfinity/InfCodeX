@@ -242,7 +242,9 @@ function buildWorkflowToolHost(
       ? 'no-host: workflowRunsBaseDir undefined'
       : options.agentMode !== 'ama'
         ? `no-host: agentMode=${String(options.agentMode)} (need ama)`
-        : 'host wired';
+        : options.context?.workflowIntent !== 'explicit'
+          ? 'no-host: explicit Workflow intent absent'
+          : 'host wired';
     emitKodaXDiagnostic({
       source: 'coding:workflow-gate',
       level: 'debug',
@@ -255,12 +257,13 @@ function buildWorkflowToolHost(
     });
   }
   if (runsBaseDir === undefined) return undefined;
-  // run_workflow is available in AMA so explicit natural-language and command/SDK
-  // requests use the same host. The policy forbids complexity-driven activation.
-  // SA never reaches here with a
+  // run_workflow is available only when the host attributes explicit intent.
+  // dispatchManagedTask derives that marker from the standalone Workflow product
+  // word; command/SDK paths set it structurally. SA never reaches here with a
   // run_workflow surface: agentMode 'sa' fails this gate, and SA_SOLO_EXCLUDE_TOOLS
   // (task-engine.ts) excludes run_workflow regardless.
   if (options.agentMode !== 'ama') return undefined;
+  if (options.context?.workflowIntent !== 'explicit') return undefined;
   // `startInline` starts the run and returns a handle without awaiting it.
   const startInline: WorkflowToolHost['startInline'] = async ({ manifest, source, args, resumeFromRunId, signal }) => {
     // Lazy literal imports break the static cycle: workflow-runner imports

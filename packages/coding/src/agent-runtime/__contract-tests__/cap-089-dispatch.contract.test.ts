@@ -101,4 +101,27 @@ describe('CAP-089: task-engine.ts mode dispatcher contract', () => {
     expect(runSA).not.toHaveBeenCalled();
     expect(runAMA).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ['Review three independent dimensions.', undefined],
+    ['Use the named scoped-review Workflow.', 'explicit'],
+  ] as const)(
+    'CAP-DISPATCH-004: attributes natural-language Workflow intent for %s',
+    async (prompt, expectedIntent) => {
+      const runSA = vi.fn();
+      const runAMA = vi.fn().mockResolvedValue(emptyResult());
+      const buildPlan = vi.fn().mockResolvedValue({ effort: 'none', decision: {}, promptOverlay: '' });
+
+      await dispatchManagedTask({ agentMode: 'ama' } as KodaXOptions, prompt, {
+        runSA,
+        runAMA,
+        buildPlan,
+      });
+
+      const [planOptions] = buildPlan.mock.calls[0]!;
+      const [runOptions] = runAMA.mock.calls[0]!;
+      expect(planOptions.context?.workflowIntent).toBe(expectedIntent);
+      expect(runOptions.context?.workflowIntent).toBe(expectedIntent);
+    },
+  );
 });

@@ -8,6 +8,7 @@ import {
 import { createRolePrompt } from '../../../packages/coding/src/task-engine/_internal/managed-task/role-prompt.js';
 import type { KodaXTaskRoutingDecision } from '../../../packages/coding/src/types.js';
 import { getToolDefinition } from '../../../packages/coding/src/tools/registry.js';
+import { hasExplicitNaturalLanguageWorkflowIntent } from '../../../packages/coding/src/workflows/invocation-policy.js';
 
 export type Feature270Arm = 'baseline' | 'treatment';
 
@@ -175,9 +176,15 @@ function assertTreatmentPolicies(prompt: string): void {
   }
 }
 
-export function feature270ToolsForArm(arm: Feature270Arm): readonly KodaXToolDefinition[] {
+export function feature270ToolsForArm(
+  arm: Feature270Arm,
+  userMessage = '',
+): readonly KodaXToolDefinition[] {
   if (arm === 'baseline') return readBaselineTools();
-  return TREATMENT_TOOL_NAMES.map(requiredProductionTool);
+  const explicitWorkflow = hasExplicitNaturalLanguageWorkflowIntent(userMessage);
+  return TREATMENT_TOOL_NAMES
+    .filter((name) => name !== 'run_workflow' || explicitWorkflow)
+    .map(requiredProductionTool);
 }
 
 function requiredProductionTool(name: string): KodaXToolDefinition {

@@ -147,7 +147,10 @@ function exactProductionBytes(): Feature270ExperimentManifest['exactBytes'] {
   const baselinePrompt = feature270BaselinePrompt();
   const treatmentPrompt = buildFeature270TreatmentPrompt();
   const baselineTools = feature270ToolsForArm('baseline');
-  const treatmentTools = feature270ToolsForArm('treatment');
+  const treatmentTools = {
+    default: feature270ToolsForArm('treatment'),
+    explicitWorkflow: feature270ToolsForArm('treatment', 'Use the named scoped-review Workflow.'),
+  };
   return {
     baselinePromptSha256: sha256(baselinePrompt),
     baselinePrompt,

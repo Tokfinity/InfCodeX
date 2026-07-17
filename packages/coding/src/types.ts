@@ -1341,7 +1341,7 @@ export interface KodaXContextOptions {
   actorHost?: KodaXActorHost;
   /** Runtime-owned session Actor tree; attached when a root run builds its tool context. */
   actorSession?: import('./agent-runtime/actor-runtime.js').CodingActorSession;
-  /** Trusted host attribution for an explicit Workflow command/SDK request. */
+  /** Host attribution for an explicit Workflow command, SDK request, or natural-language product word. */
   workflowIntent?: 'explicit';
   /** Project root used for project-scoped prompts, permissions, and path policy. */
   gitRoot?: string | null;
