@@ -635,7 +635,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      'Deliver a bounded message without starting a turn. A running actor receives it at the next safe boundary; an idle actor retains it for its next turn. Direct parent, direct child, admitted peer, and bounded broadcast targets are supported.',
+      'Deliver a bounded message without starting a turn. A running actor receives it at the next safe boundary; an idle actor retains it for its next turn. Runtime-derived forwarding lineage prevents cycles; direct parent, direct child, admitted peer, and bounded broadcast targets are supported.',
     input_schema: {
       type: 'object',
       properties: {
@@ -647,13 +647,18 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         content: {
           type: 'string',
           description:
-            'Message body. Will be wrapped in the framing tag matching the routing branch (<coordinator-instruction>, <peer-message from=…>, <child-notification from=…>, or <peer-broadcast from=…>) before the recipient sees it.',
+            'Message body. Runtime wraps it in an authenticated <agent-message> frame before delivery.',
         },
-        seen_by: {
-          type: 'array',
-          items: { type: 'string' },
+        forwarded_message_id: {
+          type: 'string',
           description:
-            'Optional chain of agents that have already handled this message — only relevant when you are forwarding a peer message you received. The incoming wrapper carries a seen_by="A,B,…" attribute; copy that list into this parameter so the tool can detect cycles (forwarding back to a prior sender is rejected) and cap chain depth. Omit entirely for fresh sends; the tool always auto-appends you to the chain before enqueue.',
+            'Message id from a received <agent-message> frame. Supply only when forwarding that message; Runtime derives and validates the forwarding chain. Omit for a fresh message.',
+        },
+        classification: {
+          type: 'string',
+          enum: ['public', 'internal', 'sensitive'],
+          description:
+            'Data classification. Defaults to internal; forwarding cannot downgrade the source classification.',
         },
       },
       required: ['to', 'content'],
@@ -704,7 +709,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'list_agents',
-    description: 'List the caller-visible live actor tree, capabilities, state, parent, active turn, and shared session capacity.',
+    description: 'List the caller-visible live actor tree, capabilities, state, parent, active turn, bounded result summary, recent activity, and shared session capacity.',
     input_schema: { type: 'object', properties: {} },
     handler: toolListAgents,
     sideEffect: 'readonly',
@@ -744,7 +749,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'agent_output',
     description:
-      'Retrieve the current or terminal result and artifact references for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
+      'Retrieve the current or terminal bounded output preview, recent activity, and artifact references for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
     input_schema: {
       type: 'object',
       properties: {

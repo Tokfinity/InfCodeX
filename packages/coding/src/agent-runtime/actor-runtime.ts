@@ -215,7 +215,7 @@ function publishRootMailboxMessage(
     priority: 'background',
     mode: 'task-notification',
     agentId: actorQueueId(sessionId, '/root'),
-    content: `<agent-completed path="${escapeXml(message.senderPath)}" turn_id="${escapeXml(message.turnId)}" state="${status}">\n${escapeXml(summary)}\n</agent-completed>`,
+    content: `<agent-completed id="${escapeXml(message.messageId)}" path="${escapeXml(message.senderPath)}" turn_id="${escapeXml(message.turnId)}" state="${status}">\n${escapeXml(summary)}\n</agent-completed>`,
     taskResult: {
       type: 'task_result',
       source: 'child_task',
@@ -240,7 +240,21 @@ async function executeCodingActorTurn(
   actorControl: AgentActorClient,
 ): Promise<AgentExecutionResult> {
   if (input.actor.kind === 'external') {
-    return executeExternalActorTurn(input, parentCtx.agentExecutorPlane);
+    const toolId = `external-actor:${input.turn.turnId}`;
+    const activityMeta = {
+      childAgentId: input.actor.path,
+      childAgentName: input.actor.taskName,
+      toolId,
+      liveOnly: true,
+    } as const;
+    try {
+      return await executeExternalActorTurn(input, parentCtx.agentExecutorPlane, (summary) => {
+        parentCtx.reportToolProgress?.(`[agent ${input.actor.path}] ${summary}`);
+        parentCtx.parentEvents?.onToolProgress?.({ id: toolId, message: summary }, activityMeta);
+      });
+    } finally {
+      parentCtx.parentEvents?.onChildActivityEnd?.(activityMeta);
+    }
   }
   const bundle = actorBundle(input);
   const parentConfig = parentCtx.parentAgentConfig;
@@ -279,9 +293,16 @@ async function executeCodingActorTurn(
       actorHost: parentCtx.actorHost,
       initialMessages,
       actorCapabilities: input.actor.capabilities,
-      onProgress: (message) => parentCtx.reportToolProgress?.(
-        `[agent ${input.actor.path}] ${message}`,
-      ),
+      onProgress: (message) => {
+        void input.reportProgress({ kind: 'status', summary: message }).catch((error: unknown) => {
+          emitKodaXDiagnostic({
+            source: 'coding:actors',
+            level: 'warn',
+            message: `Actor progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        });
+        parentCtx.reportToolProgress?.(`[agent ${input.actor.path}] ${message}`);
+      },
     });
   } finally {
     pumpStop.abort();
@@ -301,6 +322,7 @@ async function executeCodingActorTurn(
 async function executeExternalActorTurn(
   input: AgentExecutionInput,
   binding: AgentExecutorPlaneBinding | undefined,
+  onProgress?: (summary: string) => void,
 ): Promise<AgentExecutionResult> {
   const agentId = metadataString(input.turn.metadata?.agentId);
   if (!binding || !agentId) throw new Error('External Agent execution is not bound to this Runtime.');
@@ -324,6 +346,7 @@ async function executeExternalActorTurn(
   if (task.state === 'failed' || task.state === 'rejected') {
     throw new Error(task.error ?? `External Agent entered ${task.state}.`);
   }
+  let lastProgress = reportExternalProgress(input, task.progress, undefined, onProgress);
   const cancel = (): void => {
     void binding.plane.tasks.cancel(taskId, String(input.signal.reason ?? 'interrupted'))
       .catch((error: unknown) => emitKodaXDiagnostic({
@@ -343,6 +366,7 @@ async function executeExternalActorTurn(
       if (!isExternalTerminal(task.state)) {
         await new Promise<void>((resolve) => setTimeout(resolve, 25));
         task = await binding.plane.tasks.get(taskId);
+        lastProgress = reportExternalProgress(input, task.progress, lastProgress, onProgress);
       }
     }
   } finally {
@@ -364,6 +388,26 @@ function isExternalTerminal(state: AgentTaskSnapshot['state']): boolean {
     || state === 'failed'
     || state === 'canceled'
     || state === 'rejected';
+}
+
+function reportExternalProgress(
+  input: AgentExecutionInput,
+  progress: AgentTaskSnapshot['progress'],
+  previous: string | undefined,
+  onProgress?: (summary: string) => void,
+): string | undefined {
+  const summary = progress?.message?.trim()
+    || (progress?.percent === undefined ? undefined : `${progress.percent}% complete`);
+  if (!summary || summary === previous) return previous;
+  void input.reportProgress({ kind: 'status', summary }).catch((error: unknown) => {
+    emitKodaXDiagnostic({
+      source: 'coding:actors',
+      level: 'warn',
+      message: `External Actor progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  });
+  onProgress?.(summary);
+  return summary;
 }
 
 function externalTaskId(actorId: string, turnId: string): string {
@@ -452,7 +496,7 @@ async function waitForMailboxPoll(stopSignal: AbortSignal): Promise<void> {
 
 function renderMailboxMessage(message: AgentMailboxMessage): string {
   const tag = message.kind === 'completion' ? 'agent-completed' : 'agent-message';
-  return `<${tag} from="${escapeXml(message.senderPath)}" classification="${message.classification}">\n${escapeXml(message.content)}\n</${tag}>`;
+  return `<${tag} id="${escapeXml(message.messageId)}" from="${escapeXml(message.senderPath)}" classification="${message.classification}">\n${escapeXml(message.content)}\n</${tag}>`;
 }
 
 function assertProviderAuthority(input: AgentExecutionInput, provider: string | undefined): void {

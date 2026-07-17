@@ -3,6 +3,8 @@ import {
   getMessageQueue,
   type AgentExecutionInput,
   type AgentExecutionResult,
+  type AgentExecutorPlaneBinding,
+  type AgentTaskSnapshot,
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +15,10 @@ import type {
   KodaXToolExecutionContext,
 } from '../types.js';
 import { executeChildAgents } from '../child-executor.js';
-import { actorQueueId, CodingActorSession } from './actor-runtime.js';
+import {
+  actorQueueId,
+  CodingActorSession,
+} from './actor-runtime.js';
 
 vi.mock('../child-executor.js', () => ({
   executeChildAgents: vi.fn(),
@@ -36,6 +41,41 @@ function completedChild(summary: string): KodaXChildExecutionResult {
     mergedArtifacts: [],
     totalTokensUsed: 0,
     cancelledChildren: [],
+  };
+}
+
+function externalTask(
+  state: AgentTaskSnapshot['state'],
+  progress?: AgentTaskSnapshot['progress'],
+): AgentTaskSnapshot {
+  return {
+    taskId: 'external-turn',
+    route: 'external',
+    agentId: 'external:reviewer',
+    objective: 'Review.',
+    state,
+    cancellation: 'none',
+    registration: {
+      agentId: 'external:reviewer',
+      origin: 'external',
+      executorId: 'fixture',
+      protocol: 'http',
+      configurationRevision: 'rev-1',
+      capabilities: {
+        streaming: 'supported',
+        durableTasks: 'supported',
+        inputRequired: 'supported',
+        cancellation: 'supported',
+        artifacts: 'supported',
+      },
+      effects: { remote: 'read', workspace: 'none' },
+    },
+    idempotencyKey: 'external-turn',
+    dispatchAttempt: 1,
+    createdAt: '2026-07-17T00:00:00.000Z',
+    updatedAt: '2026-07-17T00:00:00.000Z',
+    ...(progress === undefined ? {} : { progress }),
+    ...(state === 'completed' ? { output: 'external done' } : {}),
   };
 }
 
@@ -119,10 +159,92 @@ describe('F270 coding Actor runtime adapter', () => {
       maxPriority: 'background',
       mode: 'prompt',
     })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ content: expect.stringContaining('Live evidence.') }),
+      expect.objectContaining({
+        content: expect.stringMatching(/<agent-message id="msg_[^"]+"[^>]*>\nLive evidence\./u),
+      }),
     ]));
     release?.(completedChild('done'));
     await settle();
+  });
+
+  it('projects native child progress into the Runtime-owned bounded turn view', async () => {
+    executeChildAgentsMock.mockImplementation(async (_bundles, _ctx, childOptions) => {
+      childOptions.onProgress?.('Reading packages/agent/src/actors/controller.ts');
+      childOptions.onProgress?.('Running focused tests');
+      return completedChild('done');
+    });
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const reportToolProgress = vi.fn();
+    ctx.reportToolProgress = reportToolProgress;
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({ taskName: 'worker', objective: 'Inspect.' });
+    await vi.waitFor(() => {
+      expect(root.output(turn.actorPath, turn.turnId).state).toBe('completed');
+    });
+
+    expect(root.output(turn.actorPath, turn.turnId).progress).toEqual([
+      expect.objectContaining({ kind: 'status', summary: 'Reading packages/agent/src/actors/controller.ts' }),
+      expect.objectContaining({ kind: 'status', summary: 'Running focused tests' }),
+    ]);
+    expect(root.list().actors.find((actor) => actor.path === turn.actorPath)?.latestTurn)
+      .toMatchObject({ summary: 'done' });
+    expect(reportToolProgress).toHaveBeenNthCalledWith(
+      1,
+      '[agent /root/worker] Reading packages/agent/src/actors/controller.ts',
+    );
+    expect(reportToolProgress).toHaveBeenNthCalledWith(
+      2,
+      '[agent /root/worker] Running focused tests',
+    );
+  });
+
+  it('projects deduplicated external progress into the same Runtime turn view', async () => {
+    const tasks = {
+      start: vi.fn(async () => externalTask('working', { message: 'Connecting' })),
+      get: vi.fn()
+        .mockResolvedValueOnce(externalTask('working', { message: 'Connecting' }))
+        .mockResolvedValueOnce(externalTask('working', { percent: 60 }))
+        .mockResolvedValueOnce(externalTask('completed', { message: 'Finalizing' })),
+      sendInput: vi.fn(async () => externalTask('working', { percent: 60 })),
+      cancel: vi.fn(async () => externalTask('canceled')),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const onToolProgress = vi.fn();
+    const onChildActivityEnd = vi.fn();
+    ctx.agentExecutorPlane = binding;
+    ctx.parentEvents = { onToolProgress, onChildActivityEnd };
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(root.output(turn.actorPath, turn.turnId).state).toBe('completed'));
+
+    expect(root.output(turn.actorPath, turn.turnId).progress).toEqual([
+      expect.objectContaining({ summary: 'Connecting' }),
+      expect.objectContaining({ summary: '60% complete' }),
+      expect.objectContaining({ summary: 'Finalizing' }),
+    ]);
+    expect(onToolProgress).toHaveBeenCalledTimes(3);
+    expect(onToolProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ message: 'Finalizing' }),
+      expect.objectContaining({
+        childAgentId: '/root/reviewer',
+        childAgentName: 'reviewer',
+        liveOnly: true,
+      }),
+    );
+    expect(onChildActivityEnd).toHaveBeenCalledOnce();
   });
 
   it('derives write authority from Actor capabilities instead of mutable metadata', async () => {

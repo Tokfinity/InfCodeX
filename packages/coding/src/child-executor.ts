@@ -1812,7 +1812,7 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
   '',
   'Send a peer message when it would change another agent\'s plan: a file you both edit, a fact you discovered that changes their scope, a blocker the parent should know about. Do not send routine status pings — peer chatter that does not change anyone\'s plan is noise.',
   '',
-  'Forwarding: peer wrappers carry a `seen_by="A,B,…"` attribute listing every agent that has already handled the chain. If you intentionally forward a received peer message, pass that list as the `seen_by` parameter so the tool can reject cycles (forwarding back to a prior sender) and cap chain depth. Omit `seen_by` for fresh sends — the tool always auto-appends you.',
+  'Forwarding: each received `<agent-message>` carries a Runtime-generated `id`. If you intentionally forward that message, pass its id as `forwarded_message_id`; Runtime derives the chain, rejects cycles, preserves data classification, and caps forwarding depth. Omit it for fresh sends.',
   '',
   '## Execution Guidelines',
   '- Focus on the objective described in the user message. Do not deviate.',

@@ -65,4 +65,29 @@ describe("ChildActivitySurface", () => {
     expect(measureChildActivitySurfaceRows(vm)).toBe(visibleRowCount(frame));
     expect(measureChildActivitySurfaceRows(vm)).toBe(2);
   });
+
+  it("keeps canonical Actor progress legible in the existing live surface", () => {
+    const vm = buildChildActivityViewModel([{
+      id: "/root/control-reviewer",
+      label: "/root/control-reviewer",
+      source: "normal",
+      status: "running",
+      kind: "progress",
+      detail: "Running focused Actor control-plane tests",
+      startedAt: 1_000,
+    }], 3, 52_000);
+
+    const { lastFrame } = render(
+      <Box width={80}>
+        <ChildActivitySurface viewModel={vm} />
+      </Box>,
+    );
+    const frame = lastFrame() ?? "";
+
+    expect(frame).toContain("child");
+    expect(frame).toContain("/root/control-reviewer · 51s - Progress");
+    expect(frame).toContain("Running focused Actor control");
+    expect(frame).toContain("…");
+    expect(visibleRowCount(frame)).toBe(1);
+  });
 });

@@ -372,6 +372,17 @@ Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
 is `recommend-ship`. F270 remains InProgress only for release sign-off and the
 separate manual test guide.
 
+A post-implementation control-plane review also replaced the stale model-owned
+`seen_by` forwarding field with Runtime-minted mailbox message IDs and
+authenticated lineage, added cycle/depth/classification guards and per-turn
+recipient limits, and made native/external Turn progress observable through the
+existing Ink/Classic activity surface. Progress, list summaries, output
+previews, and event retention are explicitly bounded; no legacy task registry,
+second UI store, or duplicate compatibility tool was restored.
+The post-review gate passes 57/57 focused and 282/282 cross-layer tests,
+87.75% core statement/line and 80.05% branch coverage, the complete build,
+and the 2/2 zero-provider manifest check.
+
 Recent completion notes:
 
 `267`, `268`, and `269` shipped together in `v0.7.69`. The release provides the

@@ -174,6 +174,7 @@ export function buildToolExecutionContext(
     // the host-supplied binding (built by `buildGoalRuntimeBinding`).
     // When unset, leave undefined; the 3 goal tools fall back to
     // `makeDisabledGoalToolsContext()` at their own call site.
+    sendMessageTurnCounter: { count: 0 },
     goalContext: options.context?.goalRuntime?.goalContext,
     // FEATURE_123 v0.7.44 — per-turn send_message flood throttle
     // counter. Allocated once per runtime; runner-driven.ts resets

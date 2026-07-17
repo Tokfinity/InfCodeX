@@ -262,6 +262,155 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', '/root/a/a1').actor.state).toBe('idle');
   });
 
+  it('derives forwarding lineage from a Runtime message id and rejects cycles and self-send', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'a', objective: 'A' });
+    await controller.spawn('/root', { taskName: 'b', objective: 'B' });
+
+    await controller.send('/root/a', '/root/b', 'Evidence from A.');
+    const receivedByB = controller.get('/root', '/root/b').mailbox.at(-1);
+    expect(receivedByB).toMatchObject({
+      senderPath: '/root/a',
+      lineage: ['/root/a'],
+    });
+    if (!receivedByB) throw new Error('Expected B to receive a message.');
+
+    await expect(controller.send(
+      '/root/b',
+      '/root/a',
+      'Forward the evidence back.',
+      'internal',
+      receivedByB.messageId,
+    )).rejects.toMatchObject({ code: 'message_cycle_detected' });
+    await expect(controller.send('/root/a', '/root/a', 'Loop.'))
+      .rejects.toMatchObject({ code: 'message_cycle_detected' });
+  });
+
+  it('rejects forged forwarding references instead of trusting model-supplied lineage', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'a', objective: 'A' });
+    await controller.spawn('/root', { taskName: 'b', objective: 'B' });
+
+    await expect(controller.send(
+      '/root/a',
+      '/root/b',
+      'Forged forward.',
+      'internal',
+      'msg_not_received_by_a',
+    )).rejects.toMatchObject({ code: 'invalid_forward_reference' });
+  });
+
+  it('caps forwarding depth and never downgrades the source classification', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      maxConcurrentThreadsPerSession: 8,
+    });
+    for (const taskName of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) {
+      await controller.spawn('/root', { taskName, objective: taskName.toUpperCase() });
+    }
+
+    let message = await controller.send('/root/a', '/root/b', 'Sensitive evidence.', 'sensitive');
+    for (const [sender, target] of [['b', 'c'], ['c', 'd'], ['d', 'e'], ['e', 'f']] as const) {
+      message = await controller.send(
+        `/root/${sender}`,
+        `/root/${target}`,
+        'Forwarded evidence.',
+        'public',
+        message.messageId,
+      );
+      expect(message.classification).toBe('sensitive');
+    }
+
+    await expect(controller.send(
+      '/root/f',
+      '/root/g',
+      'One hop too far.',
+      'internal',
+      message.messageId,
+    )).rejects.toMatchObject({ code: 'message_cycle_detected' });
+  });
+
+  it('persists only bounded recent progress and exposes bounded running and terminal summaries', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const child = await controller.spawn('/root', { taskName: 'observer', objective: 'Inspect.' });
+    const execution = executor.pending[0]?.input;
+    if (!execution) throw new Error('Expected a running child execution.');
+
+    for (let index = 0; index < 8; index += 1) {
+      await execution.reportProgress({
+        kind: index % 2 === 0 ? 'tool' : 'status',
+        summary: `activity-${index} ${'x'.repeat(300)}`,
+      });
+    }
+
+    const running = controller.output('/root', child.actorPath, child.turnId);
+    const listedRunning = controller.list('/root').actors.find((actor) => actor.path === child.actorPath);
+    expect(running.progress).toHaveLength(6);
+    expect(running.progress[0]?.summary).toMatch(/^activity-2 /u);
+    expect(running.progress.every((item) => item.summary.length <= 240)).toBe(true);
+    expect(listedRunning?.latestTurn).toMatchObject({
+      turnId: child.turnId,
+      state: 'running',
+      recentActivity: running.progress,
+    });
+    expect(controller.eventSnapshot('/root').at(-1)).toMatchObject({
+      kind: 'turn_progress',
+      actorPath: child.actorPath,
+      progress: expect.objectContaining({ summary: expect.stringContaining('activity-7') }),
+    });
+
+    executor.pending[0]?.resolve({ output: `terminal ${'y'.repeat(10_000)}` });
+    await settle();
+
+    const terminal = controller.output('/root', child.actorPath, child.turnId);
+    const listedTerminal = controller.list('/root').actors.find((actor) => actor.path === child.actorPath);
+    expect(terminal.output).toHaveLength(8_192);
+    expect(terminal.output).toContain('... [truncated] ...');
+    expect(terminal.output).toMatch(/^terminal y/u);
+    expect(terminal.output).toMatch(/y$/u);
+    expect(terminal.outputTruncated).toBe(true);
+    expect(listedTerminal?.latestTurn.summary.length).toBeLessThanOrEqual(480);
+    expect(listedTerminal?.latestTurn.summaryTruncated).toBe(true);
+  });
+
+  it('caps retained events without reusing sequence numbers', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'observer', objective: 'Inspect.' });
+    const execution = executor.pending[0]?.input;
+    if (!execution) throw new Error('Expected a running child execution.');
+
+    for (let index = 0; index < 2_050; index += 1) {
+      await execution.reportProgress({ kind: 'status', summary: `event-${index}` });
+    }
+
+    const events = controller.eventSnapshot('/root');
+    expect(events).toHaveLength(2_048);
+    expect(events[0]?.sequence).toBeGreaterThan(1);
+    expect(events.at(-1)?.sequence).toBeGreaterThan(events[0]?.sequence ?? 0);
+    expect(new Set(events.map((event) => event.sequence)).size).toBe(events.length);
+  });
+
+  it('keeps bounded output on complete grapheme boundaries', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const child = await controller.spawn('/root', { taskName: 'unicode', objective: 'Render.' });
+
+    executor.pending[0]?.resolve({ output: `terminal ${'🙂'.repeat(5_000)} tail` });
+    await settle();
+
+    const output = controller.output('/root', child.actorPath, child.turnId).output ?? '';
+    expect(output.length).toBeLessThanOrEqual(8_192);
+    expect(output).toContain('... [truncated] ...');
+    expect(output).toMatch(/^terminal /u);
+    expect(output).toMatch(/ tail$/u);
+    expect(Buffer.from(output, 'utf8').toString('utf8')).toBe(output);
+  });
+
   it('enforces monotonic capabilities and forbids user authority below root', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({

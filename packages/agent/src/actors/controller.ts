@@ -19,10 +19,13 @@ import type {
   AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
+  AgentListEntry,
   AgentMailboxMessage,
   AgentMetadataValue,
   AgentMutationOptions,
   AgentOutput,
+  AgentProgressItem,
+  AgentProgressUpdate,
   AgentSpawnInput,
   AgentTreeSnapshot,
   AgentTurn,
@@ -32,6 +35,13 @@ import type {
 const ROOT_PATH = '/root' as const;
 const DEFAULT_MAX_CONCURRENT_THREADS = 4;
 const MAX_MESSAGE_LENGTH = 32_768;
+const MAX_FORWARD_DEPTH = 5;
+const MAX_PROGRESS_ITEMS = 6;
+const MAX_PROGRESS_SUMMARY_LENGTH = 240;
+const MAX_LIST_SUMMARY_LENGTH = 480;
+const MAX_OUTPUT_PREVIEW_LENGTH = 8_192;
+const MAX_EVENT_ITEMS = 2_048;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 export interface AgentControllerOptions {
   readonly maxConcurrentThreadsPerSession?: number;
@@ -112,7 +122,8 @@ export class AgentActorController {
         targetPath: string,
         content: string,
         classification?: AgentDataClassification,
-      ) => this.send(callerPath, targetPath, content, classification),
+        forwardedMessageId?: string,
+      ) => this.send(callerPath, targetPath, content, classification, forwardedMessageId),
       followup: (
         targetPath: string,
         objective: string,
@@ -251,18 +262,25 @@ export class AgentActorController {
     targetPath: string,
     content: string,
     classification: AgentDataClassification = 'internal',
-  ): Promise<void> {
-    await this.mutate(() => {
+    forwardedMessageId?: string,
+  ): Promise<AgentMailboxMessage> {
+    return this.mutate(() => {
       this.assertMessagePermission(callerPath, targetPath);
-      this.appendMessage(
+      const forwarding = this.resolveForwarding(callerPath, targetPath, forwardedMessageId);
+      const message = this.appendMessage(
         callerPath,
         targetPath,
         content,
         'message',
-        classification,
+        forwarding.source
+          ? moreRestrictedClassification(classification, forwarding.source.classification)
+          : classification,
         this.actors.get(callerPath)?.currentTurnId,
+        forwarding.lineage,
+        forwardedMessageId,
       );
       this.appendEvent('message_delivered', targetPath, this.actors.get(targetPath)?.currentTurnId);
+      return message;
     });
   }
 
@@ -373,7 +391,10 @@ export class AgentActorController {
     );
     return {
       rootPath: ROOT_PATH,
-      actors: this.visibleActors(callerPath),
+      actors: this.visibleActors(callerPath).map((actor) => ({
+        ...actor,
+        ...this.latestTurnSummary(actor),
+      })),
       activeNonRootTurns: this.committedSnapshot.turns.filter((turn) => (
         !isTerminal(turn.state) && kindByPath.get(turn.actorPath) !== 'workflow'
       )).length,
@@ -400,12 +421,19 @@ export class AgentActorController {
     const selected = turnId ?? actor.turnIds.at(-1);
     if (!selected) throw new AgentControlError('no_active_turn', `${targetPath} has no turns`);
     const turn = this.requireCommittedTurn(selected);
+    const output = turn.output === undefined
+      ? undefined
+      : boundedTextEdges(turn.output, MAX_OUTPUT_PREVIEW_LENGTH, '\n... [truncated] ...\n');
     return {
       actorPath: actor.path,
       turnId: turn.turnId,
       state: turn.state,
-      ...(turn.output === undefined ? {} : { output: turn.output }),
+      ...(output === undefined ? {} : {
+        output: output.text,
+        ...(output.truncated ? { outputTruncated: true } : {}),
+      }),
       artifacts: turn.artifacts ?? [],
+      progress: turn.progress ?? [],
       ...(turn.structured === undefined ? {} : { structured: turn.structured }),
       ...(turn.error === undefined ? {} : { error: turn.error }),
     };
@@ -516,6 +544,7 @@ export class AgentActorController {
         priorTurns,
         signal: abort.signal,
         drainMailbox: () => this.drainMailbox(plan.actor.path),
+        reportProgress: (update) => this.recordProgress(plan.turn.turnId, update),
       }))
       .then(
         (result) => this.completeExecution(
@@ -610,6 +639,63 @@ export class AgentActorController {
       .filter((message) => message.sequence > actor.mailboxCursor);
   }
 
+  private async recordProgress(turnId: string, update: AgentProgressUpdate): Promise<void> {
+    await this.mutate(() => {
+      const turn = this.requireTurn(turnId);
+      if (isTerminal(turn.state)) return;
+      const summary = boundedText(update.summary.trim(), MAX_PROGRESS_SUMMARY_LENGTH).text;
+      if (summary.length === 0) {
+        throw new AgentControlError('invalid_message', 'progress summary is required');
+      }
+      const previous = turn.progress ?? [];
+      const progress: AgentProgressItem = {
+        sequence: (previous.at(-1)?.sequence ?? 0) + 1,
+        kind: update.kind,
+        summary,
+        createdAt: this.now(),
+      };
+      this.turns.set(turnId, {
+        ...turn,
+        progress: [...previous, progress].slice(-MAX_PROGRESS_ITEMS),
+        revision: turn.revision + 1,
+      });
+      this.appendEvent('turn_progress', turn.actorPath, turnId, undefined, progress);
+    });
+  }
+
+  private resolveForwarding(
+    senderPath: string,
+    targetPath: string,
+    forwardedMessageId: string | undefined,
+  ): { readonly lineage: readonly string[]; readonly source?: AgentMailboxMessage } {
+    const source = forwardedMessageId === undefined
+      ? undefined
+      : (this.mailboxes.get(senderPath) ?? []).find((message) => (
+          message.messageId === forwardedMessageId && message.recipientPath === senderPath
+        ));
+    if (forwardedMessageId !== undefined && !source) {
+      throw new AgentControlError(
+        'invalid_forward_reference',
+        `${senderPath} did not receive message ${forwardedMessageId}`,
+      );
+    }
+    const priorLineage = source?.lineage ?? (source ? [source.senderPath] : []);
+    const lineage = [...priorLineage, senderPath];
+    if (lineage.length > MAX_FORWARD_DEPTH) {
+      throw new AgentControlError(
+        'message_cycle_detected',
+        `forwarding depth exceeds ${MAX_FORWARD_DEPTH}: ${lineage.join(' -> ')}`,
+      );
+    }
+    if (new Set(lineage).size !== lineage.length || lineage.includes(targetPath)) {
+      throw new AgentControlError(
+        'message_cycle_detected',
+        `message target ${targetPath} is already in the forwarding chain`,
+      );
+    }
+    return { lineage, ...(source ? { source } : {}) };
+  }
+
   private appendMessage(
     senderPath: string,
     recipientPath: string,
@@ -617,6 +703,8 @@ export class AgentActorController {
     kind: AgentMailboxMessage['kind'],
     classification: AgentDataClassification,
     turnId?: string,
+    lineage: readonly string[] = [senderPath],
+    forwardedMessageId?: string,
   ): AgentMailboxMessage {
     if (content.length === 0 || content.length > MAX_MESSAGE_LENGTH) {
       throw new AgentControlError('invalid_message', `message length must be 1-${MAX_MESSAGE_LENGTH}`);
@@ -630,6 +718,8 @@ export class AgentActorController {
       ...(turnId === undefined ? {} : { turnId }),
       kind,
       classification,
+      lineage,
+      ...(forwardedMessageId === undefined ? {} : { forwardedMessageId }),
       content,
       createdAt: this.now(),
     };
@@ -642,15 +732,20 @@ export class AgentActorController {
     actorPath: string,
     turnId?: string,
     parentPath?: string,
+    progress?: AgentProgressItem,
   ): void {
     this.eventsLog.push({
-      sequence: this.eventsLog.length + 1,
+      sequence: (this.eventsLog.at(-1)?.sequence ?? 0) + 1,
       kind,
       actorPath,
       ...(turnId === undefined ? {} : { turnId }),
       ...(parentPath === undefined ? {} : { parentPath }),
+      ...(progress === undefined ? {} : { progress }),
       createdAt: this.now(),
     });
+    if (this.eventsLog.length > MAX_EVENT_ITEMS) {
+      this.eventsLog.splice(0, this.eventsLog.length - MAX_EVENT_ITEMS);
+    }
   }
 
   private requireControl(callerPath: string, targetPath: string): AgentActor {
@@ -685,6 +780,24 @@ export class AgentActorController {
     return this.committedSnapshot.actors
       .filter((actor) => this.isVisible(callerPath, actor.path))
       .sort((left, right) => left.path.localeCompare(right.path));
+  }
+
+  private latestTurnSummary(actor: AgentActor): Pick<AgentListEntry, 'latestTurn'> {
+    const turnId = actor.turnIds.at(-1);
+    if (!turnId) return {};
+    const turn = this.requireCommittedTurn(turnId);
+    const rawSummary = nonEmptyText(turn.output) ?? nonEmptyText(turn.error) ?? turn.state;
+    const normalizedSummary = rawSummary.replace(/\s+/gu, ' ').trim();
+    const summary = boundedTextEdges(normalizedSummary, MAX_LIST_SUMMARY_LENGTH, ' ... ');
+    return {
+      latestTurn: {
+        turnId,
+        state: turn.state,
+        summary: summary.text,
+        summaryTruncated: summary.truncated,
+        recentActivity: turn.progress ?? [],
+      },
+    };
   }
 
   private descendantsInclusive(path: string): AgentActor[] {
@@ -724,6 +837,7 @@ export class AgentActorController {
       forkTurns,
       ...(metadata === undefined ? {} : { metadata }),
       createdAt: this.now(),
+      progress: [],
       revision: 1,
     };
   }
@@ -785,7 +899,7 @@ export class AgentActorController {
     await previousTail;
     const before = this.snapshot();
     const beforeAborts = new Map(this.abortControllers);
-    const eventCount = this.eventsLog.length;
+    const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
     try {
       const result = await operation();
       const expectedRevision = this.revision;
@@ -795,7 +909,9 @@ export class AgentActorController {
       for (const message of appendedMessages(before, this.committedSnapshot)) {
         this.publishCommittedMessage(message);
       }
-      for (const event of this.eventsLog.slice(eventCount)) this.publishCommittedEvent(event);
+      for (const event of this.eventsLog) {
+        if (event.sequence > priorEventSequence) this.publishCommittedEvent(event);
+      }
       return result;
     } catch (error) {
       this.restore(before);
@@ -886,6 +1002,63 @@ export class AgentActorController {
 
 function nonEmptyText(value: string | undefined): string | undefined {
   return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+function boundedText(value: string, maxLength: number): { readonly text: string; readonly truncated: boolean } {
+  if (value.length <= maxLength) return { text: value, truncated: false };
+  return {
+    text: `${takeGraphemeSafeStart(value, Math.max(0, maxLength - 3)).trimEnd()}...`,
+    truncated: true,
+  };
+}
+
+function boundedTextEdges(
+  value: string,
+  maxLength: number,
+  marker: string,
+): { readonly text: string; readonly truncated: boolean } {
+  if (value.length <= maxLength) return { text: value, truncated: false };
+  const contentBudget = Math.max(0, maxLength - marker.length);
+  const headLength = Math.ceil(contentBudget / 2);
+  const tailLength = Math.floor(contentBudget / 2);
+  return {
+    text: `${takeGraphemeSafeStart(value, headLength).trimEnd()}${marker}${takeGraphemeSafeEnd(value, tailLength).trimStart()}`,
+    truncated: true,
+  };
+}
+
+function takeGraphemeSafeStart(value: string, maxCodeUnits: number): string {
+  let end = 0;
+  for (const part of GRAPHEME_SEGMENTER.segment(value)) {
+    if (end + part.segment.length > maxCodeUnits) break;
+    end += part.segment.length;
+  }
+  return value.slice(0, end);
+}
+
+function takeGraphemeSafeEnd(value: string, maxCodeUnits: number): string {
+  let used = 0;
+  let start = value.length;
+  const parts = [...GRAPHEME_SEGMENTER.segment(value)];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (!part || used + part.segment.length > maxCodeUnits) break;
+    used += part.segment.length;
+    start = part.index;
+  }
+  return value.slice(start);
+}
+
+function moreRestrictedClassification(
+  requested: AgentDataClassification,
+  source: AgentDataClassification,
+): AgentDataClassification {
+  const rank: Readonly<Record<AgentDataClassification, number>> = {
+    public: 0,
+    internal: 1,
+    sensitive: 2,
+  };
+  return rank[source] > rank[requested] ? source : requested;
 }
 
 export async function createAgentActorController(

@@ -3,6 +3,7 @@ export type AgentTurnState = 'accepted' | 'running' | 'completed' | 'failed' | '
 export type AgentExecutionKind = 'native' | 'constructed' | 'workflow' | 'external';
 export type AgentForkTurns = 'all' | 'none' | number;
 export type AgentDataClassification = 'public' | 'internal' | 'sensitive';
+export type AgentProgressKind = 'status' | 'tool' | 'assistant';
 export type AgentMetadataValue =
   | string
   | number
@@ -56,7 +57,19 @@ export interface AgentTurn {
   readonly artifacts?: readonly string[];
   readonly structured?: AgentMetadataValue;
   readonly error?: string;
+  /** Bounded Runtime-owned activity projection; full transcripts remain executor-owned. */
+  readonly progress?: readonly AgentProgressItem[];
   readonly revision: number;
+}
+
+export interface AgentProgressUpdate {
+  readonly kind: AgentProgressKind;
+  readonly summary: string;
+}
+
+export interface AgentProgressItem extends AgentProgressUpdate {
+  readonly sequence: number;
+  readonly createdAt: string;
 }
 
 export interface AgentMailboxMessage {
@@ -67,6 +80,9 @@ export interface AgentMailboxMessage {
   readonly turnId?: string;
   readonly kind: 'message' | 'followup' | 'completion';
   readonly classification: AgentDataClassification;
+  /** Canonical actors that handled this chain; absent only on pre-hardening schema-v1 snapshots. */
+  readonly lineage?: readonly string[];
+  readonly forwardedMessageId?: string;
   readonly content: string;
   readonly createdAt: string;
 }
@@ -75,6 +91,7 @@ export type AgentEventKind =
   | 'actor_spawned'
   | 'turn_started'
   | 'message_delivered'
+  | 'turn_progress'
   | 'turn_completed'
   | 'turn_failed'
   | 'turn_interrupted'
@@ -86,6 +103,7 @@ export interface AgentEvent {
   readonly actorPath: string;
   readonly turnId?: string;
   readonly parentPath?: string;
+  readonly progress?: AgentProgressItem;
   readonly createdAt: string;
 }
 
@@ -111,10 +129,22 @@ export interface AgentFollowupResult {
 
 export interface AgentTreeSnapshot {
   readonly rootPath: '/root';
-  readonly actors: readonly AgentActor[];
+  readonly actors: readonly AgentListEntry[];
   readonly activeNonRootTurns: number;
   readonly maxConcurrentThreads: number;
   readonly revision: number;
+}
+
+export interface AgentTurnSummary {
+  readonly turnId: string;
+  readonly state: AgentTurnState;
+  readonly summary: string;
+  readonly summaryTruncated: boolean;
+  readonly recentActivity: readonly AgentProgressItem[];
+}
+
+export interface AgentListEntry extends AgentActor {
+  readonly latestTurn?: AgentTurnSummary;
 }
 
 export interface AgentDetail {
@@ -128,7 +158,9 @@ export interface AgentOutput {
   readonly turnId: string;
   readonly state: AgentTurnState;
   readonly output?: string;
+  readonly outputTruncated?: boolean;
   readonly artifacts: readonly string[];
+  readonly progress: readonly AgentProgressItem[];
   readonly structured?: AgentMetadataValue;
   readonly error?: string;
 }
@@ -171,6 +203,7 @@ export interface AgentExecutionInput {
   readonly priorTurns: readonly AgentTurn[];
   readonly signal: AbortSignal;
   drainMailbox(): Promise<readonly AgentMailboxMessage[]>;
+  reportProgress(update: AgentProgressUpdate): Promise<void>;
 }
 
 export interface AgentExecutionResult {
@@ -211,7 +244,8 @@ export interface AgentActorClient {
     targetPath: string,
     content: string,
     classification?: AgentDataClassification,
-  ): Promise<void>;
+    forwardedMessageId?: string,
+  ): Promise<AgentMailboxMessage>;
   followup(
     targetPath: string,
     objective: string,

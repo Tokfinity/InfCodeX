@@ -105,6 +105,29 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - [ ] 明确请求时使用 named Workflow；仅复杂但未请求时不调用 `run_workflow`。
 - [ ] prompt 包含 canonical Ultra sentence，且没有静态波次或复杂度触发指令。
 
+### TC-007：消息安全、有界观测与统一视觉
+
+1. child 收到 root 消息后，以返回的 `messageId` 作为
+   `forwarded_message_id` 转发给 sibling；再尝试使用伪造 ID、回发到已在链路中的
+   actor、超过五跳转发，以及降低敏感消息 classification。
+2. 在同一 model turn 内分别让 root 发送 21 个 recipient deliveries、child 发送
+   6 个；用剩余配额不足的 broadcast 验证原子失败。
+3. 让 native 与 external actor 连续产生超过 6 条 tool/status 进度和超过 8,192
+   字符的输出，在窄终端和宽终端观察 Ink/Classic 活动面，并调用
+   `list_agents`/`agent_output`。
+
+预期：
+
+- [ ] Runtime 只接受调用者真实 mailbox 中的消息 ID；伪造引用、自发、环路、
+  超过五跳和 classification 降级均明确失败，合法转发保留来源链。
+- [ ] root/child 的 20/5 recipient 上限按接收者计数；配额不足的 broadcast 不发生
+  部分投递，下一 model turn 配额重置。
+- [ ] 每个 Turn 只保留最近 6 条、单条不超过 240 字符的活动；list summary 不超过
+  480 字符，output preview 不超过 8,192 UTF-16 code units、带明确截断标记、
+  保留首尾且不拆分 emoji/组合字符。
+- [ ] native、Workflow-owned、constructed、external 进度进入同一现有活动面；状态
+  色彩、前缀和省略号在 80 列终端仍清楚，无重复行、布局抖动或第二进度存储。
+
 ## 自动化与评测基线（2026-07-17）
 
 - `npm run build`：通过。
@@ -112,6 +135,10 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - 本次变更集合：55 个测试文件，999/999 通过。
 - F266/F270 扩展 Layer 1：61 个测试文件，1097/1097 通过。
 - changed-code coverage：2294/2780 statements，82.52%。
+- post-review 控制面聚焦回归：5 个测试文件，57/57 通过；跨层 Actor、Workflow、
+  child executor、storage 与 Ink/view-model 回归：12 个测试文件，282/282 通过。
+- post-review 五个核心实现文件 coverage：statements/lines 87.75%，branches
+  80.05%；完整 package、bundle、Worker sidecar 与 DTS 构建通过。
 - F270 eval harness + shared one-shot boundary：65/65 通过；新
   dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。
 - manifest-only eval：2/2 通过，三个付费 stage 默认跳过；raw root 位于 OS
@@ -140,9 +167,9 @@ npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 6 | - | - | - |
+| 7 | - | - | - |
 
-**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 6
+**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 7
 个人工用例仍待发布测试人员执行并签字。
 
 **发现的问题**：自动化未发现可复现的 F270 产品回退；已知残余行为是部分模型

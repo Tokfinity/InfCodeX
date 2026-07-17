@@ -16,6 +16,8 @@ import {
 
 const MAX_BROADCAST_RECIPIENTS = 20;
 const MAX_WAIT_MS = 120_000;
+const ROOT_SENDS_PER_TURN = 20;
+const CHILD_SENDS_PER_TURN = 5;
 
 export async function toolSpawnAgent(
   input: Record<string, unknown>,
@@ -57,21 +59,39 @@ export async function toolSendAgentMessage(
   const target = requiredString(input, 'to');
   const content = requiredString(input, 'content');
   const classification = parseClassification(input.classification);
+  const forwardedMessageId = optionalString(input.forwarded_message_id);
   try {
     if (target === '*') {
-      const recipients = messageRecipients(client);
+      const recipients = novelMessageRecipients(client, messageRecipients(client), forwardedMessageId);
       if (recipients.length > MAX_BROADCAST_RECIPIENTS) {
         return renderActorError('send_message', {
           code: 'broadcast_limit_reached',
           message: `broadcast has ${recipients.length} recipients; max is ${MAX_BROADCAST_RECIPIENTS}`,
         });
       }
-      await Promise.all(recipients.map((actor) => client.send(actor.path, content, classification)));
-      return render({ ok: true, delivery: 'broadcast', recipients: recipients.map((actor) => actor.path) });
+      if (recipients.length === 0) {
+        return renderActorError('send_message', {
+          code: 'message_cycle_detected',
+          message: 'broadcast has no recipient outside the forwarding chain',
+        });
+      }
+      const chargeError = chargeSendCounter(ctx, recipients.length);
+      if (chargeError) return renderActorError('send_message', chargeError);
+      const messages = await Promise.all(recipients.map((actor) => (
+        client.send(actor.path, content, classification, forwardedMessageId)
+      )));
+      return render({
+        ok: true,
+        delivery: 'broadcast',
+        recipients: recipients.map((actor) => actor.path),
+        messageIds: messages.map((message) => message.messageId),
+      });
     }
     const actorPath = resolveTarget(client, target);
-    await client.send(actorPath, content, classification);
-    return render({ ok: true, delivery: 'message', actorPath });
+    const chargeError = chargeSendCounter(ctx, 1);
+    if (chargeError) return renderActorError('send_message', chargeError);
+    const message = await client.send(actorPath, content, classification, forwardedMessageId);
+    return render({ ok: true, delivery: 'message', actorPath, messageId: message.messageId });
   } catch (error) {
     return renderActorError('send_message', error);
   }
@@ -147,6 +167,7 @@ export async function toolListAgents(
         capabilities: actor.capabilities,
         currentTurnId: actor.currentTurnId,
         turnCount: actor.turnIds.length,
+        latestTurn: actor.latestTurn,
         revision: actor.revision,
       })),
     });
@@ -203,6 +224,40 @@ function messageRecipients(client: AgentActorClient): AgentActor[] {
       || (self.parentPath !== undefined && actor.parentPath === self.parentPath)
     )
   ));
+}
+
+function novelMessageRecipients(
+  client: AgentActorClient,
+  recipients: readonly AgentActor[],
+  forwardedMessageId: string | undefined,
+): AgentActor[] {
+  if (!forwardedMessageId) return [...recipients];
+  const source = client.get(client.callerPath).mailbox.find((message) => (
+    message.messageId === forwardedMessageId
+  ));
+  if (!source) return [...recipients];
+  const seen = new Set([...(source.lineage ?? [source.senderPath]), client.callerPath]);
+  return recipients.filter((actor) => !seen.has(actor.path));
+}
+
+function chargeSendCounter(
+  ctx: KodaXToolExecutionContext,
+  additional: number,
+): Readonly<Record<string, unknown>> | undefined {
+  const counter = ctx.sendMessageTurnCounter;
+  if (!counter) return undefined;
+  const isRoot = ctx.actorControl?.callerPath === '/root';
+  const limit = isRoot ? ROOT_SENDS_PER_TURN : CHILD_SENDS_PER_TURN;
+  if (counter.count + additional > limit) {
+    return {
+      code: 'message_rate_limited',
+      message: `send_message limit reached for this Agent turn (${counter.count} sent, limit ${limit})`,
+      limit,
+      sent: counter.count,
+    };
+  }
+  counter.count += additional;
+  return undefined;
 }
 
 function spawnMetadata(
@@ -336,6 +391,8 @@ function errorFact(error: unknown): Readonly<Record<string, unknown>> {
       ...(record.availableNonRootSlots === 0 ? { availableNonRootSlots: 0 } : {}),
       ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
       ...(record.retryable === true ? { hint: 'Wait for an active Agent turn to finish, then replan.' } : {}),
+      ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
+      ...(typeof record.sent === 'number' ? { sent: record.sent } : {}),
     };
   }
   return { code: 'agent_control_failed', message: String(error) };

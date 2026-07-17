@@ -52,6 +52,7 @@ describe('F270 actor principal wiring', () => {
       maxConcurrentThreads: 4,
       activeNonRootTurns: 0,
     });
+    expect(ctx.sendMessageTurnCounter).toEqual({ count: 0 });
   });
 
   it('preserves a Runtime-injected actor principal instead of creating a second tree', () => {
