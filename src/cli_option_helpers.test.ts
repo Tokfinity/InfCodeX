@@ -305,13 +305,13 @@ describe('parseAgentModeOption', () => {
     expect(parseAgentModeOption('SA')).toBe('sa');
   });
 
-  it('accepts AMAW mode case-insensitively', () => {
-    expect(parseAgentModeOption('AMAW')).toBe('amaw');
+  it.each(['AMAW', 'ama-workflow'])('rejects retired %s with a migration hint', (mode) => {
+    expect(() => parseAgentModeOption(mode)).toThrow(/retired in v0\.7\.72.*Use "ama"/);
   });
 
   it('rejects unsupported agent modes', () => {
     expect(() => parseAgentModeOption('team')).toThrow(
-      'Expected one of: ama, amaw, sa.',
+      'Expected one of: ama, sa.',
     );
   });
 });

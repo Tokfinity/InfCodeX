@@ -34,7 +34,8 @@ export type AgentControlErrorCode =
   | 'invalid_task_name'
   | 'name_collision'
   | 'no_active_turn'
-  | 'permission_denied';
+  | 'permission_denied'
+  | 'unsupported_operation';
 
 export class AgentControlError extends Error {
   constructor(readonly code: AgentControlErrorCode, message: string) {

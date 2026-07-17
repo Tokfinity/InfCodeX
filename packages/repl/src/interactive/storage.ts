@@ -18,6 +18,7 @@ import type {
   KodaXSessionScope,
   KodaXSessionStorage,
   KodaXSessionUiHistoryItem,
+  AgentActorSnapshot,
 } from '@kodax-ai/agent';
 import {
   appendSessionLineageLabel,
@@ -436,6 +437,9 @@ function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSn
         ...entry,
         metadata: entry.metadata ? structuredClone(entry.metadata) : undefined,
       })),
+      actorSnapshot: snapshot.meta?.actorSnapshot
+        ? structuredClone(snapshot.meta.actorSnapshot)
+        : undefined,
     },
   };
 }
@@ -460,6 +464,7 @@ function createSessionMeta(
     extensionState: data.extensionState,
     extensionRecordCount: data.extensionRecords?.length ?? 0,
     artifactLedgerCount: data.artifactLedger?.length ?? 0,
+    actorSnapshot: data.actorSnapshot ? structuredClone(data.actorSnapshot) : undefined,
     lineageVersion: lineage?.version,
     activeEntryId: lineage?.activeEntryId,
     lineageEntryCount: lineage?.entries.length ?? 0,
@@ -927,6 +932,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       uiHistory: data.uiHistory ?? existing?.data.uiHistory,
       extensionState: data.extensionState ?? existing?.data.extensionState,
       artifactLedger: data.artifactLedger ?? existing?.data.artifactLedger,
+      actorSnapshot: data.actorSnapshot ?? existing?.data.actorSnapshot,
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
       errorMetadata: data.errorMetadata ?? existing?.data.errorMetadata,
@@ -984,6 +990,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
 
       if (data.extensionState !== undefined) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
+      if (data.actorSnapshot !== undefined) {
         await this.mergeAndWriteInternal(id, data);
         return;
       }
@@ -1099,6 +1110,30 @@ export class FileSessionStorage implements KodaXSessionStorage {
   async save(id: string, data: SessionData): Promise<void> {
     await this.serializedWrite(id, async () => {
       await this.mergeAndWriteInternal(id, data);
+    });
+  }
+
+  /** F270/F269 owner mutation: CAS-update only the Actor section of a session snapshot. */
+  async saveActorSnapshot(
+    id: string,
+    snapshot: AgentActorSnapshot,
+    expectedRevision: number,
+  ): Promise<void> {
+    await this.serializedWrite(id, async () => {
+      const resolved = await this.readSession(id);
+      if (!resolved) throw new Error(`Session not found: ${id}`);
+      const actualRevision = resolved.data.actorSnapshot?.revision ?? 0;
+      if (actualRevision !== expectedRevision) {
+        throw new Error(
+          `Actor snapshot revision conflict for ${id}: expected ${expectedRevision}, actual ${actualRevision}.`,
+        );
+      }
+      const updated: SessionData = {
+        ...resolved.data,
+        actorSnapshot: structuredClone(snapshot),
+      };
+      await this.writeSessionInternal(id, updated, resolved.createdAt);
+      this.syncAppendState(id, updated);
     });
   }
 

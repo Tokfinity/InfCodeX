@@ -1,8 +1,11 @@
 export { AgentActorController, createAgentActorController } from './controller.js';
+export type { AgentControllerOptions } from './controller.js';
 export { AgentBudgetExhaustedError, AgentControlError, AgentLimitReachedError } from './errors.js';
+export type { AgentControlErrorCode } from './errors.js';
 export { AgentTurnScheduler } from './scheduler.js';
 export type {
   AgentActor,
+  AgentActorClient,
   AgentActorSnapshot,
   AgentActorState,
   AgentActorStore,
@@ -11,7 +14,6 @@ export type {
   AgentBudgetExhausted,
   AgentBudgetPort,
   AgentCapabilities,
-  AgentControlErrorCode,
   AgentDataClassification,
   AgentDetail,
   AgentEvent,
@@ -19,11 +21,12 @@ export type {
   AgentExecutionInput,
   AgentExecutionKind,
   AgentExecutionResult,
-  AgentExecutor,
+  AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
   AgentLimitReached,
   AgentMailboxMessage,
+  AgentMetadataValue,
   AgentOutput,
   AgentSpawnInput,
   AgentTreeSnapshot,

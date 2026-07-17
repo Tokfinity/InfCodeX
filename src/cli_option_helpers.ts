@@ -19,7 +19,7 @@ import type { AcpPermissionMode } from './acp_server.js';
 export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
 export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
 export const CLI_RUNTIME_MODES = ['embedded', 'daemon'] as const;
-export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
+export const KODAX_AGENT_MODES = ['ama', 'sa'] as const;
 export const KODAX_REPO_INTELLIGENCE_MODES: KodaXRepoIntelligenceMode[] = [
   'auto',
   'off',
@@ -206,6 +206,12 @@ export function parsePermissionModeOption(value: string): AcpPermissionMode {
 
 export function parseAgentModeOption(value: string): KodaXAgentMode {
   const normalized = value.trim().toLowerCase();
+  if (normalized === 'amaw' || normalized === 'ama-workflow') {
+    throw new InvalidArgumentError(
+      `Agent mode "${normalized}" was retired in v0.7.72. Use "ama"; `
+      + 'Workflow activation is now explicit intent, not a separate mode.',
+    );
+  }
   if ((KODAX_AGENT_MODES as readonly string[]).includes(normalized)) {
     return normalized as KodaXAgentMode;
   }
@@ -307,6 +313,12 @@ export function resolveCliAgentMode(
 ): KodaXAgentMode {
   const agentModeSource = program.getOptionValueSource('agentMode');
   if (agentModeSource === 'cli' && typeof opts.agentMode === 'string') {
+    if (opts.agentMode === 'amaw' || opts.agentMode === 'ama-workflow') {
+      throw new Error(
+        `Agent mode "${opts.agentMode}" was retired in v0.7.72. Use "ama"; `
+        + 'Workflow activation is now explicit intent.',
+      );
+    }
     if (!(KODAX_AGENT_MODES as readonly string[]).includes(opts.agentMode)) {
       throw new Error(
         `Invalid agent mode "${opts.agentMode}". Expected one of: ${KODAX_AGENT_MODES.join(', ')}`,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveResumeFromRunDir } from './tool-execution-context.js';
+import { buildToolExecutionContext, resolveResumeFromRunDir } from './tool-execution-context.js';
 
 /**
  * Path-traversal guard for the model-supplied `resumeFromRunId` (FEATURE_246
@@ -36,5 +36,34 @@ describe('resolveResumeFromRunDir (path-traversal guard)', () => {
     expect(resolveResumeFromRunDir(BASE, 'a/b')).toBeUndefined();
     expect(resolveResumeFromRunDir(BASE, '/abs')).toBeUndefined();
     expect(resolveResumeFromRunDir(BASE, '.hidden')).toBeUndefined(); // must start alnum
+  });
+});
+
+describe('F270 actor principal wiring', () => {
+  it('creates one root-bound collaboration principal for a standalone AMA run', () => {
+    const ctx = buildToolExecutionContext({
+      options: { provider: 'mock', agentMode: 'ama' },
+      runtime: undefined,
+      managedProtocolPayloadRef: { current: undefined },
+    });
+
+    expect(ctx.actorControl?.callerPath).toBe('/root');
+    expect(ctx.actorControl?.list()).toMatchObject({
+      maxConcurrentThreads: 4,
+      activeNonRootTurns: 0,
+    });
+  });
+
+  it('preserves a Runtime-injected actor principal instead of creating a second tree', () => {
+    const injected = { callerPath: '/root/injected' } as NonNullable<
+      import('../types.js').KodaXContextOptions['actorControl']
+    >;
+    const ctx = buildToolExecutionContext({
+      options: { provider: 'mock', agentMode: 'ama', context: { actorControl: injected } },
+      runtime: undefined,
+      managedProtocolPayloadRef: { current: undefined },
+    });
+
+    expect(ctx.actorControl).toBe(injected);
   });
 });

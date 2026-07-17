@@ -27,7 +27,6 @@ import {
   listToolDefinitions,
 } from '../../../tools/registry.js';
 import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../../../tools/deferred-tools.js';
-import { DISPATCH_RUN_WORKFLOW_NUDGE } from '../../../tools/tool-definitions.js';
 import { TOOL_CALL_NAME, TOOL_DESCRIBE_NAME } from '../../../tools/tool-bridge.js';
 import { withManualToolBranding } from '../../../self-knowledge/tool-description.js';
 import type {
@@ -61,7 +60,6 @@ import {
 import { getAmaRoleEffectiveExclude } from './role-exclude.js';
 import { wrapCodingToolAsRunnable } from './tool-wrappers.js';
 import { getToolExecutionOverride } from '../../../agent-runtime/permission-gate.js';
-import { wrapDispatchChildTaskForRole } from './dispatch-child.js';
 import { NULL_OBSERVER } from './observer-bridge.js';
 import type { BudgetExtensionContext } from './verdict-recorder.js';
 import type {
@@ -594,33 +592,6 @@ export function buildRunnerAgentChain(
     };
     (codingTools as { -readonly [K in keyof typeof codingTools]: typeof codingTools[K] }).todoUpdate = wrappedTodoUpdate;
   }
-  const dispatchDefinition = getToolDefinition('dispatch_child_task');
-  if (!dispatchDefinition) {
-    throw new Error('dispatch_child_task tool not registered — tools/registry.ts bootstrap failure');
-  }
-  // FEATURE_246 + FEATURE_249: surface the run_workflow nudge whenever run_workflow
-  // is usable this turn (host wired). Post-FEATURE_249 that is AMA and AMAW alike, so
-  // AMA's dispatch description also carries the nudge — a soft "prefer run_workflow
-  // when you fan out" tool-choice hint that only matters once the model is already
-  // orchestrating; it does NOT push AMA to orchestrate (that is the amaw-only
-  // ORCHESTRATION DEFAULT directive). SA has no host, so the nudge is omitted there.
-  const dispatchDefForTurn = ctx.workflowHost
-    ? {
-        ...dispatchDefinition,
-        description: `${dispatchDefinition.description} ${DISPATCH_RUN_WORKFLOW_NUDGE}`,
-      }
-    : dispatchDefinition;
-  // Worker owns the full dispatch surface: read-only fan-out via RULE A,
-  // long-running probes via RULE B, write fan-out (readOnly:false) via RULE C.
-  const workerDispatch = wrapDispatchChildTaskForRole(
-    dispatchDefForTurn,
-    ctx,
-    'worker',
-    budget,
-    observer,
-    events,
-  );
-
   // FEATURE_193 (v0.7.43): scoutEmit + contractEmit deleted with V1 chain.
   // FEATURE_190 (v0.7.43) Phase 3: `handoffEmit` deleted — Worker terminates
   // text-only (Sidecar Verifier StopHook handles verification out-of-band).
@@ -692,7 +663,6 @@ export function buildRunnerAgentChain(
         budget,
         events,
         new Map<string, RunnableTool>([
-          ['dispatch_child_task', workerDispatch],
           ['todo_update', codingTools.todoUpdate],
           ['todo_create', codingTools.todoCreate],
         ]),

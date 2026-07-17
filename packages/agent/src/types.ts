@@ -47,6 +47,7 @@ export type {
 
 // Import for local types
 import type { KodaXMessage } from '@kodax-ai/llm';
+import type { AgentActorSnapshot } from './actors/types.js';
 
 export type KodaXJsonPrimitive = string | number | boolean | null;
 export type KodaXJsonValue =
@@ -419,7 +420,7 @@ export interface KodaXSessionRuntimeInfo {
   reasoningMode?: string;
   /** Permission mode active at session start, e.g. `'auto'` | `'plan'`. */
   permissionMode?: string;
-  /** Agent mode active at session start, e.g. `'sa'` | `'ama'` | `'amaw'`. */
+  /** Agent mode active at session start, e.g. `'sa'` | `'ama'`. */
   agentMode?: string;
 }
 
@@ -437,6 +438,8 @@ export interface KodaXSessionData {
   extensionRecords?: KodaXExtensionSessionRecord[];
   lineage?: KodaXSessionLineage;
   artifactLedger?: KodaXSessionArtifactLedgerEntry[];
+  /** Runtime-owned F270 Actor tree snapshot; persisted with the session owner. */
+  actorSnapshot?: AgentActorSnapshot;
 }
 
 export interface KodaXSessionMeta {
@@ -453,6 +456,8 @@ export interface KodaXSessionMeta {
   extensionState?: KodaXExtensionSessionState;
   extensionRecordCount?: number;
   artifactLedgerCount?: number;
+  /** Runtime-owned F270 Actor tree snapshot; absent on pre-v0.7.72 sessions. */
+  actorSnapshot?: AgentActorSnapshot;
   lineageVersion?: 2;
   activeEntryId?: string | null;
   lineageEntryCount?: number;

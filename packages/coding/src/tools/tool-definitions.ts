@@ -21,6 +21,7 @@ import {
 } from './memory-recall.js';
 import { toolKodaxManual } from './manual.js';
 import { buildManualToolDescription } from '../self-knowledge/tool-description.js';
+import { EXPLICIT_WORKFLOW_POLICY } from '../agents/worker-role-prompt.js';
 import { toolSkill } from './skill.js';
 import { toolRunSkillScript } from './skill-script.js';
 import { toolWrite } from './write.js';
@@ -63,12 +64,17 @@ import { toolMcpCall } from './mcp-call.js';
 import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
-import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolListDispatchableAgents } from './list-dispatchable-agents.js';
 import { toolRunWorkflow } from './run-workflow.js';
-import { toolSendMessage } from './send-message.js';
-import { toolTaskStop } from './task-stop.js';
-import { toolTaskOutput } from './task-output.js';
+import {
+  toolAgentOutput,
+  toolFollowupTask,
+  toolInterruptAgent,
+  toolListAgents,
+  toolSendAgentMessage,
+  toolSpawnAgent,
+  toolWaitAgent,
+} from './agent-collaboration.js';
 import { toolGetGoal, toolCreateGoal, toolUpdateGoal } from './goal-tools.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
@@ -135,17 +141,7 @@ function mcpCapabilityPreview(capabilityId: string | undefined, args: unknown): 
   }
 }
 
-// FEATURE_246 / FEATURE_249: the dispatch_child_task → run_workflow nudge. Kept
-// separate from the static description so it is appended to the Worker's dispatch
-// tool ONLY when run_workflow is actually usable this turn — i.e. a workflow host is
-// wired. That is the case in amaw, and in AMA once natural-language or `/workflow`
-// activation wires a host (FEATURE_249 widened the former amaw-only gate). When no
-// host is wired the nudge is omitted rather than pointing the Worker at a tool it
-// does not have. Appended verbatim in agent-chain.ts buildAgentToolsFromRegistry.
-export const DISPATCH_RUN_WORKFLOW_NUDGE =
-  'When you would otherwise fan several of these out and then synthesize or cross-check their results into one answer (comparing several codebases, reviewing a diff from multiple angles, fanning many files out and ranking what comes back), prefer run_workflow instead: one call gives you a bounded parallel/pipeline, per-child structured output, and same-session resume that dispatch_child_task does not.';
-
-export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
+const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'read',
     description: [
@@ -524,16 +520,16 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     toClassifierInput: () => 'List dispatchable agents',
   },
   {
-    name: 'dispatch_child_task',
-    description: 'Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript.',
+    name: 'spawn_agent',
+    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. Continue useful work after launch; use wait_agent for terminal events.',
     input_schema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: 'Unique child task identifier' },
+        task_name: { type: 'string', description: 'Stable direct-child name used in the Runtime-minted canonical actor path.' },
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
-        readOnly: { type: 'boolean', description: 'true (default): child can only read files. false: child may edit files (Generator/Worker only); use for non-conflicting file-level edits across modules.' },
-        scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
-        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefixed strings: "file:path" inlines the complete working-tree file, "diff:path" inlines the complete git diff against HEAD, "finding:text" transcribes a fact you already know, "task_id:<child_id>" forwards a completed sibling child\'s output verbatim. The complete child request is capacity-checked after provider/model routing; only a request that cannot fit receives a recoverable artifact preview. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it.' },
+        read_only: { type: 'boolean', description: 'true (default) narrows filesystem access to read-only; false retains the parent ceiling.' },
+        scope: { type: 'string', description: 'Optional bounded scope hint (e.g. "packages/llm/src/")' },
+        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefix with file:, diff:, finding:, or agent:<canonical-path>. Agent output must already be terminal and visible to the caller.' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
         // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
         // no-op for now; FEATURE_102 (v0.7.45) will translate this
@@ -544,7 +540,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           enum: ['fast', 'balanced', 'deep'],
           description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short focused lookups (reading a handful of files, a simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); a future routing feature will activate the hint. Mark "fast" only for trivial focused lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
         },
-        subagent_type: {
+        agent_id: {
           type: 'string',
           description: 'When the task matches a registered specialist (e.g., db-reviewer for SQL changes, e2e-runner for browser tests), dispatch as that specialist instead of a generic child.',
         },
@@ -561,16 +557,18 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'string',
           description: 'Optional. Reasoning effort for this child (for example off, low, medium, high, xhigh, max). Omit or use auto to inherit the parent/default effort. If subagent_type names a specialist with a declared effort, that specialist effort is locked and a different dispatch effort is rejected. Unsupported values are rejected by the selected provider/model.',
         },
+        isolation: { type: 'string', enum: ['shared', 'worktree'], description: 'Optional execution isolation.' },
+        fork_turns: { description: 'History fork: all (default), none, or a positive recent-turn count.' },
       },
-      required: ['objective'],
+      required: ['task_name', 'objective'],
     },
-    handler: toolDispatchChildTask,
+    handler: toolSpawnAgent,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
-      const i = input as { objective?: string; readOnly?: boolean };
+      const i = input as { objective?: string; read_only?: boolean };
       const obj = typeof i?.objective === 'string' ? i.objective.slice(0, 200) : '<no-objective>';
-      const mutability = i?.readOnly === false ? 'mutating' : 'readonly';
-      return `Dispatch(${mutability}): ${obj}`;
+      const mutability = i?.read_only === false ? 'mutating' : 'readonly';
+      return `SpawnAgent(${mutability}): ${obj}`;
     },
   },
   {
@@ -633,14 +631,14 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      'Route a short message to another in-flight agent in this session. Worker → child appends a <coordinator-instruction> at user priority (drained next tool boundary). Child → child peer appends a <peer-message from=…> at background priority (drained when the peer next yields). Child → parent Worker uses to="worker" and appends a <child-notification from=…>. Broadcast to="*" fans the message out to every other in-flight sibling plus the parent Worker, framed as <peer-broadcast from=…>. Use sparingly — most children should not need mid-flight steering, and peer chatter is for coordination notes that change another agent\'s plan, not status updates.',
+      'Deliver a bounded message without starting a turn. A running actor receives it at the next safe boundary; an idle actor retains it for its next turn. Direct parent, direct child, admitted peer, and bounded broadcast targets are supported.',
     input_schema: {
       type: 'object',
       properties: {
         to: {
           type: 'string',
           description:
-            'One of: an in-flight task_id from a prior dispatch_child_task call (single addressed send), the literal "worker" (notify the parent Worker; only valid when the sender is a child), or "*" (broadcast to all other in-flight siblings plus the parent Worker, capped at 20 recipients). Self-targeted sends are rejected.',
+            'A visible canonical actor path, direct-child/peer task name, the literal "parent", or "*" for a bounded broadcast. Self-targeted sends are rejected.',
         },
         content: {
           type: 'string',
@@ -656,7 +654,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
       required: ['to', 'content'],
     },
-    handler: toolSendMessage,
+    handler: toolSendAgentMessage,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
       const i = input as { to?: string; content?: string };
@@ -667,68 +665,101 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     },
   },
   {
-    name: 'task_stop',
-    description:
-      'Request graceful exit of a specific in-flight child task launched via dispatch_child_task. The child finishes its current tool call atomically (no hard kill — a 90s npm test won\'t be interrupted), sees an optional <coordinator-stop-request> message explaining why, then emits a final summary. Use when: child went off-scope (e.g. started writing files when launched read-only), user cancelled the parent task that justified the child, or child is pathologically slow with no progress signal. Coordinator-only: child agents cannot call this tool.',
+    name: 'followup_task',
+    description: 'Deliver an additional task to a direct child. An idle actor atomically starts a new turn; a running actor receives it in the current turn without consuming another slot.',
     input_schema: {
       type: 'object',
       properties: {
-        task_id: {
+        target: { type: 'string', description: 'Canonical child path or direct-child task name.' },
+        objective: { type: 'string', description: 'Additional objective or changed evidence.' },
+      },
+      required: ['target', 'objective'],
+    },
+    handler: toolFollowupTask,
+    sideEffect: 'mutates-state',
+    toClassifierInput: (input) => {
+      const value = input as { target?: unknown };
+      return `FollowupTask: ${String(value.target ?? '<no-target>')}`;
+    },
+  },
+  {
+    name: 'wait_agent',
+    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        after_sequence: { type: 'number', description: 'Last event sequence already observed. Defaults to 0.' },
+        timeout_ms: { type: 'number', description: 'Bounded wait window, 0-120000 ms. Defaults to 30000.' },
+      },
+    },
+    handler: toolWaitAgent,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
+    interruptBehavior: 'cancel',
+    toClassifierInput: () => 'WaitAgent',
+  },
+  {
+    name: 'list_agents',
+    description: 'List the caller-visible live actor tree, capabilities, state, parent, active turn, and shared session capacity.',
+    input_schema: { type: 'object', properties: {} },
+    handler: toolListAgents,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
+    toClassifierInput: () => 'ListAgents',
+  },
+  {
+    name: 'interrupt_agent',
+    description:
+      'Interrupt a controlled child actor\'s active turn without deleting its identity or history. Native/constructed actors support this operation; an incapable external backend rejects it explicitly.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target: {
           type: 'string',
           description:
-            'Target child task_id (from a prior dispatch_child_task call). Completed children are auto-cleaned and become invalid targets.',
+            'Canonical controlled actor path or direct-child task name.',
         },
         reason: {
           type: 'string',
           description:
-            'Optional explanation. When provided, the child receives a <coordinator-stop-request> system-reminder with this reason BEFORE the abort fires, so it can frame its final summary accordingly. Omitting the reason still aborts the child; only the explanation is skipped.',
+            'Optional attributable interruption reason.',
         },
       },
-      required: ['task_id'],
+      required: ['target'],
     },
-    handler: toolTaskStop,
+    handler: toolInterruptAgent,
     sideEffect: 'mutates-state',
     planModeAllowed: true,
     toClassifierInput: (input) => {
-      const i = input as { task_id?: string; reason?: string };
-      const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
+      const i = input as { target?: string; reason?: string };
+      const target = typeof i?.target === 'string' ? i.target : '<no-target>';
       const why = typeof i?.reason === 'string' ? i.reason.slice(0, 80) : '';
-      return `TaskStop(${target})${why ? ': ' + why : ''}`;
+      return `InterruptAgent(${target})${why ? ': ' + why : ''}`;
     },
   },
   {
-    name: 'task_output',
+    name: 'agent_output',
     description:
-      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, output_state, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Terminal output is emitted in full by this tool so the shared outer tool-result capacity policy owns any recoverable spill or pagination; running external output may be a bounded live tail and is marked output_state=live_partial. Normal Worker usage is task_output({task_id}) with block omitted/false for a status snapshot. If block:true is used, timeout_ms is only a bounded read-window cap; retrieval_status=wait_expired with status=running means the child is still running, not timed out or failed. Prefer idle-yield (end the turn text-only) for normal waits. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
+      'Retrieve the current or terminal result and artifact references for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
     input_schema: {
       type: 'object',
       properties: {
-        task_id: {
+        target: {
           type: 'string',
           description:
-            'Target child task_id (from a prior dispatch_child_task call). Returns retrieval_status=not_found if the task was never dispatched or its snapshot has been evicted.',
+            'Canonical controlled actor path or direct-child task name.',
         },
-        block: {
-          type: 'boolean',
-          description:
-            'Optional compatibility knob. When false or omitted (normal Worker usage), return the current snapshot immediately. When true, wait only within a bounded read window (up to timeout_ms) before returning the snapshot; wait expiry is not child failure. Idle-yield (end turn text-only) is the canonical wait.',
-        },
-        timeout_ms: {
-          type: 'number',
-          description:
-            'Max bounded read-window time in milliseconds when block:true. Default 30000 (30s), max 120000 (120s). Ignored when block:false. If the read window expires, returns the current snapshot with retrieval_status=wait_expired; this is not a child task timeout.',
-        },
+        turn_id: { type: 'string', description: 'Optional exact turn id. Defaults to the actor\'s latest turn.' },
       },
-      required: ['task_id'],
+      required: ['target'],
     },
-    handler: toolTaskOutput,
+    handler: toolAgentOutput,
     sideEffect: 'readonly',
     planModeAllowed: true,
     toClassifierInput: (input) => {
-      const i = input as { task_id?: string; block?: boolean };
-      const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
-      const mode = i?.block === true ? ' (block)' : '';
-      return `TaskOutput(${target})${mode}`;
+      const i = input as { target?: string };
+      const target = typeof i?.target === 'string' ? i.target : '<no-target>';
+      return `AgentOutput(${target})`;
     },
   },
   {
@@ -2029,3 +2060,15 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   TOOL_CALL_DEFINITION,
   TOOL_SEARCH_DEFINITION,
 ];
+
+const RUN_WORKFLOW_DESCRIPTION = [
+  EXPLICIT_WORKFLOW_POLICY,
+  'Author and run a deterministic multi-Agent protocol macro. The call returns a run id while the Workflow host advances declared steps and durable checkpoints. First inspect the real scope, then provide a bounded JavaScript run(wf, args) body and manifest. Use wf.runAgent for declared steps, wf.parallel only for genuine barriers, wf.pipeline for streaming stages, and wf.synthesize for the final protocol result. Child prompts must use the user\'s language and include concrete paths, constraints, evidence, and output schemas. Workflow-local limits can only narrow the session-wide Agent scheduler and work budget.',
+].join('\n\n');
+
+export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] =
+  BUILTIN_TOOL_DEFINITION_SOURCE.map((definition) => (
+    definition.name === 'run_workflow'
+      ? { ...definition, description: RUN_WORKFLOW_DESCRIPTION }
+      : definition
+  ));

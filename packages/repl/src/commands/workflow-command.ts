@@ -230,8 +230,7 @@ export const workflowCommand: Command = {
       console.log(
         chalk.yellow(
           '\n[workflow] Workflows run multiple agents, which Solo (SA) mode does not support.\n'
-          + 'Switch with /agent-mode ama to author and run one via /workflow, or /agent-mode amaw to\n'
-          + 'also let the agent start one from natural language.\n',
+          + 'Switch with /agent-mode ama, then request it explicitly via /workflow.\n',
         ),
       );
       return;
@@ -251,19 +250,17 @@ export const workflowCommand: Command = {
     // FEATURE_246 (ADR-047): turn a free-text request into a workflow. The Worker
     // authors it itself (scout-then-author via run_workflow), returned as an
     // agent-turn invocation. Shared by the explicit `create` subcommand and the
-    // bare `/workflow <prompt>` form. Only reached in ama/amaw — Solo (SA) mode
+    // bare `/workflow <prompt>` form. Only reached in AMA — Solo (SA) mode
     // rejects execution-class workflow commands upstream (see the guard below).
-    // In plain AMA the Worker has no standing run_workflow, so this authoring turn
-    // is elevated to amaw for its duration (agentModeOverride); the session mode
-    // is unchanged. This gives the command path AMAW's full authoring capability
-    // while keeping AMA from self-activating workflows from natural language.
+    // The command carries a structured explicit-intent marker; there is no hidden
+    // mode elevation and task complexity alone cannot activate a Workflow.
     const createWorkflowFromText = async (request: string): Promise<CommandResultData | undefined> => {
       return {
         invocation: {
           source: 'prompt',
           displayName: 'workflow create',
           disableModelInvocation: false,
-          ...(currentConfig.agentMode === 'ama' ? { agentModeOverride: 'amaw' as const } : {}),
+          workflowIntent: 'explicit',
           // FEATURE_246 — shared with the SDK `authorWorkflowViaWorker` entrypoint
           // so both produce a byte-identical scout-then-author turn.
           prompt: buildScoutThenAuthorPrompt(request),

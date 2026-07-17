@@ -25,7 +25,7 @@ export function buildAmaWorkStripFromStatus(
   > | null | undefined,
   isLoading: boolean,
 ): string | undefined {
-  if (!isLoading || !status || (status.agentMode !== "ama" && status.agentMode !== "amaw")) {
+  if (!isLoading || !status || status.agentMode !== "ama") {
     return undefined;
   }
 
@@ -59,7 +59,7 @@ export function buildAmaSummaryViewModel(options: {
       activeWorkerTitle: options.status?.activeWorkerTitle,
       activePhase:
         options.status?.phase
-        ?? (options.agentMode === "ama" || options.agentMode === "amaw" ? `${options.agentMode.toUpperCase()} active` : undefined),
+        ?? (options.agentMode === "ama" ? 'AMA active' : undefined),
       parallelText: options.parallelTextOverride ?? workStripText,
       currentTool: options.currentTool,
       toolInputCharCount: options.toolInputCharCount,

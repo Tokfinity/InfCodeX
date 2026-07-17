@@ -144,9 +144,11 @@ function readStringArray(value: unknown): readonly string[] {
 }
 
 function readWorkflowProcessSource(value: unknown): WorkflowRunProcessMetadata['source'] | undefined {
+  // v0.7.72 migration: historical AMAW-authored records remain readable but
+  // are normalized to the explicit command provenance used by the owner.
+  if (value === 'amaw') return 'command';
   if (
     value === 'command'
-    || value === 'amaw'
     || value === 'review'
     || value === 'sdk'
     || value === 'capsule'

@@ -171,8 +171,6 @@ const AUTO_ENGINE_ARGS: ArgumentDefinition[] = [
 
 const AGENT_MODE_ARGS: ArgumentDefinition[] = [
   { name: 'ama', description: 'Use AMA agent mode', type: 'enum' },
-  { name: 'amaw', description: 'Use AMA workflow agent mode', type: 'enum' },
-  { name: 'ama-workflow', description: 'Alias for amaw', type: 'enum' },
   { name: 'sa', description: 'Use single-agent mode', type: 'enum' },
   { name: 'toggle', description: 'Cycle to the next agent mode', type: 'enum' },
 ];

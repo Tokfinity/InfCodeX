@@ -40,40 +40,11 @@ import { EXECUTION_GUIDANCE } from '../prompts/execution-guidance.js';
 
 export const WORKER_AGENT_NAME = 'kodax-worker';
 
-/**
- * AMAW mode-level orchestration directive.
- *
- * A standing, session-level disposition — the same mechanism the reference
- * "ultracode" mode uses to activate orchestration readily — NOT a tool-description
- * clause. The prior tool-level lever (run_workflow description reframe + amaw-gated
- * dispatch nudge) was eval-falsified: models already fan out via `dispatch_child_task`
- * and the tool-description guidance is only read once the model is already weighing
- * the tool. This block is read every Worker turn, before the model commits to a solo
- * plan, so it can shift the orchestrate-vs-solo default itself.
- *
- * Kept OUT of `buildWorkerInstructions` (shared by AMA + AMAW) and spliced by
- * `role-prompt.ts`'s `case 'worker':` ONLY when `run_workflow` is on the tool surface
- * (`ManagedRolePromptContext.amawOrchestrationAvailable`, i.e. `agentMode === 'amaw'`).
- * That gate reads the same `options.agentMode` field as `buildWorkflowToolHost`
- * (`tool-execution-context.ts`), so the directive can never appear on a turn where
- * `run_workflow` is absent — it cannot leak into plain AMA. See docs/features/v0.7.59.md.
- *
- * The string body carries no version metadata (ADR-033 §5); tier-1 (orchestrate-vs-solo)
- * and tier-2 (which primitive) are single-concept sentences, never fused (ADR-033 §2).
- */
-export const orchestrationDefault = [
-  'ORCHESTRATION DEFAULT: for substantive work — a multi-file investigation, a design or architecture decision, a change that benefits from a second opinion, or anything where a wrong conclusion is costly to unwind — default to orchestrating multiple agents that cross-check each other rather than working it alone end to end.',
-  "`run_workflow` is the first thing to reach for when the task is already partitioned into bounded areas and requires final synthesis or verification: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. Do not replace that fitting workflow with ad-hoc dispatch. For exploratory work or simple parallel lookup without a workflow-shaped barrier, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — there, what matters is cross-checking, not which tool you dispatched it through.",
-  'Once a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
-  'Solo, single-threaded work stays the right call for conversational turns, single-line or typo-scale edits, and tasks you have already verified are correct.',
-  // FEATURE_248 flow-fix (v0.7.59) — front-load the decision so it is made at task
-  // inception, before solo momentum accrues, and fold it into the plan itself. The
-  // turn-0 eval showed this adds a causally-confirmed increment over the ambient
-  // directive alone (models quote it: "orchestrate-vs-solo 的决策判断" / "我的计划项
-  // 本身就是这些研究阶段"); +8~+17% on 3/4 shapes, zero regression.
-  'PLAN-TIME COMMITMENT: make the orchestrate-vs-solo call at the very start — as the first thing you decide, before your opening `todo_create` batch — not after you have already begun working the task alone.',
-  'When you orchestrate, let your plan items BE the agents or workflow stages you will dispatch, so the plan you commit to is the orchestration itself, not a solo checklist you execute alone.',
-].join('\n');
+export const ULTRA_AGENT_POLICY =
+  'Use sub-agents when parallel work would materially improve speed or quality.';
+
+export const EXPLICIT_WORKFLOW_POLICY =
+  'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone.';
 
 /**
  * Pure builder. Returns the system prompt the role-prompt entry point
@@ -152,20 +123,15 @@ export function buildWorkerInstructions(
     '- Workspace discipline: scratch files go under the Session Scratch Directory shown in the environment, or under a unique `.agent/tmp/sessions/<session-id>/` subdirectory when no absolute scratch path is shown. NEVER write scratch directly in the shared `.agent/tmp/` root, to project root, or to system tmp.',
   ].join('\n');
 
-  // FEATURE_155 (v0.7.39) — Worker waits via idle-yield. The
-  // `await_child_task` tool was removed in Slice C1; the prompt
-  // teaches the only remaining wait mechanic (text-only turn end,
-  // runner resumes on `<task-completed>`).
   const dispatchRules = [
-    'DISPATCH RULES (`dispatch_child_task` idle-yield model):',
-    '- RULE A — read-only fan-out: when you need multiple independent investigations (e.g. probe several package boundaries in parallel), launch each as a child task with `readOnly: true`.',
-    '- RULE B — long-running probes: when a single investigation will take a while (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
-    '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across multiple modules can be dispatched as `readOnly: false` children. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
-    '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
-    '- `run_workflow` USES THE SAME IDLE-YIELD MODEL: it returns a `task_id` immediately and the workflow runs in the background; its synthesized result arrives as a `<task-completed task_id="…">…</task-completed>` block, exactly like a dispatched child. After calling `run_workflow`, do NOT wait inline — idle-yield (or do other work) and you will be resumed when it finishes. The workflow is not done until its `<task-completed>` block arrives.',
-    '- PENDING CHILDREN ARE NOT FINAL: a child that has not produced its matching `<task-completed task_id="…">…</task-completed>` block is still in flight. Do not write a final review/report/summary from partial child evidence. If no useful work remains, end with one short waiting status sentence and NO tool calls.',
-    '- WAITING IS IDLE-YIELD, NOT A BLOCKING PEEK: when waiting on children is your only remaining purpose, do NOT call `task_output(block:true)` to wait — a blocking peek holds your whole turn open for the full read window and stops the user from chatting with you while children run. A `wait_expired` result means the child is still healthy, not that you should re-issue the wait with a longer `timeout_ms`; the right response is to end your turn text-only so the runner resumes you the instant a child completes. Reserve `task_output` for a quick `block:false` glance when you have a concrete decision to make right now (dispatch a sibling, or `task_stop` a stuck child).',
-    '- LARGE CHILD OUTPUT: when a child\'s report is too large to include inline, the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
+    'AGENT COLLABORATION:',
+    '- `spawn_agent` creates a named direct child and returns its canonical actor path. Use multiple calls only when their scopes can proceed independently.',
+    '- Read-only investigations use `read_only:true`; non-conflicting file-level edits may use `read_only:false`. Keep the task name stable and the objective specific.',
+    '- Children may recursively spawn descendants. Every turn shares the same root concurrency and work budget, so recursion never creates extra capacity.',
+    '- Continue useful local work after spawning. When an Agent result is required, call `wait_agent`; use its event sequence as the next `after_sequence` cursor.',
+    '- `send_message` delivers bounded evidence without waking an idle actor. Use `followup_task` when an idle actor must start another turn or a running actor needs an objective update.',
+    '- Use `list_agents` for tree/capacity state and `agent_output` for a completed turn result. Use `interrupt_agent` only when continued work is no longer useful.',
+    '- A parent may not silently abandon live descendants: wait for them, interrupt them, or explicitly report their canonical paths and unresolved ownership.',
     '- MODEL HINT: set `model_hint` intentionally — `"fast"` only for evaluated read-only mechanical lookups, `"balanced"` for ordinary implementation/investigation, and `"deep"` for architecture, adversarial verification, severity calibration, or final synthesis. Configured `fast`/`deep` tiers select their operator-mapped route; an unconfigured tier inherits the parent. Write-capable `fast` remains on the parent tier. For substantive children, also state the one-line scope, binding constraints, evidence refs, and required output shape instead of repeating the diff.',
     // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0
     // v2 audit VALID (bash disagreement 8.9%, pull-correct 3.3%): C bash=0%
@@ -180,39 +146,25 @@ export function buildWorkerInstructions(
     '    - Relationship mapping: "start with `relationship_scan` for upstream/downstream callers, callees, dependencies, and impact"',
     '    - Process flow / execution trace: "use `process_context` to map the flow before reading runner files"',
     '    - Rename / refactor impact: "use `impact_estimate` to estimate blast radius first"',
-    '- SPECIALIST ROUTING: when a registered specialist agent matches the task domain (see "Available specialist agents" block above when present), prefer dispatching with `subagent_type=<name>` over a generic child.',
+    '- SPECIALIST ROUTING: when a registered specialist Agent matches the task domain, use its canonical `agent_id` from `list_dispatchable_agents`.',
   ].join('\n');
 
-  // Worker steers in-flight children via `send_message` (push
-  // instructions) and `task_stop` (graceful abort). `task_stop` is
-  // coordinator-only; `send_message` is now also available to
-  // children for peer coordination (see CHILD_AGENT_SYSTEM_PROMPT
-  // Peer Communication section). The protocol section teaches when
-  // Worker should reach for each tool and the anti-patterns that
-  // prompt eval will guard against.
   const childSteeringRules = [
-    'ASYNC CHILD STEERING (`send_message` + `task_stop`):',
-    'After `dispatch_child_task` launches a child, you may steer it while it runs:',
-    '- `send_message(to=task_id, content="…")` — append an instruction to the child\'s queue. The child sees it as a `<coordinator-instruction>` block at its next LLM turn boundary. Use SPARINGLY: a child that needed more context is a planning failure — the typical pattern is 0-1 send_message calls per child.',
-    '- `send_message(to="*", content="…")` — broadcast a system-level update to every in-flight child at once. Capped at 20 recipients per call. Use when the same context shift applies to all children (e.g. "the user just narrowed scope to packages/coding").',
-    '- `task_stop(task_id, reason="…")` — request the child to exit gracefully. Its currently-executing tool finishes atomically (no hard kill of a 90s `npm test` mid-run); the child then sees a `<coordinator-stop-request>` reminder and emits a final summary.',
+    'AGENT STEERING:',
+    '- `send_message(to=path, content="…")` delivers evidence to a parent, direct child, or admitted peer without changing lifecycle state. Broadcast `to="*"` is capped at 20 recipients.',
+    '- `followup_task(target=path, objective="…")` starts an idle child turn or joins a running child turn at its next safe boundary.',
+    '- `interrupt_agent(target=path, reason="…")` interrupts the active turn while preserving the reusable actor identity and history.',
     '',
     'WHEN TO `send_message`:',
     '- The user added a follow-up requirement mid-task that materially affects an in-flight child (e.g., "also check the auth module" while a security-audit child is running).',
     '- You realized the child needs a constraint you forgot to set (e.g., "ignore vendored libraries under `third_party/`").',
     '- DO NOT use it to chat with the child or to ask follow-up questions — the child has no idle wait for your reply; the next message just lands in its queue at the next drain.',
     '',
-    'WHEN TO `task_stop`:',
+    'WHEN TO `interrupt_agent`:',
     '- The child went off-scope (e.g., started writing files when launched read-only, or wandered into unrelated modules).',
     '- The user cancelled the parent task that justified this child.',
     '- The child is pathologically slow with no progress signal AND a faster path exists.',
-    '- DO NOT task_stop a child just because it is slow but progressing — wait for it. Premature task_stop wastes the work already done.',
-    '',
-    'CHILD-AUTHORED MESSAGES YOU MAY SEE:',
-    '- `<child-notification from=…>` — a child volunteered a mid-flight update (background priority, drained when you next yield). Read it, but do not feel obligated to reply — children are not waiting on you.',
-    '- `<peer-broadcast from=…>` — a child broadcast a finding to all siblings + you. Same handling: integrate into your plan if relevant.',
-    '',
-    'PROMPT-INVARIANT: both tools are no-ops in sync-mode dispatch (no childTaskRegistry / childAbortControllers). Async dispatch is the default; sync only fires when `KODAX_ASYNC_DISPATCH=0` is set. Calling either tool in sync mode returns `[Tool Error]`.',
+    '- Do not interrupt a child just because it is slow but progressing; wait for a relevant event.',
   ].join('\n');
 
   // FEATURE_161 v0.7.41 — teach the Worker that repo-intelligence pull

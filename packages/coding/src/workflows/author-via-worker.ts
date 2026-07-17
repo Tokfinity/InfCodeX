@@ -3,14 +3,14 @@
  *
  * The REPL's `/workflow create <request>` does NOT call the context-blind
  * `generateWorkflowFromOptions`; it submits the request as an agent turn with
- * `agentMode:'amaw'`, so the Worker scouts the repo with its own tools and then
+ * `agentMode:'ama'` plus explicit Workflow intent, so the Worker scouts the repo and then
  * authors + runs the workflow via `run_workflow` (ADR-047 scout-then-author).
- * That elevation is REPL-internal glue (`agentModeOverride` →
+ * That intent is REPL-internal glue (`workflowIntent` →
  * `handleCommandResult` → `runAgentRound`), so a non-REPL embedder host (e.g.
  * KodaX-Space) previously had no documented one-call way to reach it and fell
  * back to the blind generator.
  *
- * `authorWorkflowViaWorker` is that one call: it forces `agentMode:'amaw'` for
+ * `authorWorkflowViaWorker` is that one call: it uses `agentMode:'ama'` for
  * the turn, prepends the same scout-then-author instruction the REPL uses (a
  * single shared constant, so both stay byte-identical), and starts the turn via
  * the existing `startKodaX` handle. The host observes progress through the
@@ -47,7 +47,7 @@ export interface AuthorWorkflowViaWorkerInput {
    * Base session options. MUST include `workflowRunsBaseDir` — without it the
    * Worker's `run_workflow` tool does not wire and no workflow can be authored
    * (this call throws early rather than silently degrading). `agentMode` is
-   * forced to `'amaw'` for this turn regardless of what the base options carry.
+   * forced to `'ama'` for this turn regardless of what the base options carry.
    */
   readonly options: KodaXOptions;
 }
@@ -71,7 +71,7 @@ export interface AuthorWorkflowViaWorkerHandle {
 
 /**
  * Route a natural-language authoring request into the Worker's scout-then-author
- * path (AMAW), returning a run handle plus the eventual workflow run id.
+ * explicit Workflow path, returning a run handle plus the eventual workflow run id.
  */
 export function authorWorkflowViaWorker(
   input: AuthorWorkflowViaWorkerInput,
@@ -96,7 +96,11 @@ export function authorWorkflowViaWorker(
   const hostOnProcessEvent = input.options.events?.onWorkflowProcessEvent;
   const options: KodaXOptions = {
     ...input.options,
-    agentMode: 'amaw',
+    agentMode: 'ama',
+    context: {
+      ...input.options.context,
+      workflowIntent: 'explicit',
+    },
     events: {
       ...input.options.events,
       onWorkflowProcessEvent: (event: WorkflowProcessEvent) => {

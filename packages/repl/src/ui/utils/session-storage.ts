@@ -75,6 +75,7 @@ export class MemorySessionStorage implements SessionStorage {
       uiHistory: data.uiHistory ?? existing?.uiHistory,
       extensionState: data.extensionState ?? existing?.extensionState,
       artifactLedger: data.artifactLedger ?? existing?.artifactLedger,
+      actorSnapshot: data.actorSnapshot ?? existing?.actorSnapshot,
       extensionRecords: data.extensionRecords ?? existing?.extensionRecords,
       tag: data.tag ?? existing?.tag,
       lineage: createSessionLineage(

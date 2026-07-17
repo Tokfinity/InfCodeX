@@ -299,7 +299,7 @@ describe('ArgumentCompleter', () => {
           ['/mcp ', ['status', 'refresh']],
           ['/fallback ', ['status', 'off']],
           ['/auto-engine ', ['llm', 'rules']],
-          ['/agent-mode ', ['ama', 'amaw', 'ama-workflow', 'sa', 'toggle']],
+          ['/agent-mode ', ['ama', 'sa', 'toggle']],
           ['/verifier-log ', ['on', 'off']],
           ['/stall-log ', ['on', 'off']],
           ['/memory ', ['list', 'pending', 'show', 'approve', 'reject', 'curate', 'rebuild', 'open', 'help']],

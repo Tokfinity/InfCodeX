@@ -187,7 +187,7 @@ describe('help command output', () => {
     expect(output).not.toContain('Unknown command');
   });
 
-  it('sets AMAW through /agent-mode and documents explicit /workflow support in AMA', async () => {
+  it('rejects retired AMAW and documents explicit /workflow support in AMA', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const context = await createInteractiveContext({});
     const setAgentMode = vi.fn();
@@ -216,12 +216,13 @@ describe('help command output', () => {
     const output = logSpy.mock.calls.flat().join('\n');
 
     expect(result).toBe(true);
-    expect(setAgentMode).toHaveBeenCalledWith('amaw');
-    expect(output).toContain('/agent-mode amaw');
+    expect(setAgentMode).not.toHaveBeenCalled();
+    expect(output).toContain('AMAW was retired in v0.7.72');
+    expect(output).toContain('/agent-mode ama');
     expect(output).toContain('/workflow');
   });
 
-  it('cycles /agent-mode toggle through AMA, AMAW, and SA', async () => {
+  it('cycles /agent-mode toggle through AMA and SA', async () => {
     const context = await createInteractiveContext({});
     const setAgentMode = vi.fn();
     const callbacks = {
@@ -246,15 +247,9 @@ describe('help command output', () => {
       { command: 'agent-mode', args: ['toggle'] },
       context,
       callbacks,
-      { ...baseConfig, agentMode: 'amaw' },
-    );
-    await executeCommand(
-      { command: 'agent-mode', args: ['toggle'] },
-      context,
-      callbacks,
       { ...baseConfig, agentMode: 'sa' },
     );
 
-    expect(setAgentMode.mock.calls.map((call) => call[0])).toEqual(['amaw', 'sa', 'ama']);
+    expect(setAgentMode.mock.calls.map((call) => call[0])).toEqual(['sa', 'ama']);
   });
 });

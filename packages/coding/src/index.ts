@@ -1355,3 +1355,9 @@ export type {
 // FEATURE_217 (v0.7.49) — Dynamic Workflow Harness: agent backend +
 // built-in workflows + run-graph + headless orchestrator.
 export * from './workflows/index.js';
+export {
+  CodingActorSession,
+  actorQueueId,
+  createLocalCodingActorControl,
+} from './agent-runtime/actor-runtime.js';
+export type { CodingActorSessionOptions } from './agent-runtime/actor-runtime.js';

@@ -1816,27 +1816,29 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'agent-mode',
     aliases: ['am'],
     description: 'Show or set agent mode',
-    usage: '/agent-mode [ama|amaw|ama-workflow|sa|toggle]',
+    usage: '/agent-mode [ama|sa|toggle]',
     handler: async (args, _context, callbacks, currentConfig) => {
       if (args.length === 0) {
         console.log(chalk.dim(`\nAgent mode: ${chalk.cyan(currentConfig.agentMode.toUpperCase())}`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
         return;
       }
 
       const raw = args[0]?.toLowerCase();
+      if (raw === 'amaw' || raw === 'ama-workflow') {
+        console.log(chalk.yellow('\n[AMAW was retired in v0.7.72. Use AMA; Workflow execution now requires an explicit /workflow request.]'));
+        return;
+      }
       const nextMode: KodaXAgentMode | undefined =
         raw === 'toggle'
           ? nextAgentMode(currentConfig.agentMode)
-          : raw === 'ama' || raw === 'sa' || raw === 'amaw'
+          : raw === 'ama' || raw === 'sa'
             ? raw
-            : raw === 'ama-workflow'
-              ? 'amaw'
             : undefined;
 
       if (!nextMode) {
         console.log(chalk.red(`\n[Invalid agent mode: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
         return;
       }
 
@@ -1847,19 +1849,15 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.cyan('\n/agent-mode - Adaptive Multi-Agent Mode Control\n'));
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /agent-mode            ') + 'Show current agent mode');
-      console.log(chalk.dim('  /agent-mode ama        ') + 'Adaptive multi-agent mode; workflows run only via the /workflow command');
-      console.log(chalk.dim('  /agent-mode amaw       ') + 'AMA + the agent may start a workflow itself from natural language');
-      console.log(chalk.dim('  /agent-mode ama-workflow') + 'Alias for /agent-mode amaw');
+      console.log(chalk.dim('  /agent-mode ama        ') + 'Adaptive multi-agent mode; workflows require an explicit /workflow request');
       console.log(chalk.dim('  /agent-mode sa         ') + 'Force single-agent execution');
-      console.log(chalk.dim('  /agent-mode toggle     ') + 'Cycle AMA -> AMAW -> SA');
+      console.log(chalk.dim('  /agent-mode toggle     ') + 'Cycle AMA -> SA');
       console.log(chalk.dim('  /am                    ') + 'Alias for /agent-mode');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  AMA runs the adaptive multi-agent harness. Workflows are command-gated: the /workflow'));
-      console.log(chalk.dim('      command runs as a full scout-then-author Worker turn, but the agent never starts'));
-      console.log(chalk.dim('      one on its own from natural language.'));
-      console.log(chalk.dim('  AMAW is AMA plus self-activation: the agent may decide from natural language to author'));
-      console.log(chalk.dim('      and run a workflow (run_workflow). /workflow behaves identically to AMA.'));
+      console.log(chalk.dim('  AMA runs the adaptive multi-agent harness. Sub-agents are available when parallel'));
+      console.log(chalk.dim('      work materially improves speed or quality. Workflows only run when explicitly'));
+      console.log(chalk.dim('      requested with /workflow or by naming a Workflow.'));
       console.log(chalk.dim('  SA forces a single solo agent — no sub-agents and no workflows — to save tokens.'));
       console.log();
     },

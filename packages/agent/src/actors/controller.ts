@@ -5,6 +5,7 @@ import {
 import { AgentTurnScheduler } from './scheduler.js';
 import type {
   AgentActor,
+  AgentActorClient,
   AgentActorSnapshot,
   AgentActorStore,
   AgentBudgetPort,
@@ -13,7 +14,7 @@ import type {
   AgentDetail,
   AgentEvent,
   AgentExecutionKind,
-  AgentExecutor,
+  AgentTurnExecutor,
   AgentFollowupResult,
   AgentForkTurns,
   AgentMailboxMessage,
@@ -28,15 +29,18 @@ const ROOT_PATH = '/root' as const;
 const DEFAULT_MAX_CONCURRENT_THREADS = 4;
 const MAX_MESSAGE_LENGTH = 32_768;
 
-interface AgentControllerOptions {
+export interface AgentControllerOptions {
   readonly maxConcurrentThreadsPerSession?: number;
   readonly rootCapabilities?: AgentCapabilities;
-  readonly executor?: AgentExecutor;
-  readonly executorFor?: (kind: AgentExecutionKind) => AgentExecutor;
+  readonly executor?: AgentTurnExecutor;
+  readonly executorFor?: (kind: AgentExecutionKind) => AgentTurnExecutor;
   readonly budget?: AgentBudgetPort;
   readonly store?: AgentActorStore;
   readonly now?: () => string;
   readonly warn?: (message: string) => void;
+  readonly onBackgroundError?: (error: unknown) => void;
+  /** Post-durability event sink. Callback failures never roll back committed actor state. */
+  readonly onEventCommitted?: (event: AgentEvent) => void | Promise<void>;
 }
 
 interface EventWaiter {
@@ -56,7 +60,7 @@ const UNLIMITED_BUDGET: AgentBudgetPort = {
   async admit() { return { admitted: true }; },
 };
 
-const EMPTY_EXECUTOR: AgentExecutor = {
+const EMPTY_EXECUTOR: AgentTurnExecutor = {
   async execute() { return { output: '' }; },
 };
 
@@ -88,6 +92,32 @@ export class AgentActorController {
     validateSnapshot(snapshot, this.scheduler.maxConcurrentThreads);
     this.restore(snapshot);
     await this.recoverUnmatchedTurns();
+  }
+
+  bind(callerPath: string): AgentActorClient {
+    this.requireActor(callerPath);
+    return Object.freeze({
+      callerPath,
+      spawn: (input: AgentSpawnInput) => this.spawn(callerPath, input),
+      send: (
+        targetPath: string,
+        content: string,
+        classification?: AgentDataClassification,
+      ) => this.send(callerPath, targetPath, content, classification),
+      followup: (targetPath: string, objective: string) => (
+        this.followup(callerPath, targetPath, objective)
+      ),
+      interrupt: (targetPath: string, reason?: string) => (
+        this.interrupt(callerPath, targetPath, reason)
+      ),
+      list: () => this.list(callerPath),
+      get: (targetPath: string) => this.get(callerPath, targetPath),
+      output: (targetPath: string, turnId?: string) => this.output(callerPath, targetPath, turnId),
+      eventSnapshot: (afterSequence?: number) => this.eventSnapshot(callerPath, afterSequence),
+      wait: (afterSequence?: number, timeoutMs?: number) => (
+        this.wait(callerPath, afterSequence, timeoutMs)
+      ),
+    });
   }
 
   async spawn(callerPath: string, input: AgentSpawnInput): Promise<AgentTurnRef> {
@@ -129,6 +159,9 @@ export class AgentActorController {
       const result = await this.mutate(async () => {
         const actor = this.requireControl(callerPath, targetPath);
         if (actor.state === 'closed') throw new AgentControlError('actor_closed', `${targetPath} is closed`);
+        if (actor.capabilities.control?.followup === false) {
+          throw new AgentControlError('unsupported_operation', `${targetPath} does not support follow-up`);
+        }
         if (actor.currentTurnId) {
           this.appendMessage(callerPath, targetPath, objective, 'followup', 'internal');
           const turn = this.requireTurn(actor.currentTurnId);
@@ -138,7 +171,7 @@ export class AgentActorController {
         admittedTurnId = plan.turn.turnId;
         return { delivery: 'started_turn' as const, turn: turnRef(plan.turn), plan };
       });
-      if ('plan' in result) this.launch(result.plan);
+      if (result.delivery === 'started_turn') this.launch(result.plan);
       return { delivery: result.delivery, turn: result.turn };
     } catch (error) {
       if (admittedTurnId) await this.budget.refund?.(admittedTurnId);
@@ -147,24 +180,43 @@ export class AgentActorController {
   }
 
   async interrupt(callerPath: string, targetPath: string, reason = 'interrupted'): Promise<void> {
-    const turnId = await this.mutate(() => {
+    const interrupted = await this.mutate(() => {
       const actor = this.requireControl(callerPath, targetPath);
+      if (actor.capabilities.control?.interrupt === false) {
+        throw new AgentControlError('unsupported_operation', `${targetPath} does not support interruption`);
+      }
       if (!actor.currentTurnId) throw new AgentControlError('no_active_turn', `${targetPath} is idle`);
-      this.finishTurn(actor.currentTurnId, 'interrupted', { error: reason });
-      return actor.currentTurnId;
+      const turnId = actor.currentTurnId;
+      const abort = this.abortControllers.get(turnId);
+      this.finishTurn(turnId, 'interrupted', { error: reason });
+      return { abort };
     });
-    this.abortControllers.get(turnId)?.abort(reason);
+    interrupted.abort?.abort(reason);
   }
 
   async close(callerPath: string, targetPath: string, reason = 'closed by owner'): Promise<void> {
-    await this.mutate(() => {
+    const aborts = await this.mutate(() => {
       this.requireControl(callerPath, targetPath);
+      const pendingAborts: AbortController[] = [];
       for (const actor of this.descendantsInclusive(targetPath).reverse()) {
-        if (actor.currentTurnId) this.finishTurn(actor.currentTurnId, 'interrupted', { error: reason });
-        this.actors.set(actor.path, { ...actor, state: 'closed', currentTurnId: undefined });
+        if (actor.currentTurnId) {
+          const abort = this.abortControllers.get(actor.currentTurnId);
+          if (abort) pendingAborts.push(abort);
+          this.finishTurn(actor.currentTurnId, 'interrupted', { error: reason });
+        }
+        const current = this.requireActor(actor.path);
+        this.actors.set(actor.path, {
+          ...current,
+          state: 'closed',
+          currentTurnId: undefined,
+          updatedAt: this.now(),
+          revision: current.revision + 1,
+        });
         this.appendEvent('actor_closed', actor.path);
       }
+      return pendingAborts;
     });
+    for (const abort of aborts) abort.abort(reason);
   }
 
   list(callerPath: string): AgentTreeSnapshot {
@@ -243,7 +295,7 @@ export class AgentActorController {
     if (this.actors.has(path)) throw new AgentControlError('name_collision', `actor already exists: ${path}`);
     const capabilities = deriveCapabilities(parent.capabilities, input.capabilities);
     const actor = this.createActor(path, input.taskName, callerPath, input.kind ?? 'native', capabilities);
-    return this.admitTurn(actor, input.objective, input.forkTurns ?? 'all', true);
+    return this.admitTurn(actor, input.objective, input.forkTurns ?? 'all', true, input.metadata);
   }
 
   private prepareExistingTurn(actor: AgentActor, objective: string): Promise<StartPlan> {
@@ -255,9 +307,10 @@ export class AgentActorController {
     objective: string,
     forkTurns: AgentForkTurns,
     createdActor: boolean,
+    metadata?: AgentTurn['metadata'],
   ): Promise<StartPlan> {
     if (objective.trim().length === 0) throw new AgentControlError('invalid_message', 'objective is required');
-    const turn = this.createTurn(actor, objective, forkTurns);
+    const turn = this.createTurn(actor, objective, forkTurns, metadata);
     this.scheduler.reserve(turn.turnId);
     const admission = await this.budget.admit({
       actorPath: actor.path,
@@ -299,16 +352,19 @@ export class AgentActorController {
     const priorTurns = plan.actor.turnIds
       .filter((turnId) => turnId !== plan.turn.turnId)
       .map((turnId) => this.requireTurn(turnId));
-    void executor.execute({
-      actor: plan.actor,
-      turn: plan.turn,
-      priorTurns,
-      signal: abort.signal,
-      drainMailbox: () => this.drainMailbox(plan.actor.path),
-    }).then(
-      (result) => this.completeExecution(plan.turn.turnId, result.output, result.artifacts),
-      (error: unknown) => this.failExecution(plan.turn.turnId, error),
-    );
+    void Promise.resolve()
+      .then(() => executor.execute({
+        actor: plan.actor,
+        turn: plan.turn,
+        priorTurns,
+        signal: abort.signal,
+        drainMailbox: () => this.drainMailbox(plan.actor.path),
+      }))
+      .then(
+        (result) => this.completeExecution(plan.turn.turnId, result.output, result.artifacts),
+        (error: unknown) => this.failExecution(plan.turn.turnId, error),
+      )
+      .catch((error: unknown) => this.reportBackgroundError(error));
   }
 
   private async completeExecution(
@@ -471,7 +527,12 @@ export class AgentActorController {
     };
   }
 
-  private createTurn(actor: AgentActor, objective: string, forkTurns: AgentForkTurns): AgentTurn {
+  private createTurn(
+    actor: AgentActor,
+    objective: string,
+    forkTurns: AgentForkTurns,
+    metadata?: AgentTurn['metadata'],
+  ): AgentTurn {
     const sequence = actor.turnIds.length + 1;
     return {
       turnId: `turn_${actor.path.slice(1).replace(/[^a-zA-Z0-9]+/g, '_')}_${sequence}`,
@@ -480,6 +541,7 @@ export class AgentActorController {
       state: 'accepted',
       objective,
       forkTurns,
+      ...(metadata === undefined ? {} : { metadata }),
       createdAt: this.now(),
       revision: 1,
     };
@@ -520,16 +582,18 @@ export class AgentActorController {
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
     await previousTail;
     const before = this.snapshot();
+    const beforeAborts = new Map(this.abortControllers);
     const eventCount = this.eventsLog.length;
     try {
       const result = await operation();
       const expectedRevision = this.revision;
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);
-      for (const event of this.eventsLog.slice(eventCount)) this.notify(event);
+      for (const event of this.eventsLog.slice(eventCount)) this.publishCommittedEvent(event);
       return result;
     } catch (error) {
       this.restore(before);
+      replaceMap(this.abortControllers, [...beforeAborts.entries()]);
       throw error;
     } finally {
       release();
@@ -575,6 +639,25 @@ export class AgentActorController {
       waiter.resolve(event);
     }
   }
+
+  private publishCommittedEvent(event: AgentEvent): void {
+    this.notify(event);
+    if (!this.options.onEventCommitted) return;
+    try {
+      void Promise.resolve(this.options.onEventCommitted(event))
+        .catch((error: unknown) => this.reportBackgroundError(error));
+    } catch (error) {
+      this.reportBackgroundError(error);
+    }
+  }
+
+  private reportBackgroundError(error: unknown): void {
+    if (this.options.onBackgroundError) {
+      this.options.onBackgroundError(error);
+      return;
+    }
+    setTimeout(() => { throw error; }, 0);
+  }
 }
 
 export async function createAgentActorController(
@@ -592,6 +675,7 @@ function defaultRootCapabilities(): AgentCapabilities {
     network: true,
     providers: ['*'],
     canAskUser: true,
+    control: { followup: true, interrupt: true, streaming: true, artifacts: true },
   };
 }
 
@@ -619,14 +703,27 @@ function deriveCapabilities(
     network: requested?.network ?? parent.network,
     providers: requested?.providers ?? parent.providers,
     canAskUser: false,
+    control: requested?.control ?? parent.control,
   };
   const valid = isSubset(child.tools, parent.tools)
     && isSubset(child.providers, parent.providers)
     && filesystemRank(child.filesystem) <= filesystemRank(parent.filesystem)
     && (!child.network || parent.network)
+    && controlIsSubset(child.control, parent.control)
     && requested?.canAskUser !== true;
   if (!valid) throw new AgentControlError('invalid_capabilities', 'child capabilities cannot exceed parent authority');
   return child;
+}
+
+function controlIsSubset(
+  child: AgentCapabilities['control'],
+  parent: AgentCapabilities['control'],
+): boolean {
+  if (!child || !parent) return true;
+  return (!child.followup || parent.followup)
+    && (!child.interrupt || parent.interrupt)
+    && (!child.streaming || parent.streaming)
+    && (!child.artifacts || parent.artifacts);
 }
 
 function isSubset(child: readonly string[], parent: readonly string[]): boolean {

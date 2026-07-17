@@ -7,9 +7,11 @@ import {
   AgentLimitReachedError,
   createAgentActorController,
   type AgentBudgetPort,
+  type AgentActorSnapshot,
+  type AgentActorStore,
   type AgentExecutionInput,
   type AgentExecutionResult,
-  type AgentExecutor,
+  type AgentTurnExecutor,
 } from './index.js';
 
 interface PendingExecution {
@@ -18,7 +20,7 @@ interface PendingExecution {
   readonly reject: (error: Error) => void;
 }
 
-class DeferredExecutor implements AgentExecutor {
+class DeferredExecutor implements AgentTurnExecutor {
   readonly pending: PendingExecution[] = [];
 
   execute(input: AgentExecutionInput): Promise<AgentExecutionResult> {
@@ -221,5 +223,114 @@ describe('F270 actor tree and scheduler', () => {
     await expect(controller.followup('/root', '/root/worker', 'Try again.')).resolves.toMatchObject({
       delivery: 'started_turn',
     });
+  });
+
+  it('binds caller authority so model-facing inputs cannot forge an actor path', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Parent.' });
+    await controller.spawn('/root', { taskName: 'peer', objective: 'Peer.' });
+    const parent = controller.bind('/root/parent');
+
+    await expect(parent.spawn({ taskName: 'child', objective: 'Child.' })).resolves.toMatchObject({
+      actorPath: '/root/parent/child',
+    });
+    await expect(parent.interrupt('/root/peer')).rejects.toMatchObject({ code: 'permission_denied' });
+    expect(Object.isFrozen(parent)).toBe(true);
+  });
+
+  it('preserves revisions and aborts active executions when closing a subtree', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Parent.' });
+    await controller.spawn('/root/parent', { taskName: 'child', objective: 'Child.' });
+    const before = controller.get('/root', '/root/parent/child').actor.revision;
+
+    await controller.close('/root', '/root/parent');
+
+    const closed = controller.get('/root', '/root/parent/child').actor;
+    expect(closed).toMatchObject({ state: 'closed', currentTurnId: undefined });
+    expect(closed.revision).toBeGreaterThan(before);
+    expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+    expect(executor.pending[1]?.input.signal.aborted).toBe(true);
+  });
+
+  it('restores abort handles when a durable mutation is rolled back', async () => {
+    let failSave = false;
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      async save(_snapshot: AgentActorSnapshot) {
+        if (failSave) throw new Error('disk unavailable');
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor, store });
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+    failSave = true;
+
+    await expect(controller.interrupt('/root', '/root/worker')).rejects.toThrow('disk unavailable');
+    expect(controller.get('/root', '/root/worker').actor.state).toBe('running');
+    expect(executor.pending[0]?.input.signal.aborted).toBe(false);
+
+    failSave = false;
+    await controller.interrupt('/root', '/root/worker');
+    expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+  });
+
+  it('reports durable completion failures through the background error boundary', async () => {
+    let failSave = false;
+    const onBackgroundError = vi.fn();
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      async save() {
+        if (failSave) throw new Error('completion save failed');
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor, store, onBackgroundError });
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+    failSave = true;
+
+    executor.pending[0]?.resolve({ output: 'done' });
+    await settle();
+
+    expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'completion save failed',
+    }));
+    expect(controller.get('/root', '/root/worker').actor.state).toBe('running');
+  });
+
+  it('publishes terminal events only after durable commit and isolates callback failures', async () => {
+    const order: string[] = [];
+    const onBackgroundError = vi.fn();
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      async save() { order.push('saved'); },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError,
+      onEventCommitted(event) {
+        if (event.kind !== 'turn_completed') return;
+        order.push('published');
+        throw new Error('observer failed');
+      },
+    });
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+    order.length = 0;
+
+    executor.pending[0]?.resolve({ output: 'done' });
+    await settle();
+    await settle();
+
+    expect(order).toEqual(['saved', 'published']);
+    expect(controller.output('/root', '/root/worker')).toMatchObject({
+      state: 'completed', output: 'done',
+    });
+    expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'observer failed',
+    }));
   });
 });

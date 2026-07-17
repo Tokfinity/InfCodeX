@@ -239,6 +239,8 @@ export interface ChildExecutorOptions {
   readonly snapshotUpdater?: (
     event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
   ) => void;
+  /** Runtime-minted principal inherited by the child runtime for recursive collaboration. */
+  readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
 }
 
 function inheritRepoIntelligenceContext(
@@ -1149,7 +1151,7 @@ async function runReadChildBody(
         model,
         effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
-        agentMode: 'sa',
+        agentMode: options.actorControl ? 'ama' : 'sa',
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
@@ -1176,6 +1178,7 @@ async function runReadChildBody(
           systemPromptOverride,
           excludeTools,
           agentScope: scope.ctx.agentScope,
+          actorControl: options.actorControl,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
           // child runtime can answer peer `send_message` calls. The
           // child stays unable to mutate the registry (no
@@ -1384,7 +1387,7 @@ async function runWriteChildBody(
         model,
         effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
-        agentMode: 'sa',
+        agentMode: options.actorControl ? 'ama' : 'sa',
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
@@ -1409,6 +1412,7 @@ async function runWriteChildBody(
           systemPromptOverride,
           excludeTools,
           agentScope: childCtx.agentScope,
+          actorControl: options.actorControl,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).
@@ -1570,7 +1574,7 @@ async function buildChildBriefing(
     bundle.readOnly
       ? '- This is a READ-ONLY task. Do NOT modify any files — the parent dispatched this child specifically for investigation, and a sibling write-child (or the parent itself) will handle any mutations the findings imply.'
       : '- You may modify files within the scope listed above.',
-    `- You CANNOT spawn child agents or call dispatch_child_tasks — recursion is disabled at the tool layer to keep fan-out bounded.`,
+    `- You may use the Runtime-bound collaboration tools to spawn direct children when parallel work materially improves speed or quality. Descendants share the same root concurrency, budget, and capability ceilings.`,
     ...(bundle.readOnly
       ? []
       : [
@@ -1725,39 +1729,26 @@ export async function resolveEvidenceRef(
   if (ref.startsWith('finding:')) {
     return `- **Known fact**: ${ref.slice(8)}`;
   }
-  // FEATURE_199 (v0.7.44) — sibling-aware child dispatch.
-  // Looks up a completed sibling child's `finalText` from the shared
-  // FEATURE_177 `childProgressSnapshots` ring buffer (cap=200, finalized
-  // in the dispatch tool's inner-IIFE `.finally`). All lifecycle states
-  // produce visible briefing output so a Worker that ref'd a stale id
-  // sees a friendly fallback instead of a silent miss.
-  if (ref.startsWith('task_id:')) {
-    const childId = ref.slice('task_id:'.length).trim();
-    if (!childId) {
-      return `- [evidence_refs error] task_id: prefix is missing the child id (write \`task_id:<id>\` where <id> is the value returned from a prior dispatch_child_task call)`;
+  if (ref.startsWith('agent:')) {
+    const actorPath = ref.slice('agent:'.length).trim();
+    if (!actorPath || !ctx.actorControl) {
+      return '- [evidence_refs error] agent: requires a visible canonical actor path.';
     }
-    const snap = ctx.childProgressSnapshots?.get(childId);
-    if (!snap) {
-      return `- task_id:${childId} (not found — child unknown, already cap-pruned, or sync-dispatch mode without snapshot map; verify the id matches a recent dispatch_child_task return)`;
+    let output;
+    try {
+      output = ctx.actorControl.output(actorPath);
+    } catch {
+      return `- agent:${actorPath} (not visible or not controlled by this Agent)`;
     }
-    if (snap.status === 'running') {
-      // Child-facing briefing: children cannot poll siblings (`task_output`
-      // is coordinator-only, see CHILD_EXCLUDE_TOOLS_BASE) and do not receive
-      // `<task-completed>` blocks (that is the parent's idle-yield mechanic).
-      // So neither "poll" nor "wait for the banner" is reachable here — say
-      // plainly that the sibling result is not available yet.
-      return `- task_id:${childId} (sibling still running — its result is not available to you yet; proceed with what you have, or note this dependency in your summary so the coordinator can follow up)`;
+    if (output.state === 'running' || output.state === 'accepted') {
+      return `- agent:${actorPath} (turn still running; wait for its terminal event before forwarding output)`;
     }
-    // Code-fence finalText so multi-hop prompt injection through a
-    // compromised child cannot escape the briefing framing.
     const FENCE = '```';
-    let body = snap.finalText ?? '(no final text recorded)';
-    // Defensive: if the body itself contains the exact fence
-    // sequence, escape it so the fence cannot be closed mid-body.
+    let body = output.output ?? output.error ?? '(no final text recorded)';
     if (body.includes(FENCE)) {
       body = body.replace(/```/g, '`​`​`');
     }
-    return `### task: ${childId} (${snap.status})\n${FENCE}\n${body}\n${FENCE}`;
+    return `### agent: ${actorPath} (${output.state})\n${FENCE}\n${body}\n${FENCE}`;
   }
   // FEATURE_199 (v0.7.44) — unknown prefix → visible error instead of
   // silent fallthrough. Pre-F199 this returned `- ${ref}` verbatim,
@@ -1768,7 +1759,7 @@ export async function resolveEvidenceRef(
   // the failure to the parent on the next turn (it appears in the
   // dispatch tool_result that wraps the child summary) so the Worker
   // can self-correct the prefix.
-  return `- [evidence_refs error] unrecognized prefix in "${ref}" — valid prefixes: file:, diff:, finding:, task_id:`;
+  return `- [evidence_refs error] unrecognized prefix in "${ref}" — valid prefixes: file:, diff:, finding:, agent:`;
 }
 
 /* ---------- Child events (progress visibility) ---------- */
@@ -1798,8 +1789,8 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
   '## Peer Communication',
   '',
   'You can send short messages to other in-flight agents in this session with `send_message`:',
-  '- `send_message(to="<peer task_id>", content="…")` — notify a sibling child that your work overlaps with theirs or that you found something they need to know.',
-  '- `send_message(to="worker", content="…")` — surface a mid-flight finding to your parent Worker (drains when the Worker next yields).',
+  '- `send_message(to="<canonical peer path>", content="…")` — notify an admitted sibling that your work overlaps or that you found evidence it needs.',
+  '- `send_message(to="parent", content="…")` — surface a mid-flight finding to your direct parent.',
   '- `send_message(to="*", content="…")` — broadcast to every sibling plus the parent Worker. Capped at 20 recipients per call.',
   '',
   'Send a peer message when it would change another agent\'s plan: a file you both edit, a fact you discovered that changes their scope, a blocker the parent should know about. Do not send routine status pings — peer chatter that does not change anyone\'s plan is noise.',
@@ -1875,19 +1866,7 @@ function buildWriteSystemPrompt(gitRoot: string): string {
  * Exported for unit-testing the security contract. Treat as read-only at runtime.
  */
 export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
-  'list_dispatchable_agents', // Discovery is coordinator-only with dispatch.
-  'emit_managed_protocol',  // AMA protocol; children are SA mode
-  'dispatch_child_task',    // Prevent recursive child spawning
-  // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed; the
-  // tool no longer exists, so excluding it from children is moot.
-  // FEATURE_123 v0.7.44 — `send_message` is no longer coordinator-only.
-  // Children can now address peers via task_id, the parent Worker via
-  // `'worker'`, and all running siblings + Worker via `'*'`. The tool
-  // itself enforces target shapes (self-rejection, broadcast cap,
-  // priority/framing rules) so removing it from the exclusion list is
-  // safe — the policy lives in the tool, not the whitelist.
-  'task_stop',              // FEATURE_120: coordinator-only — children cannot stop siblings
-  'task_output',            // FEATURE_177: coordinator-only — children cannot peek at sibling progress
+  'emit_managed_protocol',  // Root managed protocol; descendants use actor tools.
   'ask_user_question',      // Children cannot prompt the user
   'worktree_create',        // Worktree lifecycle managed by parent
   'worktree_remove',        // Worktree lifecycle managed by parent

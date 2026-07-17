@@ -55,6 +55,8 @@ import {
 import { narrowReasoningProfile } from '@kodax-ai/llm';
 
 const execAsync = promisify(exec);
+const AGENT_MODE_CONFIG_SCHEMA_VERSION = 2;
+let agentModeMigrationNoticeEmitted = false;
 
 /**
  * CLI config directory paths — top-level constants frozen at module-load time.
@@ -889,6 +891,42 @@ export function isProviderConfigured(name: string): boolean {
   }
 }
 
+class InvalidAgentModeConfigError extends Error {}
+
+function migrateLegacyAgentModeConfig<
+  T extends { readonly agentMode?: string; readonly schemaVersion?: number },
+>(parsed: T): Omit<T, 'agentMode'> & { readonly agentMode?: KodaXAgentMode } {
+  const mode = parsed.agentMode;
+  if (mode === undefined || mode === 'ama' || mode === 'sa') {
+    return parsed as Omit<T, 'agentMode'> & { readonly agentMode?: KodaXAgentMode };
+  }
+  if (mode !== 'amaw' && mode !== 'ama-workflow') {
+    throw new InvalidAgentModeConfigError(
+      `Invalid agentMode "${mode}" in ${KODAX_CONFIG_FILE}. Expected "ama" or "sa".`,
+    );
+  }
+  const migrated = {
+    ...parsed,
+    agentMode: 'ama' as const,
+    schemaVersion: Math.max(parsed.schemaVersion ?? 0, AGENT_MODE_CONFIG_SCHEMA_VERSION),
+  };
+  const temporary = `${KODAX_CONFIG_FILE}.migrate-${process.pid}.tmp`;
+  try {
+    fsSync.writeFileSync(temporary, JSON.stringify(migrated, null, 2), { mode: 0o600 });
+    fsSync.renameSync(temporary, KODAX_CONFIG_FILE);
+  } catch {
+    fsSync.rmSync(temporary, { force: true });
+  }
+  if (!agentModeMigrationNoticeEmitted) {
+    process.emitWarning(
+      `Migrated persisted agentMode "${mode}" to "ama". Workflow use is now explicit intent.`,
+      { code: 'KODAX_AGENT_MODE_MIGRATED' },
+    );
+    agentModeMigrationNoticeEmitted = true;
+  }
+  return migrated;
+}
+
 // Load config from ~/.kodax/config.json
 export function loadConfig(): {
   provider?: string;
@@ -986,7 +1024,8 @@ export function loadConfig(): {
         thinking?: boolean;
         reasoningMode?: KodaXReasoningMode;
         reasoningCeiling?: KodaXReasoningMode;
-        agentMode?: KodaXAgentMode;
+        agentMode?: string;
+        schemaVersion?: number;
         permissionMode?: string;
         locale?: string;
         providerModels?: Record<string, string[]>;
@@ -1019,6 +1058,7 @@ export function loadConfig(): {
           maxConcurrency?: number;
         };
       };
+      const migrated = migrateLegacyAgentModeConfig(parsed);
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
       // `options.reasoningMode` keep working unchanged. When both are
@@ -1026,7 +1066,7 @@ export function loadConfig(): {
       // named L1 ceiling field, and the legacy `reasoningMode` is
       // typically left over from older configs the user forgot about.
       const collapsedReasoning: KodaXReasoningMode | undefined =
-        parsed.reasoningCeiling ?? parsed.reasoningMode;
+        migrated.reasoningCeiling ?? migrated.reasoningMode;
       let effectiveExtensions: string[] = [];
       let effectiveMcpServers: KodaXMcpServersConfig = {};
       try {
@@ -1043,14 +1083,15 @@ export function loadConfig(): {
       }
       return migrateAutoInProjectAliasInConfig(
         migrateLegacyPermissionModeInConfig({
-          ...parsed,
+          ...migrated,
           reasoningMode: collapsedReasoning,
           extensions: normalizeConfiguredExtensions(effectiveExtensions),
           mcpServers: effectiveMcpServers,
         }),
       );
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof InvalidAgentModeConfigError) throw error;
     // Unreadable user config should fall back to defaults instead of breaking startup.
   }
   // Split integration files are independently usable. A user does not need to

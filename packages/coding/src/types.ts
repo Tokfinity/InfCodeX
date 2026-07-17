@@ -99,6 +99,7 @@ import type {
   SkillDynamicContextExecutor,
   ISkillRegistry,
   AgentExecutorPlaneBinding,
+  AgentActorClient,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1037,7 +1038,7 @@ export interface KodaXChildFinding {
   readonly artifacts: readonly string[];
 }
 
-export type KodaXAgentMode = 'ama' | 'sa' | 'amaw';
+export type KodaXAgentMode = 'ama' | 'sa';
 export type KodaXMemoryStrategy = 'continuous' | 'compact' | 'reset-handoff';
 export type KodaXBudgetDisclosureZone = 'green' | 'yellow' | 'orange' | 'red';
 
@@ -1310,6 +1311,12 @@ export interface KodaXContextOptions {
   memoryIdentity?: MemoryContextIdentity;
   /** Runtime-built F228 pack reused by prompt rendering and MemorySession. */
   memoryPack?: MemoryPack;
+  /** Runtime-minted collaboration principal for this actor execution. */
+  actorControl?: AgentActorClient;
+  /** Runtime-owned session Actor tree; attached when a root run builds its tool context. */
+  actorSession?: import('./agent-runtime/actor-runtime.js').CodingActorSession;
+  /** Trusted host attribution for an explicit Workflow command/SDK request. */
+  workflowIntent?: 'explicit';
   /** Project root used for project-scoped prompts, permissions, and path policy. */
   gitRoot?: string | null;
   /**
@@ -1555,6 +1562,8 @@ export interface KodaXOptions {
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   agentMode?: KodaXAgentMode;
+  /** Total concurrent Agent turns for one session, including the root. Defaults to 4. */
+  maxConcurrentThreadsPerSession?: number;
   maxIter?: number;
   session?: KodaXSessionOptions;
   context?: KodaXContextOptions;
@@ -1958,6 +1967,8 @@ export type {
 export interface KodaXToolExecutionContext {
   /** File backups for undo functionality - 文件备份用于撤销功能 */
   backups: Map<string, string>;
+  /** Runtime-minted collaboration principal; model inputs cannot replace its caller path. */
+  actorControl?: AgentActorClient;
   /** FEATURE_260: current exactly-scoped read-only MemorySession query binding. */
   memoryRecall?: (need: string) => Promise<{
     readonly content: string;

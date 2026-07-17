@@ -48,6 +48,7 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import { getDefaultLspService } from '../lsp/service.js';
+import { createLocalCodingActorControl } from './actor-runtime.js';
 
 /**
  * Resolve the on-disk run directory for a `resumeFromRunId`, or undefined when
@@ -101,8 +102,9 @@ export function buildToolExecutionContext(
   const executionCwd = resolveExecutionCwd(options.context);
   const sessionScratchDir = getSessionScratchDir(options);
 
-  return {
+  const context: KodaXToolExecutionContext = {
     backups: new Map(),
+    actorControl: options.context?.actorControl,
     gitRoot: options.context?.gitRoot ?? undefined,
     // FEATURE_247 (R7) — session/profile attribution for host-registered tools
     // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't
@@ -180,13 +182,10 @@ export function buildToolExecutionContext(
     // `send_message` lookups find sibling task_ids. Children stay
     // unable to mutate the registry because `dispatch_child_task` is
     // still in CHILD_EXCLUDE_TOOLS_BASE.
-    childTaskRegistry: options.context?.inheritedChildTaskRegistry ?? new Map(),
     // FEATURE_123 v0.7.44 — agent identity propagation. Top-level
     // Worker leaves both undefined; child-executor forwards
     // `bundle.id` (self) + the parent's currentAgentId (parent) when
     // spawning a sub-runtime.
-    currentAgentId: options.context?.currentAgentId,
-    parentAgentId: options.context?.parentAgentId,
     // FEATURE_192 v0.7.44 Phase F — pull the goal-tools context from
     // the host-supplied binding (built by `buildGoalRuntimeBinding`).
     // When unset, leave undefined; the 3 goal tools fall back to
@@ -195,13 +194,11 @@ export function buildToolExecutionContext(
     // FEATURE_123 v0.7.44 — per-turn send_message flood throttle
     // counter. Allocated once per runtime; runner-driven.ts resets
     // `count = 0` at each turn boundary via beforeNextTurn.
-    sendMessageTurnCounter: { count: 0 },
     // FEATURE_120 v0.7.39 Phase 3b — per-child AbortController registry,
     // populated by `dispatch_child_task` at launch time and drained
     // when the child settles. The `task_stop` tool reads this map to
     // request graceful exit of a specific child. Paired lifetime with
     // `childTaskRegistry` — same async-mode gating.
-    childAbortControllers: new Map(),
     // FEATURE_177 v0.7.45 — per-child progress snapshot map backing the
     // `task_output` tool. Initialised here so dispatch + tool both see
     // the same Map instance. Lifecycle paired with `childTaskRegistry`
@@ -209,21 +206,22 @@ export function buildToolExecutionContext(
     // inherit this field — `child-executor.executeReadChild/WriteChild`
     // pass a fresh `KodaXOptions` to `runKodaX` and only forward
     // workspace/system-prompt context, not the parent's registries.
-    childProgressSnapshots: new Map(),
     // Gap A — run-level workflow progress getters keyed by runId. The async
     // run_workflow path registers one on start so task_output(runId) can render
     // live workflow progress while it runs (removed on settle).
-    workflowRunProgress: new Map(),
     // FEATURE_246 Part A2 (ADR-046) — model-launched workflow capability. Wired
-    // when the host configured a runs dir AND the turn runs as `ama` or `amaw`
-    // (widened by FEATURE_249). AMA and AMAW both carry run_workflow standing;
-    // the difference is disposition, not availability: AMAW additionally gets the
-    // ORCHESTRATION DEFAULT complexity directive (amawOrchestrationAvailable), while
-    // AMA activates the tool only on an explicit natural-language request. SA (solo)
+    // when the host configured a runs dir AND the turn runs as AMA. The prompt and
+    // tool description limit activation to explicit user Workflow intent. SA (solo)
     // never hosts a workflow (fails the agentMode gate + SA_SOLO_EXCLUDE_TOOLS). The
     // lazy import keeps the static graph acyclic (workflows -> agent-runtime).
     workflowHost: buildWorkflowToolHost(options, sessionId),
   };
+  if (!context.actorControl && options.agentMode === 'ama') {
+    context.actorControl = options.context?.actorSession
+      ? options.context.actorSession.attach(context, options)
+      : createLocalCodingActorControl(context, options);
+  }
+  return context;
 }
 
 /**
@@ -298,8 +296,8 @@ function buildWorkflowToolHost(
   if (process.env.KODAX_DEBUG_WORKFLOW_GATE) {
     const decision = runsBaseDir === undefined
       ? 'no-host: workflowRunsBaseDir undefined'
-      : (options.agentMode !== 'amaw' && options.agentMode !== 'ama')
-        ? `no-host: agentMode=${String(options.agentMode)} (need ama|amaw)`
+      : options.agentMode !== 'ama'
+        ? `no-host: agentMode=${String(options.agentMode)} (need ama)`
         : 'host wired';
     emitKodaXDiagnostic({
       source: 'coding:workflow-gate',
@@ -313,16 +311,12 @@ function buildWorkflowToolHost(
     });
   }
   if (runsBaseDir === undefined) return undefined;
-  // FEATURE_249: run_workflow host is available to AMA and AMAW (widened from the
-  // former amaw-only gate). AMA can now activate a workflow directly from natural
-  // language — the Worker calls run_workflow when the user asks — matching the
-  // reference non-ultracode posture (tool available, LLM decides on request). The
-  // FEATURE_248 complexity directive (ORCHESTRATION DEFAULT) stays STRICTLY
-  // amaw-only via the independent amawOrchestrationAvailable gate (runner-driven.ts),
-  // so AMA is request-driven, not complexity-driven. SA never reaches here with a
+  // run_workflow is available in AMA so explicit natural-language and command/SDK
+  // requests use the same host. The policy forbids complexity-driven activation.
+  // SA never reaches here with a
   // run_workflow surface: agentMode 'sa' fails this gate, and SA_SOLO_EXCLUDE_TOOLS
   // (task-engine.ts) excludes run_workflow regardless.
-  if (options.agentMode !== 'amaw' && options.agentMode !== 'ama') return undefined;
+  if (options.agentMode !== 'ama') return undefined;
   // ADR-049: `startInline` starts the run and returns a `done` promise WITHOUT
   // awaiting it, so the async run_workflow path can register `done` in the Worker's
   // childTaskRegistry and idle-yield. `runInline` (the blocking path, kept for

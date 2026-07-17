@@ -1797,7 +1797,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
     .option('--effort <level>', 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value', parseEffortOption)
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
-    .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
+    .option('--agent-mode <mode>', 'Agent mode: ama, sa', parseAgentModeOption)
     .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
     .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
@@ -2021,7 +2021,7 @@ function showBasicHelp(): void {
   console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
   console.log('  --effort LEVEL          Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
   console.log('  --reasoning MODE        Compatibility mode: off, auto, quick, balanced, deep');
-  console.log('  --agent-mode MODE       Agent mode: ama, amaw, sa');
+  console.log('  --agent-mode MODE       Agent mode: ama, sa');
   console.log('  -y, --auto              Backward-compat alias; no effect in non-REPL CLI');
   console.log('  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
   console.log('  --no-session            Disable session persistence (print mode only)');
@@ -2133,7 +2133,7 @@ async function main() {
       const providerNames = getAvailableProviderNames().join(' ');
       const reasoningModes = 'off auto quick balanced deep';
       const effortModes = 'off auto low medium high xhigh max';
-      const agentModes = 'ama amaw sa';
+      const agentModes = 'ama sa';
       const repoModes = 'auto full light off';
       const rootSubcommands = 'acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
       const allOptions = [
@@ -2203,7 +2203,7 @@ _kodax() {
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
   effort_modes=(off auto low medium high xhigh max)
-  agent_modes=(ama amaw sa)
+  agent_modes=(ama sa)
   repo_modes=(${repoModes})
 
   _arguments -C \\

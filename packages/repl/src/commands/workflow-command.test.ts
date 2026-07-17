@@ -2689,13 +2689,12 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
     logSpy.mockRestore();
   });
 
-  for (const mode of ['ama', 'amaw'] as const) {
-    it(`redirects /workflow create to the Worker in ${mode} mode (scout-then-author, not blind generation)`, async () => {
+  it('redirects /workflow create to the Worker in AMA mode with explicit intent', async () => {
       const result = await workflowCommand.handler(
         ['create', 'compare', 'three', 'repos'],
         {} as Parameters<typeof workflowCommand.handler>[1],
         {} as Parameters<typeof workflowCommand.handler>[2],
-        { agentMode: mode } as Parameters<typeof workflowCommand.handler>[3],
+        { agentMode: 'ama' } as Parameters<typeof workflowCommand.handler>[3],
       );
       expect(result && typeof result === 'object' && 'invocation' in result).toBe(true);
       if (result && typeof result === 'object' && result.invocation) {
@@ -2704,16 +2703,9 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
         expect(result.invocation.prompt).toContain('compare three repos');
         // It hands an agent turn to the Worker — it does NOT blind-generate here.
         expect(result.invocation.prompt).toContain('investigate');
-        // FEATURE_246: plain AMA has no standing run_workflow, so the command
-        // turn is elevated to amaw for its duration; AMAW already has it.
-        if (mode === 'ama') {
-          expect(result.invocation.agentModeOverride).toBe('amaw');
-        } else {
-          expect(result.invocation.agentModeOverride).toBeUndefined();
-        }
+        expect(result.invocation.workflowIntent).toBe('explicit');
       }
-    });
-  }
+  });
 
   for (const [kind, args] of [
     ['create', ['create', 'compare', 'three', 'repos']],
@@ -2743,7 +2735,7 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
       {} as Parameters<typeof workflowCommand.handler>[1],
       // The start path resolves a confirm channel before falling through.
       { confirm: async () => true } as Parameters<typeof workflowCommand.handler>[2],
-      { agentMode: 'amaw' } as Parameters<typeof workflowCommand.handler>[3],
+      { agentMode: 'ama' } as Parameters<typeof workflowCommand.handler>[3],
     );
     expect(result && typeof result === 'object' && 'invocation' in result).toBe(true);
     if (result && typeof result === 'object' && result.invocation) {
@@ -2757,7 +2749,7 @@ describe('workflowCommand create redirect (FEATURE_246 / ADR-047)', () => {
       [],
       {} as Parameters<typeof workflowCommand.handler>[1],
       {} as Parameters<typeof workflowCommand.handler>[2],
-      { agentMode: 'amaw' } as Parameters<typeof workflowCommand.handler>[3],
+      { agentMode: 'ama' } as Parameters<typeof workflowCommand.handler>[3],
     );
     expect(result === undefined || (typeof result === 'object' && !('invocation' in result))).toBe(true);
     const output = logSpy.mock.calls.map((c) => c.join(' ')).join('\n');

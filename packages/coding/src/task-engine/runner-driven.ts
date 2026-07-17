@@ -148,6 +148,21 @@ import {
   countLastAssistantToolCalls,
   runWithIdleYield,
 } from '@kodax-ai/agent';
+
+function activeDescendantTurnCount(ctx: KodaXToolExecutionContext): number {
+  const control = ctx.actorControl;
+  if (!control) return 0;
+  const prefix = control.callerPath === '/root' ? '/root/' : `${control.callerPath}/`;
+  return control.list().actors.filter((actor) => (
+    actor.path.startsWith(prefix) && actor.currentTurnId !== undefined
+  )).length;
+}
+
+function actorMessageQueueId(ctx: KodaXToolExecutionContext): string | undefined {
+  const path = ctx.actorControl?.callerPath;
+  if (!path) return undefined;
+  return ctx.sessionId ? `actor:${ctx.sessionId}:${path}` : path === '/root' ? undefined : path;
+}
 // FEATURE_125 (v0.7.41) — Team Mode runner-side adapter.
 // Per-LLM-round sibling discovery + system-prompt block + content-hash
 // safety net for cross-session edits.
@@ -1156,6 +1171,7 @@ async function runManagedTaskViaRunnerInner(
   const contextTokenSnapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
     current: options.context?.contextTokenSnapshot,
   };
+  const messageQueueAgentId = actorMessageQueueId(baseCtx);
   // Build the full role-prompt context so every role's
   // system prompt carries the full surface (decision summary + contract
   // + metadata + verification + tool policy + evidence strategies +
@@ -1289,17 +1305,6 @@ async function runManagedTaskViaRunnerInner(
       isResumeAfterReviseFailure: role === 'worker'
         ? pendingFailedResetRef.current === true
         : undefined,
-      // FEATURE_248 (v0.7.59) — AMAW mode-level orchestration directive gate.
-      // FEATURE_248 complexity directive gate — STRICTLY amaw-only. This is
-      // INDEPENDENT of run_workflow tool-availability: since FEATURE_249 widened
-      // buildWorkflowToolHost to also host in AMA, run_workflow is on the tool
-      // surface for both AMA and AMAW, but the ORCHESTRATION DEFAULT directive stays
-      // amaw-exclusive via this separate `=== 'amaw'` read (evaluated in a different
-      // file/function than the host gate, so widening the host does NOT flip this).
-      // Result: AMA has the tool but no standing complexity directive (request-driven),
-      // AMAW has both (complexity-driven). Read only by the `case 'worker':` branch in
-      // `createRolePrompt`.
-      amawOrchestrationAvailable: options.agentMode === 'amaw',
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the
     // on-disk artefact paths so role prompts can quote a stable filesystem
@@ -1683,7 +1688,7 @@ async function runManagedTaskViaRunnerInner(
       }).catch(() => undefined);
     },
     getSessionId: () => sessionIdRef.current,
-    getChildTaskRegistrySize: () => baseCtx.childTaskRegistry?.size ?? 0,
+    getChildTaskRegistrySize: () => activeDescendantTurnCount(baseCtx),
     getRoundCount: () => roundRef.current,
     getHasPlan: () => todoStore.getAll().length > 0,
   });
@@ -1702,7 +1707,7 @@ async function runManagedTaskViaRunnerInner(
   }) => Promise<readonly KodaXMessage[]> = async () => {
     // FEATURE_164 mid-turn user-prompt drain.
     const drained = getMessageQueue().dequeue({
-      agentId: undefined,
+      agentId: messageQueueAgentId,
       maxPriority: 'user',
       mode: 'prompt',
     });
@@ -1920,7 +1925,7 @@ async function runManagedTaskViaRunnerInner(
       const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
       return {
         lastAssistantToolCallCount: countLastAssistantToolCalls(rr.messages),
-        pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
+        pendingChildTaskCount: activeDescendantTurnCount(baseCtx),
         // FEATURE_193 (v0.7.43): `recorder.handoff` deleted along with
         // `emit_handoff`. The idle-yield gate kept this flag to
         // distinguish "Generator emitted handoff" from "Worker ended
@@ -1933,19 +1938,19 @@ async function runManagedTaskViaRunnerInner(
         // task-notification banners — see comment above for the
         // FEATURE_159 follow-up that narrowed this filter.
         hasPendingBackgroundMessages: getMessageQueue().has({
-          agentId: undefined,
+          agentId: messageQueueAgentId,
           maxPriority: 'background',
           mode: 'task-notification',
         }),
       };
     },
-    registry: baseCtx.childTaskRegistry ?? new Map(),
+    registry: new Map(),
     messageQueue: getMessageQueue(),
     // Worker runs as the main thread; the dispatch handler enqueues
     // child notifications with `parentAgentId: undefined` (default
     // main-thread target). Match that here so the queue arm sees
     // them.
-    agentId: undefined,
+    agentId: messageQueueAgentId,
     abortSignal: options.abortSignal,
     // Worker stays the entry agent on resume — the multi-role chain's
     // prior turns are reflected in `rr.messages`, so the Runner's
@@ -1993,7 +1998,7 @@ async function runManagedTaskViaRunnerInner(
       // / GENERATOR_AGENT_NAME branches are dead.
       const idleRole: KodaXTaskRole | undefined =
         currentAgent.name === WORKER_AGENT_NAME ? 'worker' : undefined;
-      observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
+      observer.idleWaiting(idleRole, activeDescendantTurnCount(baseCtx));
     },
     // FEATURE_213 (v0.7.45) — a follow-up typed while waiting for a sub-agent
     // is drained by the idle-yield WAKE path (`composeIdleYieldUserMessage`),

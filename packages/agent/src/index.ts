@@ -742,3 +742,6 @@ export * from './session-lineage/index.js';
 // `@kodax-ai/agent/workflow` subpath. Coding provides the backend.
 export * from './workflow/index.js';
 export * from './external-agents/index.js';
+
+// FEATURE_270 (v0.7.72) - Runtime-owned recursive Actor/Turn control plane.
+export * from './actors/index.js';

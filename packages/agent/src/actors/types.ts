@@ -3,6 +3,13 @@ export type AgentTurnState = 'accepted' | 'running' | 'completed' | 'failed' | '
 export type AgentExecutionKind = 'native' | 'constructed' | 'workflow' | 'external';
 export type AgentForkTurns = 'all' | 'none' | number;
 export type AgentDataClassification = 'public' | 'internal' | 'sensitive';
+export type AgentMetadataValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly AgentMetadataValue[]
+  | { readonly [key: string]: AgentMetadataValue };
 
 export interface AgentCapabilities {
   readonly tools: readonly string[];
@@ -10,6 +17,13 @@ export interface AgentCapabilities {
   readonly network: boolean;
   readonly providers: readonly string[];
   readonly canAskUser: boolean;
+  /** Backend operation support. Omitted means the complete native contract. */
+  readonly control?: {
+    readonly followup: boolean;
+    readonly interrupt: boolean;
+    readonly streaming: boolean;
+    readonly artifacts: boolean;
+  };
 }
 
 export interface AgentActor {
@@ -34,6 +48,7 @@ export interface AgentTurn {
   readonly state: AgentTurnState;
   readonly objective: string;
   readonly forkTurns: AgentForkTurns;
+  readonly metadata?: Readonly<Record<string, AgentMetadataValue>>;
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly completedAt?: string;
@@ -79,6 +94,7 @@ export interface AgentSpawnInput {
   readonly kind?: AgentExecutionKind;
   readonly forkTurns?: AgentForkTurns;
   readonly capabilities?: Partial<AgentCapabilities>;
+  readonly metadata?: Readonly<Record<string, AgentMetadataValue>>;
 }
 
 export interface AgentTurnRef {
@@ -160,7 +176,7 @@ export interface AgentExecutionResult {
   readonly artifacts?: readonly string[];
 }
 
-export interface AgentExecutor {
+export interface AgentTurnExecutor {
   execute(input: AgentExecutionInput): Promise<AgentExecutionResult>;
 }
 
@@ -177,4 +193,22 @@ export interface AgentActorSnapshot {
 export interface AgentActorStore {
   load(): Promise<AgentActorSnapshot | undefined>;
   save(snapshot: AgentActorSnapshot, expectedRevision: number): Promise<void>;
+}
+
+/** Runtime-bound actor control surface. The caller path is minted by Runtime. */
+export interface AgentActorClient {
+  readonly callerPath: string;
+  spawn(input: AgentSpawnInput): Promise<AgentTurnRef>;
+  send(
+    targetPath: string,
+    content: string,
+    classification?: AgentDataClassification,
+  ): Promise<void>;
+  followup(targetPath: string, objective: string): Promise<AgentFollowupResult>;
+  interrupt(targetPath: string, reason?: string): Promise<void>;
+  list(): AgentTreeSnapshot;
+  get(targetPath: string): AgentDetail;
+  output(targetPath: string, turnId?: string): AgentOutput;
+  eventSnapshot(afterSequence?: number): readonly AgentEvent[];
+  wait(afterSequence?: number, timeoutMs?: number): Promise<AgentEvent | undefined>;
 }

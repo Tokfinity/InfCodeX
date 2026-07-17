@@ -57,6 +57,48 @@ describe('FileSessionStorage', () => {
 
   const testSessionsDir = (): string => path.join(tempHome, '.kodax', 'sessions');
 
+  it('persists the Runtime-owned Actor snapshot without a private sidecar journal', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const now = '2026-07-17T00:00:00.000Z';
+    const actorSnapshot = {
+      schemaVersion: 1 as const,
+      revision: 3,
+      maxConcurrentThreads: 4,
+      actors: [{
+        path: '/root', taskName: 'root', kind: 'native' as const, state: 'running' as const,
+        capabilities: {
+          tools: ['*'], filesystem: 'write' as const, network: true,
+          providers: ['*'], canAskUser: true,
+        },
+        turnIds: [], mailboxCursor: 0, createdAt: now, updatedAt: now, revision: 1,
+      }],
+      turns: [],
+      mailboxes: { '/root': [] },
+      events: [],
+    };
+    const base = {
+      messages: [{ role: 'user' as const, content: 'persist actors' }],
+      title: 'Actor owner',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+    };
+
+    await storage.save('actor-session', { ...base, actorSnapshot });
+    await storage.save('actor-session', { ...base, title: 'Actor owner updated' });
+
+    const nextSnapshot = { ...actorSnapshot, revision: 4 };
+    await storage.saveActorSnapshot('actor-session', nextSnapshot, 3);
+    await expect(storage.saveActorSnapshot('actor-session', actorSnapshot, 3))
+      .rejects.toThrow(/revision conflict/);
+
+    expect(await storage.load('actor-session')).toMatchObject({
+      title: 'Actor owner updated',
+      actorSnapshot: nextSnapshot,
+    });
+    const fork = await storage.fork('actor-session', undefined, { sessionId: 'actor-fork' });
+    expect(fork?.data.actorSnapshot).toBeUndefined();
+  });
+
   it('round-trips extension state and extension records through JSONL session storage', async () => {
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
     vi.doMock('./workspace-runtime.js', async () => {

@@ -68,7 +68,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
   {
     id: 'toggleAgentMode',
     name: 'Cycle Agent Mode',
-    description: 'Cycle agent mode: AMA, AMAW, SA',
+    description: 'Cycle agent mode: AMA, SA',
     defaultBindings: [{ key: 'm', meta: true }],
     context: 'global',
     priority: 150,

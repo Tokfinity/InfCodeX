@@ -34,7 +34,6 @@ export type WorkflowProcessSummaryStatus =
 
 export type WorkflowProcessSource =
   | 'command'
-  | 'amaw'
   | 'review'
   | 'sdk'
   | 'capsule'
