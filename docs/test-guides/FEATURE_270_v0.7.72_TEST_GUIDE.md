@@ -111,9 +111,24 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - 本次变更集合：55 个测试文件，999/999 通过。
 - F266/F270 扩展 Layer 1：61 个测试文件，1097/1097 通过。
 - changed-code coverage：2294/2780 statements，82.52%。
+- F270 eval harness + shared one-shot boundary：65/65 通过；新
+  dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。
+- manifest-only eval：2/2 通过，三个付费 stage 默认跳过；raw root 位于 OS
+  临时目录 `kodax-eval-dumps/feature-270/<revision>/`。
 - 全量分片中 Actor/Workflow 测试通过；剩余失败/挂起均定位到紧急发版遗留的
   未提交 CLI/auto-mode/schema/KNOWN_ISSUES 改动，不属于 F270 提交。
-- 付费 Layer 2/3 尚未运行：冻结预算上限为 `$18`，必须获得 owner 明确授权。
+- 付费 Layer 2/3 尚未运行：冻结预算上限为 `$18`，必须获得 owner 明确授权；
+  driver 还要求调用方同时提供 `allowGeneration=true`、
+  `KODAX_F270_ALLOW_GENERATION=1` 和可归因的 `KODAX_F270_AUTHORIZATION`。
+
+零成本 manifest 检查：
+
+```powershell
+npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
+```
+
+获得 owner 授权后，先只运行四调用 pilot；主会话盲审通过后，才按顺序选择
+`layer2` 和 `layer3`。不要一次性预设三个付费 stage，也不要添加自动重试。
 
 ## 测试总结
 

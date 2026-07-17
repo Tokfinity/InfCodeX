@@ -132,7 +132,7 @@ export async function runOneShot(
     ...(input.priorMessages ?? []),
     { role: 'user', content: input.userMessage },
   ];
-  const tools = input.tools ?? [];
+  const tools = input.tools === undefined ? [] : [...input.tools];
 
   const { result, durationMs } = await withProviderCallSlot(alias, async () => {
     const startedAt = Date.now();

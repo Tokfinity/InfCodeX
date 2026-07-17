@@ -355,9 +355,12 @@ remains InProgress until the v0.7.72 release gate is signed off.
 `270` implementation and its zero-provider Layer 1 gate are complete: native,
 Workflow-owned, and external Agent work now share the Runtime-owned Actor/Turn
 tree, scheduler, durable snapshot, canonical collaboration tools, and output
-events. AMAW and the parallel legacy task lifecycles are retired. The bounded
-Layer 2/3 behavioral eval is intentionally not started without explicit owner
-authorization for its preregistered `$18` maximum external spend.
+events. AMAW and the parallel legacy task lifecycles are retired. Its frozen
+Layer 2/3 driver, exact historical/current production-byte fixtures,
+manifest-only gate, budget enforcement, raw-cell integrity checks, and blind
+evidence packs are also complete at zero provider cost. Generation is
+intentionally not started without explicit owner authorization for the
+preregistered `$18` maximum external spend.
 
 Recent completion notes:
 

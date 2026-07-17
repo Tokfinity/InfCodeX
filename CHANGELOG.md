@@ -20,7 +20,10 @@ All notable changes to this project will be documented in this file.
   `spawn_agent`, `send_message`, `followup_task`, `wait_agent`,
   `interrupt_agent`, `list_agents`, and `agent_output` surface supports reusable
   Actor identities, durable Turn history, direct-parent completion, recursive
-  delegation, shared capacity, and SDK/daemon recovery.
+  delegation, shared capacity, and SDK/daemon recovery. A manifest-first,
+  fail-closed behavioral eval driver freezes the released/current production
+  prompt and tool bytes, call graphs, budgets, raw evidence, and blind review
+  mapping before any separately authorized provider call.
 
 ### Changed
 

@@ -1,0 +1,215 @@
+[
+  {
+    "name": "dispatch_child_task",
+    "description": "Execute a single child agent for an independent sub-task. The child runs its own multi-turn investigation loop and returns findings. Call multiple times in parallel for concurrent sub-tasks — each call appears as a separate tool with its own status in the transcript. When you would otherwise fan several of these out and then synthesize or cross-check their results into one answer (comparing several codebases, reviewing a diff from multiple angles, fanning many files out and ranking what comes back), prefer run_workflow instead: one call gives you a bounded parallel/pipeline, per-child structured output, and same-session resume that dispatch_child_task does not.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique child task identifier"
+        },
+        "objective": {
+          "type": "string",
+          "description": "Detailed multi-step goal for this child agent"
+        },
+        "readOnly": {
+          "type": "boolean",
+          "description": "true (default): child can only read files. false: child may edit files (Generator/Worker only); use for non-conflicting file-level edits across modules."
+        },
+        "scope_summary": {
+          "type": "string",
+          "description": "Optional scope hint (e.g. \"packages/llm/src/\")"
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional known evidence. Prefixed strings: \"file:path\" inlines the complete working-tree file, \"diff:path\" inlines the complete git diff against HEAD, \"finding:text\" transcribes a fact you already know, \"task_id:<child_id>\" forwards a completed sibling child's output verbatim. The complete child request is capacity-checked after provider/model routing; only a request that cannot fit receives a recoverable artifact preview. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it."
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional constraints"
+        },
+        "model_hint": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "balanced",
+            "deep"
+          ],
+          "description": "Optional hint for routing this child to a tier-appropriate model. \"fast\" for short focused lookups (reading a handful of files, a simple grep); \"balanced\" (default; same as omit) for normal subtasks; \"deep\" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent's model); a future routing feature will activate the hint. Mark \"fast\" only for trivial focused lookups; mark \"deep\" only for multi-file research or analytical synthesis; when in doubt, omit."
+        },
+        "subagent_type": {
+          "type": "string",
+          "description": "When the task matches a registered specialist (e.g., db-reviewer for SQL changes, e2e-runner for browser tests), dispatch as that specialist instead of a generic child."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Optional. Run this child on a specific provider instead of inheriting yours. Use when you deliberately want a different model family — e.g. a second independent review of the same change by a different family, to catch blind spots a single family would share. Omit to inherit your provider (the default). An unconfigured provider falls back to yours."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional. Specific model id for this child, paired with `provider`. Omit to inherit your model."
+        },
+        "effort": {
+          "type": "string",
+          "description": "Optional. Reasoning effort for this child (for example off, low, medium, high, xhigh, max). Omit or use auto to inherit the parent/default effort. If subagent_type names a specialist with a declared effort, that specialist effort is locked and a different dispatch effort is rejected. Unsupported values are rejected by the selected provider/model."
+        }
+      },
+      "required": [
+        "objective"
+      ]
+    }
+  },
+  {
+    "name": "run_workflow",
+    "description": "Author and run a multi-agent workflow inline: you write a small JavaScript orchestration script that runs as child agents under the workflow runtime. run_workflow is ASYNCHRONOUS — the call returns immediately with a task_id and the workflow runs in the background; its synthesized result arrives later as a <task-completed task_id=…> block, so after calling it you idle-yield (end your turn with no tool calls) or do other work rather than waiting inline, exactly like dispatch_child_task. Reach for this when independent agents working in parallel and then cross-checking each other beat a single linear pass — comparing several codebases or options, reviewing a diff from multiple independent angles and adversarially verifying each finding, or fanning many files out and synthesizing what they return; common single-phase shapes are understand (parallel readers over subsystems), design (a judge panel of approaches), review (find then verify each), research (a multi-angle sweep), and migrate (discover the sites, then transform each). First investigate with your own tools (read / grep / glob) to find the real files, the actual sub-problems, and the shape of the data; then bake those concrete findings into the child prompts — exact paths, the specific dimensions to compare, a real outputSchema. Write those child prompts in the same natural language as the user's request, so each child's report and the synthesized result come back in that language. A script that only says \"investigate X\" and re-delegates all the scouting to its children produces shallow, duplicated work, because each child starts from nothing; the value of the workflow is that its children start from what you already discovered. The run(wf, args) body coordinates agents through wf only: wf.runAgent({name, prompt, readOnly, phase?, modelHint?, outputSchema?}) returns the child's result, or null if it failed or was stopped (so you can .filter(Boolean) instead of guarding every call); modelHint is a tier — 'deep' for an agent that needs a stronger model, 'fast' for a cheap read-only pass — not a concrete model name; the operator maps tiers to real models, and an unconfigured tier just inherits your model, and with outputSchema — a JSON-Schema subset of type/enum/required/properties/items/additionalProperties — the parsed validated object comes back on result.structured, so read your declared fields off result.structured (e.g. result.structured.findings) and never off the top-level result, which is undefined for those fields and yields an empty report; wf.parallel([thunks]) runs thunks concurrently and nulls any that fail rather than rejecting; wf.pipeline(items, stage1, stage2) streams each item through the stages without waiting for the slowest and is the default for staged work — reach for wf.parallel as a barrier only when a stage genuinely needs every prior result before it can start, such as a dedup or merge across all of them; wf.synthesize({inputs, rubric}) folds results into one; wf.workflow(name, args) runs a saved or built-in workflow as a sub-step; a shared phase tag groups agents in the progress view. Patterns worth composing (these are examples, not a fixed menu): adversarially verify a finding by spawning a few independent agents that each attack it from a distinct failure-mode angle, keeping it only if the majority cannot refute it; run a judge panel by generating several independent attempts from different angles and synthesizing from the strongest; loop until dry by spawning finders until a couple of rounds surface nothing new rather than stopping at a fixed count; sweep multi-modally by pointing agents at one target through different routes (by file, by symbol, by test) so a single blind spot does not sink the search; end with a completeness critic that asks what is still missing. Reach for more than one of these in a single script when the task has more than one shape, and name every pattern you use in manifest.patterns — chaining them is the norm, not the exception. A review or audit, for instance, combines fan-out-and-synthesize with adversarial-verification as pipeline(findings, find, verify): fan independent reviewers out to surface findings, then pipe each finding straight into an independent verifier that tries to refute it, keeping only the ones it cannot dismiss and ending with .filter(Boolean); weaving verification in this way is what lets you skip a separate re-audit pass afterward. Research that must be exhaustive chains loop-until-done with a completeness critic; a design task chains generate-and-filter with a tournament judge. Declare each pattern the script actually uses, e.g. ['fan-out-and-synthesize', 'adversarial-verification']. Match the effort to the request: a quick 'find any bugs' wants a few finders and one check, while 'thoroughly audit this' wants a larger pool and several independent verifiers before synthesis. If you bound coverage — top-N, no retry, sampling — say so in the result, because a silent cap reads as covered-everything when it was not. Prefer dispatch_child_task for a single focused sub-task — a whole workflow's coordination overhead is wasted on one agent — and just read files yourself for a quick lookup.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "manifest": {
+          "type": "object",
+          "description": "Workflow metadata. Set readOnly false only if child agents must write files. patterns names the shapes the script uses (one or more of: classify-and-act, fan-out-and-synthesize, adversarial-verification, generate-and-filter, tournament, loop-until-done).",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "phases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Ordered phase names for progress display."
+            },
+            "readOnly": {
+              "type": "boolean"
+            },
+            "maxAgents": {
+              "type": "number",
+              "description": "Lifetime cap on total child agents across the run."
+            },
+            "maxConcurrency": {
+              "type": "number",
+              "description": "Max simultaneously in-flight child agents."
+            },
+            "patterns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "plannedAgents": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "phases",
+            "readOnly",
+            "maxAgents",
+            "maxConcurrency",
+            "patterns"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "description": "JavaScript module body defining `async function run(wf, args) { ... }`. Coordinate child agents only through `wf`; the script gets no fs/network/shell and may not use import/require. Return displayable final text (for example `{ synthesis }`)."
+        },
+        "args": {
+          "type": "object",
+          "description": "Optional initial arguments passed to run(wf, args)."
+        },
+        "resumeFromRunId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "Optional run id of a prior run of THIS workflow to resume from. Re-submit the same script (edited or not) with the prior run id: unchanged agent calls return their cached results instantly and only the changed/new calls re-run. Scripts must be deterministic for this — Date.now()/Math.random() are disabled."
+        }
+      },
+      "required": [
+        "manifest",
+        "source"
+      ]
+    }
+  },
+  {
+    "name": "send_message",
+    "description": "Route a short message to another in-flight agent in this session. Worker → child appends a <coordinator-instruction> at user priority (drained next tool boundary). Child → child peer appends a <peer-message from=…> at background priority (drained when the peer next yields). Child → parent Worker uses to=\"worker\" and appends a <child-notification from=…>. Broadcast to=\"*\" fans the message out to every other in-flight sibling plus the parent Worker, framed as <peer-broadcast from=…>. Use sparingly — most children should not need mid-flight steering, and peer chatter is for coordination notes that change another agent's plan, not status updates.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "One of: an in-flight task_id from a prior dispatch_child_task call (single addressed send), the literal \"worker\" (notify the parent Worker; only valid when the sender is a child), or \"*\" (broadcast to all other in-flight siblings plus the parent Worker, capped at 20 recipients). Self-targeted sends are rejected."
+        },
+        "content": {
+          "type": "string",
+          "description": "Message body. Will be wrapped in the framing tag matching the routing branch (<coordinator-instruction>, <peer-message from=…>, <child-notification from=…>, or <peer-broadcast from=…>) before the recipient sees it."
+        },
+        "seen_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional chain of agents that have already handled this message — only relevant when you are forwarding a peer message you received. The incoming wrapper carries a seen_by=\"A,B,…\" attribute; copy that list into this parameter so the tool can detect cycles (forwarding back to a prior sender is rejected) and cap chain depth. Omit entirely for fresh sends; the tool always auto-appends you to the chain before enqueue."
+        }
+      },
+      "required": [
+        "to",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "task_stop",
+    "description": "Request graceful exit of a specific in-flight child task launched via dispatch_child_task. The child finishes its current tool call atomically (no hard kill — a 90s npm test won't be interrupted), sees an optional <coordinator-stop-request> message explaining why, then emits a final summary. Use when: child went off-scope (e.g. started writing files when launched read-only), user cancelled the parent task that justified the child, or child is pathologically slow with no progress signal. Coordinator-only: child agents cannot call this tool.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Target child task_id (from a prior dispatch_child_task call). Completed children are auto-cleaned and become invalid targets."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional explanation. When provided, the child receives a <coordinator-stop-request> system-reminder with this reason BEFORE the abort fires, so it can frame its final summary accordingly. Omitting the reason still aborts the child; only the explanation is skipped."
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  },
+  {
+    "name": "task_output",
+    "description": "Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, output_state, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Terminal output is emitted in full by this tool so the shared outer tool-result capacity policy owns any recoverable spill or pagination; running external output may be a bounded live tail and is marked output_state=live_partial. Normal Worker usage is task_output({task_id}) with block omitted/false for a status snapshot. If block:true is used, timeout_ms is only a bounded read-window cap; retrieval_status=wait_expired with status=running means the child is still running, not timed out or failed. Prefer idle-yield (end the turn text-only) for normal waits. Coordinator-only: child agents cannot call this tool. Completed children's snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "Target child task_id (from a prior dispatch_child_task call). Returns retrieval_status=not_found if the task was never dispatched or its snapshot has been evicted."
+        },
+        "block": {
+          "type": "boolean",
+          "description": "Optional compatibility knob. When false or omitted (normal Worker usage), return the current snapshot immediately. When true, wait only within a bounded read window (up to timeout_ms) before returning the snapshot; wait expiry is not child failure. Idle-yield (end turn text-only) is the canonical wait."
+        },
+        "timeout_ms": {
+          "type": "number",
+          "description": "Max bounded read-window time in milliseconds when block:true. Default 30000 (30s), max 120000 (120s). Ignored when block:false. If the read window expires, returns the current snapshot with retrieval_status=wait_expired; this is not a child task timeout."
+        }
+      },
+      "required": [
+        "task_id"
+      ]
+    }
+  }
+]
