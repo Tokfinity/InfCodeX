@@ -129,6 +129,53 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     vi.clearAllMocks();
   });
 
+  it('forwards the shared managed-run budget into a child runtime', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const managedWorkBudget = {
+      totalBudget: 200,
+      spentBudget: 7,
+      currentHarness: 'H0_DIRECT' as const,
+    };
+
+    await executeChildAgents(
+      [createBundle()],
+      { ...createCtx(), managedWorkBudget },
+      createOptions(),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      context?: { managedWorkBudget?: unknown };
+    };
+    expect(childOptions.context?.managedWorkBudget).toBe(managedWorkBudget);
+  });
+
+  it('applies Actor history and tool/network/user-interaction ceilings to the child runtime', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const initialMessages = [{ role: 'user' as const, content: 'Prior Actor fact.' }];
+
+    await executeChildAgents([createBundle()], createCtx(), createOptions({
+      initialMessages,
+      actorCapabilities: {
+        tools: ['read', 'web_search', 'ask_user_question'],
+        filesystem: 'read',
+        network: false,
+        providers: ['anthropic'],
+        canAskUser: false,
+      },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      session?: { initialMessages?: readonly unknown[] };
+      context?: { excludeTools?: readonly string[] };
+    };
+    expect(childOptions.session?.initialMessages).toEqual(initialMessages);
+    expect(childOptions.context?.excludeTools).toEqual(expect.arrayContaining([
+      'web_search',
+      'ask_user_question',
+    ]));
+    expect(childOptions.context?.excludeTools).not.toContain('read');
+  });
+
   const okResult = (lastText = 'done') => ({
     success: true,
     lastText,

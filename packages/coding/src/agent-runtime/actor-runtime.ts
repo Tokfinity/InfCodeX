@@ -5,13 +5,15 @@ import {
   emitKodaXDiagnostic,
   getMessageQueue,
   type AgentActorClient,
+  type AgentBudgetPort,
   type AgentExecutorPlaneBinding,
   type AgentActorStore,
-  type AgentEvent,
   type AgentExecutionInput,
   type AgentExecutionResult,
+  type AgentMailboxMessage,
   type AgentMetadataValue,
   type AgentTaskSnapshot,
+  type AgentTurn,
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
 import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
@@ -20,6 +22,8 @@ import { executeChildAgents } from '../child-executor.js';
 import type {
   KodaXChildContextBundle,
   KodaXChildModelHint,
+  KodaXManagedWorkBudget,
+  KodaXMessage,
   KodaXOptions,
   KodaXToolExecutionContext,
 } from '../types.js';
@@ -31,6 +35,7 @@ export interface CodingActorSessionOptions {
   readonly sessionId?: string;
   readonly store?: AgentActorStore;
   readonly executor?: AgentTurnExecutor;
+  readonly budget?: AgentBudgetPort;
 }
 
 interface CodingActorEnvironment {
@@ -43,14 +48,18 @@ export class CodingActorSession {
   private readonly controller: AgentActorController;
   private readonly turnExecutors = new Map<string, AgentTurnExecutor>();
   private environment?: CodingActorEnvironment;
+  private activeBudget?: AgentBudgetPort;
 
   constructor(private readonly sessionOptions: CodingActorSessionOptions = {}) {
+    this.activeBudget = sessionOptions.budget;
     const executor: AgentTurnExecutor = {
       execute: (input) => {
         const executionKey = metadataString(input.turn.metadata?.executionKey);
         const registered = executionKey ? this.turnExecutors.get(executionKey) : undefined;
         if (registered) return registered.execute(input);
-        if (sessionOptions.executor) return sessionOptions.executor.execute(input);
+        if (input.actor.kind === 'external' && sessionOptions.executor) {
+          return sessionOptions.executor.execute(input);
+        }
         const environment = this.environment;
         if (!environment) throw new Error('Actor session is not attached to an active KodaX run.');
         return executeCodingActorTurn(
@@ -65,6 +74,11 @@ export class CodingActorSession {
       maxConcurrentThreadsPerSession: sessionOptions.maxConcurrentThreadsPerSession,
       store: sessionOptions.store,
       executor,
+      budget: {
+        admit: (input) => this.activeBudget?.admit(input) ?? Promise.resolve({ admitted: true }),
+        refund: (turnId) => this.activeBudget?.refund?.(turnId) ?? Promise.resolve(),
+        snapshot: () => this.activeBudget?.snapshot?.(),
+      },
       warn: (message) => emitKodaXDiagnostic({
         source: 'coding:actors',
         level: 'warn',
@@ -75,9 +89,9 @@ export class CodingActorSession {
         level: 'error',
         message: error instanceof Error ? error.message : String(error),
       }),
-      onEventCommitted: (event) => publishActorCompletion(
+      onMessageCommitted: (message) => publishRootMailboxMessage(
         this.controller,
-        event,
+        message,
         sessionOptions.sessionId,
       ),
     });
@@ -93,6 +107,9 @@ export class CodingActorSession {
     callerPath = '/root',
   ): AgentActorClient {
     this.environment = { parentCtx, options };
+    this.activeBudget = options.context?.managedWorkBudget
+      ? managedWorkBudgetPort(options.context.managedWorkBudget)
+      : this.sessionOptions.budget;
     return this.controller.bind(callerPath);
   }
 
@@ -172,13 +189,22 @@ export function createExternalActorTurnExecutor(
   };
 }
 
-function publishActorCompletion(
+function publishRootMailboxMessage(
   controller: AgentActorController,
-  event: AgentEvent,
+  message: AgentMailboxMessage,
   sessionId: string | undefined,
 ): void {
-  if (!event.turnId || !event.parentPath || !isTerminalEvent(event.kind)) return;
-  const output = controller.output('/root', event.actorPath, event.turnId);
+  if (message.recipientPath !== '/root') return;
+  if (message.kind !== 'completion' || !message.turnId) {
+    getMessageQueue().enqueue({
+      priority: message.kind === 'followup' ? 'user' : 'background',
+      mode: 'prompt',
+      agentId: actorQueueId(sessionId, '/root'),
+      content: renderMailboxMessage(message),
+    });
+    return;
+  }
+  const output = controller.output('/root', message.senderPath, message.turnId);
   const status = output.state === 'completed'
     ? 'completed'
     : output.state === 'failed'
@@ -188,15 +214,15 @@ function publishActorCompletion(
   getMessageQueue().enqueue({
     priority: 'background',
     mode: 'task-notification',
-    agentId: actorQueueId(sessionId, event.parentPath),
-    content: `<agent-completed path="${event.actorPath}" turn_id="${event.turnId}" state="${status}">\n${summary}\n</agent-completed>`,
+    agentId: actorQueueId(sessionId, '/root'),
+    content: `<agent-completed path="${escapeXml(message.senderPath)}" turn_id="${escapeXml(message.turnId)}" state="${status}">\n${escapeXml(summary)}\n</agent-completed>`,
     taskResult: {
       type: 'task_result',
       source: 'child_task',
-      taskId: event.turnId,
+      taskId: message.turnId,
       status,
       summary,
-      title: event.actorPath,
+      title: message.senderPath,
       ...(output.artifacts.length > 0 ? { artifactRefs: [...output.artifacts] } : {}),
     },
   });
@@ -205,10 +231,6 @@ function publishActorCompletion(
 export function actorQueueId(sessionId: string | undefined, actorPath: string): string | undefined {
   if (sessionId) return `actor:${sessionId}:${actorPath}`;
   return actorPath === '/root' ? undefined : actorPath;
-}
-
-function isTerminalEvent(kind: AgentEvent['kind']): boolean {
-  return kind === 'turn_completed' || kind === 'turn_failed' || kind === 'turn_interrupted';
 }
 
 async function executeCodingActorTurn(
@@ -222,30 +244,49 @@ async function executeCodingActorTurn(
   }
   const bundle = actorBundle(input);
   const parentConfig = parentCtx.parentAgentConfig;
-  const result = await executeChildAgents([bundle], parentCtx, {
-    maxParallel: 1,
-    maxIterationsPerChild: DEFAULT_MAX_CHILD_ITERATIONS,
-    abortSignal: input.signal,
-    parentOptions: {
-      provider: parentConfig?.provider ?? options.provider,
-      model: parentConfig?.model ?? options.modelOverride ?? options.model,
-      effort: parentConfig?.effort ?? options.effort,
-      reasoningMode: parentConfig?.reasoningMode ?? options.reasoningMode,
-      repoIntelligenceMode: parentConfig?.repoIntelligenceMode,
-      repoIntelligenceTrace: parentConfig?.repoIntelligenceTrace,
-      extensionRuntime: parentCtx.extensionRuntime,
-      events: parentCtx.parentEvents,
-    },
-    parentRole: 'worker',
-    parentHarness: 'tool-dispatch',
-    planModeBlockCheck: parentCtx.planModeBlockCheck,
-    guardrails: parentCtx.guardrails,
-    actorControl,
-    actorHost: parentCtx.actorHost,
-    onProgress: (message) => parentCtx.reportToolProgress?.(
-      `[agent ${input.actor.path}] ${message}`,
-    ),
-  });
+  assertProviderAuthority(
+    input,
+    bundle.provider ?? parentConfig?.provider ?? options.provider,
+  );
+  const mailbox = await input.drainMailbox();
+  const initialMessages = [
+    ...actorHistoryMessages(input.priorTurns, input.turn.forkTurns),
+    ...mailbox.map(mailboxMessageAsPrompt),
+  ];
+  const pumpStop = new AbortController();
+  const mailboxPump = pumpMailbox(input, parentCtx.sessionId, pumpStop.signal);
+  let result: Awaited<ReturnType<typeof executeChildAgents>>;
+  try {
+    result = await executeChildAgents([bundle], parentCtx, {
+      maxParallel: 1,
+      maxIterationsPerChild: DEFAULT_MAX_CHILD_ITERATIONS,
+      abortSignal: input.signal,
+      parentOptions: {
+        provider: parentConfig?.provider ?? options.provider,
+        model: parentConfig?.model ?? options.modelOverride ?? options.model,
+        effort: parentConfig?.effort ?? options.effort,
+        reasoningMode: parentConfig?.reasoningMode ?? options.reasoningMode,
+        repoIntelligenceMode: parentConfig?.repoIntelligenceMode,
+        repoIntelligenceTrace: parentConfig?.repoIntelligenceTrace,
+        extensionRuntime: parentCtx.extensionRuntime,
+        events: parentCtx.parentEvents,
+      },
+      parentRole: 'worker',
+      parentHarness: 'tool-dispatch',
+      planModeBlockCheck: parentCtx.planModeBlockCheck,
+      guardrails: parentCtx.guardrails,
+      actorControl,
+      actorHost: parentCtx.actorHost,
+      initialMessages,
+      actorCapabilities: input.actor.capabilities,
+      onProgress: (message) => parentCtx.reportToolProgress?.(
+        `[agent ${input.actor.path}] ${message}`,
+      ),
+    });
+  } finally {
+    pumpStop.abort();
+    await mailboxPump;
+  }
   const child = result.results[0];
   if (!child || child.status !== 'completed') {
     throw new Error(child?.summary || `Agent turn ${input.turn.turnId} failed without output.`);
@@ -339,13 +380,118 @@ function actorBundle(input: AgentExecutionInput): KodaXChildContextBundle {
     scopeSummary: metadataString(metadata.scope),
     evidenceRefs: metadataStringArray(metadata.evidenceRefs),
     constraints: metadataStringArray(metadata.constraints),
-    readOnly: metadata.readOnly !== false,
+    readOnly: input.actor.capabilities.filesystem !== 'write',
     modelHint: modelHint(metadata.modelHint),
     isolation: metadata.isolation === 'worktree' ? 'worktree' : undefined,
     specialistName: specialistName(metadata, input),
     provider: metadataString(metadata.provider),
     model: metadataString(metadata.model),
     effort: effort(metadata.effort),
+  };
+}
+
+function actorHistoryMessages(
+  priorTurns: readonly AgentTurn[],
+  forkTurns: AgentTurn['forkTurns'],
+): KodaXMessage[] {
+  const selected = forkTurns === 'none'
+    ? []
+    : forkTurns === 'all'
+      ? priorTurns
+      : priorTurns.slice(-forkTurns);
+  return selected.flatMap((turn): KodaXMessage[] => {
+    const outcome = turn.output ?? turn.error ?? turn.state;
+    return [
+      {
+        role: 'user',
+        content: `<actor-prior-turn id="${escapeXml(turn.turnId)}">\n${escapeXml(turn.objective)}\n</actor-prior-turn>`,
+      },
+      {
+        role: 'assistant',
+        content: `<actor-prior-result state="${turn.state}">\n${escapeXml(outcome)}\n</actor-prior-result>`,
+      },
+    ];
+  });
+}
+
+function mailboxMessageAsPrompt(message: AgentMailboxMessage): KodaXMessage {
+  return { role: 'user', content: renderMailboxMessage(message) };
+}
+
+async function pumpMailbox(
+  input: AgentExecutionInput,
+  sessionId: string | undefined,
+  stopSignal: AbortSignal,
+): Promise<void> {
+  while (!stopSignal.aborted && !input.signal.aborted) {
+    await waitForMailboxPoll(stopSignal);
+    if (stopSignal.aborted || input.signal.aborted) return;
+    for (const message of await input.drainMailbox()) {
+      getMessageQueue().enqueue({
+        priority: message.kind === 'followup' ? 'user' : 'background',
+        mode: message.kind === 'completion' ? 'task-notification' : 'prompt',
+        agentId: actorQueueId(sessionId, input.actor.path),
+        content: renderMailboxMessage(message),
+      });
+    }
+  }
+}
+
+async function waitForMailboxPoll(stopSignal: AbortSignal): Promise<void> {
+  if (stopSignal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      stopSignal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 25);
+    stopSignal.addEventListener('abort', finish, { once: true });
+  });
+}
+
+function renderMailboxMessage(message: AgentMailboxMessage): string {
+  const tag = message.kind === 'completion' ? 'agent-completed' : 'agent-message';
+  return `<${tag} from="${escapeXml(message.senderPath)}" classification="${message.classification}">\n${escapeXml(message.content)}\n</${tag}>`;
+}
+
+function assertProviderAuthority(input: AgentExecutionInput, provider: string | undefined): void {
+  if (!provider || input.actor.capabilities.providers.includes('*')) return;
+  if (!input.actor.capabilities.providers.includes(provider)) {
+    throw new Error(`Actor ${input.actor.path} is not authorized to use provider ${provider}.`);
+  }
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function managedWorkBudgetPort(
+  budget: KodaXManagedWorkBudget,
+): AgentBudgetPort {
+  return {
+    async admit(input) {
+      if (budget.spentBudget + input.units > budget.totalBudget) {
+        return {
+          admitted: false,
+          fact: {
+            code: 'agent_budget_exhausted',
+            retryable: false,
+            reason: `shared root work budget exhausted (${budget.spentBudget}/${budget.totalBudget})`,
+          },
+        };
+      }
+      budget.spentBudget += input.units;
+      return { admitted: true };
+    },
+    async refund() {
+      budget.spentBudget = Math.max(0, budget.spentBudget - 1);
+    },
+    snapshot: () => ({ ...budget }),
   };
 }
 

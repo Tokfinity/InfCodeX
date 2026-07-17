@@ -65,7 +65,7 @@ import {
   applyToolResultBatchGuardrail,
   ToolResultBatchCapacityError,
 } from './tools/tool-result-policy.js';
-import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
+import type { Agent, AgentCapabilities, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → child-executor.ts → agent.ts`. The runtime import defers agent resolution
@@ -230,6 +230,10 @@ export interface ChildExecutorOptions {
   readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
   /** Trusted host bridge inherited beside the principal for nested Workflow owners. */
   readonly actorHost?: import('./types.js').KodaXActorHost;
+  /** Prior Actor turns and committed mailbox facts projected into this turn. */
+  readonly initialMessages?: readonly import('./types.js').KodaXMessage[];
+  /** Runtime-minted ceiling applied after specialist/default tool resolution. */
+  readonly actorCapabilities?: AgentCapabilities;
 }
 
 function inheritRepoIntelligenceContext(
@@ -350,6 +354,24 @@ interface SpecialistOverride {
   modelOverride?: string;
   providerOverride?: string;
   effortOverride?: KodaXWireReasoningEffort;
+}
+
+function restrictToolsForActor(
+  excludedTools: readonly string[],
+  capabilities: AgentCapabilities | undefined,
+): readonly string[] {
+  if (!capabilities) return excludedTools;
+  const allowedTools = new Set(capabilities.tools);
+  const allowAll = allowedTools.has('*');
+  const excluded = new Set(excludedTools);
+  for (const tool of getAllRegisteredTools()) {
+    const outsideExplicitCeiling = !allowAll && !allowedTools.has(tool.name);
+    const networkDenied = !capabilities.network
+      && (tool.sideEffect === 'reads-network' || tool.sideEffect === 'mutates-network');
+    const userInteractionDenied = !capabilities.canAskUser && tool.name === 'ask_user_question';
+    if (outsideExplicitCeiling || networkDenied || userInteractionDenied) excluded.add(tool.name);
+  }
+  return [...excluded];
 }
 
 interface ChildIsolationScope {
@@ -1081,13 +1103,14 @@ async function runReadChildBody(
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
   // is undefined; falls through to v0.7.42 defaults).
   // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider/effort.
-  const { systemPromptOverride, excludeTools, modelOverride, providerOverride, effortOverride } =
+  const { systemPromptOverride, excludeTools: specialistExcludeTools, modelOverride, providerOverride, effortOverride } =
     resolveSpecialistOverride(
       bundle,
       CHILD_AGENT_SYSTEM_PROMPT,
       CHILD_EXCLUDE_TOOLS_READONLY,
       scope.ctx,
     );
+  const excludeTools = restrictToolsForActor(specialistExcludeTools, options.actorCapabilities);
 
   // FEATURE_102 P1-auto — model_hint routing applies only when the dispatcher
   // gave neither an explicit provider/model (P2) nor a specialist (P1).
@@ -1146,6 +1169,9 @@ async function runReadChildBody(
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
+        ...(options.initialMessages && options.initialMessages.length > 0
+          ? { session: { initialMessages: [...options.initialMessages] } }
+          : {}),
         // FEATURE_221: a child of a white-labeled product inherits the parent's
         // selfManual so its own kodax_manual tool description is re-branded too
         // (children carry kodax_manual — it is not in CHILD_EXCLUDE_TOOLS).
@@ -1167,6 +1193,7 @@ async function runReadChildBody(
           agentScope: scope.ctx.agentScope,
           actorControl: options.actorControl,
           actorHost: options.actorHost,
+          managedWorkBudget: scope.ctx.managedWorkBudget,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
           // child runtime can answer peer `send_message` calls. The
           // child stays unable to mutate the registry (no
@@ -1316,13 +1343,14 @@ async function runWriteChildBody(
   // FEATURE_191 — specialist override switch on the write path. Same fail-safe
   // semantic as the read path: unknown specialist falls back to defaults.
   // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider/effort.
-  const { systemPromptOverride, excludeTools, modelOverride, providerOverride, effortOverride } =
+  const { systemPromptOverride, excludeTools: specialistExcludeTools, modelOverride, providerOverride, effortOverride } =
     resolveSpecialistOverride(
       bundle,
       writeSystemPrompt,
       CHILD_EXCLUDE_TOOLS_BASE,
       childCtx,
     );
+  const excludeTools = restrictToolsForActor(specialistExcludeTools, options.actorCapabilities);
 
   // FEATURE_102 P1-auto — write children are NOT eligible for `fast`→cheap
   // (eval covered read-only only); `deep`→strong still applies. Same gate:
@@ -1382,6 +1410,9 @@ async function runWriteChildBody(
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
+        ...(options.initialMessages && options.initialMessages.length > 0
+          ? { session: { initialMessages: [...options.initialMessages] } }
+          : {}),
         // FEATURE_221: write children inherit the parent's white-label product
         // so their own kodax_manual description is re-branded too.
         selfManual: childCtx.selfManual,
@@ -1401,6 +1432,7 @@ async function runWriteChildBody(
           agentScope: childCtx.agentScope,
           actorControl: options.actorControl,
           actorHost: options.actorHost,
+          managedWorkBudget: childCtx.managedWorkBudget,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).

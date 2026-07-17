@@ -1320,7 +1320,17 @@ export interface KodaXActorHost {
   waitForAgentCapacity(signal?: AbortSignal): Promise<boolean>;
 }
 
+export interface KodaXManagedWorkBudget {
+  totalBudget: number;
+  spentBudget: number;
+  currentHarness: KodaXHarnessProfile;
+  upgradeCeiling?: KodaXHarnessProfile;
+  lastApprovalBudgetTotal?: number;
+}
+
 export interface KodaXContextOptions {
+  /** Runtime-internal shared work ledger inherited by every descendant Agent run. */
+  managedWorkBudget?: KodaXManagedWorkBudget;
   /** FEATURE_260 runtime-owned identity used for scoped memory reads. */
   memoryIdentity?: MemoryContextIdentity;
   /** Runtime-built F228 pack reused by prompt rendering and MemorySession. */
@@ -1976,6 +1986,8 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Runtime-minted collaboration principal; model inputs cannot replace its caller path. */
   actorControl?: AgentActorClient;
+  /** Shared root-run work ledger; descendant runtimes retain this exact object. */
+  managedWorkBudget?: KodaXManagedWorkBudget;
   /** Trusted host operations that are intentionally absent from model-facing clients. */
   actorHost?: KodaXActorHost;
   /** FEATURE_260: current exactly-scoped read-only MemorySession query binding. */

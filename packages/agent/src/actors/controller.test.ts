@@ -86,6 +86,31 @@ describe('F270 actor tree and scheduler', () => {
     expect(save).toHaveBeenCalledTimes(savesAfterSpawn);
   });
 
+  it('publishes mailbox messages only after their durable commit', async () => {
+    const committed: string[] = [];
+    let rejectNextSave = false;
+    const controller = await createAgentActorController({
+      executor: new DeferredExecutor(),
+      store: {
+        async load() { return undefined; },
+        async save() {
+          if (rejectNextSave) throw new Error('save failed');
+        },
+      },
+      onMessageCommitted(message) {
+        committed.push(message.content);
+      },
+    });
+    await controller.spawn('/root', { taskName: 'worker', objective: 'Wait.' });
+
+    await controller.send('/root', '/root/worker', 'committed message');
+    rejectNextSave = true;
+    await expect(controller.send('/root', '/root/worker', 'rolled back message'))
+      .rejects.toThrow('save failed');
+
+    expect(committed).toEqual(['committed message']);
+  });
+
   it('registers trusted Workflow protocol owners without consuming an Agent slot', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });

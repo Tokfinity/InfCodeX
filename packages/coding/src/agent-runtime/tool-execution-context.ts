@@ -105,6 +105,7 @@ export function buildToolExecutionContext(
     backups: new Map(),
     actorControl: options.context?.actorControl,
     actorHost: options.context?.actorHost,
+    managedWorkBudget: options.context?.managedWorkBudget,
     gitRoot: options.context?.gitRoot ?? undefined,
     // FEATURE_247 (R7) — session/profile attribution for host-registered tools
     // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't

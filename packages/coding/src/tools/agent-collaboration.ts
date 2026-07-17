@@ -34,7 +34,7 @@ export async function toolSpawnAgent(
     forkTurns: parseForkTurns(input.fork_turns),
     kind: selector.kind,
     capabilities: {
-      ...(readOnly ? { filesystem: 'read' as const } : {}),
+      filesystem: readOnly ? 'read' : 'write',
       ...(provider ? { providers: [provider] } : {}),
       canAskUser: false,
       ...(selector.control ? { control: selector.control } : {}),

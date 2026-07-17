@@ -861,12 +861,26 @@ async function runManagedTaskViaRunnerInner(
   //      is set explicitly. Both contracts now pinned in one helper.
   // The `mutationTracker` field is layered on top because AMA owns its
   // own per-run tracker (substrate has its own).
+  // One mutable ledger is inherited by all descendant Agent runtimes. A nested
+  // runner must charge the root run instead of silently minting another cap.
+  const initialHarness: KodaXHarnessProfile = 'H0_DIRECT';
+  const budget: ManagedTaskBudgetController = options.context?.managedWorkBudget ?? {
+    totalBudget: MANAGED_WORK_BUDGET_CAP,
+    spentBudget: 0,
+    currentHarness: initialHarness,
+  };
+  const runtimeOptions: KodaXOptions = options.context?.managedWorkBudget
+    ? options
+    : {
+        ...options,
+        context: { ...options.context, managedWorkBudget: budget },
+      };
   const extensionRuntime = options.extensionRuntime;
   const managedProtocolPayloadRef: { current: KodaXManagedProtocolPayload | undefined } = {
     current: undefined,
   };
   const substrateBaseCtx = buildToolExecutionContext({
-    options,
+    options: runtimeOptions,
     // FEATURE_247 (R7) — same session id `sessionIdRef` uses below, so tool
     // handlers can attribute an AMA call to the right concurrent session.
     sessionId: options.session?.id ?? resolvedSessionId,
@@ -990,16 +1004,6 @@ async function runManagedTaskViaRunnerInner(
     enumerable: true,
     configurable: true,
   });
-
-  // Budget controller. ADR-043 collapsed harness-tier routing to H0_DIRECT.
-  // The field remains for SDK/checkpoint/status compatibility, but live
-  // execution no longer replays PLANNED/H1/H2 tiers from old checkpoints.
-  const initialHarness: KodaXHarnessProfile = 'H0_DIRECT';
-  const budget: ManagedTaskBudgetController = {
-    totalBudget: MANAGED_WORK_BUDGET_CAP,
-    spentBudget: 0,
-    currentHarness: initialHarness,
-  };
 
   const recorder: VerdictRecorder = {};
   // FEATURE_193 (v0.7.43): V1 `recorder.scout` / `recorder.contract`

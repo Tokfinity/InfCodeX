@@ -95,6 +95,34 @@ describe('F270 canonical collaboration tools', () => {
     expect(listed.actors.some((actor) => actor.path === '/root/d')).toBe(false);
   });
 
+  it('cannot escalate a read-only Actor to a write child', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', {
+      taskName: 'reader',
+      objective: 'Read only.',
+      capabilities: { filesystem: 'read' },
+    });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root/reader'),
+    };
+
+    const result = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'writer',
+      objective: 'Attempt a write.',
+      read_only: false,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_capabilities' },
+    });
+    expect(controller.list('/root').actors.some((actor) => (
+      actor.path === '/root/reader/writer'
+    ))).toBe(false);
+  });
+
   it('keeps send_message dormant and uses followup_task to start the next turn', async () => {
     const { ctx, executor } = await context();
     await executeTool('spawn_agent', { task_name: 'reviewer', objective: 'First.' }, ctx);

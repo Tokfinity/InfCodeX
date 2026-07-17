@@ -43,6 +43,8 @@ export interface AgentControllerOptions {
   readonly onBackgroundError?: (error: unknown) => void;
   /** Post-durability event sink. Callback failures never roll back committed actor state. */
   readonly onEventCommitted?: (event: AgentEvent) => void | Promise<void>;
+  /** Post-durability mailbox sink. Callback failures never roll back committed actor state. */
+  readonly onMessageCommitted?: (message: AgentMailboxMessage) => void | Promise<void>;
 }
 
 interface EventWaiter {
@@ -249,7 +251,14 @@ export class AgentActorController {
   ): Promise<void> {
     await this.mutate(() => {
       this.assertMessagePermission(callerPath, targetPath);
-      this.appendMessage(callerPath, targetPath, content, 'message', classification);
+      this.appendMessage(
+        callerPath,
+        targetPath,
+        content,
+        'message',
+        classification,
+        this.actors.get(callerPath)?.currentTurnId,
+      );
       this.appendEvent('message_delivered', targetPath, this.actors.get(targetPath)?.currentTurnId);
     });
   }
@@ -269,7 +278,14 @@ export class AgentActorController {
           throw new AgentControlError('unsupported_operation', `${targetPath} does not support follow-up`);
         }
         if (actor.currentTurnId) {
-          this.appendMessage(callerPath, targetPath, objective, 'followup', 'internal');
+          this.appendMessage(
+            callerPath,
+            targetPath,
+            objective,
+            'followup',
+            'internal',
+            this.actors.get(callerPath)?.currentTurnId,
+          );
           const turn = this.requireTurn(actor.currentTurnId);
           return { delivery: 'current_turn' as const, turn: turnRef(turn) };
         }
@@ -766,6 +782,9 @@ export class AgentActorController {
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);
       this.committedSnapshot = this.snapshot();
+      for (const message of appendedMessages(before, this.committedSnapshot)) {
+        this.publishCommittedMessage(message);
+      }
       for (const event of this.eventsLog.slice(eventCount)) this.publishCommittedEvent(event);
       return result;
     } catch (error) {
@@ -830,6 +849,16 @@ export class AgentActorController {
     if (!this.options.onEventCommitted) return;
     try {
       void Promise.resolve(this.options.onEventCommitted(event))
+        .catch((error: unknown) => this.reportBackgroundError(error));
+    } catch (error) {
+      this.reportBackgroundError(error);
+    }
+  }
+
+  private publishCommittedMessage(message: AgentMailboxMessage): void {
+    if (!this.options.onMessageCommitted) return;
+    try {
+      void Promise.resolve(this.options.onMessageCommitted(message))
         .catch((error: unknown) => this.reportBackgroundError(error));
     } catch (error) {
       this.reportBackgroundError(error);
@@ -946,6 +975,18 @@ function eventKindForTerminal(state: 'completed' | 'failed' | 'interrupted'): Ag
 function replaceMap<K, V>(target: Map<K, V>, entries: readonly (readonly [K, V])[]): void {
   target.clear();
   for (const [key, value] of entries) target.set(key, value);
+}
+
+function appendedMessages(
+  before: AgentActorSnapshot,
+  after: AgentActorSnapshot,
+): AgentMailboxMessage[] {
+  const messages: AgentMailboxMessage[] = [];
+  for (const [path, afterMailbox] of Object.entries(after.mailboxes)) {
+    const beforeLength = before.mailboxes[path]?.length ?? 0;
+    messages.push(...afterMailbox.slice(beforeLength));
+  }
+  return messages;
 }
 
 function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): void {

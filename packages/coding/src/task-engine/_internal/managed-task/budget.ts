@@ -24,6 +24,7 @@ import type {
   KodaXManagedBudgetSnapshot,
   KodaXManagedTask,
   KodaXManagedTaskStatusEvent,
+  KodaXManagedWorkBudget,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
 } from '../../../types.js';
@@ -34,13 +35,7 @@ import type {
  * last-approval stamp used by `maybeRequestAdditionalWorkBudget` to avoid
  * re-prompting when the controller state hasn't changed.
  */
-export interface ManagedTaskBudgetController {
-  totalBudget: number;
-  spentBudget: number;
-  currentHarness: KodaXTaskRoutingDecision['harnessProfile'];
-  upgradeCeiling?: KodaXTaskRoutingDecision['harnessProfile'];
-  lastApprovalBudgetTotal?: number;
-}
+export type ManagedTaskBudgetController = KodaXManagedWorkBudget;
 
 // Reasoning single-tracking: the dead `createManagedBudgetController` +
 // per-harness `MANAGED_TASK_BUDGET_BASE` table were removed. The runner

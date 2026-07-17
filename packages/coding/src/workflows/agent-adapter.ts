@@ -896,7 +896,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         objective: effectiveInput.prompt,
         kind,
         capabilities: {
-          ...(effectiveInput.readOnly !== false ? { filesystem: 'read' as const } : {}),
+          filesystem: effectiveInput.readOnly !== false ? 'read' : 'write',
           canAskUser: false,
           ...(externalControl ? { control: externalControl } : {}),
         },
