@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { ensureLayoutMigrated } from './interactive/session-migration.js';
-import { runSessionPicker, type SessionPickerItem } from './ui/SessionPicker.js';
+import {
+  runSessionPicker,
+  type SessionPickerItem,
+  type SessionPickerRunOptions,
+} from './ui/SessionPicker.js';
 
 const SESSION_HEAD_READ_BYTES = 65536;
 const SESSION_READ_CONCURRENCY = 48;
@@ -198,8 +202,12 @@ export async function listCliResumeSessions(
 
 export async function runCliResumePicker(
   sessions: readonly SessionPickerItem[],
+  options: SessionPickerRunOptions = {},
 ): Promise<SessionPickerItem | undefined> {
-  return runSessionPicker(sessions);
+  return runSessionPicker(sessions, options);
 }
 
-export type { SessionPickerItem } from './ui/SessionPicker.js';
+export type {
+  SessionPickerItem,
+  SessionPickerRunOptions,
+} from './ui/SessionPicker.js';

@@ -1,5 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from './tui.js';
+
+const SELECTION_TRANSITION_PAINT_MS = 40;
 
 export interface SessionPickerItem {
   readonly id: string;
@@ -64,22 +66,27 @@ function formatTimestamp(value: string | undefined): string {
 export function SessionPicker({
   sessions,
   onSelect,
+  onSelectionError,
   onCancel,
   pageSize = 8,
 }: {
   readonly sessions: readonly SessionPickerItem[];
-  readonly onSelect: (session: SessionPickerItem) => void;
+  readonly onSelect: (session: SessionPickerItem) => void | Promise<void>;
+  readonly onSelectionError: (error: unknown) => void;
   readonly onCancel: () => void;
   readonly pageSize?: number;
 }): React.ReactElement {
   const { exit } = useApp();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectionPending, setSelectionPending] = useState(false);
+  const selectionPendingRef = useRef(false);
   const filtered = useMemo(() => filterSessionPickerItems(sessions, query), [sessions, query]);
   const page = buildSessionPickerPage(filtered, selectedIndex, pageSize);
   const selectedSession = filtered[page.selectedIndex];
 
   useInput((input, key) => {
+    if (selectionPendingRef.current) return;
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel();
       exit();
@@ -88,8 +95,18 @@ export function SessionPicker({
     if (key.return) {
       const selected = filtered[page.selectedIndex];
       if (selected) {
-        onSelect(selected);
-        exit();
+        selectionPendingRef.current = true;
+        setSelectionPending(true);
+        void (async () => {
+          await new Promise((resolve) => setTimeout(resolve, SELECTION_TRANSITION_PAINT_MS));
+          try {
+            await onSelect(selected);
+          } catch (error: unknown) {
+            onSelectionError(error);
+          } finally {
+            exit();
+          }
+        })();
       }
       return;
     }
@@ -118,7 +135,11 @@ export function SessionPicker({
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Text bold color="cyan">Resume a session</Text>
       <Text>Search: <Text color="yellow">{query || 'type to filter'}</Text></Text>
-      <Text dimColor>↑/↓ select · PgUp/PgDn page · Tab complete · Enter resume · Esc cancel</Text>
+      <Text dimColor>
+        {selectionPending
+          ? 'Loading selected session...'
+          : '↑/↓ select · PgUp/PgDn page · Tab complete · Enter resume · Esc cancel'}
+      </Text>
       <Box flexDirection="column" marginTop={1}>
         {page.items.length === 0 ? <Text color="yellow">No matching sessions.</Text> : null}
         {page.items.map((session, offset) => {
@@ -141,8 +162,13 @@ export function SessionPicker({
   );
 }
 
+export interface SessionPickerRunOptions {
+  readonly prepareSelection?: (session: SessionPickerItem) => Promise<void>;
+}
+
 export async function runSessionPicker(
   sessions: readonly SessionPickerItem[],
+  options: SessionPickerRunOptions = {},
 ): Promise<SessionPickerItem | undefined> {
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
     throw new Error(
@@ -153,12 +179,21 @@ export async function runSessionPicker(
 
   let selected: SessionPickerItem | undefined;
   let cancelled = false;
+  let selectionFailed = false;
+  let selectionError: unknown;
   const pageSize = Math.max(4, Math.min(12, (process.stdout.rows ?? 24) - 8));
   const instance = render(
     <SessionPicker
       sessions={sessions}
       pageSize={pageSize}
-      onSelect={(session) => { selected = session; }}
+      onSelect={async (session) => {
+        selected = session;
+        await options.prepareSelection?.(session);
+      }}
+      onSelectionError={(error) => {
+        selectionFailed = true;
+        selectionError = error;
+      }}
       onCancel={() => { cancelled = true; }}
     />,
     {
@@ -175,6 +210,7 @@ export async function runSessionPicker(
     instance.unmount();
     instance.cleanup();
   }
+  if (selectionFailed) throw selectionError;
   if (!selected && !cancelled) {
     throw new Error('Session picker exited unexpectedly before selection or cancellation.');
   }

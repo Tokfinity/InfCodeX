@@ -13,7 +13,7 @@ vi.mock('./tui.js', async (importOriginal) => ({
 import { runSessionPicker, type SessionPickerItem } from './SessionPicker.js';
 
 describe('runSessionPicker', () => {
-  it('binds the searchable picker to the real process terminal streams', async () => {
+  it('keeps the picker mounted while preparing the selected session', async () => {
     const session: SessionPickerItem = {
       id: 'session-one',
       title: 'First session',
@@ -31,13 +31,25 @@ describe('runSessionPicker', () => {
     const unmount = vi.fn();
     const cleanup = vi.fn();
     tuiMocks.render.mockReturnValue({ waitUntilExit, unmount, cleanup });
+    let finishPreparation: (() => void) | undefined;
+    const prepareSelection = vi.fn(() => new Promise<void>((resolve) => {
+      finishPreparation = resolve;
+    }));
 
     try {
-      const resultPromise = runSessionPicker([session]);
+      const resultPromise = runSessionPicker([session], { prepareSelection });
       const rendered = tuiMocks.render.mock.calls[0]?.[0] as React.ReactElement<{
-        onSelect: (selected: SessionPickerItem) => void;
+        onSelect: (selected: SessionPickerItem) => Promise<void>;
       }>;
-      rendered.props.onSelect(session);
+      const selectionPromise = rendered.props.onSelect(session);
+
+      await Promise.resolve();
+      expect(prepareSelection).toHaveBeenCalledWith(session);
+      expect(unmount).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+
+      finishPreparation?.();
+      await selectionPromise;
       resolveExit?.();
 
       await expect(resultPromise).resolves.toBe(session);

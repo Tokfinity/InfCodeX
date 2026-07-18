@@ -1,4 +1,7 @@
-import type { SessionPickerItem } from '@kodax-ai/repl/cli-resume';
+import type {
+  SessionPickerItem,
+  SessionPickerRunOptions,
+} from '@kodax-ai/repl/cli-resume';
 import {
   listCliResumeSessions,
   runCliResumePicker,
@@ -18,7 +21,9 @@ export interface ResolveBareResumeOptions {
   }) => Promise<SessionPickerItem[]>;
   readonly pickSession?: (
     sessions: readonly SessionPickerItem[],
+    options?: SessionPickerRunOptions,
   ) => Promise<SessionPickerItem | undefined>;
+  readonly beforeSelect?: (session: SessionPickerItem) => Promise<void>;
   readonly notify?: (notice: ResumeNotice) => void | Promise<void>;
 }
 
@@ -45,7 +50,9 @@ export async function resolveBareResume(
     await notify('empty');
     return { kind: 'continue', argv: [] };
   }
-  const selected = await pickSession(sessions);
+  const selected = await pickSession(sessions, {
+    prepareSelection: options.beforeSelect,
+  });
   if (!selected) {
     await notify('cancelled');
     return { kind: 'exit' };

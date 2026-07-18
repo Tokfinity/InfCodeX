@@ -14,20 +14,39 @@ describe('KodaX CLI bootstrap', () => {
     [['--resume']],
   ])('routes the exact bare resume form through the lightweight selector: %j', async (args) => {
     const argv = ['node', 'kodax', ...args];
-    const resolveBareResume = vi.fn(async (): Promise<BootstrapResumeRoute> => ({
-      kind: 'continue',
-      argv: ['-r', 'selected-session'],
-    }));
+    const callOrder: string[] = [];
     const main = vi.fn(async () => undefined);
+    const loadCli = vi.fn(async () => {
+      callOrder.push('load-cli');
+      return { main };
+    });
+    const resolveBareResume = vi.fn(async (options: {
+      readonly beforeSelect?: () => Promise<void>;
+    }): Promise<BootstrapResumeRoute> => {
+      callOrder.push('select');
+      await options.beforeSelect?.();
+      callOrder.push('selected');
+      return {
+        kind: 'continue',
+        argv: ['-r', 'selected-session'],
+      };
+    });
+    const ref = vi.fn();
+    const pause = vi.fn();
 
     await runKodaXBootstrap({
       argv,
       loadResume: async () => ({ resolveBareResume }),
-      loadCli: async () => ({ main }),
+      loadCli,
+      stdin: { isTTY: true, pause, ref },
     });
 
     expect(resolveBareResume).toHaveBeenCalledTimes(1);
+    expect(loadCli).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(['select', 'load-cli', 'selected']);
     expect(argv.slice(2)).toEqual(['-r', 'selected-session']);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(ref).toHaveBeenCalledTimes(1);
     expect(main).toHaveBeenCalledTimes(1);
   });
 
@@ -41,20 +60,27 @@ describe('KodaX CLI bootstrap', () => {
     const argv = ['node', 'kodax', ...args];
     const loadResume = vi.fn();
     const main = vi.fn(async () => undefined);
+    const pause = vi.fn();
+    const ref = vi.fn();
 
     await runKodaXBootstrap({
       argv,
       loadResume,
       loadCli: async () => ({ main }),
+      stdin: { isTTY: true, pause, ref },
     });
 
     expect(loadResume).not.toHaveBeenCalled();
     expect(argv.slice(2)).toEqual(args);
+    expect(pause).not.toHaveBeenCalled();
+    expect(ref).not.toHaveBeenCalled();
     expect(main).toHaveBeenCalledTimes(1);
   });
 
   it('does not load the full CLI when the picker cancels', async () => {
     const loadCli = vi.fn();
+    const pause = vi.fn();
+    const ref = vi.fn();
 
     await runKodaXBootstrap({
       argv: ['node', 'kodax', '-r'],
@@ -62,9 +88,31 @@ describe('KodaX CLI bootstrap', () => {
         resolveBareResume: async () => ({ kind: 'exit' }),
       }),
       loadCli,
+      stdin: { isTTY: true, pause, ref },
     });
 
     expect(loadCli).not.toHaveBeenCalled();
+    expect(pause).not.toHaveBeenCalled();
+    expect(ref).not.toHaveBeenCalled();
+  });
+
+  it('propagates selection preload failures without retaining stdin', async () => {
+    const failure = new Error('CLI preload failed');
+    const ref = vi.fn();
+
+    await expect(runKodaXBootstrap({
+      argv: ['node', 'kodax', '-r'],
+      loadResume: async () => ({
+        resolveBareResume: async (options) => {
+          await options?.beforeSelect?.();
+          return { kind: 'continue', argv: ['-r', 'unreachable'] };
+        },
+      }),
+      loadCli: async () => { throw failure; },
+      stdin: { isTTY: true, ref },
+    })).rejects.toBe(failure);
+
+    expect(ref).not.toHaveBeenCalled();
   });
 
   it('recognizes only an exact one-token bare resume request', () => {

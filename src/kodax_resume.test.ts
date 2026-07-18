@@ -11,15 +11,25 @@ const session = {
 describe('resolveBareResume', () => {
   it('returns the selected session as an exact resume argument', async () => {
     const notify = vi.fn();
+    const beforeSelect = vi.fn(async () => undefined);
+    const pickSession = vi.fn(async (
+      _sessions: readonly typeof session[],
+      options?: { readonly prepareSelection?: (selected: typeof session) => Promise<void> },
+    ) => {
+      await options?.prepareSelection?.(session);
+      return session;
+    });
 
     const result = await resolveBareResume({
       cwd: 'C:/repo',
       listSessions: async () => [session],
-      pickSession: async () => session,
+      pickSession,
+      beforeSelect,
       notify,
     });
 
     expect(result).toEqual({ kind: 'continue', argv: ['-r', 'session-one'] });
+    expect(beforeSelect).toHaveBeenCalledWith(session);
     expect(notify).not.toHaveBeenCalled();
   });
 

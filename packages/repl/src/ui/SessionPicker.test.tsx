@@ -48,7 +48,12 @@ class MockOutput extends EventEmitter {
   isTTY = true;
   columns = 120;
   rows = 40;
-  write = vi.fn(() => true);
+  readonly chunks: string[] = [];
+
+  write(value: string | Uint8Array): boolean {
+    this.chunks.push(String(value));
+    return true;
+  }
 }
 
 describe('SessionPicker', () => {
@@ -74,6 +79,7 @@ describe('SessionPicker', () => {
       <SessionPicker
         sessions={sessions}
         onSelect={vi.fn()}
+        onSelectionError={vi.fn()}
         onCancel={vi.fn()}
         pageSize={2}
       />,
@@ -97,6 +103,7 @@ describe('SessionPicker', () => {
       <SessionPicker
         sessions={sessions}
         onSelect={onSelect}
+        onSelectionError={vi.fn()}
         onCancel={vi.fn()}
         pageSize={2}
       />,
@@ -109,8 +116,52 @@ describe('SessionPicker', () => {
 
     try {
       stdin.emit('data', Buffer.from('\r'));
-      expect(onSelect).toHaveBeenCalledWith(sessions[0]);
       await instance.waitUntilExit();
+      expect(onSelect).toHaveBeenCalledWith(sessions[0]);
+      expect(stdin.isRaw).toBe(false);
+    } finally {
+      instance.unmount();
+      instance.cleanup();
+    }
+  });
+
+  it('shows a loading transition and retains input ownership during async selection', async () => {
+    const stdin = new MockInput();
+    const stdout = new MockOutput();
+    const stderr = new MockOutput();
+    let finishSelection: (() => void) | undefined;
+    const onSelect = vi.fn(() => new Promise<void>((resolve) => {
+      finishSelection = resolve;
+    }));
+    const instance = renderOwnedTui(
+      <SessionPicker
+        sessions={sessions}
+        onSelect={onSelect}
+        onSelectionError={vi.fn()}
+        onCancel={vi.fn()}
+        pageSize={2}
+      />,
+      {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+      },
+    );
+
+    try {
+      let exited = false;
+      const exitPromise = instance.waitUntilExit().then(() => { exited = true; });
+      stdin.emit('data', Buffer.from('\r'));
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const output = stdout.chunks.join('');
+      expect(output).toContain('Loading selected session');
+      expect(onSelect).toHaveBeenCalledWith(sessions[0]);
+      expect(exited).toBe(false);
+      expect(stdin.isRaw).toBe(true);
+
+      finishSelection?.();
+      await exitPromise;
       expect(stdin.isRaw).toBe(false);
     } finally {
       instance.unmount();
@@ -127,6 +178,7 @@ describe('SessionPicker', () => {
       <SessionPicker
         sessions={sessions}
         onSelect={vi.fn()}
+        onSelectionError={vi.fn()}
         onCancel={onCancel}
         pageSize={2}
       />,

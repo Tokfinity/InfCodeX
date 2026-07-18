@@ -5,7 +5,9 @@ export type BootstrapResumeRoute =
   | { readonly kind: 'exit' };
 
 interface ResumeModule {
-  readonly resolveBareResume: () => Promise<BootstrapResumeRoute>;
+  readonly resolveBareResume: (options?: {
+    readonly beforeSelect?: () => Promise<void>;
+  }) => Promise<BootstrapResumeRoute>;
 }
 
 interface CliModule {
@@ -16,6 +18,11 @@ export interface KodaXBootstrapOptions {
   readonly argv?: string[];
   readonly loadResume?: () => Promise<ResumeModule>;
   readonly loadCli?: () => Promise<CliModule>;
+  readonly stdin?: {
+    readonly isTTY?: boolean;
+    readonly pause?: () => void;
+    readonly ref?: () => void;
+  };
 }
 
 export function isBareResumeRequest(args: readonly string[]): boolean {
@@ -24,20 +31,36 @@ export function isBareResumeRequest(args: readonly string[]): boolean {
 
 export async function runKodaXBootstrap(options: KodaXBootstrapOptions = {}): Promise<void> {
   const argv = options.argv ?? process.argv;
+  const stdin = options.stdin ?? process.stdin;
   const loadResume = options.loadResume ?? (() => import('./kodax_resume.js'));
   const loadCli = options.loadCli ?? (() => import('./kodax_cli.js'));
+  let cliModulePromise: Promise<CliModule> | undefined;
+  const loadCliOnce = (): Promise<CliModule> => {
+    cliModulePromise ??= loadCli();
+    return cliModulePromise;
+  };
   if (isBareResumeRequest(argv.slice(2))) {
-    const route = await (await loadResume()).resolveBareResume();
+    const route = await (await loadResume()).resolveBareResume({
+      beforeSelect: async () => {
+        await loadCliOnce();
+      },
+    });
     if (route.kind === 'exit') return;
     argv.splice(2, argv.length - 2, ...route.argv);
+    if (route.argv.length > 0 && stdin.isTTY === true) {
+      stdin.pause?.();
+      stdin.ref?.();
+    }
   }
-  await (await loadCli()).main();
+  await (await loadCliOnce()).main();
 }
 
 export async function runKodaXBootstrapAsEntry(): Promise<void> {
   try {
     await runKodaXBootstrap();
   } catch (error: unknown) {
+    process.stdin.pause();
+    process.stdin.unref?.();
     const message = error instanceof Error ? error.message : String(error);
     try {
       const { default: chalk } = await import('chalk');
