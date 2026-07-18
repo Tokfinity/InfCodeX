@@ -158,6 +158,8 @@ export function createRuntimeDaemonClient(
       || capability === null
       || !('version' in capability)
       || capability.version !== 1
+      || !('methodNamespace' in capability)
+      || capability.methodNamespace !== 'agents'
     ) {
       return new RuntimeDaemonUpgradeRequiredError();
     }

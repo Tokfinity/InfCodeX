@@ -30,7 +30,7 @@ export interface WorkflowInvocationPolicyDecision {
  * identifier `run_workflow` alone is deliberately not an activation signal.
  */
 export function hasExplicitNaturalLanguageWorkflowIntent(input: string): boolean {
-  return /\bworkflows?\b|工作流|ワークフロー|워크플로우/iu.test(input);
+  return /\bworkflows?\b|工作流(?!程)|ワークフロー|워크플로우/iu.test(input);
 }
 
 /**

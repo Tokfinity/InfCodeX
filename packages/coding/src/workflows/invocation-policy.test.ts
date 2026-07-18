@@ -34,6 +34,7 @@ describe('decideWorkflowInvocation', () => {
     'Audit this complex parallel change.',
     '并行检查三个模块并汇总结论。',
     '请优化这个流程。',
+    '请优化现有工作流程。',
     'Explain the run_workflow tool definition.',
   ])('does not infer Workflow intent from complexity or an identifier: %s', (input) => {
     expect(hasExplicitNaturalLanguageWorkflowIntent(input)).toBe(false);

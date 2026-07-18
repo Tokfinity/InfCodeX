@@ -371,7 +371,12 @@ export class AgentActorController {
         if (actor.currentTurnId) {
           const abort = this.abortControllers.get(actor.currentTurnId);
           if (abort) pendingAborts.push(abort);
-          this.finishTurn(actor.currentTurnId, 'interrupted', { error: reason });
+          this.finishTurn(
+            actor.currentTurnId,
+            'interrupted',
+            { error: reason },
+            actor.path === targetPath,
+          );
         }
         const current = this.requireActor(actor.path);
         this.actors.set(actor.path, {
@@ -642,6 +647,7 @@ export class AgentActorController {
       readonly structured?: AgentMetadataValue;
       readonly error?: string;
     },
+    notifyParent = true,
   ): void {
     const turn = this.requireTurn(turnId);
     if (isTerminal(turn.state)) return;
@@ -653,7 +659,7 @@ export class AgentActorController {
     });
     this.scheduler.release(turnId);
     this.abortControllers.delete(turnId);
-    if (actor.parentPath) this.appendCompletion(actor, turnId, state, result);
+    if (notifyParent && actor.parentPath) this.appendCompletion(actor, turnId, state, result);
     this.appendEvent(eventKindForTerminal(state), actor.path, turnId, actor.parentPath);
   }
 

@@ -39,6 +39,29 @@ describe('runtime daemon client proxy', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('rejects an Actor control plane with the wrong method namespace', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-wrong-actor-namespace',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: '0.7.72',
+      },
+      transport: fakeTransport(calls),
+      capabilities: {
+        actorControlPlane: { version: 1, methodNamespace: 'legacy-agents' },
+      },
+    });
+
+    await expect(client.agents.tree('session-1')).rejects.toMatchObject({
+      code: 'daemon_upgrade_required',
+      capability: 'actorControlPlane',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   it('rejects host-only run options instead of silently dropping them on the wire', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const client = createRuntimeDaemonClient({

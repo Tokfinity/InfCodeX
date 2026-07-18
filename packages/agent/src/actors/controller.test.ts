@@ -629,6 +629,28 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', '/root/closed').mailbox).toEqual([]);
   });
 
+  it('does not deliver descendant completion into a parent closed by the same subtree commit', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Wait.' });
+    await controller.spawn('/root/parent', { taskName: 'child', objective: 'Wait too.' });
+
+    await controller.close('/root', '/root/parent', 'retire branch');
+
+    expect(controller.get('/root', '/root/parent')).toMatchObject({
+      actor: { state: 'closed' },
+      mailbox: [],
+    });
+    expect(controller.get('/root', '/root').mailbox).toEqual([
+      expect.objectContaining({
+        senderPath: '/root/parent',
+        recipientPath: '/root',
+        kind: 'completion',
+        content: 'retire branch',
+      }),
+    ]);
+  });
+
   it('conflicts a distinct concurrent follow-up submitted against the same idle revision', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
