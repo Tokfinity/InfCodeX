@@ -71,10 +71,13 @@ export function generateId(): string {
 export function createHistoryItem(
   item: CreatableHistoryItem
 ): HistoryItem {
+  const timestamp = item.timestamp;
   return {
     ...item,
     id: generateId(),
-    timestamp: Date.now(),
+    timestamp: timestamp !== undefined && Number.isFinite(timestamp) && timestamp >= 0
+      ? timestamp
+      : Date.now(),
   } as HistoryItem;
 }
 

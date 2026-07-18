@@ -15,7 +15,7 @@ import {
   truncateToolReplayText,
 } from "./tool-sanitizer.js";
 
-export type RestoredHistorySeed =
+export type RestoredHistorySeed = (
   | { type: "user"; text: string }
   | { type: "assistant"; text: string }
   | { type: "system"; text: string }
@@ -23,19 +23,26 @@ export type RestoredHistorySeed =
   | { type: "sidecar"; text: string; verdict?: "revise" | "blocked" }
   | { type: "task_completed"; text: string }
   | { type: "tool_summary"; text: string }
-  | { type: "tool_group"; tools: KodaXSessionUiToolCall[] };
+  | { type: "tool_group"; tools: KodaXSessionUiToolCall[] }
+) & { timestamp?: number };
 
 /** Convert a RestoredHistorySeed to a CreatableHistoryItem. tool_summary / task_completed → event with icon. */
 export function seedToHistoryItem(
   seed: RestoredHistorySeed,
 ): CreatableHistoryItem {
   if (seed.type === "tool_summary" || seed.type === "task_completed") {
-    return { type: "event" as const, text: seed.text, icon: "tool" };
+    return {
+      type: "event" as const,
+      text: seed.text,
+      icon: "tool",
+      ...(seed.timestamp === undefined ? {} : { timestamp: seed.timestamp }),
+    };
   }
   if (seed.type === "tool_group") {
     return {
       type: "tool_group",
       tools: seed.tools.map(toolCallSeedToHistoryToolCall),
+      ...(seed.timestamp === undefined ? {} : { timestamp: seed.timestamp }),
     };
   }
   return seed;
@@ -403,6 +410,7 @@ function extractAssistantHistorySeeds(
 export interface HistorySeedSourceMessage {
   role: KodaXMessage["role"];
   content: string | KodaXContentBlock[];
+  timestamp?: string;
   _synthetic?: boolean;
   /**
    * Provenance marker persisted on host-injected messages. `'sidecar-verifier'`
@@ -439,7 +447,9 @@ function stripManagedProtocolBlocks(text: string): string {
   return text.replace(MANAGED_PROTOCOL_BLOCK_PATTERN, '').trim();
 }
 
-export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage): RestoredHistorySeed[] {
+function extractHistorySeedsFromMessageWithoutTimestamp(
+  message: HistorySeedSourceMessage,
+): RestoredHistorySeed[] {
   switch (message.role) {
     case "assistant": {
       const seeds = extractAssistantHistorySeeds(message.content);
@@ -503,6 +513,22 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
   }
 }
 
+function withMessageTimestamp(
+  seeds: readonly RestoredHistorySeed[],
+  timestamp: string | undefined,
+): RestoredHistorySeed[] {
+  if (timestamp === undefined) return [...seeds];
+  const parsed = Date.parse(timestamp);
+  if (!Number.isFinite(parsed) || parsed < 0) return [...seeds];
+  return seeds.map((seed) => ({ ...seed, timestamp: parsed }));
+}
+
+export function extractHistorySeedsFromMessage(
+  message: HistorySeedSourceMessage,
+): RestoredHistorySeed[] {
+  return withMessageTimestamp(extractHistorySeedsFromMessageWithoutTimestamp(message), message.timestamp);
+}
+
 export function extractHistorySeedsFromMessages(
   messages: readonly HistorySeedSourceMessage[],
 ): RestoredHistorySeed[] {
@@ -516,7 +542,10 @@ export function extractHistorySeedsFromMessages(
 
     if (message.role === "assistant") {
       const toolResults = collectToolResultSeeds(messages[index + 1]);
-      const assistantSeeds = extractAssistantHistorySeeds(message.content, toolResults);
+      const assistantSeeds = withMessageTimestamp(
+        extractAssistantHistorySeeds(message.content, toolResults),
+        message.timestamp,
+      );
       seeds.push(
         ...assistantSeeds
           .map((seed) => (

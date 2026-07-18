@@ -547,7 +547,7 @@ export type HistoryItem =
  * Creatable history item types (with text property) - 可创建的历史项类型（带 text 属性）
  * Used for addHistoryItem function parameter type - 用于 addHistoryItem 等函数的参数类型
  */
-export type CreatableHistoryItem =
+export type CreatableHistoryItem = (
   | Omit<HistoryItemUser, "id" | "timestamp">
   | Omit<HistoryItemAssistant, "id" | "timestamp">
   | Omit<HistoryItemSystem, "id" | "timestamp">
@@ -557,7 +557,11 @@ export type CreatableHistoryItem =
   | Omit<HistoryItemInfo, "id" | "timestamp">
   | Omit<HistoryItemHint, "id" | "timestamp">
   | Omit<HistoryItemSidecar, "id" | "timestamp">
-  | Omit<HistoryItemToolGroup, "id" | "timestamp">;
+  | Omit<HistoryItemToolGroup, "id" | "timestamp">
+) & {
+  /** Preserve the source event time when committing live or restored history. */
+  timestamp?: number;
+};
 
 // === UI State - UI 状态 ===
 

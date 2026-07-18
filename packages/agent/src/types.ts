@@ -362,6 +362,8 @@ export type KodaXSessionUiHistoryItemType =
 export interface KodaXSessionUiTextHistoryItem {
   type: KodaXSessionUiTextHistoryItemType;
   text: string;
+  /** Original UI event time in epoch milliseconds. Absent on older sessions. */
+  timestamp?: number;
   icon?: string;
   compactText?: string;
 }
@@ -386,6 +388,8 @@ export interface KodaXSessionUiToolCall {
 
 export interface KodaXSessionUiToolGroupHistoryItem {
   type: 'tool_group';
+  /** Original UI event time in epoch milliseconds. Absent on older sessions. */
+  timestamp?: number;
   tools: KodaXSessionUiToolCall[];
 }
 

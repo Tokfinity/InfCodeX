@@ -172,19 +172,25 @@ function isKodaXSessionUiToolCall(value: unknown): value is KodaXSessionUiToolCa
     && (value.endTime === undefined || typeof value.endTime === 'number');
 }
 
+function isOptionalHistoryTimestamp(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
 export function isKodaXSessionUiHistoryItem(value: unknown): value is KodaXSessionUiHistoryItem {
   if (!isRecord(value) || typeof value.type !== 'string') {
     return false;
   }
 
   if (value.type === 'tool_group') {
-    return Array.isArray(value.tools)
+    return isOptionalHistoryTimestamp(value.timestamp)
+      && Array.isArray(value.tools)
       && value.tools.length > 0
       && value.tools.every(isKodaXSessionUiToolCall);
   }
 
   return UI_TEXT_ITEM_TYPES.has(value.type)
     && typeof value.text === 'string'
+    && isOptionalHistoryTimestamp(value.timestamp)
     && (value.icon === undefined || typeof value.icon === 'string')
     && (value.compactText === undefined || typeof value.compactText === 'string');
 }

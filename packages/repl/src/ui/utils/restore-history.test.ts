@@ -80,6 +80,58 @@ describe("restore-history / sidecar items", () => {
   });
 });
 
+describe("restore-history / timestamps", () => {
+  it("preserves timestamps already stored in uiHistory", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [],
+      uiHistory: [
+        { type: "assistant", text: "first", timestamp: 1_000 },
+        { type: "assistant", text: "second", timestamp: 2_000 },
+      ],
+    });
+
+    expect(result.map((item) => item.timestamp)).toEqual([1_000, 2_000]);
+  });
+
+  it("recovers timestamps for legacy uiHistory from canonical messages", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "user", content: "review", timestamp: "2026-07-18T03:00:13.337Z" },
+        { role: "assistant", content: "first", timestamp: "2026-07-18T03:00:26.766Z" },
+        { role: "assistant", content: "second", timestamp: "2026-07-18T03:00:47.838Z" },
+      ],
+      uiHistory: [
+        { type: "user", text: "review" },
+        { type: "assistant", text: "[Worker] first" },
+        { type: "assistant", text: "[Worker] second" },
+      ],
+    });
+
+    expect(result.map((item) => item.timestamp)).toEqual([
+      Date.parse("2026-07-18T03:00:13.337Z"),
+      Date.parse("2026-07-18T03:00:26.766Z"),
+      Date.parse("2026-07-18T03:00:47.838Z"),
+    ]);
+  });
+
+  it("does not recover a timestamp from an unrelated suffix match", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [
+        { role: "assistant", content: "foobar", timestamp: "2026-07-18T03:00:26.766Z" },
+      ],
+      uiHistory: [
+        { type: "assistant", text: "bar" },
+        { type: "assistant", text: "foobar" },
+      ],
+    });
+
+    expect(result.map((item) => item.timestamp)).toEqual([
+      undefined,
+      Date.parse("2026-07-18T03:00:26.766Z"),
+    ]);
+  });
+});
+
 describe("restore-history / task-completed recovery (GOAL 1)", () => {
   const taskCompletedMsg = {
     role: "user" as const,

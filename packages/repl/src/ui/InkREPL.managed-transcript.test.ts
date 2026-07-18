@@ -574,6 +574,25 @@ describe("buildRoundHistoryItems", () => {
 });
 
 describe("appendPersistedUiHistorySnapshot", () => {
+  it("preserves distinct event timestamps across persistence", () => {
+    const history = appendPersistedUiHistorySnapshot([], [
+      { type: "assistant", text: "first reply", timestamp: 1_000 },
+      {
+        type: "tool_group",
+        timestamp: 2_000,
+        tools: [{
+          id: "tool-1",
+          name: "read",
+          status: ToolCallStatus.Success,
+          startTime: 1_900,
+        }],
+      },
+      { type: "assistant", text: "second reply", timestamp: 3_000 },
+    ]);
+
+    expect(history.map((item) => item.timestamp)).toEqual([1_000, 2_000, 3_000]);
+  });
+
   it("accumulates back-to-back persisted additions on the latest snapshot", () => {
     const afterFirstAppend = appendPersistedUiHistorySnapshot([], [
       { type: "info", text: "> AMA Routing - Routing ready" },

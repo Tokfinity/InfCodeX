@@ -59,23 +59,27 @@ export function normalizePersistedUiHistory(
 function toCreatableTextHistoryItem(
   item: Exclude<KodaXSessionUiHistoryItem, { type: "tool_group" }>,
 ): CreatableHistoryItem {
+  const timestamp = item.timestamp === undefined ? {} : { timestamp: item.timestamp };
   switch (item.type) {
     case "assistant":
       return {
         type: "assistant",
         text: item.text,
+        ...timestamp,
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "thinking":
       return {
         type: "thinking",
         text: item.text,
+        ...timestamp,
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "event":
       return {
         type: "event",
         text: item.text,
+        ...timestamp,
         ...(item.icon ? { icon: item.icon } : {}),
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
@@ -83,25 +87,26 @@ function toCreatableTextHistoryItem(
       return {
         type: "info",
         text: item.text,
+        ...timestamp,
         ...(item.icon ? { icon: item.icon } : {}),
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "user":
-      return { type: "user", text: item.text };
+      return { type: "user", text: item.text, ...timestamp };
     case "system":
-      return { type: "system", text: item.text };
+      return { type: "system", text: item.text, ...timestamp };
     case "error":
-      return { type: "error", text: item.text };
+      return { type: "error", text: item.text, ...timestamp };
     case "hint":
-      return { type: "hint", text: item.text };
+      return { type: "hint", text: item.text, ...timestamp };
     case "sidecar": {
       // The icon slot carries the encoded verdict/delivery (see toPersistedUiHistoryItem).
       const encoded = item.icon;
       if (encoded === "budget-exhausted") {
-        return { type: "sidecar", text: item.text, delivery: "budget-exhausted" };
+        return { type: "sidecar", text: item.text, delivery: "budget-exhausted", ...timestamp };
       }
       const verdict = encoded === "blocked" ? "blocked" : "revise";
-      return { type: "sidecar", text: item.text, verdict };
+      return { type: "sidecar", text: item.text, verdict, ...timestamp };
     }
   }
 }
@@ -114,7 +119,13 @@ function persistedUiHistoryItemToCreatableHistoryItem(
   }
 
   const tools = item.tools.map(toolCallSeedToHistoryToolCall);
-  return tools.length > 0 ? { type: "tool_group", tools } : undefined;
+  return tools.length > 0
+    ? {
+        type: "tool_group",
+        tools,
+        ...(item.timestamp === undefined ? {} : { timestamp: item.timestamp }),
+      }
+    : undefined;
 }
 
 function splitCreatableHistoryRounds(
@@ -175,17 +186,50 @@ function insertDerivedToolGroupsIntoRound(
   ];
 }
 
+function matchesTimestampSource(
+  item: CreatableHistoryItem,
+  candidate: CreatableHistoryItem,
+): boolean {
+  if (item.type !== candidate.type) return false;
+  if (item.type === "tool_group" && candidate.type === "tool_group") {
+    return item.tools.map((tool) => tool.id).join("\n")
+      === candidate.tools.map((tool) => tool.id).join("\n");
+  }
+  if (item.type === "tool_group" || candidate.type === "tool_group") return false;
+  const itemText = item.text.trim();
+  const candidateText = candidate.text.trim();
+  return itemText === candidateText
+    || hasDisplayPrefix(itemText, candidateText)
+    || hasDisplayPrefix(candidateText, itemText);
+}
+
+function hasDisplayPrefix(displayText: string, sourceText: string): boolean {
+  if (!displayText.endsWith(sourceText)) return false;
+  const prefix = displayText.slice(0, -sourceText.length);
+  return /^\[[^\]\r\n]+\]\s+$/.test(prefix);
+}
+
+function recoverMissingTimestamps(
+  items: readonly CreatableHistoryItem[],
+  derivedItems: readonly CreatableHistoryItem[],
+): CreatableHistoryItem[] {
+  let derivedCursor = 0;
+  return items.map((item) => {
+    if (item.timestamp !== undefined) return item;
+    for (let index = derivedCursor; index < derivedItems.length; index += 1) {
+      const candidate = derivedItems[index];
+      if (candidate?.timestamp === undefined || !matchesTimestampSource(item, candidate)) continue;
+      derivedCursor = index + 1;
+      return { ...item, timestamp: candidate.timestamp };
+    }
+    return item;
+  });
+}
+
 function enrichTextOnlyUiHistory(
   persistedItems: readonly CreatableHistoryItem[],
   derivedItems: readonly CreatableHistoryItem[],
 ): CreatableHistoryItem[] {
-  const derivedToolGroups = derivedItems.filter(
-    (item): item is Extract<CreatableHistoryItem, { type: "tool_group" }> => item.type === "tool_group",
-  );
-  if (derivedToolGroups.length === 0) {
-    return [...persistedItems];
-  }
-
   const persistedRounds = splitCreatableHistoryRounds(persistedItems);
   const derivedRounds = splitCreatableHistoryRounds(derivedItems);
   const offset = Math.max(0, derivedRounds.length - persistedRounds.length);
@@ -195,7 +239,10 @@ function enrichTextOnlyUiHistory(
     const roundToolGroups = derivedRound.filter(
       (item): item is Extract<CreatableHistoryItem, { type: "tool_group" }> => item.type === "tool_group",
     );
-    return insertDerivedToolGroupsIntoRound(round, roundToolGroups);
+    return recoverMissingTimestamps(
+      insertDerivedToolGroupsIntoRound(round, roundToolGroups),
+      derivedRound,
+    );
   });
 }
 

@@ -12,12 +12,14 @@ describe("json-guards session uiHistory", () => {
       text: "Tool completed",
       icon: "tool",
       compactText: "Tool completed",
+      timestamp: 1_000,
     })).toBe(true);
   });
 
   it("accepts terminal tool_group items", () => {
     expect(isKodaXSessionUiHistoryItem({
       type: "tool_group",
+      timestamp: 2_000,
       tools: [
         {
           id: "tool-1",
@@ -30,6 +32,19 @@ describe("json-guards session uiHistory", () => {
         },
       ],
     })).toBe(true);
+  });
+
+  it("rejects invalid history timestamps", () => {
+    expect(isKodaXSessionUiHistoryItem({
+      type: "assistant",
+      text: "done",
+      timestamp: -1,
+    })).toBe(false);
+    expect(isKodaXSessionUiHistoryItem({
+      type: "tool_group",
+      timestamp: Number.NaN,
+      tools: [{ id: "tool-1", name: "read", status: "success" }],
+    })).toBe(false);
   });
 
   it("rejects malformed tool_group siblings item-by-item", () => {

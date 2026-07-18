@@ -14,6 +14,7 @@ _Last Updated: 2026-07-18_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 173 | Medium | Resolved | REPL batch history commit collapsed distinct reply times into one timestamp | v0.7.45 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 172 | High | Resolved | Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths | v0.7.64-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-18 |
 | 171 | High | Resolved | Verified Ark Coding image inputs were rejected before provider dispatch | v0.7.57 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-17 |
 | 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
@@ -82,6 +83,73 @@ _Last Updated: 2026-07-18_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 173: REPL batch history commit collapsed distinct reply times into one timestamp
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.45
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+After one long user query, every committed Assistant, Thinking, and Tools block
+could display the same completion-time clock value even though the replies were
+produced minutes apart. Session `20260718_105849` demonstrated the failure: its
+canonical assistant lineage retained distinct timestamps from 11:00 through
+11:17, while the persisted `uiHistory` entries had no timestamps and the final
+batch render showed the response blocks at 11:17.
+
+Expected behavior: each history block keeps the time at which that event was
+created. Batching history updates may reduce renders, but must not replace
+event metadata with the batch commit time.
+
+#### Root Cause
+
+- `CreatableHistoryItem` removed both `id` and `timestamp`, so converting live
+  managed-foreground items to bulk additions discarded their original times.
+- `KodaXSessionUiHistoryItem` and its serializer did not persist a history-item
+  timestamp.
+- `addHistoryItems()` called `createHistoryItem()` for the whole array, and
+  `createHistoryItem()` unconditionally used `Date.now()`. All entries created
+  in the same synchronous batch therefore received the same value.
+- Resume treated `uiHistory` as authoritative but did not use the canonical
+  messages' per-message timestamps to repair older timestamp-less snapshots.
+
+#### Resolution
+
+- UI history records and creatable items now carry an optional, validated epoch
+  timestamp. Live-to-durable conversion, text/tool-group serialization, JSON
+  loading, restore, and bulk commit preserve it end to end.
+- `createHistoryItem()` uses the supplied event time and only falls back to the
+  current clock for genuinely new or invalid timestamp-less items.
+- Legacy `uiHistory` is repaired on restore by stable round/order matching
+  against canonical messages. This restores the distinct assistant times in
+  session `20260718_105849`; sessions whose old canonical messages also lack a
+  timestamp remain best-effort because their exact historical times cannot be
+  reconstructed.
+- Added regression coverage for distinct batch timestamps, durable round trips,
+  legacy recovery, malformed persisted timestamps, and ambiguous suffixes.
+
+#### Files
+
+- `packages/agent/src/types.ts`
+- `packages/repl/src/interactive/json-guards.ts`
+- `packages/repl/src/ui/types.ts`
+- `packages/repl/src/ui/contexts/UIStateContext.tsx`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/utils/message-utils.ts`
+- `packages/repl/src/ui/utils/restore-history.ts`
+
+#### Verification
+
+- Relevant regression suite: 7 files, 173 tests passed.
+- Full `npm run build` passed, including package TypeScript compilation, CLI/SDK
+  bundles, and declaration bundles.
+- Loading session `20260718_105849` through `FileSessionStorage` restored 32
+  Assistant items with 32 distinct timestamps.
 
 ### 172: Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths
 

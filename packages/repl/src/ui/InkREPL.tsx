@@ -802,18 +802,21 @@ function toCreatableHistoryItem(item: HistoryItem): CreatableHistoryItem {
       return {
         type: "assistant",
         text: item.text,
+        timestamp: item.timestamp,
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "thinking":
       return {
         type: "thinking",
         text: item.text,
+        timestamp: item.timestamp,
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "event":
       return {
         type: "event",
         text: item.text,
+        timestamp: item.timestamp,
         ...(item.icon ? { icon: item.icon } : {}),
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
@@ -821,26 +824,28 @@ function toCreatableHistoryItem(item: HistoryItem): CreatableHistoryItem {
       return {
         type: "info",
         text: item.text,
+        timestamp: item.timestamp,
         ...(item.icon ? { icon: item.icon } : {}),
         ...(item.compactText ? { compactText: item.compactText } : {}),
       };
     case "error":
-      return { type: "error", text: item.text };
+      return { type: "error", text: item.text, timestamp: item.timestamp };
     case "system":
-      return { type: "system", text: item.text };
+      return { type: "system", text: item.text, timestamp: item.timestamp };
     case "hint":
-      return { type: "hint", text: item.text };
+      return { type: "hint", text: item.text, timestamp: item.timestamp };
     case "sidecar":
       return {
         type: "sidecar",
         text: item.text,
+        timestamp: item.timestamp,
         ...(item.verdict ? { verdict: item.verdict } : {}),
         ...(item.delivery ? { delivery: item.delivery } : {}),
       };
     case "tool_group":
-      return { type: "tool_group", tools: item.tools };
+      return { type: "tool_group", tools: item.tools, timestamp: item.timestamp };
     case "user":
-      return { type: "user", text: item.text };
+      return { type: "user", text: item.text, timestamp: item.timestamp };
     default:
       {
         const exhaustiveCheck: never = item;
@@ -1137,7 +1142,18 @@ function toPersistedToolGroup(
     .slice(0, MAX_PERSISTED_TOOL_GROUP_TOOLS)
     .map(toPersistedToolCall)
     .filter((tool): tool is KodaXSessionUiToolCall => Boolean(tool));
-  return tools.length > 0 ? { type: "tool_group", tools } : undefined;
+  const timestamp = persistedHistoryTimestamp(item);
+  return tools.length > 0
+    ? { type: "tool_group", tools, ...(timestamp === undefined ? {} : { timestamp }) }
+    : undefined;
+}
+
+function persistedHistoryTimestamp(
+  item: HistoryItem | CreatableHistoryItem,
+): number | undefined {
+  return item.timestamp !== undefined && Number.isFinite(item.timestamp) && item.timestamp >= 0
+    ? item.timestamp
+    : undefined;
 }
 
 function toPersistedUiHistoryItem(
@@ -1158,7 +1174,13 @@ function toPersistedUiHistoryItem(
     const verdictIcon = item.delivery === "budget-exhausted"
       ? "budget-exhausted"
       : item.verdict ?? "revise";
-    return { type: "sidecar", text, icon: verdictIcon };
+    const timestamp = persistedHistoryTimestamp(item);
+    return {
+      type: "sidecar",
+      text,
+      icon: verdictIcon,
+      ...(timestamp === undefined ? {} : { timestamp }),
+    };
   }
 
   const icon = "icon" in item && typeof item.icon === "string" && item.icon.length > 0
@@ -1167,10 +1189,12 @@ function toPersistedUiHistoryItem(
   const compactText = "compactText" in item && typeof item.compactText === "string" && item.compactText.length > 0
     ? item.compactText.trimEnd()
     : undefined;
+  const timestamp = persistedHistoryTimestamp(item);
 
   return {
     type: item.type,
     text,
+    ...(timestamp === undefined ? {} : { timestamp }),
     ...(icon ? { icon } : {}),
     ...(compactText ? { compactText } : {}),
   };
