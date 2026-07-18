@@ -17,6 +17,7 @@ _Last Updated: 2026-07-18_
 | 177 | Medium | Resolved | Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 176 | High | Resolved | Learning subscription could lose a wake, retain a waiter after disconnect, and cache transient principals without bound | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 175 | High | Resolved | Actor start/interrupt race could launch with a fresh cancellation handle; closed Actors still accepted mailbox traffic | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
+| 174 | Medium | Resolved | Bare `-r` session picker exited as cancelled before accepting input | v0.7.69 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 173 | Medium | Resolved | REPL batch history commit collapsed distinct reply times into one timestamp | v0.7.45 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 172 | High | Resolved | Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths | v0.7.64-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-18 |
 | 171 | High | Resolved | Verified Ark Coding image inputs were rejected before provider dispatch | v0.7.57 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-17 |
@@ -224,6 +225,91 @@ no explicit unchanged-result path.
 - `packages/agent/src/actors/controller.test.ts`
 - `src/runtime-daemon/{client,protocol,schema,server}.ts`
 - `src/sdk-runtime.ts`
+
+### 174: Bare `-r` session picker exited as cancelled before accepting input
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.69
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+Running `kodax -r` or `npm run dev -- -r` paused during startup and then
+printed `Session resume cancelled.` without displaying a usable searchable
+session picker. The explicit `-r <session-id-or-title>` path remained a
+workaround.
+
+Expected behavior: in an interactive terminal, bare `-r` remains alive until
+the user selects a session or explicitly cancels. In a non-interactive process,
+the CLI should report that an exact ID or title is required instead of claiming
+that the user cancelled.
+
+#### Root Cause
+
+- The v0.7.69 picker migration from upstream Ink to the local TUI called the
+  new renderer without terminal streams. The local renderer therefore used its
+  inert fallback stdin/stdout/stderr: no picker was visible and no input could
+  reach it.
+- The local input runtime also enabled raw mode and attached a data listener
+  without taking ownership of an unreferenced stdin handle.
+- During early CLI startup the picker can be the only component expected to
+  keep the process alive. Node therefore reached `beforeExit`, unmounted the
+  picker, and resolved `waitUntilExit()` without a selection.
+- `runSessionPicker()` represented both explicit cancellation and unexpected
+  lifecycle exit as `undefined`, so the CLI printed the misleading cancellation
+  message.
+- The local `useInput()` compatibility layer also discarded Ctrl+C before the
+  picker could handle it, breaking one of its documented cancellation paths.
+
+#### Resolution
+
+- `runSessionPicker()` now binds the owned renderer to the real process terminal
+  streams, so the picker is visible and receives input.
+- The terminal input controller now references stdin while at least one input
+  subscriber is active and releases that reference after the final subscriber
+  detaches. Raw-mode ownership remains shared across subscribers and is restored
+  during cleanup.
+- Ctrl+C is delivered through the local `useInput()` contract, allowing the
+  picker to cancel and restore raw mode normally.
+- The picker tracks explicit cancellation separately, reports unexpected exits
+  as errors, rejects non-interactive bare resume with an actionable ID/title
+  instruction, and always unmounts/cleans up in `finally`.
+- After Enter, the picker remains mounted in a visible loading state while the
+  full CLI module is prepared. Bootstrap memoizes that import, then pauses and
+  re-references interactive stdin before the REPL renderer takes ownership, so
+  the picker-to-REPL transition has no unowned input or process-liveness gap.
+- Selection preparation failures preserve the original error, clean up the
+  picker terminal lifecycle, and never retain stdin.
+
+#### Files
+
+- `packages/repl/src/tui/renderer-runtime.tsx`
+- `packages/repl/src/tui/renderer-runtime.test.ts`
+- `packages/repl/src/ui/SessionPicker.tsx`
+- `packages/repl/src/ui/SessionPicker.test.tsx`
+- `packages/repl/src/ui/SessionPicker.runner.test.tsx`
+- `packages/repl/src/cli-resume.ts`
+- `src/kodax_bootstrap.ts`
+- `src/kodax_bootstrap.test.ts`
+- `src/kodax_resume.ts`
+- `src/kodax_resume.test.ts`
+
+#### Verification
+
+- TUI, picker, and dialog regression suite: 34 files, 400 tests passed.
+- Root CLI suite: 1 file, 65 tests passed.
+- `npm run build --workspace=@kodax-ai/repl` passed.
+- A built-artifact terminal-stream simulation rendered the picker, selected the
+  requested session through Enter, and restored raw mode (`raw=false`).
+- Rebuilt `@kodax-ai/repl`; non-interactive bare `-r` now reports the required
+  exact ID/title rather than `Session resume cancelled.`
+- Focused picker/bootstrap/resume transition suite: 6 files, 36 tests passed,
+  including async preload failure cleanup; full TypeScript checking passed.
+- The complete package, CLI/resume/bootstrap bundle, Worker sidecar, and all 12
+  public SDK declaration builds passed.
 
 ### 173: REPL batch history commit collapsed distinct reply times into one timestamp
 
@@ -4457,7 +4543,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 63 (24 Open, 39 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 64 (24 Open, 40 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -4473,6 +4559,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   closed mailbox semantics, and daemon Actor capability negotiation.
 - Closed Learning lost-wakeup, disconnect waiter cleanup, and transient
   principal facade retention without changing durable cursor identity.
+
+### 2026-07-18: Issue 174 added and resolved (v0.7.72-hotfix.0)
+- Bound the searchable `-r` picker to the real process terminal streams, kept
+  it alive by owning an unreferenced stdin handle, restored Ctrl+C cancellation,
+  separated explicit cancel from unexpected exit, and added a clear
+  non-interactive error path.
+- Kept the selected picker visible while the full CLI preloads, then transferred
+  stdin liveness into the REPL without a transition gap; preload failures clean
+  up and preserve the original error.
 
 ### 2026-07-18: Issue 172 resolved after production-path closure (v0.7.72-hotfix.0)
 - Forwarded guardrails through managed Runner, authorized exact concrete bridge

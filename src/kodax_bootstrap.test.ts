@@ -20,11 +20,11 @@ describe('KodaX CLI bootstrap', () => {
       callOrder.push('load-cli');
       return { main };
     });
-    const resolveBareResume = vi.fn(async (options: {
+    const resolveBareResume = vi.fn(async (options?: {
       readonly beforeSelect?: () => Promise<void>;
     }): Promise<BootstrapResumeRoute> => {
       callOrder.push('select');
-      await options.beforeSelect?.();
+      await options?.beforeSelect?.();
       callOrder.push('selected');
       return {
         kind: 'continue',

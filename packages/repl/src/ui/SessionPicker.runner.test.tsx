@@ -71,4 +71,47 @@ describe('runSessionPicker', () => {
       else delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY;
     }
   });
+
+  it('rethrows selection preparation failures after terminal cleanup', async () => {
+    const session: SessionPickerItem = {
+      id: 'session-failing',
+      title: 'Failing session',
+      msgCount: 1,
+    };
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    let resolveExit: (() => void) | undefined;
+    const unmount = vi.fn();
+    const cleanup = vi.fn();
+    tuiMocks.render.mockReturnValue({
+      waitUntilExit: () => new Promise<void>((resolve) => { resolveExit = resolve; }),
+      unmount,
+      cleanup,
+    });
+    const failure = new Error('CLI preload failed');
+
+    try {
+      const resultPromise = runSessionPicker([session], {
+        prepareSelection: async () => { throw failure; },
+      });
+      const rendered = tuiMocks.render.mock.calls[0]?.[0] as React.ReactElement<{
+        onSelect: (selected: SessionPickerItem) => Promise<void>;
+        onSelectionError: (error: unknown) => void;
+      }>;
+      await rendered.props.onSelect(session).catch(rendered.props.onSelectionError);
+      resolveExit?.();
+
+      await expect(resultPromise).rejects.toBe(failure);
+      expect(unmount).toHaveBeenCalledTimes(1);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    } finally {
+      tuiMocks.render.mockReset();
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else delete (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY;
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY;
+    }
+  });
 });
