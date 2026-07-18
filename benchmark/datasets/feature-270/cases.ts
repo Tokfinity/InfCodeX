@@ -15,6 +15,7 @@ export type Feature270Arm = 'baseline' | 'treatment';
 export const FEATURE_270_LAYER_2_CASE_IDS = [
   'solo',
   'parallel',
+  'fresh_capacity',
   'capacity',
   'explicit_workflow',
   'no_workflow',
@@ -107,6 +108,12 @@ const LAYER_2_MESSAGES: Readonly<Record<Exclude<Feature270Layer2CaseId, 'capacit
     'backward compatibility, and test coverage. Each dimension can be assessed independently; then',
     'synthesize the findings into one recommendation. Decide the next collaboration actions now.',
   ].join(' '),
+  fresh_capacity: [
+    'Review the supplied API change across exactly five independent dimensions: security boundaries,',
+    'backward compatibility, test coverage, performance risk, and documentation accuracy. Each',
+    'dimension can be assessed independently; then synthesize the findings into one recommendation.',
+    'Decide the next collaboration actions now.',
+  ].join(' '),
   explicit_workflow: [
     'Review the supplied API change for security, compatibility, and test coverage.',
     'Use the named scoped-review Workflow. Decide the next tool action now.',
@@ -163,6 +170,10 @@ export function buildFeature270TreatmentPrompt(): string {
         osRelease: 'frozen',
         provider: 'frozen-provider',
         model: 'frozen-model',
+      },
+      actorCapacity: {
+        maxConcurrentThreads: 4,
+        activeNonRootTurns: 0,
       },
     },
   );
@@ -393,7 +404,9 @@ function scoreLayer2Actions(
       reason: forbidden ? 'forbidden structured action observed' : 'no forbidden structured action',
     };
   }
-  if (caseId === 'parallel') return scoreParallel(structured, observed);
+  if (caseId === 'parallel' || caseId === 'fresh_capacity') {
+    return scoreParallel(structured, observed);
+  }
   const expected = caseId === 'capacity'
     ? new Set<Feature270Action>(['wait', 'list', 'output'])
     : new Set<Feature270Action>(['workflow']);

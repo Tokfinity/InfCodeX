@@ -14,6 +14,9 @@ _Last Updated: 2026-07-18_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 177 | Medium | Resolved | Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
+| 176 | High | Resolved | Learning subscription could lose a wake, retain a waiter after disconnect, and cache transient principals without bound | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
+| 175 | High | Resolved | Actor start/interrupt race could launch with a fresh cancellation handle; closed Actors still accepted mailbox traffic | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 173 | Medium | Resolved | REPL batch history commit collapsed distinct reply times into one timestamp | v0.7.45 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 172 | High | Resolved | Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths | v0.7.64-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-18 |
 | 171 | High | Resolved | Verified Ark Coding image inputs were rejected before provider dispatch | v0.7.57 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-17 |
@@ -83,6 +86,144 @@ _Last Updated: 2026-07-18_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 177: Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72)
+- **Introduced**: v0.7.72-dev
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+On a fresh four-slot Actor tree, a request containing five independent review
+tracks could make the root say it would dispatch five Agents and emit five
+`spawn_agent` calls. The scheduler correctly admitted only three non-root
+Turns, after which the root explained the capacity failure and took over work.
+Safety was preserved, but the visible plan, tool batch, and actual execution
+disagreed.
+
+#### Root Cause
+
+The scheduler capacity fact existed only at tool execution time. The first
+prompt revision also placed correct capacity guidance deep inside a long
+collaboration section, and the no-routing-plan fallback retained static
+instructions. A paid `fresh_capacity` pilot reproduced five structured starts,
+showing that tool-layer rejection plus a buried sentence was not an adequate
+experience contract.
+
+#### Resolution
+
+- Full routing-plan and no-plan fallback prompts read the current Actor tree on
+  every LLM round.
+- Both paths reuse one authoritative first-section capacity contract with the
+  exact total, active, and available slots; it limits both visible prose and
+  `spawn_agent` calls for the current response.
+- Overflow remains root-owned or is named as a later refill wave. No hidden
+  scheduler queue, second lifecycle, or increased concurrency limit was added.
+- Deterministic full/fallback prompt tests and the smallest affected six-call
+  re-pilot verify three starts for the fresh five-track treatment case.
+
+#### Files
+
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/{agent-chain,role-prompt,role-prompts}.ts`
+- `benchmark/datasets/feature-270/*`
+
+### 176: Learning subscription could lose a wake, retain a waiter after disconnect, and cache transient principals without bound
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72)
+- **Introduced**: v0.7.72-dev
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+`subscribe()` read durable events before registering its in-process waiter. An
+event committed in that gap was neither in the first read nor delivered to the
+not-yet-registered waiter, so the subscriber remained blocked until a later
+event. Returning an async generator while it awaited that waiter could not
+cancel the wait promptly. Runtime Learning also cached one facade per daemon
+principal, allowing a long-lived daemon with changing principals to grow an
+unbounded Map.
+
+#### Root Cause
+
+The subscription combined a durable file cursor with a non-atomic in-memory
+notification hub but lacked read-register-recheck. Async-generator `return()`
+cannot enter `finally` until its current awaited promise resolves. The Runtime
+owner conflated durable client identity with object-facade identity.
+
+#### Resolution
+
+- Subscription uses read-register-recheck and advances one durable sequence at
+  a time.
+- A cancellable async iterator owns its waiter; `return()` removes and resolves
+  it immediately.
+- Runtime retains no per-principal facade Map. It creates lightweight facades
+  on demand, shares owner-level learned-area initialization, and continues to
+  hash stable client identities into durable cursor files.
+- Deterministic tests pause the first read across a concurrent commit, verify
+  prompt cancellation without a subsequent event, and prove repeated binding
+  does not return a retained facade.
+
+#### Files
+
+- `packages/agent/src/learning/learning-center-service.ts`
+- `packages/agent/src/learning/learning-center.test.ts`
+- `src/runtime-learning.ts`
+- `src/sdk-runtime.learning.test.ts`
+
+### 175: Actor start/interrupt race could launch with a fresh cancellation handle; closed Actors still accepted mailbox traffic
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72)
+- **Introduced**: v0.7.72-dev
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+Actor start persisted the running Turn before `launch()` created its
+AbortController. An interrupt could commit in between, observe no controller,
+and then allow launch to install a fresh un-aborted handle. Closed Actors also
+passed relationship authorization for mailbox send/drain, leaving messages in
+an identity that would not execute again. Late successful executor callbacks
+performed a no-op mutation that still advanced snapshot revision and saved.
+
+#### Root Cause
+
+Cancellation ownership was attached to execution launch instead of the atomic
+Turn-start state transition. Messaging authorization checked only tree
+relationships, not terminal Actor identity state. The mutation primitive had
+no explicit unchanged-result path.
+
+#### Resolution
+
+- `commitStart()` atomically creates and stores the controller; `launch()` only
+  consumes that exact handle.
+- Closed identities remain inspectable but reject send, receive/drain, spawn,
+  and follow-up with `actor_closed`.
+- Completion, failure, and progress callbacks on terminal Turns skip revision
+  increment and persistence.
+- The daemon advertises versioned `actorControlPlane v1`; incompatible new
+  SDK/old daemon and old SDK/new daemon pairs receive explicit upgrade/restart
+  errors without restoring `agentTasks` as an executable alias.
+- Deterministic save-gated race, late completion, closed mailbox, and protocol
+  compatibility tests cover the repaired boundaries.
+
+#### Files
+
+- `packages/agent/src/actors/controller.ts`
+- `packages/agent/src/actors/controller.test.ts`
+- `src/runtime-daemon/{client,protocol,schema,server}.ts`
+- `src/sdk-runtime.ts`
 
 ### 173: REPL batch history commit collapsed distinct reply times into one timestamp
 
@@ -4316,11 +4457,22 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 59 (24 Open, 35 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 63 (24 Open, 39 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-18: Issue 177 added and resolved (v0.7.72)
+- Promoted current Actor capacity to a shared authoritative first-section
+  prompt contract for both full and fallback Worker paths, with a passing
+  fresh five-track follow-up pilot.
+
+### 2026-07-18: Issues 175-176 added and resolved (v0.7.72)
+- Closed the Actor start/interrupt cancellation gap, terminal no-op writes,
+  closed mailbox semantics, and daemon Actor capability negotiation.
+- Closed Learning lost-wakeup, disconnect waiter cleanup, and transient
+  principal facade retention without changing durable cursor identity.
 
 ### 2026-07-18: Issue 172 resolved after production-path closure (v0.7.72-hotfix.0)
 - Forwarded guardrails through managed Runner, authorized exact concrete bridge

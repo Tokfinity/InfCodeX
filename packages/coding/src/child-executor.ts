@@ -334,8 +334,7 @@ export async function executeChildAgents(
  * defaults the caller passes through are used.
  *
  * Resolution is best-effort: if the specialist was unregistered between
- * dispatch and execution (a rare race the dispatch-child-tasks guard
- * cannot fully prevent in async fan-out), the defaults fire as a fail-
+ * Actor admission and execution, the defaults fire as a fail-
  * safe — the child still runs, just without specialist overrides. This
  * matches the "specialist override is opportunistic, not load-bearing"
  * semantic of the FEATURE_191 design.
@@ -2257,18 +2256,14 @@ function validateWriteBundles(
 ): readonly KodaXChildContextBundle[] {
   if (writeBundles.length === 0) return [];
 
-  // Worker (V2 AMA single-loop primary) is the sole dispatcher allowed to
-  // emit write fan-out, signalled by `parentHarness === 'tool-dispatch'`
-  // (set by `dispatch-child-tasks.ts` via `wrapDispatchChildTaskForRole`,
-  // which only accepts `role === 'worker'`).
+  // Worker (V2 AMA single-loop primary) is the sole caller allowed to
+  // execute write-capable child bundles. The Actor runtime adapter and
+  // Workflow adapter both mark this audited path with
+  // `parentHarness === 'tool-dispatch'`.
   //
-  // If this gate rejects a role/harness pair that the wrapper accepts, the
-  // write bundle is silently dropped: `executeChildAgents` returns
-  // `EMPTY_RESULT`, `dispatch-child-tasks.ts` unpacks
-  // `result.results[0] === undefined`, and the Worker sees
-  // `failed: no result` with no diagnostic signal. The async branch's
-  // empty-banner fallback covers the success-empty case; the
-  // failed-empty diagnostic envelope covers the post-fix residual paths.
+  // Rejected bundles return the executor's ordinary empty result; callers
+  // convert that into an explicit failed Actor turn instead of executing an
+  // unauthorized write path.
   if (parentRole !== 'worker') {
     return [];
   }

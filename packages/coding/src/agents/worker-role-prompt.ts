@@ -43,6 +43,37 @@ export const ULTRA_AGENT_POLICY =
 export const EXPLICIT_WORKFLOW_POLICY =
   'Use `run_workflow` only when the user explicitly requests a Workflow or names a Workflow. Do not infer Workflow intent from task complexity alone.';
 
+export interface WorkerActorCapacity {
+  readonly maxConcurrentThreads: number;
+  readonly activeNonRootTurns: number;
+}
+
+export function buildWorkerActorCapacityGuidance(
+  actorCapacity: WorkerActorCapacity | undefined,
+): readonly string[] {
+  if (actorCapacity === undefined) return [];
+  const availableStartSlots = Math.max(
+    0,
+    actorCapacity.maxConcurrentThreads - 1 - actorCapacity.activeNonRootTurns,
+  );
+  return [
+    `- This Actor tree has ${actorCapacity.maxConcurrentThreads} total concurrency slots; the root occupies one reserved slot, so at most ${Math.max(0, actorCapacity.maxConcurrentThreads - 1)} non-root Agents can run at once.`,
+    `- At this prompt snapshot, ${actorCapacity.activeNonRootTurns} non-root turns are active and ${availableStartSlots} child start slots are available.`,
+    `- HARD RUNTIME LIMIT FOR THIS ASSISTANT RESPONSE: emit at most ${availableStartSlots} \`spawn_agent\` calls. Calls beyond this number will be rejected; do not attempt them.`,
+    `- If the task has more independent tracks, select at most ${availableStartSlots} for the first wave. Keep the remaining tracks with the root or name them as a later refill wave after a terminal event.`,
+    '- Your visible plan and prose must not claim that you are dispatching more Agents than this response can start. Call `list_agents` before a later multi-spawn wave because capacity may have changed.',
+  ];
+}
+
+export function buildWorkerActorCapacityContract(
+  actorCapacity: WorkerActorCapacity | undefined,
+): string | undefined {
+  const guidance = buildWorkerActorCapacityGuidance(actorCapacity);
+  return guidance.length === 0
+    ? undefined
+    : ['ACTOR CAPACITY (authoritative runtime fact):', ...guidance].join('\n');
+}
+
 /**
  * Pure builder. Returns the system prompt the role-prompt entry point
  * splices in for the V2 Worker (the only active AMA role after
@@ -53,6 +84,7 @@ export function buildWorkerInstructions(
   decision: KodaXTaskRoutingDecision,
   verification: KodaXTaskVerificationContract | undefined,
   isResumeAfterReviseFailure: boolean,
+  actorCapacity?: WorkerActorCapacity,
 ): string {
   void verification; // kept on the signature for parity with legacy roles
   // FEATURE_116 follow-up — the revise-failure retrospective moved OUT of the
@@ -244,9 +276,11 @@ export function buildWorkerInstructions(
     `- Complexity: ${decision.complexity}`,
     `- Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
+  const actorCapacityContract = buildWorkerActorCapacityContract(actorCapacity);
 
   return [
     roleAck,
+    actorCapacityContract,
     planFirstContract,
     planListHygiene,
     scopeCommitment,
@@ -257,7 +291,7 @@ export function buildWorkerInstructions(
     EXECUTION_GUIDANCE,
     handoffRules,
   ]
-    .filter((part) => part.length > 0)
+    .filter((part): part is string => Boolean(part?.length))
     .join('\n\n');
 }
 

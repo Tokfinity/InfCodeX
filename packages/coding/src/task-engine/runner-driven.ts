@@ -1278,11 +1278,18 @@ async function runManagedTaskViaRunnerInner(
     } catch {
       siblingSnapshotRef.current = undefined;
     }
+    const actorTree = baseCtx.actorControl?.list();
     const ctx: ManagedRolePromptContext = {
       originalTask: prompt,
       workspace: managedWorkspace,
       capabilityContextBlock: prebuiltCapabilityContextBlock,
       ...(teamModeBlock ? { teamModeSection: teamModeBlock } : {}),
+      ...(actorTree ? {
+        actorCapacity: {
+          maxConcurrentThreads: actorTree.maxConcurrentThreads,
+          activeNonRootTurns: actorTree.activeNonRootTurns,
+        },
+      } : {}),
       // FEATURE_143 (v0.7.36): routing-notes overlay flows here so the
       // role-prompt builder can emit it as a system-prompt section.
       // Pre-FEATURE_143 this was stitched onto the user prompt head;

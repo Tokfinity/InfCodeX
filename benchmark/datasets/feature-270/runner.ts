@@ -130,7 +130,11 @@ export async function runFeature270Pilot(options: {
   const manifest = await prepareRun(options.allowGeneration);
   const specs = layer2Specs().filter((spec) => spec.alias === 'zhipu/glm51'
     && spec.repetition === 0
-    && (spec.caseId === 'parallel' || spec.caseId === 'no_workflow'));
+    && (
+      spec.caseId === 'parallel'
+      || spec.caseId === 'fresh_capacity'
+      || spec.caseId === 'no_workflow'
+    ));
   return runFixedSpecs('pilot', 'layer2', specs, manifest);
 }
 

@@ -30,6 +30,7 @@ import type {
 // FEATURE_193 (v0.7.43): MANAGED_TASK_CONTRACT_BLOCK, MANAGED_TASK_VERDICT_BLOCK,
 // and isRepoIntelligenceWorkingToolName removed — only used by deleted V1 cases.
 import {
+  buildWorkerActorCapacityContract,
   buildWorkerInstructions,
   EXPLICIT_WORKFLOW_POLICY,
   ULTRA_AGENT_POLICY,
@@ -293,12 +294,16 @@ export function createRolePrompt(
       // the generator-style execution surface.
       const workerSkillSection = generatorSkillSection;
       const isResumeAfterReviseFailure = rolePromptContext?.isResumeAfterReviseFailure === true;
+      const actorCapacityContract = buildWorkerActorCapacityContract(
+        rolePromptContext?.actorCapacity,
+      );
       const workerInstructions = buildWorkerInstructions(
         decision,
         verification,
         isResumeAfterReviseFailure,
       );
       return [
+        actorCapacityContract,
         // Worker is its own role announcement, but we still emit the
         // canonical decisionSummary + originalTask / agent / contract
         // sections so the LLM sees the same machine-readable context

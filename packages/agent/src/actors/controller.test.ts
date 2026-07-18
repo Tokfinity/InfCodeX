@@ -527,6 +527,63 @@ describe('F270 actor tree and scheduler', () => {
     });
   });
 
+  it('atomically installs cancellation before a durable start becomes launchable', async () => {
+    let releaseStartSave: (() => void) | undefined;
+    let startSaveEntered: (() => void) | undefined;
+    let saveCount = 0;
+    const startSaveStarted = new Promise<void>((resolve) => { startSaveEntered = resolve; });
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save() {
+          saveCount += 1;
+          if (saveCount !== 1) return;
+          startSaveEntered?.();
+          await new Promise<void>((resolve) => { releaseStartSave = resolve; });
+        },
+      },
+    });
+
+    const spawning = controller.spawn('/root', { taskName: 'racing', objective: 'Race.' });
+    await startSaveStarted;
+    const interrupting = controller.interrupt('/root', '/root/racing', 'cancel before launch');
+    releaseStartSave?.();
+
+    const [turn] = await Promise.all([spawning, interrupting]);
+    await settle();
+
+    expect(executor.pending).toHaveLength(1);
+    expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted', error: 'cancel before launch',
+    });
+  });
+
+  it('does not persist a late executor completion after interruption', async () => {
+    const save = vi.fn(async () => undefined);
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: { async load() { return undefined; }, save },
+    });
+    const turn = await controller.spawn('/root', { taskName: 'late', objective: 'Finish late.' });
+    await controller.interrupt('/root', turn.actorPath, 'superseded');
+    const savesAfterInterrupt = save.mock.calls.length;
+    const revisionAfterInterrupt = controller.list('/root').revision;
+
+    executor.pending[0]?.resolve({ output: 'obsolete result' });
+    await settle();
+    await settle();
+
+    expect(save).toHaveBeenCalledTimes(savesAfterInterrupt);
+    expect(controller.list('/root').revision).toBe(revisionAfterInterrupt);
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted', error: 'superseded',
+    });
+  });
+
   it('binds caller authority so model-facing inputs cannot forge an actor path', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
@@ -555,6 +612,21 @@ describe('F270 actor tree and scheduler', () => {
     expect(closed.revision).toBeGreaterThan(before);
     expect(executor.pending[0]?.input.signal.aborted).toBe(true);
     expect(executor.pending[1]?.input.signal.aborted).toBe(true);
+  });
+
+  it('makes a closed actor inert for both mailbox directions', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'closed', objective: 'Wait.' });
+    const drainClosedMailbox = executor.pending[0]?.input.drainMailbox;
+    await controller.close('/root', '/root/closed');
+
+    await expect(controller.send('/root', '/root/closed', 'Do not queue this.'))
+      .rejects.toMatchObject({ code: 'actor_closed' });
+    await expect(controller.send('/root/closed', '/root', 'Do not send this.'))
+      .rejects.toMatchObject({ code: 'actor_closed' });
+    await expect(drainClosedMailbox?.()).rejects.toMatchObject({ code: 'actor_closed' });
+    expect(controller.get('/root', '/root/closed').mailbox).toEqual([]);
   });
 
   it('conflicts a distinct concurrent follow-up submitted against the same idle revision', async () => {

@@ -14,6 +14,7 @@ import {
 describe('runtime daemon protocol schema', () => {
   it('covers every daemon protocol method with params and result schemas', () => {
     expect(Object.keys(RUNTIME_DAEMON_METHOD_SCHEMAS).sort()).toEqual([...RUNTIME_DAEMON_METHODS].sort());
+    expect(RUNTIME_DAEMON_PROTOCOL_SCHEMA_JSON).not.toContain('agentTasks.');
 
     for (const method of RUNTIME_DAEMON_METHODS) {
       const schema = RUNTIME_DAEMON_METHOD_SCHEMAS[method];

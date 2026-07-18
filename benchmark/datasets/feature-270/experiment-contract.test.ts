@@ -14,7 +14,7 @@ describe('FEATURE_270 experiment contract', () => {
   it('freezes the preregistered call, token, timeout, and spend ceilings', () => {
     expect(FEATURE_270_LIMITS).toEqual({
       layer2: {
-        maxProviderCalls: 60,
+        maxProviderCalls: 72,
         maxCallsPerCell: 1,
         maxRoundsPerCell: 1,
         maxOutputTokensPerCall: 6_000,

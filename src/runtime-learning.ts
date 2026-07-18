@@ -39,21 +39,26 @@ export interface CreateRuntimeLearningOwnerOptions {
 export function createRuntimeLearningOwner(
   options: CreateRuntimeLearningOwnerOptions,
 ): RuntimeLearningService {
-  const clients = new Map<string, RuntimeLearningService>();
+  const rootService = createLearningCenterService({
+    rootDir: options.rootDir,
+    clientIdentity: learningClientFileKey(options.defaultClientIdentity),
+    proposalStores: options.proposalStores,
+  });
+  let ready: Promise<void> | undefined;
+  const ensureReady = (): Promise<void> => {
+    ready ??= rootService.initialize();
+    return ready;
+  };
   const forClient = (identity: string): RuntimeLearningService => {
     const key = learningClientFileKey(identity);
-    const existing = clients.get(key);
-    if (existing) return existing;
     const service = createLearningCenterService({
       rootDir: options.rootDir,
       clientIdentity: key,
       proposalStores: options.proposalStores,
     });
-    const facade = createInitializedFacade(service);
-    clients.set(key, facade);
-    return facade;
+    return createInitializedFacade(service, ensureReady);
   };
-  const defaultFacade = forClient(options.defaultClientIdentity);
+  const defaultFacade = createInitializedFacade(rootService, ensureReady);
   return Object.assign(defaultFacade, { forClient }) satisfies RuntimeLearningOwner;
 }
 
@@ -72,10 +77,11 @@ export function learningClientFileKey(identity: string): string {
 
 function createInitializedFacade(
   service: ReturnType<typeof createLearningCenterService>,
+  sharedReady?: () => Promise<void>,
 ): RuntimeLearningService {
   let ready: Promise<void> | undefined;
   const ensureReady = (): Promise<void> => {
-    ready ??= service.initialize();
+    ready ??= sharedReady?.() ?? service.initialize();
     return ready;
   };
   return {
@@ -83,7 +89,7 @@ function createInitializedFacade(
     get: async (nameOrSlug) => { await ensureReady(); return service.get(nameOrSlug); },
     getSnapshot: async () => { await ensureReady(); return service.getSnapshot(); },
     events: async (afterRevision) => { await ensureReady(); return service.events(afterRevision); },
-    subscribe: (options) => subscribeAfter(ensureReady(), service, options),
+    subscribe: (options) => subscribeWhenReady(ensureReady(), service, options),
     acknowledge: async (nameOrSlug) => { await ensureReady(); await service.acknowledge(nameOrSlug); },
     snooze: async (nameOrSlug, until) => { await ensureReady(); await service.snooze(nameOrSlug, until); },
     reject: async (nameOrSlug) => { await ensureReady(); await service.reject(nameOrSlug); },
@@ -95,11 +101,31 @@ function createInitializedFacade(
   };
 }
 
-async function* subscribeAfter(
+function subscribeWhenReady(
   ready: Promise<void>,
   service: ReturnType<typeof createLearningCenterService>,
   options: LearningSubscribeOptions | undefined,
 ): AsyncIterable<LearningEvent> {
-  await ready;
-  yield* service.subscribe(options);
+  return {
+    [Symbol.asyncIterator]() {
+      let closed = false;
+      let active: AsyncIterator<LearningEvent> | undefined;
+      const opening = ready.then(() => {
+        if (closed) return undefined;
+        active = service.subscribe(options)[Symbol.asyncIterator]();
+        return active;
+      });
+      return {
+        async next(): Promise<IteratorResult<LearningEvent>> {
+          const opened = await opening;
+          if (closed || !opened) return { done: true, value: undefined };
+          return opened.next();
+        },
+        async return(): Promise<IteratorResult<LearningEvent>> {
+          closed = true;
+          return active?.return?.() ?? { done: true, value: undefined };
+        },
+      };
+    },
+  };
 }

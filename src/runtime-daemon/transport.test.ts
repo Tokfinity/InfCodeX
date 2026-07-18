@@ -15,6 +15,7 @@ import {
   type RuntimeDaemonFrame,
   type RuntimeDaemonNotification,
   type RuntimeDaemonRequest,
+  type RuntimeDaemonWireMethod,
 } from './protocol.js';
 import {
   createRuntimeDaemonFrameParser,
@@ -105,7 +106,7 @@ describe('runtime daemon transport', () => {
 
   it('sends requests, resolves responses, and fans out notifications', async () => {
     const endpoint = await makeTestEndpoint();
-    const requests: RuntimeDaemonRequest[] = [];
+    const requests: RuntimeDaemonRequest<RuntimeDaemonWireMethod>[] = [];
     const server = await listen(endpoint, (socket) => {
       const parser = createRuntimeDaemonFrameParser((frame) => {
         if (!isRuntimeDaemonRequest(frame)) return;

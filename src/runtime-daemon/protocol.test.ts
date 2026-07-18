@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  RUNTIME_DAEMON_METHODS,
   createRuntimeDaemonErrorResponse,
   createRuntimeDaemonNotification,
   createRuntimeDaemonRequest,
@@ -52,6 +53,18 @@ describe('runtime daemon protocol frames', () => {
       kind: 'error',
       error: { code: 'invalid_frame' },
     });
+  });
+
+  it('recognizes retired Agent task methods only so the daemon can return an upgrade error', () => {
+    const request = {
+      ...createRuntimeDaemonRequest('req-legacy-agent', 'ping'),
+      method: 'agentTasks.start',
+      params: {},
+    };
+
+    expect(isRuntimeDaemonRequest(request)).toBe(true);
+    expect(parseRuntimeDaemonFrame(JSON.stringify(request))).toEqual(request);
+    expect(RUNTIME_DAEMON_METHODS).not.toContain('agentTasks.start');
   });
 
   it('creates and validates success and error responses', () => {

@@ -160,6 +160,30 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 - [ ] root 可准确操作名为 `parent` 的 child，非 root 的 `parent` 仍解析为直接父级；
   模型仍只看到 7 个 canonical collaboration tools，永久 close 只存在于可信宿主。
 
+### TC-009：启动竞态、closed 语义、协议升级与容量承诺
+
+1. 使用可暂停的 actor snapshot store，让 `spawn_agent` 已提交 running Turn 但启动
+   save 尚未返回；此时并发执行 `interrupt_agent`，再释放 save。
+2. 永久 close 一个 Actor，分别尝试向它发消息、从它发消息、drain mailbox 和
+   follow-up。
+3. 用新 SDK 连接一个不声明 `actorControlPlane v1` 的旧 daemon；再让旧 SDK 的
+   `agentTasks.start` 请求连接新 daemon。
+4. 在默认 4 总槽位、0 active child 的新请求中给出 5 条独立审查轨道，并观察
+   Worker 的口头承诺与第一批 `spawn_agent` 调用数；再完成一条并观察 refill。
+5. 分别输入“请用工作流完成审查”和“请优化这个复杂流程并行检查三个模块”。
+
+预期：
+
+- [ ] executor 未启动或只拿到同一个已 aborted signal；Turn 保持 interrupted，迟到
+  completion 不增加 revision、不写 snapshot。
+- [ ] closed Actor 仍可审计历史，但所有 mailbox 双向操作和新执行都返回
+  `actor_closed`，mailbox 不增长。
+- [ ] 新 SDK 在发 RPC 前给出升级并重启 daemon 的明确错误；新 daemon 对旧
+  `agentTasks.*` 只返回 `client_upgrade_required`，不透明 alias、不执行旧生命周期。
+- [ ] Worker 在首轮明确看到 4 总槽/3 child start slots，最多承诺并派发 3 个；其余
+  由 root 本地承担或等待终态后 refill，不出现先承诺 5 个再解释失败的过程。
+- [ ] 明确“工作流”获得 `run_workflow`；只有“流程/复杂/并行”不会触发 Workflow。
+
 ## 自动化与评测基线（2026-07-18）
 
 - `npm run build`：通过。
@@ -176,6 +200,11 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
   89.47%、branches 82.01%；完整 build 与 2/2 零付费 manifest eval 通过。
 - F270 eval harness + shared one-shot boundary：65/65 通过；新
   dataset/runner statement coverage 为 97.00%，严格 TypeScript 校验通过。
+- fresh-capacity follow-up：Actor/Learning/prompt 103/103、daemon/SDK 94/94、
+  eval contract/fake provider 24/24、fallback capacity wiring 1/1 通过；新增
+  SDK capability/learning cancellation 选择性测试通过。
+- follow-up 覆盖组：核心 Actor/Learning/prompt 90.62% lines、80.86%
+  branches；daemon/Runtime Learning 89.34% lines、80.23% branches。
 - manifest-only eval：2/2 通过，三个付费 stage 默认跳过；raw root 位于 OS
   临时目录 `kodax-eval-dumps/feature-270/<revision>/`。
 - 清洁隔离工作树的全量 suite：10,053 通过、52 跳过、12 失败。12 项来自
@@ -194,23 +223,35 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
 npx vitest run -c vitest.eval.config.ts tests/feature-270.eval.ts
 ```
 
-本次已按顺序完成四调用 pilot、Layer 2 盲审/解盲、Layer 3 盲审/解盲；未添加
-自动重试。原始证据位于
+原始五 case 合同已按顺序完成四调用 pilot、Layer 2 盲审/解盲、Layer 3
+盲审/解盲；未添加自动重试。原始证据位于
 `kodax-eval-dumps/feature-270/cd9f0e4168a02279/`。
+
+2026-07-18 当前六 case 合同新增 `fresh_capacity`，pilot 为 6 calls，完整
+Layer 2 上限相应为 72 calls。首轮 pilot 暴露容量规则位置不够显著，treatment
+发出 5 个 starts；将共享硬容量契约提升到 full/fallback 系统提示首段后，最小
+affected re-pilot 在 revision `4d857d43e8edf234` 上通过：treatment 的
+`parallel=3`、`fresh_capacity=3`、`no_workflow=0 forbidden Workflow`，共
+50,967 tokens，估算 `$0.0027499`。本次诊断时为定位首轮失败已查看 arm 标签，
+因此不把 follow-up re-pilot 声称为新的严格盲审或完整 Layer 2 结论。
 
 ## 测试总结
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 8 | - | - | - |
+| 9 | - | - | - |
 
-**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 8
+**测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 9
 个人工用例仍待发布测试人员执行并签字。
 
-**发现的问题**：自动化未发现可复现的 F270 产品回退；已知残余行为是部分模型
-会先读取具体 diff/file 再启动并行 Agent，以及一个 Layer 3 旅程多一次树检查。
-二者均未越过容量、误启 Workflow 或重放已否定计划。
+**发现的问题**：follow-up 首轮复现了“新请求先承诺/尝试 5 个、容量层只接纳
+3 个”的体验缺口，已通过 authoritative first-section capacity contract 修复并
+由最小 re-pilot 验证。已知残余行为是部分模型会先读取具体 diff/file 再启动
+并行 Agent，以及一个 Layer 3 旅程多一次树检查；两者均未越过容量、误启
+Workflow 或重放已否定计划。
 
 **证据位置**：评测 raw dump 位于
 `kodax-eval-dumps/feature-270/cd9f0e4168a02279/`；人工 actor
 snapshot/event、迁移前后配置与终端记录待执行时补充。
+fresh-capacity follow-up raw dump 位于
+`kodax-eval-dumps/feature-270/4d857d43e8edf234/`。

@@ -666,7 +666,10 @@ describe('runtime daemon dispatcher', () => {
       dispatcher.close();
 
       const implemented = isRuntimeDaemonSuccessResponse(response) || (
-        (method === 'daemon.management.get' || method === 'daemon.rollbackToInline')
+        (
+          method === 'daemon.management.get'
+          || method === 'daemon.rollbackToInline'
+        )
         && response.error.code === 'client_upgrade_required'
       );
       expect(
@@ -908,6 +911,7 @@ describe('runtime daemon dispatcher', () => {
       expect(capabilities.result).toMatchObject({
         events: true,
         contextDiagnostics: true,
+        actorControlPlane: { version: 1, methodNamespace: 'agents' },
       });
     }
     if (isRuntimeDaemonSuccessResponse(activeEntry)) {
@@ -919,6 +923,26 @@ describe('runtime daemon dispatcher', () => {
     if (isRuntimeDaemonSuccessResponse(removedMcp)) {
       expect(removedMcp.result).toBe(true);
     }
+  });
+
+  it('returns an explicit upgrade path for the retired agentTasks namespace', async () => {
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle({
+      ...createRuntimeDaemonRequest('req-retired-agent-tasks', 'ping'),
+      method: 'agentTasks.start',
+      params: {},
+    });
+
+    expect(response).toMatchObject({
+      kind: 'error',
+      error: {
+        code: 'client_upgrade_required',
+        message: expect.stringContaining('actorControlPlane v1'),
+      },
+    });
+    dispatcher.close();
   });
 
   it('routes run.start and run.await through the hosted runtime', async () => {
@@ -2102,6 +2126,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           state: 'completed' as const,
           output: 'done',
           artifacts: [],
+          progress: [],
         };
       },
       async events() { return []; },

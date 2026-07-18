@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   LearningCapabilityError,
@@ -13,6 +13,7 @@ import {
   type LearnedCapabilityRecord,
   type LearningActionDriver,
 } from './index.js';
+import { LearnedAreaStore } from './learned-area-store.js';
 
 const tempDirs: string[] = [];
 
@@ -95,6 +96,92 @@ describe('Learning Center identity and lifecycle', () => {
     await expect(nextEvent).resolves.toMatchObject({
       done: false,
       value: { eventId: 'lc_release_notes-r1-ready' },
+    });
+    await iterator.return?.();
+  });
+
+  it('rechecks the durable cursor after registering a subscriber waiter', async () => {
+    const rootDir = await createArea();
+    const service = createLearningCenterService({ rootDir, clientIdentity: 'cli-a' });
+    await service.initialize();
+    const original = LearnedAreaStore.prototype.listEvents;
+    let releaseFirstRead: (() => void) | undefined;
+    let firstReadEntered: (() => void) | undefined;
+    let reads = 0;
+    const firstReadStarted = new Promise<void>((resolve) => { firstReadEntered = resolve; });
+    const spy = vi.spyOn(LearnedAreaStore.prototype, 'listEvents').mockImplementation(async function () {
+      reads += 1;
+      const events = await original.call(this);
+      if (reads === 1) {
+        firstReadEntered?.();
+        await new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+      }
+      return events;
+    });
+    const iterator = service.subscribe()[Symbol.asyncIterator]();
+    const nextEvent = iterator.next();
+    await firstReadStarted;
+
+    await service.record(candidate());
+    releaseFirstRead?.();
+    const outcome = await Promise.race([
+      nextEvent.then((result) => ({ kind: 'event' as const, result })),
+      new Promise<{ readonly kind: 'timeout' }>((resolve) => {
+        setTimeout(() => resolve({ kind: 'timeout' }), 100);
+      }),
+    ]);
+    if (outcome.kind === 'timeout') {
+      await service.record(candidate({
+        lifecycle: 'archived', revision: 2, updatedAt: '2026-07-17T00:01:00.000Z',
+      }));
+      await nextEvent;
+    }
+    await iterator.return?.();
+    spy.mockRestore();
+
+    expect(outcome).toMatchObject({
+      kind: 'event',
+      result: { done: false, value: { eventId: 'lc_release_notes-r1-ready' } },
+    });
+  });
+
+  it('cancels a pending subscriber waiter when the iterator is returned', async () => {
+    const rootDir = await createArea();
+    const service = createLearningCenterService({ rootDir, clientIdentity: 'cli-a' });
+    await service.initialize();
+    const iterator = service.subscribe()[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const returned = await Promise.race([
+      iterator.return?.().then(() => 'returned' as const),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 100)),
+    ]);
+
+    expect(returned).toBe('returned');
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  it('serializes concurrent subscriber reads without delivering one event twice', async () => {
+    const rootDir = await createArea();
+    const service = createLearningCenterService({ rootDir, clientIdentity: 'cli-a' });
+    await service.initialize();
+    const iterator = service.subscribe()[Symbol.asyncIterator]();
+    const first = iterator.next();
+    const second = iterator.next();
+
+    await service.record(candidate());
+    await expect(first).resolves.toMatchObject({
+      done: false,
+      value: { eventId: 'lc_release_notes-r1-ready' },
+    });
+    await service.record(candidate({
+      lifecycle: 'archived', revision: 2, updatedAt: '2026-07-17T00:01:00.000Z',
+    }));
+
+    await expect(second).resolves.toMatchObject({
+      done: false,
+      value: { eventId: 'lc_release_notes-r2-archived' },
     });
     await iterator.return?.();
   });

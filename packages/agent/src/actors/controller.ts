@@ -72,6 +72,7 @@ interface StartPlan {
   readonly actor: AgentActor;
   readonly turn: AgentTurn;
   readonly createdActor: boolean;
+  readonly abortController: AbortController;
 }
 
 const UNLIMITED_BUDGET: AgentBudgetPort = {
@@ -539,12 +540,22 @@ export class AgentActorController {
       this.scheduler.release(turn.turnId);
       throw new AgentBudgetExhaustedError(admission.fact.reason);
     }
-    this.commitStart(actor, turn, createdActor);
-    return { actor: this.requireActor(actor.path), turn: this.requireTurn(turn.turnId), createdActor };
+    const abortController = this.commitStart(actor, turn, createdActor);
+    return {
+      actor: this.requireActor(actor.path),
+      turn: this.requireTurn(turn.turnId),
+      createdActor,
+      abortController,
+    };
   }
 
-  private commitStart(actor: AgentActor, turn: AgentTurn, createdActor: boolean): void {
+  private commitStart(
+    actor: AgentActor,
+    turn: AgentTurn,
+    createdActor: boolean,
+  ): AbortController {
     const timestamp = this.now();
+    const abortController = new AbortController();
     const runningTurn: AgentTurn = { ...turn, state: 'running', startedAt: timestamp, revision: 2 };
     const current = createdActor ? actor : this.requireActor(actor.path);
     this.actors.set(actor.path, {
@@ -556,14 +567,16 @@ export class AgentActorController {
       revision: current.revision + 1,
     });
     this.turns.set(turn.turnId, runningTurn);
+    this.abortControllers.set(turn.turnId, abortController);
     if (createdActor) this.mailboxes.set(actor.path, []);
     if (createdActor) this.appendEvent('actor_spawned', actor.path, turn.turnId, actor.parentPath);
     this.appendEvent('turn_started', actor.path, turn.turnId, actor.parentPath);
+    return abortController;
   }
 
   private launch(plan: StartPlan): void {
-    const abort = new AbortController();
-    this.abortControllers.set(plan.turn.turnId, abort);
+    const abort = plan.abortController;
+    if (abort.signal.aborted) return;
     const executor = this.options.executorFor?.(plan.actor.kind) ?? this.options.executor ?? EMPTY_EXECUTOR;
     const priorTurns = plan.actor.turnIds
       .filter((turnId) => turnId !== plan.turn.turnId)
@@ -597,20 +610,26 @@ export class AgentActorController {
     artifactDetails?: readonly AgentArtifactDescriptor[],
     structured?: AgentMetadataValue,
   ): Promise<void> {
-    await this.mutate(() => this.finishTurn(turnId, 'completed', {
-      output,
-      artifacts,
-      ...(artifactDetails === undefined ? {} : { artifactDetails }),
-      ...(structured === undefined ? {} : { structured }),
-    }));
+    await this.mutate(() => {
+      const turn = this.turns.get(turnId);
+      if (!turn || isTerminal(turn.state)) return false;
+      this.finishTurn(turnId, 'completed', {
+        output,
+        artifacts,
+        ...(artifactDetails === undefined ? {} : { artifactDetails }),
+        ...(structured === undefined ? {} : { structured }),
+      });
+      return true;
+    }, (changed) => changed);
   }
 
   private async failExecution(turnId: string, error: unknown): Promise<void> {
     await this.mutate(() => {
       const turn = this.turns.get(turnId);
-      if (!turn || isTerminal(turn.state)) return;
+      if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'failed', { error: error instanceof Error ? error.message : String(error) });
-    });
+      return true;
+    }, (changed) => changed);
   }
 
   private finishTurn(
@@ -652,9 +671,15 @@ export class AgentActorController {
   }
 
   private async drainMailbox(actorPath: string): Promise<readonly AgentMailboxMessage[]> {
+    if (this.requireActor(actorPath).state === 'closed') {
+      throw new AgentControlError('actor_closed', `${actorPath} is closed`);
+    }
     if (this.unreadMailbox(actorPath).length === 0) return [];
     return this.mutate(() => {
       const actor = this.requireActor(actorPath);
+      if (actor.state === 'closed') {
+        throw new AgentControlError('actor_closed', `${actorPath} is closed`);
+      }
       const unread = this.unreadMailbox(actorPath);
       if (unread.length > 0) {
         this.actors.set(actorPath, {
@@ -677,7 +702,7 @@ export class AgentActorController {
   private async recordProgress(turnId: string, update: AgentProgressUpdate): Promise<void> {
     await this.mutate(() => {
       const turn = this.requireTurn(turnId);
-      if (isTerminal(turn.state)) return;
+      if (isTerminal(turn.state)) return false;
       const summary = boundedText(update.summary.trim(), MAX_PROGRESS_SUMMARY_LENGTH).text;
       if (summary.length === 0) {
         throw new AgentControlError('invalid_message', 'progress summary is required');
@@ -695,7 +720,8 @@ export class AgentActorController {
         revision: turn.revision + 1,
       });
       this.appendEvent('turn_progress', turn.actorPath, turnId, undefined, progress);
-    });
+      return true;
+    }, (changed) => changed);
   }
 
   private resolveForwarding(
@@ -795,6 +821,12 @@ export class AgentActorController {
   private assertMessagePermission(callerPath: string, targetPath: string): void {
     const caller = this.requireActor(callerPath);
     const target = this.requireActor(targetPath);
+    if (caller.state === 'closed') {
+      throw new AgentControlError('actor_closed', `${callerPath} is closed`);
+    }
+    if (target.state === 'closed') {
+      throw new AgentControlError('actor_closed', `${targetPath} is closed`);
+    }
     const allowed = caller.path === ROOT_PATH
       || target.path === caller.parentPath
       || target.parentPath === caller.path
@@ -927,7 +959,10 @@ export class AgentActorController {
     this.mailboxes.set(ROOT_PATH, []);
   }
 
-  private async mutate<T>(operation: () => T | Promise<T>): Promise<T> {
+  private async mutate<T>(
+    operation: () => T | Promise<T>,
+    shouldCommit: (result: T) => boolean = () => true,
+  ): Promise<T> {
     const previousTail = this.mutationTail;
     let release: () => void = () => {};
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
@@ -937,6 +972,11 @@ export class AgentActorController {
     const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
     try {
       const result = await operation();
+      if (!shouldCommit(result)) {
+        this.restore(before);
+        replaceMap(this.abortControllers, [...beforeAborts.entries()]);
+        return result;
+      }
       const expectedRevision = this.revision;
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);

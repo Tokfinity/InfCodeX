@@ -628,6 +628,7 @@ export function buildRunnerAgentChain(
       //
       // 1. Build prompt — contextFactory reads pendingFailedResetRef.current
       //    and writes ctx.isResumeAfterReviseFailure when role==='worker'.
+      const actorTree = promptContext ? undefined : ctx.actorControl?.list();
       const resolved = resolveRoleInstructions(
         'worker',
         WORKER_AGENT_NAME,
@@ -635,6 +636,10 @@ export function buildRunnerAgentChain(
         recorder,
         promptContext,
         verification,
+        actorTree ? {
+          maxConcurrentThreads: actorTree.maxConcurrentThreads,
+          activeNonRootTurns: actorTree.activeNonRootTurns,
+        } : undefined,
       );
       // 2. Visual reset + ref clear. Mirrors Generator's same-turn
       //    consumption (kept identical so the retry UX is bit-for-bit

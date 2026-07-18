@@ -18,6 +18,7 @@ import path from 'node:path';
 import {
   buildAssistantMessageFromLlmResult,
   ContextCapacityError,
+  createAgentActorController,
 } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
@@ -1327,6 +1328,30 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(result.success).toBe(true);
     expect(result.lastText).toBe('Hello, world.');
     expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
+  });
+
+  it('injects the current Actor capacity into the production Worker prompt', async () => {
+    const controller = await createAgentActorController();
+    const options = makeOptions();
+    options.context = {
+      ...options.context,
+      actorControl: controller.bind('/root'),
+    };
+    let systemPrompt = '';
+
+    await runManagedTaskViaRunner(
+      options,
+      'Review five independent dimensions.',
+      async (_transcript, _tools, system) => {
+        systemPrompt = system;
+        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    );
+
+    expect(systemPrompt).toContain('This Actor tree has 4 total concurrency slots');
+    expect(systemPrompt).toContain('0 non-root turns are active');
+    expect(systemPrompt).toContain('3 child start slots are available');
+    expect(systemPrompt).toMatch(/^ACTOR CAPACITY \(authoritative runtime fact\):/);
   });
 
   it('records todo drift telemetry and injects the next-turn reminder through runner wiring', async () => {

@@ -402,6 +402,24 @@ core implementation files reach 89.47% statements/lines and 82.01% branches;
 the complete package/bundle/Worker/DTS build and 2/2 zero-provider manifest
 eval also pass.
 
+The 2026-07-18 adversarial concurrency follow-up closed two final runtime
+classes without restoring a legacy surface. F270 now installs each Turn's
+AbortController in the same atomic start commit, makes closed Actors inert for
+mailbox send/receive, skips terminal executor no-op persistence, advertises
+`actorControlPlane v1`, and returns explicit SDK-upgrade/daemon-restart errors
+for incompatible peers. The full and fallback Worker prompts now begin with an
+authoritative current total/active Actor-capacity contract before any spawn
+wave is announced, and explicit Workflow intent now
+recognizes the product word in English, Chinese, Japanese, and Korean without
+guessing from complexity. F266 now uses cursor read-register-recheck,
+cancellable subscription waiters, and owner-scoped initialization without a
+principal-to-facade cache. PID-reuse stale-lock handling remains deliberately
+fail-closed pending a portable process-start identity contract. A six-call
+`zhipu/glm51` follow-up pilot distinguishes the repaired prompt: treatment
+starts three Actors for a fresh five-track request while the historical
+baseline starts five; this diagnostic re-pilot does not replace the original
+authorized Layer 2/3 result.
+
 Recent completion notes:
 
 `267`, `268`, and `269` shipped together in `v0.7.69`. The release provides the

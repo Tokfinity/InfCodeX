@@ -511,10 +511,16 @@ describe('F270 — explicit Workflow activation policy', () => {
   });
 
   it('teaches Actor completion and capacity recovery semantics', () => {
-    const rendered = renderWorker();
+    const rendered = renderWorker({
+      actorCapacity: { maxConcurrentThreads: 4, activeNonRootTurns: 1 },
+    });
     expect(rendered).toContain('<agent-completed path="..." turn_id="..." state="completed">');
     expect(rendered).toContain('use the inline result directly');
     expect(rendered).toContain('Do not call `agent_output` speculatively');
     expect(rendered).toContain('do not retry `spawn_agent` while the reported capacity is still full');
+    expect(rendered).toContain('4 total concurrency slots');
+    expect(rendered).toContain('2 child start slots are available');
+    expect(rendered).toMatch(/^ACTOR CAPACITY \(authoritative runtime fact\):/);
+    expect(rendered).toContain('emit at most 2 `spawn_agent` calls');
   });
 });

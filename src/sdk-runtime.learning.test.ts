@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createLearningCenterService } from '@kodax-ai/agent';
-import { createRuntimeLearningOwner } from './runtime-learning.js';
+import { bindRuntimeLearningClient, createRuntimeLearningOwner } from './runtime-learning.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 
 const tempDirs: string[] = [];
@@ -44,6 +44,36 @@ describe('runtime.learning inline facade', () => {
     });
 
     await expect(access(rootDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not retain one facade per transient daemon principal', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-facades-'));
+    tempDirs.push(homeDir);
+    const owner = createRuntimeLearningOwner({
+      rootDir: join(homeDir, '.kodax', 'learned'),
+      defaultClientIdentity: 'default-client',
+    });
+
+    const first = bindRuntimeLearningClient(owner, 'transient-principal');
+    const second = bindRuntimeLearningClient(owner, 'transient-principal');
+
+    expect(second).not.toBe(first);
+    await first.getSnapshot();
+    await second.getSnapshot();
+  });
+
+  it('cancels a lazy subscription before initialization installs an active iterator', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-cancel-'));
+    tempDirs.push(homeDir);
+    const owner = createRuntimeLearningOwner({
+      rootDir: join(homeDir, '.kodax', 'learned'),
+      defaultClientIdentity: 'default-client',
+    });
+    const client = bindRuntimeLearningClient(owner, 'disconnecting-principal');
+    const iterator = client.subscribe()[Symbol.asyncIterator]();
+
+    await expect(iterator.return?.()).resolves.toEqual({ done: true, value: undefined });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
   it('persists a stable client cursor independently from other clients', async () => {

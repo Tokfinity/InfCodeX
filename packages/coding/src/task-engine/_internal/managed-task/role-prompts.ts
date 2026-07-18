@@ -18,6 +18,10 @@ import type {
   KodaXTaskRole,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
+import {
+  buildWorkerActorCapacityContract,
+  type WorkerActorCapacity,
+} from '../../../agents/worker-role-prompt.js';
 import { createRolePrompt } from './role-prompt.js';
 import type { RunnerChainPromptContext, VerdictRecorder } from './types.js';
 
@@ -61,12 +65,16 @@ export function resolveRoleInstructions(
   recorder: VerdictRecorder,
   promptContext: RunnerChainPromptContext | undefined,
   verification: KodaXTaskVerificationContract | undefined,
+  fallbackActorCapacity?: WorkerActorCapacity,
 ): string {
   if (!promptContext) {
     // Legacy minimal-instructions path for tests / topology-only calls.
     // FEATURE_193 (v0.7.43): removed role === 'generator' skillMap append —
     // generator role deleted along with V1 chain.
-    return fallback;
+    const capacityContract = buildWorkerActorCapacityContract(fallbackActorCapacity);
+    return capacityContract === undefined
+      ? fallback
+      : [capacityContract, '', fallback].join('\n');
   }
   const ctx = promptContext.contextFactory
     ? promptContext.contextFactory(role, recorder)

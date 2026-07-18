@@ -52,7 +52,7 @@ export interface LearningCenterService {
 }
 
 interface EventWaiter {
-  readonly resolve: (event: LearningEvent) => void;
+  readonly resolve: (event: LearningEvent | undefined) => void;
 }
 
 const EVENT_HUBS = new Map<string, Set<EventWaiter>>();
@@ -140,17 +140,12 @@ export class FileLearningCenterService implements LearningCenterService {
     return (await this.store.listEvents()).filter((event) => event.sequence > afterRevision);
   }
 
-  async *subscribe(options: LearningSubscribeOptions = {}): AsyncIterable<LearningEvent> {
-    const events = await this.store.listEvents();
-    for (const event of events) {
-      if (event.sequence > (options.afterRevision ?? 0)) yield event;
-    }
-    while (true) {
-      yield await new Promise<LearningEvent>((resolve) => {
-        const waiter: EventWaiter = { resolve };
-        this.waiters.add(waiter);
-      });
-    }
+  subscribe(options: LearningSubscribeOptions = {}): AsyncIterable<LearningEvent> {
+    return new LearningEventSubscription(
+      this.store,
+      this.waiters,
+      options.afterRevision ?? 0,
+    );
   }
 
   async acknowledge(nameOrSlug: string): Promise<void> {
@@ -382,6 +377,85 @@ export class FileLearningCenterService implements LearningCenterService {
       'capability_not_found',
       `F224 proposal owner was not found: ${proposalId}`,
     );
+  }
+}
+
+class LearningEventSubscription implements AsyncIterableIterator<LearningEvent> {
+  private cursor: number;
+  private closed = false;
+  private pendingWaiter: EventWaiter | undefined;
+  private nextQueue: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly store: LearnedAreaStore,
+    private readonly waiters: Set<EventWaiter>,
+    afterRevision: number,
+  ) {
+    if (!Number.isSafeInteger(afterRevision) || afterRevision < 0) {
+      throw new LearningCapabilityError('invalid_record', 'learning event revision is invalid');
+    }
+    this.cursor = afterRevision;
+  }
+
+  [Symbol.asyncIterator](): AsyncIterableIterator<LearningEvent> {
+    return this;
+  }
+
+  next(): Promise<IteratorResult<LearningEvent>> {
+    const result = this.nextQueue.then(() => this.readNext());
+    this.nextQueue = result.then(
+      () => undefined,
+      () => { this.closed = true; },
+    );
+    return result;
+  }
+
+  private async readNext(): Promise<IteratorResult<LearningEvent>> {
+    while (!this.closed) {
+      const existing = (await this.store.listEvents()).find((event) => event.sequence > this.cursor);
+      if (this.closed) break;
+      if (existing) return this.deliver(existing);
+
+      const event = await this.registerAndRecheck();
+      if (this.closed || !event) break;
+      if (event.sequence <= this.cursor) continue;
+      return this.deliver(event);
+    }
+    return { done: true, value: undefined };
+  }
+
+  async return(): Promise<IteratorResult<LearningEvent>> {
+    this.closed = true;
+    const waiter = this.pendingWaiter;
+    this.pendingWaiter = undefined;
+    if (waiter) {
+      this.waiters.delete(waiter);
+      waiter.resolve(undefined);
+    }
+    return { done: true, value: undefined };
+  }
+
+  private async registerAndRecheck(): Promise<LearningEvent | undefined> {
+    let waiter: EventWaiter | undefined;
+    const waiting = new Promise<LearningEvent | undefined>((resolve) => {
+      waiter = { resolve };
+      this.pendingWaiter = waiter;
+      this.waiters.add(waiter);
+    });
+    try {
+      const rechecked = (await this.store.listEvents()).find((event) => event.sequence > this.cursor);
+      if (this.closed) return undefined;
+      if (rechecked) return rechecked;
+      return await waiting;
+    } finally {
+      if (waiter) this.waiters.delete(waiter);
+      if (this.pendingWaiter === waiter) this.pendingWaiter = undefined;
+    }
+  }
+
+  private deliver(event: LearningEvent): IteratorResult<LearningEvent> {
+    this.cursor = event.sequence;
+    return { done: false, value: event };
   }
 }
 

@@ -116,6 +116,19 @@ export class RuntimeTransportBoundaryError extends Error {
   }
 }
 
+export class RuntimeDaemonUpgradeRequiredError extends Error {
+  readonly code = 'daemon_upgrade_required' as const;
+  readonly capability = 'actorControlPlane' as const;
+  readonly restartRequired = true as const;
+
+  constructor() {
+    super(
+      'Runtime daemon does not advertise actorControlPlane v1. Upgrade KodaX and restart the daemon before using Runtime Actor control.',
+    );
+    this.name = 'RuntimeDaemonUpgradeRequiredError';
+  }
+}
+
 export interface RuntimeDaemonClientOptions {
   readonly identity: RuntimeIdentity;
   readonly transport: RuntimeDaemonClientTransport;
@@ -138,6 +151,18 @@ export function createRuntimeDaemonClient(
       ? createOperationEnvelope(options.journalEpoch, operation)
       : undefined,
   );
+  const actorControlPlaneError = (): RuntimeDaemonUpgradeRequiredError | undefined => {
+    const capability = options.capabilities?.actorControlPlane;
+    if (
+      typeof capability !== 'object'
+      || capability === null
+      || !('version' in capability)
+      || capability.version !== 1
+    ) {
+      return new RuntimeDaemonUpgradeRequiredError();
+    }
+    return undefined;
+  };
   const credentialBrokers = new Map<string, RuntimeCredentialBroker>();
   const hostToolHandlers = new Map<string, Readonly<Record<string, RuntimeHostToolHandler>>>();
   const hostToolResults = new Map<string, HostToolInvocationResult>();
@@ -632,20 +657,28 @@ export function createRuntimeDaemonClient(
         return request('agents.preflight', input) as ReturnType<KodaXRuntime['agents']['preflight']>;
       },
       tree(sessionId) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.tree', { sessionId }) as ReturnType<KodaXRuntime['agents']['tree']>;
       },
       detail(sessionId, actorPath) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.detail', { sessionId, actorPath }) as ReturnType<
           KodaXRuntime['agents']['detail']
         >;
       },
       spawn(sessionId, input) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         assertRuntimeTransportSafe(input, 'agents.spawn');
         return request('agents.spawn', { sessionId, input }) as ReturnType<
           KodaXRuntime['agents']['spawn']
         >;
       },
       async send(sessionId, actorPath, content, classification) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) throw unavailable;
         await request('agents.send', {
           sessionId,
           actorPath,
@@ -654,6 +687,8 @@ export function createRuntimeDaemonClient(
         });
       },
       followup(sessionId, actorPath, objective, options) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.followup', {
           sessionId,
           actorPath,
@@ -666,6 +701,8 @@ export function createRuntimeDaemonClient(
         >;
       },
       async interrupt(sessionId, actorPath, reason) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) throw unavailable;
         await request('agents.interrupt', {
           sessionId,
           actorPath,
@@ -673,6 +710,8 @@ export function createRuntimeDaemonClient(
         });
       },
       output(sessionId, actorPath, turnId) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.output', {
           sessionId,
           actorPath,
@@ -680,12 +719,16 @@ export function createRuntimeDaemonClient(
         }) as ReturnType<KodaXRuntime['agents']['output']>;
       },
       events(sessionId, afterSequence) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.events', {
           sessionId,
           ...(afterSequence !== undefined ? { afterSequence } : {}),
         }) as ReturnType<KodaXRuntime['agents']['events']>;
       },
       wait(sessionId, afterSequence, timeoutMs) {
+        const unavailable = actorControlPlaneError();
+        if (unavailable) return Promise.reject(unavailable);
         return request('agents.wait', {
           sessionId,
           ...(afterSequence !== undefined ? { afterSequence } : {}),

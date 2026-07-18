@@ -540,6 +540,7 @@ export interface RuntimeCapabilityRequirements {
   readonly sharedSessionSettings?: 1;
   readonly durableRecoveryQueries?: 1;
   readonly daemonManagement?: 1;
+  readonly actorControlPlane?: 1;
 }
 
 export type RuntimeOperationState =
@@ -2067,6 +2068,7 @@ export async function createKodaXRuntime(
     externalAgents: options.externalAgents !== undefined,
     afterTurnInput: { version: 1 },
     learningCenter: { version: 1 },
+    actorControlPlane: { version: 1, methodNamespace: 'agents' },
     ...(options.externalAgents !== undefined ? { externalAgentAdmin: { version: 1 } } : {}),
   };
   assertRuntimeCapabilities(embeddedCapabilities, options.requirements);
@@ -2417,6 +2419,7 @@ function assertRuntimeCapabilities(
     && requirements?.sharedSessionSettings === undefined
     && requirements?.durableRecoveryQueries === undefined
     && requirements?.daemonManagement === undefined
+    && requirements?.actorControlPlane === undefined
   ) return;
   const capabilities = requireRuntimeRecord(value);
   if (requirements.hardDispose && capabilities.hardDispose !== true) {
@@ -2450,6 +2453,7 @@ function assertRuntimeCapabilities(
     ['sharedSessionSettings', requirements.sharedSessionSettings],
     ['durableRecoveryQueries', requirements.durableRecoveryQueries],
     ['daemonManagement', requirements.daemonManagement],
+    ['actorControlPlane', requirements.actorControlPlane],
   ] as const;
   for (const [name, version] of versionedRequirements) {
     if (version !== undefined) assertVersionedRuntimeCapability(capabilities, name, version);
@@ -6193,9 +6197,9 @@ function buildEffectiveRuntimeOptions(
         : {}),
   };
   const optionContext = options.context;
-  const requestedGitRoot = optionContext?.gitRoot === undefined
-    ? undefined
-    : path.resolve(optionContext.gitRoot);
+  const requestedGitRoot = typeof optionContext?.gitRoot === 'string'
+    ? path.resolve(optionContext.gitRoot)
+    : undefined;
   if (
     sessionGitRoot !== undefined
     && requestedGitRoot !== undefined

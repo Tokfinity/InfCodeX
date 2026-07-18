@@ -20,6 +20,9 @@ describe('decideWorkflowInvocation', () => {
 
   it.each([
     'Use the named scoped-review Workflow.',
+    '请用工作流完成这次审查。',
+    'ワークフローを使って監査してください。',
+    '워크플로우로 검토해 주세요.',
     '请使用 Workflow 完成这个审查。',
     'Launch two Workflows for comparison.',
   ])('recognizes an explicit natural-language Workflow surface: %s', (input) => {
@@ -29,6 +32,8 @@ describe('decideWorkflowInvocation', () => {
   it.each([
     'Review three independent dimensions and synthesize the result.',
     'Audit this complex parallel change.',
+    '并行检查三个模块并汇总结论。',
+    '请优化这个流程。',
     'Explain the run_workflow tool definition.',
   ])('does not infer Workflow intent from complexity or an identifier: %s', (input) => {
     expect(hasExplicitNaturalLanguageWorkflowIntent(input)).toBe(false);

@@ -46,7 +46,7 @@ describe('FEATURE_270 runner safety', () => {
 
   it('fails closed before exceeding calls, tokens, or spend', () => {
     expect(() => assertFeature270Budget('layer2', {
-      calls: 60, totalTokens: 1, estimatedCostUsd: 0,
+      calls: 72, totalTokens: 1, estimatedCostUsd: 0,
     }, 'before-call')).toThrow(/call cap/i);
     expect(() => assertFeature270Budget('layer2', {
       calls: 1, totalTokens: 4_000_000, estimatedCostUsd: 0,
@@ -79,8 +79,8 @@ describe('FEATURE_270 runner safety', () => {
     }));
 
     const pilot = await runFeature270Pilot({ allowGeneration: true });
-    expect(pilot).toMatchObject({ complete: true, expectedCalls: 4, externalCallsThisRun: 4 });
-    expect(runOneShotMock).toHaveBeenCalledTimes(4);
+    expect(pilot).toMatchObject({ complete: true, expectedCalls: 6, externalCallsThisRun: 6 });
+    expect(runOneShotMock).toHaveBeenCalledTimes(6);
 
     runOneShotMock.mockClear();
     const resumedPilot = await runFeature270Pilot({ allowGeneration: true });
@@ -88,10 +88,10 @@ describe('FEATURE_270 runner safety', () => {
     expect(runOneShotMock).not.toHaveBeenCalled();
 
     const layer2 = await runFeature270Layer2({ allowGeneration: true });
-    expect(layer2).toMatchObject({ complete: true, expectedCalls: 60, externalCallsThisRun: 56 });
+    expect(layer2).toMatchObject({ complete: true, expectedCalls: 72, externalCallsThisRun: 66 });
     const layer3 = await runFeature270Layer3({ allowGeneration: true });
     expect(layer3).toMatchObject({ complete: true, expectedCalls: 24, externalCallsThisRun: 24 });
-    expect(runOneShotMock).toHaveBeenCalledTimes(80);
+    expect(runOneShotMock).toHaveBeenCalledTimes(90);
 
     const evidence = await readFile(
       path.join(manifest.rawOutputRoot, 'layer3', 'main-session-review', 'evidence.json'),

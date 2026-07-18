@@ -88,18 +88,38 @@ Learned Skill 的优先级低于正式 Skill；F266 不执行 learned Extension 
 - [ ] 窄终端行预算正确，final text 不被状态段遮挡。
 - [ ] headless/Classic 获得等价文本信息，不依赖 Ink。
 
-## 自动化基线（2026-07-17）
+### TC-006：订阅竞态、断连清理与 transient principal
+
+1. 在 subscriber 完成第一次 durable event 读取、但尚未挂 waiter 时，由另一个
+   client 写入一条 Learning event。
+2. 在空游标上发起 `subscribe().next()`，随后在没有新 event 的情况下调用
+   iterator `return()`，模拟 daemon client 断连。
+3. 依次使用大量不同 transient daemon principal 查询 Learning Center，再用相同
+   stable client identity 重连并检查 acknowledge 状态。
+
+预期：
+
+- [ ] 第 1 步的 event 通过 read-register-recheck 被立即返回，不等下一条 event 才唤醒。
+- [ ] `return()` 立即完成，pending waiter 被移除；下一条 event 不会投递给已断连订阅。
+- [ ] Runtime 不按 transient principal 永久保留 facade；stable identity 的 durable
+  notification cursor 仍能跨重连恢复。
+
+## 自动化基线（2026-07-18）
 
 - `npm run build`：通过。
 - F266 聚焦组：8 个测试文件，148/148 通过。
 - F266/F270 changed-code 综合覆盖：2294/2780 statements，82.52%。
 - F266 全部属于 Layer 1 确定性验证，provider 调用数为 0，成本 `$0`。
+- 新增 lost-wakeup、iterator cancellation 与 facade-retention 确定性回归：
+  Learning service 18/18、Runtime Learning 5/5 通过。
+- 2026-07-18 follow-up 覆盖组中 Actor/Learning/prompt 为 90.62% lines、
+  80.86% branches；daemon/Runtime Learning 为 89.34% lines、80.23% branches。
 
 ## 测试总结
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 5 | - | - | - |
+| 6 | - | - | - |
 
 **测试结论**：待填写
 

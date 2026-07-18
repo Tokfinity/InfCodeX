@@ -45,10 +45,14 @@ function runtimeAutoGuardrail(options: KodaXOptions): AutoModeToolGuardrail {
   const guardrail = options.guardrails?.find((candidate) => (
     candidate.kind === 'tool' && candidate.name === 'auto-mode'
   ));
-  if (!guardrail || guardrail.kind !== 'tool' || !guardrail.beforeTool) {
+  if (!guardrail || guardrail.kind !== 'tool') {
     throw new Error('expected Runtime-owned auto-mode tool guardrail');
   }
-  return guardrail as AutoModeToolGuardrail;
+  const autoModeGuardrail = guardrail as AutoModeToolGuardrail;
+  if (!autoModeGuardrail.beforeTool) {
+    throw new Error('expected Runtime-owned auto-mode tool guardrail');
+  }
+  return autoModeGuardrail;
 }
 
 async function authorizeRuntimeAutoCall(
@@ -223,6 +227,33 @@ describe('createKodaXRuntime', () => {
       transport,
       requirements: { externalAgentAdmin: 1 },
     })).rejects.toThrow(/does not support.*externalAgentAdmin/i);
+  });
+
+  it('fails closed when an older daemon lacks the versioned Actor control plane', async () => {
+    const { connectKodaXRuntime } = await import('./sdk-runtime.js');
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== 'initialize') return null;
+        return {
+          identity: {
+            runtimeId: 'daemon-without-actor-control-plane',
+            mode: 'daemon',
+            profile: 'default',
+            startedAt: '2026-07-18T00:00:00.000Z',
+            version: '0.7.71',
+          },
+          capabilities: {},
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(connectKodaXRuntime({
+      transport,
+      requirements: { actorControlPlane: 1 },
+    })).rejects.toThrow(/does not support.*actorControlPlane/i);
   });
 
   it('rejects Worker-only options unless Worker isolation is selected', async () => {

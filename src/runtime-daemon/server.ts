@@ -50,6 +50,8 @@ import {
   RUNTIME_DAEMON_METHODS,
   isRuntimeDaemonDrainingSensitiveMethod,
   isRuntimeDaemonMutationMethod,
+  isRuntimeDaemonRetiredMethod,
+  type RuntimeDaemonWireMethod,
 } from './protocol.js';
 import type { RuntimeControlJournal } from './control-journal.js';
 import type { RuntimeDaemonManagementController } from './management.js';
@@ -95,7 +97,7 @@ export interface RuntimeDaemonDispatcherOptions {
 
 export interface RuntimeDaemonDispatcher {
   handle(
-    request: RuntimeDaemonRequest,
+    request: RuntimeDaemonRequest<RuntimeDaemonWireMethod>,
   ): Promise<RuntimeDaemonSuccessResponse | RuntimeDaemonErrorResponse>;
   close(): void;
 }
@@ -304,9 +306,16 @@ export function createRuntimeDaemonDispatcher(
   };
 
   const handle = async (
-    request: RuntimeDaemonRequest,
+    wireRequest: RuntimeDaemonRequest<RuntimeDaemonWireMethod>,
   ): Promise<RuntimeDaemonSuccessResponse | RuntimeDaemonErrorResponse> => {
     try {
+      if (isRuntimeDaemonRetiredMethod(wireRequest.method)) {
+        throw daemonError(
+          'client_upgrade_required',
+          'The legacy agentTasks control plane was retired. Upgrade the KodaX SDK; if this daemon does not advertise actorControlPlane v1, restart it with the upgraded KodaX installation.',
+        );
+      }
+      const request = wireRequest as RuntimeDaemonRequest;
       validateDaemonMethodValue(
         request.method,
         'params',
@@ -413,7 +422,7 @@ export function createRuntimeDaemonDispatcher(
       }
       return createRuntimeDaemonSuccessResponse(request.id, result);
     } catch (error: unknown) {
-      return createRuntimeDaemonErrorResponse(normalizeRuntimeDaemonError(error), request.id);
+      return createRuntimeDaemonErrorResponse(normalizeRuntimeDaemonError(error), wireRequest.id);
     }
   };
 
@@ -1377,6 +1386,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.externalAgents;
   delete safeOverrides.externalAgentAdmin;
   delete safeOverrides.a2aConfigReconciler;
+  delete safeOverrides.actorControlPlane;
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
     events: true,
@@ -1389,6 +1399,10 @@ function runtimeDaemonCapabilities(
     contextDiagnostics: true,
     hardDispose: false,
     externalAgents,
+    actorControlPlane: {
+      version: 1,
+      methodNamespace: 'agents',
+    },
     ...(externalAgentAdmin ? {
       externalAgentAdmin: {
         version: 1,

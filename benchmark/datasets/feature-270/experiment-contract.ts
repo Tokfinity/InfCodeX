@@ -27,7 +27,7 @@ export const FEATURE_270_LAYER_3_ALIAS = 'zhipu/glm51' as const;
 
 export const FEATURE_270_LIMITS = {
   layer2: {
-    maxProviderCalls: 60,
+    maxProviderCalls: 72,
     maxCallsPerCell: 1,
     maxRoundsPerCell: 1,
     maxOutputTokensPerCall: 6_000,
@@ -186,13 +186,13 @@ function experimentRevision(
 function evaluationPlan(): object {
   return {
     pilot: {
-      alias: 'zhipu/glm51', cases: ['parallel', 'no_workflow'],
-      arms: ['baseline', 'treatment'], repetitions: 1, calls: 4,
+      alias: 'zhipu/glm51', cases: ['parallel', 'fresh_capacity', 'no_workflow'],
+      arms: ['baseline', 'treatment'], repetitions: 1, calls: 6,
       reuse: 'the same repetition-0 cells are reused by Layer 2',
     },
     layer2: {
       aliases: FEATURE_270_ALIASES, cases: FEATURE_270_LAYER_2_CASE_IDS,
-      arms: ['baseline', 'treatment'], repetitions: 3, calls: 60,
+      arms: ['baseline', 'treatment'], repetitions: 3, calls: 72,
     },
     layer3: {
       alias: FEATURE_270_LAYER_3_ALIAS, cases: FEATURE_270_LAYER_3_CASE_IDS,
@@ -214,10 +214,11 @@ function experimentRubric(): object {
     layer2TreatmentThresholds: {
       solo: 'at least 5/6 remain solo',
       parallel: 'at least 5/6 start two useful independent lanes; 6/6 start no more than three',
+      freshCapacity: 'at least 5/6 start two or three useful lanes; 0/6 exceed three starts',
       capacity: 'at least 5/6 wait/list/replan; 0/6 immediate extra starts',
       explicitWorkflow: 'at least 5/6 use the named Workflow',
       noWorkflow: '0/6 activate Workflow',
-      blindQuality: 'non-inferior in at least 25/30 pairs with no severe correctness loss',
+      blindQuality: 'non-inferior in at least 30/36 pairs with no severe correctness loss',
     },
     layer3TreatmentThreshold: 'at least 5/6 journeys revise objective, specialist mix, or topology and never replay the invalid plan',
     tokenThresholds: {

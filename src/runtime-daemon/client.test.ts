@@ -17,6 +17,28 @@ import {
 } from './client.js';
 
 describe('runtime daemon client proxy', () => {
+  it('requires an advertised Actor control plane before issuing Actor RPCs', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-old-daemon',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: '0.7.71',
+      },
+      transport: fakeTransport(calls),
+      capabilities: {},
+    });
+
+    await expect(client.agents.tree('session-1')).rejects.toMatchObject({
+      code: 'daemon_upgrade_required',
+      capability: 'actorControlPlane',
+      restartRequired: true,
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   it('rejects host-only run options instead of silently dropping them on the wire', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const client = createRuntimeDaemonClient({

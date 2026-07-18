@@ -131,6 +131,18 @@ export type RuntimeDaemonMethod =
   | 'context.budget.get'
   | 'tool.exposure.preview';
 
+export type RuntimeDaemonRetiredMethod =
+  | 'agentTasks.list'
+  | 'agentTasks.start'
+  | 'agentTasks.get'
+  | 'agentTasks.events'
+  | 'agentTasks.wait'
+  | 'agentTasks.sendInput'
+  | 'agentTasks.cancel'
+  | 'agentTasks.reconcile';
+
+export type RuntimeDaemonWireMethod = RuntimeDaemonMethod | RuntimeDaemonRetiredMethod;
+
 export type RuntimeDaemonMutationMethod =
   | 'runtime.shutdown'
   | 'daemon.stop'
@@ -233,10 +245,12 @@ interface RuntimeDaemonFrameBase {
   readonly version: typeof KODAX_DAEMON_PROTOCOL_VERSION;
 }
 
-export interface RuntimeDaemonRequest extends RuntimeDaemonFrameBase {
+export interface RuntimeDaemonRequest<
+  Method extends RuntimeDaemonWireMethod = RuntimeDaemonMethod,
+> extends RuntimeDaemonFrameBase {
   readonly kind: 'request';
   readonly id: string;
-  readonly method: RuntimeDaemonMethod;
+  readonly method: Method;
   readonly params?: unknown;
   readonly operation?: RuntimeDaemonOperationEnvelope;
 }
@@ -265,7 +279,7 @@ export interface RuntimeDaemonNotification extends RuntimeDaemonFrameBase {
 }
 
 export type RuntimeDaemonFrame =
-  | RuntimeDaemonRequest
+  | RuntimeDaemonRequest<RuntimeDaemonWireMethod>
   | RuntimeDaemonSuccessResponse
   | RuntimeDaemonErrorResponse
   | RuntimeDaemonNotification;
@@ -462,7 +476,20 @@ export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMeth
   'agents.interrupt',
 ];
 
-const REQUEST_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMethod>(RUNTIME_DAEMON_METHODS);
+const RETIRED_METHODS: readonly RuntimeDaemonRetiredMethod[] = [
+  'agentTasks.list',
+  'agentTasks.start',
+  'agentTasks.get',
+  'agentTasks.events',
+  'agentTasks.wait',
+  'agentTasks.sendInput',
+  'agentTasks.cancel',
+  'agentTasks.reconcile',
+];
+const REQUEST_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonWireMethod>([
+  ...RUNTIME_DAEMON_METHODS,
+  ...RETIRED_METHODS,
+]);
 const MUTATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonMutationMethod>(
   RUNTIME_DAEMON_MUTATION_METHODS,
 );
@@ -541,6 +568,12 @@ export function isRuntimeDaemonDrainingSensitiveMethod(
   return isRuntimeDaemonMutationMethod(method) || REVERSE_BRIDGE_STATE_METHODS.has(method);
 }
 
+export function isRuntimeDaemonRetiredMethod(
+  method: RuntimeDaemonWireMethod,
+): method is RuntimeDaemonRetiredMethod {
+  return (RETIRED_METHODS as readonly RuntimeDaemonWireMethod[]).includes(method);
+}
+
 export function createRuntimeDaemonSuccessResponse(
   id: string,
   result: unknown,
@@ -580,7 +613,9 @@ export function createRuntimeDaemonNotification(
   };
 }
 
-export function isRuntimeDaemonRequest(value: unknown): value is RuntimeDaemonRequest {
+export function isRuntimeDaemonRequest(
+  value: unknown,
+): value is RuntimeDaemonRequest<RuntimeDaemonWireMethod> {
   if (!isFrameBase(value)) return false;
   const frame = value as Record<string, unknown>;
   return frame.kind === 'request'

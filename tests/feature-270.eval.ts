@@ -30,17 +30,17 @@ describe('FEATURE_270 bounded collaboration-policy experiment', () => {
       + manifest.limits.layer3.maxExternalSpendUsd).toBe(18);
   });
 
-  it.runIf(stage === 'pilot')('runs the four-call validity pilot', async () => {
+  it.runIf(stage === 'pilot')('runs the six-call validity pilot', async () => {
     const result = await runFeature270Pilot({ allowGeneration });
     expect(result.complete).toBe(true);
-    expect(result.expectedCalls).toBe(4);
+    expect(result.expectedCalls).toBe(6);
     expect(result.reviewStatus).toBe('pending-main-session-blind-review');
   }, 15 * 60_000);
 
-  it.runIf(stage === 'layer2')('runs the 60-call single-turn comparison', async () => {
+  it.runIf(stage === 'layer2')('runs the 72-call single-turn comparison', async () => {
     const result = await runFeature270Layer2({ allowGeneration });
     expect(result.complete).toBe(true);
-    expect(result.expectedCalls).toBe(60);
+    expect(result.expectedCalls).toBe(72);
     expect(result.budget.estimatedCostUsd).toBeLessThanOrEqual(6);
   }, 180 * 60_000);
 

@@ -101,6 +101,11 @@ export interface ManagedRolePromptContext {
    * re-rendered per LLM call.
    */
   teamModeSection?: string;
+  /** Per-round Actor scheduler facts used to size a spawn wave before tool calls. */
+  actorCapacity?: {
+    readonly maxConcurrentThreads: number;
+    readonly activeNonRootTurns: number;
+  };
 }
 
 // FEATURE_193 / ADR-043: isReviewEvidenceTask (a Scout-era review-evidence

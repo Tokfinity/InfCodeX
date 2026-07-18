@@ -61,6 +61,21 @@ describe('buildWorkerInstructions', () => {
     expect(output).not.toContain('On a fresh request with independent lanes');
   });
 
+  it('states the configured Actor capacity before the model announces a spawn wave', () => {
+    const output = buildWorkerInstructions(baseDecision, undefined, false, {
+      maxConcurrentThreads: 4,
+      activeNonRootTurns: 0,
+    });
+
+    expect(output).toContain('4 total concurrency slots');
+    expect(output).toContain('root occupies one reserved slot');
+    expect(output).toContain('3 child start slots are available');
+    expect(output).toContain('HARD RUNTIME LIMIT FOR THIS ASSISTANT RESPONSE');
+    expect(output).toContain('emit at most 3 `spawn_agent` calls');
+    expect(output).toContain('must not claim that you are dispatching more Agents');
+    expect(output.indexOf('ACTOR CAPACITY')).toBeLessThan(output.indexOf('PLAN-FIRST CONTRACT'));
+  });
+
   it('does not teach retired task lifecycle tools or complexity-driven Workflow activation', () => {
     const output = buildWorkerInstructions(baseDecision, undefined, false);
 

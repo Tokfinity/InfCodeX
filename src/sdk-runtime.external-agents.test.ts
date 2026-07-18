@@ -360,7 +360,7 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     expect(initialized).toMatchObject({ capabilities: { externalAgents: true } });
     const daemon = createRuntimeDaemonClient({
       identity: host.identity,
-      capabilities: { externalAgents: true },
+      capabilities: initializedCapabilities(initialized),
       transport: {
         request,
         subscribe() { return { close() {} }; },
@@ -375,6 +375,17 @@ describe('FEATURE_258 Embedded Runtime agent services', () => {
     await host.close();
   });
 });
+
+function initializedCapabilities(result: unknown): Readonly<Record<string, unknown>> {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    throw new Error('daemon initialize result is invalid');
+  }
+  const capabilities = (result as Record<string, unknown>).capabilities;
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+    throw new Error('daemon initialize capabilities are invalid');
+  }
+  return capabilities as Readonly<Record<string, unknown>>;
+}
 
 async function waitForActorTerminal(
   runtime: KodaXRuntime,

@@ -9,28 +9,22 @@
  * outside KodaX's coding stack can reuse the same async fan-out
  * wait-and-resume mechanic (ADR-021).
  *
- * The lifted module is **generic over the child-task result type**
- * (`TChildResult`). Coding's `KodaXChildExecutionResult` shape stays in
- * `@kodax-ai/coding`; only `taskId` + `error` are read here. The
- * `result` field is opaque — `composeIdleYieldUserMessage` never
- * inspects it (the fallback banner uses only `taskId` / error message).
- *
  * Replaces the blocking `await_child_task` semantics with a Claude-Code-
  * style "agent turn ends idle, runner waits for the next external event"
- * mechanism. When the agent has dispatched ≥1 children and has nothing
- * else to do, it outputs a brief status line (no tool calls), and
- * Runner.run returns. This module gives the runner layer the utilities
- * it needs to interpret that exit and resume:
+ * mechanism. When the agent has active descendant Actor turns and nothing
+ * else to do, it outputs a brief status line (no tool calls), and Runner.run
+ * returns. Actor completion and user input both arrive through the bounded
+ * MessageQueue; this module interprets that exit and resumes from the first
+ * queued wake event:
  *
  *   1. `detectIdleYield(...)` — synchronous predicate over the run's exit
  *      state. Returns true when the agent turn ended without an
- *      `emit_handoff` AND there are still child tasks the agent is
+ *      `emit_handoff` AND there are still descendant Actor turns the agent is
  *      expected to wait on. False on every other path so legacy
  *      semantics stay untouched.
  *
- *   2. `waitForWakeEvent(...)` — async race between child-task
- *      completions and the MessageQueue. Returns the first event so the
- *      runner layer knows what to splice into the next-turn context.
+ *   2. `waitForWakeEvent(...)` — async wait on the MessageQueue, which
+ *      carries committed Actor completion envelopes and user input.
  *      Cooperative with `AbortSignal` so REPL Esc tears it down promptly.
  *
  *   3. `composeIdleYieldUserMessage(...)` — given a resolved
@@ -44,13 +38,11 @@
  *     on terminal Evaluator verdict, NOT on legacy
  *     `managedProtocolPayloadRef.verdict`. The agent layer carries
  *     the boolean as a snapshot field; callers compute it.
- *   - Bug E / `hasPendingBackgroundMessages` field: fast-child race
- *     recovery — keep the loop alive when either the registry OR the
- *     queue still has undelivered work.
+ *   - Bug E / `hasPendingBackgroundMessages` field: fast-Actor recovery —
+ *     keep the loop alive when either the Actor tree OR the queue still has
+ *     undelivered work.
  *   - Bug F / abort listener cleanup: explicit
  *     `removeEventListener` in `settle()` even on non-abort wakes.
- *   - Bug A registry cleanup: NOT this module's responsibility — owned
- *     by `registerChildTask` in `task-registry.ts`.
  */
 
 import type { KodaXMessage, KodaXContentBlock, KodaXTaskResultMetadata } from '@kodax-ai/llm';
@@ -153,8 +145,8 @@ export interface IdleYieldSnapshot {
    */
   readonly lastAssistantToolCallCount: number;
   /**
-   * Number of child tasks still in the registry when Runner.run
-   * returned. Reads `registry.size` at the boundary. Idle-yield only
+   * Number of active descendant Actor turns when Runner.run returned.
+   * The historical field name is retained for source compatibility. Idle-yield only
    * fires when this is > 0 OR `hasPendingBackgroundMessages` is true
    * — otherwise there's nothing to wait for and the stop is a real
    * terminal event.
@@ -194,16 +186,12 @@ export interface IdleYieldSnapshot {
   readonly hasEmittedTerminalVerdict: boolean;
   /**
    * v0.7.38 FEATURE_155 Bug E hotfix — true if the background-priority
-   * message queue still has undelivered banners destined for the
+   * message queue still has undelivered envelopes destined for the
    * caller agent. Set this alongside `pendingChildTaskCount` because
-   * of the **fast-child race**: the dispatch IIFE may enqueue a
-   * notification BEFORE its promise resolves, and the registry's
-   * `.finally(delete)` cleanup runs in the same microtask burst.
-   * When a child completes faster than the surrounding Runner.run
-   * iteration (e.g. a sub-second probe vs a multi-second LLM call),
-   * the registry entry is removed BEFORE the outer loop reads
-   * `pendingChildTaskCount` — making the snapshot see `0`, breaking
-   * the loop, and orphaning the banner in the background queue.
+   * of the **fast-Actor race**: a terminal Actor commit can enqueue its
+   * notification before the outer loop snapshots the tree. The active-turn
+   * count is then already zero even though the completion envelope still
+   * needs delivery.
    * With this field, the loop stays in the wait state whenever
    * there's still something to deliver, regardless of which arm
    * (registry or queue) carries it.
@@ -256,11 +244,8 @@ export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
 /**
  * Discriminated union surfacing the reason a wake completed.
  *
- * Generic over `TChildResult` so coding-flavor consumers can carry
- * their `KodaXChildExecutionResult` shape through `child-completed`
- * wakes without the agent layer naming the type. This module only
- * reads `taskId` (for the fallback banner) and `error` — `result` is
- * opaque pass-through.
+ * Actor completions and user input are both represented as queued messages;
+ * cancellation remains a distinct event so callers can terminate promptly.
  */
 export type WakeEvent =
   | {
@@ -293,8 +278,8 @@ export interface WaitForWakeEventOptions {
 }
 
 /**
- * Race child completions against MessageQueue arrivals. Returns the
- * first wake event. Guarantees:
+ * Wait for MessageQueue arrivals or cancellation. Returns the first wake
+ * event. Guarantees:
  *
  *   - Cleanup: the poll timer is cleared on resolution regardless of
  *     which arm wins.
@@ -303,15 +288,11 @@ export interface WaitForWakeEventOptions {
  *     (the caller is now responsible for splicing them into the
  *     agent's next-turn context).
  *   - Abort-safe: if `abortSignal` fires before any other event, the
- *     waiter resolves with `{ kind: 'aborted' }`. Already-settled
- *     child promises are NOT cancelled — the registry's owner handles
- *     them on the next turn.
+ *     waiter resolves with `{ kind: 'aborted' }`. Actor execution
+ *     cancellation remains owned by the Actor controller.
  *
  * Caller responsibilities:
- *   - Pass the EXACT registry snapshot (not a copy) so subsequent
- *     dispatches the agent performs after wake are visible to the
- *     next `waitForWakeEvent` call.
- *   - Splice the returned messages / child result into the agent's
+ *   - Splice the returned messages into the agent's
  *     next Runner.run input. The waiter does not itself construct
  *     synthetic user-message bytes — that's the runner-layer's job.
  */
@@ -352,14 +333,6 @@ export function waitForWakeEvent(
       return;
     }
 
-    // Child arm — wrap each registry entry. We do NOT mutate the
-    // registry here; `registerChildTask` attaches a
-    // `.finally(() => registry.delete(childId))` so settled entries
-    // disappear before the next `waitForWakeEvent` call iterates.
-    // Without that cleanup an already-settled promise's `.then` fires
-    // synchronously in the microtask queue and resolves this wake with
-    // a spurious `child-completed` event — the FEATURE_155 v0.7.38
-    // Bug A hotfix landed the dispatch-side fix.
     // Queue arm — poll. The MessageQueue is currently poll-based
     // (no event-emitter surface yet); 100 ms is the perception
     // budget. If queue ever grows a `wait()` API we can swap this
@@ -382,10 +355,8 @@ export function waitForWakeEvent(
     // load-bearing cleanup for the common non-abort path.
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
-    // Edge: registry was already empty AND queue had a pending
-    // message at construction time. The poll arm would still
-    // fire on first tick; nothing additional needed. If both
-    // registry and queue are empty AND no abort fires, the
+    // Edge: the queue may already have a pending message at construction
+    // time. The poll arm fires on the first tick. If the queue is empty and no abort fires, the
     // waiter blocks indefinitely — by design (caller must
     // either dispatch a child or queue a message to wake it).
   });
