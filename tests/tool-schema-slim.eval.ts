@@ -38,7 +38,7 @@ import {
 
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'tool-schema-slim');
 
-const PANEL_ALIASES = ['kimi', 'zhipu/glm51', 'ds/v4flash', 'mmx/m27'] as const;
+const PANEL_ALIASES = ['kimi', 'zhipu/glm52', 'ds/v4flash', 'mmx/m3'] as const;
 const RUNS_PER_CELL = 5;
 
 describe('Eval: tool-schema slim (v0.7.41) — v1_orig / v2_slim / v3_aggressive × 4 alias × 9 scenarios × 5 runs', () => {

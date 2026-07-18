@@ -4,7 +4,7 @@
  *
  * Enforces EVAL_GUIDELINES anti-pattern 7 §3 strict clause + the
  * 2026-05-12 judge-model-selection clause: panel-internal multi-judge
- * majority vote (zhipu/glm51 + ds/v4pro + kimi-code, 2/3 majority).
+ * majority vote (zhipu/glm52 + ds/v4pro + kimi-code, 2/3 majority).
  *
  * ## Input
  *
@@ -60,7 +60,7 @@
  *
  * ## Judge panel rationale (per EVAL_GUIDELINES §Judge model selection)
  *
- *   - zhipu/glm51 — zhipu family (overlaps with judged panel, but
+ *   - zhipu/glm52 — zhipu family (overlaps with judged panel, but
  *     majority vote across 3 independent families breaks same-family
  *     bias even when one judge happens to share family with one judged
  *     alias; audit dump records each judge's raw verdict for post-hoc
@@ -103,7 +103,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-125-team-mode-awareness-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

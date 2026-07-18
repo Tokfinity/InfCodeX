@@ -474,7 +474,7 @@ function buildToolNamePatterns(toolName: string): readonly RegExp[] {
   return [
     new RegExp(`\\b${esc}\\s*\\(`, 'i'),                              // tool_name(
     new RegExp(`["'\`]name["'\`]\\s*:\\s*["'\`]${esc}["'\`]`, 'i'),   // "name":"tool_name"  (quoted key + quoted value, JSON form)
-    // Sub-agent review (2026-05-15) flagged: zhipu/glm51 sometimes
+    // Sub-agent review (2026-05-15) flagged: zhipu/glm52 sometimes
     // emits the unquoted-key + quoted-value YAML-ish hybrid form,
     // e.g. `<tool_call>name:"emit_handoff" arguments:{...}</tool_call>`.
     // The original 4-syntax set did not cover this and would log

@@ -65,9 +65,9 @@ type Mode = 'pilot' | 'panel';
 const MODE: Mode = (process.env.KODAX_F196_PROBE ?? 'pilot') as Mode;
 
 const DEFAULT_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ];

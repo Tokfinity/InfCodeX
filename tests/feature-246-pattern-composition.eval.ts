@@ -26,7 +26,7 @@
  *   own todo bookkeeping, then synthetic tool_results are injected and turn 2 is
  *   the authoring (matches the real trajectory, whose authoring turn was
  *   todo_update + run_workflow together).
- * - Pilot (ds/v4flash + zhipu/glm51, 1 run) already showed baseline 0/2 combined
+ * - Pilot (ds/v4flash + zhipu/glm52, 1 run) already showed baseline 0/2 combined
  *   -> proposed 2/2 combined. Raw dump -> os.tmpdir()/kodax-eval-dumps/...
  *
  * Pre-registered gate (panel >= 3 aliases) — LIFT metric, no floor-override:
@@ -34,7 +34,7 @@
  * - mean combinedRate(proposed) >= 0.40 (combination is reachably taught)
  *
  * Run (panel):    npm run test:eval -- tests/feature-246-pattern-composition.eval.ts
- * Run (pilot):    KODAX_EVAL_ALIASES=ds/v4flash,zhipu/glm51 KODAX_EVAL_RUNS=1 npm run test:eval -- tests/feature-246-pattern-composition.eval.ts
+ * Run (pilot):    KODAX_EVAL_ALIASES=ds/v4flash,zhipu/glm52 KODAX_EVAL_RUNS=1 npm run test:eval -- tests/feature-246-pattern-composition.eval.ts
  */
 
 import { readFileSync } from 'node:fs';
@@ -82,7 +82,7 @@ function toolsForVariant(variant: 'baseline' | 'proposed'): KodaXToolDefinition[
   return all.map((t) => (t.name === 'run_workflow' ? { ...t, description: makeBaselineDescription(t.description) } : t));
 }
 
-const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash'];
+const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/v4pro', 'ark/v4flash'];
 const ALIAS_FALLBACK: Partial<Record<ModelAlias, ModelAlias>> = { 'ark/v4pro': 'ds/v4pro', 'ark/v4flash': 'ds/v4flash' };
 
 function resolvePanel(): ModelAlias[] {

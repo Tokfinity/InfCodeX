@@ -96,9 +96,9 @@ const DUMP_ROOT = join(
 );
 
 const CANONICAL_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4flash',
   'ark/v4pro',
 ] as const;

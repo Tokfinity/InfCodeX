@@ -6,7 +6,7 @@
  * whether the model's tool routing was APPROPRIATE, then compares the 3-judge
  * majority to the binding classification. Disagreement > 10% = DATA INVALID.
  *
- * Judges are panel-internal (zhipu/glm51 + ds/v4pro + kimi) — NEVER
+ * Judges are panel-internal (zhipu/glm52 + ds/v4pro + kimi) — NEVER
  * anthropic/openai (Judge-model constraint). The binding is given to the judge
  * as ABSOLUTE GROUND TRUTH so empty-text binding-only models are not misjudged
  * (per feedback_audit_must_see_binding + feedback_audit_binding_priority_in_prompt).
@@ -33,7 +33,7 @@ import {
 
 // Panel-internal judges (coding-plan; NEVER anthropic/openai per anti-pattern 7).
 // These three carry keys in the canonical panel, so the audit does not skip.
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-218-self-knowledge');
 const AUDIT_RUNS = new Set((process.env.KODAX_F218_AUDIT_RUNS ?? '0').split(',').map((s) => Number(s.trim())));
 

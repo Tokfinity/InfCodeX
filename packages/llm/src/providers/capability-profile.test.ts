@@ -114,13 +114,13 @@ describe('provider capability profiles', () => {
     // by the upstream gateway — only the M2.7 GA pair and the M3
     // Frontier Coding model remain.
     expect(getProviderModels('minimax-coding')).toEqual([
-      'MiniMax-M2.7',
       'MiniMax-M3',
       'MiniMax-M2.7-highspeed',
+      'MiniMax-M2.7',
     ]);
 
     expect(
       getProviderList().find((provider) => provider.name === 'minimax-coding')?.model,
-    ).toBe('MiniMax-M2.7');
+    ).toBe('MiniMax-M3');
   });
 });

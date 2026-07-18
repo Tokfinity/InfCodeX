@@ -46,13 +46,13 @@
  *
  * ## Budget
  *
- * 5 cases × 2 variants × 5 runs × 1 alias (zhipu/glm51 per user direction) =
+ * 5 cases × 2 variants × 5 runs × 1 alias (zhipu/glm52 per user direction) =
  * 50 calls ≈ $1. Worth one prompt-change ship/reject decision per
  * EVAL_GUIDELINES §"$5 实验换一条 production prompt 改动: 值".
  *
  * ## Multi-syntax tool detection (反模式 7 §4 compliance)
  *
- * Tool-name detection must cover 4+ syntaxes. zhipu/glm51 in particular
+ * Tool-name detection must cover 4+ syntaxes. zhipu/glm52 in particular
  * emits `<tool_name>(...)`, `<tool_call>{"name":"tool_name",...}</tool_call>`,
  * etc. Both regex judge AND self-judge cross-check the raw dump.
  *
@@ -427,9 +427,9 @@ const STAGE_LABEL = 'phase3-f7-plus-f2-multialias-5cases-3runs';
 // EVAL_GUIDELINES "$5 实验换一条 production prompt 改动" guideline.
 const RUNS_PER_CELL = 3;
 const PANEL_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/glm51',
   'ds/v4pro',
   'ds/v4flash',
@@ -615,7 +615,7 @@ describe('Eval: Repo-intelligence pull-tool adoption (F7 prompt validation)', ()
     });
 
     // Pre-registered decision matrix (locked before run; question-shifted
-    // after Phase 1 zhipu/glm51 found baseline 88% — we now want to know:
+    // after Phase 1 zhipu/glm52 found baseline 88% — we now want to know:
     // does baseline hold across panel, or does it collapse on weaker models?
     //
     // - BASELINE_SUFFICIENT: ≥4 of 6 aliases hit ≥80% A_baseline rate

@@ -7,7 +7,7 @@
  *
  * 5 alias × 2 case × 2 variant × 5 runs = 100 calls (~$3-5, ~50 min).
  * Canonical alias panel per `feedback_canonical_eval_alias_panel`:
- *   zhipu/glm51 + kimi + mmx/m27 + ark/v4flash + ark/v4pro
+ *   zhipu/glm52 + kimi + mmx/m3 + ark/v4flash + ark/v4pro
  * with `aliasFallback` to DeepSeek-official when ark hits rate-limit
  * (per `feedback_harness_alias_fallback`).
  *
@@ -79,9 +79,9 @@ const DUMP_ROOT = join(
 );
 
 const CANONICAL_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4flash',
   'ark/v4pro',
 ] as const;

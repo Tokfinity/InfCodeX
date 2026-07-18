@@ -63,7 +63,7 @@ import {
 
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-125-block-micro-pilot');
 
-const PILOT_ALIASES = ['kimi', 'zhipu/glm51'] as const;
+const PILOT_ALIASES = ['kimi', 'zhipu/glm52'] as const;
 const RUNS_PER_CELL = 5;
 
 describe('Eval: FEATURE_125 block V2-decomposition micro-pilot (v0.7.41) — V1/V2/V2a/V2b × c1+c2 × kimi/zhipu × 5', () => {

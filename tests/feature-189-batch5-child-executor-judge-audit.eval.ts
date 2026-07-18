@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit for FEATURE_189 Batch 5 child-executor pilot.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi).
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi).
  * Re-judges 4 cases semantically — regex judges hit alias floor / over-strict
  * (e.g., C3 requires pull-tool but glob+grep+read is also acceptable).
  *
@@ -31,7 +31,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-batch5-child-executor-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['C1_parallel_fanout', 'C2_readonly_respect', 'C3_pulltool_leadership', 'C4_cwd_discipline'] as const;
 type CaseId = typeof CASE_IDS[number];

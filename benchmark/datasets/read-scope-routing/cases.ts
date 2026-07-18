@@ -224,7 +224,7 @@ export const FEATURE_112_VARIANT_SYSTEM_PROMPT: string = [
 /**
  * `feature_112_compact` variant: same content as `feature_112` but the
  * SCOPE COMMITMENT block is compressed to ~40% fewer characters. Iteration
- * driven by Stage 1 finding that `mmx/m27` produced garbled output on the
+ * driven by Stage 1 finding that `mmx/m3` produced garbled output on the
  * verbose feature_112 prompt (output: `"packageashawn张扬你是"` —
  * hallucinated tokens, no HARNESS line). Hypothesis: MiniMax M2.7 has a
  * lower stable prompt-length window; compact rules preserve the FEATURE_106
@@ -275,7 +275,7 @@ export const FEATURE_112_COMPACT_VARIANT_SYSTEM_PROMPT: string = [
 /**
  * `feature_112_anchor` variant: same verbose rules as `feature_112`,
  * but prepended with an explicit "Default is H0_DIRECT" reverse anchor.
- * Tests whether the mmx/m27 garbling was due to prompt length OR to the
+ * Tests whether the mmx/m3 garbling was due to prompt length OR to the
  * model under-weighting the H0-default semantics implicit in the H0
  * tier definition above. If `compact` (which has the title anchor)
  * outperforms `anchor` (which has explicit reverse anchor but full

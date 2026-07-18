@@ -351,6 +351,13 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       }));
     });
 
+    it('minimax-coding defaults future sessions to MiniMax-M3', () => {
+      const minimax = getProviderSnapshots()['minimax-coding'];
+      expect(minimax.model).toBe('MiniMax-M3');
+      expect(minimax.contextWindow).toBe(1_000_000);
+      expect(minimax.reasoningCapability).toBe('native-adaptive');
+    });
+
     it('ark-coding: per-model contextWindow overrides preserved', () => {
       const a = getProviderSnapshots()['ark-coding'];
       expect(a.contextWindow).toBe(200000);

@@ -57,7 +57,7 @@
  * Raw outputs land at `os.tmpdir()/kodax-eval-dumps/feature-121-envelope-
  * spillover/<case>.json` (EVAL_GUIDELINES §Raw output preservation). If
  * the regex pass-rate looks suspicious, an operator can spin up a sibling
- * panel-internal LLM-judge audit (zhipu/glm51 + ds/v4pro + kimi 2/3
+ * panel-internal LLM-judge audit (zhipu/glm52 + ds/v4pro + kimi 2/3
  * majority) over those dumps — the FEATURE_120 child-steering pair
  * (`tests/feature-120-child-steering-judge-audit.eval.ts`) is the
  * reference implementation.
@@ -118,10 +118,10 @@ const RUNS_PER_CELL = 5;
 // EVAL_GUIDELINES 2026-05-12 judge-model-selection clause — zhipu /
 // kimi-code / deepseek / minimax). No anthropic / openai.
 const PANEL_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
   'ds/v4flash',
-  'mmx/m27',
+  'mmx/m3',
 ] as const;
 
 describe('Eval: FEATURE_121 envelope-spillover dispatch bullet (v0.7.40)', () => {

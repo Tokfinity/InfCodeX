@@ -45,13 +45,13 @@
  * ## Combos
  *
  *   The matrix uses three providers known to pass the v0.7.33 latency gate
- *   (kimi, ds/v4flash, zhipu/glm51 — see Stage 1 pilot
+ *   (kimi, ds/v4flash, zhipu/glm52 — see Stage 1 pilot
  *   `benchmark/results/2026-05-02T06-54-27Z-auto-mode-classifier-pilot/`):
  *
  *     [agent]        → [classifier]
  *     ds/v4flash     → kimi
- *     kimi           → zhipu/glm51
- *     zhipu/glm51    → ds/v4flash
+ *     kimi           → zhipu/glm52
+ *     zhipu/glm52    → ds/v4flash
  *
  *   Combos skip individually if either alias's API key is missing
  *   (`MODEL_ALIASES[alias].apiKeyEnv`).
@@ -99,8 +99,8 @@ const EMPTY_RULES: AutoRules = { allow: [], soft_deny: [], environment: [] };
  */
 const COMBOS: ReadonlyArray<readonly [agent: ModelAlias, classifier: ModelAlias]> = [
   ['ds/v4flash',  'kimi'],
-  ['kimi',        'zhipu/glm51'],
-  ['zhipu/glm51', 'ds/v4flash'],
+  ['kimi',        'zhipu/glm52'],
+  ['zhipu/glm52', 'ds/v4flash'],
 ];
 
 function hasKey(alias: ModelAlias): boolean {

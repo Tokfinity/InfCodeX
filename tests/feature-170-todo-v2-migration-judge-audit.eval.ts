@@ -1,6 +1,6 @@
 /**
  * LLM-judge audit driver for FEATURE_170 (v0.7.41) Todo V2 Migration
- * prompt rewrite — panel-internal 3-judge majority vote (zhipu/glm51 +
+ * prompt rewrite — panel-internal 3-judge majority vote (zhipu/glm52 +
  * ds/v4pro + kimi-code, 2/3 majority).
  *
  * Per EVAL_GUIDELINES anti-pattern 7 §3 strict clause + §Judge model
@@ -76,7 +76,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-170-todo-v2-migration-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

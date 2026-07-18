@@ -90,9 +90,9 @@ const DUMP_ROOT = join(
 // `feedback_eval_partial_alias_expansion`: PARTIAL eval often resolves
 // by widening alias panel rather than iterating the prompt.
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/glm51',
   'ds/v4pro',
 ] as const;

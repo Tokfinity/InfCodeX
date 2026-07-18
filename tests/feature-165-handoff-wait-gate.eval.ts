@@ -13,7 +13,7 @@
  * wasted turn).
  *
  * 5 cases × 2 variants × 3 aliases × 5 runs/cell = 150 LLM calls
- * (~$5-8 at zhipu/glm51 + kimi + ds/v4pro pricing).
+ * (~$5-8 at zhipu/glm52 + kimi + ds/v4pro pricing).
  *
  * ## Pre-registered decision matrix
  *
@@ -48,7 +48,7 @@
  *
  *   1. Allowed (per `EVAL_GUIDELINES.md` §"Judge 模型选择约束"):
  *      Self-judge by the orchestrating Claude session (audit JSON dump),
- *      OR panel-internal majority vote (zhipu/glm51 + ds/v4pro + kimi).
+ *      OR panel-internal majority vote (zhipu/glm52 + ds/v4pro + kimi).
  *
  *   2. Forbidden: anthropic claude / openai gpt — they're outside the
  *      panel distribution and bias the judgement (over-tolerant of
@@ -99,14 +99,14 @@ import {
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-165-handoff-wait-gate');
 
 // Panel-internal alias set covering 5 production-tier aliases:
-//   - zhipu/glm51   — known intent-vs-action floor (memory
+//   - zhipu/glm52   — known intent-vs-action floor (memory
 //                     `project_zhipu_send_message_floor`); the highest-
 //                     risk alias for prompt cross-case regression.
 //   - kimi          — separate family, validates portability.
 //   - ds/v4pro      — DeepSeek high-tier; separate family.
 //   - ds/v4flash    — DeepSeek floor-tier; cheapest, useful to bound
 //                     the weakest-model behaviour we ship for.
-//   - mmx/m27       — MiniMax family, broadens panel coverage so the
+//   - mmx/m3       — MiniMax family, broadens panel coverage so the
 //                     SHIP decision generalises across 4 distinct
 //                     model families (zhipu / moonshot / deepseek /
 //                     minimax) — directly per memory
@@ -120,11 +120,11 @@ const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-165-handoff-wait-g
 const STAGE_LABEL = 'phase1-multialias-5run-with-dump';
 const RUNS_PER_CELL = 5;
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
   'ds/v4pro',
   'ds/v4flash',
-  'mmx/m27',
+  'mmx/m3',
 ] as const;
 
 describe('Eval: FEATURE_165 v0.7.41 emit_handoff HARD PRECONDITION prompt addition', () => {

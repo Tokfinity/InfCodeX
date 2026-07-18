@@ -37,7 +37,7 @@
  *
  * **Panel**: canonical 5-alias panel per
  * `benchmark/EVAL_GUIDELINES.md` §"Canonical alias panel" —
- * `zhipu/glm51` + `kimi` + `mmx/m27` + `ds/v4pro` + `ds/v4flash`.
+ * `zhipu/glm52` + `kimi` + `mmx/m3` + `ds/v4pro` + `ds/v4flash`.
  * Original FEATURE_094 design observed 15% bypass on kimi-code /
  * minimax-coding / glm-coding, so 3 of those 5 hit the original signal
  * source; ds pro/flash adds cross-family control.
@@ -64,7 +64,7 @@
  *
  *   2. ADJUST-TO-OPTION-C  if panel_escape_rate < 15%  AND  one alias has
  *      escape_rate ≥ 25% while ≥3 others ≤ 5%
- *      → behaviour is a provider-specific quirk (likely zhipu/glm51 or
+ *      → behaviour is a provider-specific quirk (likely zhipu/glm52 or
  *        kimi structural floor — see [[zhipu_send_message_floor]]).
  *        Recommend Option C: fold path-policy hardening into FEATURE_158
  *        for the broad case, leave the floor alone (prompt won't fix

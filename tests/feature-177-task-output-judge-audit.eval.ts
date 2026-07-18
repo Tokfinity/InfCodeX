@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit driver for FEATURE_177 (v0.7.45) `task_output` Worker
  * prompt RULE D — panel-internal 3-judge majority vote
- * (zhipu/glm51 + ark/v4pro + kimi, 2/3 majority).
+ * (zhipu/glm52 + ark/v4pro + kimi, 2/3 majority).
  *
  * Per EVAL_GUIDELINES anti-pattern 7 §3 strict clause + §Judge model
  * selection. Mirrors `tests/feature-170-todo-v2-migration-judge-audit
@@ -29,7 +29,7 @@
  *
  * ## Judge panel
  *
- *   `zhipu/glm51` + `ark/v4pro` + `kimi` — 3 independent provider
+ *   `zhipu/glm52` + `ark/v4pro` + `kimi` — 3 independent provider
  *   families, all on coding-plan. 2/3 majority vote. Per
  *   `feedback_audit_binding_priority_in_prompt`: audit prompt MUST
  *   include binding ground truth at top with CRITICAL RULE wording.
@@ -74,7 +74,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-177-task-output-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

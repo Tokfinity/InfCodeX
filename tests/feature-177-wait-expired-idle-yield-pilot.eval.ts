@@ -22,7 +22,7 @@
  * - waiting status: the text should indicate the Worker is still waiting.
  *
  * Pre-registered pilot gate:
- * `v_current` should pass at least 2/3 runs on `zhipu/glm51` (a capable
+ * `v_current` should pass at least 2/3 runs on `zhipu/glm52` (a capable
  * instruction-follower that can actually demonstrate the taught idle-yield).
  * Measured 2026-06-26: 3/3 after (a) renaming `timeout` → `wait_expired`,
  * (b) the Worker prompt pending-child gate, and (c) the anti-block-peek
@@ -62,7 +62,7 @@ const DUMP_ROOT = join(
   'feature-177-wait-expired-idle-yield-pilot',
 );
 
-// Pilot alias is a capable instruction-follower (zhipu/glm51): it can
+// Pilot alias is a capable instruction-follower (zhipu/glm52): it can
 // demonstrate the taught idle-yield behavior so the gate is meaningful.
 // Weak "flash" models (ark/v4flash, ark/v4pro) structurally resist ending
 // a turn with no tool call — after this fix they downgrade to harmless
@@ -71,9 +71,9 @@ const DUMP_ROOT = join(
 // fail a strict "no tool calls" gate (a known weak-model floor, see
 // `feedback_model_structural_floor_not_prompt_tunable`). Validate them by
 // dump inspection, not by this PASS gate.
-const PILOT_PANEL: readonly ModelAlias[] = ['zhipu/glm51'] as const;
+const PILOT_PANEL: readonly ModelAlias[] = ['zhipu/glm52'] as const;
 const ALIAS_FALLBACK: Partial<Record<ModelAlias, ModelAlias>> = {
-  'zhipu/glm51': 'ark/v4pro',
+  'zhipu/glm52': 'ark/v4pro',
 };
 const RUNS_PER_CELL = 3;
 
@@ -242,7 +242,7 @@ function judgeNoFinalReport(output: string): JudgeResult {
   // idle-yield message legitimately mentions the one completed child's
   // one-line result (e.g. "review-agent: no blocking findings") — the bare
   // token "findings" must NOT trip this judge, or it false-fails clean
-  // waiting messages (observed: zhipu/glm51 "no blocking findings" + yield).
+  // waiting messages (observed: zhipu/glm52 "no blocking findings" + yield).
   const finalReportPattern =
     /(final report|final review|overall conclusion|overall assessment|总体评估|总体结论|最终报告|总体总结)/i;
   if (finalReportPattern.test(output)) {

@@ -27,6 +27,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Current coding-eval aliases and MiniMax default model.** Newly authored or
+  revised evals now route Zhipu through `zhipu/glm52` (`glm-5.2`) and MiniMax
+  through `mmx/m3` (`MiniMax-M3`). `minimax-coding` now defaults to M3 while
+  the old `zhipu/glm51` and `mmx/m27` aliases remain explicitly selectable for
+  historical replay; existing raw evidence and reports keep their original
+  route labels.
 - **AMA and Workflow orchestration cutover.** AMAW and the old model-visible
   child-task vocabulary are retired. Persisted `amaw`/`ama-workflow` settings
   migrate once to AMA, while new inputs fail with a migration hint. Workflow

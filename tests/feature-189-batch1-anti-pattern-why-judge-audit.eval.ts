@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit driver for FEATURE_189 Batch 1 ✗ 加 WHY pilot.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi) per
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi) per
  * `feedback_audit_must_see_binding` + `feedback_audit_binding_priority_in_prompt`.
  * Re-judges 4 case-specific anti-pattern compliance questions on each
  * pilot run.
@@ -33,7 +33,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-batch1-anti-pattern-why-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['A_scratch_path', 'B_multi_question', 'C_send_message_restraint', 'D_edit_fail_recovery'] as const;
 type CaseId = typeof CASE_IDS[number];

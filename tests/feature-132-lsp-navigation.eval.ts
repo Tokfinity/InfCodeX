@@ -47,7 +47,7 @@ import {
 const MODE = process.env.KODAX_F132_PROBE ?? 'pilot';
 const SCALE = MODE === 'scale';
 
-const SCALE_PANEL: readonly ModelAlias[] = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash'];
+const SCALE_PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/v4pro', 'ark/v4flash'];
 const PILOT_PANEL: readonly ModelAlias[] = ['ark/v4flash'];
 const RUNS = SCALE ? 3 : 1;
 

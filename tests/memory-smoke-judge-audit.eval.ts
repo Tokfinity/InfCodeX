@@ -37,7 +37,7 @@
  *
  * ## Panel & aggregation
  *
- * Judges: zhipu/glm51 + ark/v4pro + kimi — 3 independent families.
+ * Judges: zhipu/glm52 + ark/v4pro + kimi — 3 independent families.
  * Aggregation: 2/3 majority. Ties (1 PASS / 1 FAIL / 1 UNCLEAR) = UNCLEAR.
  * Total: 45 rows × 3 judges = 135 LLM calls (~$1.5-2).
  *
@@ -71,7 +71,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-124-memory-smoke-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 interface SmokeRow {
   readonly caseId: 'S1_write' | 'S2_read' | 'S3_no_duplicate';

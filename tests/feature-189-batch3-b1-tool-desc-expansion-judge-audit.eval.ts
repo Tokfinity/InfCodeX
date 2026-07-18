@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit for FEATURE_189 Batch 3 B.1 tool description expansion pilot.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi).
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi).
  *
  * Reads from: feature-189-batch3-b1-tool-desc-expansion-pilot/
  * Writes to:  feature-189-batch3-b1-tool-desc-expansion-judge-audit/
@@ -29,7 +29,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-batch3-b1-tool-desc-expansion-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['C1_github_url_prefer_gh', 'C2_module_exploration_pulltool', 'C3_refactor_impact_first', 'C4_websearch_markdown_cite'] as const;
 type CaseId = typeof CASE_IDS[number];

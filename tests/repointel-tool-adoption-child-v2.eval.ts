@@ -301,7 +301,7 @@ function extractFirstToolNameFromText(text: string): string | null {
 
 const STAGE_LABEL = 'phase1-f1v2-f2-child-realobj-negcases-3variants-3runs';
 const RUNS_PER_CELL = 3;
-const PANEL_ALIASES = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
+const PANEL_ALIASES = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption-child-v2');
 
 describe('Eval Suite A: Repo-intelligence pull-tool adoption — CHILD (F1v2 + F2) with real production objectives', () => {

@@ -19,7 +19,7 @@
  *
  * **Topology** — Canonical 5-alias panel × 3 cases × 3 runs = 45 cells.
  *                Aliases per EVAL_GUIDELINES §266-280 (frozen 2026-05-21):
- *                  zhipu/glm51 + kimi + mmx/m27 + ark/v4pro + ark/v4flash.
+ *                  zhipu/glm52 + kimi + mmx/m3 + ark/v4pro + ark/v4flash.
  *                Budget ~$2.25 / ~25 min.
  *
  * **Pre-registered SHIP gate** (FROZEN 2026-05-23 before any run; per
@@ -41,7 +41,7 @@
  * **LLM-judge audit** — see `tests/memory-smoke-judge-audit.eval.ts`.
  *   Required per EVAL_GUIDELINES §172 (反模式 7 §3): every cell at least
  *   1 sampled fail/pass re-judged by 3-judge panel-internal majority
- *   (zhipu/glm51 + ark/v4pro + kimi). Disagreement >10% (>2/20) → data
+ *   (zhipu/glm52 + ark/v4pro + kimi). Disagreement >10% (>2/20) → data
  *   invalid, eval rerun. NO anthropic/openai judges per §180-183.
  *
  * **Why panel-internal majority (not self-judge by orchestrator)**:
@@ -56,7 +56,7 @@
  *   2026-05-23 noted (a) claudecode tested Sonnet/Haiku, KodaX runs
  *   distillation-trained coding plans where prompts behave differently;
  *   (b) 2-alias × 2-run smoke gave 11/12 PASS but provided weak signal
- *   for unmeasured alias (mmx/m27, kimi, ark/v4pro). This Layer 2 panel
+ *   for unmeasured alias (mmx/m3, kimi, ark/v4pro). This Layer 2 panel
  *   closes that gap. Soft-gate language removed.
  *
  * Skips when no canonical-panel API key is set.
@@ -86,9 +86,9 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 // All coding-plan providers; 4 independent families (Zhipu / Moonshot /
 // MiniMax / DeepSeek via Ark) + DeepSeek floor for in-family signal.
 const REQUESTED: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ];
@@ -389,7 +389,7 @@ interface ProbeRow {
 describe('FEATURE_124 Phase E — memory subsystem smoke eval', () => {
   const aliases = availableAliases(...REQUESTED);
   if (aliases.length === 0) {
-    it('skips: no provider API keys for ark/v4flash or zhipu/glm51', () => {
+    it('skips: no provider API keys for ark/v4flash or zhipu/glm52', () => {
       // no-op
     });
     return;

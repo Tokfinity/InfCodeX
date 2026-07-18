@@ -87,7 +87,7 @@ function resolvePanel(): ModelAlias[] {
   if (raw && raw.trim().length > 0) {
     return raw.split(',').map((s) => s.trim()).filter(Boolean) as ModelAlias[];
   }
-  return ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash'] as ModelAlias[];
+  return ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/v4pro', 'ark/v4flash'] as ModelAlias[];
 }
 
 function promptFor(variant: Variant): string {

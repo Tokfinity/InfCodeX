@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit for FEATURE_189 Batch 4 quantitative → qualitative rewrite pilot.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi).
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi).
  * Re-judges 4 case-specific semantic questions that the regex judge couldn't
  * fully capture (especially C2 plan structure — model often emits markdown
  * plan content without binding exit_plan_mode tool, which the regex judge
@@ -33,7 +33,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-batch4-quant-to-qual-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['C1_subject_brevity', 'C2_plan_structure', 'C3_large_file_decision', 'C4_multi_file_lookup'] as const;
 type CaseId = typeof CASE_IDS[number];

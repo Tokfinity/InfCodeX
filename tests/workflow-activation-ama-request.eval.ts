@@ -30,8 +30,8 @@
  * (proves the FEATURE_248 boundary holds); TOOLS must contain run_workflow (proves the
  * widened gate produced an AMA surface with the tool).
  *
- * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm51 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-ama-request.eval.ts
- * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm51,mmx/m27,kimi,ark/v4flash npm run test:eval -- tests/workflow-activation-ama-request.eval.ts
+ * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm52 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-ama-request.eval.ts
+ * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm52,mmx/m3,kimi,ark/v4flash npm run test:eval -- tests/workflow-activation-ama-request.eval.ts
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -116,7 +116,7 @@ const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'workflow-activation-ama-req
 function resolvePanel(): ModelAlias[] {
   const raw = process.env.KODAX_EVAL_ALIASES;
   if (raw && raw.trim().length > 0) return availableAliases(...(raw.split(',').map((s) => s.trim()) as ModelAlias[]));
-  return availableAliases('zhipu/glm51', 'mmx/m27', 'kimi', 'ark/v4flash');
+  return availableAliases('zhipu/glm52', 'mmx/m3', 'kimi', 'ark/v4flash');
 }
 
 async function activationSignal(

@@ -43,9 +43,9 @@ const MODE = process.env.KODAX_F178_PROBE ?? 'pilot';
 const SCALE = MODE === 'scale';
 
 const DEFAULT_SCALE_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ds/v4pro',
   'ds/v4flash',
 ];

@@ -100,9 +100,9 @@ const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-120-child-steering
 const STAGE_LABEL = 'phase1-multialias-5run-with-dump';
 const RUNS_PER_CELL = 5;
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/glm51',
   'ds/v4pro',
 ] as const;

@@ -5,7 +5,7 @@
  *
  * The main FEATURE_170 Layer 2 eval (2026-05-17, see
  * `tests/feature-170-todo-v2-migration.eval.ts`) shipped per cross-method
- * convergence, BUT zhipu/glm51 C3 regressed from v_baseline 80% → v_proposed
+ * convergence, BUT zhipu/glm52 C3 regressed from v_baseline 80% → v_proposed
  * 20% (-60pp), while the other 4 aliases held 100% on v_proposed C3.
  *
  * Layer A LLM judge audit confirmed the regression is REAL (not regex
@@ -74,7 +74,7 @@ import {
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-170-prompt-iteration-pilot');
 
 // 3 aliases: zhipu (target — failed C3), ds (control — was 100%), kimi (control — was 100%)
-const PILOT_ALIASES = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const PILOT_ALIASES = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 // Only mid-task suite — the 3 cases that actually exercise the changed prompt section.
 const PILOT_CASE_IDS = new Set([

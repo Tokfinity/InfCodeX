@@ -434,8 +434,8 @@ const IS_PILOT = process.env.KODAX_EVAL_PILOT === '1';
  * Fallbacks within family if primary unavailable.
  */
 const PANEL_ALIAS_PREFERENCE: readonly ModelAlias[] = IS_PILOT
-  ? ['zhipu/glm52', 'kimi', 'mimo/v25pro', 'mmx/m3', 'ds/v4pro', 'zhipu/glm51', 'mimo/v25', 'mmx/m27', 'ds/v4flash', 'ark/v4flash']
-  : ['zhipu/glm52', 'kimi', 'mimo/v25pro', 'mmx/m3', 'ds/v4pro', 'zhipu/glm51', 'mimo/v25', 'mmx/m27', 'ds/v4flash', 'ark/v4flash'];
+  ? ['zhipu/glm52', 'kimi', 'mimo/v25pro', 'mmx/m3', 'ds/v4pro', 'zhipu/glm52', 'mimo/v25', 'mmx/m3', 'ds/v4flash', 'ark/v4flash']
+  : ['zhipu/glm52', 'kimi', 'mimo/v25pro', 'mmx/m3', 'ds/v4pro', 'zhipu/glm52', 'mimo/v25', 'mmx/m3', 'ds/v4flash', 'ark/v4flash'];
 
 const RUNS_PER_CELL = IS_PILOT ? 1 : 3;
 

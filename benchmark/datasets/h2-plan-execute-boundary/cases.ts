@@ -382,7 +382,7 @@ const REAL_REPLAY_CASES: readonly H2BoundaryCase[] = [
     userMessage:
       'KodaX 当前 7 个 tests/*.eval.ts 各自 inline (provider, model, apiKeyEnv) 三元组，没有共享 harness。' +
       '实装 prompt-eval 测试基础设施模块化：' +
-      '(1) 建 benchmark/harness/aliases.ts，收敛到 8 个用户指定 coding-plan 短名 (zhipu/glm51, kimi, mimo/v25, mimo/v25pro, mmx/m27, ark/glm51, ds/v4pro, ds/v4flash)；' +
+      '(1) 建 benchmark/harness/aliases.ts，收敛到 8 个用户指定 coding-plan 短名 (zhipu/glm52, kimi, mimo/v25, mimo/v25pro, mmx/m3, ark/glm51, ds/v4pro, ds/v4flash)；' +
       '(2) benchmark/harness/judges.ts 提供共享 judges (mustContainAll, mustContainAny, mustNotContain, mustMatch, mustNotMatch, lengthWithin, parseAndAssert, runJudges) 含 5 类 category (format/correctness/style/safety/custom)；' +
       '(3) benchmark/harness/harness.ts 提供 runOneShot / runABComparison / runBenchmark 量化版（multi-run + variance + decomposed quality + 9 段 REPORT.md）；' +
       '(4) benchmark/harness/persist.ts 把结果存 benchmark/results/<timestamp>/；' +

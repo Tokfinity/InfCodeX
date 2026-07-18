@@ -3,7 +3,7 @@
  * Layer 2 eval — panel-internal 3-judge majority vote.
  *
  * Per EVAL_GUIDELINES anti-pattern 7 §3 + §Judge model selection. The
- * 3 judges (zhipu/glm51 + ark/v4pro + kimi) cover 3 independent
+ * 3 judges (zhipu/glm52 + ark/v4pro + kimi) cover 3 independent
  * provider families per the canonical alias panel.
  *
  * ## Input
@@ -65,7 +65,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-104-v0742-hygiene-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

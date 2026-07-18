@@ -2,7 +2,7 @@
  * LLM-judge audit driver for the PLAN-FIRST quant→qual canonical panel
  * (ADR-033 hygiene follow-up to FEATURE_188).
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi) per
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi) per
  * `feedback_audit_must_see_binding` + `feedback_audit_binding_priority_in_prompt`.
  * Re-judges both `plan_first_compliance` and `dispatch_intent`
  * categories from the canonical panel dump.
@@ -36,7 +36,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-plan-first-quant-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['audit_4_packages', 'edit_3_modules'] as const;
 type CaseId = typeof CASE_IDS[number];

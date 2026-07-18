@@ -64,7 +64,7 @@ const DUMP_ROOT = join(
 // aliases (kimi / zhipu / minimax — 3 independent families). Calls are
 // subscription-covered (no marginal token bill). availableAliases() drops
 // any whose key is absent.
-const PILOT_PANEL: readonly ModelAlias[] = ['kimi', 'zhipu/glm51', 'mmx/m27'] as const;
+const PILOT_PANEL: readonly ModelAlias[] = ['kimi', 'zhipu/glm52', 'mmx/m3'] as const;
 const ALIAS_FALLBACK: Partial<Record<ModelAlias, ModelAlias>> = {};
 const RUNS_PER_CELL = 5;
 

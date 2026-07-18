@@ -62,7 +62,7 @@ the current KodaX adapter path and direct raw wire behavior.
 benchmark/                    Top-level folder for everything benchmark-related.
   README.md                   This file. Convention guide + KodaX-vs-LiveCanvas rationale.
   harness/                    Code modules. Version-tracked.
-    aliases.ts                Short alias map: 'zhipu/glm51' → { provider, model, apiKeyEnv }
+    aliases.ts                Short alias map: 'zhipu/glm52' → { provider, model, apiKeyEnv }
     judges.ts                 Reusable judges with categories: format / correctness / style / safety / custom
                               Factories: mustContainAll/Any, mustNotContain, mustMatch/NotMatch,
                               lengthWithin, parseAndAssert, runJudges (decomposed aggregation)
@@ -90,12 +90,13 @@ and import from `../benchmark/harness/*` for shared helpers.
 
 | Alias | Provider | Model | API key env |
 |---|---|---|---|
+| `zhipu/glm52` | `zhipu-coding` | `glm-5.2` | `ZHIPU_CODING_API_KEY` |
 | `zhipu/glm51` | `zhipu-coding` | `glm-5.1` | `ZHIPU_CODING_API_KEY` |
 | `kimi` | `kimi-code` | `kimi-for-coding` | `KIMI_CODE_API_KEY` |
 | `mimo/v25` | `mimo-coding` | `mimo-v2.5` | `MIMO_CODING_API_KEY` |
 | `mimo/v25pro` | `mimo-coding` | `mimo-v2.5-pro` | `MIMO_CODING_API_KEY` |
-| `mmx/m27` | `minimax-coding` | `MiniMax-M2.7` | `MINIMAX_CODING_API_KEY` |
 | `mmx/m3` | `minimax-coding` | `MiniMax-M3` | `MINIMAX_CODING_API_KEY` |
+| `mmx/m27` | `minimax-coding` | `MiniMax-M2.7` | `MINIMAX_CODING_API_KEY` |
 | `ark/glm51` | `ark-coding` | `glm-5.1` | `ARK_CODING_API_KEY` |
 | `ark/v4pro` | `ark-coding` | `deepseek-v4-pro` | `ARK_CODING_API_KEY` |
 | `ark/v4flash` | `ark-coding` | `deepseek-v4-flash` | `ARK_CODING_API_KEY` |
@@ -108,6 +109,11 @@ without coaching, and most prompt-quality issues we've debugged historically
 (Issue 124 dispatch regressions, distillation persona bleed) reproduce on
 the coding-plan side.
 
+New and revised evals use `zhipu/glm52` and `mmx/m3`. The older
+`zhipu/glm51` / `mmx/m27` aliases remain available only for explicit replay of
+frozen historical experiments; historical raw and reports keep their original
+route labels.
+
 To add a new alias, extend `MODEL_ALIASES` in `aliases.ts`.
 
 ## Pattern 1 — One-shot probe
@@ -119,7 +125,7 @@ import { describe, it, expect } from 'vitest';
 import { availableAliases } from '../benchmark/harness/aliases.js';
 import { runOneShot } from '../benchmark/harness/harness.js';
 
-const TARGETS = availableAliases('zhipu/glm51', 'ds/v4flash');
+const TARGETS = availableAliases('zhipu/glm52', 'ds/v4flash');
 
 describe.skipIf(TARGETS.length === 0)('my prompt eval', () => {
   for (const alias of TARGETS) {
@@ -145,7 +151,7 @@ import { availableAliases } from '../benchmark/harness/aliases.js';
 import { runABComparison, formatComparisonTable } from '../benchmark/harness/harness.js';
 import { mustContainAll, mustNotMatch } from '../benchmark/harness/judges.js';
 
-const TARGETS = availableAliases('zhipu/glm51', 'mmx/m27', 'ds/v4flash');
+const TARGETS = availableAliases('zhipu/glm52', 'mmx/m3', 'ds/v4flash');
 
 describe.skipIf(TARGETS.length === 0)('refactor instruction prompt — v1 vs v2', () => {
   it('v2 passes on more models than v1', async () => {
@@ -192,7 +198,7 @@ import {
   type PromptJudge,
 } from '../benchmark/harness/judges.js';
 
-const TARGETS = availableAliases('zhipu/glm51', 'mmx/m27', 'ds/v4flash');
+const TARGETS = availableAliases('zhipu/glm52', 'mmx/m3', 'ds/v4flash');
 
 describe.skipIf(TARGETS.length === 0)('refactor prompt v1 vs v2 — benchmark', () => {
   it('v2 is dominant on every model and improves correctness', async () => {

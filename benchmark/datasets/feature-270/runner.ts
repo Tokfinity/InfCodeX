@@ -128,7 +128,7 @@ export async function runFeature270Pilot(options: {
   readonly allowGeneration: boolean;
 }): Promise<Feature270RunSummary> {
   const manifest = await prepareRun(options.allowGeneration);
-  const specs = layer2Specs().filter((spec) => spec.alias === 'zhipu/glm51'
+  const specs = layer2Specs().filter((spec) => spec.alias === 'zhipu/glm52'
     && spec.repetition === 0
     && (
       spec.caseId === 'parallel'

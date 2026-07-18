@@ -48,9 +48,9 @@ const SCALE = MODE === 'scale';
 // `KODAX_F094_ALIASES` env can override (comma-separated short ids) — used to resume
 // after a partial-completion run without redoing already-completed aliases.
 const DEFAULT_SCALE_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ds/v4pro',
   'ds/v4flash',
 ];

@@ -18,7 +18,7 @@
  *     exist; else sample 1 of whichever exists.
  *   - pull-tool-correct axis: same pattern.
  *
- * Aggregation: 3-judge majority (zhipu/glm51 + ds/v4pro + kimi); ties or
+ * Aggregation: 3-judge majority (zhipu/glm52 + ds/v4pro + kimi); ties or
  * unparseable replies = UNCLEAR. Disagreement = (judge majority ≠ regex
  * verdict). >10% across audited dump-runs → suite INVALID.
  *
@@ -39,7 +39,7 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 
 const DUMP_SOURCE_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-worker-dispatch-objective');
 const AUDIT_DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-worker-dispatch-objective-judge-audit');
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   runIndex: number;

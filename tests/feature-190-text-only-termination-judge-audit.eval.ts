@@ -7,7 +7,7 @@
  *
  * ## Judge panel (per EVAL_GUIDELINES Judge §)
  *
- *   - zhipu/glm51 — Zhipu family
+ *   - zhipu/glm52 — Zhipu family
  *   - ark/v4pro   — DeepSeek family (via ark-coding gateway)
  *   - kimi        — Moonshot family
  *
@@ -58,7 +58,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-190-text-only-termination-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = [
   'C1_all_todos_completed',

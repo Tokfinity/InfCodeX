@@ -54,9 +54,9 @@ const MIRROR_ROOT = path.join(os.tmpdir(), 'kodax-feature-259-eval-mirror');
 const HARD_CAP_USD = 75;
 const PILOT_ALIAS: ModelAlias = 'ark/v4flash';
 const DECISION_ALIASES: readonly ModelAlias[] = [
-  'zhipu/glm51', 'ark/k27', 'mmx/m27', 'ark/v4pro', 'ark/v4flash',
+  'zhipu/glm52', 'ark/k27', 'mmx/m3', 'ark/v4pro', 'ark/v4flash',
 ];
-const LAYER_3_DECISION_ALIASES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4flash'];
+const LAYER_3_DECISION_ALIASES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4flash'];
 const SEVERITY_RANK: Readonly<Record<ReviewSeverity, number>> = {
   low: 0, medium: 1, high: 2, critical: 3,
 };

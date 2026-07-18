@@ -70,7 +70,7 @@ import {
 
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-125-block-iteration-pilot');
 
-const PILOT_ALIASES = ['kimi', 'ds/v4pro', 'zhipu/glm51'] as const;
+const PILOT_ALIASES = ['kimi', 'ds/v4pro', 'zhipu/glm52'] as const;
 const RUNS_PER_CELL = 5;
 
 describe('Eval: FEATURE_125 block iteration pilot (v0.7.41) — V1/V2/V3 × c1+c2 × kimi/ds/zhipu × 5', () => {

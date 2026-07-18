@@ -42,9 +42,9 @@ type Mode = 'pilot' | 'scale' | 'skip';
 const MODE: Mode = (process.env.KODAX_F123_MODE ?? 'skip') as Mode;
 
 const DEFAULT_SCALE_PANEL: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ];

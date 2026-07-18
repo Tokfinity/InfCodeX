@@ -117,7 +117,7 @@ const CASES: readonly EvalCase[] = [
   },
 ];
 
-const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash'];
+const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/v4pro', 'ark/v4flash'];
 
 // Documented fallback (per feedback_harness_alias_fallback): ark-coding's
 // DeepSeek slots fall back to the deepseek official API when the ark CodingPlan
@@ -271,7 +271,7 @@ describe('FEATURE_246 run_workflow tool-description trigger', () => {
       //   fan-out, so models split between them; (2) single-turn trigger is
       //   variable run-to-run (anti-pattern 11). Per-alias rates are logged for
       //   inspection; the floor guards only against the tool becoming totally
-      //   undiscoverable. Observed: P1 reliably via kimi + mmx/m27; P2 via kimi
+      //   undiscoverable. Observed: P1 reliably via kimi + mmx/m3; P2 via kimi
       //   (variable). No alias over-triggers.
       const intendedByAnyAlias = (c: EvalCase): boolean =>
         panel.some((a) => (intentRate.get(c.id)!.get(a) ?? 0) > 0);

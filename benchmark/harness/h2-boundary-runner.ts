@@ -10,7 +10,7 @@
  *     '../benchmark/datasets/h2-plan-execute-boundary/cases.js';
  *   import { availableAliases } from '../benchmark/harness/aliases.js';
  *
- *   const aliases = availableAliases('zhipu/glm51', 'kimi', 'ds/v4flash');
+ *   const aliases = availableAliases('zhipu/glm52', 'kimi', 'ds/v4flash');
  *   const result = await runH2BoundaryEval({
  *     cases: H2_BOUNDARY_TASKS,
  *     aliases,

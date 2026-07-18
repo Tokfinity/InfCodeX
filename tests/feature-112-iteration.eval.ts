@@ -1,7 +1,7 @@
 /**
  * Iteration eval: FEATURE_112 prompt-length / H0-anchor variants.
  *
- * Stage 1 (`tests/feature-112-read-scope-routing.eval.ts`) found `mmx/m27`
+ * Stage 1 (`tests/feature-112-read-scope-routing.eval.ts`) found `mmx/m3`
  * regressing on `read-shallow-qa` from 100% → 0% under `feature_112` —
  * the actual cause was prompt-length-induced output garbling
  * (`"packageashawn张扬你是"` hallucination), not "model upgrades simple

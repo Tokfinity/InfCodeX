@@ -22,7 +22,7 @@
  *
  *   SHIP (keep dirty-reject) IFF all of:
  *     (a) ≥4 of 5 alias达 ≥60% recovery rate on C1 (additive scope)
- *     (b) zhipu/glm51 NOT at 0% on C1 (structural floor → revert)
+ *     (b) zhipu/glm52 NOT at 0% on C1 (structural floor → revert)
  *     (c) ≥3 of 5 alias达 ≥40% recovery rate on C2 (pivot scope)
  *     (d) self-judge audit disagreement < 10% on regex-fail samples
  *
@@ -86,9 +86,9 @@ const RUNS_PER_CELL = 5;
 // 4 distinct model families (zhipu / moonshot / minimax / deepseek)
 // with deepseek double-tier (flash floor + pro high-end).
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ds/v4pro',
   'ds/v4flash',
 ] as const;

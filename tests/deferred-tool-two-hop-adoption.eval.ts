@@ -342,7 +342,7 @@ const PILOT = process.env.KODAX_EVAL_PILOT === '1';
 const PANEL_ALIASES = (
   PILOT
     ? ['ark/v4flash']
-    : ['zhipu/glm51', 'ark/k27', 'mmx/m27', 'ark/v4pro', 'ark/v4flash']
+    : ['zhipu/glm52', 'ark/k27', 'mmx/m3', 'ark/v4pro', 'ark/v4flash']
 ) as const;
 const RUNS_PER_CELL = PILOT ? 1 : 3;
 const STAGE_LABEL = PILOT ? 'pilot-ark-1run' : 'panel-5alias-3runs';

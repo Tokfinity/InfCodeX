@@ -365,7 +365,7 @@ function hasPullToolCorrectMention(objective: string, preferredForCase: readonly
 
 const STAGE_LABEL = 'phase2-f0-worker-dispatch-objective-fanout-redesign-3variants-3runs';
 const RUNS_PER_CELL = 3;
-const PANEL_ALIASES = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
+const PANEL_ALIASES = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-worker-dispatch-objective');
 
 describe('Eval Suite 0: Worker dispatch objective quality (F0a + F0b)', () => {

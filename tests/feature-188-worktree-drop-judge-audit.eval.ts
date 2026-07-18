@@ -3,7 +3,7 @@
  * `dispatch_child_task` worktree drop + qualitative dispatchRules
  * Layer 2 panel.
  *
- * 3-judge majority vote across `zhipu/glm51` + `ark/v4pro` + `kimi`
+ * 3-judge majority vote across `zhipu/glm52` + `ark/v4pro` + `kimi`
  * (per `feedback_canonical_eval_alias_panel` 2026-05-21 update +
  * `feedback_audit_binding_priority_in_prompt`).
  *
@@ -41,7 +41,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-188-worktree-drop-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 // The panel covers exactly 2 cases (C4 + C5) — both share the FEATURE_177
 // CASES list. Filter so the audit only re-judges those two cases (not

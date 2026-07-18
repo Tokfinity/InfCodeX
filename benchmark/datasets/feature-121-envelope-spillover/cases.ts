@@ -46,7 +46,7 @@
  *
  * Concurrency: per-alias single-call (anti-pattern 3), cross-alias serial.
  * Aliases (panel-internal, no anthropic/openai per 2026-05-12 rule):
- *   zhipu/glm51 + kimi + ds/v4flash + mmx/m27 — 4 independent families.
+ *   zhipu/glm52 + kimi + ds/v4flash + mmx/m3 — 4 independent families.
  */
 
 import type { PromptVariant } from '../../harness/harness.js';

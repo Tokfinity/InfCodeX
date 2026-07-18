@@ -43,7 +43,7 @@
  *   (feedback_pre_registered_gate_saturation).
  *
  * Run (pilot):  KODAX_EVAL_ALIASES=mimo/v25 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation.eval.ts
- * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm51,mmx/m27,mimo/v25 npm run test:eval -- tests/workflow-activation.eval.ts
+ * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm52,mmx/m3,mimo/v25 npm run test:eval -- tests/workflow-activation.eval.ts
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -156,7 +156,7 @@ const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'workflow-activation');
 function resolvePanel(): ModelAlias[] {
   const raw = process.env.KODAX_EVAL_ALIASES;
   if (raw && raw.trim().length > 0) return availableAliases(...(raw.split(',').map((s) => s.trim()) as ModelAlias[]));
-  return availableAliases('zhipu/glm51', 'mmx/m27', 'mimo/v25');
+  return availableAliases('zhipu/glm52', 'mmx/m3', 'mimo/v25');
 }
 
 /**

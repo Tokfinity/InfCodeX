@@ -22,8 +22,8 @@ import {
 export const FEATURE_270_BASELINE_COMMIT =
   'a8c9c28330796a4827c4e44f135f1f42481e31ac';
 
-export const FEATURE_270_ALIASES = ['zhipu/glm51', 'mmx/m27'] as const;
-export const FEATURE_270_LAYER_3_ALIAS = 'zhipu/glm51' as const;
+export const FEATURE_270_ALIASES = ['zhipu/glm52', 'mmx/m3'] as const;
+export const FEATURE_270_LAYER_3_ALIAS = 'zhipu/glm52' as const;
 
 export const FEATURE_270_LIMITS = {
   layer2: {
@@ -186,7 +186,7 @@ function experimentRevision(
 function evaluationPlan(): object {
   return {
     pilot: {
-      alias: 'zhipu/glm51', cases: ['parallel', 'fresh_capacity', 'no_workflow'],
+      alias: 'zhipu/glm52', cases: ['parallel', 'fresh_capacity', 'no_workflow'],
       arms: ['baseline', 'treatment'], repetitions: 1, calls: 6,
       reuse: 'the same repetition-0 cells are reused by Layer 2',
     },
@@ -275,12 +275,12 @@ export function feature270Pricing(alias: ModelAlias): {
   if (exact !== undefined) {
     return { rate: exact, source: `${target.provider}/${target.model}` };
   }
-  if (alias === 'zhipu/glm51') {
+  if (alias === 'zhipu/glm52') {
     const routed = getCostRate('zhipu-coding', 'glm-5.2');
     if (routed !== undefined) {
       return {
         rate: routed,
-        source: 'zhipu-coding/glm-5.2 nominal rate for the upstream-routed glm-5.1 alias',
+        source: 'zhipu-coding/glm-5.2',
       };
     }
   }

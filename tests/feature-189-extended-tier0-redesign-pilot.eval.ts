@@ -19,7 +19,7 @@
  * The DROP rationale at decision time:
  *   B.4: ark/v4flash 5/5 textLen <220 systematic regression on C4 when
  *        RULE A/B/C labels removed.
- *   B.5: zhipu/glm51 -2pf -2dp + ark/v4pro -2pf when version metadata
+ *   B.5: zhipu/glm52 -2pf -2dp + ark/v4pro -2pf when version metadata
  *        stripped (mid-tier model attention anchors).
  *
  * Under current substrate, this pilot tests whether those regressions
@@ -51,13 +51,13 @@
  *      PLAN GRANULARITY + REPO INTELLIGENCE). Tests B.5 — does removing
  *      version parentheticals break model's ability to navigate sections?
  *
- * 1 alias (ark/v4flash for B.4, zhipu/glm51 for B.5) × 3 case × 2 variant
+ * 1 alias (ark/v4flash for B.4, zhipu/glm52 for B.5) × 3 case × 2 variant
  * × 3 runs = 18 cells per sub-block (~$0.6 each, ~$1.2 total).
  *
  * Pre-registered SHIP gate (sub-block independent):
  *   B.4: ark/v4flash proposed C1+C2+C3 per-case ≥ baseline − 1 cell
  *        → revisit B.4 DROP (escalate to 5-alias panel)
- *   B.5: zhipu/glm51 proposed per-case ≥ baseline − 1 cell + ark/v4pro
+ *   B.5: zhipu/glm52 proposed per-case ≥ baseline − 1 cell + ark/v4pro
  *        cross-check → revisit B.5 DROP
  *   If pilot shows clear regression under current substrate → DROP holds
  *
@@ -444,7 +444,7 @@ describe('FEATURE_189-extended Tier 0 redesign pilot — B.4 RULE labels', () =>
 });
 
 describe('FEATURE_189-extended Tier 0 redesign pilot — B.5 version metadata', () => {
-  const aliases = availableAliases('zhipu/glm51');
+  const aliases = availableAliases('zhipu/glm52');
 
   if (aliases.length === 0) {
     it('skips: no pilot alias key in env', () => {

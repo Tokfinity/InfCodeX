@@ -36,7 +36,7 @@
  *   B1 SHIPS iff: C1 < 80% on ≥ 1 alias AND C2 ≥ 80% on ≥ 3/5 alias
  *      SKIPS if C1 ≥ 80% on all aliases (baseline already adequate)
  *      OR C2 < 50% on majority (retry ineffective — wasted budget)
- *      Special: zhipu/glm51 with C2 < 30% gets alias-specific cap=1
+ *      Special: zhipu/glm52 with C2 < 30% gets alias-specific cap=1
  *      (intent floor unrecoverable; do not waste two retries)
  *
  *   B2 SHIPS unconditionally — smoking-gun fix; the false-COMPLETE
@@ -61,7 +61,7 @@
  * process them without rerunning the probe.
  *
  * Judge model constraint (EVAL_GUIDELINES §"Judge 模型选择约束"):
- * panel-internal 3-way majority on zhipu/glm51 + ds/v4pro + kimi.
+ * panel-internal 3-way majority on zhipu/glm52 + ds/v4pro + kimi.
  * Anthropic claude / OpenAI gpt are FORBIDDEN as judges.
  *
  * ## Run
@@ -98,11 +98,11 @@ const RUNS_PER_CELL = 5;
 // `feedback_eval_partial_alias_expansion` if a PARTIAL outcome emerges,
 // the next step is alias expansion before prompt iteration.
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
   'ds/v4pro',
   'ds/v4flash',
-  'mmx/m27',
+  'mmx/m3',
 ] as const;
 
 describe('Eval: FEATURE_167 v0.7.41 Evaluator terminal-verdict fallback', () => {

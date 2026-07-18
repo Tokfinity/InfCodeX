@@ -16,7 +16,7 @@
  *  - Production-shaped MCP tool definitions advertised via the tools channel.
  *  - Raw dump to os.tmpdir()/kodax-eval-dumps/feature-205b-mcp-parallel/.
  *  - 3-judge panel-internal LLM audit is run by a companion pass over the dump
- *    (zhipu/glm51 + ark/v4pro + kimi; never anthropic/openai).
+ *    (zhipu/glm52 + ark/v4pro + kimi; never anthropic/openai).
  *
  * Pre-registered SHIP gate:
  *  - C1 independent-fan-out: 4/5 alias proposed parallel-rate >= baseline + 30pp.
@@ -42,9 +42,9 @@ interface AliasTarget {
 }
 
 const PANEL: AliasTarget[] = [
-  { alias: 'zhipu/glm51', provider: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
+  { alias: 'zhipu/glm52', provider: 'zhipu-coding', model: 'glm-5.2', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
   { alias: 'kimi', provider: 'kimi-code', model: 'kimi-for-coding', apiKeyEnv: 'KIMI_CODE_API_KEY' },
-  { alias: 'mmx/m27', provider: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
+  { alias: 'mmx/m3', provider: 'minimax-coding', model: 'MiniMax-M3', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   { alias: 'ark/v4pro', provider: 'ark-coding', model: 'deepseek-v4-pro', apiKeyEnv: 'ARK_CODING_API_KEY' },
   { alias: 'ark/v4flash', provider: 'ark-coding', model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
 ];

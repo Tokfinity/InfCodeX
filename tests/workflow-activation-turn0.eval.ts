@@ -35,8 +35,8 @@
  *   evidence the prompt-level lever is insufficient -> pivot to a structured PLAN-FIRST
  *   solo-vs-orchestrate field (flow fix), not more prompt iteration.
  *
- * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm51 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-turn0.eval.ts
- * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm51,mmx/m27,kimi npm run test:eval -- tests/workflow-activation-turn0.eval.ts
+ * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm52 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-turn0.eval.ts
+ * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm52,mmx/m3,kimi npm run test:eval -- tests/workflow-activation-turn0.eval.ts
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -138,7 +138,7 @@ const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'workflow-activation-turn0')
 function resolvePanel(): ModelAlias[] {
   const raw = process.env.KODAX_EVAL_ALIASES;
   if (raw && raw.trim().length > 0) return availableAliases(...(raw.split(',').map((s) => s.trim()) as ModelAlias[]));
-  return availableAliases('zhipu/glm51', 'mmx/m27', 'kimi');
+  return availableAliases('zhipu/glm52', 'mmx/m3', 'kimi');
 }
 
 async function turn0Signal(

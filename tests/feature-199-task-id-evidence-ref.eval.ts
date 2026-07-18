@@ -8,7 +8,7 @@
  *     per anti-pattern 9 — this is a behavioral-neutral hygiene refactor
  *     adding a new vocabulary item; a 5-alias panel would re-prove the
  *     same null hypothesis at 5× cost).
- *   - 3-judge majority audit (zhipu/glm51 + ark/v4pro + kimi, all
+ *   - 3-judge majority audit (zhipu/glm52 + ark/v4pro + kimi, all
  *     panel-internal — per the Judge model selection constraint
  *     "NEVER use anthropic/openai", and per anti-pattern 7 §3
  *     "Negative-case judges 不能只用 regex").
@@ -85,9 +85,9 @@ const PILOT_PROBE_ALIASES: readonly ModelAlias[] = ['ark/v4flash'] as const;
  * `panel` mode for generalisation verification across 4 provider families
  * (Zhipu / Moonshot / MiniMax / DeepSeek). */
 const PANEL_PROBE_ALIASES: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ] as const;
@@ -96,7 +96,7 @@ const RUNS_PER_CELL = 3;
 
 /** 3-judge majority audit aliases (panel-internal per Judge model selection
  * constraint — NEVER anthropic/openai). Reused across pilot/audit/panel. */
-const JUDGE_ALIASES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGE_ALIASES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-199-task-id-evidence-ref');
 

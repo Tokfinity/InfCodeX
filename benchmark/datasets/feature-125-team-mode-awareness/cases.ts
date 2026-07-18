@@ -39,7 +39,7 @@
  * Per EVAL_GUIDELINES anti-pattern 7: both cases are POSITIVE
  * assertions; no negative regex. The `read` tool name is detected
  * via the multi-syntax pattern set introduced in feature-120
- * (`buildToolNamePatterns`) so zhipu/glm51's `<read>(args)` /
+ * (`buildToolNamePatterns`) so zhipu/glm52's `<read>(args)` /
  * `<tool_call>{"name":"read",...}</tool_call>` variants pass.
  *
  * **Design source**: `docs/features/v0.7.41.md` Step 5 §"Step 7" —
@@ -373,11 +373,11 @@ export function buildPromptVariantsMicroPilot(caseId: CaseId): readonly PromptVa
 
 // FEATURE_125 audit (2026-05-16) — the 4-pattern feature-120 set missed
 // several syntactic forms that Phase 1 panel actually emits:
-//   zhipu/glm51   `<tool_call id="..."><tool_name>read</tool_name>...</tool_call>`
+//   zhipu/glm52   `<tool_call id="..."><tool_name>read</tool_name>...</tool_call>`
 //   ark/glm51     `<tool_call>read<arg_key>path</arg_key>...</tool_call>`
 //   kimi          `read:0>{"path":"..."}` (the digit is kimi's tool-call serial)
 //                 and also `<tool>read</tool>` (XML-wrapper alt)
-//   mmx/m27       `[TOOL_CALL] {tool => "read", args => {...}} [/TOOL_CALL]`
+//   mmx/m3       `[TOOL_CALL] {tool => "read", args => {...}} [/TOOL_CALL]`
 //   ds/v4pro      `<read>...</read>`                                  (already matched)
 // Re-judging the same raw dumps with the broader set flipped case 1 from
 // 40% → 84% and case 2 from 48% → 60% — well above the 10% disagreement

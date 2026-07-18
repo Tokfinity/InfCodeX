@@ -42,7 +42,7 @@
  *                Pre-registered trigger: ≥ 1/3 PASS = SHIP signal.
  *   - `audit`  → same panel as pilot, plus 3-judge majority audit
  *                replays each raw text dump through 3 panel-internal
- *                judges (zhipu/glm51 + ark/v4pro + kimi) per
+ *                judges (zhipu/glm52 + ark/v4pro + kimi) per
  *                EVAL_GUIDELINES anti-pattern 7 §3.
  *   - default  → SKIP (no env, no spend).
  *

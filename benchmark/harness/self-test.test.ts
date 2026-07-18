@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import {
   availableAliases,
   ALL_MODEL_ALIASES,
+  DEFAULT_EVAL_ALIASES,
   MODEL_ALIASES,
   resolveAlias,
   type ModelAlias,
@@ -101,20 +102,46 @@ describe('FEATURE_104 aliases', () => {
     }
   });
 
-  it('availableAliases() with no args defaults to all known aliases as candidates', () => {
-    // Without setting env, this returns whatever is currently present.
-    // Test that it's a subset of ALL_MODEL_ALIASES.
-    const got = availableAliases();
-    for (const alias of got) {
-      expect(ALL_MODEL_ALIASES).toContain(alias);
+  it('availableAliases() with no args uses the current canonical eval pool', () => {
+    const envNames = [
+      'ZHIPU_CODING_API_KEY',
+      'MINIMAX_CODING_API_KEY',
+      'ARK_CODING_API_KEY',
+      'KIMI_CODE_API_KEY',
+      'MIMO_CODING_API_KEY',
+      'DEEPSEEK_API_KEY',
+    ] as const;
+    const before = new Map(envNames.map((name) => [name, process.env[name]]));
+    for (const name of envNames) delete process.env[name];
+    process.env.ZHIPU_CODING_API_KEY = 'test-key';
+    process.env.MINIMAX_CODING_API_KEY = 'test-key';
+    process.env.ARK_CODING_API_KEY = 'test-key';
+    try {
+      expect(availableAliases()).toEqual([...DEFAULT_EVAL_ALIASES]);
+      expect(DEFAULT_EVAL_ALIASES).toEqual([
+        'zhipu/glm52',
+        'ark/k27',
+        'mmx/m3',
+        'ark/v4pro',
+        'ark/v4flash',
+      ]);
+      expect(DEFAULT_EVAL_ALIASES).not.toContain('zhipu/glm51');
+      expect(DEFAULT_EVAL_ALIASES).not.toContain('mmx/m27');
+    } finally {
+      for (const [name, value] of before) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 
   it('matches the user-supplied alias scheme verbatim', () => {
+    expect(resolveAlias('zhipu/glm52')).toMatchObject({ provider: 'zhipu-coding', model: 'glm-5.2' });
     expect(resolveAlias('zhipu/glm51')).toMatchObject({ provider: 'zhipu-coding', model: 'glm-5.1' });
     expect(resolveAlias('kimi')).toMatchObject({ provider: 'kimi-code', model: 'kimi-for-coding' });
     expect(resolveAlias('mimo/v25')).toMatchObject({ provider: 'mimo-coding', model: 'mimo-v2.5' });
     expect(resolveAlias('mimo/v25pro')).toMatchObject({ provider: 'mimo-coding', model: 'mimo-v2.5-pro' });
+    expect(resolveAlias('mmx/m3')).toMatchObject({ provider: 'minimax-coding', model: 'MiniMax-M3' });
     expect(resolveAlias('mmx/m27')).toMatchObject({ provider: 'minimax-coding', model: 'MiniMax-M2.7' });
     expect(resolveAlias('ark/glm51')).toMatchObject({ provider: 'ark-coding', model: 'glm-5.1' });
     expect(resolveAlias('ark/k27')).toMatchObject({ provider: 'ark-coding', model: 'kimi-k2.7-code' });
@@ -341,7 +368,7 @@ function fixtureBenchmarkResult(): BenchmarkResult {
   // Two variants × two models × 3 runs.
   const cell = (
     variantId: string,
-    alias: 'zhipu/glm51' | 'ds/v4flash',
+    alias: 'zhipu/glm52' | 'ds/v4flash',
     quality: number,
     correctnessPassed = 2,
   ): BenchmarkCellSummary => ({
@@ -410,11 +437,11 @@ function fixtureBenchmarkResult(): BenchmarkResult {
       { id: 'v1', systemPrompt: 'old prompt', userMessage: 'task' },
       { id: 'v2', systemPrompt: 'new prompt', userMessage: 'task' },
     ],
-    models: ['zhipu/glm51', 'ds/v4flash'],
+    models: ['zhipu/glm52', 'ds/v4flash'],
     cells: [
-      cell('v1', 'zhipu/glm51', 33),
+      cell('v1', 'zhipu/glm52', 33),
       cell('v1', 'ds/v4flash', 50),
-      cell('v2', 'zhipu/glm51', 100, 6),
+      cell('v2', 'zhipu/glm52', 100, 6),
       cell('v2', 'ds/v4flash', 83, 5),
     ],
     byVariant: {
@@ -422,7 +449,7 @@ function fixtureBenchmarkResult(): BenchmarkResult {
       v2: [],
     },
     byModel: {
-      'zhipu/glm51': [],
+      'zhipu/glm52': [],
       'ds/v4flash': [],
     },
     variantsDominantOnEveryModel: ['v2'],
@@ -576,7 +603,7 @@ describe('FEATURE_104 harness — formatComparisonTable', () => {
     const outcomes: VariantOutcome[] = [
       {
         variantId: 'v1',
-        alias: 'zhipu/glm51',
+        alias: 'zhipu/glm52',
         text: 'ok',
         toolCalls: [],
         judges: [{ name: 'mustContain', passed: true }],
@@ -594,7 +621,7 @@ describe('FEATURE_104 harness — formatComparisonTable', () => {
       },
       {
         variantId: 'v2',
-        alias: 'zhipu/glm51',
+        alias: 'zhipu/glm52',
         text: 'ok2',
         toolCalls: [],
         judges: [{ name: 'mustContain', passed: true }],
@@ -616,7 +643,7 @@ describe('FEATURE_104 harness — formatComparisonTable', () => {
         v2: [outcomes[2]!, outcomes[3]!],
       },
       byModel: {
-        'zhipu/glm51': [outcomes[0]!, outcomes[2]!],
+        'zhipu/glm52': [outcomes[0]!, outcomes[2]!],
         'ds/v4flash': [outcomes[1]!, outcomes[3]!],
       },
       variantsPassingEveryModel: ['v2'],
@@ -624,7 +651,7 @@ describe('FEATURE_104 harness — formatComparisonTable', () => {
     const table = formatComparisonTable(result);
     expect(table).toContain('v1');
     expect(table).toContain('v2');
-    expect(table).toContain('zhipu/glm51');
+    expect(table).toContain('zhipu/glm52');
     expect(table).toContain('ds/v4flash');
     expect(table).toContain('PASS');
     expect(table).toContain('FAIL');

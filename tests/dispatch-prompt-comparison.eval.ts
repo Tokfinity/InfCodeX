@@ -89,8 +89,8 @@ interface ProviderTarget {
 }
 
 const PROVIDERS: ProviderTarget[] = [
-  { name: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
-  { name: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
+  { name: 'zhipu-coding', model: 'glm-5.2', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
+  { name: 'minimax-coding', model: 'MiniMax-M3', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   // kimi: KIMI_CODE_API_KEY in env returns 401 — endpoint mismatch, skip
   // deepseek: model pinned to current default (v4-flash). Earlier runs used
   // the deprecated `deepseek-chat` alias (slated for 2026-07-24 removal) and

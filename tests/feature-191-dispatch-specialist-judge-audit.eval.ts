@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit driver for FEATURE_191 dispatch specialist panel.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi) per
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi) per
  * `feedback_audit_must_see_binding` + `feedback_audit_binding_priority_in_prompt`.
  * Re-judges the `specialist_dispatch` outcome on every panel run so we
  * can compute regex-vs-LLM disagreement for the EVAL_GUIDELINES
@@ -16,7 +16,7 @@
  *
  * ## Why this judge stays panel-internal
  *
- * Per EVAL_GUIDELINES — KodaX uses panel-internal judges (zhipu/glm51 +
+ * Per EVAL_GUIDELINES — KodaX uses panel-internal judges (zhipu/glm52 +
  * ark/v4pro + kimi); we do NOT call anthropic claude or openai gpt as
  * judges. The 3-judge majority compensates for any single-family bias.
  *
@@ -43,7 +43,7 @@ const AUDIT_DUMP_ROOT = join(
 );
 
 // Panel-internal judges only (NEVER anthropic/openai per EVAL_GUIDELINES).
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['C1_match', 'C2_no_match', 'C3_unknown', 'C4_multi'] as const;
 type CaseId = typeof CASE_IDS[number];

@@ -49,16 +49,20 @@ describe('provider registry', () => {
 
   it('registers MiniMax Coding Plan as minimax-coding (Anthropic-compat, MINIMAX_CODING_API_KEY)', () => {
     // Pin the load-bearing pieces of the multi-model gateway: the provider
-    // default (M2.7 at the 204K provider window) and the M3 per-model
-    // override (1M frontier context). M3 carries an explicit override
-    // because it diverges from the provider default — guard the value so
-    // future edits to the JSON catalog have to update this assertion.
+    // default (M3 at the 1M provider window) and the legacy explicit M2.7
+    // override (204K). Guard both so a default change cannot silently drop
+    // backwards-compatible explicit model selection.
     vi.stubEnv('MINIMAX_CODING_API_KEY', 'mm-test-key');
     const minimax = getProvider('minimax-coding');
     expect(minimax.name).toBe('minimax-coding');
+    expect(getProviderList().find((provider) => provider.name === 'minimax-coding')?.model)
+      .toBe('MiniMax-M3');
     expect(minimax.getEffectiveContextWindow('MiniMax-M2.7')).toBe(204_800);
+    expect(minimax.getEffectiveContextWindow('MiniMax-M2.7-highspeed')).toBe(204_800);
     expect(minimax.getEffectiveContextWindow('MiniMax-M3')).toBe(1_000_000);
     expect(getProviderConfiguredReasoningCapability('minimax-coding', 'MiniMax-M3')).toBe('native-adaptive');
+    expect(getProviderConfiguredReasoningCapability('minimax-coding', 'MiniMax-M2.7-highspeed'))
+      .toBe('native-toggle');
     expectReasoningPreset('minimax-coding', 'MiniMax-M3', 'minimax-m3');
     expectReasoningPreset('minimax-coding', 'MiniMax-M2.7', 'minimax-m2-always');
   });

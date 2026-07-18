@@ -7,16 +7,17 @@
  *   pattern works but drifts: when a coding-plan model gets renamed (e.g.
  *   `glm-5` → `glm-5.1`, FEATURE_099) every eval file that hard-coded the
  *   old name has to be touched. Centralizing the alias map fixes drift and
- *   gives prompt-eval cases an ergonomic short id (`zhipu/glm51`,
+ *   gives prompt-eval cases an ergonomic short id (`zhipu/glm52`,
  *   `ds/v4flash`, etc.).
  *
  * The alias short ids follow the user-supplied convention:
- *   'zhipu-coding/glm-5.1':         'zhipu/glm51'
+ *   'zhipu-coding/glm-5.2':         'zhipu/glm52'
+ *   'zhipu-coding/glm-5.1':         'zhipu/glm51' (legacy replay only)
  *   'kimi-code/kimi-for-coding':    'kimi'
  *   'mimo-coding/mimo-v2.5':        'mimo/v25'
  *   'mimo-coding/mimo-v2.5-pro':    'mimo/v25pro'
- *   'minimax-coding/MiniMax-M2.7':  'mmx/m27'
  *   'minimax-coding/MiniMax-M3':    'mmx/m3'
+ *   'minimax-coding/MiniMax-M2.7':  'mmx/m27' (legacy replay only)
  *   'ark-coding/glm-5.1':           'ark/glm51'
  *   'ark-coding/kimi-k2.7-code':    'ark/k27'
  *   'ark-coding/deepseek-v4-pro':   'ark/v4pro'
@@ -28,12 +29,12 @@
  * that still inline their own PROVIDERS arrays continue to work — migration
  * is opportunistic, not forced.
  *
- * **Canonical panel rule (2026-07-11)**: new prompt-evals default to the 5
- * coding-plan aliases — `zhipu/glm51`, `ark/k27`, `mmx/m27`, `ark/v4pro`,
+ * **Canonical panel rule (2026-07-18)**: new prompt-evals default to the 5
+ * coding-plan aliases — `zhipu/glm52`, `ark/k27`, `mmx/m3`, `ark/v4pro`,
  * `ark/v4flash`. The `ds/*` (deepseek official API) aliases stay in the
- * registry for legacy compatibility but should not be picked for new
- * canonical panels — `ark/v4*` is the equivalent on a coding-plan provider
- * (cost-controlled).
+ * registry for legacy compatibility but should not be picked for new canonical
+ * panels. `zhipu/glm51` and `mmx/m27` likewise remain resolvable only so frozen
+ * historical experiments can be replayed without rewriting their provenance.
  */
 
 export type ModelAlias =
@@ -87,6 +88,15 @@ export const ALL_MODEL_ALIASES: readonly ModelAlias[] = Object.freeze(
   Object.keys(MODEL_ALIASES) as ModelAlias[],
 );
 
+/** Default cross-family pool for every newly authored or revised eval. */
+export const DEFAULT_EVAL_ALIASES = Object.freeze([
+  'zhipu/glm52',
+  'ark/k27',
+  'mmx/m3',
+  'ark/v4pro',
+  'ark/v4flash',
+] as const satisfies readonly ModelAlias[]);
+
 /**
  * Resolve the provider/model/env triple for a short alias. Throws on
  * unknown alias to surface typos at test-write time, not at run time.
@@ -122,10 +132,11 @@ export function resolveEvalConcurrency(alias: ModelAlias): EvalConcurrencyPolicy
  * `process.env`. Eval cases call this at suite setup so the suite can
  * skip gracefully (or `it.skipIf`) when no providers are configured.
  *
- * Defaults to all known aliases when called without arguments.
+ * Defaults to the canonical current pool when called without arguments.
+ * Legacy aliases remain available only when explicitly requested.
  */
 export function availableAliases(...preferred: ModelAlias[]): ModelAlias[] {
-  const candidates = preferred.length > 0 ? preferred : [...ALL_MODEL_ALIASES];
+  const candidates = preferred.length > 0 ? preferred : [...DEFAULT_EVAL_ALIASES];
   return candidates.filter((alias) => {
     const env = MODEL_ALIASES[alias].apiKeyEnv;
     const value = process.env[env];

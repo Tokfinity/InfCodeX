@@ -53,7 +53,7 @@
  *
  *   SHIP (keep dirty-reject in production) IFF all of:
  *     (a) ≥4 of 5 alias达 ≥60% recovery rate on C1
- *     (b) zhipu/glm51 NOT at exactly 0% on C1 (structural floor → revert)
+ *     (b) zhipu/glm52 NOT at exactly 0% on C1 (structural floor → revert)
  *     (c) ≥3 of 5 alias达 ≥40% recovery rate on C2 (the harder pivot path)
  *     (d) self-judge audit disagreement < 10% on regex-fail samples
  *
@@ -82,7 +82,7 @@
  *   by the orchestrating Claude session (self-judge mode allowed for
  *   ≤50 cells per EVAL_GUIDELINES §"Judge 模型选择约束" rule 1). If
  *   disagreement >10%, escalate to panel-internal 3-judge majority
- *   (zhipu/glm51 + ds/v4pro + kimi) per rule 2.
+ *   (zhipu/glm52 + ds/v4pro + kimi) per rule 2.
  *
  * ## See also
  *

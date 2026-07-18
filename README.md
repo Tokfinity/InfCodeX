@@ -1215,9 +1215,9 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding (`k3-256k` for Moderato / `k3` 1M for Allegretto+ / `kimi-for-coding-highspeed` via `/model`; both K3 choices use upstream `k3`) |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2 (1M ctx; legacy `glm-5.1` and `glm-5-turbo` remain selectable via `/model`) |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (`MiniMax-M3` Frontier Coding, native multimodal + 1M ctx, plus `MiniMax-M2.7-highspeed` via `/model`) |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M3 (Frontier Coding, native multimodal + 1M ctx; legacy `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` remain selectable via `/model`) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |

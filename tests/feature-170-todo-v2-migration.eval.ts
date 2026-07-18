@@ -59,9 +59,9 @@ import {
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-170-todo-v2-migration');
 
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/glm51',
   'ds/v4pro',
 ] as const;

@@ -84,7 +84,7 @@ const REQUEST = [
   '最后综合所有模块的结构化结果,产出一份按严重度排序的中文 review 报告。只读代码,不要改动任何文件。',
 ].join('');
 
-const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m27', 'ark/v4pro', 'ark/v4flash'];
+const CANONICAL_PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/v4pro', 'ark/v4flash'];
 const ALIAS_FALLBACK: Partial<Record<ModelAlias, ModelAlias>> = {
   'ark/v4pro': 'ds/v4pro',
   'ark/v4flash': 'ds/v4flash',

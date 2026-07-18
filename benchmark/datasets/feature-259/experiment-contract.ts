@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const FEATURE_259_DECISION_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'ark/k27',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ] as const;

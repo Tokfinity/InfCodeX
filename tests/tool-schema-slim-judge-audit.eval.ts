@@ -2,7 +2,7 @@
  * LLM-judge audit driver for tool-schema-slim Layer 2 panel.
  *
  * Per EVAL_GUIDELINES anti-pattern 7 §3 + 2026-05-12 judge-model-selection
- * clause: panel-internal multi-judge majority vote (kimi + zhipu/glm51 +
+ * clause: panel-internal multi-judge majority vote (kimi + zhipu/glm52 +
  * ds/v4flash, 2/3 majority). Per `feedback_audit_must_see_binding` the
  * judge prompt includes harness-captured tool_call binding so it can
  * distinguish binding-only output (text=""/empty) from "no tool".
@@ -54,7 +54,7 @@ import { CASES } from '../benchmark/datasets/tool-schema-slim/cases.js';
 const DUMP_SOURCE_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'tool-schema-slim');
 const AUDIT_DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'tool-schema-slim-judge-audit');
 
-const JUDGES: readonly ModelAlias[] = ['kimi', 'zhipu/glm51', 'ds/v4flash'] as const;
+const JUDGES: readonly ModelAlias[] = ['kimi', 'zhipu/glm52', 'ds/v4flash'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

@@ -63,8 +63,8 @@ const isGateOpen = process.env[GATE_ENV] === '1';
 const TIMEOUT_MS = 60_000;
 
 const PREFERRED_ALIASES: readonly ModelAlias[] = [
-  'zhipu/glm51',
-  'mmx/m27',
+  'zhipu/glm52',
+  'mmx/m3',
   'kimi',
   'ds/v4flash',
   'ds/v4pro',

@@ -298,7 +298,7 @@ const ALIAS_PREFERENCE: readonly ModelAlias[] = [
   // fallbacks if primary unavailable
   'ark/v4pro',
   'mimo/v25',
-  'zhipu/glm51',
+  'zhipu/glm52',
   'ark/v4flash',
 ];
 

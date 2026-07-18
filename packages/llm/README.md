@@ -35,8 +35,8 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `kimi-for-coding` |
 | `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
-| `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5` |
-| `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M2.7` |
+| `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.2` |
+| `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
 | `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
 | `mimo` | `MIMO_API_KEY` | Yes | `mimo-v2.5-pro` |
 | `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.1` |
@@ -49,8 +49,8 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 - Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；四者上下文均为 262,144 token。
 - Kimi Code 保持 `kimi-for-coding` 为稳定默认模型，并提供 `/model` 可选的 `k3-256k`（Moderato，262,144 token）、`k3`（Allegretto 及以上，1,048,576 token）与 `kimi-for-coding-highspeed`。两个 K3 选项实际都请求上游官方模型 `k3`，无需手工覆盖 compaction 上下文；K3 默认使用 `max` 思考强度，也支持显式关闭思考。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
-- Zhipu / Zhipu Coding 默认 `glm-5`，并提供 `glm-5.2`（1M context, 131072 max output）/ `glm-5.1` / `glm-5-turbo`。
-- MiniMax Coding 默认 `MiniMax-M2.7`，并保留 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context）/ `MiniMax-M2.7-highspeed`；旧 M2.5/M2.1/M2 路由已移除。
+- Zhipu 开放平台默认 `glm-5`；Zhipu Coding 默认 `glm-5.2`（1M context, 131072 max output），并保留 `glm-5.1` / `glm-5-turbo` 供显式兼容选择。
+- MiniMax Coding 默认 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context），并保留 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` 供显式兼容选择；旧 M2.5/M2.1/M2 路由已移除。
 - Ark Coding 默认 `glm-5.1`，同一 gateway 暴露 GLM、Kimi K2.6、MiniMax M3/M2.7、DeepSeek V3.2/V4、Doubao Seed 2.0 Code/Pro/Lite。
 
 ## 使用示例

@@ -34,8 +34,8 @@
  *   measurement artifact — DEFER with evidence, do NOT lower the gate
  *   (feedback_pre_registered_gate_saturation / feedback_model_structural_floor_not_prompt_tunable).
  *
- * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm51 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-replay.eval.ts
- * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm51,mmx/m27,ark/v4flash,kimi npm run test:eval -- tests/workflow-activation-replay.eval.ts
+ * Run (pilot):  KODAX_EVAL_ALIASES=zhipu/glm52 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/workflow-activation-replay.eval.ts
+ * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm52,mmx/m3,ark/v4flash,kimi npm run test:eval -- tests/workflow-activation-replay.eval.ts
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -114,7 +114,7 @@ function resolvePanel(): ModelAlias[] {
   const raw = process.env.KODAX_EVAL_ALIASES;
   if (raw && raw.trim().length > 0) return availableAliases(...(raw.split(',').map((s) => s.trim()) as ModelAlias[]));
   // ark + kimi now available; mimo excluded (key returns 401).
-  return availableAliases('zhipu/glm51', 'mmx/m27', 'ark/v4flash', 'kimi');
+  return availableAliases('zhipu/glm52', 'mmx/m3', 'ark/v4flash', 'kimi');
 }
 
 async function replayDecision(

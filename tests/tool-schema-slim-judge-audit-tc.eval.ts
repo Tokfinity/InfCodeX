@@ -22,7 +22,7 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 const DUMP_SOURCE_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'tool-schema-slim');
 const AUDIT_DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'tool-schema-slim-judge-audit');
 
-const JUDGES: readonly ModelAlias[] = ['kimi', 'zhipu/glm51', 'ds/v4flash'] as const;
+const JUDGES: readonly ModelAlias[] = ['kimi', 'zhipu/glm52', 'ds/v4flash'] as const;
 
 const REMAINING_CASES = [
   'AUQ_6_boundary_no_cram',

@@ -111,14 +111,14 @@ const STAGE_LABEL = 'phase1-multialias-3run-with-dump';
 const RUNS_PER_CELL = 3;
 
 // 4-alias panel — same cross-family selection as feature-120-child-steering
-// minus ark/glm51 (zhipu/glm51 already covers the glm-5.1 family). Drop to
+// minus ark/glm51 (zhipu/glm52 already covers the current GLM family). Drop to
 // 4 because the summarizer prompt is small + uncontroversial; the variance
 // signal we care about is RETENTION across diverse families, not sampling
 // every alias variant within a family.
 const PHASE1_ALIASES = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ds/v4pro',
 ] as const;
 

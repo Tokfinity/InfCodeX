@@ -12,7 +12,7 @@
  * Per benchmark/EVAL_GUIDELINES.md:
  *  - Layer 2 single-turn probe (self-contained task — answer is in the prompt).
  *  - Content-correctness is NOT a structural metric → primary judge is a
- *    panel-internal 3-judge majority (zhipu/glm51 + ark/v4pro + kimi; NEVER
+ *    panel-internal 3-judge majority (zhipu/glm52 + ark/v4pro + kimi; NEVER
  *    anthropic/openai), per anti-pattern 7 §3 + the judge-model constraint.
  *    A keyword pre-check is recorded as a cross-reference only.
  *  - Canonical 5-alias panel; raw dump (answers + per-judge verdicts).
@@ -42,16 +42,16 @@ interface AliasTarget {
 }
 
 const PANEL: AliasTarget[] = [
-  { alias: 'zhipu/glm51', provider: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_CODING_API_KEY', tier: 'strong' },
+  { alias: 'zhipu/glm52', provider: 'zhipu-coding', model: 'glm-5.2', apiKeyEnv: 'ZHIPU_CODING_API_KEY', tier: 'strong' },
   { alias: 'kimi', provider: 'kimi-code', model: 'kimi-for-coding', apiKeyEnv: 'KIMI_CODE_API_KEY', tier: 'strong' },
-  { alias: 'mmx/m27', provider: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_CODING_API_KEY', tier: 'strong' },
+  { alias: 'mmx/m3', provider: 'minimax-coding', model: 'MiniMax-M3', apiKeyEnv: 'MINIMAX_CODING_API_KEY', tier: 'strong' },
   { alias: 'ark/v4pro', provider: 'ark-coding', model: 'deepseek-v4-pro', apiKeyEnv: 'ARK_CODING_API_KEY', tier: 'strong' },
   { alias: 'ark/v4flash', provider: 'ark-coding', model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY', tier: 'floor' },
 ];
 
 // Judge panel: 3 independent families, all coding-plan, NEVER anthropic/openai.
 const JUDGES: AliasTarget[] = PANEL.filter((t) =>
-  ['zhipu/glm51', 'ark/v4pro', 'kimi'].includes(t.alias),
+  ['zhipu/glm52', 'ark/v4pro', 'kimi'].includes(t.alias),
 );
 
 const RUNS = 5;

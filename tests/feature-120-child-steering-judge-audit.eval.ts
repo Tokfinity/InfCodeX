@@ -11,7 +11,7 @@
  *
  *   > 禁止用 anthropic claude / openai gpt 等"外来 strong model"做内部
  *   > eval 的 LLM-judge … allowed: panel-internal multi-judge majority
- *   > vote (zhipu/glm51 + ds/v4pro + kimi-code, 2/3 majority = PASS).
+ *   > vote (zhipu/glm52 + ds/v4pro + kimi-code, 2/3 majority = PASS).
  *
  * Input: the 50 raw outputs (5 alias × 5 run × 2 case) already dumped at
  * `os.tmpdir()/kodax-eval-dumps/feature-120-child-steering/{send_message_trigger,
@@ -51,7 +51,7 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 const DUMP_SOURCE_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-120-child-steering');
 const AUDIT_DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-120-child-steering-judge-audit');
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 type CaseId = 'send_message_trigger' | 'task_stop_trigger';
 

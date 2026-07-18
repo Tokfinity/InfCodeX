@@ -465,7 +465,7 @@ function classifyFirstTool(
 
 const STAGE_LABEL = 'phase2-f2-f3-worker-plancompleted-history-3variants-3runs';
 const RUNS_PER_CELL = 3;
-const PANEL_ALIASES = ['zhipu/glm51', 'kimi', 'mmx/m27', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
+const PANEL_ALIASES = ['zhipu/glm52', 'kimi', 'mmx/m3', 'ark/glm51', 'ds/v4pro', 'ds/v4flash'] as const;
 const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption-worker-v2');
 
 describe('Eval Suite B: Worker prompt F2 + F3 — pull-tool preference for review tasks', () => {

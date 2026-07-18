@@ -12,7 +12,7 @@
  *
  * Run modes (env var `KODAX_F228_MEMORY_HINTS_PROBE`):
  * - `pilot`: ark/v4flash x 3 cases x 1 run (~3 calls).
- * - `panel`: zhipu/glm51, kimi, mmx/m27, ark/v4pro, ark/v4flash x 3 cases.
+ * - `panel`: zhipu/glm52, kimi, mmx/m3, ark/v4pro, ark/v4flash x 3 cases.
  * - `off`: compile/no-cost smoke path.
  *
  * Run:
@@ -41,9 +41,9 @@ type Mode = 'off' | 'pilot' | 'panel';
 
 const MODE = parseMode(process.env.KODAX_F228_MEMORY_HINTS_PROBE);
 const PANEL_ALIASES: readonly ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ark/v4pro',
   'ark/v4flash',
 ];

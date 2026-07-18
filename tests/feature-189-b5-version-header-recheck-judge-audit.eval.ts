@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit driver for FEATURE_189 B.5 RECHECK pilot (2026-05-24).
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi) on the
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi) on the
  * recheck pilot's 12-cell dump per `feedback_audit_must_see_binding`
  * + `feedback_audit_binding_priority_in_prompt`.
  *
@@ -39,7 +39,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-b5-version-header-recheck-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['audit_4_packages', 'edit_3_modules'] as const;
 type CaseId = typeof CASE_IDS[number];

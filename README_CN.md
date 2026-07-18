@@ -466,9 +466,9 @@ dist/binary/linux-x64/
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding（可 `/model` 切换 `k3-256k`〔Moderato，256K〕/ `k3`〔Allegretto+，1M〕/ `kimi-for-coding-highspeed`；两个 K3 选项均请求上游 `k3`） |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan；可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2（1M ctx；仍可通过 `/model` 显式选择兼容模型 `glm-5.1` / `glm-5-turbo`） |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2（GLM Coding Plan 海外站，通过 `api.z.ai` 接入，Anthropic 协议 — 模型清单和 `zhipu-coding` 完全一致） |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7（可 `/model` 切换 `MiniMax-M3` Frontier Coding，原生多模态 + 1M ctx；以及 `MiniMax-M2.7-highspeed`） |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M3（Frontier Coding，原生多模态 + 1M ctx；仍可通过 `/model` 显式选择兼容模型 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed`） |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2（火山方舟 Coding Plan — GLM-5.2（别名 `glm-latest`） · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code） |

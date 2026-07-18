@@ -399,17 +399,18 @@ Total: $Z
 
 | Alias short id | Provider · model | Family | 档位 |
 |---|---|---|---|
-| `zhipu/glm51` | zhipu-coding · glm-5.1 | Zhipu | high-end |
+| `zhipu/glm52` | zhipu-coding · glm-5.2 | Zhipu | high-end |
 | `ark/k27`     | ark-coding · kimi-k2.7-code | Moonshot (via Ark) | high-end |
-| `mmx/m27`     | minimax-coding · MiniMax-M2.7 | MiniMax | high-end |
+| `mmx/m3`      | minimax-coding · MiniMax-M3 | MiniMax | high-end |
 | `ark/v4pro`   | ark-coding · deepseek-v4-pro | DeepSeek (via Ark) | high-end |
 | `ark/v4flash` | ark-coding · deepseek-v4-flash | DeepSeek (via Ark) | floor |
 
 **覆盖价值**：
 - 覆盖 4 个模型 family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补；其中 Moonshot 与 DeepSeek 共用 Ark gateway，但走独立 model lane
 - DeepSeek 双档（flash floor + pro high-end）能在同 family 内捕到"模型档位是否吃 prompt 改动"
-- **2026-05-21 升级**：DeepSeek 双档从官方 API `ds/v4{pro,flash}` 切到 `ark-coding` 路线 `ark/v4{pro,flash}`。理由：用户验证 ark-coding gateway routes DeepSeek-V4 正常，**走 coding-plan 订阅成本可控**，不再混入 token-bill 路径。`zhipu-coding/glm-5.1` 留在 panel；`ark-coding/glm-5.1`（`ark/glm51`）退出 default panel — 同 zhipu family 重复采样收益低于跨 family
+- **2026-05-21 升级**：DeepSeek 双档从官方 API `ds/v4{pro,flash}` 切到 `ark-coding` 路线 `ark/v4{pro,flash}`。理由：用户验证 ark-coding gateway routes DeepSeek-V4 正常，**走 coding-plan 订阅成本可控**，不再混入 token-bill 路径。`ark-coding/glm-5.1`（`ark/glm51`）退出 default panel — 同 Zhipu family 重复采样收益低于跨 family。
 - **2026-07-11 升级**：官方 `kimi-code/kimi-for-coding` 暂停用于新 eval；Moonshot 覆盖改由 `ark/k27`（`ark-coding/kimi-k2.7-code`）承担。历史 raw 仍保留原 alias/route，不改写证据。
+- **2026-07-18 升级**：所有新建或修订的 eval 将 Zhipu / MiniMax 默认路线升级为 `zhipu/glm52` 与 `mmx/m3`。`zhipu/glm51` / `mmx/m27` 仅保留为显式历史重放 alias；禁止改写旧 raw、旧报告或既有盲审中的真实路由标签。旧实验若要用新模型复验，必须创建新 experiment revision。
 - `mimo/v25(pro)` / `ark/glm51` / `ds/v4{pro,flash}` 可按任务显式 opt-in；不要为了“阵容完整”重复采样同 family / 同模型 gateway
 
 **选择原则**：

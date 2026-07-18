@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit for FEATURE_189 B.5 RECHECK panel (2026-05-24).
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi) on the 100-cell
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi) on the 100-cell
  * recheck panel. Handles TWO judge categories per case:
  *   - audit_4_packages      → plan_first_compliance + dispatch_intent
  *   - review_recent_changes → plan_first_compliance + pull_tool_first
@@ -37,7 +37,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-b5-version-header-recheck-panel-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['audit_4_packages', 'review_recent_changes'] as const;
 type CaseId = typeof CASE_IDS[number];

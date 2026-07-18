@@ -34,7 +34,7 @@
  *   lift (the rules fix the English JS-string drift the user hit).
  *
  * Run (pilot):  KODAX_EVAL_ALIASES=mimo/v25 KODAX_EVAL_RUNS=3 npm run test:eval -- tests/language-continuity-authoring.eval.ts
- * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm51,mmx/m27,mimo/v25 npm run test:eval -- tests/language-continuity-authoring.eval.ts
+ * Run (panel):  KODAX_EVAL_ALIASES=zhipu/glm52,mmx/m3,mimo/v25 npm run test:eval -- tests/language-continuity-authoring.eval.ts
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -120,7 +120,7 @@ function resolvePanel(): ModelAlias[] {
   if (raw && raw.trim().length > 0) {
     return availableAliases(...(raw.split(',').map((s) => s.trim()) as ModelAlias[]));
   }
-  return availableAliases('zhipu/glm51', 'mmx/m27', 'mimo/v25');
+  return availableAliases('zhipu/glm52', 'mmx/m3', 'mimo/v25');
 }
 
 /** One authoring turn (2-turn fallback if turn 1 was bookkeeping, mirroring F246). */

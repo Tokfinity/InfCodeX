@@ -635,34 +635,31 @@
     },
     "minimax-coding": {
       "apiKeyEnv": "MINIMAX_CODING_API_KEY",
-      "model": "MiniMax-M2.7",
+      "model": "MiniMax-M3",
       "models": [
-        {
-          "id": "MiniMax-M3",
-          "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)",
-          "contextWindow": 1000000,
-          "reasoningCapability": "native-adaptive",
-          "reasoningProfile": {
-            "reasoningPreset": "minimax-m3",
-            "effortStrategy": "provider-toggle",
-            "thinkingStrategy": "anthropic-adaptive",
-            "supportedEfforts": [
-              { "value": "none", "description": "Disable thinking" },
-              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
-              { "value": "low", "description": "Adaptive thinking" },
-              { "value": "medium", "description": "Adaptive thinking", "isDefault": true },
-              { "value": "high", "description": "Adaptive thinking" },
-              { "value": "xhigh", "description": "Adaptive thinking" },
-              { "value": "max", "description": "Adaptive thinking" }
-            ],
-            "disabledEfforts": ["none", "minimal"],
-            "supportsAdaptiveThinking": true,
-            "supportsDisabledThinking": true
-          }
-        },
         {
           "id": "MiniMax-M2.7-highspeed",
           "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)",
+          "contextWindow": 204800,
+          "reasoningCapability": "native-toggle",
+          "reasoningProfile": {
+            "reasoningPreset": "minimax-m2-always",
+            "effortStrategy": "prompt-only",
+            "supportedEfforts": [
+              { "value": "low", "description": "Thinking is always on" },
+              { "value": "medium", "description": "Thinking is always on", "isDefault": true },
+              { "value": "high", "description": "Thinking is always on" },
+              { "value": "xhigh", "description": "Thinking is always on" },
+              { "value": "max", "description": "Thinking is always on" }
+            ],
+            "localRejectEfforts": ["none", "minimal"]
+          }
+        },
+        {
+          "id": "MiniMax-M2.7",
+          "displayName": "MiniMax M2.7 (legacy explicit selection, 204K ctx)",
+          "contextWindow": 204800,
+          "reasoningCapability": "native-toggle",
           "reasoningProfile": {
             "reasoningPreset": "minimax-m2-always",
             "effortStrategy": "prompt-only",
@@ -677,22 +674,27 @@
           }
         }
       ],
-      "reasoningCapability": "native-toggle",
+      "reasoningCapability": "native-adaptive",
       "reasoningProfile": {
-        "reasoningPreset": "minimax-m2-always",
-        "effortStrategy": "prompt-only",
+        "reasoningPreset": "minimax-m3",
+        "effortStrategy": "provider-toggle",
+        "thinkingStrategy": "anthropic-adaptive",
         "supportedEfforts": [
-          { "value": "low", "description": "Thinking is always on" },
-          { "value": "medium", "description": "Thinking is always on", "isDefault": true },
-          { "value": "high", "description": "Thinking is always on" },
-          { "value": "xhigh", "description": "Thinking is always on" },
-          { "value": "max", "description": "Thinking is always on" }
+          { "value": "none", "description": "Disable thinking" },
+          { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+          { "value": "low", "description": "Adaptive thinking" },
+          { "value": "medium", "description": "Adaptive thinking", "isDefault": true },
+          { "value": "high", "description": "Adaptive thinking" },
+          { "value": "xhigh", "description": "Adaptive thinking" },
+          { "value": "max", "description": "Adaptive thinking" }
         ],
-        "localRejectEfforts": ["none", "minimal"]
+        "disabledEfforts": ["none", "minimal"],
+        "supportsAdaptiveThinking": true,
+        "supportsDisabledThinking": true
       },
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
-      "contextWindow": 204800,
+      "contextWindow": 1000000,
       "maxOutputTokens": 32000,
       "verifyStrategy": "count-tokens"
     },

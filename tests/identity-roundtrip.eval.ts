@@ -48,14 +48,14 @@ const PROBES: ProbeCase[] = [
     id: 'zhipu-coding',
     provider: 'zhipu-coding',
     apiKeyEnv: 'ZHIPU_CODING_API_KEY',
-    model: 'glm-5',
+    model: 'glm-5.2',
     expectedIdentityTokens: ['KodaX', 'glm', 'zhipu', '智谱'],
   },
   {
     id: 'minimax-coding',
     provider: 'minimax-coding',
     apiKeyEnv: 'MINIMAX_CODING_API_KEY',
-    model: 'MiniMax-M2.7',
+    model: 'MiniMax-M3',
     expectedIdentityTokens: ['KodaX', 'minimax'],
   },
   {

@@ -286,7 +286,7 @@ export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
 //
 // **First-pass regex (`/tool_name\s*\(/i`) had a 14% false-negative rate**
 // (7/50 runs, all FN) against the v0.7.39 production aliases:
-//   - zhipu/glm51 emits `<task_stop>(args)`, `<task_stop>...</task_stop>`,
+//   - zhipu/glm52 emits `<task_stop>(args)`, `<task_stop>...</task_stop>`,
 //     `<tool_call[]>{"name":"task_stop", ...}</tool_call[]>`, etc.
 //   - ark/glm51 sometimes emits `<tool_call>{"name":"task_stop", "arguments":{...}}</tool_call>`
 //     (JSON-in-XML, no fn-call parens after the name)

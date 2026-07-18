@@ -33,7 +33,7 @@
  *
  * ## Aliases
  *
- *   5 aliases with API keys configured: `zhipu/glm51`, `kimi`, `mmx/m27`,
+ *   5 aliases with API keys configured: `zhipu/glm52`, `kimi`, `mmx/m3`,
  *   `ds/v4pro`, `ds/v4flash`. Cells skip individually when their key is
  *   absent (per `availableAliases()`).
  *
@@ -60,9 +60,9 @@ import {
 } from '../benchmark/datasets/prompt-overlay-position/cases.js';
 
 const PROBE_ALIASES: ModelAlias[] = [
-  'zhipu/glm51',
+  'zhipu/glm52',
   'kimi',
-  'mmx/m27',
+  'mmx/m3',
   'ds/v4pro',
   'ds/v4flash',
 ];

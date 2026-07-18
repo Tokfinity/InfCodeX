@@ -25,7 +25,7 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 
 const DUMP_SOURCE_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption-worker-v2');
 const AUDIT_DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'repointel-tool-adoption-worker-v2-judge-audit');
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 const PULL_TOOL_NAMES = ['repo_overview','changed_scope','changed_diff','changed_diff_bundle','module_context','symbol_context','process_context','impact_estimate'];
 

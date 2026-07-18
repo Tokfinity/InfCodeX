@@ -295,7 +295,7 @@ describe('parseObligations parser', () => {
 
   it('does NOT mistake markdown bold close (**) for a list marker', () => {
     // Regression for parser bug surfaced in the FEATURE_097 pilot eval:
-    // mmx/m27 wraps headers in **OBLIGATIONS:** style, and an old version
+    // mmx/m3 wraps headers in **OBLIGATIONS:** style, and an old version
     // of the parser counted the trailing `**` as a `*` marker with content `*`.
     const out = parseObligations(
       '**OBLIGATIONS:**\n' +

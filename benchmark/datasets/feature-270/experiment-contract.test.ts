@@ -63,12 +63,12 @@ describe('FEATURE_270 experiment contract', () => {
     expect(manifest.exactBytes.treatmentToolsSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('freezes a pre-call price for the historical routed GLM alias', () => {
-    expect(feature270Pricing('zhipu/glm51')).toEqual({
+  it('freezes pre-call prices for the current canonical aliases', () => {
+    expect(feature270Pricing('zhipu/glm52')).toEqual({
       rate: { inputPer1M: 0.05, outputPer1M: 0.1 },
-      source: 'zhipu-coding/glm-5.2 nominal rate for the upstream-routed glm-5.1 alias',
+      source: 'zhipu-coding/glm-5.2',
     });
-    expect(feature270Pricing('mmx/m27').source).toBe('minimax-coding/MiniMax-M2.7');
+    expect(feature270Pricing('mmx/m3').source).toBe('minimax-coding/MiniMax-M3');
   });
 
   it('requires both an explicit caller flag and the paid-generation environment gate', () => {

@@ -33,7 +33,7 @@ const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-270-sidecar-alignm
 
 const DEFAULT_PANEL: readonly ModelAlias[] = MODE === 'pilot'
   ? ['ark/v4flash']
-  : ['zhipu/glm51', 'ark/v4flash'];
+  : ['zhipu/glm52', 'ark/v4flash'];
 
 function requestedPanel(): readonly ModelAlias[] {
   const raw = process.env.KODAX_F270_SIDECAR_ALIASES;

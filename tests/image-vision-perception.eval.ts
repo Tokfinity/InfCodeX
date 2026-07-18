@@ -696,7 +696,7 @@ function summarize(label: string, cells: readonly CellResult[]): string {
 // ---------------------------------------------------------------------------
 
 const PILOT_ALIAS: ModelAlias = 'kimi';
-const PANEL_ALIASES: readonly ModelAlias[] = ['zhipu/glm51', 'kimi', 'mmx/m27'];
+const PANEL_ALIASES: readonly ModelAlias[] = ['zhipu/glm52', 'kimi', 'mmx/m3'];
 
 describe('Eval: image vision perception (Fix B regression guard)', () => {
   // Layer 3 pilot — smallest possible call to verify multi-turn priming
@@ -735,7 +735,7 @@ describe('Eval: image vision perception (Fix B regression guard)', () => {
   // hallucinated SVG content for an unrelated image. Tightened regex
   // (requires imageContentKeyword match) catches the hallucination.
   describe('compaction-pilot', () => {
-    const aliases = availableAliases('kimi', 'zhipu/glm51');
+    const aliases = availableAliases('kimi', 'zhipu/glm52');
     if (aliases.length === 0) {
       it('skips: no compaction-pilot alias api keys present', () => {});
       return;

@@ -12,7 +12,7 @@
  *
  *   > 禁止用 anthropic claude / openai gpt 等"外来 strong model"做内部
  *   > eval 的 LLM-judge … allowed: panel-internal multi-judge majority
- *   > vote (zhipu/glm51 + ds/v4pro + kimi-code, 2/3 majority = PASS).
+ *   > vote (zhipu/glm52 + ds/v4pro + kimi-code, 2/3 majority = PASS).
  *
  * ## Input
  *
@@ -51,7 +51,7 @@
  *
  * ## Judge self-bias note
  *
- * One judge alias (`zhipu/glm51`) overlaps with one probed alias.
+ * One judge alias (`zhipu/glm52`) overlaps with one probed alias.
  * Permitted per EVAL_GUIDELINES §"Judge 模型选择约束" — majority vote
  * across 3 independent families (zhipu / deepseek / moonshot) breaks
  * same-family bias even when one judge shares family with one probed
@@ -91,7 +91,7 @@ const AUDIT_DUMP_ROOT = join(
 );
 
 // Panel-internal majority vote — 3 independent families.
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ds/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ds/v4pro', 'kimi'] as const;
 
 interface DumpRun {
   readonly runIndex: number;

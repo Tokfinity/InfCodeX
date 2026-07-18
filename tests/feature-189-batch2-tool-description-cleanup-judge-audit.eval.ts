@@ -1,7 +1,7 @@
 /**
  * LLM-judge audit for FEATURE_189 Batch 2 tool description cleanup pilot.
  *
- * 3-judge majority vote (zhipu/glm51 + ark/v4pro + kimi).
+ * 3-judge majority vote (zhipu/glm52 + ark/v4pro + kimi).
  * Re-judges 4 case-specific anti-pattern compliance questions.
  *
  * Reads from: feature-189-batch2-tool-description-cleanup-pilot/
@@ -30,7 +30,7 @@ const AUDIT_DUMP_ROOT = join(
   'feature-189-batch2-tool-description-cleanup-judge-audit',
 );
 
-const JUDGES: readonly ModelAlias[] = ['zhipu/glm51', 'ark/v4pro', 'kimi'] as const;
+const JUDGES: readonly ModelAlias[] = ['zhipu/glm52', 'ark/v4pro', 'kimi'] as const;
 
 const CASE_IDS = ['C1_initial_plan', 'C2_status_transition', 'C3_staleness', 'C4_cancelled_vs_deleted'] as const;
 type CaseId = typeof CASE_IDS[number];
