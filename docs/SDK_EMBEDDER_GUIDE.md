@@ -4191,7 +4191,7 @@ UI: tool permission and plan approval are different user decisions.
 
 See [ADR-056](ADR.md#adr-056-runtime-owns-auto-mode-permission-decisions-and-host-capability-exposure)
 for the ownership decision and [the v0.7.72 design](features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
-for the complete release-candidate boundary.
+for the complete released boundary.
 
 ---
 

@@ -76,7 +76,7 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.72 release-candidate verification
+## v0.7.72 release verification
 
 Run the normal build first; this refreshes `dist/kodax_bootstrap.js`, which is
 also the artifact used by a globally linked `kodax` command.

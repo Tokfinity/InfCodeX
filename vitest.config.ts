@@ -62,9 +62,11 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     // The suite mixes worker RPC with filesystem-heavy tests and real child
-    // processes. On high-core Windows hosts, uncapped workers can starve both
-    // the workers and daemon shutdown long enough to create false failures.
-    maxWorkers: Math.min(isCoverageRun ? 4 : 8, availableParallelism()),
+    // processes. On high-core Windows hosts, even eight workers can starve
+    // daemon startup/shutdown long enough to create false failures; four keeps
+    // the process-level smoke tests inside their real production deadlines.
+    // Linux CI retains eight workers, while coverage remains capped at four.
+    maxWorkers: Math.min(isCoverageRun || process.platform === 'win32' ? 4 : 8, availableParallelism()),
     minWorkers: 1,
     // FEATURE_159 (v0.7.40) — global MessageQueue singleton reset before
     // each test. See `vitest.setup.queue.ts` for the rationale.

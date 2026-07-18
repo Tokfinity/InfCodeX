@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-18_
+_Last Updated: 2026-07-19_
 
 ---
 
@@ -14,6 +14,8 @@ _Last Updated: 2026-07-18_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 185 | Medium | Open | Learning lock crash recovery can time out before stale ownership is reclaimable | v0.7.68; expanded v0.7.72 RC | - | 2026-07-19 | - |
+| 184 | High | Open | `sed` side effects can bypass plan-mode write classification | v0.5.36 | - | 2026-07-19 | - |
 | 183 | High | Resolved | CLI daemon startup failures and forced test exits could leave detached Node processes | v0.7.66-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 182 | Medium | Resolved | Windows lifecycle lock contention surfaced as fatal `EPERM` during concurrent memory forgets | v0.7.68 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 181 | Medium | Resolved | MiniMax M3 default upgrade left the media capability regression stale | v0.7.72-dev | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
@@ -93,6 +95,143 @@ _Last Updated: 2026-07-18_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 185: Learning lock crash recovery can time out before stale ownership is reclaimable
+
+- **Priority**: Medium
+- **Status**: **Open**
+- **Introduced**: v0.7.68; expanded v0.7.72 RC
+- **Created**: 2026-07-19
+
+#### Original Problem
+
+Both learning lock implementations stop waiting after 5 seconds, but refuse to
+test the recorded owner's liveness until the lock file is more than 30 seconds
+old. When a process crashes after writing a valid owner record, learning
+proposal and Learned Area operations started during that 5-to-30-second window
+can therefore fail with a lock timeout even though no live owner remains.
+
+The two thresholds serve different purposes: a bounded acquisition timeout is
+appropriate for live contention, while stale-owner recovery handles a crashed
+owner. Raising the acquisition timeout to 30 seconds would hide the mismatch by
+turning a recoverable crash into a long user-visible stall. Slow storage can
+also make concurrent operations exceed the current waiting budget, but this is
+contention behavior rather than proof that both thresholds must be identical.
+
+The same lock protocol is duplicated in the F224/F228 proposal store and the
+new F266 Learned Area helper. Their error messages differ and future fixes can
+drift. The current stale path also performs a check followed by an unconditional
+`rm`; multiple contenders reclaiming one crashed lock could race with creation
+of a successor lock unless stale ownership is claimed atomically.
+
+#### Expected Behavior
+
+- A valid lock whose owner is demonstrably alive is never stolen.
+- A valid lock whose owner is demonstrably dead can be reclaimed promptly,
+  without first forcing callers through repeated five-second failures.
+- Empty, partially written, malformed, inaccessible, or otherwise unverifiable
+  ownership remains fail-closed.
+- Live contention stays bounded and does not become a 30-second UI stall.
+- Concurrent stale-lock contenders cannot remove a successor's lock.
+
+#### Context
+
+- **Feature ownership**: FEATURE_266, reusing the earlier F224/F228 proposal
+  store protocol
+- **Affected components**: `packages/agent/src/learning/store-lock.ts`,
+  `packages/agent/src/learning/store.ts`, Learning Center/Learned Area writes
+- **Trigger**: owner crash followed by a learning operation within 30 seconds;
+  slow or highly contended storage increases the visible failure rate
+- **Impact**: bounded learning-operation failure or delay; no normal-path data
+  corruption has been reproduced
+- **Release decision**: accepted as a non-blocking v0.7.72 deferral; fix in the
+  F266 reliability follow-up rather than changing the lock protocol during the
+  release cut
+- **Workaround**: retry after the stale threshold; manually remove a lock only
+  after independently confirming that its recorded owner is no longer alive
+
+#### Root Cause
+
+Owner liveness is nested behind a file-age gate, coupling crash recovery to a
+30-second grace period even when the stored PID can already be checked safely.
+The protocol was copied instead of routing proposal-store and Learned Area
+writes through one implementation, and stale deletion is not an atomic claim.
+
+#### Proposed Solution
+
+- Consolidate proposal-store and Learned Area writes on one lock helper while
+  preserving package-layer independence and existing token-fenced release.
+- Separate live-contention timeout from stale-owner recovery; inspect a complete
+  parseable owner record before the age threshold and reclaim only after an
+  unambiguous dead-process result.
+- Claim a stale lock atomically before removal so only one contender can win;
+  never use a check-then-unconditional-delete sequence that can target a
+  successor lock.
+- Preserve fail-closed handling for malformed records and filesystem sharing
+  errors rather than guessing ownership.
+- Add crash-child, live-owner, malformed/partial-record, successor-token,
+  simultaneous-contender, and Windows sharing-error regression tests.
+
+### 184: `sed` side effects can bypass plan-mode write classification
+
+- **Priority**: High
+- **Status**: **Open**
+- **Introduced**: v0.5.36
+- **Created**: 2026-07-19
+
+#### Original Problem
+
+`sed` is listed as a safe read command, but the plan-mode write classifier does
+not recognize its file-writing forms. The existing read-side check only scans
+space-split text for a subset of `-i` forms, while `isBashWriteCommand()` does
+not classify `sed` as writing. SDK and ACP plan-mode paths can therefore treat
+an in-place invocation as allowed because they consume the write classifier's
+result directly. The traditional REPL retains an additional shell confirmation
+layer, so the observable behavior is inconsistent across hosts.
+
+The gap is broader than a bare `sed -i`: GNU/BusyBox/BSD accept multiple
+in-place option forms, and sed programs can write through `w`, `W`, or the
+`s///w` flag; GNU `e` can execute a command. A script supplied with `-f` is
+opaque to a command-line-only classifier. Conversely, adding every `sed`
+invocation to the write-command list would regress legitimate read-only uses
+such as `sed -n` and `sed -e`.
+
+#### Expected Behavior
+
+All Runtime surfaces should apply one effect-aware classification before a
+plan-mode decision. Clearly read-only sed invocations should remain available;
+known write effects should be blocked in plan mode and use the normal
+guardrail/permission chain elsewhere; opaque or ambiguous programs must not be
+silently treated as read-only.
+
+#### Context
+
+- **Affected components**: REPL permission classification, SDK Runtime, ACP
+- **Affected scenarios**: plan mode and any host that trusts the shared bash
+  read/write classifiers as an immutability boundary
+- **Release decision**: accepted as a documented deferral for v0.7.72 while an
+  effect model that avoids read-command regressions is designed
+- **Workaround**: hosts requiring a hard read-only boundary should omit the
+  shell tool or enforce filesystem immutability outside the command classifier
+
+#### Root Cause
+
+Read admission and write detection are separate boolean heuristics. The
+read-side sed exception parses reconstructed command text rather than the shell
+AST's argument roles, and the write-side classifier has no sed semantics. The
+model cannot represent an opaque/unknown effect without incorrectly mapping it
+to either read-only or writing.
+
+#### Proposed Solution
+
+- Classify parsed sed arguments rather than scanning arbitrary text; honor
+  `--` and the arguments consumed by `-e`/`-f`.
+- Recognize documented GNU, BusyBox, and BSD in-place forms without matching
+  `-i` inside scripts, regular expressions, replacement text, or operands.
+- Detect direct script write/execute commands and treat external `-f` programs
+  as unknown unless their contents can be safely inspected.
+- Introduce `readOnly` / `writes` / `unknown` effect outcomes shared by REPL,
+  SDK, and ACP, with table-driven cross-surface regression tests.
 
 ### 183: CLI daemon startup failures and forced test exits could leave detached Node processes
 
@@ -4819,11 +4958,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 70 (24 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 72 (26 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-19: Issue 185 added
+- Deferred F266 learning-lock crash recovery hardening; rejected a blanket
+  30-second acquisition timeout in favor of a future owner-aware atomic claim.
+
+### 2026-07-19: Issue 184 added
+- Deferred sed effect-aware permission classification to avoid shipping a
+  blanket write classification that would regress legitimate read-only use.
 
 ### 2026-07-18: Issue 183 added and resolved (v0.7.72-hotfix.0)
 - Unified CLI and SDK daemon startup ownership, reclaimed only the current

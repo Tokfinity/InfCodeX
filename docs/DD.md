@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-18
+> Last updated: 2026-07-19
 >
-> Current release baseline: `v0.7.72` release candidate
-> (`@kodax-ai/kodax@0.7.72-hotfix.0` workspace package)
+> Current release baseline: `v0.7.72`
+> (`@kodax-ai/kodax@0.7.72` workspace package)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,8 +20,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.72-hotfix.0`; the active
-release-candidate design target is `v0.7.72`.
+The root workspace package is `@kodax-ai/kodax@0.7.72`; FEATURE_266 and
+FEATURE_270 are released in the `v0.7.72` baseline.
 
 `package.json` exposes:
 

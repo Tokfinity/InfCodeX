@@ -11,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.72-hotfix.0` |
-| Current package version | `@kodax-ai/kodax@0.7.72-hotfix.0` |
+| Current released version | `v0.7.72` |
+| Current package version | `@kodax-ai/kodax@0.7.72` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `57` |
-| InProgress | `3` |
+| InProgress | `1` |
 | Planned | `11` |
-| Completed | `36` |
+| Completed | `38` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -26,8 +26,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 36 | `269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `267`, `268`, and `269` shipped together in v0.7.69 (2026-07-15): bidirectional A2A 1.0, split hot-reloadable integrations, and the authoritative shared Coder daemon. `260` shipped in v0.7.68; `261`, `259`, and `258` shipped in v0.7.67. Earlier completion history is unchanged. |
-| InProgress | 3 | `266, 270, 225` | `266` and `270` are implementation-complete release-candidate work; only package/version-tag finalization remains. `225` remains the bounded v0.7.100 cleanup. |
+| Completed | 38 | `270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `266` and `270` shipped together in v0.7.72 (2026-07-19): the Learning Center/Learned Capability Runtime control plane and unified adaptive Actor/Turn control plane. Earlier completion history is unchanged. |
+| InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -340,17 +340,18 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `266` | Learning Center + Learned Capability Runtime Control Plane | Core / Agent Learning + Runtime SDK | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_266-learning-center--learned-capability-runtime-control-plane) |
-| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | Core / Agent Orchestration + Runtime | High | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
-Current v0.7.72 progress:
+---
+
+## v0.7.72 Completion Record
 
 `266` implementation and its zero-provider Layer 1 gate are complete: the
 Runtime-owned Learning Center, learned-area store, lower-precedence learned
 Skill discovery, daemon/Worker facade, `/learn`/status surfaces, notification
 cursors, and hard-dispose persistence are covered by deterministic tests. It
-remains InProgress until the v0.7.72 package/version tag is finalized.
+shipped in v0.7.72 after the package, documentation, build, and release gates
+were finalized.
 
 `270` engineering implementation and release eval are complete:
 native, Workflow-owned, and external Agent work share the Runtime-owned
@@ -369,8 +370,8 @@ and blind evidence packs are complete. The final isolated 227/227 focused suite
 and full build pass. The authorized Layer 2 treatment is non-inferior in 29/30
 blind pairs; Layer 3 is non-inferior in 5/6 journeys with no invalid-plan replay.
 Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
-is `recommend-ship`. F270 remains InProgress only for package/version-tag
-finalization; the separate manual guide is evidence, not a sign-off gate.
+is `recommend-ship`. F270 shipped in v0.7.72; the separate manual guide remains
+evidence rather than a sign-off gate.
 
 The 2026-07-18 Sidecar/Actor alignment follow-up is also complete. Terminal
 verification now waits for both descendant termination and root-scoped
@@ -430,7 +431,7 @@ starts three Actors for a fresh five-track request while the historical
 baseline starts five; this diagnostic re-pilot does not replace the original
 authorized Layer 2/3 result.
 
-The same release-candidate closure makes Runtime Auto Mode a real permission
+The same release closure makes Runtime Auto Mode a real permission
 owner rather than a prompt/config preference: an auto session reuses one LLM or
 rules guardrail across turns, executes guardrail -> permission bridge -> tool,
 and persists a fallback to rules. Classifier model/timeout are durable session
@@ -570,6 +571,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) | One Runtime-owned Actor/Turn tree and scheduler replaces the parallel child-task authorities; AMA gains bounded adaptive recursion, durable observation, safe follow-up/interruption, unified Workflow/external execution, and the canonical collaboration surface while AMAW retires. |
+| `266` | Learning Center + Learned Capability Runtime Control Plane | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_266-learning-center--learned-capability-runtime-control-plane) | Runtime-owned Learning Center, Learned Area lifecycle/events/cursors, lower-precedence learned Skills, governed actions, and inline/Worker/daemon SDK plus REPL parity. |
 | `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) | Authoritative shared Coder daemon observation/resync, durable operations, transport-safe AskUser/permissions, run-scoped credential and Host Tool bridges, recovery facts, and daemon/inline owner fencing. |
 | `268` | Hot-Reloadable Integration Configuration Split | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_268-hot-reloadable-integration-configuration-split) | Base split/template/migration/hot-reload scope shipped in v0.7.69; the v0.7.71 closure adds source-owned, fail-closed per-Agent hot `enabled` reconciliation without peer rediscovery. |
 | `267` | Bidirectional A2A Client Executor + KodaX Agent Server | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_267-bidirectional-a2a-client-executor--kodax-agent-server) | Bounded A2A 1.0 client/server base shipped in v0.7.69; the v0.7.71 closure adds external-issuer OAuth Client Credentials/JWT Resource Server profiles and activation hardening alongside trusted Agent/Skill/tool admission, durable tasks, and explicit artifact publication. |

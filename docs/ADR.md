@@ -1,6 +1,18 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-17
+> Last updated: 2026-07-19
+>
+> **v0.7.72 agent-control-plane addendum:** FEATURE_266 centralizes learned
+> capability lifecycle, durable events, governance, and Runtime/REPL access in
+> one agent-layer Learning Center. FEATURE_270 replaces parallel child-task
+> authorities with one Runtime-owned Actor/Turn tree and bounded adaptive
+> scheduler shared by native, Workflow-owned, and external Agent execution.
+>
+> **v0.7.72 permission/terminal addendum:** Runtime Auto Mode owns and reuses
+> the session guardrail before permission escalation, persists LLM-to-rules
+> fallback, and exposes plan exit only when a real host callback exists. The
+> same release preserves event timestamps and makes bare resume selection and
+> cancellation transfer terminal ownership deterministically.
 >
 > **v0.7.71 A2A durable-owner/admission correction:** normal RPC handling never
 > dual-reads pre-realm task keys; a stopped operator may explicitly rekey exact
@@ -71,7 +83,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-07-16 / v0.7.71 release candidate)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 11 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259/260 的渐进披露、工具输出完整采集/无损优先/批次容量回退、workflow quality lint、review handoff optimization 与 governed memory recall/review。
+> **Current package / SDK state (2026-07-19 / v0.7.72)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 11 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259/260/266/270 的渐进披露、工具输出完整采集/无损优先/批次容量回退、workflow quality lint、review handoff optimization、governed memory recall/review、Learning Center 与 Actor/Turn control plane。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：

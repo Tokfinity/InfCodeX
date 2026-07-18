@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.72] - 2026-07-19
+
 ### Added
 
 - **Learning Center and learned-capability Runtime control plane
