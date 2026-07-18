@@ -155,4 +155,6 @@ export {
   TOOL_CALL_NAME,
   TOOL_DESCRIBE_DEFINITION,
   TOOL_DESCRIBE_NAME,
+  resolveToolBridgeTarget,
+  type ToolBridgeTargetResolution,
 } from './tool-bridge.js';

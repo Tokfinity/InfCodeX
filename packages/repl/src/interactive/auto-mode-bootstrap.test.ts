@@ -47,6 +47,7 @@ import { createAutoModeToolGuardrail } from '@kodax-ai/coding';
 const baseDeps = () => ({
   askUser: vi.fn(async () => 'allow' as const),
   projectRoot: '/test/project',
+  executionCwd: '/test/project/worktree',
   getCurrentProviderName: () => 'kimi-code',
   getCurrentModel: () => 'kimi-for-coding',
   getCurrentPermissionMode: () => 'auto' as const,

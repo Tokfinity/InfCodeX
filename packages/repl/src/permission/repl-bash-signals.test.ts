@@ -62,6 +62,18 @@ describe('replBashPathSignalCollector — outside_project', () => {
     expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
     expect(signals.some((s) => s.kind === 'shell_redirect_outside')).toBe(false);
   });
+
+  it('resolves redirects from executionCwd without changing the project boundary', () => {
+    const executionCwd = path.join(PROJECT_ROOT, 'packages', 'app');
+    const signals = replBashPathSignalCollector.collect(
+      bash('echo x > ../../src/generated.ts'),
+      PROJECT_ROOT,
+      executionCwd,
+    );
+
+    expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
+    expect(signals.some((s) => s.kind === 'shell_redirect_outside')).toBe(false);
+  });
 });
 
 describe('replBashPathSignalCollector — empty / invalid input', () => {

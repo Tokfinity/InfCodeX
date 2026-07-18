@@ -1771,6 +1771,7 @@ async function runManagedTaskViaRunnerInner(
     return Runner.run(agent, input, {
       llm,
       abortSignal: options.abortSignal,
+      guardrails: options.guardrails,
       compactionHook,
       toolResultBatchTransform,
       toolObserver: runnerToolObserver,

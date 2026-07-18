@@ -98,7 +98,11 @@ const BASH_TOOL_NAMES: ReadonlySet<string> = new Set(['bash']);
 export const replBashPathSignalCollector: SignalCollector = {
   toolNames: BASH_TOOL_NAMES,
 
-  collect(call: RunnerToolCall, projectRoot: string): readonly ToolCallSignal[] {
+  collect(
+    call: RunnerToolCall,
+    projectRoot: string,
+    executionCwd = projectRoot,
+  ): readonly ToolCallSignal[] {
     const command = typeof call.input.command === 'string' ? call.input.command : '';
     if (!command || !projectRoot) return [];
 
@@ -112,7 +116,7 @@ export const replBashPathSignalCollector: SignalCollector = {
     for (const candidate of extractPathsFromCommand(command)) {
       let resolved: string;
       try {
-        resolved = path.resolve(projectRoot, candidate);
+        resolved = path.resolve(executionCwd, candidate);
       } catch {
         continue;
       }
@@ -124,7 +128,7 @@ export const replBashPathSignalCollector: SignalCollector = {
         }
         continue; // skip outside_project for the same path (avoid double-flag)
       }
-      if (isAlwaysConfirmPath(candidate, projectRoot)) {
+      if (isAlwaysConfirmPath(resolved, projectRoot)) {
         // isAlwaysConfirmPath returns true when path is outside-project AND
         // outside system temp. Treat as outside_project signal.
         const insideTemp = tempDirs.some((d) => isPathUnder(resolved, d));
@@ -142,7 +146,7 @@ export const replBashPathSignalCollector: SignalCollector = {
     for (const target of collectBashWriteTargets(command)) {
       let resolved: string;
       try {
-        resolved = path.resolve(projectRoot, target);
+        resolved = path.resolve(executionCwd, target);
       } catch {
         continue;
       }

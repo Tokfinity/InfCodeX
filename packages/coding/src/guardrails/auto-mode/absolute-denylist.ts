@@ -200,7 +200,10 @@ function isPathUnder(target: string, directory: string): boolean {
   return t.startsWith(d + path.sep);
 }
 
-function checkUserKodaxWrite(call: RunnerToolCall, projectRoot: string): AbsoluteDenyResult {
+function checkUserKodaxWrite(
+  call: RunnerToolCall,
+  executionCwd: string,
+): AbsoluteDenyResult {
   if (call.name !== 'write' && call.name !== 'edit') return MISS;
   const targetPath = typeof call.input.path === 'string' ? call.input.path : '';
   if (!targetPath) return MISS;
@@ -210,7 +213,7 @@ function checkUserKodaxWrite(call: RunnerToolCall, projectRoot: string): Absolut
   } catch {
     return MISS;
   }
-  const resolved = path.resolve(projectRoot, targetPath);
+  const resolved = path.resolve(executionCwd, targetPath);
   if (isPathUnder(resolved, userKodax)) {
     return {
       denied: true,
@@ -236,9 +239,13 @@ function checkUserKodaxWrite(call: RunnerToolCall, projectRoot: string): Absolut
  * **Fast**: ~5 regex tests + 1-2 string ops; safe to run on every
  * non-Tier-1 call without measurable overhead.
  */
-export function checkAbsoluteDeny(call: RunnerToolCall, projectRoot: string): AbsoluteDenyResult {
+export function checkAbsoluteDeny(
+  call: RunnerToolCall,
+  projectRoot: string,
+  executionCwd = projectRoot,
+): AbsoluteDenyResult {
   // File-tool path (write/edit to ~/.kodax/)
-  const kodaxWrite = checkUserKodaxWrite(call, projectRoot);
+  const kodaxWrite = checkUserKodaxWrite(call, executionCwd);
   if (kodaxWrite.denied) return kodaxWrite;
 
   // Bash command-string patterns

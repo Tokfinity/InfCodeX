@@ -24,6 +24,7 @@ export interface RuntimeDaemonJsonSchema {
   readonly additionalProperties?: boolean | RuntimeDaemonJsonSchema;
   readonly items?: RuntimeDaemonJsonSchema;
   readonly oneOf?: readonly RuntimeDaemonJsonSchema[];
+  readonly maxLength?: number;
 }
 
 export interface RuntimeDaemonMethodSchema {
@@ -585,6 +586,10 @@ export function validateRuntimeDaemonJsonSchema(
     return [`${path} must be ${types.join(' or ')}.`];
   }
 
+  if (typeof value === 'string' && schema.maxLength !== undefined && value.length > schema.maxLength) {
+    return [`${path} must have at most ${schema.maxLength} characters.`];
+  }
+
   if (Array.isArray(value)) {
     const itemSchema = schema.items;
     if (itemSchema === undefined) return [];
@@ -979,7 +984,10 @@ function permissionRequestInputSchema(): RuntimeDaemonJsonSchema {
     toolName: stringSchema,
     reason: stringSchema,
     risk: { enum: ['low', 'medium', 'high'] },
+    // The Runtime replaces caller input with its own bounded/redacted JSON
+    // summary before the request becomes observable or is returned.
     inputPreview: stringSchema,
+    executionCwd: { type: 'string', maxLength: 4_096 },
     expiresAt: stringSchema,
     timeoutMs: integerSchema,
   }, ['sessionId', 'runId', 'toolName']);
@@ -988,6 +996,7 @@ function permissionRequestInputSchema(): RuntimeDaemonJsonSchema {
 function permissionRequestSchema(): RuntimeDaemonJsonSchema {
   return objectSchema({
     ...(permissionRequestInputSchema().properties ?? {}),
+    inputPreview: { type: 'string', maxLength: 8_192 },
     id: stringSchema,
     createdAt: stringSchema,
   }, ['id', 'sessionId', 'runId', 'toolName', 'createdAt'], true);

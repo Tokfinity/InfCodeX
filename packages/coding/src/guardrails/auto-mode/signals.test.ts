@@ -92,6 +92,29 @@ describe('collectAllSignals', () => {
     expect(captured).toBe('/some/other/root');
   });
 
+  it('passes executionCwd separately from the project boundary', () => {
+    let capturedRoot: string | undefined;
+    let capturedCwd: string | undefined;
+    const collectors: SignalCollector[] = [{
+      toolNames: new Set(['bash']),
+      collect: (_call, projectRoot, executionCwd) => {
+        capturedRoot = projectRoot;
+        capturedCwd = executionCwd;
+        return [];
+      },
+    }];
+
+    collectAllSignals(
+      makeCall('bash'),
+      '/repo',
+      collectors,
+      '/repo/packages/app',
+    );
+
+    expect(capturedRoot).toBe('/repo');
+    expect(capturedCwd).toBe('/repo/packages/app');
+  });
+
   it('handles many collectors with mix of match/no-match', () => {
     const collectors = [
       makeCollector(['write'], () => [{ kind: 'file_modification', targets: ['x'] }]),

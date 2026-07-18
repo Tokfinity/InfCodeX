@@ -67,6 +67,7 @@ import {
 import type { AutoRules } from './rules.js';
 import { collectAllSignals, type SignalCollector, type ToolCallSignal } from './signals.js';
 import { speculativeRace } from './speculative.js';
+import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 
 export type AutoModeEngine = 'llm' | 'rules';
 
@@ -230,6 +231,9 @@ export interface AutoModeGuardrailConfig {
    */
   readonly projectRoot?: string;
 
+  /** Directory used to resolve relative tool paths. Defaults to projectRoot. */
+  readonly executionCwd?: string;
+
   /**
    * Override the default signal-collector set. When unset, defaults to
    * `[bashSignalCollector, fileSignalCollector]` — coding-side
@@ -343,15 +347,18 @@ export function createAutoModeToolGuardrail(
     ...(config.extraCollectors ?? []),
   ];
   const projectRoot = config.projectRoot ?? '';
+  const executionCwd = config.executionCwd ?? projectRoot;
 
   const beforeTool = async (
     call: RunnerToolCall,
     ctx: GuardrailContext,
   ): Promise<GuardrailVerdict> => {
+    const bridgeTarget = resolveToolBridgeTarget(call);
+    const guardedCall = bridgeTarget?.ok ? bridgeTarget.call : call;
     // FEATURE_158: collect signals ONCE per call. Used by both the
     // classifier prompt and the escalate-to-user path (REPL UI renders
     // Scope/Risk from signals). Empty array when no collector matches.
-    const signals = collectAllSignals(call, projectRoot, signalCollectors);
+    const signals = collectAllSignals(guardedCall, projectRoot, signalCollectors, executionCwd);
 
     // When the REPL has supplied askUser, every "escalate" path is resolved
     // here into a concrete allow/block; otherwise we fall through to the
@@ -361,14 +368,14 @@ export function createAutoModeToolGuardrail(
       if (!config.askUser) {
         return { action: 'escalate', reason };
       }
-      const verdict = await config.askUser(call, reason, signals);
+      const verdict = await config.askUser(guardedCall, reason, signals);
       if (verdict === 'allow') return { action: 'allow' };
       return { action: 'block', reason };
     };
 
     // Tier 1: tool opted out of classifier via empty projection
-    const projector = config.getToolProjection(call.name);
-    const action = projector ? projector(call.input) : '';
+    const projector = config.getToolProjection(guardedCall.name);
+    const action = projector ? projector(guardedCall.input) : '';
     if (action === '') {
       return { action: 'allow' };
     }
@@ -378,7 +385,7 @@ export function createAutoModeToolGuardrail(
     // ~/.kodax write) are blocked even when engine is downgraded to 'rules'.
     // LLM cannot override. denialTracker NOT incremented (Tier 0 isn't a
     // classifier denial — separate concern from engine downgrade).
-    const tier0: AbsoluteDenyResult = checkAbsoluteDeny(call, projectRoot);
+    const tier0: AbsoluteDenyResult = checkAbsoluteDeny(guardedCall, projectRoot, executionCwd);
     if (tier0.denied) {
       config.log?.(
         'warn',

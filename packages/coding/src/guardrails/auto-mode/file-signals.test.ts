@@ -93,6 +93,17 @@ describe('fileSignalCollector — outside_project', () => {
     expect(kinds).toContain('protected_path');
     expect(kinds).not.toContain('outside_project');
   });
+
+  it('resolves relative paths from executionCwd while checking the project boundary', () => {
+    const executionCwd = path.join(PROJECT_ROOT, 'packages', 'app');
+    const signals = fileSignalCollector.collect(
+      call('write', '../../src/index.ts'),
+      PROJECT_ROOT,
+      executionCwd,
+    );
+
+    expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
+  });
 });
 
 describe('fileSignalCollector — file_modification anchor', () => {

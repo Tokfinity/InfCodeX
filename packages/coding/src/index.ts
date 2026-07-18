@@ -317,6 +317,7 @@ export {
   registerTool,
   getTool,
   getToolDefinition,
+  resolveToolBridgeTarget,
   getRegisteredToolDefinition,
   getToolRegistrations,
   getBuiltinToolDefinition,

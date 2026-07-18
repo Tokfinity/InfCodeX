@@ -126,4 +126,27 @@ describe('runtime daemon protocol schema', () => {
       permissionBroker: 'unknown',
     })).toContain('$.permissionBroker must be one of: runtime, client.');
   });
+
+  it('carries the effective execution directory on permission requests', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['permission.request'].params;
+
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      executionCwd: 'C:\\work\\project',
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      executionCwd: 42,
+    })).toContain('$.executionCwd must be string.');
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      inputPreview: 'x'.repeat(8_193),
+    })).toEqual([]);
+  });
 });

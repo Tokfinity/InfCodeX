@@ -190,6 +190,7 @@ export {
   getBashOutsideProjectWriteRisk,
   generateSavePattern,
   getPlanModeBlockReason,
+  replBashPathSignalCollector,
 } from "./permission/index.js";
 
 // === Auto-mode bootstrap (v0.7.42 SDK export) ===

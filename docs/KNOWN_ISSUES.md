@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-17_
+_Last Updated: 2026-07-18_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-17_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 172 | High | Resolved | Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths | v0.7.64-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-18 |
 | 171 | High | Resolved | Verified Ark Coding image inputs were rejected before provider dispatch | v0.7.57 | v0.7.72-hotfix.0 | 2026-07-17 | 2026-07-17 |
 | 170 | High | Resolved | A2A realm-key upgrade hid durable tasks and global admission serialized slow preparation | v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
 | 169 | High | Resolved | Executor shutdown and daemon auto-start could wait indefinitely or leak startup children | v0.7.67-v0.7.71 | v0.7.71 | 2026-07-17 | 2026-07-17 |
@@ -81,6 +82,139 @@ _Last Updated: 2026-07-17_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 172: Daemon Runtime bypassed auto-mode guardrails and treated quoted source text as protected paths
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.64-v0.7.72-hotfix.0
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-17
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+KodaX Space ran a shared-daemon Coder Session with `permissionMode=auto` and
+`autoModeEngine=llm`, but ordinary Bash-backed OCR/Python work repeatedly
+created permission requests. The inspected Session
+`s_d13b9f93...` / run `run_mroh9tzn_71aa4afb` contained 18 Bash calls, 15
+permission prompts, and four five-minute permission timeouts. The request
+events already carried the command and description in `inputPreview`, so the
+repetition was not caused by the renderer losing the decision response.
+
+Expected behavior: an explicit Runtime auto engine must classify each tool
+call through the same auto-mode guardrail used by the REPL. Only a deliberate
+guardrail escalation should enter the shared permission broker. Quoted Python
+source, regular expressions, and other non-path arguments must not be treated
+as protected filesystem paths.
+
+#### Root Cause
+
+- Runtime persisted `autoModeEngine` but never bootstrapped or installed an
+  `AutoModeToolGuardrail`; its event-level fallback therefore applied the
+  static permission policy before any LLM/rules classifier could decide.
+- The legacy raw-command scan added every quoted string as a path. Python
+  `-c` source and search expressions consequently reached protected/outside
+  path checks as false path candidates.
+- Relative candidates were resolved against the daemon process cwd instead of
+  the run's execution cwd (with the project root kept as the security
+  boundary), so daemon launch location could create additional false matches.
+- Runtime runs exposed `exit_plan_mode` even when their host supplied no
+  `exitPlanMode` approval callback. The tool first entered the generic
+  permission broker and then failed as interactive-REPL-only.
+- Permission previews truncated serialized JSON at an arbitrary character,
+  producing invalid input for large writes and hiding the target/operation from
+  downstream clients.
+
+#### Resolution
+
+- Runtime now bootstraps the selected `llm` or `rules` auto engine once per
+  Session/root context, reuses the stateful tool guardrail across turns, and
+  persists automatic fallback to `rules`. Session deletion and Runtime close
+  release cached guardrail state.
+- Managed-task now forwards Runtime guardrails into the real `Runner`. Runtime
+  issues a one-shot decision receipt only after guardrail allow and requires an
+  exact call-id/tool/input match before the permission hook can run; missing,
+  changed, or replayed receipts fail closed.
+- `tool_call` resolution is shared by the guardrail and dispatcher, so signals,
+  Tier 0, projection, classification, permission, and execution all refer to
+  the same concrete target. Only the guardrail's explicit `askUser` escalation
+  enters the shared permission service, including with
+  `permissionBroker=client`.
+- `gitRoot` is now only the project security boundary, while relative command
+  and file paths resolve from the run's separate `executionCwd`. Session
+  metadata supplies both defaults when run options omit them, run-level
+  overrides cannot widen the Session boundary, and both direct REPL surfaces
+  pass their detected execution directory into auto-mode.
+- Command argument roles distinguish inline Python/regex/program text from file
+  operands and path-valued flags, including attached forms. Ordinary-prefix
+  traversal remains a path candidate, while nested source literals do not.
+- Runtime rejects a caller-supplied duplicate auto-mode guardrail when it owns
+  explicit auto mode.
+- Runtime removes `exit_plan_mode` from the model-visible tool set unless the
+  caller supplied its approval callback, while preserving caller exclusions.
+- Permission previews now remain valid bounded JSON, redact credential-bearing
+  keys and inline shell secrets, fall back to a compact command/path summary,
+  carry the effective execution directory, and normalize caller-supplied
+  previews through the same registry boundary. The daemon accepts legacy large
+  preview inputs for Runtime normalization but keeps observable response
+  previews capped at 8192 characters.
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/schema.ts`
+- `src/runtime-daemon/schema.test.ts`
+- `src/sdk-runtime.test.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`
+- `packages/coding/src/guardrails/auto-mode/absolute-denylist.ts`
+- `packages/coding/src/guardrails/auto-mode/file-signals.test.ts`
+- `packages/coding/src/guardrails/auto-mode/file-signals.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
+- `packages/coding/src/guardrails/auto-mode/signals.test.ts`
+- `packages/coding/src/guardrails/auto-mode/signals.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/task-engine/runner-driven.test.ts`
+- `packages/coding/src/tools/tool-bridge.ts`
+- `packages/coding/src/tools/index.ts`
+- `packages/coding/src/index.ts`
+- `packages/repl/src/index.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.test.ts`
+- `packages/repl/src/interactive/repl.ts`
+- `packages/repl/src/permission/permission.ts`
+- `packages/repl/src/permission/permission.test.ts`
+- `packages/repl/src/permission/repl-bash-signals.test.ts`
+- `packages/repl/src/permission/repl-bash-signals.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- Runtime explicit-auto regressions covering guardrail installation, actual
+  Runner execution order, managed-task propagation, exact concrete-call
+  receipts, replay/mutation rejection, broker escalation, Session reuse/cache
+  release, client-broker and host-hook compatibility, queued-turn fallback,
+  duplicate rejection, Session-derived path context, and execution cwd.
+- Runtime tool-exposure regression covering both the no-callback exclusion and
+  the explicitly wired `exitPlanMode` path.
+- Quoted/nested Python source, regex/program source and option-value roles,
+  attached source/path flags, Windows paths with spaces, ordinary-prefix
+  traversal, and project-root/execution-cwd path-resolution regressions.
+- Large-write and caller-supplied preview regressions proving bounded,
+  credential-redacted, valid JSON with an effective execution directory.
+- Daemon schema validation for the `executionCwd` permission field, legacy
+  oversized input compatibility, and the 8192-character response ceiling.
+
+#### Verification
+
+- `npm run build` passed, including package type-check, SDK/CLI bundles, worker
+  sidecars, and declaration bundles; `git diff --check` passed.
+- Full Runtime SDK suite passed 80/80, including real daemon lifecycle tests.
+- Permission, auto-mode, managed Runner, bridge contract, bootstrap, and daemon
+  schema suites passed 572 tests, with one platform-dependent skip and two
+  existing todos.
 
 ### 171: Verified Ark Coding image inputs were rejected before provider dispatch
 
@@ -4114,11 +4248,28 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 57 (24 Open, 33 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 59 (24 Open, 35 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-18: Issue 172 resolved after production-path closure (v0.7.72-hotfix.0)
+- Forwarded guardrails through managed Runner, authorized exact concrete bridge
+  calls with one-shot receipts, completed execution-cwd/path-role handling,
+  preserved legacy daemon preview input compatibility, and verified the full
+  Runtime SDK suite plus publish build.
+
+### 2026-07-18: Issue 172 reopened
+- Production review found that managed-task did not forward Runtime guardrails,
+  `tool_call` classified only its wrapper, and two command-path forms still
+  lost deterministic boundary signals. The issue remains open until the final
+  concrete-call authorization path and compatibility regressions are verified.
+
+### 2026-07-17: Issue 172 added and resolved (v0.7.72-hotfix.0)
+- Installed and Session-scoped the real auto-mode guardrail in daemon Runtime
+  runs, limited the shared permission broker to explicit escalations, separated
+  project boundaries from execution cwd, and bounded permission transport data.
 
 ### 2026-07-16: Issue 168 added and resolved (v0.7.71)
 - Closed A2A executor shutdown/durability, daemon ownership/readiness,

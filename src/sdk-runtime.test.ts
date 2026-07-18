@@ -6,16 +6,23 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createAgent, Runner } from '@kodax-ai/agent';
 import type {
+  GuardrailContext,
   ManagedRunClassification,
+  RunnableTool,
+  RunnerLlmResult,
+  RunnerToolCall,
   WorkflowEvent,
 } from '@kodax-ai/agent';
 import type {
+  AutoModeToolGuardrail,
   KodaXMessage,
   KodaXOptions,
   KodaXResult,
   RunningSession,
 } from '@kodax-ai/coding';
+import type { AutoModeBootstrapDeps } from '@kodax-ai/repl';
 import type {
   RuntimeDaemonClientTransport,
   RuntimeEvent,
@@ -29,9 +36,35 @@ const codingMock = vi.hoisted(() => ({
 }));
 
 const replMock = vi.hoisted(() => ({
+  bootstrapAutoMode: vi.fn(),
   beforeLoadSession: null as null | ((call: number) => Promise<void>),
   loadSessionCalls: 0,
 }));
+
+function runtimeAutoGuardrail(options: KodaXOptions): AutoModeToolGuardrail {
+  const guardrail = options.guardrails?.find((candidate) => (
+    candidate.kind === 'tool' && candidate.name === 'auto-mode'
+  ));
+  if (!guardrail || guardrail.kind !== 'tool' || !guardrail.beforeTool) {
+    throw new Error('expected Runtime-owned auto-mode tool guardrail');
+  }
+  return guardrail as AutoModeToolGuardrail;
+}
+
+async function authorizeRuntimeAutoCall(
+  options: KodaXOptions,
+  call: RunnerToolCall,
+): Promise<void> {
+  const guardrail = runtimeAutoGuardrail(options);
+  const context: GuardrailContext = {
+    agent: createAgent({ name: 'runtime-auto-test', instructions: 'Test guardrail ordering.' }),
+    messages: [],
+  };
+  const verdict = await guardrail.beforeTool?.(call, context);
+  if (verdict?.action !== 'allow') {
+    throw new Error(`expected auto-mode allow, received ${verdict?.action ?? 'no verdict'}`);
+  }
+}
 
 vi.mock('@kodax-ai/coding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
@@ -46,6 +79,7 @@ vi.mock('@kodax-ai/repl', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/repl')>();
   return {
     ...actual,
+    bootstrapAutoMode: replMock.bootstrapAutoMode,
     createSessionManager: (...args: Parameters<typeof actual.createSessionManager>) => {
       const manager = actual.createSessionManager(...args);
       return {
@@ -68,6 +102,7 @@ describe('createKodaXRuntime', () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-runtime-'));
     codingMock.runManagedTask.mockReset();
     codingMock.startKodaX.mockReset();
+    replMock.bootstrapAutoMode.mockReset();
     replMock.beforeLoadSession = null;
     replMock.loadSessionCalls = 0;
   });
@@ -877,12 +912,62 @@ describe('createKodaXRuntime', () => {
     await recreated.close();
   });
 
+  it('hides exit_plan_mode when a Runtime run has no approval callback', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Plan Bridge Test' });
+    const capturedOptions: KodaXOptions[] = [];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      capturedOptions.push(options);
+      return fakeRunningSession(
+        options,
+        Promise.resolve({
+          success: true,
+          lastText: 'done',
+          messages: [],
+          sessionId: session.id,
+        }),
+      );
+    });
+
+    await (
+      await runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'plan without a bridge',
+        options: { context: { excludeTools: ['caller_tool'] } },
+      })
+    ).result;
+    await (
+      await runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'plan with a bridge',
+        options: {
+          context: { excludeTools: ['caller_tool'] },
+          events: { exitPlanMode: async () => true },
+        },
+      })
+    ).result;
+
+    expect(capturedOptions[0]?.context?.excludeTools).toEqual([
+      'caller_tool',
+      'exit_plan_mode',
+    ]);
+    expect(capturedOptions[1]?.context?.excludeTools).toEqual(['caller_tool']);
+    await runtime.close();
+  });
+
   it('keeps session executionCwd settings inside the session workspace root', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const projectRoot = path.join(tempRoot, 'project');
     const outsideRoot = path.join(tempRoot, 'outside');
+    const dotPrefixedDirectory = path.join(projectRoot, '..cache');
     await fs.mkdir(projectRoot, { recursive: true });
     await fs.mkdir(outsideRoot, { recursive: true });
+    await fs.mkdir(dotPrefixedDirectory, { recursive: true });
     const sessionsDir = path.join(tempRoot, 'sessions');
     const runtime = await createKodaXRuntime({
       sessionsDir,
@@ -897,8 +982,21 @@ describe('createKodaXRuntime', () => {
       executionCwd: projectRoot,
     })).resolves.toMatchObject({ executionCwd: path.resolve(projectRoot) });
     await expect(runtime.sessions.updateSettings(session.id, {
+      executionCwd: dotPrefixedDirectory,
+    })).resolves.toMatchObject({ executionCwd: path.resolve(dotPrefixedDirectory) });
+    await expect(runtime.sessions.updateSettings(session.id, {
       executionCwd: outsideRoot,
     })).rejects.toThrow('executionCwd must stay within the session workspace root');
+    await expect(runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'blocked run cwd override',
+      options: { context: { executionCwd: outsideRoot } },
+    })).rejects.toThrow('executionCwd must stay within the session workspace root');
+    await expect(runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'blocked run boundary override',
+      options: { context: { gitRoot: outsideRoot } },
+    })).rejects.toThrow('gitRoot must match the session repository safety boundary');
     await fs.writeFile(
       path.join(tempRoot, '.kodax', 'runtime', 'session-settings', `${encodeURIComponent(session.id)}.json`),
       JSON.stringify({ executionCwd: outsideRoot }),
@@ -2719,6 +2817,700 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('runs explicit auto engines inside Runtime and brokers only guardrail escalation', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+      permissionTimeoutMs: 1_000,
+    });
+    const gitRoot = path.join(tempRoot, 'project');
+    const executionCwd = path.join(gitRoot, 'packages', 'app');
+    const session = await runtime.sessions.create({ title: 'Daemon Auto Mode' });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd,
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'inspect Python',
+      permissionBroker: 'client',
+      options: { context: { gitRoot, executionCwd } },
+    });
+    await flushMicrotasks();
+
+    const bootstrap = replMock.bootstrapAutoMode.mock.calls[0]?.[0] as
+      | AutoModeBootstrapDeps
+      | undefined;
+    expect(bootstrap).toMatchObject({ projectRoot: gitRoot, executionCwd });
+    expect(bootstrap?.autoModeSettings.engine).toBe('llm');
+    if (!runOptions) throw new Error('expected Runtime run options');
+    const runtimeGuardrail = runtimeAutoGuardrail(runOptions);
+    expect(runtimeGuardrail).not.toBe(fakeGuardrail);
+
+    const command = 'python -c "import sys; print(sys.executable); print(sys.version)"';
+    await authorizeRuntimeAutoCall(runOptions, {
+      id: 'bash_python',
+      name: 'bash',
+      input: { command, description: 'Check Python environment' },
+    });
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      { command, description: 'Check Python environment' },
+      { sessionId: session.id, toolId: 'bash_python' },
+    )).resolves.toBe(true);
+    await expect(runtime.permissions.listPending({ runId: handle.runId })).resolves.toEqual([]);
+
+    const escalation = bootstrap?.askUser(
+      {
+        id: 'bash_python',
+        name: 'bash',
+        input: {
+          command: `${command} # Authorization: Bearer private-value`,
+          description: 'Check Python environment',
+          apiKey: 'private-value',
+        },
+      },
+      'The classifier could not establish whether this command is safe.',
+      [{ kind: 'outside_project', path: 'C:\\outside\\input.pdf' }],
+    );
+    await flushMicrotasks();
+    const [pending] = await runtime.permissions.listPending({ runId: handle.runId });
+    expect(pending).toMatchObject({
+      toolName: 'bash',
+      reason: 'The classifier could not establish whether this command is safe.',
+      risk: 'medium',
+      executionCwd,
+    });
+    expect(JSON.parse(pending?.inputPreview ?? '{}')).toMatchObject({
+      command: `${command} # Authorization: [REDACTED]`,
+      description: 'Check Python environment',
+      apiKey: '[REDACTED]',
+    });
+    if (!pending) throw new Error('expected guardrail escalation permission');
+    await runtime.permissions.respond(pending.id, { type: 'allow_once' }, { runId: handle.runId });
+    await expect(escalation).resolves.toBe('allow');
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  }, 60_000);
+
+  it('blocks Runtime auto tool hooks that lack a matching guardrail decision', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Auto Decision Receipt' });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const handle = await runtime.runs.start({ sessionId: session.id, prompt: 'verify' });
+    await flushMicrotasks();
+    if (!runOptions) throw new Error('expected Runtime run options');
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      { command: 'npm test' },
+      { sessionId: session.id, toolId: 'bash_test' },
+    )).resolves.toContain('[Blocked]');
+    await expect(runtime.permissions.listPending({ runId: handle.runId })).resolves.toEqual([]);
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  }, 60_000);
+
+  it('binds a tool_call guardrail decision to one exact concrete bridge execution', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Concrete Bridge Receipt' });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const handle = await runtime.runs.start({ sessionId: session.id, prompt: 'verify bridge' });
+    await flushMicrotasks();
+    if (!runOptions) throw new Error('expected Runtime run options');
+    const outerCall: RunnerToolCall = {
+      id: 'bridge_1',
+      name: 'tool_call',
+      input: { name: 'bash', input: { command: 'npm test', marker: undefined } },
+    };
+    await authorizeRuntimeAutoCall(runOptions, outerCall);
+    await expect(runOptions.events?.beforeToolExecute?.(
+      outerCall.name,
+      outerCall.input,
+      { sessionId: session.id, toolId: outerCall.id },
+    )).resolves.toBe(true);
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      { command: 'npm test' },
+      { sessionId: session.id, toolId: 'bridge_1:bash' },
+    )).resolves.toContain('[Blocked]');
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      { command: 'npm test', marker: undefined },
+      { sessionId: session.id, toolId: 'bridge_1:bash' },
+    )).resolves.toBe(true);
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      { command: 'npm test', marker: undefined },
+      { sessionId: session.id, toolId: 'bridge_1:bash' },
+    )).resolves.toContain('[Blocked]');
+
+    let accessorReads = 0;
+    const accessorInput: Record<string, unknown> = { command: 'npm test' };
+    Object.defineProperty(accessorInput, 'marker', {
+      enumerable: true,
+      get() {
+        accessorReads += 1;
+        return 'dynamic';
+      },
+    });
+    await authorizeRuntimeAutoCall(runOptions, {
+      id: 'bash_accessor',
+      name: 'bash',
+      input: accessorInput,
+    });
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      accessorInput,
+      { sessionId: session.id, toolId: 'bash_accessor' },
+    )).resolves.toContain('[Blocked]');
+    expect(accessorReads).toBe(0);
+
+    const symbolInput: Record<string, unknown> = { command: 'npm test' };
+    Object.defineProperty(symbolInput, Symbol('marker'), { enumerable: true, value: 'hidden' });
+    await authorizeRuntimeAutoCall(runOptions, {
+      id: 'bash_symbol',
+      name: 'bash',
+      input: symbolInput,
+    });
+    await expect(runOptions.events?.beforeToolExecute?.(
+      'bash',
+      symbolInput,
+      { sessionId: session.id, toolId: 'bash_symbol' },
+    )).resolves.toContain('[Blocked]');
+    await expect(runtime.permissions.listPending({ runId: handle.runId })).resolves.toEqual([]);
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  }, 60_000);
+
+  it('keeps host permission hooks without creating a shared request in Runtime-owned auto mode', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Auto Host Hook' });
+    const hostPermissionHook = vi.fn(async () => true);
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const call: RunnerToolCall = {
+        id: 'bash_test',
+        name: 'bash',
+        input: { command: 'npm test' },
+      };
+      const result = authorizeRuntimeAutoCall(options, call)
+        .then(() => options.events?.beforeToolExecute?.(
+          call.name,
+          call.input,
+          { sessionId: session.id, toolId: call.id },
+        ))
+        .then((decision): KodaXResult => ({
+          success: decision === true,
+          lastText: String(decision),
+          messages: [],
+          sessionId: session.id,
+        }));
+      return fakeRunningSession(options, result);
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'verify',
+      options: { events: { beforeToolExecute: hostPermissionHook } },
+    });
+    await expect(handle.result).resolves.toMatchObject({ phase: 'completed' });
+
+    expect(hostPermissionHook).toHaveBeenCalledOnce();
+    await expect(runtime.events.replay({
+      runId: handle.runId,
+      type: 'permission.requested',
+    })).resolves.toEqual([]);
+    await expect(runtime.permissions.listPending({ runId: handle.runId })).resolves.toEqual([]);
+    await runtime.close();
+  }, 60_000);
+
+  it('derives Runtime auto path context from the Session when run options omit it', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const projectRoot = path.join(tempRoot, 'session-project');
+    await fs.mkdir(projectRoot, { recursive: true });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({
+      title: 'Session Path Context',
+      projectPath: projectRoot,
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+    });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+      fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId: session.id,
+      }))
+    ));
+
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'inspect' })).result;
+
+    expect(replMock.bootstrapAutoMode).toHaveBeenCalledWith(expect.objectContaining({
+      projectRoot,
+      executionCwd: projectRoot,
+    }));
+    await runtime.close();
+  }, 60_000);
+
+  it('executes the Runtime auto guardrail before the static permission hook', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Runner Auto Mode' });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const order: string[] = [];
+    const execute = vi.fn(async () => {
+      order.push('execute');
+      return { content: 'ok' };
+    });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: vi.fn(async () => {
+        order.push('guardrail');
+        return { action: 'allow' as const };
+      }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const bashTool: RunnableTool = {
+        name: 'bash',
+        description: 'Test bash tool',
+        input_schema: { type: 'object', properties: { command: { type: 'string' } } },
+        execute,
+      };
+      const agent = createAgent({
+        name: 'runtime-auto-runner',
+        instructions: 'Run the requested command.',
+        tools: [bashTool],
+      });
+      let turn = 0;
+      const result = Runner.run(agent, 'inspect', {
+        guardrails: options.guardrails,
+        llm: async (): Promise<RunnerLlmResult> => {
+          turn += 1;
+          return turn === 1
+            ? {
+                text: '',
+                toolCalls: [{ id: 'bash_python', name: 'bash', input: { command: 'python --version' } }],
+              }
+            : { text: 'done', toolCalls: [] };
+        },
+        toolObserver: {
+          beforeTool: async (call) => {
+            order.push('permission');
+            return options.events?.beforeToolExecute?.(
+              call.name,
+              call.input,
+              { sessionId: session.id, toolId: call.id },
+            );
+          },
+        },
+      }).then((): KodaXResult => ({
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId: session.id,
+      }));
+      return fakeRunningSession(options, result);
+    });
+
+    const handle = await runtime.runs.start({ sessionId: session.id, prompt: 'inspect' });
+    await expect(handle.result).resolves.toMatchObject({ phase: 'completed' });
+    expect(fakeGuardrail.beforeTool).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
+    expect(order).toEqual(['guardrail', 'permission', 'execute']);
+    await expect(runtime.permissions.listPending({ runId: handle.runId })).resolves.toEqual([]);
+    await runtime.close();
+  }, 60_000);
+
+  it('reuses one Runtime auto guardrail across sequential turns and persists fallback engine', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Persistent Auto Mode' });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'rules' as const,
+      getStats: () => ({ engine: 'rules' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'rules' as const,
+      getStatsForTest: () => ({ engine: 'rules' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockImplementation(async (deps: AutoModeBootstrapDeps) => {
+      queueMicrotask(() => deps.onEngineChange?.('rules'));
+      return {
+        getGuardrail: () => fakeGuardrail,
+        rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+      };
+    });
+    const guardrails: unknown[] = [];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      guardrails.push(options.guardrails?.find((guardrail) => guardrail.name === 'auto-mode'));
+      return fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId: session.id,
+      }));
+    });
+
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'turn one' })).result;
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'turn two' })).result;
+
+    expect(replMock.bootstrapAutoMode).toHaveBeenCalledOnce();
+    expect(guardrails).toHaveLength(2);
+    expect(guardrails[0]).toBe(guardrails[1]);
+    expect(guardrails[0]).not.toBe(fakeGuardrail);
+    await expect(runtime.sessions.getSettings(session.id)).resolves.toMatchObject({
+      autoModeEngine: 'rules',
+    });
+    await runtime.close();
+  }, 60_000);
+
+  it('releases the Session guardrail cache when a Session is deleted', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const sessionId = 'recreated-auto-session';
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    const runtimeGuardrails: AutoModeToolGuardrail[] = [];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runtimeGuardrails.push(runtimeAutoGuardrail(options));
+      return fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId,
+      }));
+    });
+
+    const configureSession = async (): Promise<void> => {
+      await runtime.sessions.create({ sessionId, title: 'Recreated Auto Session' });
+      await runtime.sessions.updateSettings(sessionId, {
+        permissionMode: 'auto',
+        autoModeEngine: 'llm',
+        executionCwd: tempRoot,
+      });
+    };
+    await configureSession();
+    await (await runtime.runs.start({ sessionId, prompt: 'first lifetime' })).result;
+    await runtime.sessions.delete(sessionId);
+    await configureSession();
+    await (await runtime.runs.start({ sessionId, prompt: 'second lifetime' })).result;
+
+    expect(replMock.bootstrapAutoMode).toHaveBeenCalledTimes(2);
+    expect(runtimeGuardrails).toHaveLength(2);
+    expect(runtimeGuardrails[0]).not.toBe(runtimeGuardrails[1]);
+    await runtime.close();
+  }, 60_000);
+
+  it('reports the shared auto guardrail engine when a queued turn starts after fallback', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Queued Auto Mode' });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    let engine: 'llm' | 'rules' = 'llm';
+    let notifyEngineChange: ((next: 'llm' | 'rules') => void) | undefined;
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => engine,
+      getStats: () => ({ engine, denials: {}, breaker: {} }),
+      setEngine: (next: 'llm' | 'rules') => {
+        engine = next;
+      },
+      getEngineForTest: () => engine,
+      getStatsForTest: () => ({ engine, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockImplementation(async (deps: AutoModeBootstrapDeps) => {
+      notifyEngineChange = deps.onEngineChange;
+      return {
+        getGuardrail: () => fakeGuardrail,
+        rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+      };
+    });
+
+    let releaseFirst: ((result: KodaXResult) => void) | undefined;
+    let invocation = 0;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      invocation += 1;
+      const result = invocation === 1
+        ? new Promise<KodaXResult>((resolve) => {
+            releaseFirst = resolve;
+          })
+        : Promise.resolve({
+            success: true,
+            lastText: 'done',
+            messages: [],
+            sessionId: session.id,
+          });
+      return fakeRunningSession(options, result);
+    });
+    const effectiveConfigs: unknown[] = [];
+    runtime.events.subscribe({ sessionId: session.id }, (event) => {
+      if (event.type === 'config.effective') effectiveConfigs.push(event.payload);
+    });
+
+    const first = await runtime.runs.start({ sessionId: session.id, prompt: 'turn one' });
+    const second = await runtime.runs.start({ sessionId: session.id, prompt: 'turn two' });
+    engine = 'rules';
+    notifyEngineChange?.('rules');
+    await flushMicrotasks();
+    releaseFirst?.({
+      success: true,
+      lastText: 'done',
+      messages: [],
+      sessionId: session.id,
+    });
+    await first.result;
+    await second.result;
+
+    expect(effectiveConfigs).toEqual([
+      expect.objectContaining({ autoModeEngine: 'llm' }),
+      expect.objectContaining({ autoModeEngine: 'rules' }),
+    ]);
+    await runtime.close();
+  }, 60_000);
+
+  it('rejects a caller-supplied auto-mode guardrail when Runtime owns explicit auto mode', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      defaultModel: 'mock-model',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Duplicate Auto Mode' });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+    const duplicate = {
+      kind: 'tool' as const,
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+    };
+
+    await expect(runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'duplicate',
+      options: { guardrails: [duplicate] },
+    })).rejects.toThrow(/Runtime owns the auto-mode guardrail/i);
+    expect(replMock.bootstrapAutoMode).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it('tracks pending permission requests from wrapped tool approval hooks', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -2831,6 +3623,90 @@ describe('createKodaXRuntime', () => {
     expect(await runtime.permissions.respond('missing-permission', { type: 'allow_once' })).toBe(false);
 
     await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  });
+
+  it('emits bounded valid permission previews with an effective cwd for large writes', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const projectRoot = path.join(tempRoot, 'large-write-project');
+    await fs.mkdir(projectRoot, { recursive: true });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({
+      title: 'Large Write Preview',
+      projectPath: projectRoot,
+    });
+    let approvalDone: Promise<boolean | string> | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      queueMicrotask(() => {
+        approvalDone = options.events?.beforeToolExecute?.(
+          'write',
+          {
+            path: 'generated/large.txt',
+            description:
+              'Authorization: Bearer private-preview-token; deploy --access-token private-access-token',
+            content: `password=private-write-password\n${'x'.repeat(32_000)}`,
+          },
+          { sessionId: session.id, toolId: 'write-large' },
+        );
+      });
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'write a large generated file',
+    });
+    await flushMicrotasks();
+
+    const [pending] = await runtime.permissions.listPending({ runId: handle.runId });
+    expect(pending?.executionCwd).toBe(projectRoot);
+    expect(pending?.inputPreview?.length).toBeLessThanOrEqual(8_192);
+    const preview = JSON.parse(pending?.inputPreview ?? '');
+    expect(preview).toMatchObject({
+      path: 'generated/large.txt',
+      description: 'Authorization: [REDACTED]; deploy --access-token=[REDACTED]',
+      __truncated: true,
+    });
+    expect(pending?.inputPreview).not.toContain('private-preview-token');
+    expect(pending?.inputPreview).not.toContain('private-access-token');
+    expect(pending?.inputPreview).not.toContain('private-write-password');
+
+    if (!pending) throw new Error('expected a permission request for the large write');
+    await runtime.permissions.respond(pending.id, { type: 'reject' }, { runId: handle.runId });
+    await approvalDone;
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  }, 60_000);
+
+  it('normalizes caller-supplied permission previews into redacted JSON', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+    });
+    const session = await runtime.sessions.create({ title: 'Permission Preview Input' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-preview-input',
+      toolName: 'bash',
+      inputPreview: `Authorization: Bearer private-token ${'x'.repeat(12_000)}`,
+    });
+    await flushMicrotasks();
+
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-preview-input' });
+    expect(pending?.executionCwd).toBe(process.cwd());
+    expect(pending?.inputPreview?.length).toBeLessThanOrEqual(8_192);
+    expect(() => JSON.parse(pending?.inputPreview ?? '')).not.toThrow();
+    expect(pending?.inputPreview).toContain('[REDACTED]');
+    expect(pending?.inputPreview).not.toContain('private-token');
+
+    if (!pending) throw new Error('expected caller permission request');
+    await runtime.permissions.respond(pending.id, { type: 'reject' });
+    await expect(decision).resolves.toEqual({ type: 'reject' });
     await runtime.close();
   });
 

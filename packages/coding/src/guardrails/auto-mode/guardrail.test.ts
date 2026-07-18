@@ -637,6 +637,30 @@ describe('AutoModeToolGuardrail — defaultProvider/defaultModel staleness fix (
 // ============== FEATURE_158 (v0.7.39) ==============
 
 describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () => {
+  it('applies Tier 0 to the concrete target behind tool_call', async () => {
+    let classifierCalls = 0;
+    const provider = new StubProvider(async () => {
+      classifierCalls += 1;
+      return okResult('<block>no</block><reason>unsafe allow</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+    });
+
+    const verdict = await g.beforeTool!({
+      id: 'bridge-1',
+      name: 'tool_call',
+      input: {
+        name: 'bash',
+        input: { command: 'rm -rf /' },
+      },
+    }, ctx());
+
+    expect(verdict.action).toBe('block');
+    expect(classifierCalls).toBe(0);
+  });
+
   it('blocks `rm -rf /` BEFORE classifier consultation (no LLM call)', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {

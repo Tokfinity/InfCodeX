@@ -1268,6 +1268,53 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
 describe('runManagedTaskViaRunner — end-to-end', () => {
   // FEATURE_193 v0.7.43: Scout H0_DIRECT emit_scout_verdict flow it deleted (V1 chain retired — Scout role + emit_scout_verdict tool retired)
 
+  it('runs configured guardrails before permission and execution on the managed path', async () => {
+    const order: string[] = [];
+    let turn = 0;
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      guardrails: [{
+        kind: 'tool',
+        name: 'managed-order',
+        beforeTool: async () => {
+          order.push('guardrail');
+          return { action: 'allow' as const };
+        },
+      }],
+      events: {
+        beforeToolExecute: async () => {
+          order.push('permission');
+          return true;
+        },
+        onToolResult: () => {
+          order.push('execute');
+        },
+      },
+    };
+
+    const result = await runManagedTaskViaRunner(
+      options,
+      'Read the project README',
+      async () => {
+        turn += 1;
+        return turn === 1
+          ? {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'managed-read-order',
+                name: 'read',
+                input: { path: path.join(process.cwd(), 'README.md'), limit: 1 },
+              }],
+            }
+          : { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(order).toEqual(['guardrail', 'permission', 'execute']);
+  });
+
   it('handles a zero-tool direct answer (Worker answers without emit)', async () => {
     // Edge case: a minimalist Worker that just returns the answer as text.
     // The run still completes; managedTask is populated with defaults (harness=H0_DIRECT).

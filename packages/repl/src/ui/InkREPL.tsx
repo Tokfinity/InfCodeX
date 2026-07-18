@@ -10318,6 +10318,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       return handler(call, reason, signals);
     },
     projectRoot: gitRoot ?? process.cwd(),
+    executionCwd: activeRuntimeInfo.executionCwd ?? gitRoot ?? process.cwd(),
     getCurrentProviderName: () => inkCurrentConfigRef.current.provider,
     getCurrentModel: () => inkCurrentConfigRef.current.model,
     getCurrentPermissionMode: () => inkCurrentConfigRef.current.permissionMode,

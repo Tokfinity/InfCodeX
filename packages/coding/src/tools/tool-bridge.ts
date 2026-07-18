@@ -1,7 +1,42 @@
+import type { RunnerToolCall } from '@kodax-ai/agent';
 import type { LocalToolDefinition, ToolHandlerSync } from './types.js';
 
 export const TOOL_DESCRIBE_NAME = 'tool_describe';
 export const TOOL_CALL_NAME = 'tool_call';
+
+export type ToolBridgeTargetResolution =
+  | { readonly ok: true; readonly call: RunnerToolCall }
+  | { readonly ok: false; readonly error: string };
+
+/** Resolve the exact concrete call that a portable tool_call will dispatch. */
+export function resolveToolBridgeTarget(
+  call: {
+    readonly id: string;
+    readonly name: string;
+    readonly input?: Record<string, unknown>;
+  },
+): ToolBridgeTargetResolution | undefined {
+  if (call.name !== TOOL_CALL_NAME) return undefined;
+  const input = call.input ?? {};
+  const name = typeof input.name === 'string'
+    ? input.name.trim()
+    : typeof input.tool_name === 'string'
+      ? input.tool_name.trim()
+      : '';
+  if (name.length === 0) return { ok: false, error: '`name` is required.' };
+  const targetInput = input.input ?? input.arguments;
+  if (!targetInput || typeof targetInput !== 'object' || Array.isArray(targetInput)) {
+    return { ok: false, error: '`input` must be a JSON object.' };
+  }
+  return {
+    ok: true,
+    call: {
+      id: `${call.id}:${name}`,
+      name,
+      input: targetInput as Record<string, unknown>,
+    },
+  };
+}
 
 const bridgeDispatchUnavailable: ToolHandlerSync = async (_input, _context) => (
   '[Tool Error] tool bridge dispatch is unavailable outside the agent runtime.'

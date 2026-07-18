@@ -114,6 +114,7 @@ import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import {
   executeTool,
   getToolDefinition,
+  resolveToolBridgeTarget,
   TOOL_CALL_NAME,
   TOOL_DESCRIBE_NAME,
 } from '../tools/index.js';
@@ -351,20 +352,16 @@ async function executeBridgeToolCall(input: {
   readonly activeToolNames: readonly string[] | undefined;
   readonly abortSignal: AbortSignal | undefined;
 }): Promise<string> {
-  const parsed = parseBridgeCallInput(input.bridgeCall.input ?? {});
-  if (!parsed.ok) {
-    return `[Tool Error] ${TOOL_CALL_NAME}: ${parsed.error}`;
+  const resolved = resolveToolBridgeTarget(input.bridgeCall);
+  if (!resolved?.ok) {
+    return `[Tool Error] ${TOOL_CALL_NAME}: ${resolved?.error ?? 'invalid bridge call.'}`;
   }
-  const targetName = parsed.name;
-  const targetInput = parsed.input;
+  const targetCall = resolved.call;
+  const targetName = targetCall.name;
+  const targetInput = targetCall.input;
   if (targetName === TOOL_CALL_NAME || targetName === TOOL_DESCRIBE_NAME) {
     return `[Tool Error] ${TOOL_CALL_NAME}: bridge meta-tools cannot be called through ${TOOL_CALL_NAME}.`;
   }
-  const targetCall: RunnableToolCall = {
-    id: `${input.bridgeCall.id}:${targetName}`,
-    name: targetName,
-    input: targetInput,
-  };
 
   if (input.abortSignal?.aborted) {
     return CANCELLED_TOOL_RESULT_MESSAGE;
@@ -398,29 +395,6 @@ async function executeBridgeToolCall(input: {
     }
   }
   return result;
-}
-
-function parseBridgeCallInput(input: Record<string, unknown>): (
-  | { readonly ok: true; readonly name: string; readonly input: Record<string, unknown> }
-  | { readonly ok: false; readonly error: string }
-) {
-  const name = typeof input.name === 'string'
-    ? input.name.trim()
-    : typeof input.tool_name === 'string'
-      ? input.tool_name.trim()
-      : '';
-  if (name.length === 0) {
-    return { ok: false, error: '`name` is required.' };
-  }
-  const targetInput = input.input ?? input.arguments;
-  if (!targetInput || typeof targetInput !== 'object' || Array.isArray(targetInput)) {
-    return { ok: false, error: '`input` must be a JSON object.' };
-  }
-  return {
-    ok: true,
-    name,
-    input: targetInput as Record<string, unknown>,
-  };
 }
 
 // Only allow MCP fallback for read-only / network-fetch tools.

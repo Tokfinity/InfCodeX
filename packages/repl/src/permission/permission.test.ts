@@ -516,6 +516,139 @@ describe('extractPathsFromCommand — FEATURE_152 AST hardening', () => {
     const paths = extractPathsFromCommand('echo `rm -rf /`');
     expect(paths).toEqual([]);
   });
+
+  it('does not treat quoted Python source as a file path', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      'python -c "import sys; print(sys.executable); print(sys.version)"',
+    );
+    expect(paths).toEqual([]);
+  });
+
+  it('does not recover path-looking literals nested inside inline source', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      `python -c "import re; print('/outside/file.txt'); re.search(r'../secret', 'x')"`,
+    );
+    expect(paths).toEqual([]);
+  });
+
+  it('does not treat a quoted search expression as a file path', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('findstr /R "v[0-9]" file.txt');
+    expect(paths).not.toContain('v[0-9]');
+  });
+
+  it('does not treat a slash-prefixed regex argument as an absolute path', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      'rg "/api/v[0-9]+/" "C:\\outside project\\request.log"',
+    );
+    expect(paths).not.toContain('/api/v[0-9]+/');
+    expect(paths).toContain('C:\\outside project\\request.log');
+  });
+
+  it('does not treat slash-prefixed inline Python source as an absolute path', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('python -c "/api/v[0-9]+/"');
+    expect(paths).not.toContain('/api/v[0-9]+/');
+  });
+
+  it('masks raw Windows paths in regex source while retaining identical file operands', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const sourceOnly = extractPathsFromCommand('rg -e C:\\outside\\request.log');
+    const sourceAndFile = extractPathsFromCommand(
+      'rg -e C:\\outside\\request.log C:\\outside\\request.log',
+    );
+    expect(sourceOnly).not.toContain('C:\\outside\\request.log');
+    expect(sourceAndFile).toContain('C:\\outside\\request.log');
+    expect(
+      extractPathsFromCommand('printf \u{1F600} | python -c "print(\'C:\\outside\\request.log\')"'),
+    ).not.toContain('C:\\outside\\request.log');
+  });
+
+  it('keeps attached findstr pattern files as raw Windows paths', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      'findstr /G:C:\\outside\\patterns.txt C:\\outside\\input.txt',
+    );
+    expect(paths).toEqual(expect.arrayContaining([
+      'C:\\outside\\patterns.txt',
+      'C:\\outside\\input.txt',
+    ]));
+    expect(paths.some((candidate) => candidate.startsWith('/G:'))).toBe(false);
+  });
+
+  it('keeps regex source files as paths while skipping inline expressions', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      'rg -f "/outside/patterns.txt" "/outside/request.log"',
+    );
+    expect(paths).toContain('/outside/patterns.txt');
+    expect(paths).toContain('/outside/request.log');
+  });
+
+  it.each([
+    ['rg -e/api/v[0-9]+/ "/outside/request.log"', ['/outside/request.log']],
+    ['grep --regexp=needle "/outside/request.log"', ['/outside/request.log']],
+    ['sed -es/value/replacement/ "/outside/input.txt"', ['/outside/input.txt']],
+    ['awk -f/outside/program.awk "/outside/input.txt"', ['/outside/program.awk', '/outside/input.txt']],
+    ['rg --file=/outside/patterns.txt "/outside/input.txt"', ['/outside/patterns.txt', '/outside/input.txt']],
+  ])('decodes attached source options without discarding file operands: %s', async (command, expected) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toEqual(expect.arrayContaining(expected));
+  });
+
+  it.each([
+    [
+      'awk -v "endpoint=/api/v1" "{ print $1 }" "/outside/input.txt"',
+      ['endpoint=/api/v1', '{ print $1 }'],
+    ],
+    [
+      'grep --include "*.ts" "/api/v[0-9]+/" "/outside/input.txt"',
+      ['*.ts', '/api/v[0-9]+/'],
+    ],
+    [
+      'Select-String -InputObject "/api/v1" -Pattern "needle"',
+      ['/api/v1', 'needle'],
+    ],
+  ])('does not promote regex option values or expressions to paths: %s', async (command, excluded) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(command);
+    for (const value of excluded) expect(paths).not.toContain(value);
+  });
+
+  it.each([
+    ['rg --ignore-file "/outside/ignore" needle "/outside/input.txt"', ['/outside/ignore', '/outside/input.txt']],
+    ['grep --exclude-from=/outside/excludes needle "/outside/input.txt"', ['/outside/excludes', '/outside/input.txt']],
+    ['Select-String -Pattern needle -Path "/outside/input.txt"', ['/outside/input.txt']],
+  ])('keeps path-valued regex options as paths: %s', async (command, expected) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toEqual(expect.arrayContaining(expected));
+  });
+
+  it('resolves ordinary-prefix traversal candidates after argument classification', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand('cat "subdir/../../outside.txt"')).toContain(
+      'subdir/../../outside.txt',
+    );
+  });
+
+  it('keeps quoted path-shaped values with spaces', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('python "C:\\outside project\\inspect.py"');
+    expect(paths).toContain('C:\\outside project\\inspect.py');
+  });
+
+  it('does not report quoted Python source as protected when daemon cwd differs', () => {
+    const projectRoot = createProjectRoot();
+    expect(
+      isCommandOnProtectedPath(
+        'python -c "import sys; print(sys.executable); print(sys.version)"',
+        projectRoot,
+      ),
+    ).toBe(false);
+  });
 });
 
 // FEATURE_152 slice 4 (v0.7.38): attack-surface hardening. The pre-AST regex

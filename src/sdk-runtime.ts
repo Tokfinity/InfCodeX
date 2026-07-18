@@ -18,6 +18,7 @@ import {
   generateSessionId,
   listCodingDispatchableAgents,
   registerCustomProviders,
+  resolveToolBridgeTarget,
   runManagedTask,
   startKodaX,
   validateCustomProviderConfig,
@@ -53,8 +54,10 @@ import type {
   KodaXTurnCompletedEvent,
   KodaXTurnFailedEvent,
   KodaXTurnStartedEvent,
+  AutoModeToolGuardrail,
   RuntimeContextBudgetSnapshot,
   RuntimeToolExposurePlan,
+  ToolCallSignal,
   KodaXVideoInputArtifact,
   RunningSession,
 } from '@kodax-ai/coding';
@@ -119,6 +122,9 @@ import type {
   McpServerConfig,
   McpServerStatus,
   McpServerToolList,
+  GuardrailContext,
+  GuardrailVerdict,
+  RunnerToolCall,
   Skill,
   SkillMetadata,
   WorkflowProcessEvent,
@@ -1582,6 +1588,8 @@ export interface RuntimePermissionRequest {
   readonly reason?: string;
   readonly risk?: RuntimePermissionRisk;
   readonly inputPreview?: string;
+  /** Effective directory used to resolve relative tool paths for this run. */
+  readonly executionCwd?: string;
   readonly createdAt: string;
   readonly expiresAt?: string;
 }
@@ -1595,6 +1603,7 @@ export interface RuntimePermissionRequestInput {
   readonly reason?: string;
   readonly risk?: RuntimePermissionRisk;
   readonly inputPreview?: string;
+  readonly executionCwd?: string;
   readonly expiresAt?: string;
   readonly timeoutMs?: number;
 }
@@ -1900,6 +1909,7 @@ type RuntimeArtifactStore = ReturnType<typeof createRuntimeArtifactStore>;
 
 interface RuntimeRunServiceInternal extends RuntimeRunService {
   closeAll(reason: string): void;
+  releaseSession(sessionId: string): void;
 }
 
 interface PendingRunStart {
@@ -2170,6 +2180,7 @@ export async function createKodaXRuntime(
     },
     (sessionId) => runService.list({ sessionId }),
     (sessionId) => permissions.service.listPending({ sessionId }),
+    (sessionId) => runService.releaseSession(sessionId),
     sessionAdmission,
   );
   const configHome = options.homeDir
@@ -2653,6 +2664,7 @@ function createRuntimeSessionService(
   updateActivePermissionMode: (sessionId: string, permissionMode: string | undefined) => void,
   listRuns: (sessionId: string) => Promise<readonly RuntimeRunStatus[]>,
   listPendingPermissions: (sessionId: string) => Promise<readonly RuntimePermissionRequest[]>,
+  onSessionDeleted: (sessionId: string) => void,
   admission: RuntimeSessionAdmission,
 ): RuntimeSessionService {
   const creatingSessionIds = new Set<string>();
@@ -2980,6 +2992,7 @@ function createRuntimeSessionService(
       await admission.loadRequired(sessionId);
       const result = await manager.deleteSession(sessionId);
       assertDeleteSucceeded(sessionId, result);
+      onSessionDeleted(sessionId);
     },
   };
 }
@@ -3003,6 +3016,7 @@ function createRuntimeRunService(deps: {
   readonly sessionAdmission: RuntimeSessionAdmission;
 }): RuntimeRunServiceInternal {
   const activeRunBySession = new Map<string, string>();
+  const autoModeGuardrails = new Map<string, RuntimeAutoModeGuardrailCacheEntry>();
   const queueBySession = new Map<string, string[]>();
   const latestSessionOrder = new Map<string, number>();
   const startOrderBySession = new Map<string, Promise<void>>();
@@ -3036,6 +3050,7 @@ function createRuntimeRunService(deps: {
   const finishRun = (record: RuntimeRunRecord, result: RuntimeRunResult): RuntimeRunResult => {
     deps.permissions.rejectForRun(record.runId, 'runtime run ended');
     deps.userInputs.rejectForRun(record.runId, 'runtime run ended');
+    record.start?.options.guardrails?.find(isRuntimeAutoModeGuardrail)?.clearAllowedCalls();
     resolveRunStart(record, result);
     releaseActiveRun(record);
     pruneTerminalRuns(deps.runs);
@@ -3056,6 +3071,7 @@ function createRuntimeRunService(deps: {
     record.abortController?.abort(new Error(reason));
     deps.permissions.rejectForRun(record.runId, reason);
     deps.userInputs.rejectForRun(record.runId, reason);
+    record.start?.options.guardrails?.find(isRuntimeAutoModeGuardrail)?.clearAllowedCalls();
     markRunTerminal(deps.bus, deps.persistence, record, 'cancelled', {
       code: 'cancelled',
       effectOutcome: wasQueued ? 'none' : 'unknown',
@@ -3078,6 +3094,10 @@ function createRuntimeRunService(deps: {
     if (!record.start || deps.isClosed()) {
       cancelRun(record, 'runtime closed', false);
       return;
+    }
+    const autoModeGuardrail = record.start.options.guardrails?.find(isRuntimeAutoModeGuardrail);
+    if (autoModeGuardrail) {
+      record.autoModeEngine = autoModeGuardrail.getEngine();
     }
     record.phase = 'running';
     record.queuedAt = undefined;
@@ -3224,6 +3244,25 @@ function createRuntimeRunService(deps: {
     });
   };
 
+  const persistAutoModeEngine = (
+    sessionId: string,
+    engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>,
+  ): void => {
+    const current = deps.persistence.loadSessionSettingsVersioned(sessionId);
+    if (current.value.autoModeEngine === engine) return;
+    const updated = {
+      revision: current.revision + 1,
+      value: { ...current.value, autoModeEngine: engine },
+    };
+    deps.persistence.saveSessionSettingsVersioned(sessionId, updated);
+    deps.bus.emit('session.settings.updated', {
+      sessionId,
+      revision: updated.revision,
+      settings: updated.value,
+      patch: { autoModeEngine: engine },
+    }, { sessionId, runId: sessionId });
+  };
+
   const startRun = async (input: RuntimeStartRunInput): Promise<RuntimeRunHandle> => {
       deps.ensureOpen();
       const normalizedInput = normalizeRuntimeRunInput(input, deps.artifacts);
@@ -3234,6 +3273,7 @@ function createRuntimeRunService(deps: {
         input.options ?? {},
         settings,
         normalizedInput.inputArtifacts,
+        session,
       );
       const actorSession = options.agentMode === 'sa'
         ? undefined
@@ -3258,6 +3298,34 @@ function createRuntimeRunService(deps: {
       const model = options.modelOverride ?? options.model ?? deps.defaultModel;
       const runId = (input as RuntimeTrustedStartRunInput).trustedRunId ?? createRunId();
       if (deps.runs.has(runId)) throw createRuntimeConflictError(`Runtime run already exists: ${runId}`, 0);
+      const autoModeGuardrail = await createRuntimeAutoModeGuardrail({
+        sessionId: input.sessionId,
+        provider,
+        model,
+        settings,
+        options,
+        permissions: deps.permissions,
+        cache: autoModeGuardrails,
+        getRecord: () => {
+          const activeRunId = activeRunBySession.get(input.sessionId);
+          return activeRunId === undefined ? undefined : deps.runs.get(activeRunId);
+        },
+        onEngineChange: (engine) => {
+          persistAutoModeEngine(input.sessionId, engine);
+          const activeRunId = activeRunBySession.get(input.sessionId);
+          const activeRecord = activeRunId === undefined ? undefined : deps.runs.get(activeRunId);
+          if (activeRecord && activeRecord.autoModeEngine !== engine) {
+            activeRecord.autoModeEngine = engine;
+            publishRunUpdate(activeRecord);
+          }
+        },
+      });
+      const effectiveOptions: RuntimeKodaXOptions = autoModeGuardrail === undefined
+        ? options
+        : {
+            ...options,
+            guardrails: [...(options.guardrails ?? []), autoModeGuardrail],
+          };
       const startedAt = new Date().toISOString();
       let resolveResult: (result: RuntimeRunResult) => void = () => undefined;
       const result = new Promise<RuntimeRunResult>((resolve) => {
@@ -3293,7 +3361,9 @@ function createRuntimeRunService(deps: {
           ? { permissionBroker: input.permissionBroker }
           : {}),
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
-        ...(settings.autoModeEngine !== undefined ? { autoModeEngine: settings.autoModeEngine } : {}),
+        ...(autoModeGuardrail !== undefined
+          ? { autoModeEngine: autoModeGuardrail.getEngine() }
+          : settings.autoModeEngine !== undefined ? { autoModeEngine: settings.autoModeEngine } : {}),
         ...(options.reasoningMode !== undefined ? { reasoning: options.reasoningMode } : {}),
         mode: input.mode ?? 'coding',
         ...((input as RuntimeTrustedStartRunInput).providerCredential !== undefined
@@ -3321,7 +3391,7 @@ function createRuntimeRunService(deps: {
         start: {
           prompt: normalizedInput.prompt,
           inputArtifacts: normalizedInput.inputArtifacts,
-          options,
+          options: effectiveOptions,
           resolve: resolveResult,
         },
         terminalEmitted: false,
@@ -3512,7 +3582,12 @@ function createRuntimeRunService(deps: {
         }
       }
       activeRunBySession.clear();
+      autoModeGuardrails.clear();
       queueBySession.clear();
+    },
+    releaseSession(sessionId) {
+      autoModeGuardrails.get(sessionId)?.guardrail.clearAllowedCalls();
+      autoModeGuardrails.delete(sessionId);
     },
   };
 }
@@ -3829,6 +3904,9 @@ function buildRunOptions(input: {
   readonly sessionManager: SessionManager;
 }): KodaXOptions {
   const { agentPlane, events, model, options, provider, record, sessionManager } = input;
+  const hideUnwiredExitPlanMode = options.events?.exitPlanMode === undefined;
+  const requiresContextOverride =
+    hideUnwiredExitPlanMode || record.actorSession !== undefined || Boolean(agentPlane && record.agentContext);
   return {
     ...options,
     provider,
@@ -3839,10 +3917,23 @@ function buildRunOptions(input: {
       storage: sessionManager.storage,
     },
     events,
-    ...((record.actorSession || (agentPlane && record.agentContext))
+    ...(requiresContextOverride
       ? {
           context: {
             ...(options.context ?? {}),
+            ...(hideUnwiredExitPlanMode
+              ? {
+                  // Runtime daemon options cannot transport callback functions. Do
+                  // not expose a plan-exit tool that can only raise a generic
+                  // permission request and then fail for lack of an approval UI.
+                  excludeTools: [
+                    ...new Set([
+                      ...(options.context?.excludeTools ?? []),
+                      'exit_plan_mode',
+                    ]),
+                  ],
+                }
+              : {}),
             ...(record.actorSession ? { actorSession: record.actorSession } : {}),
             ...(agentPlane && record.agentContext
               ? { agentExecutorPlane: { plane: agentPlane, context: record.agentContext } }
@@ -5410,6 +5501,7 @@ function createRuntimePermissionRegistry(
         ...(input.reason !== undefined ? { reason: input.reason } : {}),
         ...(input.risk !== undefined ? { risk: input.risk } : {}),
         ...(input.inputPreview !== undefined ? { inputPreview: input.inputPreview } : {}),
+        ...(input.executionCwd !== undefined ? { executionCwd: input.executionCwd } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       }, input.timeoutMs ?? defaultTimeoutMs);
       return pendingPermission.response;
@@ -5483,8 +5575,13 @@ function createRuntimePermissionRegistry(
     waiters: Array<(decision: RuntimePermissionDecision) => void>,
     timeoutMs = defaultTimeoutMs,
   ): RuntimePermissionRequest {
+    const inputPreview = request.inputPreview === undefined
+      ? undefined
+      : normalizePermissionInputPreview(request.inputPreview);
     const created: RuntimePermissionRequest = {
       ...request,
+      ...(inputPreview !== undefined ? { inputPreview } : {}),
+      executionCwd: path.resolve(request.executionCwd ?? process.cwd()),
       id: `perm_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
       createdAt: new Date().toISOString(),
     };
@@ -5801,6 +5898,19 @@ function wrapKodaXEvents(input: {
       toolInput: Record<string, unknown>,
       meta?: KodaXToolEventMeta,
     ): Promise<RuntimePermissionToolDecision> => {
+      const autoGuardrail = getRuntimeAutoModeGuardrail(record);
+      if (autoGuardrail) {
+        if (RUNTIME_PERMISSION_BRIDGE_TOOLS.has(tool)) return true;
+        const allowed = meta?.toolId !== undefined && autoGuardrail.consumeAllowedCall({
+          id: meta.toolId,
+          name: tool,
+          input: toolInput,
+        });
+        if (!allowed) {
+          return '[Blocked] Runtime auto mode did not classify this concrete tool call.';
+        }
+        return original?.beforeToolExecute?.(tool, toolInput, meta) ?? true;
+      }
       if (permissions.isGranted(meta?.sessionId ?? record.sessionId, tool)) {
         return true;
       }
@@ -5822,6 +5932,7 @@ function wrapKodaXEvents(input: {
         ...(meta?.toolId ? { toolCallId: meta.toolId } : {}),
         toolName: tool,
         inputPreview: previewInput(toolInput),
+        executionCwd: resolveRuntimeExecutionCwd(record),
       });
       try {
         if (!original?.beforeToolExecute) {
@@ -6065,11 +6176,43 @@ function buildEffectiveRuntimeOptions(
   options: RuntimeKodaXOptions,
   settings: RuntimeSessionSettings,
   inputArtifacts: readonly KodaXInputArtifact[],
+  session: KodaXSessionData,
 ): RuntimeKodaXOptions {
+  const storedGitRoot = session.runtimeInfo?.canonicalRepoRoot
+    ?? (session.gitRoot ? session.gitRoot : undefined);
+  const sessionGitRoot = storedGitRoot === undefined ? undefined : path.resolve(storedGitRoot);
+  const storedExecutionCwd = session.runtimeInfo?.executionCwd
+    ?? session.runtimeInfo?.workspaceRoot
+    ?? sessionGitRoot;
   const inheritedContext: KodaXOptions['context'] = {
-    ...(settings.executionCwd !== undefined ? { executionCwd: settings.executionCwd } : {}),
+    ...(sessionGitRoot !== undefined ? { gitRoot: sessionGitRoot } : {}),
+    ...(settings.executionCwd !== undefined
+      ? { executionCwd: path.resolve(settings.executionCwd) }
+      : storedExecutionCwd !== undefined
+        ? { executionCwd: path.resolve(storedExecutionCwd) }
+        : {}),
   };
   const optionContext = options.context;
+  const requestedGitRoot = optionContext?.gitRoot === undefined
+    ? undefined
+    : path.resolve(optionContext.gitRoot);
+  if (
+    sessionGitRoot !== undefined
+    && requestedGitRoot !== undefined
+    && normalizePathForContainment(sessionGitRoot) !== normalizePathForContainment(requestedGitRoot)
+  ) {
+    throw new Error('gitRoot must match the session repository safety boundary');
+  }
+  const requestedExecutionCwd = optionContext?.executionCwd === undefined
+    ? undefined
+    : path.resolve(optionContext.executionCwd);
+  const effectiveExecutionCwd = requestedExecutionCwd
+    ?? inheritedContext.executionCwd;
+  const sessionWorkspaceRoot = session.runtimeInfo?.workspaceRoot
+    ?? sessionGitRoot;
+  if (requestedExecutionCwd !== undefined && sessionWorkspaceRoot !== undefined) {
+    assertPathWithinRoot(requestedExecutionCwd, sessionWorkspaceRoot, 'executionCwd');
+  }
   const combinedArtifacts = [
     ...(optionContext?.inputArtifacts ?? []),
     ...inputArtifacts,
@@ -6077,6 +6220,10 @@ function buildEffectiveRuntimeOptions(
   const context: KodaXOptions['context'] = {
     ...inheritedContext,
     ...(optionContext ?? {}),
+    ...(sessionGitRoot !== undefined
+      ? { gitRoot: sessionGitRoot }
+      : requestedGitRoot !== undefined ? { gitRoot: requestedGitRoot } : {}),
+    ...(effectiveExecutionCwd !== undefined ? { executionCwd: effectiveExecutionCwd } : {}),
     ...(combinedArtifacts.length > 0 ? { inputArtifacts: combinedArtifacts } : {}),
   };
   const provider = options.provider ?? settings.provider;
@@ -6209,7 +6356,7 @@ function assertPathWithinRoot(candidate: string, root: string, label: string): v
   const resolvedRoot = normalizePathForContainment(path.resolve(root));
   const relative = path.relative(resolvedRoot, resolvedCandidate);
   if (relative === '') return;
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`${label} must stay within the session workspace root`);
   }
 }
@@ -7003,17 +7150,278 @@ type RuntimePermissionRaceResult =
   | { readonly source: 'hook'; readonly decision: RuntimePermissionToolDecision }
   | { readonly source: 'runtime'; readonly decision: RuntimePermissionToolDecision };
 
+function autoModeEscalationRisk(signals: readonly ToolCallSignal[] | undefined): RuntimePermissionRisk {
+  if (signals?.some((signal) => (
+    (signal.kind === 'dangerous_pattern' && signal.severity === 'high')
+    || signal.kind === 'protected_path'
+    || signal.kind === 'shell_redirect_outside'
+  ))) {
+    return 'high';
+  }
+  return signals && signals.length > 0 ? 'medium' : 'low';
+}
+
+interface RuntimeAutoModeGuardrailCacheEntry {
+  readonly projectRoot: string;
+  readonly executionCwd: string;
+  engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>;
+  readonly guardrail: RuntimeOwnedAutoModeGuardrail;
+}
+
+interface RuntimeOwnedAutoModeGuardrail extends AutoModeToolGuardrail {
+  consumeAllowedCall(call: RunnerToolCall): boolean;
+  clearAllowedCalls(): void;
+}
+
+function resolveRuntimeExecutionCwd(record: RuntimeRunRecord): string {
+  return path.resolve(
+    record.start?.options.context?.executionCwd
+      ?? record.start?.options.context?.gitRoot
+      ?? process.cwd(),
+  );
+}
+
+function isRuntimeAutoModeGuardrail(
+  guardrail: NonNullable<RuntimeKodaXOptions['guardrails']>[number],
+): guardrail is RuntimeOwnedAutoModeGuardrail {
+  return guardrail.kind === 'tool'
+    && guardrail.name === 'auto-mode'
+    && 'getEngine' in guardrail
+    && typeof guardrail.getEngine === 'function'
+    && 'consumeAllowedCall' in guardrail
+    && typeof guardrail.consumeAllowedCall === 'function';
+}
+
+function getRuntimeAutoModeGuardrail(
+  record: RuntimeRunRecord,
+): RuntimeOwnedAutoModeGuardrail | undefined {
+  if (
+    replApi.normalizePermissionMode(record.permissionMode) !== 'auto'
+    || record.autoModeEngine === undefined
+  ) {
+    return undefined;
+  }
+  return record.start?.options.guardrails?.find(isRuntimeAutoModeGuardrail);
+}
+
+function serializeRuntimeToolInput(
+  value: unknown,
+  ancestors = new Set<object>(),
+): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') return `string:${value.length}:${value}`;
+  if (typeof value === 'boolean') return value ? 'boolean:true' : 'boolean:false';
+  if (typeof value === 'undefined') return 'undefined';
+  if (typeof value === 'bigint') return `bigint:${value.toString()};`;
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return 'number:NaN';
+    if (Object.is(value, -0)) return 'number:-0';
+    return `number:${String(value)};`;
+  }
+  if (typeof value !== 'object') throw new Error('Tool input must contain data values only.');
+  if (ancestors.has(value)) throw new Error('Tool input must not be circular.');
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    throw new Error('Tool input must be a plain object.');
+  }
+  ancestors.add(value);
+  try {
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.some((key) => typeof key === 'symbol')) {
+      throw new Error('Tool input must not contain symbol properties.');
+    }
+    if (Array.isArray(value)) {
+      const indexes = ownKeys
+        .filter((key): key is string => key !== 'length' && typeof key === 'string')
+        .map((key) => {
+          const index = Number(key);
+          if (!Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+            throw new Error('Tool input arrays must not contain named properties.');
+          }
+          return { index, key };
+        })
+        .sort((left, right) => left.index - right.index);
+      return `array:${value.length}:[${indexes.map(({ key }) => (
+        `${key}:${serializeRuntimeDataProperty(value, key, ancestors)}`
+      )).join('')}]`;
+    }
+    const keys = ownKeys.filter((key): key is string => typeof key === 'string').sort();
+    return `object:{${keys.map((key) => (
+      `${serializeRuntimeToolInput(key, ancestors)}${serializeRuntimeDataProperty(
+        value,
+        key,
+        ancestors,
+      )}`
+    )).join('')}}`;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function serializeRuntimeDataProperty(
+  owner: object,
+  key: string,
+  ancestors: Set<object>,
+): string {
+  const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+  if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) {
+    throw new Error('Tool input must contain enumerable data properties only.');
+  }
+  return serializeRuntimeToolInput(descriptor.value, ancestors);
+}
+
+function runtimeAutoModeDecisionKey(call: RunnerToolCall): string | undefined {
+  try {
+    const input = serializeRuntimeToolInput(call.input);
+    return createHash('sha256')
+      .update(`${call.id}\0${call.name}\0${input}`)
+      .digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+function createRuntimeOwnedAutoModeGuardrail(
+  guardrail: AutoModeToolGuardrail,
+): RuntimeOwnedAutoModeGuardrail {
+  const allowedCalls = new Set<string>();
+  return {
+    ...guardrail,
+    beforeTool: async (call: RunnerToolCall, ctx: GuardrailContext): Promise<GuardrailVerdict> => {
+      if (!guardrail.beforeTool) {
+        return { action: 'block', reason: 'Runtime auto-mode guardrail has no beforeTool hook.' };
+      }
+      const verdict = await guardrail.beforeTool(call, ctx);
+      if (verdict.action === 'allow') {
+        const bridgeTarget = resolveToolBridgeTarget(call);
+        const authorizedCall = bridgeTarget?.ok ? bridgeTarget.call : call;
+        const key = runtimeAutoModeDecisionKey(authorizedCall);
+        if (key !== undefined) allowedCalls.add(key);
+      }
+      return verdict;
+    },
+    consumeAllowedCall(call) {
+      const key = runtimeAutoModeDecisionKey(call);
+      if (key === undefined || !allowedCalls.has(key)) return false;
+      allowedCalls.delete(key);
+      return true;
+    },
+    clearAllowedCalls() {
+      allowedCalls.clear();
+    },
+  };
+}
+
+async function createRuntimeAutoModeGuardrail(input: {
+  readonly sessionId: string;
+  readonly provider: string;
+  readonly model?: string;
+  readonly settings: RuntimeSessionSettings;
+  readonly options: RuntimeKodaXOptions;
+  readonly permissions: RuntimePermissionRegistry;
+  readonly cache: Map<string, RuntimeAutoModeGuardrailCacheEntry>;
+  readonly getRecord: () => RuntimeRunRecord | undefined;
+  readonly onEngineChange: (
+    engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>,
+  ) => void;
+}): Promise<RuntimeOwnedAutoModeGuardrail | undefined> {
+  const engine = input.settings.autoModeEngine;
+  if (
+    replApi.normalizePermissionMode(input.settings.permissionMode) !== 'auto'
+    || (engine !== 'llm' && engine !== 'rules')
+  ) {
+    return undefined;
+  }
+  if (input.options.guardrails?.some((guardrail) => (
+    guardrail.kind === 'tool' && guardrail.name === 'auto-mode'
+  ))) {
+    throw new Error(
+      'Runtime owns the auto-mode guardrail when permissionMode=auto and an explicit autoModeEngine is configured.',
+    );
+  }
+  const executionCwd = path.resolve(
+    input.options.context?.executionCwd
+      ?? input.settings.executionCwd
+      ?? input.options.context?.gitRoot
+      ?? process.cwd(),
+  );
+  const projectRoot = path.resolve(input.options.context?.gitRoot ?? executionCwd);
+  const cached = input.cache.get(input.sessionId);
+  if (
+    cached
+    && cached.projectRoot === projectRoot
+    && cached.executionCwd === executionCwd
+    && cached.engine === engine
+  ) {
+    return cached.guardrail;
+  }
+
+  let cacheEntry: RuntimeAutoModeGuardrailCacheEntry | undefined;
+  const bootstrap = await replApi.bootstrapAutoMode({
+    askUser: async (call, reason, signals) => {
+      const record = input.getRecord();
+      if (!record) return 'block';
+      const previousPhase = record.phase;
+      if (record.phase === 'running') record.phase = 'waiting_permission';
+      try {
+        const decision = await input.permissions.service.request({
+          sessionId: input.sessionId,
+          runId: record.runId,
+          ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
+          toolCallId: call.id,
+          toolName: call.name,
+          reason: reason.slice(0, 512),
+          risk: autoModeEscalationRisk(signals),
+          inputPreview: previewInput(call.input),
+          executionCwd,
+        });
+        return decision.type === 'allow_once' || decision.type === 'allow_always'
+          ? 'allow'
+          : 'block';
+      } finally {
+        if (record.phase === 'waiting_permission') {
+          record.phase = previousPhase === 'queued' ? 'running' : previousPhase;
+        }
+      }
+    },
+    projectRoot,
+    executionCwd,
+    getCurrentProviderName: () => input.getRecord()?.provider ?? input.provider,
+    getCurrentModel: () => input.getRecord()?.model ?? input.model,
+    getCurrentPermissionMode: () => 'auto',
+    autoModeSettings: { engine },
+    extraCollectors: [replApi.replBashPathSignalCollector],
+    onEngineChange: (nextEngine) => {
+      if (cacheEntry) cacheEntry.engine = nextEngine;
+      input.onEngineChange(nextEngine);
+    },
+  });
+  const guardrail = createRuntimeOwnedAutoModeGuardrail(bootstrap.getGuardrail());
+  cacheEntry = {
+    projectRoot,
+    executionCwd,
+    engine: guardrail.getEngine(),
+    guardrail,
+  };
+  input.cache.set(input.sessionId, cacheEntry);
+  return guardrail;
+}
+
 function resolveRuntimePermissionPolicy(
   record: RuntimeRunRecord,
   tool: string,
   input: Record<string, unknown>,
 ): RuntimePermissionToolDecision | undefined {
   if (RUNTIME_PERMISSION_BRIDGE_TOOLS.has(tool)) return true;
+  // `permissionBroker=client` selects who answers an escalation; it must not
+  // replace the explicit auto guardrail as the owner of the initial decision.
   if (record.permissionBroker === 'client') return undefined;
   const mode = replApi.normalizePermissionMode(record.permissionMode);
   if (mode === undefined) return undefined;
-  const projectRoot = record.start?.options.context?.gitRoot
+  const rawProjectRoot = record.start?.options.context?.gitRoot
     ?? record.start?.options.context?.executionCwd;
+  const projectRoot = rawProjectRoot === undefined ? undefined : path.resolve(rawProjectRoot);
+  const executionCwd = resolveRuntimeExecutionCwd(record);
   if (mode === 'plan') {
     const blockReason = replApi.getPlanModeBlockReason(tool, input, projectRoot);
     return blockReason === null
@@ -7023,12 +7431,15 @@ function resolveRuntimePermissionPolicy(
   if (tool === 'bash') {
     const command = typeof input.command === 'string' ? input.command : '';
     if (replApi.isBashReadCommand(command)) return true;
-    if (projectRoot && replApi.isCommandOnProtectedPath(command, projectRoot)) return undefined;
+    if (
+      projectRoot
+      && replApi.isCommandOnProtectedPath(command, projectRoot, executionCwd)
+    ) return undefined;
   }
   if (projectRoot && replApi.FILE_MODIFICATION_TOOLS.has(tool)) {
     const targetPath = typeof input.path === 'string' ? input.path : undefined;
     if (targetPath && replApi.isAlwaysConfirmPath(
-      path.resolve(projectRoot, targetPath),
+      path.resolve(executionCwd, targetPath),
       projectRoot,
     )) {
       return undefined;
@@ -7045,9 +7456,86 @@ function decisionToToolDecision(
   return decision.reason ?? false;
 }
 
+const PERMISSION_PREVIEW_MAX_LENGTH = 8_192;
+const PERMISSION_PREVIEW_STRING_MAX_LENGTH = 4_096;
+const PERMISSION_PREVIEW_KEYS = [
+  'command',
+  'description',
+  'path',
+  'paths',
+  'cwd',
+  'url',
+  'preview',
+] as const;
+const PERMISSION_SENSITIVE_KEY = /(?:api[_-]?key|authorization|cookie|credential|password|secret|token)/i;
+
+function redactPermissionPreviewString(value: string): string {
+  return value
+    .replace(
+      /\b((?=[a-z0-9_]*(?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|private[_-]?key|refresh[_-]?token|secret|token))[a-z_][a-z0-9_]*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s;&|]+)/gi,
+      '$1=[REDACTED]',
+    )
+    .replace(
+      /(--(?:(?:api|access|auth|id|refresh)[_-]?(?:key|token)|authorization|client[_-]?secret|password|private[_-]?key|secret|token))(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/gi,
+      '$1=[REDACTED]',
+    )
+    .replace(
+      /\b((?:proxy-)?authorization|cookie|x-api-key)(\s*:\s*)(?:bearer\s+|basic\s+)?[^\s"';&|]+/gi,
+      '$1$2[REDACTED]',
+    )
+    .replace(/(https?:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
+}
+
+function permissionPreviewReplacer(key: string, value: unknown): unknown {
+  if (key && PERMISSION_SENSITIVE_KEY.test(key)) return '[REDACTED]';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value !== 'string') return value;
+  const redacted = redactPermissionPreviewString(value);
+  return redacted.length <= PERMISSION_PREVIEW_STRING_MAX_LENGTH
+    ? redacted
+    : `${redacted.slice(0, PERMISSION_PREVIEW_STRING_MAX_LENGTH - 1)}…`;
+}
+
+function stringifyPermissionPreview(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, permissionPreviewReplacer);
+  } catch {
+    return undefined;
+  }
+}
+
 function previewInput(input: Record<string, unknown>): string {
-  const json = JSON.stringify(input);
-  return json.length <= 500 ? json : `${json.slice(0, 497)}...`;
+  const json = stringifyPermissionPreview(input);
+  const hasOversizedTopLevelString = Object.values(input).some((value) => (
+    typeof value === 'string' && value.length > PERMISSION_PREVIEW_STRING_MAX_LENGTH
+  ));
+  if (
+    !hasOversizedTopLevelString
+    && json !== undefined
+    && json.length <= PERMISSION_PREVIEW_MAX_LENGTH
+  ) {
+    return json;
+  }
+
+  const summary: Record<string, unknown> = {};
+  for (const key of PERMISSION_PREVIEW_KEYS) {
+    if (input[key] !== undefined) summary[key] = input[key];
+  }
+  summary.__truncated = true;
+  const summarized = stringifyPermissionPreview(summary);
+  if (summarized !== undefined && summarized.length <= PERMISSION_PREVIEW_MAX_LENGTH) {
+    return summarized;
+  }
+  return '{"__truncated":true,"__unavailable":"Tool input could not be serialized safely"}';
+}
+
+function normalizePermissionInputPreview(inputPreview: string): string {
+  try {
+    const parsed = JSON.parse(inputPreview) as unknown;
+    return previewInput(isRecord(parsed) ? parsed : { value: parsed });
+  } catch {
+    return previewInput({ preview: inputPreview });
+  }
 }
 
 function normalizeError(error: unknown): Error {

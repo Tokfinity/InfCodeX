@@ -73,12 +73,16 @@ const FILE_TOOL_NAMES: ReadonlySet<string> = new Set(['write', 'edit']);
 export const fileSignalCollector: SignalCollector = {
   toolNames: FILE_TOOL_NAMES,
 
-  collect(call: RunnerToolCall, projectRoot: string): readonly ToolCallSignal[] {
+  collect(
+    call: RunnerToolCall,
+    projectRoot: string,
+    executionCwd = projectRoot,
+  ): readonly ToolCallSignal[] {
     const targetPath = typeof call.input.path === 'string' ? call.input.path : '';
     if (!targetPath) return [];
 
     const signals: ToolCallSignal[] = [];
-    const resolvedTarget = path.resolve(projectRoot, targetPath);
+    const resolvedTarget = path.resolve(executionCwd, targetPath);
 
     // 1. protected_path — ~/.kodax (highest priority; user-creds zone)
     const userKodaxDir = safeGetAgentConfigHome();

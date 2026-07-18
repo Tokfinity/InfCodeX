@@ -621,6 +621,10 @@ function looksLikePath(token: string): boolean {
   // Hidden-dir-relative (`.agent/plan_mode_doc.md`) — token has a separator
   // and starts with `.`, but not `..` (already matched above).
   if (token.startsWith('.') && /[/\\]/.test(token)) return true;
+  // A normal directory prefix can still escape after normalization, e.g.
+  // `subdir/../../outside.txt`. Shape checks must not discard traversal
+  // before the executionCwd/projectRoot boundary comparison runs.
+  if (token.split(/[/\\]+/).includes('..')) return true;
   return false;
 }
 
@@ -640,6 +644,250 @@ function looksLikePath(token: string): boolean {
  */
 const IS_WINDOWS_CMD_FLAG = /^\/[A-Za-z][A-Za-z0-9]*(?::[A-Za-z0-9]+)?$/;
 
+const INLINE_SCRIPT_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  python: new Set(['-c']),
+  py: new Set(['-c']),
+  node: new Set(['-e', '--eval', '-p', '--print']),
+  ruby: new Set(['-e']),
+  perl: new Set(['-e']),
+};
+const REGEX_SOURCE_COMMANDS: ReadonlySet<string> = new Set([
+  'rg',
+  'ripgrep',
+  'grep',
+  'egrep',
+  'fgrep',
+  'findstr',
+  'select-string',
+  'sed',
+  'awk',
+]);
+const EXPLICIT_REGEX_FLAGS: ReadonlySet<string> = new Set([
+  '-e',
+  '--regexp',
+  '--regex',
+  '-pattern',
+]);
+const REGEX_SOURCE_FILE_FLAGS: ReadonlySet<string> = new Set(['-f', '--file']);
+const RG_SOURCE_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '-g',
+  '--glob',
+  '--iglob',
+  '-r',
+  '--replace',
+]);
+const GREP_SOURCE_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  '--include',
+  '--exclude',
+  '--exclude-dir',
+]);
+const REGEX_SOURCE_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  rg: RG_SOURCE_VALUE_FLAGS,
+  ripgrep: RG_SOURCE_VALUE_FLAGS,
+  grep: GREP_SOURCE_VALUE_FLAGS,
+  egrep: GREP_SOURCE_VALUE_FLAGS,
+  fgrep: GREP_SOURCE_VALUE_FLAGS,
+  awk: new Set(['-v', '--assign']),
+  'select-string': new Set(['-inputobject']),
+};
+const REGEX_PATH_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  rg: new Set(['--ignore-file']),
+  ripgrep: new Set(['--ignore-file']),
+  grep: new Set(['--exclude-from']),
+  egrep: new Set(['--exclude-from']),
+  fgrep: new Set(['--exclude-from']),
+  'select-string': new Set(['-path', '-literalpath']),
+};
+
+function commandBasename(value: string): string {
+  const normalized = value.replace(/\\/g, '/');
+  return (normalized.split('/').pop() ?? normalized).toLowerCase().replace(/\.exe$/, '');
+}
+
+interface CommandArgumentRoles {
+  readonly sourceIndexes: Set<number>;
+  readonly pathIndexes: Set<number>;
+  readonly pathValues: Set<string>;
+}
+
+function createCommandArgumentRoles(): CommandArgumentRoles {
+  return {
+    sourceIndexes: new Set<number>(),
+    pathIndexes: new Set<number>(),
+    pathValues: new Set<string>(),
+  };
+}
+
+function addIndexedValue(
+  argv: readonly string[],
+  index: number,
+  indexes: Set<number>,
+  values?: Set<string>,
+): void {
+  const value = argv[index];
+  if (value === undefined) return;
+  indexes.add(index);
+  values?.add(value);
+}
+
+function attachedOptionValue(token: string, flag: string): string | undefined {
+  const lower = token.toLowerCase();
+  if (flag.startsWith('--')) {
+    const prefix = `${flag}=`;
+    return lower.startsWith(prefix) ? token.slice(prefix.length) : undefined;
+  }
+  return lower.startsWith(flag) && token.length > flag.length
+    ? token.slice(flag.length)
+    : undefined;
+}
+
+function collectScriptSourceRoles(
+  argv: readonly string[],
+  flags: ReadonlySet<string>,
+  roles: CommandArgumentRoles,
+): void {
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    const lower = token.toLowerCase();
+    for (const flag of flags) {
+      if (lower === flag) {
+        addIndexedValue(argv, index + 1, roles.sourceIndexes);
+        break;
+      }
+      const attached = attachedOptionValue(token, flag);
+      if (attached !== undefined) {
+        roles.sourceIndexes.add(index);
+        break;
+      }
+    }
+  }
+}
+
+function collectFlagValueRoles(
+  argv: readonly string[],
+  flags: ReadonlySet<string> | undefined,
+  indexes: Set<number>,
+  values?: Set<string>,
+): void {
+  if (!flags) return;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (token === '--') break;
+    const lower = token.toLowerCase();
+    for (const flag of flags) {
+      if (lower === flag) {
+        addIndexedValue(argv, index + 1, indexes, values);
+        break;
+      }
+      const attached = attachedOptionValue(token, flag);
+      if (attached !== undefined) {
+        indexes.add(index);
+        values?.add(attached);
+        break;
+      }
+    }
+  }
+}
+
+function collectRegexArgumentRoles(argv: readonly string[], roles: CommandArgumentRoles): void {
+  const command = commandBasename(argv[0] ?? '');
+  collectFlagValueRoles(
+    argv,
+    REGEX_SOURCE_VALUE_FLAGS[command],
+    roles.sourceIndexes,
+  );
+  collectFlagValueRoles(
+    argv,
+    REGEX_PATH_VALUE_FLAGS[command],
+    roles.pathIndexes,
+    roles.pathValues,
+  );
+  let hasExplicitPattern = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (token === '--') break;
+    const lower = token.toLowerCase();
+    if (command === 'findstr' && lower.startsWith('/c:')) {
+      roles.sourceIndexes.add(index);
+      hasExplicitPattern = true;
+      continue;
+    }
+    if (command === 'findstr' && lower.startsWith('/g:')) {
+      roles.pathIndexes.add(index);
+      roles.pathValues.add(token.slice(3));
+      hasExplicitPattern = true;
+      continue;
+    }
+    for (const flag of EXPLICIT_REGEX_FLAGS) {
+      if (lower === flag) {
+        addIndexedValue(argv, index + 1, roles.sourceIndexes);
+        hasExplicitPattern = true;
+        break;
+      }
+      const attached = attachedOptionValue(token, flag);
+      if (attached !== undefined) {
+        roles.sourceIndexes.add(index);
+        hasExplicitPattern = true;
+        break;
+      }
+    }
+    for (const flag of REGEX_SOURCE_FILE_FLAGS) {
+      if (lower === flag) {
+        addIndexedValue(argv, index + 1, roles.pathIndexes, roles.pathValues);
+        hasExplicitPattern = true;
+        break;
+      }
+      const attached = attachedOptionValue(token, flag);
+      if (attached !== undefined) {
+        roles.pathValues.add(attached);
+        hasExplicitPattern = true;
+        break;
+      }
+    }
+  }
+  if (!hasExplicitPattern) {
+    let optionsEnded = false;
+    for (let index = 1; index < argv.length; index += 1) {
+      const token = argv[index] ?? '';
+      if (token === '--') {
+        optionsEnded = true;
+        continue;
+      }
+      if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
+      if (!optionsEnded && token.startsWith('-')) continue;
+      if (command === 'findstr' && IS_WINDOWS_CMD_FLAG.test(token)) continue;
+      addIndexedValue(argv, index, roles.sourceIndexes);
+      break;
+    }
+  }
+  let optionsEnded = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (
+      (!optionsEnded && token.startsWith('-'))
+      || roles.sourceIndexes.has(index)
+      || roles.pathIndexes.has(index)
+    ) continue;
+    if (command === 'findstr' && IS_WINDOWS_CMD_FLAG.test(token)) continue;
+    addIndexedValue(argv, index, roles.pathIndexes, roles.pathValues);
+  }
+}
+
+function collectCommandArgumentRoles(argv: readonly string[]): CommandArgumentRoles {
+  const roles = createCommandArgumentRoles();
+  const command = commandBasename(argv[0] ?? '');
+  const scriptFlags = /^python(?:\d+(?:\.\d+)*)?$/.test(command)
+    ? INLINE_SCRIPT_FLAGS.python
+    : INLINE_SCRIPT_FLAGS[command];
+  if (scriptFlags) collectScriptSourceRoles(argv, scriptFlags, roles);
+  if (REGEX_SOURCE_COMMANDS.has(command)) collectRegexArgumentRoles(argv, roles);
+  return roles;
+}
+
 /**
  * Pre-AST regex-based path scanner. Retained as a complementary pass
  * because shell-quote's POSIX tokenisation eats Windows backslash escapes:
@@ -653,21 +901,99 @@ const IS_WINDOWS_CMD_FLAG = /^\/[A-Za-z][A-Za-z0-9]*(?::[A-Za-z0-9]+)?$/;
  * layered ON TOP of the AST argv pass. Tokens recognised by both are
  * de-duped at the `Set` level by the caller.
  */
+interface RawCommandWord {
+  readonly value: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+function tokenizeRawCommandStages(command: string): readonly RawCommandWord[][] {
+  const stages: RawCommandWord[][] = [];
+  let words: RawCommandWord[] = [];
+  let value = '';
+  let start = -1;
+  let quote: '"' | "'" | undefined;
+  const finishWord = (end: number): void => {
+    if (start < 0) return;
+    words.push({ value, start, end });
+    value = '';
+    start = -1;
+  };
+  const finishStage = (): void => {
+    if (words.length > 0) stages.push(words);
+    words = [];
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!;
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else if (quote === '"' && char === '\\' && command[index + 1] === '"') {
+        value += `${char}${command[index + 1]}`;
+        index += 1;
+      } else {
+        value += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      if (start < 0) start = index;
+      quote = char;
+    } else if (/\s/.test(char)) {
+      finishWord(index);
+    } else if (char === '|' || char === '&' || char === ';') {
+      finishWord(index);
+      finishStage();
+    } else {
+      if (start < 0) start = index;
+      value += char;
+    }
+  }
+  if (quote) return [];
+  finishWord(command.length);
+  finishStage();
+  return stages;
+}
+
+function maskRawInlineSources(command: string): string {
+  // String offsets above are UTF-16 code-unit indexes; split the same way so
+  // non-BMP text before a source argument cannot shift the masked range.
+  const masked = command.split('');
+  for (const words of tokenizeRawCommandStages(command)) {
+    const roles = collectCommandArgumentRoles(words.map((word) => word.value));
+    for (const index of roles.sourceIndexes) {
+      const word = words[index];
+      if (!word) continue;
+      for (let offset = word.start; offset < word.end; offset += 1) masked[offset] = ' ';
+    }
+  }
+  return masked.join('');
+}
+
 function legacyRegexPathScan(command: string): string[] {
   const out: string[] = [];
 
-  // Quoted paths (single or double quotes)
-  const quotedPattern = /["']([^"']+)["']/g;
   let m: RegExpExecArray | null;
-  while ((m = quotedPattern.exec(command)) !== null) {
-    out.push(m[1]!);
+  // Preserve quoted Windows paths with spaces without recovering arbitrary
+  // quoted source/regex fragments as paths.
+  for (const pattern of [/"([A-Za-z]:\\[^"\r\n]+)"/g, /'([A-Za-z]:\\[^'\r\n]+)'/g]) {
+    while ((m = pattern.exec(command)) !== null) {
+      out.push(m[1]!);
+    }
   }
 
   // Common path patterns (mirrors pre-AST `pathPattern` exactly so we
   // preserve identification of `./foo`, `../foo`, `C:\foo`, `~/foo`,
   // `.x/foo`)
-  const pathPattern = /(?:^|\s)(\.\.?\/[^\s]+|\.\.?\\[^\s]+|[a-zA-Z]:\\[^\s]+|~\/[^\s]+|\.[^\s]*[/\\][^\s]*)/g;
+  const pathPattern = /(?:^|\s)(\.\.?\/[^\s]+|\.\.?\\[^\s]+|~\/[^\s]+|\.[^\s]*[/\\][^\s]*)/g;
   while ((m = pathPattern.exec(command)) !== null) {
+    out.push(m[1]!);
+  }
+  // Raw Windows paths need a wider left boundary for attached path options
+  // such as `findstr /G:C:\patterns.txt`; inline source ranges were masked
+  // before this pass, so matching after `=` or `:` cannot recover code text.
+  const windowsPathPattern = /(?:^|[\s:=<>])([a-zA-Z]:\\[^\s"'|;&<>]+)/g;
+  while ((m = windowsPathPattern.exec(command)) !== null) {
     out.push(m[1]!);
   }
   return out;
@@ -699,7 +1025,11 @@ export function extractPathsFromCommand(command: string): string[] {
   if (!tree.unparseable) {
     for (const stmt of tree.statements) {
       for (const stage of stmt.stages) {
-        for (const token of stage.argv) {
+        const roles = collectCommandArgumentRoles(stage.argv);
+        for (const value of roles.pathValues) paths.add(value);
+        for (let index = 0; index < stage.argv.length; index += 1) {
+          const token = stage.argv[index]!;
+          if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
           if (looksLikePath(token)) paths.add(token);
         }
         for (const redir of stage.redirections) {
@@ -712,7 +1042,7 @@ export function extractPathsFromCommand(command: string): string[] {
   // Pass 2: legacy regex pass (handles Windows backslash paths shell-quote
   // can't tokenise). Always run — even on parseable input — because the
   // two passes recognise different forms.
-  for (const p of legacyRegexPathScan(command)) {
+  for (const p of legacyRegexPathScan(maskRawInlineSources(command))) {
     paths.add(p);
   }
 
@@ -723,10 +1053,15 @@ export function extractPathsFromCommand(command: string): string[] {
  * Check if a bash command operates on any protected paths
  * Issue 052: Prevent "always" option for bash commands on protected paths
  */
-export function isCommandOnProtectedPath(command: string, projectRoot: string): boolean {
+export function isCommandOnProtectedPath(
+  command: string,
+  projectRoot: string,
+  executionCwd = projectRoot,
+): boolean {
   const paths = extractPathsFromCommand(command);
   for (const p of paths) {
-    if (isAlwaysConfirmPath(p, projectRoot)) {
+    const resolved = path.isAbsolute(p) ? p : path.resolve(executionCwd, p);
+    if (isAlwaysConfirmPath(resolved, projectRoot)) {
       return true;
     }
   }

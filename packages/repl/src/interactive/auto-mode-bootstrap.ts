@@ -55,6 +55,8 @@ export interface AutoModeBootstrapDeps {
    */
   readonly askUser: AutoModeAskUser;
   readonly projectRoot: string;
+  /** Directory used to resolve relative tool paths. */
+  readonly executionCwd: string;
   readonly getCurrentProviderName: () => string;
   readonly getCurrentModel: () => string | undefined;
   readonly getCurrentPermissionMode: () => PermissionMode;
@@ -192,6 +194,7 @@ export async function bootstrapAutoMode(
       // FEATURE_158: thread projectRoot to signal collectors + Tier 0;
       // path-aware bash collector merges with coding-side defaults.
       projectRoot: deps.projectRoot,
+      executionCwd: deps.executionCwd,
       extraCollectors: deps.extraCollectors,
       // FEATURE_092 phase 2b.7b slice C: starting engine + timeout + classifier
       // model overrides. `userSettings` is layer 4 of `resolveClassifierModel`;

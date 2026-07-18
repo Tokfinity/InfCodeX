@@ -7,7 +7,7 @@
  *
  * Two invariants the producers must hold:
  *
- *   1. **Pure**: same `call` + `projectRoot` ⇒ same signals. No I/O, no
+ *   1. **Pure**: same `call` + path context ⇒ same signals. No I/O, no
  *      timestamps, no env reads inside collectors. Collectors run on every
  *      non-Tier-1 tool call, so they must be cheap and deterministic.
  *
@@ -103,10 +103,15 @@ export interface SignalCollector {
    * Inspect the call and produce zero or more signals.
    *
    * Must be pure: no I/O, no timing, no global state reads. The
-   * `projectRoot` argument is the only environmental context — pass
-   * the same value through every call site to keep results stable.
+   * `projectRoot` is the authorization boundary. `executionCwd` is the
+   * directory relative paths resolve from and defaults to `projectRoot` for
+   * backward compatibility.
    */
-  collect(call: RunnerToolCall, projectRoot: string): readonly ToolCallSignal[];
+  collect(
+    call: RunnerToolCall,
+    projectRoot: string,
+    executionCwd?: string,
+  ): readonly ToolCallSignal[];
 }
 
 /**
@@ -124,11 +129,12 @@ export function collectAllSignals(
   call: RunnerToolCall,
   projectRoot: string,
   collectors: readonly SignalCollector[],
+  executionCwd = projectRoot,
 ): readonly ToolCallSignal[] {
   const result: ToolCallSignal[] = [];
   for (const collector of collectors) {
     if (!collector.toolNames.has(call.name)) continue;
-    const signals = collector.collect(call, projectRoot);
+    const signals = collector.collect(call, projectRoot, executionCwd);
     if (signals.length === 0) continue;
     for (const signal of signals) result.push(signal);
   }

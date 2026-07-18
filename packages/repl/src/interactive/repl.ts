@@ -645,6 +645,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       return result.confirmed ? 'allow' : 'block';
     },
     projectRoot: gitRoot ?? process.cwd(),
+    executionCwd: startupRuntime.executionCwd ?? gitRoot ?? process.cwd(),
     getCurrentProviderName: () => currentConfig.provider,
     getCurrentModel: () => currentConfig.model,
     getCurrentPermissionMode: () => currentPermissionMode,
