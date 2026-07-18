@@ -30,6 +30,8 @@ const PLAN_EVIDENCE_LIMIT = 20;
 const TOOL_OUTCOME_LIMIT = 32;
 const FILE_EDIT_LIMIT = 40;
 const ARTIFACT_REF_LIMIT = 8;
+const FILE_PATH_LIMIT = 400;
+const TRUNCATION_MARKER = '...[truncated]';
 
 interface CurrentIntentSelection {
   readonly queries: readonly string[];
@@ -135,7 +137,10 @@ export function buildFileEditSummary(
   for (const [path, opCount] of mutationTracker.files) {
     if (out.length >= FILE_EDIT_LIMIT) break;
     const label = opCount === 1 ? '1 mutation' : `${opCount} mutations`;
-    out.push({ path, diffHint: label });
+    const boundedPath = path.length <= FILE_PATH_LIMIT
+      ? path
+      : `${path.slice(0, FILE_PATH_LIMIT - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+    out.push({ path: boundedPath, diffHint: label });
   }
   return out;
 }
@@ -188,9 +193,23 @@ function extractPlanEvidence(
     ...(item.owner ? { owner: item.owner } : {}),
     ...(item.note ? { note: item.note } : {}),
   }));
+  if (all.length <= PLAN_EVIDENCE_LIMIT) return { items: all, omitted: 0 };
+  const needsAttention = all.filter((item) => (
+    item.status === 'pending'
+    || item.status === 'in_progress'
+    || item.status === 'failed'
+    || item.status === 'cancelled'
+  ));
+  const settled = all.filter((item) => (
+    item.status === 'completed' || item.status === 'skipped'
+  ));
+  const selectedAttention = needsAttention.slice(0, PLAN_EVIDENCE_LIMIT);
+  const remaining = PLAN_EVIDENCE_LIMIT - selectedAttention.length;
+  const selectedSettled = settled.slice(Math.max(0, settled.length - remaining));
+  const selected = [...selectedAttention, ...selectedSettled];
   return {
-    items: all.slice(0, PLAN_EVIDENCE_LIMIT),
-    omitted: Math.max(0, all.length - PLAN_EVIDENCE_LIMIT),
+    items: selected,
+    omitted: Math.max(0, all.length - selected.length),
   };
 }
 

@@ -375,4 +375,57 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       await extensionRuntime.dispose();
     }
   });
+
+  it('rechecks collaboration readiness and verifies exactly once after delivery settles', async () => {
+    const stream = vi.fn(async (): Promise<KodaXStreamResult> => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'accept', reason: 'Verified.' })],
+    }));
+    const observer = makeObserver();
+    const collaboration = {
+      activeDescendantTurns: 1,
+      hasPendingRootTaskNotifications: false,
+    };
+    const adapter = buildRunnerSidecarVerifierAdapter({
+      mainProvider: fakeProvider(stream),
+      mainProviderName: 'fake-verifier',
+      mainModel: undefined,
+      mutationTracker: makeMutationTracker(),
+      observer,
+      onVerdict: () => {},
+      getSessionId: () => 'session-scoped',
+      getCollaborationState: () => collaboration,
+      getPlanSnapshot: () => [],
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
+    });
+    const stopContext = {
+      transcript: [
+        { role: 'user' as const, content: 'finish after the delegated review' },
+        { role: 'assistant' as const, content: 'review complete' },
+      ],
+      lastAssistantText: 'review complete',
+      signal: 'natural-end' as const,
+      reanimateCount: 0,
+      reanimateBudget: 2,
+    };
+
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    process.env.KODAX_VERIFIER_ALWAYS = '1';
+    try {
+      await adapter.composedStopHook(stopContext);
+      collaboration.activeDescendantTurns = 0;
+      collaboration.hasPendingRootTaskNotifications = true;
+      await adapter.composedStopHook(stopContext);
+      collaboration.hasPendingRootTaskNotifications = false;
+      await adapter.composedStopHook(stopContext);
+
+      expect(stream).toHaveBeenCalledOnce();
+      expect(observer.sidecarStarted).toHaveBeenCalledOnce();
+    } finally {
+      if (priorAlways === undefined) delete process.env.KODAX_VERIFIER_ALWAYS;
+      else process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+    }
+  });
 });

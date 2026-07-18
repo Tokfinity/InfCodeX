@@ -304,7 +304,7 @@ export function buildVerifierUserMessage(inputs: SidecarVerifierContextInputs): 
     }
   }
   if ((inputs.omittedFileEditCount ?? 0) > 0) {
-    sections.push(`(${inputs.omittedFileEditCount} additional file mutation(s) omitted)`);
+    sections.push(`(${inputs.omittedFileEditCount} additional file(s) omitted)`);
   }
   sections.push('');
 

@@ -333,6 +333,52 @@ describe('Sidecar Verifier current user intent', () => {
     expect(message).toContain('2 additional task result(s) omitted');
     expect(message).toContain('5 additional plan item(s) omitted');
     expect(message).toContain('3 additional tool outcome(s) omitted');
-    expect(message).toContain('5 additional file mutation(s) omitted');
+    expect(message).toContain('5 additional file(s) omitted');
+  });
+
+  it('keeps actionable plan states ahead of completed history when evidence is bounded', () => {
+    const completed = Array.from({ length: 21 }, (_, index) => ({
+      id: `completed-${index}`,
+      subject: `Completed ${index}`,
+      status: 'completed' as const,
+    }));
+    const actionable = [
+      { id: 'pending-tail', subject: 'Run required test', status: 'pending' as const },
+      { id: 'active-tail', subject: 'Finish integration', status: 'in_progress' as const },
+      { id: 'failed-tail', subject: 'Repair failed build', status: 'failed' as const },
+      { id: 'cancelled-tail', subject: 'Restore cancelled review', status: 'cancelled' as const },
+    ];
+
+    const context = buildVerifierContext({
+      transcript: [{ role: 'user', content: 'Complete every required step.' }],
+      lastAssistantText: 'Everything is complete.',
+      plan: [...completed, ...actionable],
+    });
+
+    expect(context.planEvidence).toHaveLength(20);
+    expect(context.planEvidence?.slice(0, 4).map((item) => item.id)).toEqual([
+      'pending-tail',
+      'active-tail',
+      'failed-tail',
+      'cancelled-tail',
+    ]);
+    expect(context.omittedPlanEvidenceCount).toBe(5);
+  });
+
+  it('strictly bounds file paths before they enter the verifier envelope', () => {
+    const longPath = `${'nested/'.repeat(100)}implementation.ts`;
+    const context = buildVerifierContext({
+      transcript: [{ role: 'user', content: 'Implement the change.' }],
+      lastAssistantText: 'Implemented.',
+      mutationTracker: {
+        files: new Map([[longPath, 1]]),
+        totalOps: 1,
+      },
+    });
+
+    const evidencePath = context.fileEditSummary[0]?.path ?? '';
+    expect(evidencePath).toHaveLength(400);
+    expect(evidencePath).toMatch(/\.\.\.\[truncated\]$/u);
+    expect(buildVerifierUserMessage(context)).not.toContain(longPath);
   });
 });
