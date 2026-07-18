@@ -47,6 +47,7 @@ interface TerminalInputSource {
   off?: (event: "data", listener: (chunk: TerminalInputChunk) => void) => void;
   hasRef?: () => boolean;
   ref?: () => void;
+  resume?: () => unknown;
   unref?: () => void;
   isRaw?: boolean;
 }
@@ -214,6 +215,12 @@ export function createTerminalInputController({
         inputRefOwned = true;
       }
       stdin.on?.("data", handleData);
+      // A previous terminal owner may have left the shared ReadStream paused
+      // or stopped after releasing its ref. `ref()` only keeps the underlying
+      // handle alive; it does not guarantee that the stream is flowing again.
+      // Resume after installing our listener so sequential renderers (for
+      // example the session picker followed by the REPL) cannot lose input.
+      stdin.resume?.();
       attachedInput = stdin;
     }
 

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTerminalInputController,
   render,
+  useApp,
   useInput,
   type Key,
 } from "./renderer-runtime.js";
@@ -11,12 +12,25 @@ import {
 class MockInput extends EventEmitter {
   isTTY = true;
   isRaw = false;
+  acceptsInput = true;
   hasRef = vi.fn(() => false);
   ref = vi.fn();
-  unref = vi.fn();
+  unref = vi.fn(() => {
+    this.acceptsInput = false;
+  });
+  resume = vi.fn(() => {
+    this.acceptsInput = true;
+    return this;
+  });
 
   setRawMode(enabled: boolean) {
     this.isRaw = enabled;
+  }
+
+  emitInput(chunk: Buffer): void {
+    if (this.acceptsInput) {
+      this.emit("data", chunk);
+    }
   }
 }
 
@@ -112,9 +126,69 @@ describe("createTerminalInputController", () => {
     expect(handlerB).toHaveBeenCalledTimes(1);
     expect(handlerA.mock.calls[0]?.[0]).toEqual(Buffer.from("a"));
   });
+
+  it("restores input flow when a new controller takes over an unreferenced terminal", () => {
+    const stdin = new MockInput();
+    const first = createTerminalInputController({
+      stdin,
+      setRawMode: (enabled) => stdin.setRawMode(enabled),
+      isRawModeSupported: true,
+    });
+    const stopFirst = first.subscribe(() => undefined);
+
+    stopFirst();
+    expect(stdin.acceptsInput).toBe(false);
+
+    const handler = vi.fn();
+    const second = createTerminalInputController({
+      stdin,
+      setRawMode: (enabled) => stdin.setRawMode(enabled),
+      isRawModeSupported: true,
+    });
+    second.subscribe(handler);
+    stdin.emitInput(Buffer.from("next"));
+
+    expect(stdin.resume).toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledWith(Buffer.from("next"));
+  });
 });
 
 describe("renderer-runtime useInput", () => {
+  it("hands terminal input from a completed renderer to the next renderer", async () => {
+    const stdout = new MockOutput() as unknown as NodeJS.WriteStream;
+    const stderr = new MockOutput() as unknown as NodeJS.WriteStream;
+    const mockInput = new MockInput();
+    const stdin = mockInput as unknown as NodeJS.ReadStream;
+
+    function PickerHarness() {
+      const { exit } = useApp();
+      useInput((_input, key) => {
+        if (key.return) exit();
+      });
+      return null;
+    }
+
+    const picker = render(React.createElement(PickerHarness), { stdout, stderr, stdin });
+    const pickerExit = picker.waitUntilExit();
+    mockInput.emitInput(Buffer.from("\r"));
+    await pickerExit;
+    picker.cleanup();
+
+    const replHandler = vi.fn();
+    function ReplHarness() {
+      useInput(replHandler);
+      return null;
+    }
+
+    const repl = render(React.createElement(ReplHarness), { stdout, stderr, stdin });
+    mockInput.emitInput(Buffer.from("a"));
+
+    expect(replHandler).toHaveBeenCalledWith("a", expect.objectContaining({ ctrl: false }));
+
+    repl.unmount();
+    repl.cleanup();
+  });
+
   it("delivers Ctrl+C to an active input handler", () => {
     const stdout = new MockOutput() as unknown as NodeJS.WriteStream;
     const stderr = new MockOutput() as unknown as NodeJS.WriteStream;
