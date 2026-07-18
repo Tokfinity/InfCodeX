@@ -2626,6 +2626,9 @@ const sub = runtime.events.subscribe({ sessionId: session.id }, (event) => {
     // Render streaming text in the host UI.
   }
 });
+// Daemon subscriptions establish a remote handshake. Await this before
+// starting work whose first event must not be missed; local subscriptions omit it.
+await sub.ready;
 
 const artifact = await runtime.artifacts.create({
   kind: 'image',
@@ -2694,9 +2697,12 @@ const sub = runtime.events.subscribe({ type: 'permission.requested' }, (event) =
     { runId: payload.runId },
   );
 });
+await sub.ready;
 ```
 
-Only the first valid response wins. Wrong-run or stale responses are rejected.
+Await `ready` before another client starts work that may request permission;
+this creates an explicit cross-connection ordering boundary. Only the first
+valid response wins. Wrong-run or stale responses are rejected.
 Abort, runtime close, daemon stop, and timeout reject unresolved permission
 requests so tool approval promises do not hang forever.
 

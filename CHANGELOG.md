@@ -44,6 +44,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Remote Runtime subscription readiness.** Daemon event/workflow
+  subscriptions now expose an awaitable `RuntimeSubscription.ready` handshake,
+  so hosts can establish cross-client ordering before starting work whose first
+  event must not be missed. Handshake failures remain observable to new callers
+  without creating unhandled rejections in legacy callers that ignore `ready`.
+
 - **Detached daemon lifecycle cleanup.** CLI and SDK startup now retain the
   exact candidate process until its PID is healthy and reclaim only that process
   tree on early exit, timeout, identity mismatch, owner-race loss, or startup

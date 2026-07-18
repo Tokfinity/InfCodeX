@@ -1570,6 +1570,8 @@ export type RuntimeEventListener = (event: RuntimeEvent) => void;
 export type RuntimeTypedEventListener = (event: RuntimeTypedEvent) => void;
 
 export interface RuntimeSubscription {
+  /** Resolves when a remote subscription handshake is complete; absent for synchronous local subscriptions. */
+  readonly ready?: Promise<void>;
   close(): void;
 }
 

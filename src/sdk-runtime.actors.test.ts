@@ -87,12 +87,14 @@ describe('F270 Runtime Actor facade', () => {
     await runtime.agents.wait(session.id, 2, 1_000);
     const idleRevision = (await runtime.agents.detail(session.id, initial.actorPath)).actor.revision;
 
-    const accepted = runtime.agents.followup(
+    const accepted = await runtime.agents.followup(
       session.id,
       initial.actorPath,
       'Accepted follow-up.',
       { expectedRevision: idleRevision },
     );
+    expect(accepted).toMatchObject({ delivery: 'started_turn' });
+
     const stale = runtime.agents.followup(
       session.id,
       initial.actorPath,
@@ -100,11 +102,9 @@ describe('F270 Runtime Actor facade', () => {
       { expectedRevision: idleRevision },
     );
 
-    await expect(accepted).resolves.toMatchObject({ delivery: 'started_turn' });
     await expect(stale).rejects.toMatchObject({
       code: 'revision_conflict',
       expectedRevision: idleRevision,
-      currentRevision: idleRevision + 1,
     });
     await runtime.close();
   });

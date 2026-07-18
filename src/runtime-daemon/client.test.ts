@@ -208,7 +208,8 @@ describe('runtime daemon client proxy', () => {
     const subscription = client.events.subscribe({ sessionId: 'session-1' }, (event) => {
       seen.push(event);
     });
-    await Promise.resolve();
+    expect(subscription.ready).toBeInstanceOf(Promise);
+    await subscription.ready;
 
     const event: RuntimeEvent = {
       id: 'evt-1',
@@ -506,8 +507,8 @@ describe('runtime daemon client proxy', () => {
       transport,
     });
 
-    client.events.subscribe({}, () => undefined);
-    await flushAsyncNotifications();
+    const subscription = client.events.subscribe({}, () => undefined);
+    await expect(subscription.ready).rejects.toThrow('subscribe failed');
 
     // The persistent reverse-capability listener remains; the failed event
     // subscription itself is removed.

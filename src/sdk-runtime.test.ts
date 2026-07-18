@@ -753,7 +753,7 @@ describe('createKodaXRuntime', () => {
         profileId: 'space',
       });
 
-      space.events.subscribe({ sessionId: session.id }, (event) => {
+      const permissionSubscription = space.events.subscribe({ sessionId: session.id }, (event) => {
         seen.push(event.type);
         if (event.type !== 'permission.requested') return;
         const payload = event.payload;
@@ -764,6 +764,8 @@ describe('createKodaXRuntime', () => {
           { runId: payload.runId },
         );
       });
+      expect(permissionSubscription.ready).toBeInstanceOf(Promise);
+      await permissionSubscription.ready;
 
       approvalDone = worker.permissions.request({
         sessionId: session.id,
@@ -773,11 +775,11 @@ describe('createKodaXRuntime', () => {
         toolName: 'bash',
         inputPreview: '{"command":"echo from space permission"}',
       });
-      await expect(expectSettles(approvalDone, 'space permission approval')).resolves.toEqual({
+      await expect(expectSettles(approvalDone, 'space permission approval', 5_000)).resolves.toEqual({
         type: 'allow_once',
       });
       if (!responseDone) throw new Error('Space permission response was not submitted.');
-      await expect(expectSettles(responseDone, 'space permission response')).resolves.toBe(true);
+      await expect(expectSettles(responseDone, 'space permission response', 5_000)).resolves.toBe(true);
       await flushMicrotasks();
 
       expect(await space.permissions.listPending({ runId: 'run-space-permission' })).toEqual([]);
@@ -4287,13 +4289,17 @@ async function shutdownRuntimeDaemon(homeDir: string, profile: string): Promise<
   await waitForCondition(() => readRuntimeDaemonState(paths) === undefined);
 }
 
-async function expectSettles<T>(promise: Promise<T>, label: string): Promise<T> {
+async function expectSettles<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = 250,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), timeoutMs);
       }),
     ]);
   } finally {

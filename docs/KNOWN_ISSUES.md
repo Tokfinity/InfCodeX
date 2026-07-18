@@ -14,6 +14,7 @@ _Last Updated: 2026-07-19_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 186 | High | Resolved | Daemon event subscriptions had no readiness boundary and could miss the first cross-client event | v0.7.66 | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 185 | Medium | Open | Learning lock crash recovery can time out before stale ownership is reclaimable | v0.7.68; expanded v0.7.72 RC | - | 2026-07-19 | - |
 | 184 | High | Open | `sed` side effects can bypass plan-mode write classification | v0.5.36 | - | 2026-07-19 | - |
 | 183 | High | Resolved | CLI daemon startup failures and forced test exits could leave detached Node processes | v0.7.66-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
@@ -95,6 +96,56 @@ _Last Updated: 2026-07-19_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 186: Daemon event subscriptions had no readiness boundary and could miss the first cross-client event
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72)
+- **Introduced**: v0.7.66
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-19
+- **Resolved**: 2026-07-19
+
+#### Original Problem
+
+The daemon client returned `RuntimeSubscription` synchronously while it created
+the corresponding server subscription in an unobservable background request.
+Its notification buffer covered events received before the subscribe response,
+but it could not cover an event emitted before the server had processed the
+subscribe request. A second client could therefore start a permission request
+immediately after `events.subscribe()` and lose `permission.requested`, leaving
+the request pending until timeout or shutdown.
+
+Release CI reproduced the race on both Node 20 and Node 22. The test cleanup's
+correct refusal to stop a daemon with an active `permission.request` initially
+masked the earlier subscription-handshake timeout.
+
+#### Expected Behavior
+
+- A daemon host can explicitly wait until a remote event/workflow subscription
+  is installed before another client starts work.
+- Notifications received after installation but before the response remain
+  buffered and are delivered once the remote subscription ID is known.
+- Handshake failure is observable without producing an unhandled rejection for
+  existing callers that do not use the new readiness boundary.
+- Local embedded subscriptions remain synchronous and unchanged.
+
+#### Root Cause
+
+`subscribeToDaemonNotification()` started an asynchronous RPC and discarded its
+promise. `RuntimeSubscription` exposed only `close()`, so callers had no way to
+establish a happens-before relationship across two daemon connections.
+
+#### Resolution
+
+- Added the optional `RuntimeSubscription.ready` promise for remote
+  event/workflow subscription handshakes.
+- Preserved pre-response notification buffering and close-before-ready remote
+  cleanup.
+- Propagated handshake rejection through `ready` while attaching an internal
+  rejection handler for backward-compatible callers that ignore it.
+- Updated SDK permission examples to await readiness before triggering
+  cross-client work, with focused success/failure regressions.
 
 ### 185: Learning lock crash recovery can time out before stale ownership is reclaimable
 
@@ -4958,11 +5009,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 72 (26 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 73 (26 Open, 47 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-19: Issue 186 added and resolved (v0.7.72)
+- Added an awaitable daemon subscription readiness boundary so a second client
+  cannot outrun installation of a permission/event listener.
 
 ### 2026-07-19: Issue 185 added
 - Deferred F266 learning-lock crash recovery hardening; rejected a blanket

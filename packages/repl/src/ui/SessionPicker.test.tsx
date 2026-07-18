@@ -153,9 +153,10 @@ describe('SessionPicker', () => {
       const exitPromise = instance.waitUntilExit().then(() => { exited = true; });
       stdin.emit('data', Buffer.from('\r'));
 
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      const output = stdout.chunks.join('');
-      expect(output).toContain('Loading selected session');
+      await vi.waitFor(
+        () => expect(stdout.chunks.join('')).toContain('Loading selected session'),
+        { timeout: 2_000 },
+      );
       expect(onSelect).toHaveBeenCalledWith(sessions[0]);
       expect(exited).toBe(false);
       expect(stdin.isRaw).toBe(true);
