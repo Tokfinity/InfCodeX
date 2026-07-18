@@ -5,8 +5,10 @@
 // React loads its development reconciler (~100 MB/turn profiling leak).
 // This is handled by the CJS shim/preload upstream of this file:
 //   - bin entry:        scripts/kodax-bin.cjs requires production-env.cjs
-//                       then dynamic-imports this module (ESM)
+//                       then imports the lightweight bootstrap (ESM)
 //   - npm run dev/start: --require ./scripts/production-env.cjs flag
+// The bootstrap dynamically imports this full module after optional resume
+// selection, so production mode is still fixed before React is evaluated.
 // The inline fallback below only covers `node dist/kodax_cli.js` invoked
 // directly; in that path we cannot guarantee React is still in production
 // mode, but setting NODE_ENV here keeps downstream NODE_ENV checks sane.
@@ -3365,24 +3367,19 @@ complete -c kodax -l version -d 'Show version'`);
  * This is necessary because:
  * 1. When run directly (e.g., `node dist/kodax_cli.js`), we should execute main()
  * 2. When imported for testing, we should NOT execute main()
- * 3. When run via npm link, the paths may differ due to symlinks
+ * 3. When imported by the lightweight bootstrap, we should NOT execute main()
  *
  * Detection logic:
  * - Direct execution: import.meta.url === pathToFileURL(process.argv[1]).href
- * - npm link: import.meta.url ends with '/dist/kodax_cli.js' while process.argv[1]
- *   points to the symlinked global bin
+ * Global/npm-link execution is owned by scripts/kodax-bin.cjs, which imports
+ * the bootstrap and calls main() explicitly after optional resume routing.
  */
 const scriptPath = process.argv[1];
 const metaUrl = import.meta.url;
 const scriptUrl = scriptPath ? pathToFileURL(scriptPath).href : '';
 
-// Check if this is the main module
-// Primary: exact URL match (direct execution)
-// Fallback: check if module path ends with the expected dist file (npm link scenario)
-const isMainModule = scriptPath && (
-  metaUrl === scriptUrl ||
-  metaUrl.endsWith('/dist/kodax_cli.js')
-);
+// Only direct execution owns automatic startup. Importers call main() explicitly.
+const isMainModule = scriptPath && metaUrl === scriptUrl;
 
 if (isMainModule) {
   main().catch(e => { console.error(chalk.red(`[Error] ${e.message}`)); process.exit(1); });

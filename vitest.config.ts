@@ -41,6 +41,7 @@ export default defineConfig({
       '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
+      '@kodax-ai/repl/cli-resume': resolveFromRoot('packages', 'repl', 'src', 'cli-resume.ts'),
       '@kodax-ai/repl': resolveFromRoot('packages', 'repl', 'src', 'index.ts'),
       '@kodax-ai/agent/session-lineage': resolveFromRoot('packages', 'agent', 'src', 'session-lineage', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),

@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ENTRY = join(ROOT, 'dist', 'kodax_cli.js');
+const ENTRY = join(ROOT, 'dist', 'kodax_bootstrap.js');
 const WORKER_SIDECAR = join(ROOT, 'dist', 'semantic-worker.js');
 const RUNTIME_WORKER_SIDECAR = join(ROOT, 'dist', 'runtime-worker.js');
 const HANDLER_WORKER_SIDECAR = join(ROOT, 'dist', 'constructed-handler-worker.js');
@@ -257,7 +257,7 @@ async function main() {
     rmSync(OUT_ROOT, { recursive: true, force: true });
   }
 
-  // Workspace TS build → produces dist/kodax_cli.js + packages/*/dist + packages/agent/dist/capabilities/skills/builtin
+  // Workspace build produces bootstrap/full CLI bundles, package dist, and built-in assets.
   if (!args['skip-tsc']) {
     runStep('npm run build (workspaces + root tsc + copy:builtin)', 'npm', ['run', 'build']);
   } else if (!existsSync(ENTRY)) {

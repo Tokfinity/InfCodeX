@@ -11,7 +11,7 @@
  * development reconciler, leaking ~100 MB/turn of profiling objects.
  *
  * This CJS file runs synchronously first, requires the env preload,
- * then dynamic-imports the compiled ESM entry.
+ * then dynamic-imports the lightweight compiled bootstrap.
  *
  * Opt back into development by setting KODAX_DEV=1.
  */
@@ -19,7 +19,9 @@
 
 require('./production-env.cjs');
 
-import('../dist/kodax_cli.js').catch((err) => {
+import('../dist/kodax_bootstrap.js').then(
+  ({ runKodaXBootstrapAsEntry }) => runKodaXBootstrapAsEntry(),
+).catch((err) => {
   // Surface unexpected errors with a full stack — this path should be rare.
   // eslint-disable-next-line no-console
   console.error(err);

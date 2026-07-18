@@ -4,20 +4,22 @@
 // Later releases added mcp / session / media subpaths.
 //
 // Produces the following artifacts under dist/:
-//   1. dist/kodax_cli.js     — CLI entry (bin command runs this; self-contained)
-//   2. dist/index.js         — SDK root entry (`@kodax-ai/kodax`)
-//   3. dist/sdk-agent.js     — SDK subpath `@kodax-ai/kodax/agent`
-//   4. dist/sdk-llm.js       — SDK subpath `@kodax-ai/kodax/llm`
-//   5. dist/sdk-coding.js    — SDK subpath `@kodax-ai/kodax/coding`
-//   6. dist/sdk-media.js     — SDK subpath `@kodax-ai/kodax/media`
-//   7. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
-//   8. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
-//   9. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
-//  10. dist/sdk-session.js   — SDK subpath `@kodax-ai/kodax/session`
-//  11. dist/sdk-runtime.js   — SDK subpath `@kodax-ai/kodax/runtime`
-//  12. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
+//   1. dist/kodax_bootstrap.js — lightweight CLI entry (bin command runs this)
+//   2. dist/kodax_resume.js  — bare-resume discovery and picker
+//   3. dist/kodax_cli.js     — full CLI entry (self-contained)
+//   4. dist/index.js         — SDK root entry (`@kodax-ai/kodax`)
+//   5. dist/sdk-agent.js     — SDK subpath `@kodax-ai/kodax/agent`
+//   6. dist/sdk-llm.js       — SDK subpath `@kodax-ai/kodax/llm`
+//   7. dist/sdk-coding.js    — SDK subpath `@kodax-ai/kodax/coding`
+//   8. dist/sdk-media.js     — SDK subpath `@kodax-ai/kodax/media`
+//   9. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
+//  10. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
+//  11. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
+//  12. dist/sdk-session.js   — SDK subpath `@kodax-ai/kodax/session`
+//  13. dist/sdk-runtime.js   — SDK subpath `@kodax-ai/kodax/runtime`
+//  14. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
 //                                across the SDK entries (avoids repeated bundle bloat).
-//  13. dist/builtin/         — verbatim copy of
+//  15. dist/builtin/         — verbatim copy of
 //                                packages/agent/dist/capabilities/skills/builtin/
 //                                (FEATURE_194 v0.7.43; pre-v0.7.43 source was
 //                                packages/skills/dist/builtin/).
@@ -32,8 +34,9 @@
 // esbuild's automatic transitive import tracking. All third-party packages
 // (and node built-ins) stay external and are listed in root package.json#dependencies.
 //
-// CLI stays self-contained (no chunk hops) for fastest bin startup. The 9
-// SDK entries share code via `splitting: true` so re-exporting the same
+// The full CLI stays self-contained; the bootstrap only imports it after
+// optional bare-resume routing. The SDK entries share code via `splitting: true`
+// so re-exporting the same
 // internal package from multiple subpaths doesn't multiply tarball size.
 //
 // See docs/ADR.md ADR-022 + ADR-024 + docs/HLD.md §12 for architecture rationale.
@@ -55,6 +58,10 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
+const productionPreloadSource = readFileSync(
+  path.join(repoRoot, 'scripts', 'production-env.cjs'),
+  'utf8',
+);
 
 // CLI flags
 const argv = process.argv.slice(2);
@@ -289,6 +296,31 @@ const cliResult = await build({
 const cliBytes = statSync(path.join(distDir, 'kodax_cli.js')).size;
 log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
+// Bare `-r` must show the picker without evaluating the full CLI graph.
+log('Building dist/kodax_resume.js (bare-resume entry)…');
+const resumeResult = await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'src/kodax_resume.ts')],
+  outfile: path.join(distDir, 'kodax_resume.js'),
+});
+const resumeBytes = statSync(path.join(distDir, 'kodax_resume.js')).size;
+log(`  ✓ dist/kodax_resume.js (${(resumeBytes / 1024).toFixed(0)} kB)`);
+
+// Keep these imports external so the bootstrap remains genuinely lightweight.
+// The preload is embedded for standalone binaries, which do not use the CJS shim.
+log('Building dist/kodax_bootstrap.js (lightweight CLI entry)…');
+const bootstrapResult = await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'src/kodax_bootstrap.ts')],
+  outfile: path.join(distDir, 'kodax_bootstrap.js'),
+  external: [...external, './kodax_cli.js', './kodax_resume.js'],
+  banner: {
+    js: `${commonOptions.banner.js}\n${productionPreloadSource}`,
+  },
+});
+const bootstrapBytes = statSync(path.join(distDir, 'kodax_bootstrap.js')).size;
+log(`  ✓ dist/kodax_bootstrap.js (${(bootstrapBytes / 1024).toFixed(0)} kB)`);
+
 // ---- build SDK entries (multi-entry + code-splitting) -------------------
 //
 // ADR-024: SDK entries (root + subpaths) share large internal
@@ -444,6 +476,8 @@ log(`  ✓ helper depth contract: ${distRelativeDepth} levels (matches HELPER_SC
 
 if (writeMetafile) {
   const meta = {
+    bootstrap: bootstrapResult.metafile,
+    resume: resumeResult.metafile,
     cli: cliResult.metafile,
     sdk: sdkResult.metafile,
     worker: workerResult.metafile,
@@ -476,6 +510,8 @@ log(`  OK worker sidecar guard: dist/constructed-handler-worker.js present`);
 
 log('');
 log('Bundle complete:');
+log(`  Bootstrap: ${(bootstrapBytes / 1024).toFixed(0)} kB → dist/kodax_bootstrap.js`);
+log(`  Resume:    ${(resumeBytes / 1024).toFixed(0)} kB → dist/kodax_resume.js`);
 log(`  CLI:  ${(cliBytes / 1024).toFixed(0)} kB → dist/kodax_cli.js`);
 for (const name of sdkEntryNames) {
   const label = name === 'index' ? 'SDK (root) ' : `SDK ${name.replace('sdk-', '/')}`.padEnd(11);

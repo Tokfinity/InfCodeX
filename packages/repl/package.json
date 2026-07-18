@@ -14,6 +14,10 @@
     "./session": {
       "types": "./dist/session/public-api.d.ts",
       "import": "./dist/session/public-api.js"
+    },
+    "./cli-resume": {
+      "types": "./dist/cli-resume.d.ts",
+      "import": "./dist/cli-resume.js"
     }
   },
   "scripts": {
