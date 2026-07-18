@@ -45,6 +45,9 @@ type TerminalInputChunk = Buffer | string;
 interface TerminalInputSource {
   on?: (event: "data", listener: (chunk: TerminalInputChunk) => void) => void;
   off?: (event: "data", listener: (chunk: TerminalInputChunk) => void) => void;
+  hasRef?: () => boolean;
+  ref?: () => void;
+  unref?: () => void;
   isRaw?: boolean;
 }
 
@@ -162,6 +165,7 @@ export function createTerminalInputController({
 }): TerminalInputController {
   const subscriptions = new Set<TerminalInputSubscription>();
   let attachedInput: TerminalInputSource | undefined;
+  let inputRefOwned = false;
   let rawModeEnabledByController = false;
 
   const handleData = (chunk: TerminalInputChunk) => {
@@ -184,9 +188,14 @@ export function createTerminalInputController({
   };
 
   const detachInput = () => {
-    attachedInput?.off?.("data", handleData);
-    attachedInput = undefined;
+    const input = attachedInput;
+    input?.off?.("data", handleData);
     disableRawModeIfOwned();
+    if (inputRefOwned) {
+      input?.unref?.();
+      inputRefOwned = false;
+    }
+    attachedInput = undefined;
   };
 
   const syncInputOwnership = () => {
@@ -200,6 +209,10 @@ export function createTerminalInputController({
     }
 
     if (attachedInput !== stdin) {
+      if (stdin.hasRef?.() !== true && typeof stdin.ref === "function") {
+        stdin.ref();
+        inputRefOwned = true;
+      }
       stdin.on?.("data", handleData);
       attachedInput = stdin;
     }
@@ -479,10 +492,6 @@ export function useInput(
     const { input, key } = createCompatKeypress(
       parseKeypress(sequence) as CompatParsedKeypress,
     );
-
-    if (input === "c" && key.ctrl) {
-      return;
-    }
 
     handlerRef.current(input, key);
   }, []);

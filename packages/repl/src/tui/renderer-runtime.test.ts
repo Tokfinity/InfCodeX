@@ -9,7 +9,11 @@ import {
 } from "./renderer-runtime.js";
 
 class MockInput extends EventEmitter {
+  isTTY = true;
   isRaw = false;
+  hasRef = vi.fn(() => false);
+  ref = vi.fn();
+  unref = vi.fn();
 
   setRawMode(enabled: boolean) {
     this.isRaw = enabled;
@@ -24,6 +28,43 @@ class MockOutput extends EventEmitter {
 }
 
 describe("createTerminalInputController", () => {
+  it("keeps terminal input referenced while subscribers are active", () => {
+    const stdin = new MockInput();
+    const controller = createTerminalInputController({
+      stdin,
+      setRawMode: vi.fn(),
+      isRawModeSupported: true,
+    });
+
+    const unsubscribeA = controller.subscribe(() => undefined);
+    const unsubscribeB = controller.subscribe(() => undefined);
+
+    expect(stdin.ref).toHaveBeenCalledTimes(1);
+    expect(stdin.unref).not.toHaveBeenCalled();
+
+    unsubscribeA();
+    expect(stdin.unref).not.toHaveBeenCalled();
+
+    unsubscribeB();
+    expect(stdin.unref).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not release an input reference owned by the caller", () => {
+    const stdin = new MockInput();
+    stdin.hasRef.mockReturnValue(true);
+    const controller = createTerminalInputController({
+      stdin,
+      setRawMode: vi.fn(),
+      isRawModeSupported: true,
+    });
+
+    const unsubscribe = controller.subscribe(() => undefined);
+    unsubscribe();
+
+    expect(stdin.ref).not.toHaveBeenCalled();
+    expect(stdin.unref).not.toHaveBeenCalled();
+  });
+
   it("keeps raw mode enabled until the last raw subscriber unsubscribes", () => {
     const stdin = new MockInput();
     const setRawMode = vi.fn((enabled: boolean) => {
@@ -74,6 +115,27 @@ describe("createTerminalInputController", () => {
 });
 
 describe("renderer-runtime useInput", () => {
+  it("delivers Ctrl+C to an active input handler", () => {
+    const stdout = new MockOutput() as unknown as NodeJS.WriteStream;
+    const stderr = new MockOutput() as unknown as NodeJS.WriteStream;
+    const stdin = new MockInput() as unknown as NodeJS.ReadStream;
+    const handler = vi.fn();
+
+    function Harness() {
+      useInput(handler);
+      return null;
+    }
+
+    const instance = render(React.createElement(Harness), { stdout, stderr, stdin });
+
+    (stdin as unknown as MockInput).emit("data", Buffer.from("\x03"));
+
+    expect(handler).toHaveBeenCalledWith("c", expect.objectContaining({ ctrl: true }));
+
+    instance.unmount();
+    instance.cleanup();
+  });
+
   it("parses printable and special keys through the local terminal pipeline", () => {
     const stdout = new MockOutput() as unknown as NodeJS.WriteStream;
     const stderr = new MockOutput() as unknown as NodeJS.WriteStream;

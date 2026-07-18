@@ -144,18 +144,39 @@ export function SessionPicker({
 export async function runSessionPicker(
   sessions: readonly SessionPickerItem[],
 ): Promise<SessionPickerItem | undefined> {
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    throw new Error(
+      'Searchable session resume requires an interactive terminal. '
+      + 'Pass an exact session ID or title to -r/--resume instead.',
+    );
+  }
+
   let selected: SessionPickerItem | undefined;
+  let cancelled = false;
   const pageSize = Math.max(4, Math.min(12, (process.stdout.rows ?? 24) - 8));
   const instance = render(
     <SessionPicker
       sessions={sessions}
       pageSize={pageSize}
       onSelect={(session) => { selected = session; }}
-      onCancel={() => undefined}
+      onCancel={() => { cancelled = true; }}
     />,
-    { exitOnCtrlC: false, patchConsole: false },
+    {
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
   );
-  await instance.waitUntilExit();
-  instance.cleanup();
+  try {
+    await instance.waitUntilExit();
+  } finally {
+    instance.unmount();
+    instance.cleanup();
+  }
+  if (!selected && !cancelled) {
+    throw new Error('Session picker exited unexpectedly before selection or cancellation.');
+  }
   return selected;
 }

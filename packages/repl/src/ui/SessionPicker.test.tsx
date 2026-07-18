@@ -7,6 +7,7 @@ import {
   SessionPicker,
   buildSessionPickerPage,
   filterSessionPickerItems,
+  runSessionPicker,
   type SessionPickerItem,
 } from './SessionPicker.js';
 
@@ -114,6 +115,55 @@ describe('SessionPicker', () => {
     } finally {
       instance.unmount();
       instance.cleanup();
+    }
+  });
+
+  it('cancels and exits on Ctrl+C through the owned TUI input lifecycle', async () => {
+    const stdin = new MockInput();
+    const stdout = new MockOutput();
+    const stderr = new MockOutput();
+    const onCancel = vi.fn();
+    const instance = renderOwnedTui(
+      <SessionPicker
+        sessions={sessions}
+        onSelect={vi.fn()}
+        onCancel={onCancel}
+        pageSize={2}
+      />,
+      {
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+        exitOnCtrlC: false,
+      },
+    );
+
+    try {
+      stdin.emit('data', Buffer.from('\x03'));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      await instance.waitUntilExit();
+      expect(stdin.isRaw).toBe(false);
+    } finally {
+      instance.unmount();
+      instance.cleanup();
+    }
+  });
+
+  it('rejects the searchable picker when stdin/stdout are not interactive', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+
+    try {
+      await expect(runSessionPicker(sessions)).rejects.toThrow(
+        'requires an interactive terminal',
+      );
+    } finally {
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else delete (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY;
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY;
     }
   });
 });
