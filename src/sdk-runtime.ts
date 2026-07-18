@@ -92,6 +92,8 @@ import {
   getAgentConfigHome,
   getDefaultWorkflowRunManager,
   initializeSkillRegistry,
+  actorQueueId,
+  registerActiveRootQueueRoute,
   resolveLearningProposalStore,
 } from '@kodax-ai/agent';
 import type {
@@ -901,6 +903,8 @@ export interface RuntimeSessionSettings {
   readonly executionCwd?: string;
   readonly agentMode?: KodaXOptions['agentMode'];
   readonly autoModeEngine?: 'llm' | 'rules';
+  readonly autoModeClassifierModel?: string;
+  readonly autoModeTimeoutMs?: number;
 }
 
 export interface RuntimeSessionSettingsPatch {
@@ -913,6 +917,8 @@ export interface RuntimeSessionSettingsPatch {
   readonly executionCwd?: string | null;
   readonly agentMode?: KodaXOptions['agentMode'] | null;
   readonly autoModeEngine?: 'llm' | 'rules' | null;
+  readonly autoModeClassifierModel?: string | null;
+  readonly autoModeTimeoutMs?: number | null;
 }
 
 export interface RuntimeAppendNoticeInput {
@@ -1869,6 +1875,8 @@ interface RuntimeRunRecord {
   permissionBroker?: RuntimePermissionBroker;
   permissionMode?: string;
   autoModeEngine?: RuntimeSessionSettings['autoModeEngine'];
+  autoModeClassifierModel?: string;
+  autoModeTimeoutMs?: number;
   reasoning?: KodaXReasoningMode;
   error?: string;
   terminal?: RuntimeTerminalFact;
@@ -3020,6 +3028,7 @@ function createRuntimeRunService(deps: {
   readonly sessionAdmission: RuntimeSessionAdmission;
 }): RuntimeRunServiceInternal {
   const activeRunBySession = new Map<string, string>();
+  const activeQueueRouteReleaseByRun = new Map<string, () => void>();
   const autoModeGuardrails = new Map<string, RuntimeAutoModeGuardrailCacheEntry>();
   const queueBySession = new Map<string, string[]>();
   const latestSessionOrder = new Map<string, number>();
@@ -3045,6 +3054,22 @@ function createRuntimeRunService(deps: {
     }
   };
 
+  const releaseActiveQueueRoute = (record: RuntimeRunRecord): void => {
+    activeQueueRouteReleaseByRun.get(record.runId)?.();
+    activeQueueRouteReleaseByRun.delete(record.runId);
+  };
+
+  const registerActiveQueueRoute = (record: RuntimeRunRecord): void => {
+    if (
+      record.actorSession === undefined
+      || activeQueueRouteReleaseByRun.has(record.runId)
+    ) return;
+    activeQueueRouteReleaseByRun.set(
+      record.runId,
+      registerActiveRootQueueRoute(actorQueueId(record.sessionId, '/root')),
+    );
+  };
+
   const resolveRunStart = (record: RuntimeRunRecord, result: RuntimeRunResult): void => {
     record.start?.resolve(result);
     record.start = undefined;
@@ -3056,6 +3081,7 @@ function createRuntimeRunService(deps: {
     deps.userInputs.rejectForRun(record.runId, 'runtime run ended');
     record.start?.options.guardrails?.find(isRuntimeAutoModeGuardrail)?.clearAllowedCalls();
     resolveRunStart(record, result);
+    releaseActiveQueueRoute(record);
     releaseActiveRun(record);
     pruneTerminalRuns(deps.runs);
     drainNext(record.sessionId);
@@ -3087,6 +3113,7 @@ function createRuntimeRunService(deps: {
       phase: record.phase,
     };
     resolveRunStart(record, result);
+    releaseActiveQueueRoute(record);
     releaseActiveRun(record);
     if (drain && !deps.isClosed()) {
       drainNext(record.sessionId);
@@ -3141,6 +3168,12 @@ function createRuntimeRunService(deps: {
       ...(runOptions.agentMode !== undefined ? { agentMode: runOptions.agentMode } : {}),
       ...(record.permissionMode !== undefined ? { permissionMode: record.permissionMode } : {}),
       ...(record.autoModeEngine !== undefined ? { autoModeEngine: record.autoModeEngine } : {}),
+      ...(record.autoModeClassifierModel !== undefined
+        ? { autoModeClassifierModel: record.autoModeClassifierModel }
+        : {}),
+      ...(record.autoModeTimeoutMs !== undefined
+        ? { autoModeTimeoutMs: record.autoModeTimeoutMs }
+        : {}),
       ...(runOptions.context?.executionCwd !== undefined ? { executionCwd: runOptions.context.executionCwd } : {}),
     }, {
       sessionId: record.sessionId,
@@ -3165,6 +3198,7 @@ function createRuntimeRunService(deps: {
       const managedResult = record.providerCredential !== undefined
         ? runWithProviderCredential(record.provider, record.providerCredential, managedOperation)
         : managedOperation();
+      registerActiveQueueRoute(record);
       void managedResult
         .then((value): RuntimeRunResult => {
           const phase = record.terminalEmitted
@@ -3192,6 +3226,7 @@ function createRuntimeRunService(deps: {
       ? runWithProviderCredential(record.provider, record.providerCredential, codingOperation)
       : codingOperation();
     record.running = running;
+    registerActiveQueueRoute(record);
     void running.result
       .then((value): RuntimeRunResult => {
         const phase = record.terminalEmitted
@@ -3365,6 +3400,12 @@ function createRuntimeRunService(deps: {
           ? { permissionBroker: input.permissionBroker }
           : {}),
         ...(settings.permissionMode !== undefined ? { permissionMode: settings.permissionMode } : {}),
+        ...(settings.autoModeClassifierModel !== undefined
+          ? { autoModeClassifierModel: settings.autoModeClassifierModel }
+          : {}),
+        ...(settings.autoModeTimeoutMs !== undefined
+          ? { autoModeTimeoutMs: settings.autoModeTimeoutMs }
+          : {}),
         ...(autoModeGuardrail !== undefined
           ? { autoModeEngine: autoModeGuardrail.getEngine() }
           : settings.autoModeEngine !== undefined ? { autoModeEngine: settings.autoModeEngine } : {}),
@@ -6378,11 +6419,13 @@ function applySessionSettingsPatch(
   applyNullableStringPatch(next, 'model', patch.model);
   applyNullableStringPatch(next, 'permissionMode', patch.permissionMode);
   applyNullableStringPatch(next, 'executionCwd', patch.executionCwd, true);
+  applyNullableStringPatch(next, 'autoModeClassifierModel', patch.autoModeClassifierModel);
   applyNullablePatch(next, 'effort', patch.effort);
   applyNullablePatch(next, 'thinking', patch.thinking);
   applyNullablePatch(next, 'reasoningMode', patch.reasoningMode);
   applyNullablePatch(next, 'agentMode', patch.agentMode);
   applyNullablePatch(next, 'autoModeEngine', patch.autoModeEngine);
+  applyNullablePositiveIntegerPatch(next, 'autoModeTimeoutMs', patch.autoModeTimeoutMs);
   return next;
 }
 
@@ -6390,7 +6433,24 @@ type RuntimeStringSettingKey =
   | 'provider'
   | 'model'
   | 'permissionMode'
-  | 'executionCwd';
+  | 'executionCwd'
+  | 'autoModeClassifierModel';
+
+function applyNullablePositiveIntegerPatch(
+  target: RuntimeSessionSettings,
+  key: 'autoModeTimeoutMs',
+  value: number | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, key);
+    return;
+  }
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${key} must be a positive safe integer`);
+  }
+  setMutableSetting(target, key, value);
+}
 
 function applyNullableStringPatch(
   target: RuntimeSessionSettings,
@@ -6444,6 +6504,7 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
   setStringIfPresent(settings, 'model', value.model);
   setStringIfPresent(settings, 'permissionMode', value.permissionMode);
   setStringIfPresent(settings, 'executionCwd', value.executionCwd);
+  setStringIfPresent(settings, 'autoModeClassifierModel', value.autoModeClassifierModel);
   setStringIfPresent(settings, 'effort', value.effort);
   if (typeof value.thinking === 'boolean') {
     setMutableSetting(settings, 'thinking', value.thinking);
@@ -6452,6 +6513,9 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
   setStringIfPresent(settings, 'agentMode', value.agentMode);
   if (value.autoModeEngine === 'llm' || value.autoModeEngine === 'rules') {
     setMutableSetting(settings, 'autoModeEngine', value.autoModeEngine);
+  }
+  if (Number.isSafeInteger(value.autoModeTimeoutMs) && Number(value.autoModeTimeoutMs) > 0) {
+    setMutableSetting(settings, 'autoModeTimeoutMs', Number(value.autoModeTimeoutMs));
   }
   return settings;
 }
@@ -6865,6 +6929,12 @@ function serializeSessionSettings(settings: RuntimeSessionSettings): RuntimeSess
   if (settings.executionCwd !== undefined) setMutableSetting(result, 'executionCwd', settings.executionCwd);
   if (settings.agentMode !== undefined) setMutableSetting(result, 'agentMode', settings.agentMode);
   if (settings.autoModeEngine !== undefined) setMutableSetting(result, 'autoModeEngine', settings.autoModeEngine);
+  if (settings.autoModeClassifierModel !== undefined) {
+    setMutableSetting(result, 'autoModeClassifierModel', settings.autoModeClassifierModel);
+  }
+  if (settings.autoModeTimeoutMs !== undefined) {
+    setMutableSetting(result, 'autoModeTimeoutMs', settings.autoModeTimeoutMs);
+  }
   return result;
 }
 
@@ -7169,6 +7239,8 @@ interface RuntimeAutoModeGuardrailCacheEntry {
   readonly projectRoot: string;
   readonly executionCwd: string;
   engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>;
+  readonly classifierModel?: string;
+  readonly timeoutMs?: number;
   readonly guardrail: RuntimeOwnedAutoModeGuardrail;
 }
 
@@ -7356,6 +7428,8 @@ async function createRuntimeAutoModeGuardrail(input: {
     && cached.projectRoot === projectRoot
     && cached.executionCwd === executionCwd
     && cached.engine === engine
+    && cached.classifierModel === input.settings.autoModeClassifierModel
+    && cached.timeoutMs === input.settings.autoModeTimeoutMs
   ) {
     return cached.guardrail;
   }
@@ -7393,7 +7467,15 @@ async function createRuntimeAutoModeGuardrail(input: {
     getCurrentProviderName: () => input.getRecord()?.provider ?? input.provider,
     getCurrentModel: () => input.getRecord()?.model ?? input.model,
     getCurrentPermissionMode: () => 'auto',
-    autoModeSettings: { engine },
+    autoModeSettings: {
+      engine,
+      ...(input.settings.autoModeClassifierModel !== undefined
+        ? { classifierModel: input.settings.autoModeClassifierModel }
+        : {}),
+      ...(input.settings.autoModeTimeoutMs !== undefined
+        ? { timeoutMs: input.settings.autoModeTimeoutMs }
+        : {}),
+    },
     extraCollectors: [replApi.replBashPathSignalCollector],
     onEngineChange: (nextEngine) => {
       if (cacheEntry) cacheEntry.engine = nextEngine;
@@ -7405,6 +7487,12 @@ async function createRuntimeAutoModeGuardrail(input: {
     projectRoot,
     executionCwd,
     engine: guardrail.getEngine(),
+    ...(input.settings.autoModeClassifierModel !== undefined
+      ? { classifierModel: input.settings.autoModeClassifierModel }
+      : {}),
+    ...(input.settings.autoModeTimeoutMs !== undefined
+      ? { timeoutMs: input.settings.autoModeTimeoutMs }
+      : {}),
     guardrail,
   };
   input.cache.set(input.sessionId, cacheEntry);

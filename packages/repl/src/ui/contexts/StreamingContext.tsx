@@ -31,30 +31,35 @@ import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
  * consumed prompt.
  *
  * Post-FEATURE_159: MessageQueue is canonical. React `pendingInputs`
- * mirrors a filtered slice (main-thread + user priority + mode='prompt')
+ * mirrors a filtered slice (current session root + user priority + mode='prompt')
  * via a `queue.subscribe` callback. The manager methods write to the
  * queue directly; the queue's notify triggers the subscribe callback,
  * which rebuilds the React slice and fires `notify()`. Any consumer
  * (wake-drain, mid-turn yield, queued-prompt-sequence, test harness)
  * that mutates the queue automatically updates the UI.
  *
- * Predicate `isMainThreadPrompt` is the canonical filter for the REPL's
- * slice — reused by manager methods that need to know "what's mine".
+ * The same session-scoped predicate is reused by manager methods that need
+ * to know which prompts belong to the active REPL session.
  */
-function isMainThreadPrompt(message: QueuedMessage): boolean {
+function isPendingPromptForAgent(
+  message: QueuedMessage,
+  agentId: string | undefined,
+): boolean {
   return (
-    message.agentId === undefined &&
+    message.agentId === agentId &&
     message.priority === "user" &&
     message.mode === "prompt"
   );
 }
 
-function getMainThreadPrompts(): readonly QueuedMessage[] {
-  return getMessageQueue().getSnapshot().filter(isMainThreadPrompt);
+function getPendingPrompts(agentId: string | undefined): readonly QueuedMessage[] {
+  return getMessageQueue()
+    .getSnapshot()
+    .filter((message) => isPendingPromptForAgent(message, agentId));
 }
 
-function getMainThreadPromptContents(): string[] {
-  return getMainThreadPrompts().map((m) => m.content);
+function getPendingPromptContents(agentId: string | undefined): string[] {
+  return getPendingPrompts(agentId).map((message) => message.content);
 }
 
 // === Types ===
@@ -367,13 +372,22 @@ export interface StreamingManager {
  * - Buffer streaming text and thinking content to 80ms cycle - 流式文本和 thinking 内容缓冲到 80ms 周期
  * - Sync with Spinner animation to avoid race conditions - 与 Spinner 动画同步，避免竞态条件
  */
-export function createStreamingManager(): StreamingManager {
+export interface StreamingManagerOptions {
+  /** Resolve the queue routing key at operation time so /new and /load work. */
+  readonly getPendingInputAgentId?: () => string | undefined;
+}
+
+export function createStreamingManager(
+  options: StreamingManagerOptions = {},
+): StreamingManager {
+  const getPendingInputAgentId = (): string | undefined =>
+    options.getPendingInputAgentId?.();
   // FEATURE_159 (v0.7.40) — initial state seeds pendingInputs from queue
   // snapshot in case the manager is recreated mid-session (queue persists
   // across React remount; we don't want to lose pending prompts).
   let state: StreamingContextValue = {
     ...DEFAULT_STREAMING_STATE,
-    pendingInputs: getMainThreadPromptContents(),
+    pendingInputs: getPendingPromptContents(getPendingInputAgentId()),
   };
   const listeners = new Set<StreamingStateListener>();
 
@@ -411,7 +425,7 @@ export function createStreamingManager(): StreamingManager {
   // out-of-slice events (subagent task-notifications, sub-agent prompts)
   // would force a no-op React rerender on every event.
   const syncReactStateFromQueue = (): void => {
-    const next = getMainThreadPromptContents();
+    const next = getPendingPromptContents(getPendingInputAgentId());
     if (next.length === state.pendingInputs.length) {
       let equal = true;
       for (let i = 0; i < next.length; i++) {
@@ -431,7 +445,7 @@ export function createStreamingManager(): StreamingManager {
   });
 
   /**
-   * Drain the REPL's slice of the queue (main-thread user prompts) and
+   * Drain the REPL's session-root user-prompt slice and
    * return their contents. Used by `clearPendingInputs` / `consumePendingInputs`
    * / `abort(preservePendingInputs:false)` / `reset`. Out-of-slice
    * messages (subagent task-notifications, sub-agent prompts) are
@@ -439,6 +453,7 @@ export function createStreamingManager(): StreamingManager {
    */
   const drainOurSlice = (): string[] => {
     const drained = getMessageQueue().dequeue({
+      agentId: getPendingInputAgentId(),
       maxPriority: "user",
       mode: "prompt",
     });
@@ -605,7 +620,7 @@ export function createStreamingManager(): StreamingManager {
       drainOurSlice();
       state = {
         ...DEFAULT_STREAMING_STATE,
-        pendingInputs: getMainThreadPromptContents(),
+        pendingInputs: getPendingPromptContents(getPendingInputAgentId()),
       };
       bufferSealed = false;
       notify();
@@ -831,10 +846,11 @@ export function createStreamingManager(): StreamingManager {
     addPendingInput: (input: string) => {
       const trimmed = input.trim();
       if (!trimmed) return;
-      if (getMainThreadPrompts().length >= MAX_PENDING_INPUTS) return;
+      if (getPendingPrompts(getPendingInputAgentId()).length >= MAX_PENDING_INPUTS) return;
 
       flushPendingUpdates();
       getMessageQueue().enqueue({
+        agentId: getPendingInputAgentId(),
         priority: "user",
         mode: "prompt",
         content: trimmed,
@@ -842,12 +858,13 @@ export function createStreamingManager(): StreamingManager {
     },
 
     removeLastPendingInput: () => {
-      const prompts = getMainThreadPrompts();
+      const prompts = getPendingPrompts(getPendingInputAgentId());
       const last = prompts[prompts.length - 1];
       if (!last) return;
 
       flushPendingUpdates();
       getMessageQueue().dequeue({
+        agentId: getPendingInputAgentId(),
         maxPriority: "user",
         mode: "prompt",
         id: last.id,
@@ -857,6 +874,7 @@ export function createStreamingManager(): StreamingManager {
     shiftPendingInput: () => {
       flushPendingUpdates();
       const drained = getMessageQueue().dequeue({
+        agentId: getPendingInputAgentId(),
         maxPriority: "user",
         mode: "prompt",
         limit: 1,
@@ -890,6 +908,7 @@ const StreamingActionsContext = createContext<StreamingActions | null>(null);
 export interface StreamingProviderProps {
   children: ReactNode;
   onStateChange?: (state: StreamingContextValue) => void;
+  getPendingInputAgentId?: () => string | undefined;
 }
 
 // === Provider ===
@@ -900,146 +919,154 @@ export interface StreamingProviderProps {
 export function StreamingProvider({
   children,
   onStateChange,
+  getPendingInputAgentId,
 }: StreamingProviderProps): React.ReactElement {
-  const managerRef = useRef<StreamingManager>(createStreamingManager());
+  const pendingInputAgentIdResolver = useRef(getPendingInputAgentId);
+  pendingInputAgentIdResolver.current = getPendingInputAgentId;
+  const managerRef = useRef<StreamingManager | undefined>(undefined);
+  if (!managerRef.current) {
+    managerRef.current = createStreamingManager({
+      getPendingInputAgentId: () => pendingInputAgentIdResolver.current?.(),
+    });
+  }
+  const manager = managerRef.current;
   const [, forceUpdate] = useReducer((x) => x + 1, 0);
 
   // Subscribe to state changes - 订阅状态变更
   useEffect(() => {
-    const unsubscribe = managerRef.current.subscribe((state) => {
+    const unsubscribe = manager.subscribe((state) => {
       forceUpdate();
       onStateChange?.(state);
     });
 
     return unsubscribe;
-  }, [onStateChange]);
+  }, [manager, onStateChange]);
 
   // FEATURE_159 (v0.7.40) — release the manager's queue subscription on
   // provider unmount so the process-global MessageQueue doesn't retain
   // a stale listener after hot reload / test teardown.
   useEffect(() => {
-    const manager = managerRef.current;
     return () => {
       manager.dispose();
     };
-  }, []);
+  }, [manager]);
 
   // === Actions ===
 
   const startStreaming = useCallback(() => {
-    managerRef.current.startStreaming();
+    manager.startStreaming();
   }, []);
 
   const stopStreaming = useCallback(() => {
-    managerRef.current.stopStreaming();
+    manager.stopStreaming();
   }, []);
 
   const appendResponse = useCallback((text: string) => {
-    managerRef.current.appendResponse(text);
+    manager.appendResponse(text);
   }, []);
 
   const clearResponse = useCallback(() => {
-    managerRef.current.clearResponse();
+    manager.clearResponse();
   }, []);
 
   const setError = useCallback((error: string | undefined) => {
-    managerRef.current.setError(error);
+    manager.setError(error);
   }, []);
 
   const abort = useCallback((options?: AbortOptions) => {
-    managerRef.current.abort(options);
+    manager.abort(options);
   }, []);
 
   const reset = useCallback(() => {
-    managerRef.current.reset();
+    manager.reset();
   }, []);
 
   const startThinking = useCallback(() => {
-    managerRef.current.startThinking();
+    manager.startThinking();
   }, []);
 
   const appendThinkingChars = useCallback((count: number) => {
-    managerRef.current.appendThinkingChars(count);
+    manager.appendThinkingChars(count);
   }, []);
 
   const appendThinkingContent = useCallback((text: string) => {
-    managerRef.current.appendThinkingContent(text);
+    manager.appendThinkingContent(text);
   }, []);
 
   const stopThinking = useCallback(() => {
-    managerRef.current.stopThinking();
+    manager.stopThinking();
   }, []);
 
   const clearThinkingContent = useCallback(() => {
-    managerRef.current.clearThinkingContent();
+    manager.clearThinkingContent();
   }, []);
 
   const setCurrentTool = useCallback((tool: string | undefined) => {
-    managerRef.current.setCurrentTool(tool);
+    manager.setCurrentTool(tool);
   }, []);
 
   const appendToolInputChars = useCallback((count: number) => {
-    managerRef.current.appendToolInputChars(count);
+    manager.appendToolInputChars(count);
   }, []);
 
   const appendToolInputContent = useCallback((text: string) => {
-    managerRef.current.appendToolInputContent(text);
+    manager.appendToolInputContent(text);
   }, []);
 
   const clearToolInputContent = useCallback(() => {
-    managerRef.current.clearToolInputContent();
+    manager.clearToolInputContent();
   }, []);
 
   const getSignal = useCallback(() => {
-    return managerRef.current.getSignal();
+    return manager.getSignal();
   }, []);
 
   const getFullResponse = useCallback(() => {
-    return managerRef.current.getFullResponse();
+    return manager.getFullResponse();
   }, []);
 
   const getThinkingContent = useCallback(() => {
-    return managerRef.current.getThinkingContent();
+    return manager.getThinkingContent();
   }, []);
 
   const startNewIteration = useCallback((iteration: number) => {
-    managerRef.current.startNewIteration(iteration);
+    manager.startNewIteration(iteration);
   }, []);
 
   const clearIterationHistory = useCallback(() => {
-    managerRef.current.clearIterationHistory();
+    manager.clearIterationHistory();
   }, []);
 
   const setMaxIter = useCallback((maxIter: number) => {
-    managerRef.current.setMaxIter(maxIter);
+    manager.setMaxIter(maxIter);
   }, []);
 
   const startCompacting = useCallback(() => {
-    managerRef.current.startCompacting();
+    manager.startCompacting();
   }, []);
 
   const stopCompacting = useCallback(() => {
-    managerRef.current.stopCompacting();
+    manager.stopCompacting();
   }, []);
 
   const addPendingInput = useCallback((input: string) => {
-    managerRef.current.addPendingInput(input);
+    manager.addPendingInput(input);
   }, []);
 
   const removeLastPendingInput = useCallback(() => {
-    managerRef.current.removeLastPendingInput();
+    manager.removeLastPendingInput();
   }, []);
 
   const shiftPendingInput = useCallback(() => {
-    return managerRef.current.shiftPendingInput();
+    return manager.shiftPendingInput();
   }, []);
 
   const clearPendingInputs = useCallback(() => {
-    managerRef.current.clearPendingInputs();
+    manager.clearPendingInputs();
   }, []);
 
   const consumePendingInputs = useCallback(() => {
-    return managerRef.current.consumePendingInputs();
+    return manager.consumePendingInputs();
   }, []);
 
   const actions: StreamingActions = {
@@ -1076,7 +1103,7 @@ export function StreamingProvider({
 
   return React.createElement(
     StreamingContextValueContext.Provider,
-    { value: managerRef.current.getState() },
+    { value: manager.getState() },
     React.createElement(
       StreamingActionsContext.Provider,
       { value: actions },

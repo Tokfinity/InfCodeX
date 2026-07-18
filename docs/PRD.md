@@ -1,8 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-17
+> Last updated: 2026-07-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+> Current release baseline: `v0.7.72` release candidate
+> (`@kodax-ai/kodax@0.7.72-hotfix.0` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -79,6 +80,11 @@ collaboration tools: `spawn_agent`, `send_message`, `followup_task`,
 `wait_agent`, `interrupt_agent`, `list_agents`, and `agent_output`. The main
 Worker remains responsible for final user-facing synthesis.
 
+Queued user input belongs to the session-root Actor queue rather than a
+process-global "main thread" bucket. A waiting Actor can therefore yield at a
+safe boundary for its own follow-up without consuming or displaying prompts
+from another session.
+
 ## 6. Required Capabilities
 
 ### Runtime Host API
@@ -98,6 +104,15 @@ starters must converge on the verified owner rather than start competing
 servers. Process-local callbacks and service objects must fail closed at
 Worker/daemon DTO boundaries. `close()` must terminate private inline/Worker
 ownership but only detach a daemon client.
+
+For a session with `permissionMode: 'auto'`, the Runtime is also the owner of
+the Auto Mode tool guardrail. It creates and reuses the guardrail across turns,
+keys reuse to the effective provider/model, project boundary, execution
+directory, classifier model, and timeout, and persists an automatic fallback
+from LLM to rules in the session settings. The execution sequence is always
+guardrail classification, then the host permission bridge only for an explicit
+`escalate` verdict, then tool execution. A static approval hook must not bypass
+that decision owner or manufacture requests for an `allow` verdict.
 
 Packaged Electron hosts may auto-start the shared daemon only through a bounded
 Node bootstrap that cannot relaunch the GUI or leak Electron Node mode into
@@ -136,6 +151,12 @@ navigation, MCP calls, git worktree helpers, child task control, goals, todos,
 construction, and self-modification tools. Tool permissions and side effects
 must be visible to the runtime.
 
+`gitRoot` is a repository safety boundary, while relative file operands resolve
+from the effective `executionCwd`. Permission summaries must remain bounded,
+redacted, valid JSON and carry that effective directory; they are not raw tool
+input logs. A plan-exit tool is exposed only when the active REPL or host has
+provided an approval callback.
+
 ### Media Inputs
 
 SDK and REPL hosts must be able to construct image/file/video input artifact
@@ -152,6 +173,12 @@ context from append-order transcript history. Resumed interactive sessions
 should preserve durable terminal tool-card replay where sanitized `uiHistory`
 is available, while canonical `messages` / `lineage` remain the source of
 truth.
+
+Bare `kodax -r` must show the searchable picker without loading the full CLI
+until a selection is made. Esc restores terminal ownership immediately; a
+selection transfers input ownership to the resumed REPL. Replayed history keeps
+the timestamp of each persisted event rather than assigning the current render
+time to all entries.
 
 ### Skills, MCP, And A2A
 

@@ -283,7 +283,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
   it('timeoutMs override forces a fast classifier timeout when sideQuery hangs', async () => {
     // Provider that hangs but observes the abort signal. sideQuery's
     // internal timeout (classify forwards opts.timeoutMs to sideQuery)
-    // must fire — the guardrail's default is 8000ms, so without the
+    // must fire — the guardrail's default is 20_000ms, so without the
     // override this would hang. Setting timeoutMs: 25 forces fast escalate.
     class HangingProvider extends KodaXBaseProvider {
       readonly name = 'hanging';
@@ -327,7 +327,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
     if (verdict.action === 'escalate') {
       expect(verdict.reason).toMatch(/timeout/i);
     }
-    // The default 8000ms must NOT have been used — assert we returned in
+    // The default 20_000ms must NOT have been used — assert we returned in
     // well under 1s. The 500ms cap leaves slack for slow CI without
     // accidentally validating the default.
     expect(elapsed).toBeLessThan(500);

@@ -1,11 +1,13 @@
 import {
+  _resetMessageQueueForTests,
   createAgentActorController,
+  getMessageQueue,
   type AgentActorController,
   type AgentExecutionInput,
   type AgentExecutionResult,
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { executeTool, getToolDefinition } from './registry.js';
@@ -23,16 +25,31 @@ class DeferredExecutor implements AgentTurnExecutor {
   }
 }
 
-async function context(executor = new DeferredExecutor()): Promise<{
+async function context(
+  executor = new DeferredExecutor(),
+  sessionId?: string,
+): Promise<{
   readonly ctx: KodaXToolExecutionContext;
   readonly executor: DeferredExecutor;
   readonly controller: AgentActorController;
 }> {
   const controller = await createAgentActorController({ executor });
-  return { ctx: { backups: new Map(), actorControl: controller.bind('/root') }, executor, controller };
+  return {
+    ctx: {
+      backups: new Map(),
+      actorControl: controller.bind('/root'),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    },
+    executor,
+    controller,
+  };
 }
 
 describe('F270 canonical collaboration tools', () => {
+  afterEach(() => {
+    _resetMessageQueueForTests();
+  });
+
   it('offers only the canonical model-visible names', () => {
     for (const name of [
       'spawn_agent', 'send_message', 'followup_task', 'wait_agent',
@@ -348,6 +365,46 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({ ok: true, status: 'interrupted' });
+  });
+
+  it('returns immediately for pre-existing scoped user input without consuming it', async () => {
+    const { ctx } = await context(new DeferredExecutor(), 'session-1');
+    const queue = getMessageQueue();
+    queue.enqueue({
+      agentId: 'actor:session-1:/root',
+      priority: 'user',
+      mode: 'prompt',
+      content: 'answer the user first',
+    });
+
+    const result = JSON.parse(await executeTool('wait_agent', {
+      timeout_ms: 1_000,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ ok: true, status: 'user_input_pending' });
+    expect(queue.peek({
+      agentId: 'actor:session-1:/root',
+      maxPriority: 'user',
+      mode: 'prompt',
+    }).map((message) => message.content)).toEqual(['answer the user first']);
+  });
+
+  it('wakes when scoped user input arrives after the Actor waiter is registered', async () => {
+    const { ctx } = await context(new DeferredExecutor(), 'session-1');
+    const waiting = executeTool('wait_agent', { timeout_ms: 1_000 }, ctx);
+    await Promise.resolve();
+
+    getMessageQueue().enqueue({
+      agentId: 'actor:session-1:/root',
+      priority: 'user',
+      mode: 'prompt',
+      content: 'queued while waiting',
+    });
+
+    await expect(waiting.then((value) => JSON.parse(value))).resolves.toMatchObject({
+      ok: true,
+      status: 'user_input_pending',
+    });
   });
 
   it('returns a bounded event batch without skipping the remaining committed events', async () => {

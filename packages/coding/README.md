@@ -16,6 +16,11 @@ KodaX Coding Agent 的核心实现，包含 coding preset、tool registry、role
 - Repo intelligence / LSP：`repo_overview`, `changed_scope`, `module_context`, `lsp_definition`, `symbol_context`, `impact_estimate`, ...
 - Construction and self-extension: tool/agent scaffold, validate, stage, test, activate, self-modify helpers
 
+Auto Mode is enforced by the active Runtime guardrail before the generic
+permission bridge. A host only receives a permission request for an explicit
+guardrail escalation; Runtime sessions retain the selected/fallback LLM or
+rules engine across turns.
+
 ## 安装 / 导入
 
 ```bash

@@ -46,7 +46,7 @@ describe('getModelInputCapabilities', () => {
     },
   );
 
-  it('supports only documented non-official image models, not nearby defaults', () => {
+  it('supports documented non-official image models and their current defaults', () => {
     const supported = getModelInputCapabilities({
       provider: 'minimax-coding',
       model: 'minimax-m3',
@@ -60,7 +60,7 @@ describe('getModelInputCapabilities', () => {
     expect(supported.video.reason).toContain('not wired');
     expect(supported.file.maxCount).toBe(0);
 
-    expect(getModelInputCapabilities({ provider: 'minimax-coding' }).image.status).toBe('unsupported');
+    expect(getModelInputCapabilities({ provider: 'minimax-coding' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'mimo-coding' }).image.status).toBe('unsupported');
     expect(getModelInputCapabilities({ provider: 'mimo-coding', model: 'mimo-v2.5' }).image.status).toBe('supported');
   });

@@ -27,6 +27,9 @@ import type {
   KodaXOptions,
   KodaXToolExecutionContext,
 } from '../types.js';
+import { actorQueueId } from './actor-queue.js';
+
+export { actorQueueId } from './actor-queue.js';
 
 const DEFAULT_MAX_CHILD_ITERATIONS = 200;
 
@@ -230,11 +233,6 @@ function publishRootMailboxMessage(
       ...(output.artifacts.length > 0 ? { artifactRefs: [...output.artifacts] } : {}),
     },
   });
-}
-
-export function actorQueueId(sessionId: string | undefined, actorPath: string): string | undefined {
-  if (sessionId) return `actor:${sessionId}:${actorPath}`;
-  return actorPath === '/root' ? undefined : actorPath;
 }
 
 async function executeCodingActorTurn(

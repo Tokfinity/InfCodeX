@@ -76,6 +76,35 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.72 release-candidate verification
+
+Run the normal build first; this refreshes `dist/kodax_bootstrap.js`, which is
+also the artifact used by a globally linked `kodax` command.
+
+```bash
+npm run build
+
+# Bare-resume startup, terminal ownership, selection handoff, and replay path
+npx vitest run src/kodax_bootstrap.test.ts src/kodax_resume.test.ts \
+  packages/repl/src/cli-resume.test.ts \
+  packages/repl/src/ui/SessionPicker.test.tsx \
+  packages/repl/src/ui/SessionPicker.runner.test.tsx \
+  packages/repl/src/tui/renderer-runtime.test.ts
+
+# Runtime Auto Mode ownership, session settings, and daemon capability contract
+npx vitest run src/sdk-runtime.test.ts src/runtime-daemon/server.test.ts \
+  packages/coding/src/guardrails/auto-mode/classify.test.ts \
+  packages/coding/src/guardrails/auto-mode/guardrail.test.ts
+```
+
+On Windows, manually validate the interactive terminal boundary after
+`npm link`: run `kodax -r`, press Esc, and confirm the PowerShell prompt returns
+without another keypress; repeat, select a session, and confirm normal text
+input reaches the resumed REPL. For an SDK auto-mode session, verify that a
+guardrail `allow` produces no pending permission while an explicit classifier
+`escalate` creates exactly one shared request. A headless/daemon run without
+`events.exitPlanMode` must not expose `exit_plan_mode`.
+
 ## Automated release (CI)
 
 ### Trigger paths

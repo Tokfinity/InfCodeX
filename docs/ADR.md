@@ -4259,3 +4259,68 @@ durable record with exact session/owner correlation and at least three real
 recovery cases. In-place cross-version downgrade requires a versioned owner
 schema understood by both versions plus a tested reversible migration; backups
 and active-turn fencing remain mandatory until then.
+
+---
+
+## ADR-056: Runtime Owns Auto-Mode Permission Decisions and Host Capability Exposure
+
+**Status**: Accepted (2026-07-18)
+
+**Driver**: `v0.7.72` shared-daemon permission-chain correction
+
+**Context**: Session settings could explicitly request
+`permissionMode: 'auto'` with an LLM classifier, yet a static
+`beforeToolExecute` hook could make the generic permission broker decide first.
+That inverted ownership: ordinary tool calls became pending requests even when
+the configured classifier would allow them, and the classifier's fallback
+state was not reliably the state used on a later turn. The same boundary had
+related correctness problems: path evidence could confuse quoted shell source
+with an operand, `gitRoot` was treated as both safety boundary and working
+directory, hosts without a plan-approval bridge could expose an unusable tool,
+and large/raw permission previews were not a safe transport contract.
+
+**Decision**:
+
+1. For an auto-mode Runtime session, construct the LLM/rules guardrail in the
+   Runtime and cache it by session while its effective provider/model,
+   repository boundary, execution directory, classifier model, and timeout are
+   unchanged. Do not delegate this ownership to a process-local REPL hook.
+2. The required tool order is `guardrail -> permission bridge -> execute`.
+   Only `escalate` creates a shared pending permission. `allow` executes under
+   the ordinary tool/capability checks; `block` does not ask the user merely to
+   override a classification error path.
+3. An automatic LLM-to-rules fallback is durable session state. A subsequent
+   run reuses the rules engine until settings intentionally select a fresh
+   guardrail. A classifier configuration change invalidates the cache rather
+   than silently reusing incompatible circuit-breaker or denial history.
+4. `gitRoot` remains the validated session repository boundary. Relative
+   operands resolve from the separately validated `executionCwd`; path analysis
+   must not infer paths from quoted program or regexp source.
+5. Permission transport uses a bounded, credential-redacted, valid JSON
+   preview and includes the effective execution directory. Preview is a safe
+   diagnostic projection, never the source of truth for tool input.
+6. Tool scope is capability-derived. `exit_plan_mode` is included only when
+   the current run provides `events.exitPlanMode`; absent host capability means
+   absent model tool, not a call that fails after model selection.
+
+**Consequences**:
+
+- Shared-daemon and inline sessions use the same auto permission decision owner
+  and persist the same engine state across turns.
+- SDK hosts gain explicit durable `autoModeClassifierModel` and
+  `autoModeTimeoutMs` session settings; daemon capability discovery advertises
+  both keys.
+- A permission UI remains responsible for an actual escalation, but no longer
+  acts as an implicit classifier or sees avoidable pending requests.
+- Host integrations can trust the preview as display-safe JSON while retaining
+  the real typed tool input only in the owner execution path.
+
+**Rejected alternatives**: keeping a static hook as the first auto decision,
+recreating a classifier on every turn, allowing a broad raw-input preview,
+using `gitRoot` as an implicit process cwd, parsing arbitrary quoted text as a
+path, or exposing a no-op plan-exit compatibility tool.
+
+**Reconsideration gates**: a separate permission decision owner requires at
+least three concrete deployment forms that cannot share Runtime session state.
+Any broadening of tool scope or preview content requires a distinct transport
+security review and cross-host compatibility tests.

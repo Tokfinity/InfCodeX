@@ -155,7 +155,7 @@ Low-level mapping and TypeScript contracts are covered by automated tests.
 **Type**: Positive / SDK
 
 1. Start a run that remains active long enough to accept a follow-up.
-2. Call `enqueueWithArtifacts({ provider, model, content, inputArtifacts })`
+2. Call `enqueueWithArtifacts({ provider, model, sessionId, content, inputArtifacts })`
    with an image artifact.
 3. Drain or observe the next runner turn.
 4. Repeat with a file artifact.

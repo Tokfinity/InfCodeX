@@ -527,7 +527,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolListDispatchableAgents,
     sideEffect: 'readonly',
-    toClassifierInput: () => 'List dispatchable agents',
+    toClassifierInput: () => '',
   },
   {
     name: 'spawn_agent',
@@ -705,8 +705,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolWaitAgent,
     sideEffect: 'readonly',
     planModeAllowed: true,
-    interruptBehavior: 'cancel',
-    toClassifierInput: () => 'WaitAgent',
+    toClassifierInput: () => '',
   },
   {
     name: 'list_agents',
@@ -727,7 +726,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolListAgents,
     sideEffect: 'readonly',
     planModeAllowed: true,
-    toClassifierInput: () => 'ListAgents',
+    toClassifierInput: () => '',
   },
   {
     name: 'interrupt_agent',
@@ -784,11 +783,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolAgentOutput,
     sideEffect: 'readonly',
     planModeAllowed: true,
-    toClassifierInput: (input) => {
-      const i = input as { target?: string };
-      const target = typeof i?.target === 'string' ? i.target : '<no-target>';
-      return `AgentOutput(${target})`;
-    },
+    toClassifierInput: () => '',
   },
   {
     name: 'web_search',
@@ -879,7 +874,11 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     // refresh: true rebuilds the repo-intel snapshot (disk side effect),
     // so this is not strictly Tier 1 — surface name + truncated input via
     // the helper so the classifier can see when refresh is requested.
-    toClassifierInput: (input) => defaultToClassifierInput('semantic_lookup', input),
+    toClassifierInput: (input) => (
+      (input as { readonly refresh?: unknown }).refresh === true
+        ? defaultToClassifierInput('semantic_lookup', input)
+        : ''
+    ),
   },
   {
     name: 'mcp_search',
@@ -1643,7 +1642,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolLspDocumentSymbols,
     sideEffect: 'readonly',
-    toClassifierInput: (input) => defaultToClassifierInput('relationship_scan', input),
+    toClassifierInput: () => '',
   },
   {
     name: 'lsp_workspace_symbols',

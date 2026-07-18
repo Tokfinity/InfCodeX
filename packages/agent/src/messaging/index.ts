@@ -21,6 +21,13 @@ export {
   getMessageQueue,
 } from './queue.js';
 
+export {
+  _resetActiveRootQueueRoutesForTests,
+  actorQueueId,
+  registerActiveRootQueueRoute,
+  resolveActiveRootQueueRoute,
+} from './routing.js';
+
 export type { MaybeDrainMidTurnInput } from './drain.js';
 export {
   YIELD_TOOL_NAMES,

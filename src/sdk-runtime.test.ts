@@ -6,7 +6,16 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createAgent, Runner } from '@kodax-ai/agent';
+import {
+  _resetActiveRootQueueRoutesForTests,
+  _resetMessageQueueForTests,
+  actorQueueId,
+  createAgent,
+  enqueueWithArtifacts,
+  getMessageQueue,
+  resolveActiveRootQueueRoute,
+  Runner,
+} from '@kodax-ai/agent';
 import type {
   GuardrailContext,
   ManagedRunClassification,
@@ -112,6 +121,8 @@ describe('createKodaXRuntime', () => {
   });
 
   afterEach(async () => {
+    _resetMessageQueueForTests();
+    _resetActiveRootQueueRoutesForTests();
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
@@ -884,6 +895,8 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      autoModeClassifierModel: 'mock-provider:classifier-model',
+      autoModeTimeoutMs: 20_000,
     });
     expect(settings).toMatchObject({
       provider: 'settings-provider',
@@ -893,6 +906,13 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      autoModeClassifierModel: 'mock-provider:classifier-model',
+      autoModeTimeoutMs: 20_000,
+    });
+    await expect(runtime.sessions.updateSettings(session.id, { autoModeTimeoutMs: 0 }))
+      .rejects.toThrow(/positive safe integer/);
+    await expect(runtime.sessions.getSettings(session.id)).resolves.toMatchObject({
+      autoModeTimeoutMs: 20_000,
     });
 
     let capturedOptions: KodaXOptions | undefined;
@@ -926,6 +946,8 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      autoModeClassifierModel: 'mock-provider:classifier-model',
+      autoModeTimeoutMs: 20_000,
     });
 
     await runtime.close();
@@ -2622,6 +2644,60 @@ describe('createKodaXRuntime', () => {
     });
   });
 
+  it('routes legacy media follow-up helpers to the active SDK Actor session', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Queue Route Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'stay active',
+    });
+    enqueueWithArtifacts({
+      provider: 'mock-provider',
+      content: 'queued follow-up',
+    });
+
+    const queueAgentId = actorQueueId(session.id, '/root');
+    expect(resolveActiveRootQueueRoute()).toBe(queueAgentId);
+    expect(getMessageQueue().dequeue({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    })).toHaveLength(1);
+
+    await runtime.runs.abort(handle.runId);
+    await expectSettles(handle.result, 'queue route abort result');
+    expect(resolveActiveRootQueueRoute()).toBeUndefined();
+    await runtime.close();
+  });
+
+  it('does not leak the active Actor route when SDK launch throws synchronously', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Queue Route Launch Failure' });
+    codingMock.startKodaX.mockImplementation(() => {
+      throw new Error('synchronous launch failure');
+    });
+
+    await expect(runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'fail before launch',
+    })).rejects.toThrow('synchronous launch failure');
+    expect(resolveActiveRootQueueRoute()).toBeUndefined();
+
+    await runtime.close();
+  });
+
   it('rejects pending permissions when aborting a run', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -2884,6 +2960,8 @@ describe('createKodaXRuntime', () => {
     await runtime.sessions.updateSettings(session.id, {
       permissionMode: 'auto',
       autoModeEngine: 'llm',
+      autoModeClassifierModel: 'mock-provider:classifier-model',
+      autoModeTimeoutMs: 20_000,
       executionCwd,
     });
 
@@ -2899,7 +2977,11 @@ describe('createKodaXRuntime', () => {
       | AutoModeBootstrapDeps
       | undefined;
     expect(bootstrap).toMatchObject({ projectRoot: gitRoot, executionCwd });
-    expect(bootstrap?.autoModeSettings.engine).toBe('llm');
+    expect(bootstrap?.autoModeSettings).toMatchObject({
+      engine: 'llm',
+      classifierModel: 'mock-provider:classifier-model',
+      timeoutMs: 20_000,
+    });
     if (!runOptions) throw new Error('expected Runtime run options');
     const runtimeGuardrail = runtimeAutoGuardrail(runOptions);
     expect(runtimeGuardrail).not.toBe(fakeGuardrail);
@@ -3317,7 +3399,7 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   }, 60_000);
 
-  it('reuses one Runtime auto guardrail across sequential turns and persists fallback engine', async () => {
+  it('reuses one Runtime auto guardrail until classifier configuration changes', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -3365,10 +3447,16 @@ describe('createKodaXRuntime', () => {
     await (await runtime.runs.start({ sessionId: session.id, prompt: 'turn one' })).result;
     await (await runtime.runs.start({ sessionId: session.id, prompt: 'turn two' })).result;
 
-    expect(replMock.bootstrapAutoMode).toHaveBeenCalledOnce();
-    expect(guardrails).toHaveLength(2);
+    await runtime.sessions.updateSettings(session.id, { autoModeTimeoutMs: 18_000 });
+    await (await runtime.runs.start({ sessionId: session.id, prompt: 'turn three' })).result;
+
+    expect(replMock.bootstrapAutoMode).toHaveBeenCalledTimes(2);
+    expect(guardrails).toHaveLength(3);
     expect(guardrails[0]).toBe(guardrails[1]);
+    expect(guardrails[2]).not.toBe(guardrails[1]);
     expect(guardrails[0]).not.toBe(fakeGuardrail);
+    expect(replMock.bootstrapAutoMode.mock.calls[1]?.[0].autoModeSettings)
+      .toMatchObject({ engine: 'rules', timeoutMs: 18_000 });
     await expect(runtime.sessions.getSettings(session.id)).resolves.toMatchObject({
       autoModeEngine: 'rules',
     });

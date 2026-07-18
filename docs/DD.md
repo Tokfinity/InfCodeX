@@ -1,8 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-17
+> Last updated: 2026-07-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+> Current release baseline: `v0.7.72` release candidate
+> (`@kodax-ai/kodax@0.7.72-hotfix.0` workspace package)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -19,7 +20,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root package is `@kodax-ai/kodax@0.7.71`.
+The root workspace package is `@kodax-ai/kodax@0.7.72-hotfix.0`; the active
+release-candidate design target is `v0.7.72`.
 
 `package.json` exposes:
 
@@ -59,7 +61,7 @@ Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 
 | Area | Current file(s) | Notes |
 |---|---|---|
-| CLI bootstrap | `src/kodax_cli.ts` | Thin product entry for CLI and binary use. |
+| CLI bootstrap | `src/kodax_bootstrap.ts`, `src/kodax_resume.ts`, `src/kodax_cli.ts` | The bootstrap handles bare `-r` with a lightweight picker, then loads the full CLI only after selection. |
 | Coding SDK | `packages/coding/src/agent.ts` | `runKodaX(options, prompt)` delegates through `Runner.run`. |
 | Coding preset | `packages/coding/src/coding-preset.ts` | Declares the default coding agent and substrate executor. |
 | Continuous SDK | `packages/coding/src/client.ts`, `running-session.ts` | `KodaXClient` and non-blocking session handle. |
@@ -98,6 +100,14 @@ All forms expose `identity`, `sessions`, `runs`, `events`, `permissions`,
 `requirements.hardDispose` is checked for all three forms. Worker-only options
 without `isolation: 'worker'`, or any explicit embedded isolation combined with
 daemon mode, are rejected rather than ignored.
+
+`RuntimeSessionSettings` carries `permissionMode`, `executionCwd`,
+`autoModeEngine`, `autoModeClassifierModel`, and `autoModeTimeoutMs` alongside
+the provider/model/reasoning fields. The Runtime validates a positive timeout,
+persists these settings, advertises them through daemon capability negotiation,
+and uses them to build a session-owned auto guardrail. Changing classifier
+model or timeout invalidates the cached guardrail; an automatic LLM-to-rules
+fallback updates `autoModeEngine` for the next run.
 
 The Worker and daemon facades reuse `runtime-daemon/server.ts` and
 `runtime-daemon/client.ts`; there is no duplicate service implementation.
@@ -255,10 +265,21 @@ Key concepts:
 
 - permission modes come from REPL/CLI options and config;
 - tools declare side-effect class;
-- auto-mode uses classifier and guardrail logic before allowing risky tools;
-- shell commands are classified before execution;
+- an auto session uses its Runtime-owned guardrail before the generic permission
+  hook; only a guardrail `escalate` creates a shared broker request;
+- shell commands and other classifier-eligible tools are classified before
+  execution, while safe allow verdicts do not become pending permissions;
 - trusted-local workflow scripts require explicit confirmation;
 - verifier and stop-hook failures fail open where blocking would trap the user.
+
+`gitRoot` constrains the session repository boundary. `executionCwd` is the
+working directory used to resolve relative operands and is independently
+validated to remain inside that boundary. Path extraction must not treat quoted
+Python, JavaScript, or regular-expression source inside a shell command as a
+path. Permission `inputPreview` is a bounded, credential-redacted JSON object
+that remains parseable even for a large write input and records the effective
+execution directory. Tool exposure removes `exit_plan_mode` unless an
+`events.exitPlanMode` approval bridge exists for the active run.
 
 Do not add a new permission bypass path for convenience. Route effects through
 the tool layer or an existing capability API.
@@ -279,6 +300,11 @@ the Actor revision instead of silently joining newer work. The main Worker uses
 children for bounded parallel investigation or specialist work. Children do
 not own final response. When pending children remain and the
 main Worker has no useful work, idle-yield is the wait mechanism.
+
+The queue routing key for user follow-ups is derived from the session and root
+Actor. MessageQueue, idle-yield wake subscriptions, StreamingContext, and the
+Ink queued-input view all filter by that same key; a process-global
+`agentId: undefined` bucket is not a REPL session contract.
 
 ## 9. Stop Hooks And Sidecar Verifier
 
@@ -511,6 +537,12 @@ manager moves to `@kodax-ai/agent` (ADR-046). ADR-044/046/047/048/049.
 The REPL should not become the owner of core agent semantics. Product behavior
 belongs in `coding`, reusable primitives in `agent`, and provider behavior in
 `llm`.
+
+The bare resume path follows the same separation: `src/kodax_bootstrap.ts`
+starts the picker without importing the complete CLI, pauses/references stdin
+only for a selected-session handoff, and pauses/unreferences it on Esc. Session
+replay uses the persisted event timestamp for each message/tool record instead
+of one `Date.now()` value at render time.
 
 ## 17. Construction And Self-Modification
 

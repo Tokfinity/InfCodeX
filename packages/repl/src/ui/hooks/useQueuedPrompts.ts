@@ -2,7 +2,7 @@
  * FEATURE_159 (v0.7.40) — `useQueuedPrompts` hook.
  *
  * Subscribes a React component to the agent-side MessageQueue and
- * returns the filtered slice of main-thread user-priority prompts —
+ * returns the filtered slice of user-priority prompts for one queue scope —
  * the same slice REPL renders as "Queue N" / "Queued follow-ups: N".
  *
  * Implementation contract:
@@ -34,9 +34,12 @@ import {
   type QueuedMessage,
 } from "@kodax-ai/agent";
 
-function isMainThreadPrompt(message: QueuedMessage): boolean {
+function isQueuedPromptForAgent(
+  message: QueuedMessage,
+  agentId: string | undefined,
+): boolean {
   return (
-    message.agentId === undefined &&
+    message.agentId === agentId &&
     message.priority === "user" &&
     message.mode === "prompt"
   );
@@ -50,37 +53,43 @@ function isMainThreadPrompt(message: QueuedMessage): boolean {
  * identity (which IS reference-stable per FEATURE_159 Phase 1).
  */
 let lastQueueSnapshot: readonly QueuedMessage[] | null = null;
-let lastFilteredSnapshot: readonly QueuedMessage[] = Object.freeze([]);
+const filteredSnapshots = new Map<string | undefined, readonly QueuedMessage[]>();
 
-function getQueueSliceSnapshot(): readonly QueuedMessage[] {
+function getQueueSliceSnapshot(agentId: string | undefined): readonly QueuedMessage[] {
   const current = getMessageQueue().getSnapshot();
-  if (current === lastQueueSnapshot) {
-    return lastFilteredSnapshot;
+  if (current !== lastQueueSnapshot) {
+    lastQueueSnapshot = current;
+    filteredSnapshots.clear();
   }
-  lastQueueSnapshot = current;
-  lastFilteredSnapshot = Object.freeze(current.filter(isMainThreadPrompt));
-  return lastFilteredSnapshot;
+  const cached = filteredSnapshots.get(agentId);
+  if (cached !== undefined) return cached;
+  const filtered = Object.freeze(
+    current.filter((message) => isQueuedPromptForAgent(message, agentId)),
+  );
+  filteredSnapshots.set(agentId, filtered);
+  return filtered;
 }
 
 /**
- * Subscribe to main-thread user-priority prompt slice of the
+ * Subscribe to one agent/session user-priority prompt slice of the
  * MessageQueue. Returns a stable snapshot — safe to use as a `useEffect`
  * dep or pass to a memoized child.
  */
-export function useQueuedPrompts(): readonly QueuedMessage[] {
+export function useQueuedPrompts(agentId?: string): readonly QueuedMessage[] {
   const subscribe = useCallback(
     (onStoreChange: () => void) => getMessageQueue().subscribe(onStoreChange),
     [],
   );
-  return useSyncExternalStore(subscribe, getQueueSliceSnapshot, getQueueSliceSnapshot);
+  const getSnapshot = useCallback(() => getQueueSliceSnapshot(agentId), [agentId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /**
  * Variant returning just the content strings — convenience for the
  * common case where the consumer doesn't care about ids / timestamps.
  */
-export function useQueuedPromptContents(): readonly string[] {
-  const prompts = useQueuedPrompts();
+export function useQueuedPromptContents(agentId?: string): readonly string[] {
+  const prompts = useQueuedPrompts(agentId);
   // useMemo isn't worth the dependency cost; prompts is already
   // reference-stable across no-op renders so .map() identity rotates
   // only when the slice itself changed.
@@ -94,5 +103,5 @@ export function useQueuedPromptContents(): readonly string[] {
  */
 export function _resetQueuedPromptsCacheForTests(): void {
   lastQueueSnapshot = null;
-  lastFilteredSnapshot = Object.freeze([]);
+  filteredSnapshots.clear();
 }

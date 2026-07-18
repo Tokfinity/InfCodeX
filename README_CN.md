@@ -88,6 +88,13 @@ daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程�
 再使用 attach-only 模式连接。SDK 的 `homeDir` 是拥有 `.kodax` 的 CLI 风格基础目录，
 不是 `.kodax` 目录本身。
 
+**v0.7.72 Runtime 修正：**Auto Mode 的权限决策由 Runtime Session 持有，
+不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
+仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到
+session。Session 也可设置 classifier model 和有界 timeout；没有宿主审批回调时，
+不会向模型暴露 `exit_plan_mode`。完整 SDK 接入见
+[Runtime Auto Mode 指引](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072)。
+
 ## 为什么用 KodaX
 
 <table>
@@ -541,7 +548,7 @@ KodaX 有 50+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 | `list_agents` | 查看调用方有权访问的 Actor 子树与 Turn 状态。 |
 | `agent_output` | 读取有权限的 Actor/Turn 有界持久输出。 |
 | `ask_user_question` | 向用户发起单选 / 多选 / 自由文本提问 |
-| `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
+| `exit_plan_mode` | 仅在当前 REPL/宿主提供审批回调时提交最终方案 |
 | `emit_managed_protocol` | managed-task 协议侧信道（verdict role payload）。v0.7.42 FEATURE_184 起默认走 V2 Worker 单循环 + Sidecar Verifier；v0.7.43 FEATURE_193 退役 V1 chain。 |
 
 ## Repo Intelligence（内置 full/light 引擎）
@@ -681,6 +688,12 @@ A2A 配置迁移与历史任务 owner 迁移是两件事。如果升级 realm-aw
 精确授权的 Skill 脚本必须使用隔离策略，并通过 `kodax sandbox doctor`；
 Windows 的一次性显式初始化由 `kodax sandbox setup` 完成。
 
+**v0.7.72 会话恢复与队列闭环：**裸 `kodax -r` 先加载可搜索选择器，不为列出
+session 预加载完整 CLI；选中后才把 stdin 交给恢复后的 REPL，Esc 会释放选择器的
+stdin 并立即回到原 shell。历史回放保留每条持久 event 的原始时间。用户 follow-up
+使用 session-root Actor queue scope，避免一个 session/child 的待处理输入被另一个
+REPL 显示、唤醒或消费。
+
 **外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
 
 **成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
@@ -804,7 +817,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成与 v0.7.70 公共 API 契约
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime 与 v0.7.72 Auto Mode 契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策

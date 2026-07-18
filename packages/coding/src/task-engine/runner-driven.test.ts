@@ -19,6 +19,7 @@ import {
   buildAssistantMessageFromLlmResult,
   ContextCapacityError,
   createAgentActorController,
+  resolveActiveRootQueueRoute,
 } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
@@ -97,6 +98,25 @@ function makeOptions(): KodaXOptions {
     events: {},
   } as KodaXOptions;
 }
+
+describe('managed runner queue routing', () => {
+  it('advertises its session root during execution and releases it on error', async () => {
+    const observedRoutes: Array<string | undefined> = [];
+    const failure = new Error('queue-route-test-stop');
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: 'queue-route-session' },
+    };
+
+    await expect(runManagedTaskViaRunner(options, 'inspect route', async () => {
+      observedRoutes.push(resolveActiveRootQueueRoute());
+      throw failure;
+    })).rejects.toBe(failure);
+
+    expect(observedRoutes).toEqual(['actor:queue-route-session:/root']);
+    expect(resolveActiveRootQueueRoute()).toBeUndefined();
+  });
+});
 
 describe('isRunnerDrivenRuntimeEnabled', () => {
   const envKey = 'KODAX_MANAGED_TASK_RUNTIME';

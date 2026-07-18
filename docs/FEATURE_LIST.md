@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 36 | `269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `267`, `268`, and `269` shipped together in v0.7.69 (2026-07-15): bidirectional A2A 1.0, split hot-reloadable integrations, and the authoritative shared Coder daemon. `260` shipped in v0.7.68; `261`, `259`, and `258` shipped in v0.7.67. Earlier completion history is unchanged. |
-| InProgress | 3 | `266, 270, 225` | `270` engineering review/eval is complete and awaits manual/release sign-off; `266` awaits release sign-off; `225` remains the bounded v0.7.100 cleanup. |
+| InProgress | 3 | `266, 270, 225` | `266` and `270` are implementation-complete release-candidate work; only package/version-tag finalization remains. `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -350,7 +350,7 @@ Current v0.7.72 progress:
 Runtime-owned Learning Center, learned-area store, lower-precedence learned
 Skill discovery, daemon/Worker facade, `/learn`/status surfaces, notification
 cursors, and hard-dispose persistence are covered by deterministic tests. It
-remains InProgress until the v0.7.72 release gate is signed off.
+remains InProgress until the v0.7.72 package/version tag is finalized.
 
 `270` engineering implementation and release eval are complete:
 native, Workflow-owned, and external Agent work share the Runtime-owned
@@ -369,8 +369,8 @@ and blind evidence packs are complete. The final isolated 227/227 focused suite
 and full build pass. The authorized Layer 2 treatment is non-inferior in 29/30
 blind pairs; Layer 3 is non-inferior in 5/6 journeys with no invalid-plan replay.
 Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
-is `recommend-ship`. F270 remains InProgress only for release sign-off and the
-separate manual test guide.
+is `recommend-ship`. F270 remains InProgress only for package/version-tag
+finalization; the separate manual guide is evidence, not a sign-off gate.
 
 The 2026-07-18 Sidecar/Actor alignment follow-up is also complete. Terminal
 verification now waits for both descendant termination and root-scoped
@@ -429,6 +429,19 @@ fail-closed pending a portable process-start identity contract. A six-call
 starts three Actors for a fresh five-track request while the historical
 baseline starts five; this diagnostic re-pilot does not replace the original
 authorized Layer 2/3 result.
+
+The same release-candidate closure makes Runtime Auto Mode a real permission
+owner rather than a prompt/config preference: an auto session reuses one LLM or
+rules guardrail across turns, executes guardrail -> permission bridge -> tool,
+and persists a fallback to rules. Classifier model/timeout are durable session
+settings and daemon capabilities. The surrounding permission boundary now
+keeps `gitRoot` as a safety boundary, resolves relative operands from the
+validated execution directory, avoids quoted-source false paths, emits bounded
+credential-redacted JSON previews, and omits `exit_plan_mode` when no host
+approval callback exists. The final REPL follow-up scopes queued prompts to the
+session-root Actor, preserves original history timestamps, and closes the bare
+resume picker cleanly: list startup stays lightweight, selecting a session
+hands stdin to the REPL, and Esc immediately returns the invoking shell.
 
 Recent completion notes:
 

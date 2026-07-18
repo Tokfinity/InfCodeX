@@ -264,16 +264,10 @@ export interface WaitForWakeEventOptions {
   readonly agentId: string | undefined;
   /**
    * Optional cancellation. When fired, the waiter resolves with
-   * `{ kind: 'aborted' }` and tears down its poll timer.
+   * `{ kind: 'aborted' }` and tears down its subscriptions.
    */
   readonly abortSignal?: AbortSignal;
-  /**
-   * Queue poll interval. The MessageQueue is poll-based; this is the
-   * granularity at which user input becomes visible to the waiter.
-   * 100 ms keeps perceived REPL responsiveness < 1 frame at 60 fps
-   * for the human eye and stays well below typical LLM-call latency.
-   * Tests can pass smaller values (e.g. 10 ms) to keep them fast.
-   */
+  /** @deprecated Queue subscriptions now wake immediately. */
   readonly pollIntervalMs?: number;
 }
 
@@ -281,8 +275,7 @@ export interface WaitForWakeEventOptions {
  * Wait for MessageQueue arrivals or cancellation. Returns the first wake
  * event. Guarantees:
  *
- *   - Cleanup: the poll timer is cleared on resolution regardless of
- *     which arm wins.
+ *   - Cleanup: queue and abort subscriptions are removed on resolution.
  *   - At-most-once dequeue: when the queue arm wins, the messages it
  *     drained are returned to the caller AND removed from the queue
  *     (the caller is now responsible for splicing them into the
@@ -299,12 +292,11 @@ export interface WaitForWakeEventOptions {
 export function waitForWakeEvent(
   options: WaitForWakeEventOptions,
 ): Promise<WakeEvent> {
-  const { messageQueue, agentId, abortSignal, pollIntervalMs = 100 } =
-    options;
+  const { messageQueue, agentId, abortSignal } = options;
 
   return new Promise<WakeEvent>((resolve) => {
     let settled = false;
-    let intervalId: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe: (() => void) | undefined;
     // v0.7.38 FEATURE_155 Bug F hotfix — abort listener leak. Without
     // tracking & removing on wake, every idle-yield iteration on the
     // same long-lived `abortSignal` (one per outer-loop turn, capped at
@@ -320,10 +312,7 @@ export function waitForWakeEvent(
     const settle = (event: WakeEvent): void => {
       if (settled) return;
       settled = true;
-      if (intervalId !== undefined) {
-        clearInterval(intervalId);
-        intervalId = undefined;
-      }
+      unsubscribe?.();
       abortSignal?.removeEventListener('abort', abortHandler);
       resolve(event);
     };
@@ -333,12 +322,9 @@ export function waitForWakeEvent(
       return;
     }
 
-    // Queue arm — poll. The MessageQueue is currently poll-based
-    // (no event-emitter surface yet); 100 ms is the perception
-    // budget. If queue ever grows a `wait()` API we can swap this
-    // for a single await without changing the public WakeEvent
-    // contract.
-    intervalId = setInterval(() => {
+    // Queue arm — drain once, subscribe, then recheck. The second read closes
+    // the enqueue gap between the first snapshot and listener registration.
+    const drain = (): void => {
       if (settled) return;
       const messages = messageQueue.dequeue({
         agentId,
@@ -347,7 +333,15 @@ export function waitForWakeEvent(
       if (messages.length > 0) {
         settle({ kind: 'messages-arrived', messages });
       }
-    }, pollIntervalMs);
+    };
+
+    drain();
+    if (settled) return;
+
+    unsubscribe = messageQueue.subscribe((event) => {
+      if (event.kind !== 'enqueued' || event.message.agentId !== agentId) return;
+      drain();
+    });
 
     // Abort arm — tear down on Esc / parent-cancel. Note: `{once:true}`
     // is still useful as belt-and-suspenders (auto-remove on abort
@@ -355,10 +349,12 @@ export function waitForWakeEvent(
     // load-bearing cleanup for the common non-abort path.
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
-    // Edge: the queue may already have a pending message at construction
-    // time. The poll arm fires on the first tick. If the queue is empty and no abort fires, the
-    // waiter blocks indefinitely — by design (caller must
-    // either dispatch a child or queue a message to wake it).
+    if (abortSignal?.aborted) {
+      settle({ kind: 'aborted' });
+      return;
+    }
+    drain();
+
   });
 }
 

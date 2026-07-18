@@ -167,7 +167,7 @@ export class MessageQueue {
 
     if (taken.length === 0) {
       // Nothing matched — no mutation, no notify. Keeps subscribers from
-      // re-rendering on no-op drains (e.g. polling waitForWakeEvent).
+      // re-rendering on no-op drains and read-register-recheck probes.
       return [];
     }
 

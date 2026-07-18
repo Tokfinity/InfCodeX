@@ -49,6 +49,42 @@ All notable changes to this project will be documented in this file.
   worker cannot run normal teardown; production daemons remain persistent after
   ordinary client detach and have no idle reaper.
 
+- **Windows memory lifecycle lock contention.** Concurrent forget/archive
+  operations now retry short-lived Windows sharing denials within the existing
+  bounded lock deadline instead of failing immediately with `EPERM`; unrelated
+  filesystem errors remain fail-fast.
+
+- **MiniMax M3 default media regression.** The media capability suite now
+  expects the current `minimax-coding` default, MiniMax M3, to support image
+  input while retaining fail-closed checks for unverified nearby routes.
+
+- **Bare resume cancellation terminal release.** Pressing Esc in `kodax -r`
+  now pauses and unreferences the picker-owned stdin path before the bootstrap
+  exits, so Windows PowerShell regains its prompt immediately without requiring
+  an extra keypress. The full CLI remains unloaded while listing sessions,
+  successful selection hands input to the REPL, and replay retains each
+  persisted event timestamp.
+- **Auto[LLM] approval reliability.** The default classifier budget is now 20
+  seconds, pure readonly invocations bypass classification by invariant, and
+  SDK/daemon session settings can select the classifier model and timeout without
+  stale guardrail-cache reuse. Runtime owns the session guardrail ahead of the
+  generic permission hook, persists LLM-to-rules fallback, and creates a shared
+  pending request only for an explicit escalation. The one conditional readonly
+  exception, `semantic_lookup(refresh:true)`, remains classified because it
+  rebuilds the on-disk derived index.
+- **Runtime permission boundary correctness.** Relative operands resolve from
+  the validated execution directory while `gitRoot` remains a safety boundary;
+  quoted Python/regexp source is not treated as a path. Permission previews are
+  bounded, credential-redacted valid JSON with that directory, and
+  `exit_plan_mode` is absent without a real host approval bridge.
+- **Queued follow-up responsiveness.** REPL, AMA, and SA now share the same
+  Actor queue routing contract while SA retains its legacy unscoped queue. User
+  input wakes `wait_agent` and idle-yield through lossless subscriptions and
+  resumes at a safe turn boundary without canceling unrelated parallel tools.
+  SDK media follow-ups accept an explicit `sessionId`, preserve old single-Actor
+  calls through lifecycle-bound auto-routing, and reject ambiguous concurrent
+  calls instead of crossing sessions.
+
 ## [0.7.72-hotfix.0] - 2026-07-17
 
 ### Fixed

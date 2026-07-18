@@ -14,6 +14,11 @@ KodaX 的交互式终端层，基于 Ink/React，同时保留 readline 传统 RE
 - File-backed session storage and public session-management SDK
 - Terminal host detection and renderer policy
 
+Bare `-r` starts with the searchable session picker rather than importing the
+full CLI. Selecting a session transfers stdin to the resumed REPL; Esc releases
+the picker stdin and returns to the invoking terminal. Auto Mode configuration
+is passed to the Runtime guardrail, which decides before the permission UI.
+
 ## 安装 / 导入
 
 ```bash

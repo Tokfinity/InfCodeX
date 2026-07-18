@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { classify } from './classify.js';
+import { classify, DEFAULT_CLASSIFIER_TIMEOUT_MS } from './classify.js';
 import type { AutoRules } from './rules.js';
 import { KodaXBaseProvider, createCostTracker, getSummary } from '@kodax-ai/llm';
 import type {
@@ -60,6 +60,10 @@ const okStream = (out: string): KodaXStreamResult => ({
 });
 
 describe('classify', () => {
+  it('uses a 20 second default classifier timeout', () => {
+    expect(DEFAULT_CLASSIFIER_TIMEOUT_MS).toBe(20_000);
+  });
+
   it('returns block when classifier outputs <block>yes</block>', async () => {
     const provider = new StubProvider(async () =>
       okStream('<block>yes</block><reason>exfiltrates ssh key</reason>'),

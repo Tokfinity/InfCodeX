@@ -12,6 +12,8 @@
 
 **测试人员**：待填写
 
+> 发布候选说明（2026-07-18）：以下人工用例用于保留发布证据，不构成人工签字门槛；剩余发布动作仅为包版本与 Git tag 定版。
+
 本功能用一个 Runtime-owned Actor/Turn 树替代旧 child-task、Workflow-local
 scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 只在显式请求时
 使用，并把所有 child Agent 纳入同一容量、事件、输出和恢复模型。
@@ -215,7 +217,7 @@ scheduler 和并行外部任务投影。AMA 保留主动协作能力；Workflow 
   盲审 10 胜/1 负/19 平，29/30 不劣；Layer 3 完成 24/24 calls：3 胜/1 负/2
   平，5/6 不劣且无无效计划重放。两层均无 timeout/provider error/truncation。
 - Layer 2/3 共 678,203 tokens，评估修订估算费用 `$0.02550684`。最终工程建议
-  为 `recommend-ship`；发布决定与本指南的人工签字保持独立。
+  为 `recommend-ship`；发布决定与本指南保留的人工证据保持独立。
 
 零成本 manifest 检查：
 
@@ -242,7 +244,7 @@ affected re-pilot 在 revision `4d857d43e8edf234` 上通过：treatment 的
 | 9 | - | - | - |
 
 **测试结论**：自动化与付费行为评测通过，工程建议 `recommend-ship`；本页 9
-个人工用例仍待发布测试人员执行并签字。
+个人工用例可由发布测试人员保留为补充证据，但不构成人工签字门槛。
 
 **发现的问题**：follow-up 首轮复现了“新请求先承诺/尝试 5 个、容量层只接纳
 3 个”的体验缺口，已通过 authoritative first-section capacity contract 修复并

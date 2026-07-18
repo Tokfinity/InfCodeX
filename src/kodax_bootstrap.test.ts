@@ -77,10 +77,11 @@ describe('KodaX CLI bootstrap', () => {
     expect(main).toHaveBeenCalledTimes(1);
   });
 
-  it('does not load the full CLI when the picker cancels', async () => {
+  it('releases terminal input without loading the full CLI when the picker cancels', async () => {
     const loadCli = vi.fn();
     const pause = vi.fn();
     const ref = vi.fn();
+    const unref = vi.fn();
 
     await runKodaXBootstrap({
       argv: ['node', 'kodax', '-r'],
@@ -88,11 +89,12 @@ describe('KodaX CLI bootstrap', () => {
         resolveBareResume: async () => ({ kind: 'exit' }),
       }),
       loadCli,
-      stdin: { isTTY: true, pause, ref },
+      stdin: { isTTY: true, pause, ref, unref },
     });
 
     expect(loadCli).not.toHaveBeenCalled();
-    expect(pause).not.toHaveBeenCalled();
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(unref).toHaveBeenCalledTimes(1);
     expect(ref).not.toHaveBeenCalled();
   });
 

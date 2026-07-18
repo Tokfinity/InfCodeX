@@ -458,10 +458,14 @@ export type {
 export {
   MessageQueue,
   YIELD_TOOL_NAMES,
+  _resetActiveRootQueueRoutesForTests,
   _resetMessageQueueForTests,
+  actorQueueId,
   getMessageQueue,
   maybeDrainMidTurn,
   midTurnDrainPriority,
+  registerActiveRootQueueRoute,
+  resolveActiveRootQueueRoute,
 } from './messaging/index.js';
 
 // ============== Media / input artifacts ==============

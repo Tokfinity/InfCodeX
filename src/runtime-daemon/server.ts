@@ -1457,6 +1457,7 @@ function runtimeDaemonCapabilities(
       keys: [
         'provider', 'model', 'effort', 'thinking', 'reasoningMode',
         'permissionMode', 'executionCwd', 'agentMode', 'autoModeEngine',
+        'autoModeClassifierModel', 'autoModeTimeoutMs',
       ],
     },
     ...(controlJournal !== undefined

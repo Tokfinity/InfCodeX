@@ -9,8 +9,10 @@ import type {
   AgentMetadataValue,
   AgentSpawnInput,
 } from '@kodax-ai/agent';
+import { getMessageQueue } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { actorQueueId } from '../agent-runtime/actor-queue.js';
 import {
   listCodingDispatchableAgents,
   resolveCodingDispatchableAgent,
@@ -24,6 +26,55 @@ const MAX_WAIT_EVENTS = 20;
 const MAX_WAIT_MS = 120_000;
 const ROOT_SENDS_PER_TURN = 20;
 const CHILD_SENDS_PER_TURN = 5;
+
+type QueuedPromptWaitResult = 'queued' | 'aborted';
+type CollaborationWaitWinner =
+  | { readonly source: 'queue'; readonly result: QueuedPromptWaitResult }
+  | { readonly source: 'actor'; readonly event: Awaited<ReturnType<AgentActorClient['wait']>> };
+
+function waitForQueuedPrompt(
+  agentId: string | undefined,
+  signal: AbortSignal,
+): Promise<QueuedPromptWaitResult> {
+  const queue = getMessageQueue();
+  const hasPrompt = (): boolean => queue.has({
+    agentId,
+    maxPriority: 'user',
+    mode: 'prompt',
+  });
+  if (hasPrompt()) return Promise.resolve('queued');
+  if (signal.aborted) return Promise.resolve('aborted');
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: (() => void) | undefined;
+    const onAbort = (): void => settle('aborted');
+    const settle = (result: QueuedPromptWaitResult): void => {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      signal.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+
+    unsubscribe = queue.subscribe((event) => {
+      if (
+        event.kind === 'enqueued'
+        && event.message.agentId === agentId
+        && event.message.priority === 'user'
+        && event.message.mode === 'prompt'
+      ) {
+        settle('queued');
+      }
+    });
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    // Read-register-recheck closes the enqueue gap between the first snapshot
+    // and subscription registration without polling or consuming the prompt.
+    if (signal.aborted) settle('aborted');
+    else if (hasPrompt()) settle('queued');
+  });
+}
 
 export async function toolSpawnAgent(
   input: Record<string, unknown>,
@@ -132,15 +183,50 @@ export async function toolWaitAgent(
       MAX_WAIT_EVENTS,
       'max_events',
     );
-    const first = await client.wait(afterSequence, timeoutMs, ctx.abortSignal);
-    const interrupted = first === undefined && ctx.abortSignal?.aborted === true;
+    if (ctx.abortSignal?.aborted) {
+      return render({ ok: true, status: 'interrupted', afterSequence });
+    }
+
+    const queueAgentId = actorQueueId(ctx.sessionId, client.callerPath);
+    const waiterAbort = new AbortController();
+    const forwardAbort = (): void => waiterAbort.abort(ctx.abortSignal?.reason);
+    ctx.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
+
+    let winner: CollaborationWaitWinner;
+    try {
+      const queuedPrompt = waitForQueuedPrompt(queueAgentId, waiterAbort.signal);
+      const actorEvent = client.wait(afterSequence, timeoutMs, waiterAbort.signal);
+      winner = await Promise.race([
+        queuedPrompt.then((result) => ({ source: 'queue' as const, result })),
+        actorEvent.then((event) => ({ source: 'actor' as const, event })),
+      ]);
+    } finally {
+      waiterAbort.abort('wait_agent settled');
+      ctx.abortSignal?.removeEventListener('abort', forwardAbort);
+    }
+    const interrupted = ctx.abortSignal?.aborted === true;
+    const userInputPending = !interrupted && (
+      (winner.source === 'queue' && winner.result === 'queued')
+      || getMessageQueue().has({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      })
+    );
+    const first = winner.source === 'actor' ? winner.event : undefined;
     const pending = first === undefined ? [] : client.eventSnapshot(afterSequence);
     const events = (pending.length === 0 && first ? [first] : pending).slice(0, maxEvents);
     const event = events[0];
     const nextSequence = events.at(-1)?.sequence;
     return render({
       ok: true,
-      status: event ? 'event' : interrupted ? 'interrupted' : 'wait_expired',
+      status: event
+        ? 'event'
+        : interrupted
+          ? 'interrupted'
+          : userInputPending
+            ? 'user_input_pending'
+            : 'wait_expired',
       afterSequence,
       ...(event ? {
         event,

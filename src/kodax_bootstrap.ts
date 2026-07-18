@@ -22,6 +22,7 @@ export interface KodaXBootstrapOptions {
     readonly isTTY?: boolean;
     readonly pause?: () => void;
     readonly ref?: () => void;
+    readonly unref?: () => void;
   };
 }
 
@@ -45,7 +46,11 @@ export async function runKodaXBootstrap(options: KodaXBootstrapOptions = {}): Pr
         await loadCliOnce();
       },
     });
-    if (route.kind === 'exit') return;
+    if (route.kind === 'exit') {
+      stdin.pause?.();
+      stdin.unref?.();
+      return;
+    }
     argv.splice(2, argv.length - 2, ...route.argv);
     if (route.argv.length > 0 && stdin.isTTY === true) {
       stdin.pause?.();

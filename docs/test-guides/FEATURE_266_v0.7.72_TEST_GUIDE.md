@@ -12,6 +12,8 @@
 
 **测试人员**：待填写
 
+> 发布候选说明（2026-07-18）：以下人工用例用于保留发布证据，不构成人工签字门槛；剩余发布动作仅为包版本与 Git tag 定版。
+
 本功能把 learned capability 的生命周期、通知、查询和治理统一到
 Runtime-owned Learning Center，并保持 inline、Worker、daemon 与 REPL 表面一致。
 Learned Skill 的优先级低于正式 Skill；F266 不执行 learned Extension 代码，也不

@@ -2172,6 +2172,7 @@ message queue:
 enqueueWithArtifacts({
   provider: selectedProvider,
   model: selectedModel,
+  sessionId: activeSessionId,
   content: followupText,
   inputArtifacts: [artifact],
 });
@@ -2180,6 +2181,18 @@ enqueueWithArtifacts({
 The helper validates first and then stores `inputArtifacts` on the queued prompt.
 Queued image follow-ups are rebuilt as multimodal content blocks on the next
 runner turn. Unsupported file/video attachments are rejected before enqueueing.
+Pass `sessionId` whenever the host can run more than one session concurrently;
+it targets that Actor session's root queue without exposing Actor paths. For
+backward compatibility, omitting both `sessionId` and `agentId` still binds to
+the sole active Actor root, or uses the legacy unscoped SA queue when no Actor
+run is active. If multiple Actor roots are active, the helper rejects the
+ambiguous call instead of risking cross-session delivery. Low-level child-Actor
+producers may continue to pass an explicit `agentId`.
+
+`enqueueWithArtifacts()` is an in-process queue helper for direct/inline runs.
+Runtime Worker and daemon clients must use `runtime.runs.submitInput(...)` (with
+the same `sessionId`, `afterRunId`, and `delivery:'after_turn'`) because a
+process-local MessageQueue cannot cross those transport boundaries.
 
 ### Boundaries
 
@@ -4097,6 +4110,88 @@ permission-grant administration. Renderer IPC should expose product-specific
 commands and sanitized projections only. Never pass daemon credentials,
 leases, operation epochs, or trusted session/run context to renderer or model
 tool arguments.
+
+---
+
+## 24. Runtime-owned Auto Mode and plan-approval bridges (v0.7.72)
+
+Auto Mode is a Runtime session contract, including in shared-daemon mode. Do
+not implement a second classifier or decide permissions from a client-side
+`beforeToolExecute` hook before the Runtime has classified the call.
+
+### Configure the session, not an individual UI callback
+
+```ts
+await runtime.sessions.updateSettings(session.id, {
+  permissionMode: 'auto',
+  autoModeEngine: 'llm',
+  autoModeClassifierModel: 'zhipu:glm-5.2', // optional; otherwise follow the run model
+  autoModeTimeoutMs: 20_000,                // positive safe integer, optional
+  executionCwd: projectDirectory,
+});
+```
+
+`autoModeClassifierModel` and `autoModeTimeoutMs` are durable session settings
+in inline, Worker, and daemon forms. A `null` patch removes either optional
+override; a zero, negative, fractional, or unsafe timeout is rejected. Daemon
+capability discovery advertises both fields in `sharedSessionSettings.keys`.
+
+The Runtime lazily creates one guardrail for the session and reuses it across
+turns while provider/model, repository boundary, execution directory,
+classifier model, and timeout remain the same. Updating one of those inputs
+creates a new guardrail by design. If the LLM guardrail automatically falls
+back to rules, its `autoModeEngine` state is persisted to the session before a
+later run starts.
+
+### What an embedder should expect
+
+The Runtime's execution order is fixed:
+
+```text
+Runtime Auto Mode guardrail -> host permission bridge only for escalate -> tool execution
+```
+
+Consequently, an LLM/rules `allow` does not create a pending permission request
+just because a host installed a static approval hook. `block` does not become a
+spurious approval prompt. A real `escalate` uses the existing shared
+`runtime.permissions` flow, so another authorized client may render and answer
+it. Hosts should subscribe to permission events to display such a request, but
+must not treat a missing request as an error for a safe tool call.
+
+The permission event's `inputPreview` is a display-safe diagnostic projection:
+it is bounded, credential-redacted, valid JSON, and includes the effective
+execution directory. Use the Runtime owner’s typed tool input for execution;
+do not reconstruct or authorize a tool from the preview. `gitRoot` remains the
+session repository safety boundary, whereas relative operands resolve from the
+validated `executionCwd`. In particular, quoted Python/JavaScript/regexp source
+inside a shell command is not a path operand.
+
+### Plan capability is opt-in
+
+`exit_plan_mode` is exposed to a Runtime run only when that run supplies an
+approval bridge. A daemon or headless host that cannot approve a plan should
+leave the bridge absent; KodaX removes the tool from that run's scope.
+
+```ts
+const planned = await runtime.runs.start({
+  sessionId: session.id,
+  prompt: 'Draft a migration plan, then ask for approval.',
+  options: {
+    events: {
+      exitPlanMode: async () => showPlanAndAskUser(),
+    },
+  },
+});
+await planned.result;
+```
+
+The callback belongs in a trusted host process (for Electron, Main rather than
+renderer). It is intentionally not inferred from the presence of a permission
+UI: tool permission and plan approval are different user decisions.
+
+See [ADR-056](ADR.md#adr-056-runtime-owns-auto-mode-permission-decisions-and-host-capability-exposure)
+for the ownership decision and [the v0.7.72 design](features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
+for the complete release-candidate boundary.
 
 ---
 

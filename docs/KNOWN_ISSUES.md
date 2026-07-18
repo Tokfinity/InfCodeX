@@ -15,6 +15,11 @@ _Last Updated: 2026-07-18_
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 183 | High | Resolved | CLI daemon startup failures and forced test exits could leave detached Node processes | v0.7.66-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
+| 182 | Medium | Resolved | Windows lifecycle lock contention surfaced as fatal `EPERM` during concurrent memory forgets | v0.7.68 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
+| 181 | Medium | Resolved | MiniMax M3 default upgrade left the media capability regression stale | v0.7.72-dev | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
+| 180 | High | Resolved | Queued user input used a different root scope and could not wake `wait_agent` | v0.7.72-dev | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
+| 179 | High | Resolved | Auto[LLM] eight-second timeout and readonly projections caused spurious approvals | v0.7.33 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
+| 178 | Medium | Resolved | Bare `-r` cancellation retained terminal input until another keypress | v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 177 | Medium | Resolved | Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 176 | High | Resolved | Learning subscription could lose a wake, retain a waiter after disconnect, and cache transient principals without bound | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 175 | High | Resolved | Actor start/interrupt race could launch with a fresh cancellation handle; closed Actors still accepted mailbox traffic | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
@@ -166,6 +171,198 @@ profile and was not used as a basis for a speculative provider change.
   client detach, concurrent starters converge, and CLI start/restart/stop works.
 - Strict TypeScript compilation passes and the final Windows process inventory
   contains no KodaX daemon residue.
+
+### 182: Windows lifecycle lock contention surfaced as fatal `EPERM` during concurrent memory forgets
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.68
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+The memory lifecycle lock retried only `EEXIST`. Under concurrent forgets,
+Windows can report a short-lived `EPERM`, `EACCES`, or `EBUSY` while another
+owner closes or removes the lock file. That valid contention path escaped
+immediately and made the full Agent suite intermittently fail even though the
+lock owner was live and the five-second acquisition deadline had not expired.
+
+#### Resolution
+
+- Treats Windows sharing-denial errors and cross-platform `EBUSY` as bounded
+  lock contention, using the existing stale-owner check, retry interval, and
+  five-second deadline. Other filesystem errors still propagate immediately.
+- The 24-way concurrent-forget regression passed five consecutive focused runs
+  after reproducing the original failure.
+
+#### Files
+
+- `packages/agent/src/memory-control/lifecycle.ts`
+- `packages/agent/src/memory-control/memory-control.test.ts`
+
+### 181: MiniMax M3 default upgrade left the media capability regression stale
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.72-dev
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+The current provider snapshot changed `minimax-coding`'s default from
+MiniMax M2.7 to the verified image-capable MiniMax M3 route. Model-specific
+media regressions were updated, but one default-provider assertion still
+expected image input to be unsupported, leaving the full Agent suite red even
+though production capability resolution was correct.
+
+#### Resolution
+
+- Updated the stale assertion to pin the current MiniMax M3 default's supported
+  image capability while retaining the nearby unsupported-route checks.
+- Re-ran the full Agent suite so the capability source, default-model snapshot,
+  and regression contract agree.
+
+#### Files
+
+- `packages/agent/src/media/capabilities.test.ts`
+- `packages/coding/src/media/capabilities.test.ts`
+
+### 180: Queued user input used a different root scope and could not wake `wait_agent`
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.72-dev
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+While the root Agent repeatedly called `wait_agent`, a user follow-up could
+remain in the visible Queue across many tool/LLM steps and even after the child
+Agent completed. The UI queued prompts without an `agentId`, while the new Actor
+runner drained `actor:<sessionId>:/root`; exact queue routing meant neither side
+could see the other. `wait_agent` also waited only for Actor events and the UI
+used whole-run abort as its historical wake mechanism.
+
+#### Resolution
+
+- Added one canonical Actor queue-id helper and routed REPL producers, AMA/SA
+  consumers, cancellation terminals, and goal deferral through the session root.
+- Preserved the legacy unscoped SA route. The public media enqueue helper now
+  accepts `sessionId`, automatically binds old single-Actor calls to the sole
+  active root, and rejects ambiguous multi-session calls instead of crossing
+  sessions. Runtime and Runner own reference-counted route registration from
+  start through every terminal path; Runtime commits registration only after
+  the underlying launch object exists, so synchronous startup failure cannot
+  leak a stale active route.
+- `wait_agent` now races Actor events against a non-consuming queue subscription
+  using read-register-recheck, returning `user_input_pending` at the next safe
+  boundary without aborting unrelated parallel tools.
+- Idle-yield now uses the same lossless subscription pattern instead of polling.
+- Session isolation, pre-existing input, registration-gap input, abort, timeout,
+  synchronous launch failure, and queue-retention behavior have deterministic
+  regression coverage.
+
+#### Files
+
+- `packages/coding/src/agent-runtime/actor-queue.ts`
+- `packages/agent/src/messaging/routing.ts`
+- `packages/agent/src/media/queue.ts`
+- `packages/coding/src/tools/agent-collaboration.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/agent-runtime/run-substrate.ts`
+- `packages/agent/src/orchestration/idle-yield.ts`
+- `packages/repl/src/ui/contexts/StreamingContext.tsx`
+- `src/sdk-runtime.ts`
+
+### 179: Auto[LLM] eight-second timeout and readonly projections caused spurious approvals
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.33
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+Auto[LLM] escalated classifier timeouts into confirmation dialogs. The fixed
+eight-second default was below historical P90 classifier latency, so timeouts
+were frequent rather than exceptional. Several locally readonly observation
+tools also emitted non-empty classifier projections and unnecessarily paid the
+LLM latency/failure path.
+
+#### Resolution
+
+- Raised the bounded default classifier timeout to 20 seconds; explicit user
+  settings still override it and non-readonly failures remain fail-closed.
+- Enforced empty classifier projections for pure readonly invocations, covering
+  Actor observation, ordinary semantic lookup, and LSP document symbols without
+  weakening write/network policy. `semantic_lookup(refresh:true)` remains a
+  deliberate exception because it rebuilds the on-disk derived index.
+- Added SDK/daemon session settings for classifier model and timeout, positive
+  integer validation, persistence, capability advertisement, and cache-key
+  invalidation when either setting changes.
+
+#### Files
+
+- `packages/coding/src/guardrails/auto-mode/classify.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/server.ts`
+
+### 178: Bare `-r` cancellation retained terminal input until another keypress
+
+- **Priority**: Medium
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.72-hotfix.0
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+After `npm link`, running `kodax -r` and pressing Esc displayed
+`Session resume cancelled.` but did not immediately return to the PowerShell
+prompt. Pressing another key, such as Space, allowed the command to finish.
+
+Expected behavior: explicit picker cancellation must restore the terminal and
+return to the invoking shell without requiring any additional input.
+
+#### Root Cause
+
+The searchable picker resumes stdin so it can receive raw terminal input. Its
+renderer correctly removed listeners and restored raw mode, but the bootstrap
+handled the resulting `kind: 'exit'` route with an immediate return. Unlike the
+successful handoff and error paths, that branch never paused or unreferenced
+stdin, so Windows could keep the linked Node process attached to terminal input
+until another keypress woke the stream.
+
+#### Resolution
+
+- The bare-resume bootstrap now pauses and unreferences stdin before returning
+  from an explicit cancellation.
+- Successful selection still uses the existing pause/ref handoff before the
+  full REPL takes ownership, so resumed sessions retain working input.
+- A focused regression asserts cancellation releases stdin without loading the
+  full CLI or referencing input again.
+
+#### Files
+
+- `src/kodax_bootstrap.ts`
+- `src/kodax_bootstrap.test.ts`
+
+#### Verification
+
+- Bootstrap, picker, runner, renderer, and resume-handoff suites: 36/36 tests
+  passed across 6 test files.
+- Full `npm run build` passed, including the linked CLI bootstrap bundle.
 
 ### 177: Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection
 
@@ -4622,7 +4819,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 65 (24 Open, 41 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 70 (24 Open, 46 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -4632,6 +4829,28 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - Unified CLI and SDK daemon startup ownership, reclaimed only the current
   failed/cancelled candidate process tree, and added a test-only worker-death
   shutdown fallback without changing persistent production daemon semantics.
+
+### 2026-07-18: Issue 182 added and resolved (v0.7.72-hotfix.0)
+- Retried bounded Windows sharing-denial errors as lifecycle-lock contention;
+  unrelated filesystem errors remain fail-fast.
+
+### 2026-07-18: Issue 181 added and resolved (v0.7.72-hotfix.0)
+- Aligned the stale default MiniMax media-capability assertion with the current
+  image-capable MiniMax M3 provider default.
+
+### 2026-07-18: Issues 179-180 added and resolved (v0.7.72-hotfix.0)
+- Increased Auto[LLM]'s default classifier budget to 20 seconds, removed
+  pure readonly invocations from the classifier path, retained classification
+  for semantic index refresh, and exposed SDK/daemon overrides.
+- Unified queued input on the session-root Actor scope and made `wait_agent`
+  plus idle-yield wake lossless without canceling the whole run. SA compatibility,
+  single-session SDK auto-binding, explicit concurrent-session routing, and
+  ambiguity rejection are covered without reintroducing a second control plane.
+
+### 2026-07-18: Issue 178 added and resolved (v0.7.72-hotfix.0)
+- Released stdin ownership on bare-resume cancellation so PowerShell regains
+  its prompt without a follow-up keypress; the selected-session handoff remains
+  unchanged.
 
 ### 2026-07-18: Issue 177 added and resolved (v0.7.72)
 - Promoted current Actor capacity to a shared authoritative first-section

@@ -102,7 +102,7 @@ export interface DequeueFilter {
  *   - `dequeued` fires ONCE per `dequeue()` call that removed ≥1 message,
  *     carrying ALL drained messages in priority+FIFO order. No-op drains
  *     (filter matched nothing) fire no event — quiet by design so the
- *     `waitForWakeEvent` 100ms poll doesn't spam idle subscribers.
+ *     idle consumers can probe without spamming subscribers.
  *   - `cleared` fires ONCE per `clear()` call that removed ≥1 message,
  *     carrying the pre-clear messages. Empty-queue clear fires nothing.
  *

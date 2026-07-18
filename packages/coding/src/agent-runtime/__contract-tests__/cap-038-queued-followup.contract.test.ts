@@ -114,5 +114,18 @@ describe('CAP-038: hasQueuedFollowUp contract', () => {
       const events: KodaXEvents = { hasPendingInputs: () => false };
       expect(hasQueuedFollowUp(events)).toBe(true);
     });
+
+    it('matches only the requested session-root scope', () => {
+      getMessageQueue().enqueue({
+        priority: 'user',
+        mode: 'prompt',
+        content: 'session a prompt',
+        agentId: 'actor:session-a:/root',
+      });
+
+      expect(hasQueuedFollowUp({}, 'actor:session-a:/root')).toBe(true);
+      expect(hasQueuedFollowUp({}, 'actor:session-b:/root')).toBe(false);
+      expect(hasQueuedFollowUp({})).toBe(false);
+    });
   });
 });

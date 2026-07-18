@@ -48,6 +48,7 @@ import {
   createMemoryControlPlane,
   completeEpisodeReview,
   persistPendingEpisodeReview,
+  registerActiveRootQueueRoute,
   type CompactionConfig,
   type MemoryController,
   type MemoryPack,
@@ -125,6 +126,7 @@ import {
   emitTurnStarted,
   withLiveTurnAttribution,
 } from './event-emitter.js';
+import { actorQueueId } from './actor-queue.js';
 import { resolvePerTurnProvider } from './per-turn-provider-resolution.js';
 import {
   deriveCodingMemoryIdentity,
@@ -463,6 +465,7 @@ export async function runSubstrate(
   }
   const releaseActiveExecutionRuntime = bindActiveExtensionExecutionRuntime(runtime);
   let releaseRuntimeBinding: (() => void) | undefined;
+  let releaseActiveRootQueueRoute: (() => void) | undefined;
   try {
   const maxIter = options.maxIter ?? 200;
   let events = options.events ?? {};
@@ -610,6 +613,12 @@ export async function runSubstrate(
     runtime: runtime ?? undefined,
     managedProtocolPayloadRef,
   });
+  const messageQueueAgentId = ctx.actorControl
+    ? actorQueueId(sessionId, ctx.actorControl.callerPath)
+    : undefined;
+  if (messageQueueAgentId !== undefined && ctx.actorControl?.callerPath === '/root') {
+    releaseActiveRootQueueRoute = registerActiveRootQueueRoute(messageQueueAgentId);
+  }
 
   let contextTokenSnapshot = rebaseContextTokenSnapshot(
     messages,
@@ -1595,7 +1604,10 @@ export async function runSubstrate(
           });
           continue;
         }
-        const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
+        const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(
+          events,
+          messageQueueAgentId,
+        );
         if (shouldYieldToQueuedFollowUp) {
           emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
@@ -1789,7 +1801,10 @@ export async function runSubstrate(
           });
           continue;
         }
-        const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
+        const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(
+          events,
+          messageQueueAgentId,
+        );
         if (shouldYieldToQueuedFollowUp) {
           emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
@@ -1863,6 +1878,7 @@ export async function runSubstrate(
           toolResults,
           completedTurnTokenSnapshot,
           sessionId,
+          queueAgentId: messageQueueAgentId,
           iter,
           emitIterationEnd,
         });
@@ -1898,7 +1914,10 @@ export async function runSubstrate(
         continue;
       }
 
-      const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
+      const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(
+        events,
+        messageQueueAgentId,
+      );
       if (shouldYieldToQueuedFollowUp) {
         emitIterationEnd(iter + 1, contextTokenSnapshot);
         await emitActiveExtensionEvent('turn:end', {
@@ -2032,6 +2051,7 @@ export async function runSubstrate(
     limitReached: true,
   });
   } finally {
+    releaseActiveRootQueueRoute?.();
     releaseRuntimeBinding?.();
     releaseActiveExecutionRuntime();
     if (didSetActiveRuntime) {

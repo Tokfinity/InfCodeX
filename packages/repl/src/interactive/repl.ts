@@ -27,6 +27,7 @@ import {
   KodaXProviderError,
   KODAX_DEFAULT_PROVIDER,
   buildGoalRuntimeBinding,
+  actorQueueId,
   decideWorkflowInvocation,
   workflowStartOutcomeConsumesTurn,
 } from '@kodax-ai/coding';
@@ -1682,7 +1683,7 @@ Keyboard Shortcuts:
                 // continue so their input lands naturally.
                 hasPendingUserInput: () =>
                   getMessageQueue().has({
-                    agentId: undefined,
+                    agentId: actorQueueId(context.sessionId, '/root'),
                     maxPriority: 'user',
                     mode: 'prompt',
                   }),

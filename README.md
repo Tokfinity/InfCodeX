@@ -386,6 +386,13 @@ context diagnostics, and daemon protocol schemas, see
 The Space/IDE shared-daemon contract is documented in
 [SDK Embedder Guide section 23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
 
+**v0.7.72 Runtime correction:** Auto Mode is now owned by the Runtime session,
+not by a UI hook. It reuses its LLM/rules guardrail across turns, classifies
+before the shared permission bridge, and persists an automatic fallback to
+rules. The same session settings can select a classifier model and bounded
+timeout. Host plan exit is exposed only when the host supplies an approval
+callback. See the [Runtime Auto Mode integration guide](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072).
+
 ## Repo Intelligence
 
 KodaX ships with built-in repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, and related tools) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.
@@ -806,7 +813,12 @@ Bare `-r` opens an interactive picker with incremental search, arrow/PageUp/Page
 navigation, Tab completion, full selected-session ID display, and Enter-to-resume.
 An explicit value checks the complete session ID first, then an exact
 case-insensitive title; duplicate titles open a narrowed picker instead of
-silently choosing one. Cleanup is preview-only unless
+silently choosing one. The picker loads before the full CLI, so session listing
+remains responsive. After selection it hands terminal input to the resumed
+REPL; Esc releases the picker's stdin ownership and immediately returns to the
+invoking shell. Session replay preserves each recorded message/event timestamp.
+
+Cleanup is preview-only unless
 `--apply-session-cleanup` is also provided; matching sessions are archived rather
 than permanently deleted.
 
@@ -862,14 +874,14 @@ KodaX provides 3 permission modes for fine-grained control:
 |------|-------------|------------------------|
 | `plan` | Read-only planning mode | All modification tools blocked |
 | `accept-edits` | Auto-accept file edits | bash only |
-| `auto-in-project` | Full auto within project | None (project-scoped) |
+| `auto` | Runtime-owned LLM/rules classification within the project boundary | Only explicit classifier escalation |
 
 ```bash
 # In REPL, use /mode command
 /mode plan          # Switch to plan mode (read-only)
 /mode accept-edits  # Switch to accept-edits mode
-/mode auto-in-project  # Switch to auto-in-project mode
-/auto                  # Alias for auto-in-project
+/mode auto             # Switch to Runtime-owned Auto Mode
+/auto                  # Alias for auto
 
 # Check current mode
 /mode
@@ -881,6 +893,9 @@ KodaX provides 3 permission modes for fine-grained control:
 - Permanent protection zones: `.kodax/`, `~/.kodax/`, paths outside project
 - Pattern-based permission: Allow specific Bash commands (e.g., `Bash(npm install)`)
 - Unified diff display for write/edit operations
+- Auto Mode runs guardrail classification before the permission UI; a safe
+  allow verdict does not create a pending approval request. The session records
+  an automatic LLM-to-rules fallback for later turns.
 
 ### CLI Help Topics
 
@@ -1312,7 +1327,7 @@ KodaX ships 50+ built-in tools, grouped below. They are registered as a single f
 | `list_agents` | Inspect the caller-visible Actor subtree and Turn states. |
 | `agent_output` | Read bounded durable output for an authorized Actor/Turn. |
 | `ask_user_question` | Single/multi-select or free-text prompt back to the user |
-| `exit_plan_mode` | Present a finalized plan for approval (REPL only) |
+| `exit_plan_mode` | Present a finalized plan only when the active REPL/host supplied an approval callback |
 | `run_workflow` | Author and run a deterministic Workflow protocol in AMA only when Workflow intent is explicit; complexity alone never activates it. Child Agents share the Actor control plane. Async / idle-yield. (FEATURE_246; FEATURE_270 v0.7.72) |
 | `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (verdict). V2 Worker single-loop + Sidecar Verifier is the default since v0.7.42 (FEATURE_184); V1 chain retired in v0.7.43 (FEATURE_193). |
 

@@ -137,6 +137,7 @@ import {
   getDefaultWorkflowRunManager,
   resolveProvider,
   prewarmRepoIntelligenceCaches,
+  actorQueueId,
 } from "@kodax-ai/coding";
 import type {
   AgentsFile,
@@ -9990,7 +9991,9 @@ const InkREPL: React.FC<InkREPLProps> = (props) => {
 
   return (
     <UIStateProvider>
-      <StreamingProvider>
+      <StreamingProvider
+        getPendingInputAgentId={() => actorQueueId(props.context.sessionId, "/root")}
+      >
         <KeypressProvider>
           <ShortcutsProvider>
             <AutocompleteContextProvider cwd={cwd} gitRoot={gitRoot}>

@@ -40,6 +40,7 @@ import {
   buildSystemPrompt,
   getMessageQueue,
   readRunnerRecoveryTranscript,
+  registerActiveRootQueueRoute,
 } from '@kodax-ai/agent';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
@@ -148,6 +149,7 @@ import {
   countLastAssistantToolCalls,
   runWithIdleYield,
 } from '@kodax-ai/agent';
+import { actorQueueId } from '../agent-runtime/actor-queue.js';
 
 function activeDescendantTurnCount(ctx: KodaXToolExecutionContext): number {
   const control = ctx.actorControl;
@@ -159,9 +161,7 @@ function activeDescendantTurnCount(ctx: KodaXToolExecutionContext): number {
 }
 
 function actorMessageQueueId(ctx: KodaXToolExecutionContext): string | undefined {
-  const path = ctx.actorControl?.callerPath;
-  if (!path) return undefined;
-  return ctx.sessionId ? `actor:${ctx.sessionId}:${path}` : path === '/root' ? undefined : path;
+  return actorQueueId(ctx.sessionId, ctx.actorControl?.callerPath ?? '/root');
 }
 // FEATURE_125 (v0.7.41) — Team Mode runner-side adapter.
 // Per-LLM-round sibling discovery + system-prompt block + content-hash
@@ -602,13 +602,17 @@ export async function runManagedTaskViaRunner(
   // and the per-iteration L1-L4 resolver inside the Runner loop. When no
   // signal fires, the helper returns the input options reference unchanged.
   const { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
+  const initialSessionId = effectiveOptions.session?.id
+    ?? `runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const releaseActiveRootQueueRoute = registerActiveRootQueueRoute(
+    actorQueueId(initialSessionId, '/root'),
+  );
+  try {
   await maybeRunMemoryMaintenanceWindow(effectiveOptions);
   await maybeReviewMemoryFeedbackFromPrompt(effectiveOptions, prompt);
   // Fire onSessionStart early so REPL / CLI listeners bound to session
   // init trigger for AMA runs the same way they trigger for SA runs.
   const providerName = effectiveOptions.provider ?? 'anthropic';
-  const initialSessionId = effectiveOptions.session?.id
-    ?? `runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Ad-hoc askUser callers without a stable host session id get a run-local id:
   // checkpoint resume should prefer a safe miss over cross-session attachment.
   const shouldAttachInitialSessionId = Boolean(effectiveOptions.session?.id)
@@ -729,6 +733,9 @@ export async function runManagedTaskViaRunner(
     // path rely on the universal-cleanup semantics. Future work to
     // unify would touch REPL contract.
     emitComplete(liveEvents);
+  }
+  } finally {
+    releaseActiveRootQueueRoute();
   }
 }
 

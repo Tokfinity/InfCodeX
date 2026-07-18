@@ -112,6 +112,8 @@ export interface CancellationTerminalInput {
   readonly toolResults: KodaXToolResultBlock[];
   readonly completedTurnTokenSnapshot: KodaXContextTokenSnapshot;
   readonly sessionId: string;
+  /** Queue route owned by the current execution; undefined keeps legacy SA scope. */
+  readonly queueAgentId?: string;
   readonly iter: number;
   /**
    * The local `emitIterationEnd` wrapper from agent.ts that takes
@@ -151,7 +153,10 @@ export interface CancellationTerminalResult {
 export async function applyCancellationTerminal(
   input: CancellationTerminalInput,
 ): Promise<CancellationTerminalResult> {
-  const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(input.events);
+  const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(
+    input.events,
+    input.queueAgentId,
+  );
   input.messages.push({ role: 'user', content: input.toolResults });
   // Tool results are already appended, so emit the post-tool rebased snapshot here.
   let contextTokenSnapshot = rebaseContextTokenSnapshot(

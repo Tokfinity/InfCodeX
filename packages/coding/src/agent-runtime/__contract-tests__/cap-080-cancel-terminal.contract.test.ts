@@ -33,6 +33,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../../types.js';
 import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
+import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
 
 import {
   hasCancelledToolResult,
@@ -177,6 +178,39 @@ describe('CAP-080: applyCancellationTerminal — terminal effects', () => {
       emitIterationEnd,
     });
     expect(emitIterationEnd).not.toHaveBeenCalled();
+  });
+
+  it('CAP-CANCEL-TERMINAL-002e: checks only the current execution queue route', async () => {
+    _resetMessageQueueForTests();
+    getMessageQueue().enqueue({
+      priority: 'user',
+      mode: 'prompt',
+      content: 'session A follow-up',
+      agentId: 'actor:session-a:/root',
+    });
+
+    try {
+      const result = await applyCancellationTerminal({
+        events: { hasPendingInputs: () => false } as unknown as KodaXEvents,
+        emitActiveExtensionEvent: fakeEmitter(),
+        messages: [],
+        toolResults: [cancelledBlock('t1')],
+        completedTurnTokenSnapshot: fakeSnapshot(),
+        sessionId: 'session-a',
+        queueAgentId: 'actor:session-a:/root',
+        iter: 0,
+        emitIterationEnd: vi.fn().mockReturnValue(fakeSnapshot()),
+      });
+
+      expect(result.shouldYieldToQueuedFollowUp).toBe(true);
+      expect(getMessageQueue().has({
+        agentId: 'actor:session-b:/root',
+        maxPriority: 'user',
+        mode: 'prompt',
+      })).toBe(false);
+    } finally {
+      _resetMessageQueueForTests();
+    }
   });
 });
 

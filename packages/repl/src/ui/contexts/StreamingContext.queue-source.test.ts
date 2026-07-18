@@ -29,6 +29,12 @@ function mainThreadUserContents(): string[] {
     .map((m) => m.content);
 }
 
+function scopedUserContents(agentId: string): string[] {
+  return getMessageQueue()
+    .peek({ agentId, maxPriority: "user", mode: "prompt" })
+    .map((message) => message.content);
+}
+
 describe("StreamingContext queue-as-source-of-truth (FEATURE_159)", () => {
   beforeEach(() => {
     _resetMessageQueueForTests();
@@ -41,6 +47,24 @@ describe("StreamingContext queue-as-source-of-truth (FEATURE_159)", () => {
     const mgr = createStreamingManager();
     mgr.addPendingInput("first follow-up");
     expect(mainThreadUserContents()).toEqual(["first follow-up"]);
+  });
+
+  it("routes pending input to the current session root without exposing another session", () => {
+    let agentId = "actor:session-a:/root";
+    const mgr = createStreamingManager({ getPendingInputAgentId: () => agentId });
+
+    mgr.addPendingInput("for session a");
+    expect(scopedUserContents("actor:session-a:/root")).toEqual(["for session a"]);
+    expect(mainThreadUserContents()).toEqual([]);
+
+    agentId = "actor:session-b:/root";
+    mgr.addPendingInput("for session b");
+    expect(mgr.getState().pendingInputs).toEqual(["for session b"]);
+    expect(scopedUserContents("actor:session-a:/root")).toEqual(["for session a"]);
+    expect(scopedUserContents("actor:session-b:/root")).toEqual(["for session b"]);
+
+    expect(mgr.shiftPendingInput()).toBe("for session b");
+    expect(scopedUserContents("actor:session-a:/root")).toEqual(["for session a"]);
   });
 
   it("multiple addPendingInput calls preserve insertion order in the queue", () => {

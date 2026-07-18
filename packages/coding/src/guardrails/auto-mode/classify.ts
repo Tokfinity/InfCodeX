@@ -69,7 +69,14 @@ export type ClassifyDecision =
   | { readonly kind: 'block'; readonly reason: string }
   | { readonly kind: 'escalate'; readonly reason: string };
 
-const DEFAULT_TIMEOUT_MS = 8000;
+/**
+ * Classifier requests share the foreground provider path and can queue behind
+ * a long-running main response. Historical Auto[LLM] latency measurements put
+ * P90 above eight seconds, so the old default caused ordinary operations to
+ * fail closed into an approval dialog. Keep the timeout bounded, but leave
+ * enough room for the classifier to answer under normal provider load.
+ */
+export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
 const QUERY_SOURCE = 'auto_mode';
 
 export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision> {
@@ -87,7 +94,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     system: prompt.system,
     messages: prompt.messages,
     reasoning: { effort: 'none' },
-    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
     abortSignal: opts.abortSignal,
     querySource: QUERY_SOURCE,
     costTracker: opts.costTracker,
@@ -113,7 +120,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     case 'timeout':
       return {
         kind: 'escalate',
-        reason: `classifier timeout (${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms exceeded)`,
+        reason: `classifier timeout (${opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}ms exceeded)`,
       };
 
     case 'aborted':

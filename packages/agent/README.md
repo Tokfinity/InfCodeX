@@ -7,7 +7,8 @@
 `packages/agent` 是 KodaX 的平台层，不包含 coding 业务工具。当前包内聚合了 v0.7.43 之后内联的能力子树：
 
 - Layer A primitives: `Agent`, `Runner`, handoff, guardrail, compaction policy
-- Runtime substrate: admission, runtime middleware, idle-yield, child task registry
+- Runtime substrate: admission, runtime middleware, idle-yield, one Actor/Turn
+  scheduler, and session-scoped follow-up queues
 - Session lineage: branchable session tree、compaction、persistence helpers
 - Capabilities: MCP integration、Skills loader、builtin skills
 - Observability: tracing spans / trace store
@@ -58,7 +59,8 @@ The generic `Runner` path can be used with a caller-provided `llm` callback. The
 ## 常用公开能力
 
 - Agent primitives: `createAgent`, `createHandoff`, `Runner`, `DefaultSummaryCompaction`
-- Runtime helpers: `runFanOut`, `runWithIdleYield`, `AgentActorController`, `AgentTurnScheduler`
+- Runtime helpers: `runFanOut`, `runWithIdleYield`, `AgentActorController`,
+  `AgentTurnScheduler`, and Actor-scoped message routing
 - Session lineage: session tree, compaction, archive markers, persistence types
 - Skills: `SkillRegistry`, `loadFullSkill`, `expandSkillForLLM`
 - MCP: `McpCapabilityProvider`, `createMcpTransport`, catalog helpers

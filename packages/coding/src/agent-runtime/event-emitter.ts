@@ -355,16 +355,19 @@ export function isVisibleToolName(name: string): boolean {
  *
  * Post-FEATURE_159: MessageQueue is the canonical source of queued
  * user prompts. We OR-in a queue probe for `mode:'prompt'`
- * main-thread user-priority entries — so any origin (REPL,
+ * caller-scoped user-priority entries — so any origin (REPL,
  * idle-yield wake-resumed prompts, SDK consumer that enqueues
  * directly) triggers the same yield. The `events.hasPendingInputs?.()`
  * fallback is kept for SDK consumers that implement custom
  * queueing without routing through MessageQueue (BC-preserved).
  */
-export function hasQueuedFollowUp(events: KodaXEvents): boolean {
+export function hasQueuedFollowUp(
+  events: KodaXEvents,
+  agentId?: string,
+): boolean {
   if (events.hasPendingInputs?.() === true) return true;
   return getMessageQueue().has({
-    agentId: undefined,
+    agentId,
     maxPriority: 'user',
     mode: 'prompt',
   });

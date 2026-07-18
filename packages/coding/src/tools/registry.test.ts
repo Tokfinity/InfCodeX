@@ -164,6 +164,27 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     }
   });
 
+  it('readonly tools bypass the Auto[LLM] classifier', () => {
+    for (const tool of listBuiltinToolDefinitions()) {
+      if (tool.sideEffect !== 'readonly') continue;
+      expect(
+        tool.toClassifierInput({}),
+        `readonly tool "${tool.name}" must have an empty classifier projection`,
+      ).toBe('');
+    }
+  });
+
+  it('only projects semantic_lookup when refresh rebuilds the index', () => {
+    const semanticLookup = listBuiltinToolDefinitions()
+      .find((tool) => tool.name === 'semantic_lookup');
+
+    expect(semanticLookup?.toClassifierInput({ query: 'actor routing' })).toBe('');
+    expect(semanticLookup?.toClassifierInput({
+      query: 'actor routing',
+      refresh: true,
+    })).toContain('"refresh":true');
+  });
+
   it('classifies read/glob/grep as readonly', () => {
     for (const name of ['read', 'glob', 'grep', 'code_search', 'todo_list', 'todo_get']) {
       const tool = listBuiltinToolDefinitions().find((t) => t.name === name);

@@ -840,7 +840,12 @@ describe('runtime daemon dispatcher', () => {
           daemonSafeRunInput: { version: 1 },
           sharedSessionSettings: {
             version: 1,
-            keys: expect.arrayContaining(['agentMode', 'autoModeEngine']),
+            keys: expect.arrayContaining([
+              'agentMode',
+              'autoModeEngine',
+              'autoModeClassifierModel',
+              'autoModeTimeoutMs',
+            ]),
           },
           durableRecoveryQueries: {
             version: 1,

@@ -1,8 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-17
+> Last updated: 2026-07-18
 >
-> Current release baseline: `@kodax-ai/kodax@0.7.71` release candidate
+> Current release baseline: `v0.7.72` release candidate
+> (`@kodax-ai/kodax@0.7.72-hotfix.0` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -129,6 +130,14 @@ class instances, `AbortSignal`, cyclic values, and extension runtime objects do
 not silently cross or execute in the client. Runtime methods bridge abort,
 events, permissions, artifacts, config, and owner-loaded extensions instead.
 
+Auto Mode is likewise an owner-plane concern. For an `auto` session, the
+Runtime holds one session-scoped LLM/rules guardrail and runs it before the
+generic permission bridge. Only an explicit guardrail escalation reaches a
+shared pending-permission request; a rules fallback updates the persisted
+engine for later turns. Classifier model/timeout, project boundary, execution
+directory, and provider/model are part of the guardrail reuse key, so a setting
+change gets a fresh guardrail rather than stale classification state.
+
 The main coding path is:
 
 ```text
@@ -217,6 +226,13 @@ Major tool families include:
 Permission modes and auto-mode guardrails must operate on tool side effects and
 runtime context, not on prompt-only convention.
 
+The permission boundary treats `gitRoot` as an allowed repository boundary and
+`executionCwd` as the base for relative operands. It never promotes quoted
+script or regular-expression source into a filesystem path. Permission events
+carry a bounded, credential-redacted JSON summary plus the effective execution
+directory. `exit_plan_mode` is part of a tool scope only when a trusted host
+has supplied its plan-approval callback.
+
 ## 7. Child Tasks
 
 Child work is explicit and tool-driven. The main Worker can dispatch a child,
@@ -226,6 +242,10 @@ remain in flight.
 
 Children are a coordination primitive, not a replacement for the main Worker.
 The main Worker owns final synthesis and user communication.
+
+User follow-ups are routed with the session-root Actor queue id. Queue display,
+idle-yield wakeups, and prompt consumption use the same scope, preventing one
+session or child actor from draining another session's pending input.
 
 ## 8. Sessions
 
@@ -237,6 +257,11 @@ requirements span both product and SDK:
 - session snapshots and runtime state persistence;
 - durable terminal tool-card replay from sanitized `uiHistory`, with canonical
   `messages` / `lineage` remaining the source of truth;
+- searchable bare-resume selection that defers the full CLI load until a
+  selection, returns Esc directly to the invoking terminal, and hands stdin to
+  the resumed REPL only after selection;
+- original per-event history timestamps retained through replay rather than a
+  render-time timestamp applied to every message;
 - tags, filters, archive state, and project-aware storage evolution;
 - compatibility with old session records where practical.
 

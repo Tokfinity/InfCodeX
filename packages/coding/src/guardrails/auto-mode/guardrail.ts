@@ -45,7 +45,11 @@ import type {
 
 import { checkAbsoluteDeny, type AbsoluteDenyResult } from './absolute-denylist.js';
 import { bashSignalCollector } from './bash-signals.js';
-import { classify, type ClassifyDecision } from './classify.js';
+import {
+  classify,
+  DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  type ClassifyDecision,
+} from './classify.js';
 import {
   createCircuitBreaker,
   recordError as recordBreakerError,
@@ -210,7 +214,7 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * FEATURE_092 phase 2b.7b slice C: classifier sideQuery timeout in ms.
-   * Defaults to 8000. Resolved by the REPL from `~/.kodax/config.json`
+   * Defaults to 20_000. Resolved by the REPL from `~/.kodax/config.json`
    * `autoMode.timeoutMs`.
    */
   readonly timeoutMs?: number;
@@ -314,8 +318,6 @@ export interface AutoModeToolGuardrail extends ToolGuardrail {
   setProviderForTest(provider: KodaXBaseProvider): void;
 }
 
-const DEFAULT_TIMEOUT_MS = 8000;
-
 export function createAutoModeToolGuardrail(
   config: AutoModeGuardrailConfig,
 ): AutoModeToolGuardrail {
@@ -324,7 +326,7 @@ export function createAutoModeToolGuardrail(
     denials: createDenialTracker(),
     breaker: createCircuitBreaker(),
   };
-  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = config.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
 
   // For tests only: lets us swap the provider mid-flight to verify downgrade.
   let providerOverride: KodaXBaseProvider | undefined;

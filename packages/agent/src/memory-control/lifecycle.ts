@@ -103,7 +103,7 @@ async function acquireLifecycleLock(
         throw error;
       }
     } catch (error) {
-      if (!isAlreadyExists(error)) throw error;
+      if (!isAlreadyExists(error) && !isTransientLockContention(error)) throw error;
       if (await isStaleLifecycleLock(lockPath)) {
         await rm(lockPath, { force: true });
         continue;
@@ -242,4 +242,11 @@ function isMissing(error: unknown): boolean {
 
 function isAlreadyExists(error: unknown): boolean {
   return isRecord(error) && error.code === 'EEXIST';
+}
+
+function isTransientLockContention(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  if (error.code === 'EBUSY') return true;
+  return process.platform === 'win32'
+    && (error.code === 'EPERM' || error.code === 'EACCES');
 }
