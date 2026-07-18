@@ -145,6 +145,9 @@ describe('SessionPicker', () => {
         stdin: stdin as unknown as NodeJS.ReadStream,
         stdout: stdout as unknown as NodeJS.WriteStream,
         stderr: stderr as unknown as NodeJS.WriteStream,
+        // The renderer suppresses dynamic stdout frames under is-in-ci unless
+        // debug output is requested; this assertion intentionally inspects one.
+        debug: true,
       },
     );
 
