@@ -1692,7 +1692,15 @@ async function runManagedTaskViaRunnerInner(
       }).catch(() => undefined);
     },
     getSessionId: () => sessionIdRef.current,
-    getActiveDescendantTurnCount: () => activeDescendantTurnCount(baseCtx),
+    getCollaborationState: () => ({
+      activeDescendantTurns: activeDescendantTurnCount(baseCtx),
+      hasPendingRootTaskNotifications: getMessageQueue().has({
+        agentId: messageQueueAgentId,
+        maxPriority: 'background',
+        mode: 'task-notification',
+      }),
+    }),
+    getPlanSnapshot: () => todoStore.getAll(),
     getRoundCount: () => roundRef.current,
     getHasPlan: () => todoStore.getAll().length > 0,
   });

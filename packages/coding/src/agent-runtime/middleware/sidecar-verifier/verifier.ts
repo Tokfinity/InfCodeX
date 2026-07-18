@@ -45,6 +45,7 @@ import type {
 } from '@kodax-ai/llm';
 import type { StopHookFn, StopHookResult, LlmJudgeFailureReason } from '@kodax-ai/agent';
 import { invokeLlmJudge, createLlmJudgedStopHook } from '@kodax-ai/agent';
+import type { TodoStatus } from '../../../types.js';
 
 import {
   VERIFIER_SYSTEM_PROMPT,
@@ -90,7 +91,7 @@ export interface SidecarVerifierVerdict {
 }
 
 export interface SidecarVerifierContextInputs {
-  /** All user-role messages emitted during the CURRENT turn — kept in full. */
+  /** Real (non-synthetic) user intent for the CURRENT turn — kept in full. */
   readonly currentTurnUserQueries: readonly string[];
   /** Rolling window of recent transcript messages (recommend last 24). */
   readonly recentTranscript: readonly KodaXMessage[];
@@ -101,15 +102,48 @@ export interface SidecarVerifierContextInputs {
    * ("done!" with no actual edits) is invisible.
    */
   readonly fileEditSummary: readonly { readonly path: string; readonly diffHint: string }[];
+  readonly omittedFileEditCount?: number;
+  /** Structured completion evidence already delivered to the root transcript. */
+  readonly taskEvidence?: readonly SidecarTaskEvidence[];
+  readonly omittedTaskEvidenceCount?: number;
+  /** Compact Todo state; descriptions and opaque metadata are intentionally excluded. */
+  readonly planEvidence?: readonly SidecarPlanEvidence[];
+  readonly omittedPlanEvidenceCount?: number;
+  /** Tool names plus success/error only — raw tool output never crosses this boundary. */
+  readonly toolOutcomeEvidence?: readonly SidecarToolOutcomeEvidence[];
+  readonly omittedToolOutcomeEvidenceCount?: number;
   /** The exact text the Main Agent emitted as its final answer. */
   readonly lastAssistantText: string;
   /**
    * FEATURE_247 (R3) — rendered profile/task verification criteria appended to
    * the verifier user message. Present only when a profile-default or per-task
-   * verification standard was supplied, so the default coding verifier prompt is
-   * byte-identical.
+   * verification standard was supplied, so an absent contract adds no profile-
+   * specific section.
    */
   readonly additionalCriteria?: string;
+}
+
+export interface SidecarTaskEvidence {
+  readonly source: 'workflow' | 'child_task';
+  readonly taskId: string;
+  readonly status: 'completed' | 'failed' | 'cancelled';
+  readonly title?: string;
+  readonly summary?: string;
+  readonly artifactRefs: readonly string[];
+  readonly omittedArtifactRefCount: number;
+}
+
+export interface SidecarPlanEvidence {
+  readonly id: string;
+  readonly subject: string;
+  readonly status: TodoStatus;
+  readonly owner?: string;
+  readonly note?: string;
+}
+
+export interface SidecarToolOutcomeEvidence {
+  readonly toolName: string;
+  readonly outcome: 'ok' | 'error';
 }
 
 export interface SidecarVerifierInvokeOptions {

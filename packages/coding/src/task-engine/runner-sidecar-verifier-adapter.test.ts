@@ -12,6 +12,10 @@ import { buildRunnerSidecarVerifierAdapter } from './runner-sidecar-verifier-ada
 import type { ManagedMutationTracker } from '../types.js';
 import type { SidecarVerifierVerdict } from '../agent-runtime/middleware/sidecar-verifier/verifier.js';
 import type { ObserverBridge } from './_internal/managed-task/types.js';
+import {
+  KodaXExtensionRuntime,
+  setActiveExtensionRuntime,
+} from '../extensions/runtime.js';
 
 function fakeProvider(streamImpl: (
   messages: KodaXMessage[],
@@ -87,7 +91,11 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
         });
       },
       getSessionId: () => undefined,
-      getActiveDescendantTurnCount: () => 0,
+      getCollaborationState: () => ({
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: false,
+      }),
+      getPlanSnapshot: () => [],
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -147,7 +155,11 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       observer,
       onVerdict: () => {},
       getSessionId: () => undefined,
-      getActiveDescendantTurnCount: () => 0,
+      getCollaborationState: () => ({
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: false,
+      }),
+      getPlanSnapshot: () => [],
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -192,7 +204,11 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       observer,
       onVerdict: () => {},
       getSessionId: () => undefined,
-      getActiveDescendantTurnCount: () => 0,
+      getCollaborationState: () => ({
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: false,
+      }),
+      getPlanSnapshot: () => [],
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -220,5 +236,143 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
     }
 
     expect(observer.agentSwitched).not.toHaveBeenCalled();
+  });
+
+  it('records an accepted verdict before falling through to the extension hook', async () => {
+    const provider = fakeProvider(async () => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'accept', reason: 'Verified.' })],
+    }));
+    const observer = makeObserver();
+    const onVerdict = vi.fn();
+    const extensionRuntime = new KodaXExtensionRuntime();
+    const extensionTurnComplete = vi.fn(() => 'extension requested another pass');
+    extensionRuntime.registerHook('turn:complete', extensionTurnComplete);
+    setActiveExtensionRuntime(extensionRuntime);
+    const adapter = buildRunnerSidecarVerifierAdapter({
+      mainProvider: provider,
+      mainProviderName: 'fake-verifier',
+      mainModel: undefined,
+      mutationTracker: makeMutationTracker(),
+      observer,
+      onVerdict,
+      getSessionId: () => 'session-logged',
+      getCollaborationState: () => ({
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: false,
+      }),
+      getPlanSnapshot: () => [],
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
+    });
+
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    const priorLog = process.env.KODAX_VERIFIER_LOG;
+    process.env.KODAX_VERIFIER_ALWAYS = '1';
+    process.env.KODAX_VERIFIER_LOG = '1';
+    try {
+      const result = await adapter.composedStopHook({
+        transcript: [
+          { role: 'user', content: 'verify the implementation' },
+          { role: 'assistant', content: 'verified' },
+        ],
+        lastAssistantText: 'verified',
+        signal: 'natural-end',
+        reanimateCount: 0,
+        reanimateBudget: 2,
+      });
+
+      expect(result).toBe('extension requested another pass');
+      expect(onVerdict).toHaveBeenCalledWith(
+        expect.objectContaining({ verdict: 'accept', trace: 'verifier_ok' }),
+        expect.objectContaining({ reanimateCount: 0, reanimateBudget: 2 }),
+      );
+      expect(observer.sidecarStarted).toHaveBeenCalledOnce();
+      expect(observer.sidecarFinished).toHaveBeenCalledWith(expect.objectContaining({
+        verdict: 'accept',
+        providerName: 'fake-verifier',
+        trace: 'verifier_ok',
+      }));
+      expect(extensionTurnComplete).toHaveBeenCalledOnce();
+    } finally {
+      if (priorAlways === undefined) delete process.env.KODAX_VERIFIER_ALWAYS;
+      else process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+      if (priorLog === undefined) delete process.env.KODAX_VERIFIER_LOG;
+      else process.env.KODAX_VERIFIER_LOG = priorLog;
+      setActiveExtensionRuntime(null);
+      await extensionRuntime.dispose();
+    }
+  });
+
+  it.each([
+    {
+      name: 'an active descendant Turn',
+      state: {
+        activeDescendantTurns: 1,
+        hasPendingRootTaskNotifications: false,
+      },
+    },
+    {
+      name: 'a session-scoped completion awaiting root delivery',
+      state: {
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: true,
+      },
+    },
+  ])('defers every terminal consumer while collaboration has $name', async ({ state }) => {
+    const stream = vi.fn(async (): Promise<KodaXStreamResult> => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'accept', reason: 'Verified.' })],
+    }));
+    const provider = fakeProvider(stream);
+    const observer = makeObserver();
+    const extensionRuntime = new KodaXExtensionRuntime();
+    const extensionTurnComplete = vi.fn(() => 'extension requested another pass');
+    extensionRuntime.registerHook('turn:complete', extensionTurnComplete);
+    setActiveExtensionRuntime(extensionRuntime);
+
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    process.env.KODAX_VERIFIER_ALWAYS = '1';
+    try {
+      const adapter = buildRunnerSidecarVerifierAdapter({
+        mainProvider: provider,
+        mainProviderName: 'fake-verifier',
+        mainModel: undefined,
+        mutationTracker: makeMutationTracker(),
+        observer,
+        onVerdict: () => {},
+        getSessionId: () => 'session-scoped',
+        getCollaborationState: () => state,
+        getPlanSnapshot: () => [],
+        getRoundCount: () => 1,
+        getHasPlan: () => false,
+      });
+
+      const result = await adapter.composedStopHook({
+        transcript: [
+          { role: 'user', content: 'finish after the delegated review' },
+          { role: 'assistant', content: 'waiting' },
+        ],
+        lastAssistantText: 'waiting',
+        signal: 'natural-end',
+        reanimateCount: 0,
+        reanimateBudget: 2,
+      });
+
+      expect(result).toBeUndefined();
+      expect(stream).not.toHaveBeenCalled();
+      expect(extensionTurnComplete).not.toHaveBeenCalled();
+      expect(observer.sidecarStarted).not.toHaveBeenCalled();
+    } finally {
+      if (priorAlways === undefined) {
+        delete process.env.KODAX_VERIFIER_ALWAYS;
+      } else {
+        process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+      }
+      setActiveExtensionRuntime(null);
+      await extensionRuntime.dispose();
+    }
   });
 });

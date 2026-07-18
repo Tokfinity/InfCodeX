@@ -372,6 +372,16 @@ Estimated evaluated-revision spend is `$0.02550684`; engineering recommendation
 is `recommend-ship`. F270 remains InProgress only for release sign-off and the
 separate manual test guide.
 
+The 2026-07-18 Sidecar/Actor alignment follow-up is also complete. Terminal
+verification now waits for both descendant termination and root-scoped
+completion delivery, synthetic completion cannot replace real user intent, and
+the verifier consumes bounded task/plan/tool/file evidence with explicit
+confidence semantics. The final related Layer 1 gate passes 188/188; its
+separate 32-call blind A/B is candidate 14/14 versus baseline 12/14 across the
+seven valid cases and recommends ship without a credible false-revise
+regression. The detailed raw-evidence paths and invalid-fixture analysis remain
+in the v0.7.72 design document.
+
 A post-implementation control-plane review also replaced the stale model-owned
 `seen_by` forwarding field with Runtime-minted mailbox message IDs and
 authenticated lineage, added cycle/depth/classification guards and per-turn

@@ -123,6 +123,35 @@ describe('F270 coding Actor runtime adapter', () => {
     expect(root.output(turn.actorPath, turn.turnId).output).toBe('native result');
   });
 
+  it.each([
+    { name: 'session-scoped', sessionId: 'session-1' },
+    { name: 'local unscoped', sessionId: undefined },
+  ])('projects root child completion into the $name task-notification queue', async ({ sessionId }) => {
+    executeChildAgentsMock.mockResolvedValue(completedChild('review complete'));
+    const session = new CodingActorSession({ sessionId });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({ taskName: 'review', objective: 'Review the patch.' });
+    await settle();
+
+    expect(getMessageQueue().peek({
+      agentId: actorQueueId(sessionId, '/root'),
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: expect.stringContaining(`<agent-completed`),
+        taskResult: expect.objectContaining({
+          source: 'child_task',
+          taskId: turn.turnId,
+          status: 'completed',
+          summary: 'review complete',
+        }),
+      }),
+    ]));
+  });
+
   it('projects prior turns and dormant mailbox messages into the next native turn', async () => {
     executeChildAgentsMock
       .mockResolvedValueOnce(completedChild('first result'))

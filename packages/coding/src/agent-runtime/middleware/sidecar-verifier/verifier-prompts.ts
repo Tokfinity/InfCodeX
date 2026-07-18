@@ -18,6 +18,7 @@
  */
 
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import type { SidecarVerifierContextInputs } from './verifier.js';
 
 /**
  * Sidecar Verifier SYSTEM_PROMPT — pinned by the FEATURE_184 Phase D.4
@@ -32,11 +33,19 @@ import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
  * during the eval pilot.
  */
 export const VERIFIER_SYSTEM_PROMPT: string = [
-  'You are a verification sidecar for an autonomous coding agent. A DIFFERENT agent (the "main agent") has just emitted what it considers its final answer for the user\'s current request. Your job is to do a second-pass judgment by reading the main agent\'s recent transcript + the file edits it made + the user\'s original ask.',
+  'You are a verification sidecar for an autonomous coding agent. A DIFFERENT agent (the "main agent") has just emitted what it considers its final answer for the user\'s current request. Your job is to do a second-pass judgment from the user\'s original ask, the main agent\'s recent transcript and final text, plus bounded control-plane evidence about delegated tasks, plan state, tool outcomes, and file edits.',
   '',
   '# IMPORTANT — role separation',
   '',
   'The transcript shown to you contains the MAIN AGENT\'s past messages and tool calls. You are NOT the author of those messages. You are a third-party observer judging whether that agent satisfied the user\'s request. Do not say "I edited the file" or "my reasoning" — the actions belong to the main agent. Your only action is to call `emit_sidecar_verdict` once.',
+  '',
+  '# Evidence semantics',
+  '',
+  '- Treat structured evidence as control-plane observations, not as stronger proof than it actually provides.',
+  '- Task status proves lifecycle state, not correctness. A completed task summary is still an agent-produced claim; compare it with the request, transcript, and final answer.',
+  '- A successful tool outcome only means the tool returned without error. It does not prove that tests passed or that the requested behavior is correct.',
+  '- Plan state can expose an unfinished obligation, but plans can contain stale, optional, or superseded items. Do not reject solely because a plan item is still open; revise only when it corresponds to a requirement the user actually asked for and the final answer claims completion.',
+  '- Omission counts mean the envelope was deliberately bounded. Do not infer failure merely because older evidence was omitted.',
   '',
   '# Three-state verdict',
   '',
@@ -138,7 +147,7 @@ export function renderTranscriptForVerifier(
       const text = typeof m.content === 'string'
         ? m.content
         : extractTextFromContent(m.content);
-      lines.push(`[USER]: ${truncate(text, 800)}`);
+      if (text.trim()) lines.push(`[USER]: ${truncate(text, 800)}`);
     } else if (m.role === 'assistant') {
       const text = typeof m.content === 'string'
         ? m.content
@@ -204,6 +213,7 @@ function extractToolCallsFromContent(
  * Build the verifier's user-message body from context inputs. Combines:
  *   - The user's original current-turn ask(es) — always preserved in full
  *   - A rendered transcript window (last N messages)
+ *   - Bounded delegated-task, plan-state, and tool-outcome evidence
  *   - A file-edit summary (paths + diff hints — verifier sees WHAT
  *     changed, not just what the agent claimed)
  *   - The final assistant text the agent produced
@@ -212,13 +222,7 @@ function extractToolCallsFromContent(
  * provider via `provider.stream`. Why one message, not priorMessages:
  * see the F178 finding above.
  */
-export function buildVerifierUserMessage(inputs: {
-  readonly currentTurnUserQueries: readonly string[];
-  readonly recentTranscript: readonly KodaXMessage[];
-  readonly fileEditSummary: readonly { readonly path: string; readonly diffHint: string }[];
-  readonly lastAssistantText: string;
-  readonly additionalCriteria?: string;
-}): string {
+export function buildVerifierUserMessage(inputs: SidecarVerifierContextInputs): string {
   const sections: string[] = [];
 
   sections.push('=== USER REQUEST (CURRENT TURN) ===');
@@ -236,6 +240,61 @@ export function buildVerifierUserMessage(inputs: {
   sections.push(rendered || '(empty)');
   sections.push('');
 
+  sections.push('=== DELEGATED TASK EVIDENCE ===');
+  const taskEvidence = inputs.taskEvidence ?? [];
+  if (taskEvidence.length === 0) {
+    sections.push('(no structured child or workflow completion evidence)');
+  } else {
+    for (const task of taskEvidence) {
+      sections.push(
+        `- [${task.status}] ${truncate(task.title ?? task.taskId, 240)} `
+        + `(source=${task.source}, task_id=${truncate(task.taskId, 240)})`,
+      );
+      if (task.summary) sections.push(`  Summary: ${truncate(task.summary, 800)}`);
+      if (task.artifactRefs.length > 0) {
+        sections.push(`  Artifacts: ${task.artifactRefs.map((ref) => truncate(ref, 240)).join(', ')}`);
+      }
+      if (task.omittedArtifactRefCount > 0) {
+        sections.push(`  (${task.omittedArtifactRefCount} additional artifact reference(s) omitted)`);
+      }
+    }
+  }
+  if ((inputs.omittedTaskEvidenceCount ?? 0) > 0) {
+    sections.push(`(${inputs.omittedTaskEvidenceCount} additional task result(s) omitted)`);
+  }
+  sections.push('');
+
+  sections.push('=== PLAN STATE ===');
+  const planEvidence = inputs.planEvidence ?? [];
+  if (planEvidence.length === 0) {
+    sections.push('(no committed plan items)');
+  } else {
+    for (const item of planEvidence) {
+      const identity = [`id=${truncate(item.id, 120)}`];
+      if (item.owner) identity.push(`owner=${truncate(item.owner, 160)}`);
+      sections.push(`- [${item.status}] ${truncate(item.subject, 400)} (${identity.join(', ')})`);
+      if (item.note) sections.push(`  Note: ${truncate(item.note, 400)}`);
+    }
+  }
+  if ((inputs.omittedPlanEvidenceCount ?? 0) > 0) {
+    sections.push(`(${inputs.omittedPlanEvidenceCount} additional plan item(s) omitted)`);
+  }
+  sections.push('');
+
+  sections.push('=== TOOL OUTCOMES ===');
+  const toolOutcomes = inputs.toolOutcomeEvidence ?? [];
+  if (toolOutcomes.length === 0) {
+    sections.push('(no structured tool outcomes in the current verification window)');
+  } else {
+    for (const outcome of toolOutcomes) {
+      sections.push(`- ${truncate(outcome.toolName, 160)}: ${outcome.outcome}`);
+    }
+  }
+  if ((inputs.omittedToolOutcomeEvidenceCount ?? 0) > 0) {
+    sections.push(`(${inputs.omittedToolOutcomeEvidenceCount} additional tool outcome(s) omitted)`);
+  }
+  sections.push('');
+
   sections.push('=== FILE EDITS PERFORMED THIS TURN ===');
   if (inputs.fileEditSummary.length === 0) {
     sections.push('(no file edits — text-only response, OR the agent did not actually edit anything despite claiming it did)');
@@ -243,6 +302,9 @@ export function buildVerifierUserMessage(inputs: {
     for (const edit of inputs.fileEditSummary) {
       sections.push(`- ${edit.path}: ${truncate(edit.diffHint, 400)}`);
     }
+  }
+  if ((inputs.omittedFileEditCount ?? 0) > 0) {
+    sections.push(`(${inputs.omittedFileEditCount} additional file mutation(s) omitted)`);
   }
   sections.push('');
 
