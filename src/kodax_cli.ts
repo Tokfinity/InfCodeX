@@ -35,7 +35,6 @@ if (
  */
 import { Command, Option } from 'commander';
 import chalk from 'chalk';
-import { spawn } from 'node:child_process';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import os from 'node:os';
@@ -67,6 +66,11 @@ import {
 } from './runtime-daemon/state.js';
 import { createRuntimeDaemonSocketClientTransport } from './runtime-daemon/transport.js';
 import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
+import {
+  RuntimeDaemonStartupError,
+  spawnRuntimeDaemonServeProcess,
+  waitForHealthyDaemonStartup,
+} from './runtime-daemon/process.js';
 import { runDoctor } from './kodax_doctor.js';
 import {
   getDefaultCommandDir,
@@ -140,7 +144,6 @@ import {
   cleanupRegisteredManagedChildren,
   shutdownTracing,
   applyProcessHardening,
-  prepareInternalNodeLaunch,
 } from '@kodax-ai/agent';
 import {
   getGitRoot,
@@ -260,6 +263,7 @@ interface DaemonStartResult {
   readonly reason?: 'already_running';
   readonly pid?: number | null;
   readonly health?: RuntimeDaemonHealth;
+  readonly error?: string;
   readonly state: RuntimeDaemonState | null;
 }
 
@@ -975,7 +979,9 @@ async function startDaemonCommand(input: {
     return;
   }
   if (result.health !== 'healthy') {
-    throw new Error(`KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`);
+    throw new Error(
+      result.error ?? `KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`,
+    );
   }
   console.log(chalk.green(`KodaX runtime daemon started for profile "${paths.profile}".`));
   if (result.state) {
@@ -1002,22 +1008,51 @@ async function getDaemonStartResult(input: {
       state: before.state ?? null,
     };
   }
+  if (beforeHealth === 'unhealthy' || beforeHealth === 'mismatch') {
+    return {
+      started: false,
+      health: beforeHealth,
+      error: `Runtime daemon is ${beforeHealth}; refusing to start a competing owner.`,
+      state: before.state ?? null,
+    };
+  }
 
-  const child = spawnDaemonServeProcess({
-    profile: paths.profile,
-    homeDir: input.homeDir,
-    configHome: input.configHome,
-    provider: input.provider,
-    model: input.model,
-  });
-  const observation = await waitForDaemonHealth(paths, input.timeoutMs);
-  const health = classifyRuntimeDaemonHealth(observation);
-  return {
-    started: health === 'healthy',
-    pid: child.pid ?? null,
-    health,
-    state: observation.state ?? null,
-  };
+  const cancellation = createDaemonStartupCancellation();
+  try {
+    const child = await spawnRuntimeDaemonServeProcess({
+      profile: paths.profile,
+      homeDir: input.homeDir,
+      configHome: input.configHome,
+      defaultProvider: input.provider,
+      defaultModel: input.model,
+    });
+    try {
+      const observation = await waitForHealthyDaemonStartup(paths, {
+        startupTimeoutMs: input.timeoutMs,
+        startupSignal: cancellation.signal,
+      }, child);
+      return {
+        started: true,
+        pid: child.pid ?? null,
+        health: 'healthy',
+        state: observation.state,
+      };
+    } catch (error: unknown) {
+      if (!(error instanceof RuntimeDaemonStartupError) || error.reason === 'cancelled') {
+        throw error;
+      }
+      const observation = await observeRuntimeDaemonHealth(paths);
+      return {
+        started: false,
+        pid: child.pid ?? null,
+        health: classifyRuntimeDaemonHealth(observation),
+        error: error.message,
+        state: observation.state ?? null,
+      };
+    }
+  } finally {
+    cancellation.close();
+  }
 }
 
 async function serveDaemonCommand(input: {
@@ -1088,12 +1123,29 @@ async function serveDaemonCommand(input: {
       return;
     }
     if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
+    const hostClosed = lease.hostClosed;
+    if (!hostClosed) {
+      await lease.shutdown();
+      throw new Error('Owned Runtime daemon lease did not expose its close signal.');
+    }
+    const testParentWatch = watchRuntimeDaemonTestParent(
+      process.env.KODAX_INTERNAL_DAEMON_TEST_PARENT_PID,
+    );
+    let shutdownPromise: Promise<void> | undefined;
+    const shutdown = (): Promise<void> => {
+      shutdownPromise ??= lease.shutdown();
+      return shutdownPromise;
+    };
+    const externallyClosed = testParentWatch === undefined
+      ? hostClosed
+      : Promise.race([hostClosed, testParentWatch.exited.then(shutdown)]);
     try {
-      await waitForShutdownSignal(() => lease.shutdown(), lease.hostClosed);
+      await waitForShutdownSignal(shutdown, externallyClosed);
     } finally {
+      testParentWatch?.close();
       a2aHandle?.close();
       a2aHandle = undefined;
-      await lease.shutdown();
+      await shutdown();
     }
   } finally {
     a2aHandle?.close();
@@ -1419,106 +1471,6 @@ function tailTextFile(file: string, lineCount: number): readonly string[] {
   return lines.slice(-lineCount);
 }
 
-function spawnDaemonServeProcess(input: {
-  readonly profile: string;
-  readonly homeDir: string;
-  readonly configHome: string;
-  readonly provider?: string;
-  readonly model?: string;
-}): ReturnType<typeof spawn> {
-  const entry = fileURLToPath(import.meta.url);
-  if (!entry) {
-    throw new Error('Cannot resolve current KodaX CLI entrypoint for daemon start.');
-  }
-  const args = [
-    ...daemonServeExecArgv(process.execArgv),
-    entry,
-    'daemon',
-    'serve',
-    '--profile',
-    input.profile,
-    '--home',
-    input.homeDir,
-    '--config-home',
-    input.configHome,
-  ];
-  if (input.provider !== undefined) {
-    args.push('--provider', input.provider);
-  }
-  if (input.model !== undefined) {
-    args.push('--model', input.model);
-  }
-  const launch = prepareInternalNodeLaunch({
-    args,
-    env: {
-      ...process.env,
-      KODAX_DAEMON_SERVE: '1',
-      KODAX_HOME: input.configHome,
-    },
-    isElectron: process.versions.electron !== undefined,
-  });
-  const child = spawn(process.execPath, launch.args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: launch.env,
-  });
-  child.unref();
-  return child;
-}
-
-function daemonServeExecArgv(execArgv: readonly string[]): string[] {
-  const keep: string[] = [];
-  for (let i = 0; i < execArgv.length; i += 1) {
-    const arg = execArgv[i] ?? '';
-    const normalized = arg.toLowerCase();
-    if (
-      normalized === '--import'
-      || normalized === '--loader'
-      || normalized === '--experimental-loader'
-      || normalized === '--require'
-      || normalized === '-r'
-    ) {
-      keep.push(arg);
-      const value = execArgv[i + 1];
-      if (value !== undefined) {
-        keep.push(value);
-        i += 1;
-      }
-      continue;
-    }
-    if (
-      normalized.startsWith('--import=')
-      || normalized.startsWith('--loader=')
-      || normalized.startsWith('--experimental-loader=')
-      || normalized.startsWith('--require=')
-      || normalized.startsWith('--max-old-space-size')
-      || normalized === '--enable-source-maps'
-    ) {
-      keep.push(arg);
-    }
-  }
-  return keep;
-}
-
-async function waitForDaemonHealth(
-  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
-  timeoutMs: number,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let latest = await observeRuntimeDaemonHealth(paths);
-  while (Date.now() <= deadline) {
-    latest = await observeRuntimeDaemonHealth(paths);
-    if (classifyRuntimeDaemonHealth(latest) === 'healthy') {
-      if (latest.state?.status === 'ready') {
-        return latest;
-      }
-    }
-    await delay(100);
-  }
-  return latest;
-}
-
 async function waitForDaemonStopped(
   paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
   timeoutMs: number,
@@ -1556,20 +1508,75 @@ function waitForShutdownSignal(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let closing = false;
-    const finish = (): void => {
+    const cleanup = (): void => {
       process.off('SIGINT', close);
       process.off('SIGTERM', close);
+    };
+    const finish = (): void => {
+      cleanup();
       resolve();
+    };
+    const fail = (error: unknown): void => {
+      cleanup();
+      reject(error);
     };
     const close = (): void => {
       if (closing) return;
       closing = true;
-      void onShutdown().then(finish, reject);
+      void onShutdown().then(finish, fail);
     };
     process.once('SIGINT', close);
     process.once('SIGTERM', close);
-    void hostClosed?.then(finish, reject);
+    void hostClosed?.then(finish, fail);
   });
+}
+
+function createDaemonStartupCancellation(): {
+  readonly signal: AbortSignal;
+  close(): void;
+} {
+  const controller = new AbortController();
+  const cancel = (): void => controller.abort();
+  process.once('SIGINT', cancel);
+  process.once('SIGTERM', cancel);
+  return {
+    signal: controller.signal,
+    close() {
+      process.off('SIGINT', cancel);
+      process.off('SIGTERM', cancel);
+    },
+  };
+}
+
+function watchRuntimeDaemonTestParent(parentPidValue: string | undefined): {
+  readonly exited: Promise<void>;
+  close(): void;
+} | undefined {
+  const parentPid = Number(parentPidValue);
+  if (!Number.isInteger(parentPid) || parentPid <= 0 || parentPid === process.pid) return undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let resolveExit: (() => void) | undefined;
+  const exited = new Promise<void>((resolve) => { resolveExit = resolve; });
+  const poll = (): void => {
+    if (isRuntimeDaemonPidAlive(parentPid)) return;
+    if (timer !== undefined) clearInterval(timer);
+    timer = undefined;
+    resolveExit?.();
+    resolveExit = undefined;
+  };
+  poll();
+  if (resolveExit !== undefined) {
+    timer = setInterval(poll, 1_000);
+    timer.unref?.();
+  }
+  return {
+    exited,
+    close() {
+      if (timer !== undefined) clearInterval(timer);
+      timer = undefined;
+      resolveExit = undefined;
+    },
+  };
 }
 
 function delay(ms: number): Promise<void> {

@@ -40,6 +40,15 @@ All notable changes to this project will be documented in this file.
   SDK requests, but its child Agents now use the unified Actor scheduler and
   task complexity alone no longer activates Workflow.
 
+### Fixed
+
+- **Detached daemon lifecycle cleanup.** CLI and SDK startup now retain the
+  exact candidate process until its PID is healthy and reclaim only that process
+  tree on early exit, timeout, identity mismatch, owner-race loss, or startup
+  cancellation. Vitest-owned daemons also shut down when a forcibly terminated
+  worker cannot run normal teardown; production daemons remain persistent after
+  ordinary client detach and have no idle reaper.
+
 ## [0.7.72-hotfix.0] - 2026-07-17
 
 ### Fixed

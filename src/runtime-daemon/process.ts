@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import {
   ELECTRON_RUN_AS_NODE_ENV,
+  killChildProcessTree,
   prepareInternalNodeLaunch,
 } from '@kodax-ai/agent';
 
@@ -41,6 +42,7 @@ export interface RuntimeDaemonProcessLeaseOptions {
   readonly permissionTimeoutMs?: number;
   readonly connectTimeoutMs?: number;
   readonly startupTimeoutMs?: number;
+  readonly startupSignal?: AbortSignal;
   readonly pollIntervalMs?: number;
   readonly healthCheck?: RuntimeDaemonHealthCheckOptions;
 }
@@ -64,6 +66,22 @@ export interface RuntimeDaemonStartupProcess {
   readonly exit: Promise<RuntimeDaemonStartupExit>;
   unref(): void;
   terminate(): Promise<void>;
+}
+
+export type RuntimeDaemonStartupFailureReason =
+  | 'cancelled'
+  | 'child_exit'
+  | 'identity_mismatch'
+  | 'timeout';
+
+export class RuntimeDaemonStartupError extends Error {
+  constructor(
+    message: string,
+    readonly reason: RuntimeDaemonStartupFailureReason,
+  ) {
+    super(message);
+    this.name = 'RuntimeDaemonStartupError';
+  }
 }
 
 type RuntimeDaemonHealthObserver = (
@@ -154,7 +172,10 @@ export async function waitForHealthyDaemonStartup(
         return { ...observation, state: observation.state };
       }
       if (health === 'mismatch') {
-        throw new Error('Runtime daemon endpoint identity does not match its persisted owner state.');
+        throw new RuntimeDaemonStartupError(
+          'Runtime daemon endpoint identity does not match its persisted owner state.',
+          'identity_mismatch',
+        );
       }
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) throw runtimeDaemonStartupTimeout(paths);
@@ -162,6 +183,7 @@ export async function waitForHealthyDaemonStartup(
         Math.min(Math.max(1, options.pollIntervalMs ?? 100), remainingMs),
         paths,
         child,
+        options.startupSignal,
       );
     }
   } catch (error: unknown) {
@@ -183,13 +205,13 @@ async function observeStartupHealth(
   child: RuntimeDaemonStartupProcess,
   observe: RuntimeDaemonHealthObserver,
 ): Promise<RuntimeDaemonHealthObservation> {
-  const outcome = await Promise.race([
+  const outcome = await raceRuntimeDaemonStartupStep(Promise.race([
     observe(paths, options.healthCheck).then((observation) => ({
       kind: 'health' as const,
       observation,
     })),
     child.exit.then((exit) => ({ kind: 'exit' as const, exit })),
-  ]);
+  ]), options.startupSignal);
   if (outcome.kind === 'exit') {
     if (hasCompetingStartupOwner(paths, child)) {
       return observe(paths, options.healthCheck);
@@ -203,14 +225,15 @@ async function waitForStartupPoll(
   pollIntervalMs: number,
   paths: RuntimeDaemonPaths,
   child: RuntimeDaemonStartupProcess,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const outcome = await Promise.race([
+  const outcome = await raceRuntimeDaemonStartupStep(Promise.race([
     delay(pollIntervalMs).then(() => undefined),
     child.exit,
-  ]);
+  ]), signal);
   if (outcome === undefined) return;
   if (hasCompetingStartupOwner(paths, child)) {
-    await delay(pollIntervalMs);
+    await raceRuntimeDaemonStartupStep(delay(pollIntervalMs), signal);
     return;
   }
   throw runtimeDaemonExitedEarly(outcome);
@@ -224,23 +247,27 @@ function hasCompetingStartupOwner(
   return owner !== undefined && owner.pid !== child.pid;
 }
 
-function runtimeDaemonExitedEarly(exit: RuntimeDaemonStartupExit): Error {
+function runtimeDaemonExitedEarly(exit: RuntimeDaemonStartupExit): RuntimeDaemonStartupError {
   const status = exit.signal !== null
     ? `signal ${exit.signal}`
     : `code ${exit.code ?? 'unknown'}`;
-  return new Error(`Runtime daemon child exited before becoming healthy (${status}).`);
-}
-
-function runtimeDaemonStartupTimeout(paths: RuntimeDaemonPaths): Error {
-  const electronHint = process.versions.electron === undefined
-    ? ''
-    : ' Packaged Electron auto-start requires the RunAsNode fuse to remain enabled.';
-  return new Error(
-    `Timed out waiting for runtime daemon profile "${paths.profile}" to become ready.${electronHint}`,
+  return new RuntimeDaemonStartupError(
+    `Runtime daemon child exited before becoming healthy (${status}).`,
+    'child_exit',
   );
 }
 
-async function spawnRuntimeDaemonServeProcess(input: {
+function runtimeDaemonStartupTimeout(paths: RuntimeDaemonPaths): RuntimeDaemonStartupError {
+  const electronHint = process.versions.electron === undefined
+    ? ''
+    : ' Packaged Electron auto-start requires the RunAsNode fuse to remain enabled.';
+  return new RuntimeDaemonStartupError(
+    `Timed out waiting for runtime daemon profile "${paths.profile}" to become ready.${electronHint}`,
+    'timeout',
+  );
+}
+
+export async function spawnRuntimeDaemonServeProcess(input: {
   readonly profile: string;
   readonly homeDir: string;
   readonly configHome: string;
@@ -306,9 +333,7 @@ function createRuntimeDaemonStartupProcess(
     },
     async terminate() {
       if (child.exitCode !== null || child.signalCode !== null) return;
-      child.kill();
-      if (await didExitWithin(exit, 1_000)) return;
-      child.kill('SIGKILL');
+      await killChildProcessTree(child);
       if (!await didExitWithin(exit, 1_000)) {
         throw new Error(`Runtime daemon child ${child.pid ?? 'unknown'} did not exit after termination.`);
       }
@@ -396,4 +421,28 @@ function daemonServeExecArgv(execArgv: readonly string[], needsTsx: boolean): st
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function raceRuntimeDaemonStartupStep<T>(
+  step: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (!signal) return step;
+  if (signal.aborted) throw runtimeDaemonStartupCancelled();
+  let cancel: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      step,
+      new Promise<never>((_, reject) => {
+        cancel = () => reject(runtimeDaemonStartupCancelled());
+        signal.addEventListener('abort', cancel, { once: true });
+      }),
+    ]);
+  } finally {
+    if (cancel) signal.removeEventListener('abort', cancel);
+  }
+}
+
+function runtimeDaemonStartupCancelled(): RuntimeDaemonStartupError {
+  return new RuntimeDaemonStartupError('Runtime daemon startup cancelled.', 'cancelled');
 }

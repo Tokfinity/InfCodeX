@@ -134,6 +134,27 @@ describe('runtime daemon child startup', () => {
     expect(child.unref).not.toHaveBeenCalled();
   });
 
+  it('reclaims a still-starting child when startup is cancelled', async () => {
+    const controller = new AbortController();
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 655,
+      exit: new Promise(() => undefined),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+
+    const waiting = waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      startupSignal: controller.signal,
+    }, child, missingHealth);
+    controller.abort();
+
+    await expect(waiting).rejects.toThrow(/startup cancelled/i);
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
+
   it('unrefs the spawned child only after that child publishes healthy state', async () => {
     const child: RuntimeDaemonStartupProcess = {
       pid: 777,

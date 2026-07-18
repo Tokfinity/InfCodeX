@@ -20,6 +20,7 @@ import {
   tryAcquireRuntimeDaemonLock,
   writeRuntimeDaemonState,
 } from './runtime-daemon/state.js';
+import { isRuntimeDaemonPidAlive } from './runtime-daemon/lifecycle.js';
 
 const tempRoots: string[] = [];
 
@@ -740,6 +741,32 @@ describe('daemon CLI smoke', () => {
     expect(fs.existsSync(lockFile)).toBe(false);
   }, 180_000);
 
+  it('shuts down a test-owned daemon when its explicitly watched parent exits', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-parent-watch-'));
+    tempRoots.push(homeDir);
+    const profile = `parent-watch-${process.pid}-${Date.now()}`;
+    const parentScript = `
+      const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
+      const { readRuntimeDaemonState, resolveRuntimeDaemonPaths } = await import('./src/runtime-daemon/state.ts');
+      process.env.KODAX_INTERNAL_DAEMON_TEST_PARENT_PID = String(process.pid);
+      await createKodaXRuntime({
+        mode: 'daemon', homeDir: process.argv[1], profile: process.argv[2],
+        defaultProvider: 'mock-provider',
+      });
+      const state = readRuntimeDaemonState(resolveRuntimeDaemonPaths(process.argv[1], process.argv[2]));
+      if (!state) throw new Error('daemon did not publish state');
+      process.stdout.write(JSON.stringify({ pid: state.pid }), () => process.exit(0));
+    `;
+
+    const result = await runSdkProbe(parentScript, homeDir, profile) as { readonly pid: number };
+    try {
+      await waitForDaemonState(profile, homeDir, false, 5_000);
+      await waitForDaemonPidExit(result.pid, 5_000);
+    } finally {
+      await stopDaemonBestEffort(homeDir);
+    }
+  }, 90_000);
+
   it('force-cleans stale daemon ownership without a live owner process', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cli-force-stale-'));
     tempRoots.push(homeDir);
@@ -939,15 +966,26 @@ async function waitForDaemonState(
   profile: string,
   homeDir: string,
   present: boolean,
+  timeoutMs = 30_000,
 ): Promise<void> {
   const paths = resolveRuntimeDaemonPaths(homeDir, profile);
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     const exists = fs.existsSync(paths.stateFile) || fs.existsSync(paths.lockFile);
     if (exists === present) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Timed out waiting for daemon state present=${present}.`);
+}
+
+async function waitForDaemonPidExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (isRuntimeDaemonPidAlive(pid)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for daemon PID ${pid} to exit.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function stopDaemonBestEffort(homeDir: string): Promise<void> {

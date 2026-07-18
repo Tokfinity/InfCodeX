@@ -14,6 +14,7 @@ _Last Updated: 2026-07-18_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 183 | High | Resolved | CLI daemon startup failures and forced test exits could leave detached Node processes | v0.7.66-v0.7.72-hotfix.0 | v0.7.72-hotfix.0 | 2026-07-18 | 2026-07-18 |
 | 177 | Medium | Resolved | Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 176 | High | Resolved | Learning subscription could lose a wake, retain a waiter after disconnect, and cache transient principals without bound | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
 | 175 | High | Resolved | Actor start/interrupt race could launch with a fresh cancellation handle; closed Actors still accepted mailbox traffic | v0.7.72-dev | v0.7.72 | 2026-07-18 | 2026-07-18 |
@@ -87,6 +88,84 @@ _Last Updated: 2026-07-18_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 183: CLI daemon startup failures and forced test exits could leave detached Node processes
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72-hotfix.0)
+- **Introduced**: v0.7.66-v0.7.72-hotfix.0
+- **Fixed**: v0.7.72-hotfix.0
+- **Created**: 2026-07-18
+- **Resolved**: 2026-07-18
+
+#### Original Problem
+
+Windows process inspection found detached `kodax daemon serve` Node processes
+whose launching test workers no longer existed. Normal daemon persistence was
+initially conflated with leakage: a healthy shared daemon intentionally survives
+client `close()`, and a live/reachable daemon is not stale merely because its
+original client or parent exited.
+
+Two real lifecycle gaps remained. `kodax daemon start` detached its child before
+health confirmation and retained no handle, so timeout, startup failure, owner
+race, or Ctrl+C could not reclaim that exact candidate. Separately, daemon tests
+performed explicit shutdown in `finally`, but a forcibly terminated Vitest
+worker cannot run JavaScript teardown and could leave its test daemon alive.
+The report's claimed `mock-provider` tight loop had no supporting stack or CPU
+profile and was not used as a basis for a speculative provider change.
+
+#### Root Cause
+
+- CLI and SDK startup used different process lifecycle implementations. The SDK
+  path retained and fenced its child, while the CLI path called `unref()`
+  immediately and then polled health independently.
+- The test harness had normal-path shutdown but no out-of-process fallback tied
+  to the actual Vitest worker lifetime.
+- A universal zero-client/idle reaper would violate the documented shared-daemon
+  contract and the proposed `unowned` condition cannot describe a live owner,
+  because a live daemon holds its own owner lock.
+
+#### Resolution
+
+- CLI and SDK now share one startup primitive. The exact candidate stays
+  referenced until its own PID publishes healthy state; child exit, timeout,
+  identity mismatch, competing-owner loss, and startup cancellation reclaim
+  only that candidate and its descendants. Successfully healthy daemons remain
+  detached and persistent.
+- CLI startup installs bounded SIGINT/SIGTERM cancellation only while startup is
+  pending and removes those listeners on every exit path. Known startup failure
+  remains structured in JSON results; cleanup failure still propagates.
+- Vitest records its worker PID in an internal inherited marker. A daemon checks
+  that marker only when explicitly present and performs normal owner shutdown if
+  the worker disappears. Production launches have no parent timer or idle
+  reaper, and external tests must still use explicit `runtime.shutdown`/daemon
+  stop during normal teardown.
+- Startup termination uses the existing cross-platform process-tree cleanup so
+  a partially initialized candidate cannot leave MCP/A2A descendants behind.
+
+#### Files Changed
+
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/kodax_cli.ts`
+- `src/kodax_cli.daemon-smoke.test.ts`
+- `vitest.setup.queue.ts`
+- `docs/HLD.md`
+- `docs/DD.md`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `docs/test-guides/ISSUE_183_v0.7.72_REGRESSION_GUIDE.md`
+- `CHANGELOG.md`
+
+#### Tests Added / Verification Coverage
+
+- Cancellation rejects promptly, terminates once, and never unreferences the
+  pending candidate.
+- A real SDK-started daemon shuts down, removes state/lock, and exits after its
+  explicitly watched parent process terminates without closing the client.
+- Existing regressions continue proving that a healthy daemon survives ordinary
+  client detach, concurrent starters converge, and CLI start/restart/stop works.
+- Strict TypeScript compilation passes and the final Windows process inventory
+  contains no KodaX daemon residue.
 
 ### 177: Worker announced and attempted an oversized fresh spawn wave before Actor capacity rejection
 
@@ -4543,11 +4622,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 64 (24 Open, 40 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 65 (24 Open, 41 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-18: Issue 183 added and resolved (v0.7.72-hotfix.0)
+- Unified CLI and SDK daemon startup ownership, reclaimed only the current
+  failed/cancelled candidate process tree, and added a test-only worker-death
+  shutdown fallback without changing persistent production daemon semantics.
 
 ### 2026-07-18: Issue 177 added and resolved (v0.7.72)
 - Promoted current Actor capacity to a shared authoritative first-section

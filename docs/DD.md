@@ -394,7 +394,11 @@ registration replacement/removal and Runtime restart. `closeTimeoutMs` is a
 positive finite owner-plane override with a 30-second default shared by admitted
 work and executor disposal. Obsolete executor cleanup happens after the
 serialized persistence/publication lane, while daemon auto-start waits on and
-terminates abandoned child processes.
+terminates abandoned child process trees. CLI and SDK callers share that exact
+candidate lifecycle; detachment occurs only after the candidate PID is healthy.
+The repository test harness may additionally bind a daemon to its Vitest worker
+for abnormal worker-loss cleanup, but production daemon lifetime remains
+explicitly administered rather than client- or idle-owned.
 
 ## 14. Governed Memory Runtime
 

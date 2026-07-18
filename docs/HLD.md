@@ -88,6 +88,12 @@ ends the shared owner. Restart marks persisted non-terminal runs interrupted;
 clients reconnect explicitly and KodaX does not pretend to resume an unknown
 in-flight provider/tool operation.
 
+CLI and SDK auto-start use the same candidate lifecycle: the spawned process
+remains referenced until its own PID is healthy, and only that candidate process
+tree is reclaimed on exit, timeout, identity mismatch, startup cancellation, or
+loss of the owner race. Healthy daemons detach and remain available for later
+clients; there is no production zero-client idle reaper.
+
 Packaged Electron daemon auto-start uses the application executable only as a
 bootstrap Node host. A preloaded scrub import removes `ELECTRON_RUN_AS_NODE`
 before daemon application code loads, so ordinary children do not inherit it.

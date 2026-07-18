@@ -32,6 +32,12 @@ import { beforeEach } from 'vitest';
 // and a safe dependency surface for global test setup.
 import { _resetMessageQueueForTests } from '@kodax-ai/agent/messaging/queue';
 
+// Daemon processes intentionally outlive ordinary clients. Bind daemons
+// launched by this Vitest worker to the worker PID so a forced worker exit can
+// still trigger clean daemon shutdown when per-test finally hooks cannot run.
+// Child CLI/probe processes inherit the original worker PID unchanged.
+process.env.KODAX_INTERNAL_DAEMON_TEST_PARENT_PID = String(process.pid);
+
 beforeEach(() => {
   _resetMessageQueueForTests();
 });

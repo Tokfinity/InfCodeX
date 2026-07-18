@@ -2526,6 +2526,12 @@ an in-process socket listener as daemon mode. Closing the SDK client detaches
 without stopping that shared process. Use `kodax daemon stop` or the explicit
 runtime shutdown protocol to stop the owner.
 
+CLI and SDK startup retain the exact spawned candidate until health confirms
+that candidate PID. Early exit, timeout, identity mismatch, cancellation, or a
+different owner winning the race reclaims only the unsuccessful candidate
+process tree. Once healthy, the owner detaches normally and is not tied to the
+creating client process.
+
 ### Daemon startup, conflict, and recovery behavior
 
 REPL, Space, and SDK callers using the same resolved `homeDir + profile` target
@@ -2548,6 +2554,9 @@ Operational guidance:
 - test harnesses that auto-start a process daemon must send authenticated
   `runtime.shutdown` (or run `kodax daemon stop --home <dir> --profile <name>`)
   before deleting their temporary home; `runtime.close()` only detaches;
+- KodaX's own Vitest harness also supplies an internal worker-PID marker so a
+  forcibly terminated worker cannot strand its test daemon; this is a test-only
+  fallback, not a public SDK option or a production idle-shutdown policy;
 - query `kodax daemon status --json` before deciding to restart;
 - inspect `kodax daemon logs --lines 100` when startup times out;
 - custom endpoints and injected transports are attach-only unless the caller
