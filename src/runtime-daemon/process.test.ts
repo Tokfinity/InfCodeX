@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assertRuntimeDaemonCliEntryAvailable,
   createRuntimeDaemonServeEnvironment,
+  daemonServeExecArgv,
   waitForHealthyDaemonStartup,
   type RuntimeDaemonStartupProcess,
 } from './process.js';
@@ -72,6 +73,23 @@ describe('runtime daemon child process environment', () => {
     expect(() => assertRuntimeDaemonCliEntryAvailable(missingEntry)).toThrow(
       /Keep the published KodaX dist files external/,
     );
+  });
+
+  it('does not inherit test-runner loaders into a source daemon child', () => {
+    expect(daemonServeExecArgv([
+      '--import', 'tsx',
+      '--import', 'vitest/worker',
+      '--require', './scripts/production-env.cjs',
+      '--require', 'vitest/register',
+      '--loader', 'some-test-loader',
+      '--max-old-space-size=4096',
+      '--enable-source-maps',
+    ], true)).toEqual([
+      '--require', './scripts/production-env.cjs',
+      '--max-old-space-size=4096',
+      '--enable-source-maps',
+      '--import', 'tsx',
+    ]);
   });
 });
 

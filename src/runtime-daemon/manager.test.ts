@@ -625,6 +625,7 @@ function makeRuntime(
           queuedRuns: [],
           activeWorkflows: [],
           activeAgentTurns: [],
+          activeAgentTasks: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

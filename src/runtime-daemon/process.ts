@@ -390,33 +390,33 @@ function resolveDaemonCliEntry(): string | undefined {
   return path.join(distDir, 'kodax_cli.js');
 }
 
-function daemonServeExecArgv(execArgv: readonly string[], needsTsx: boolean): string[] {
+export function daemonServeExecArgv(execArgv: readonly string[], needsTsx: boolean): string[] {
   const keep: string[] = [];
   for (let index = 0; index < execArgv.length; index += 1) {
     const arg = execArgv[index] ?? '';
     const normalized = arg.toLowerCase();
-    if (['--import', '--loader', '--experimental-loader', '--require', '-r'].includes(normalized)) {
-      keep.push(arg);
+    if (normalized === '--require' || normalized === '-r') {
       const value = execArgv[index + 1];
       if (value !== undefined) {
-        keep.push(value);
+        if (isKodaXProductionEnvPreload(value)) keep.push(arg, value);
         index += 1;
       }
+    } else if (normalized.startsWith('--require=')) {
+      const value = arg.slice('--require='.length);
+      if (isKodaXProductionEnvPreload(value)) keep.push(arg);
     } else if (
-      normalized.startsWith('--import=')
-      || normalized.startsWith('--loader=')
-      || normalized.startsWith('--experimental-loader=')
-      || normalized.startsWith('--require=')
-      || normalized.startsWith('--max-old-space-size')
+      normalized.startsWith('--max-old-space-size')
       || normalized === '--enable-source-maps'
     ) {
       keep.push(arg);
     }
   }
-  if (needsTsx && !keep.some((arg) => arg === 'tsx' || arg.endsWith('/tsx') || arg.endsWith('\\tsx'))) {
-    keep.unshift('--import', 'tsx');
-  }
+  if (needsTsx) keep.push('--import', 'tsx');
   return keep;
+}
+
+function isKodaXProductionEnvPreload(value: string): boolean {
+  return path.resolve(value) === path.resolve('scripts', 'production-env.cjs');
 }
 
 function delay(ms: number): Promise<void> {

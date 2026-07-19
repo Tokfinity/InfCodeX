@@ -43,7 +43,11 @@ import type {
   ToolGuardrail,
 } from '@kodax-ai/agent';
 
-import { checkAbsoluteDeny, type AbsoluteDenyResult } from './absolute-denylist.js';
+import {
+  checkAbsoluteDeny,
+  type AbsoluteDenyCheck,
+  type AbsoluteDenyResult,
+} from './absolute-denylist.js';
 import { bashSignalCollector } from './bash-signals.js';
 import {
   classify,
@@ -262,6 +266,9 @@ export interface AutoModeGuardrailConfig {
    */
   readonly extraCollectors?: readonly SignalCollector[];
 
+  /** Layer-owned Tier-0 checks that run after the coding-side frozen list. */
+  readonly extraAbsoluteDenyChecks?: readonly AbsoluteDenyCheck[];
+
   /**
    * Speculative-classify quiet window (ms). When a classifier promise
    * settles within this window, the guardrail uses the verdict directly
@@ -387,7 +394,12 @@ export function createAutoModeToolGuardrail(
     // ~/.kodax write) are blocked even when engine is downgraded to 'rules'.
     // LLM cannot override. denialTracker NOT incremented (Tier 0 isn't a
     // classifier denial — separate concern from engine downgrade).
-    const tier0: AbsoluteDenyResult = checkAbsoluteDeny(guardedCall, projectRoot, executionCwd);
+    const tier0: AbsoluteDenyResult = [
+      checkAbsoluteDeny,
+      ...(config.extraAbsoluteDenyChecks ?? []),
+    ].reduce<AbsoluteDenyResult>((result, check) => (
+      result.denied ? result : check(guardedCall, projectRoot, executionCwd)
+    ), { denied: false });
     if (tier0.denied) {
       config.log?.(
         'warn',

@@ -1038,7 +1038,24 @@ export interface KodaXChildFinding {
   readonly artifacts: readonly string[];
 }
 
-export type KodaXAgentMode = 'ama' | 'sa';
+export type KodaXAgentMode =
+  | 'ama'
+  | 'sa'
+  /** @deprecated AMAW was merged into AMA in v0.7.72; accepted as an input alias only. */
+  | 'amaw';
+export type KodaXCanonicalAgentMode = Exclude<KodaXAgentMode, 'amaw'>;
+
+/** Normalize the retired AMAW spelling at every public SDK entry boundary. */
+export function normalizeKodaXAgentMode(mode: KodaXAgentMode): KodaXCanonicalAgentMode;
+export function normalizeKodaXAgentMode(mode: undefined): undefined;
+export function normalizeKodaXAgentMode(
+  mode: KodaXAgentMode | undefined,
+): KodaXCanonicalAgentMode | undefined;
+export function normalizeKodaXAgentMode(
+  mode: KodaXAgentMode | undefined,
+): KodaXCanonicalAgentMode | undefined {
+  return mode === 'amaw' ? 'ama' : mode;
+}
 export type KodaXMemoryStrategy = 'continuous' | 'compact' | 'reset-handoff';
 export type KodaXBudgetDisclosureZone = 'green' | 'yellow' | 'orange' | 'red';
 

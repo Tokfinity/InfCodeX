@@ -56,15 +56,16 @@ import {
   findValidCheckpoint,
 } from './task-engine/_internal/managed-task/checkpoint.js';
 import type {
-  KodaXAgentMode,
+  KodaXCanonicalAgentMode,
   KodaXHarnessProfile,
   KodaXOptions,
   KodaXResult,
   KodaXTaskRoutingDecision,
 } from './types.js';
+import { normalizeKodaXAgentMode } from './types.js';
 
-export function resolveManagedAgentMode(options: KodaXOptions): KodaXAgentMode {
-  return options.agentMode ?? 'ama';
+export function resolveManagedAgentMode(options: KodaXOptions): KodaXCanonicalAgentMode {
+  return normalizeKodaXAgentMode(options.agentMode) ?? 'ama';
 }
 
 export function buildDirectPathTaskFamilyPromptOverlay(

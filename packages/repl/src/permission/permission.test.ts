@@ -45,6 +45,26 @@ describe('plan mode writable path whitelist', () => {
     ).toBeNull();
   });
 
+  it('resolves relative plan-mode targets from executionCwd while keeping projectRoot as the boundary', () => {
+    const projectRoot = createProjectRoot();
+    const executionCwd = path.join(projectRoot, 'packages', 'app');
+    const planFromExecutionCwd = path.join('..', '..', '.agent', 'plan_mode_doc.md');
+
+    expect(isPlanModeAllowedPath(planFromExecutionCwd, projectRoot, executionCwd)).toBe(true);
+    expect(getPlanModeBlockReason(
+      'write',
+      { path: planFromExecutionCwd },
+      projectRoot,
+      executionCwd,
+    )).toBeNull();
+    expect(getPlanModeBlockReason(
+      'write',
+      { path: '.agent/plan_mode_doc.md' },
+      projectRoot,
+      executionCwd,
+    )).toContain('Plan mode only allows file modifications');
+  });
+
   it('allows writes in the system temp directory', () => {
     const projectRoot = createProjectRoot();
     const tempFile = path.join(os.tmpdir(), `kodax-plan-${Date.now()}.txt`);

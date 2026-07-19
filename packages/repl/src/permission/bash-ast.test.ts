@@ -64,6 +64,14 @@ describe('parseBashCommand — logical operators', () => {
 });
 
 describe('parseBashCommand — redirections', () => {
+  it('preserves environment references in redirection targets', () => {
+    const tree = parseBashCommand('echo secret > "$HOME/.kodax/credentials.json"');
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements[0]?.stages[0]?.redirections).toEqual([
+      expect.objectContaining({ target: '$HOME/.kodax/credentials.json' }),
+    ]);
+  });
+
   it('parses a simple stdout redirect', () => {
     const tree = parseBashCommand('echo hi > out.txt');
     expect(tree.statements[0].stages[0].argv).toEqual(['echo', 'hi']);

@@ -376,6 +376,8 @@ export {
   getAgentConfigPath,
   setAgentConfigHome,
   getAppDataDir,
+  isPathInsideDirectory,
+  resolveExecutionPath,
 } from './runtime/agent-home.js';
 
 export {

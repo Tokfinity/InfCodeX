@@ -166,6 +166,14 @@ describe('Tier 0 — user_kodax_write (file tools)', () => {
     if (result.denied) expect(result.patternId).toBe('user_kodax_write');
   });
 
+  it.runIf(process.platform === 'win32')('BLOCKS case-varied Windows user KodaX paths', () => {
+    const result = checkAbsoluteDeny(
+      write(path.join(USER_KODAX.toUpperCase(), 'CONFIG.JSON')),
+      PROJECT_ROOT,
+    );
+    expect(result).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
   it('ALLOWS write to <projectRoot>/.kodax/ (project-config zone, not credential zone)', () => {
     // The project-side .kodax has its own protected_path signal but is NOT
     // Tier 0 — it's recoverable from git, unlike credentials.

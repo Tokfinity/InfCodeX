@@ -20,18 +20,21 @@ import { runWithScopedConfig } from '@kodax-ai/llm';
 import { createDefaultCodingAgent } from './coding-preset.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';
 import { deriveRunScopedConfig } from './run-scoped-config.js';
-import type { KodaXOptions, KodaXResult } from './types.js';
+import { normalizeKodaXAgentMode, type KodaXOptions, type KodaXResult } from './types.js';
 
 export async function runKodaX(
   options: KodaXOptions,
   prompt: string,
 ): Promise<KodaXResult> {
+  const normalizedOptions: KodaXOptions = options.agentMode === undefined
+    ? options
+    : { ...options, agentMode: normalizeKodaXAgentMode(options.agentMode) };
   // FEATURE_103 (v0.7.29): apply L5 user-followup escalation at the SA
   // entry. When the user's prompt contains a doubt or deepen marker
   // (and, for doubt, there is a prior assistant turn in the session),
   // bump the L1 ceiling one rank. Off remains off (kill switch). Pure
   // option transform — no escalation = same reference returned.
-  const { options: baseOptions } = applyFollowupEscalationToOptions(options, prompt);
+  const { options: baseOptions } = applyFollowupEscalationToOptions(normalizedOptions, prompt);
   // FEATURE_247 (R1, SA): a profile's instructions map to `systemPromptOverride`
   // on the SA path (consumed in reasoning-plan-entry). `dispatchManagedTask`
   // applies this for its SA route, but `runKodaX` is ALSO a direct SA entry

@@ -15,7 +15,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-import { getAgentConfigHome } from '@kodax-ai/agent';
+import {
+  getAgentConfigHome,
+  isPathInsideDirectory,
+  resolveExecutionPath,
+} from '@kodax-ai/agent';
 import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
 import { isToolPlanModeAllowed } from '@kodax-ai/coding';
 
@@ -267,6 +271,29 @@ const POWERSHELL_WRITE_TOKENS = new Set([
   'ni',
 ]);
 
+const NESTED_SHELL_COMMAND_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  bash: new Set(['-c']),
+  dash: new Set(['-c']),
+  sh: new Set(['-c']),
+  zsh: new Set(['-c']),
+  cmd: new Set(['/c']),
+  powershell: new Set(['-command', '-c']),
+  pwsh: new Set(['-command', '-c']),
+};
+
+function getNestedShellCommand(argv: readonly string[]): string | undefined {
+  const executablePath = argv[0]?.replace(/\\/g, '/');
+  const executable = executablePath
+    ?.slice(executablePath.lastIndexOf('/') + 1)
+    .replace(/\.exe$/i, '')
+    .toLowerCase();
+  if (!executable) return undefined;
+  const flags = NESTED_SHELL_COMMAND_FLAGS[executable];
+  if (!flags) return undefined;
+  const flagIndex = argv.findIndex((value, index) => index > 0 && flags.has(value.toLowerCase()));
+  return flagIndex >= 0 ? argv[flagIndex + 1] : undefined;
+}
+
 /**
  * Check if a bash command is a write operation.
  *
@@ -303,6 +330,10 @@ const POWERSHELL_WRITE_TOKENS = new Set([
  * @returns true if the command is a write operation
  */
 export function isBashWriteCommand(command: string): boolean {
+  return isBashWriteCommandAtDepth(command, 0);
+}
+
+function isBashWriteCommandAtDepth(command: string, depth: number): boolean {
   if (!command || !command.trim()) {
     return false;
   }
@@ -342,6 +373,9 @@ export function isBashWriteCommand(command: string): boolean {
         if (redir.input) continue;
         if (!isNullDevice(redir.target)) return true;
       }
+
+      const nested = depth < 3 ? getNestedShellCommand(stage.argv) : undefined;
+      if (nested !== undefined && isBashWriteCommandAtDepth(nested, depth + 1)) return true;
     }
   }
 
@@ -1060,7 +1094,7 @@ export function isCommandOnProtectedPath(
 ): boolean {
   const paths = extractPathsFromCommand(command);
   for (const p of paths) {
-    const resolved = path.isAbsolute(p) ? p : path.resolve(executionCwd, p);
+    const resolved = resolveExecutionPath(p, executionCwd);
     if (isAlwaysConfirmPath(resolved, projectRoot)) {
       return true;
     }
@@ -1075,12 +1109,6 @@ function normalizePathForComparison(targetPath: string): string {
 
 function pathsEqual(leftPath: string, rightPath: string): boolean {
   return normalizePathForComparison(leftPath) === normalizePathForComparison(rightPath);
-}
-
-function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
-  const normalizedTarget = normalizePathForComparison(targetPath);
-  const normalizedDirectory = normalizePathForComparison(directoryPath);
-  return normalizedTarget === normalizedDirectory || normalizedTarget.startsWith(normalizedDirectory + path.sep);
 }
 
 /**
@@ -1171,8 +1199,12 @@ function expandSystemTempAlias(targetPath: string): string {
   return targetPath;
 }
 
-function resolvePermissionPath(targetPath: string, projectRoot?: string): string {
-  const baseRoot = path.resolve(projectRoot ?? process.cwd());
+function resolvePermissionPath(
+  targetPath: string,
+  projectRoot?: string,
+  executionCwd = projectRoot,
+): string {
+  const baseRoot = path.resolve(executionCwd ?? projectRoot ?? process.cwd());
   const expanded = expandSystemTempAlias(expandHomeDirectory(targetPath));
   const resolved = path.isAbsolute(expanded)
     ? path.resolve(expanded)
@@ -1212,8 +1244,12 @@ export function getPlanModeAllowedWritablePaths(projectRoot?: string): {
   };
 }
 
-export function isPlanModeAllowedPath(targetPath: string, projectRoot?: string): boolean {
-  const resolvedTarget = resolvePermissionPath(targetPath, projectRoot);
+export function isPlanModeAllowedPath(
+  targetPath: string,
+  projectRoot?: string,
+  executionCwd = projectRoot,
+): boolean {
+  const resolvedTarget = resolvePermissionPath(targetPath, projectRoot, executionCwd);
   const { projectPlanDoc, systemTempDirs } = getPlanModeAllowedWritablePaths(projectRoot);
 
   if (pathsEqual(resolvedTarget, projectPlanDoc)) {
@@ -1295,6 +1331,101 @@ function collectPowerShellWriteTargets(stage: { readonly argv: readonly string[]
  * tokens with quoting stripped, and per-stage redirection targets.
  */
 export function collectBashWriteTargets(command: string): string[] {
+  return collectBashWriteTargetsAtDepth(command, 0, true);
+}
+
+/** Parsed targets whose command role itself proves they are mutated. */
+export function collectDeterministicBashWriteTargets(command: string): string[] {
+  return collectBashWriteTargetsAtDepth(command, 0, false);
+}
+
+const MUTATE_ALL_POSITIONAL_COMMANDS = new Set([
+  'rm', 'rmdir', 'mkdir', 'touch', 'mv', 'move', 'ren', 'del', 'erase', 'rd',
+]);
+const DESTINATION_ONLY_COMMANDS = new Set(['cp', 'copy']);
+
+function collectPositionalArgs(argv: readonly string[], startIndex = 1): string[] {
+  const positional: string[] = [];
+  let optionsEnded = false;
+  for (let index = startIndex; index < argv.length; index += 1) {
+    const token = argv[index]!;
+    if (token === '--') {
+      optionsEnded = true;
+    } else if (optionsEnded || !token.startsWith('-')) {
+      positional.push(token);
+    }
+  }
+  return positional;
+}
+
+function collectDirectCommandWriteTargets(stage: { readonly argv: readonly string[] }): string[] {
+  const command = commandBasename(stage.argv[0] ?? '');
+  const positional = collectPositionalArgs(stage.argv);
+  if (MUTATE_ALL_POSITIONAL_COMMANDS.has(command)) return positional;
+  if (DESTINATION_ONLY_COMMANDS.has(command)) {
+    const targetDirectoryIndex = stage.argv.findIndex((token) => (
+      token === '-t' || token === '--target-directory'
+    ));
+    if (targetDirectoryIndex >= 0) {
+      const targetDirectory = stage.argv[targetDirectoryIndex + 1];
+      return targetDirectory ? [targetDirectory] : [];
+    }
+    const attachedTarget = stage.argv.find((token) => token.startsWith('--target-directory='));
+    return attachedTarget ? [attachedTarget.slice('--target-directory='.length)] : positional.slice(-1);
+  }
+  if (command === 'chmod' || command === 'chown') return positional.slice(1);
+  if (command === 'dd') {
+    const output = stage.argv.find((token) => token.startsWith('of='));
+    return output ? [output.slice(3)] : [];
+  }
+  return [];
+}
+
+function collectRawOutputRedirectionTargets(command: string): string[] {
+  const targets: string[] = [];
+  const masked = maskRawInlineSources(command);
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < masked.length; index += 1) {
+    const char = masked[index]!;
+    if (quote !== undefined) {
+      if (char === quote) quote = undefined;
+      else if (char === '\\' && quote === '"') index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (char !== '>') continue;
+    if (masked[index + 1] === '>') index += 1;
+    while (/\s/.test(masked[index + 1] ?? '')) index += 1;
+    const targetQuote = masked[index + 1];
+    const start = index + (targetQuote === '"' || targetQuote === "'" ? 2 : 1);
+    let end = start;
+    while (end < masked.length) {
+      const targetChar = masked[end]!;
+      if (targetQuote === '"' || targetQuote === "'") {
+        if (targetChar === targetQuote) break;
+      } else if (/\s|[|;&<>]/.test(targetChar)) {
+        break;
+      }
+      end += 1;
+    }
+    if (end > start) targets.push(masked.slice(start, end));
+    index = end;
+  }
+  return targets;
+}
+
+function collectBashWriteTargetsAtDepth(
+  command: string,
+  depth: number,
+  includeHeuristicPaths: boolean,
+): string[] {
   const targets = new Set<string>();
   const pushTarget = (value: string | undefined): void => {
     const trimmed = value?.trim();
@@ -1304,12 +1435,35 @@ export function collectBashWriteTargets(command: string): string[] {
   // 1. Heuristic path tokens (covers e.g. `cp src.ts dst.ts` where neither
   //    arg is a redirection but both name files). Pre-AST version included
   //    this via `extractPathsFromCommand`; preserved for compat.
-  for (const extractedPath of extractPathsFromCommand(command)) {
-    pushTarget(extractedPath);
+  if (includeHeuristicPaths) {
+    for (const extractedPath of extractPathsFromCommand(command)) {
+      pushTarget(extractedPath);
+    }
+  } else {
+    for (const target of collectRawOutputRedirectionTargets(command)) {
+      pushTarget(target);
+    }
   }
 
   const tree = parseBashCommand(command);
   if (tree.unparseable) {
+    // A shell payload can contain syntax deliberately rejected by the AST
+    // (notably backticks) while still exposing a deterministic redirect.
+    // Recover only recognized shell-command roles; arbitrary quoted Python,
+    // regex, and data arguments remain opaque.
+    if (depth < 3) {
+      for (const words of tokenizeRawCommandStages(command)) {
+        const nested = getNestedShellCommand(words.map((word) => word.value));
+        if (nested === undefined) continue;
+        for (const target of collectBashWriteTargetsAtDepth(
+          nested,
+          depth + 1,
+          includeHeuristicPaths,
+        )) {
+          pushTarget(target);
+        }
+      }
+    }
     return Array.from(targets);
   }
 
@@ -1330,6 +1484,20 @@ export function collectBashWriteTargets(command: string): string[] {
         for (const t of collectTeeTargets(stage)) pushTarget(t);
       } else if (POWERSHELL_WRITE_TOKENS.has(cmd)) {
         for (const t of collectPowerShellWriteTargets(stage)) pushTarget(t);
+      }
+      if (!includeHeuristicPaths) {
+        for (const target of collectDirectCommandWriteTargets(stage)) pushTarget(target);
+      }
+
+      const nested = depth < 3 ? getNestedShellCommand(stage.argv) : undefined;
+      if (nested !== undefined) {
+        for (const target of collectBashWriteTargetsAtDepth(
+          nested,
+          depth + 1,
+          includeHeuristicPaths,
+        )) {
+          pushTarget(target);
+        }
       }
     }
   }
@@ -1398,7 +1566,8 @@ export function getBashOutsideProjectWriteRisk(
 export function getPlanModeBlockReason(
   toolName: string,
   input: Record<string, unknown>,
-  projectRoot?: string
+  projectRoot?: string,
+  executionCwd = projectRoot,
 ): string | null {
   const allowedLocations = formatPlanModeAllowedLocations(projectRoot);
 
@@ -1418,7 +1587,7 @@ export function getPlanModeBlockReason(
       return `[Blocked] Tool '${toolName}' is not allowed in plan mode unless it targets ${allowedLocations}.`;
     }
 
-    if (isPlanModeAllowedPath(targetPath, projectRoot)) {
+    if (isPlanModeAllowedPath(targetPath, projectRoot, executionCwd)) {
       return null;
     }
 
@@ -1437,7 +1606,9 @@ export function getPlanModeBlockReason(
       return `[Blocked] Plan mode only allows bash write operations when every target is either ${allowedLocations}. Could not determine a safe target from: ${command.slice(0, 80)}${command.length > 80 ? '...' : ''}`;
     }
 
-    const blockedTarget = targets.find(target => !isPlanModeAllowedPath(target, projectRoot));
+    const blockedTarget = targets.find(target => (
+      !isPlanModeAllowedPath(target, projectRoot, executionCwd)
+    ));
     if (!blockedTarget) {
       return null;
     }

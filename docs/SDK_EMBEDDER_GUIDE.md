@@ -3721,6 +3721,7 @@ const runtime = await connectKodaXRuntime({
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
     daemonManagement: 1,
+    runtimeAutoModeGuardrail: 1,
   },
 });
 ```
@@ -3731,6 +3732,18 @@ scopes must disable the affected UI; Space must not silently start inline
 Coder. FEATURE_269 does not advertise `interruptInput`, so an interrupt-only
 product must require `{ interruptInput: 1 }` and fail connection. The supported
 fallback is `delivery: 'after_turn'` only when that is the user's intent.
+
+The final v0.7.72 SDK requires `runtimeAutoModeGuardrail:1` automatically for
+`autoStart: true`, even when the caller omits it from `requirements`. If the healthy
+profile daemon is older, the SDK first requires `daemonManagement:1`, takes a
+revision/owner-policy fenced preflight, and replaces it only when no active or
+queued run, Workflow, Agent turn, pending permission/user input, or other
+logical client exists. A busy or still-older daemon is never stopped: the
+connection rejects with `RuntimeDaemonCapabilityUpgradeError`, whose
+`recoverable` and `restartRequired` fields are `true` and whose optional
+`preflight` explains the blockers. Attach-only connections never mutate daemon
+ownership and must request `runtimeAutoModeGuardrail:1` explicitly when they
+depend on this contract.
 
 The `coderFeatureMatrix` capability reports daemon availability for managed
 runs, transcript/session operations, Todo projection, managed tasks, Workflow,
@@ -4142,12 +4155,14 @@ in inline, Worker, and daemon forms. A `null` patch removes either optional
 override; a zero, negative, fractional, or unsafe timeout is rejected. Daemon
 capability discovery advertises both fields in `sharedSessionSettings.keys`.
 
-The Runtime lazily creates one guardrail for the session and reuses it across
-turns while provider/model, repository boundary, execution directory,
-classifier model, and timeout remain the same. Updating one of those inputs
-creates a new guardrail by design. If the LLM guardrail automatically falls
-back to rules, its `autoModeEngine` state is persisted to the session before a
-later run starts.
+The Runtime owns one serialized permission-settings stream and one shared
+engine/denial/breaker state per Session. It reuses bounded context-specific
+guardrails across turns while provider/model, repository boundary, execution
+directory, classifier model, and timeout remain the same. Updating one of
+those inputs selects a new context guardrail by design without copying stale
+state from a queued turn. Active runs, queued runs, explicit settings updates,
+and automatic LLM-to-rules fallback merge through the same Session mutation
+queue; fallback is persisted before a later classification reads the engine.
 
 ### What an embedder should expect
 
@@ -4171,6 +4186,25 @@ do not reconstruct or authorize a tool from the preview. `gitRoot` remains the
 session repository safety boundary, whereas relative operands resolve from the
 validated `executionCwd`. In particular, quoted Python/JavaScript/regexp source
 inside a shell command is not a path operand.
+
+The user-level `.kodax` directory is a credential/configuration boundary, not
+an ordinary project path. Direct shell mutations, output redirects, and
+recognized nested-shell payloads whose target is provably beneath that
+directory are rejected before LLM classification. The check is segment-safe
+and Windows case-insensitive. KodaX deliberately does not scan arbitrary
+quoted language source for path-looking substrings: doing so would turn Python,
+JavaScript, YAML, and regular expressions into false Tier-0 matches. Trusted
+configuration changes should use the KodaX config CLI or SDK configuration API.
+
+### 0.7.x source compatibility
+
+The v0.7.72 public declarations retain the following migration aliases:
+
+| Legacy source | Current source | Contract |
+|---|---|---|
+| `agentMode: 'amaw'` | `'ama'` | accepted as deprecated input and normalized to AMA; no separate AMAW runtime is restored |
+| `SkillSource` | `ResolvedSkillSource` | formal source union remains `project \| user \| plugin \| builtin`; only resolved discovery output adds `learned` |
+| `RuntimeDaemonPreflight.activeAgentTasks` | `activeAgentTurns` | both required fields are returned and reference the same array throughout the 0.7.x line |
 
 ### Plan capability is opt-in
 
@@ -4196,8 +4230,9 @@ renderer). It is intentionally not inferred from the presence of a permission
 UI: tool permission and plan approval are different user decisions.
 
 See [ADR-056](ADR.md#adr-056-runtime-owns-auto-mode-permission-decisions-and-host-capability-exposure)
-for the ownership decision and [the v0.7.72 design](features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
-for the complete released boundary.
+for the ownership decision, [the v0.7.72 design](features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
+for the release boundary, and [Known Issue 187](KNOWN_ISSUES.md#187-shared-daemon-auto-permission-ownership-upgrade-fencing-preview-bounds-and-sdk-compatibility-were-incomplete)
+for the final capability-upgrade and compatibility closure.
 
 ---
 

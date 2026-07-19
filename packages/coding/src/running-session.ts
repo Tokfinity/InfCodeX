@@ -38,6 +38,7 @@ import type {
   KodaXSessionControl,
   KodaXSessionMutators,
 } from './types.js';
+import { normalizeKodaXAgentMode } from './types.js';
 
 export interface RunningSession {
   /** Session id used by the underlying run (echoes options.session.id when supplied). */
@@ -123,6 +124,9 @@ export function startKodaX(
     : options.session;
   const effectiveOptions: KodaXOptions = {
     ...options,
+    ...(options.agentMode !== undefined
+      ? { agentMode: normalizeKodaXAgentMode(options.agentMode) }
+      : {}),
     ...(sessionOptions !== undefined ? { session: sessionOptions } : {}),
     abortSignal: internalAbort.signal,
     sessionControl: control,

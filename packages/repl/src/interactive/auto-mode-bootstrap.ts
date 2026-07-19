@@ -39,12 +39,14 @@ import {
   loadAutoRules,
   resolveProvider as resolveCodingProvider,
   type AutoModeAskUser,
+  type AutoModeSharedState,
   type AutoModeToolGuardrail,
   type RulesLoadResult,
   type SignalCollector,
 } from '@kodax-ai/coding';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
+import { replBashUserKodaxWriteDeny } from '../permission/repl-bash-signals.js';
 
 export interface AutoModeBootstrapDeps {
   /**
@@ -80,6 +82,9 @@ export interface AutoModeBootstrapDeps {
    * mode toggle to refresh.
    */
   readonly onEngineChange?: (engine: 'llm' | 'rules') => void;
+
+  /** Session-owned engine/denial/breaker state shared by context-specific guardrails. */
+  readonly sharedState?: AutoModeSharedState;
 
   /**
    * FEATURE_158 (v0.7.39): additional signal collectors merged with the
@@ -191,11 +196,13 @@ export async function bootstrapAutoMode(
       askUser: deps.askUser,
       log: deps.log,
       onEngineChange: deps.onEngineChange,
+      sharedState: deps.sharedState,
       // FEATURE_158: thread projectRoot to signal collectors + Tier 0;
       // path-aware bash collector merges with coding-side defaults.
       projectRoot: deps.projectRoot,
       executionCwd: deps.executionCwd,
       extraCollectors: deps.extraCollectors,
+      extraAbsoluteDenyChecks: [replBashUserKodaxWriteDeny],
       // FEATURE_092 phase 2b.7b slice C: starting engine + timeout + classifier
       // model overrides. `userSettings` is layer 4 of `resolveClassifierModel`;
       // `envVar` is layer 2 (cli flag and session-override remain unset until

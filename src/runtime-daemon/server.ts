@@ -1387,6 +1387,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.externalAgentAdmin;
   delete safeOverrides.a2aConfigReconciler;
   delete safeOverrides.actorControlPlane;
+  delete safeOverrides.runtimeAutoModeGuardrail;
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
     events: true,
@@ -1402,6 +1403,12 @@ function runtimeDaemonCapabilities(
     actorControlPlane: {
       version: 1,
       methodNamespace: 'agents',
+    },
+    runtimeAutoModeGuardrail: {
+      version: 1,
+      owner: 'session-runtime',
+      escalationCreatesPermission: true,
+      fallbackPersistsEngine: true,
     },
     ...(externalAgentAdmin ? {
       externalAgentAdmin: {

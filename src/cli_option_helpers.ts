@@ -327,7 +327,7 @@ export function resolveCliAgentMode(
     return opts.agentMode as KodaXAgentMode;
   }
 
-  return config.agentMode ?? 'ama';
+  return config.agentMode === 'amaw' ? 'ama' : config.agentMode ?? 'ama';
 }
 
 export function resolveCliModelSelection(

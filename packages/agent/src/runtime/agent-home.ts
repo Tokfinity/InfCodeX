@@ -59,6 +59,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { isAbsolute, normalize, resolve, sep } from 'node:path';
 import { join } from 'node:path';
 
 const DEFAULT_DIRNAME = '.kodax';
@@ -103,6 +104,32 @@ export function getAgentConfigHome(): string {
  */
 export function getAgentConfigPath(...segments: string[]): string {
   return join(getAgentConfigHome(), ...segments);
+}
+
+/**
+ * Lexical path containment with the host filesystem's comparison semantics.
+ * Windows paths are case-insensitive; segment boundaries prevent sibling
+ * prefixes such as `.kodax-backup` from being treated as descendants.
+ */
+export function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
+  const comparable = (value: string): string => {
+    const normalized = normalize(resolve(value));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const target = comparable(targetPath);
+  const directory = comparable(directoryPath);
+  const descendantPrefix = directory.endsWith(sep) ? directory : `${directory}${sep}`;
+  return target === directory || target.startsWith(descendantPrefix);
+}
+
+/** Resolve a tool path from the directory where the tool actually executes. */
+export function resolveExecutionPath(targetPath: string, executionCwd: string): string {
+  const expanded = targetPath === '~'
+    ? homedir()
+    : targetPath.startsWith('~/') || targetPath.startsWith('~\\')
+      ? join(homedir(), targetPath.slice(2))
+      : targetPath;
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(executionCwd, expanded);
 }
 
 /**

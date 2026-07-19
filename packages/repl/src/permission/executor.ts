@@ -7,6 +7,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { isPathInsideDirectory } from '@kodax-ai/agent';
 import { executeTool } from '@kodax-ai/coding';
 import type { KodaXToolExecutionContext } from '@kodax-ai/coding';
 import {
@@ -54,12 +55,6 @@ const BASH_FILE_WRITE_MARKERS = [
 ];
 
 // ============== Path Safety Checks ==============
-
-function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedDirectory = path.resolve(directoryPath);
-  return resolvedTarget === resolvedDirectory || resolvedTarget.startsWith(resolvedDirectory + path.sep);
-}
 
 function isSystemTempReference(targetPath: string): boolean {
   const normalized = targetPath.replace(/\\/g, '/').toLowerCase();

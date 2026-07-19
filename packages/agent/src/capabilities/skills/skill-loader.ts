@@ -14,7 +14,7 @@ import type {
   SkillMetadata,
   SkillFile,
   SkillFrontmatter,
-  SkillSource,
+  ResolvedSkillSource,
 } from './types.js';
 import {
   normalizeAllowedToolsString,
@@ -71,7 +71,7 @@ export function parseSkillMarkdown(content: string): {
  */
 export async function loadSkillMetadata(
   skillDir: string,
-  source: SkillSource
+  source: ResolvedSkillSource
 ): Promise<SkillMetadata | null> {
   const skillFilePath = join(skillDir, 'SKILL.md');
 
@@ -104,7 +104,7 @@ export async function loadSkillMetadata(
  */
 export async function loadFullSkill(
   skillDir: string,
-  source: SkillSource
+  source: ResolvedSkillSource
 ): Promise<Skill | null> {
   const skillFilePath = join(skillDir, 'SKILL.md');
 

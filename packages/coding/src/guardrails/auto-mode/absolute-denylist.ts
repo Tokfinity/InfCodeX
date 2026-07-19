@@ -40,9 +40,7 @@
  * patterns that don't need path extraction.
  */
 
-import path from 'node:path';
-
-import { getAgentConfigHome } from '@kodax-ai/agent';
+import { getAgentConfigHome, isPathInsideDirectory, resolveExecutionPath } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
 
 export type TierZeroPatternId =
@@ -63,6 +61,11 @@ export interface AbsoluteDenyMiss {
 }
 
 export type AbsoluteDenyResult = AbsoluteDenyMatch | AbsoluteDenyMiss;
+export type AbsoluteDenyCheck = (
+  call: RunnerToolCall,
+  projectRoot: string,
+  executionCwd: string,
+) => AbsoluteDenyResult;
 
 const MISS: AbsoluteDenyMiss = { denied: false };
 
@@ -193,13 +196,6 @@ function checkForkBomb(command: string): AbsoluteDenyResult {
 
 // ============== Pattern 5: write / edit to ~/.kodax/ ==============
 
-function isPathUnder(target: string, directory: string): boolean {
-  const t = path.resolve(target);
-  const d = path.resolve(directory);
-  if (t === d) return true;
-  return t.startsWith(d + path.sep);
-}
-
 function checkUserKodaxWrite(
   call: RunnerToolCall,
   executionCwd: string,
@@ -213,8 +209,8 @@ function checkUserKodaxWrite(
   } catch {
     return MISS;
   }
-  const resolved = path.resolve(executionCwd, targetPath);
-  if (isPathUnder(resolved, userKodax)) {
+  const resolved = resolveExecutionPath(targetPath, executionCwd);
+  if (isPathInsideDirectory(resolved, userKodax)) {
     return {
       denied: true,
       patternId: 'user_kodax_write',

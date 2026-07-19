@@ -838,6 +838,12 @@ describe('runtime daemon dispatcher', () => {
           connectionLifecycle: { version: 1 },
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
+          runtimeAutoModeGuardrail: {
+            version: 1,
+            owner: 'session-runtime',
+            escalationCreatesPermission: true,
+            fallbackPersistsEngine: true,
+          },
           sharedSessionSettings: {
             version: 1,
             keys: expect.arrayContaining([
@@ -2155,6 +2161,7 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
           queuedRuns: [],
           activeWorkflows: [],
           activeAgentTurns: [],
+          activeAgentTasks: [],
           pendingPermissions: [],
           pendingUserInputs: [],
           blockers: [],

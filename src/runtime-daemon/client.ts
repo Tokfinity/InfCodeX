@@ -137,6 +137,26 @@ export interface RuntimeDaemonClientOptions {
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
 }
 
+type RuntimeDaemonPreflightWire = Omit<
+  RuntimeDaemonPreflight,
+  'activeAgentTurns' | 'activeAgentTasks'
+> & Partial<Pick<RuntimeDaemonPreflight, 'activeAgentTurns' | 'activeAgentTasks'>>;
+
+type RuntimeDaemonManagementStateWire = Omit<RuntimeDaemonManagementState, 'preflight'> & {
+  readonly preflight: RuntimeDaemonPreflightWire;
+};
+
+function normalizeRuntimeDaemonPreflight(
+  value: RuntimeDaemonPreflightWire,
+): RuntimeDaemonPreflight {
+  const activeAgentTurns = value.activeAgentTurns ?? value.activeAgentTasks ?? [];
+  return {
+    ...value,
+    activeAgentTurns,
+    activeAgentTasks: activeAgentTurns,
+  };
+}
+
 export function createRuntimeDaemonClient(
   options: RuntimeDaemonClientOptions,
 ): KodaXDaemonRuntime {
@@ -743,12 +763,20 @@ export function createRuntimeDaemonClient(
         return request('daemon.status') as Promise<RuntimeStatusSnapshot>;
       },
       preflight() {
-        return request('daemon.preflight') as Promise<RuntimeDaemonPreflight>;
+        return request('daemon.preflight').then((value) => (
+          normalizeRuntimeDaemonPreflight(value as RuntimeDaemonPreflightWire)
+        ));
       },
     },
     daemon: {
       inspect() {
-        return request('daemon.management.get') as Promise<RuntimeDaemonManagementState>;
+        return request('daemon.management.get').then((value) => {
+          const state = value as RuntimeDaemonManagementStateWire;
+          return {
+            ...state,
+            preflight: normalizeRuntimeDaemonPreflight(state.preflight),
+          };
+        });
       },
       stopForInline(input: RuntimeDaemonRollbackInput) {
         const { operation, ...params } = input;

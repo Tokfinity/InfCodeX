@@ -31,26 +31,24 @@
 import path from 'node:path';
 import os from 'node:os';
 
-import { getAgentConfigHome } from '@kodax-ai/agent';
+import {
+  getAgentConfigHome,
+  isPathInsideDirectory,
+  resolveExecutionPath,
+} from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
-import type { SignalCollector, ToolCallSignal } from '@kodax-ai/coding';
+import type {
+  AbsoluteDenyCheck,
+  SignalCollector,
+  ToolCallSignal,
+} from '@kodax-ai/coding';
 
 import {
   collectBashWriteTargets,
+  collectDeterministicBashWriteTargets,
   extractPathsFromCommand,
   isAlwaysConfirmPath,
 } from './permission.js';
-
-function isPathUnder(target: string, directory: string): boolean {
-  try {
-    const t = path.resolve(target);
-    const d = path.resolve(directory);
-    if (t === d) return true;
-    return t.startsWith(d + path.sep);
-  } catch {
-    return false;
-  }
-}
 
 function safeGetAgentConfigHome(): string | undefined {
   try {
@@ -58,6 +56,13 @@ function safeGetAgentConfigHome(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveShellWriteTarget(target: string, executionCwd: string): string {
+  const homePrefix = process.platform === 'win32'
+    ? /^(?:\$\{home\}|\$home|\$env:(?:home|userprofile)|%userprofile%)(?=$|[\\/])/i
+    : /^(?:\$\{HOME\}|\$HOME)(?=$|[\\/])/;
+  return resolveExecutionPath(target.replace(homePrefix, os.homedir()), executionCwd);
 }
 
 /**
@@ -69,9 +74,9 @@ function resolveProtectedZone(
   projectRoot: string,
 ): 'project-kodax' | 'user-kodax' | undefined {
   const userKodax = safeGetAgentConfigHome();
-  if (userKodax && isPathUnder(candidate, userKodax)) return 'user-kodax';
+  if (userKodax && isPathInsideDirectory(candidate, userKodax)) return 'user-kodax';
   const projectKodax = path.join(path.resolve(projectRoot), '.kodax');
-  if (isPathUnder(candidate, projectKodax)) return 'project-kodax';
+  if (isPathInsideDirectory(candidate, projectKodax)) return 'project-kodax';
   return undefined;
 }
 
@@ -116,7 +121,7 @@ export const replBashPathSignalCollector: SignalCollector = {
     for (const candidate of extractPathsFromCommand(command)) {
       let resolved: string;
       try {
-        resolved = path.resolve(executionCwd, candidate);
+        resolved = resolveShellWriteTarget(candidate, executionCwd);
       } catch {
         continue;
       }
@@ -131,8 +136,8 @@ export const replBashPathSignalCollector: SignalCollector = {
       if (isAlwaysConfirmPath(resolved, projectRoot)) {
         // isAlwaysConfirmPath returns true when path is outside-project AND
         // outside system temp. Treat as outside_project signal.
-        const insideTemp = tempDirs.some((d) => isPathUnder(resolved, d));
-        const insideProject = isPathUnder(resolved, resolvedRoot);
+        const insideTemp = tempDirs.some((d) => isPathInsideDirectory(resolved, d));
+        const insideProject = isPathInsideDirectory(resolved, resolvedRoot);
         if (!insideTemp && !insideProject && !emittedOutsideTargets.has(resolved)) {
           emittedOutsideTargets.add(resolved);
           signals.push({ kind: 'outside_project', path: candidate });
@@ -146,15 +151,15 @@ export const replBashPathSignalCollector: SignalCollector = {
     for (const target of collectBashWriteTargets(command)) {
       let resolved: string;
       try {
-        resolved = path.resolve(executionCwd, target);
+        resolved = resolveShellWriteTarget(target, executionCwd);
       } catch {
         continue;
       }
       // Don't duplicate a protected_path signal as shell_redirect_outside.
       if (resolveProtectedZone(resolved, projectRoot)) continue;
-      const insideProject = isPathUnder(resolved, resolvedRoot);
+      const insideProject = isPathInsideDirectory(resolved, resolvedRoot);
       if (insideProject) continue;
-      const insideTemp = tempDirs.some((d) => isPathUnder(resolved, d));
+      const insideTemp = tempDirs.some((d) => isPathInsideDirectory(resolved, d));
       if (insideTemp) continue;
       // Outside project + outside temp = redirect-to-elsewhere.
       signals.push({ kind: 'shell_redirect_outside', target });
@@ -162,4 +167,32 @@ export const replBashPathSignalCollector: SignalCollector = {
 
     return signals;
   },
+};
+
+/**
+ * Deterministic REPL-layer Tier-0 check for shell writes into the user
+ * credential zone. Parsed write targets are used so quoted Python and regex
+ * source is never reinterpreted as a path.
+ */
+export const replBashUserKodaxWriteDeny: AbsoluteDenyCheck = (
+  call,
+  _projectRoot,
+  executionCwd,
+) => {
+  if (call.name !== 'bash') return { denied: false };
+  const command = typeof call.input.command === 'string' ? call.input.command : '';
+  const protectedHomes = new Set<string>([path.join(os.homedir(), '.kodax')]);
+  const configuredHome = safeGetAgentConfigHome();
+  if (configuredHome) protectedHomes.add(configuredHome);
+  for (const target of collectDeterministicBashWriteTargets(command)) {
+    const resolved = resolveShellWriteTarget(target, executionCwd);
+    if ([...protectedHomes].some((home) => isPathInsideDirectory(resolved, home))) {
+      return {
+        denied: true,
+        patternId: 'user_kodax_write',
+        reason: `Shell write to credential-zone path \`${target}\` (under ~/.kodax/) is permanently denied. KodaX config edits must use the \`kodax config\` CLI or SDK config API.`,
+      };
+    }
+  }
+  return { denied: false };
 };

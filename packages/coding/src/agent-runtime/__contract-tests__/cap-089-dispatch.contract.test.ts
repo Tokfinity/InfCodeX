@@ -93,6 +93,10 @@ describe('CAP-089: task-engine.ts mode dispatcher contract', () => {
     expect(resolveManagedAgentMode({ agentMode: 'ama' } as KodaXOptions)).toBe('ama');
   });
 
+  it('CAP-DISPATCH-003c.1: deprecated "amaw" input is normalized to AMA', () => {
+    expect(resolveManagedAgentMode({ agentMode: 'amaw' } as KodaXOptions)).toBe('ama');
+  });
+
   it('CAP-DISPATCH-003d: dispatchManagedTask propagates the default ("ama") when no agentMode is set', async () => {
     const runSA = vi.fn();
     const runAMA = vi.fn().mockResolvedValue(emptyResult());

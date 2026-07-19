@@ -26,21 +26,14 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import { getAgentConfigHome } from '@kodax-ai/agent';
+import {
+  getAgentConfigHome,
+  isPathInsideDirectory,
+  resolveExecutionPath,
+} from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
 
 import type { SignalCollector, ToolCallSignal } from './signals.js';
-
-/**
- * Returns true when `target` is `directory` itself or any path beneath it.
- * Uses `path.resolve` to normalize both sides so relative inputs behave.
- */
-function isPathUnder(target: string, directory: string): boolean {
-  const t = path.resolve(target);
-  const d = path.resolve(directory);
-  if (t === d) return true;
-  return t.startsWith(d + path.sep);
-}
 
 /**
  * Returns the union of system temp directories that should be considered
@@ -82,17 +75,17 @@ export const fileSignalCollector: SignalCollector = {
     if (!targetPath) return [];
 
     const signals: ToolCallSignal[] = [];
-    const resolvedTarget = path.resolve(executionCwd, targetPath);
+    const resolvedTarget = resolveExecutionPath(targetPath, executionCwd);
 
     // 1. protected_path — ~/.kodax (highest priority; user-creds zone)
     const userKodaxDir = safeGetAgentConfigHome();
-    if (userKodaxDir && isPathUnder(resolvedTarget, userKodaxDir)) {
+    if (userKodaxDir && isPathInsideDirectory(resolvedTarget, userKodaxDir)) {
       signals.push({ kind: 'protected_path', path: targetPath, zone: 'user-kodax' });
     }
 
     // 2. protected_path — <projectRoot>/.kodax (project-config zone)
     const projectKodaxDir = path.join(path.resolve(projectRoot), '.kodax');
-    if (isPathUnder(resolvedTarget, projectKodaxDir)) {
+    if (isPathInsideDirectory(resolvedTarget, projectKodaxDir)) {
       signals.push({ kind: 'protected_path', path: targetPath, zone: 'project-kodax' });
     }
 
@@ -100,10 +93,10 @@ export const fileSignalCollector: SignalCollector = {
     //    AND not in project AND not in system temp
     if (!signals.some((s) => s.kind === 'protected_path')) {
       const resolvedRoot = path.resolve(projectRoot);
-      const insideProject = isPathUnder(resolvedTarget, resolvedRoot);
+      const insideProject = isPathInsideDirectory(resolvedTarget, resolvedRoot);
       if (!insideProject) {
         const tempDirs = getSystemTempDirectories();
-        const insideTemp = tempDirs.some((d) => isPathUnder(resolvedTarget, d));
+        const insideTemp = tempDirs.some((d) => isPathInsideDirectory(resolvedTarget, d));
         if (!insideTemp) {
           signals.push({ kind: 'outside_project', path: targetPath });
         }

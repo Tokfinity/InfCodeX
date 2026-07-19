@@ -1,4 +1,4 @@
-import type { SkillSource } from '../capabilities/skills/types.js';
+import type { ResolvedSkillSource } from '../capabilities/skills/types.js';
 import type { MemoryApplicability } from '../memory/identity.js';
 
 export type SkillWriteOrigin =
@@ -241,7 +241,7 @@ export interface StoredSkillLearningApplyPlan {
 
 export type StoredLearningApplyPlan = StoredSkillLearningApplyPlan;
 
-export type GovernedSkillSource = SkillSource | 'external';
+export type GovernedSkillSource = ResolvedSkillSource | 'external';
 
 export type SkillOwnership =
   | 'system'

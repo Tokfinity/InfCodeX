@@ -132,7 +132,11 @@ export function parseBashCommand(command: string): BashCommandTree {
 
   let entries: ParseEntry[];
   try {
-    entries = shellQuoteParse(trimmed);
+    // Keep environment references lexical. shell-quote otherwise replaces
+    // unknown variables with an empty string, which can erase a protected
+    // redirection target before permission policy sees it. Execution-time
+    // expansion is handled only by the target-specific policy that needs it.
+    entries = shellQuoteParse(trimmed, (key) => `$${key}`);
   } catch {
     // shell-quote shouldn't throw on standard input but guard anyway.
     return { statements: [], unparseable: true };

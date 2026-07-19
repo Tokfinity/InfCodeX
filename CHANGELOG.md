@@ -55,7 +55,10 @@ All notable changes to this project will be documented in this file.
   tree on early exit, timeout, identity mismatch, owner-race loss, or startup
   cancellation. Vitest-owned daemons also shut down when a forcibly terminated
   worker cannot run normal teardown; production daemons remain persistent after
-  ordinary client detach and have no idle reaper.
+  ordinary client detach and have no idle reaper. A source daemon child now
+  carries only KodaX's production preload, explicit `tsx` support, and safe
+  Node engine flags instead of inheriting arbitrary parent loaders, preventing
+  test-runner hooks from parsing daemon CLI arguments.
 
 - **Windows memory lifecycle lock contention.** Concurrent forget/archive
   operations now retry short-lived Windows sharing denials within the existing
@@ -75,16 +78,29 @@ All notable changes to this project will be documented in this file.
 - **Auto[LLM] approval reliability.** The default classifier budget is now 20
   seconds, pure readonly invocations bypass classification by invariant, and
   SDK/daemon session settings can select the classifier model and timeout without
-  stale guardrail-cache reuse. Runtime owns the session guardrail ahead of the
-  generic permission hook, persists LLM-to-rules fallback, and creates a shared
-  pending request only for an explicit escalation. The one conditional readonly
-  exception, `semantic_lookup(refresh:true)`, remains classified because it
-  rebuilds the on-disk derived index.
+  stale guardrail-cache reuse. Runtime advertises and requires
+  `runtimeAutoModeGuardrail:1` for auto-started daemon clients, owns the Session
+  guardrail ahead of the generic permission hook, persists LLM-to-rules
+  fallback, and creates a shared pending request only for an explicit
+  escalation. An older daemon is replaced only after a revision/owner-policy
+  fenced preflight proves that active/queued work and pending interactions are
+  absent; busy or unfenceable daemons return a typed recoverable error. The one
+  conditional readonly exception, `semantic_lookup(refresh:true)`, remains
+  classified because it rebuilds the on-disk derived index.
 - **Runtime permission boundary correctness.** Relative operands resolve from
   the validated execution directory while `gitRoot` remains a safety boundary;
-  quoted Python/regexp source is not treated as a path. Permission previews are
-  bounded, credential-redacted valid JSON with that directory, and
-  `exit_plan_mode` is absent without a real host approval bridge.
+  Windows containment is case-insensitive, deterministic direct/nested-shell
+  writes to the user `.kodax` credential zone are Tier-0 denied, and quoted
+  Python/regexp source is not treated as a path. Permission previews use a
+  scan-bounded field whitelist, omit write/edit bodies, redact JSON/YAML/PEM
+  and command-line credentials, and remain valid size-limited JSON with that
+  directory. `exit_plan_mode` is absent without a real host approval bridge.
+- **0.7.x SDK source compatibility.** Deprecated `amaw` input is accepted and
+  normalized to AMA without restoring retired behavior; formal `SkillSource`
+  remains exhaustive while `ResolvedSkillSource` adds `learned`; daemon
+  preflight normalizes canonical `activeAgentTurns` and deprecated
+  `activeAgentTasks` to the same required array across old and current wire
+  shapes.
 - **Queued follow-up responsiveness.** REPL, AMA, and SA now share the same
   Actor queue routing contract while SA retains its legacy unscoped queue. User
   input wakes `wait_agent` and idle-yield through lossless subscriptions and

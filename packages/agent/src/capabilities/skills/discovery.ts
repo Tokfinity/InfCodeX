@@ -7,7 +7,7 @@
 
 import { readdir, stat } from 'fs/promises';
 import { join, dirname } from 'path';
-import type { SkillMetadata, SkillSource, SkillPathsConfig } from './types.js';
+import type { ResolvedSkillSource, SkillMetadata, SkillPathsConfig } from './types.js';
 import { getDefaultSkillPaths, getSkillPathsFlat } from './types.js';
 import { loadSkillMetadata } from './skill-loader.js';
 
@@ -67,7 +67,7 @@ export async function discoverSkills(
  */
 async function scanSkillDirectory(
   dirPath: string,
-  source: SkillSource
+  source: ResolvedSkillSource
 ): Promise<SkillMetadata[]> {
   const skills: SkillMetadata[] = [];
 

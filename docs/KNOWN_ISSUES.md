@@ -14,6 +14,7 @@ _Last Updated: 2026-07-19_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 187 | High | Resolved | Shared-daemon Auto permission ownership, upgrade fencing, preview bounds, and SDK compatibility were incomplete | v0.7.72 RC | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 186 | High | Resolved | Daemon event subscriptions had no readiness boundary and could miss the first cross-client event | v0.7.66 | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 185 | Medium | Open | Learning lock crash recovery can time out before stale ownership is reclaimable | v0.7.68; expanded v0.7.72 RC | - | 2026-07-19 | - |
 | 184 | High | Open | `sed` side effects can bypass plan-mode write classification | v0.5.36 | - | 2026-07-19 | - |
@@ -96,6 +97,81 @@ _Last Updated: 2026-07-19_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 187: Shared-daemon Auto permission ownership, upgrade fencing, preview bounds, and SDK compatibility were incomplete
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.72)
+- **Introduced**: v0.7.72
+- **Fixed**: v0.7.72
+- **Created**: 2026-07-19
+- **Resolved**: 2026-07-19
+
+#### Original Problem
+
+The v0.7.72 Runtime Auto guardrail fix did not give SDK clients a complete
+semantic upgrade or compatibility contract. An SDK client could reuse a healthy
+older daemon that did not advertise Runtime-owned Auto classification; Session
+fallback and settings updates could race or leave queued turns bound to a stale
+cwd/engine; several Windows path checks remained case-sensitive; Bash writes to
+the user `.kodax` credential zone were classifier-overridable; and permission
+previews traversed and serialized more caller input than an approval UI needs.
+
+The same SDK cut also removed the `amaw` input spelling, expanded `SkillSource`
+with `learned`, and renamed daemon preflight task fields without a 0.7.x
+compatibility surface. KodaX Space consequently encountered compile-time
+breakage even though AMAW's runtime behavior had already merged into AMA.
+
+#### Root Cause
+
+Daemon health was treated as sufficient compatibility evidence, while the
+permission owner contract had no dedicated capability. Auto guardrails were
+cached as configuration snapshots instead of resolving the serialized Session
+permission state at execution time. Path containment and preview construction
+were duplicated across layers, and release-time type migrations changed
+consumer-facing unions/fields rather than separating legacy input types from
+new resolved runtime output.
+
+#### Resolution
+
+- Added `runtimeAutoModeGuardrail:1`; auto-start clients safely replace an old
+  daemon only through revision/owner-policy fenced preflight when no active,
+  queued, workflow, Agent-turn, permission, user-input, or second-client work
+  exists. Attach-only and busy cases fail with a typed recoverable error.
+- Added one serialized per-Session settings owner. Active and queued runs follow
+  permission/engine/classifier/timeout updates; fallback merges the latest
+  revision, persists rules state, and cannot reuse a downgraded LLM cache entry.
+  Context-specific guardrails share the Session's engine, denial tracker, and
+  circuit breaker without capturing another queued turn's cwd.
+- Kept execution cwd in each guardrail cache identity and resolve relative tool
+  and plan-mode paths from that cwd while treating git root only as the safety
+  boundary and plan-document anchor.
+- Unified permission-related path containment with Windows case-insensitive,
+  segment-safe semantics and made proven direct/nested-shell writes to the user
+  `.kodax` credential zone a deterministic Tier-0 denial, including redirects
+  recoverable from otherwise unparseable shell input. Quoted Python and
+  regular-expression source remains data rather than a path.
+- Replaced recursive input serialization with a fixed-field, scan-bounded JSON
+  summary. Write/edit bodies are omitted; strings, arrays, JSON/YAML secrets,
+  headers, CLI credentials, URLs, and PEM blocks are bounded/redacted.
+- Restored deprecated 0.7.x input aliases without restoring retired behavior:
+  `amaw` normalizes to `ama`; legacy `SkillSource` stays exhaustive while
+  `ResolvedSkillSource` adds `learned`; `activeAgentTasks` aliases current Agent
+  turns alongside canonical `activeAgentTurns`.
+- Runtime runs without an executable plan-exit callback do not expose
+  `exit_plan_mode` to the model.
+
+#### Verification
+
+Regression coverage includes guardrail-before-hook execution order, read-only
+and ordinary verification commands without pending permissions, exactly one
+request on classifier escalation, active mode switching, concurrent
+settings/fallback mutation, different-cwd queued turns, fallback then explicit
+LLM re-entry, Windows case variants, execution-cwd-relative plan paths, direct
+and nested Bash redirects (including unparseable surrounding syntax), source
+text false-positive protection, valid bounded large-write previews, YAML/JSON/
+PEM redaction, daemon capability advertisement/fail-closed attachment, plan-exit
+tool hiding, and legacy SDK type aliases.
 
 ### 186: Daemon event subscriptions had no readiness boundary and could miss the first cross-client event
 
@@ -5009,11 +5085,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 73 (26 Open, 47 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 74 (26 Open, 48 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-19: Issue 187 added and resolved (Unreleased)
+- Closed the shared-daemon Auto permission owner, safe old-daemon upgrade,
+  Windows/Tier-0 path, bounded preview, and 0.7.x SDK compatibility gaps.
 
 ### 2026-07-19: Issue 186 added and resolved (v0.7.72)
 - Added an awaitable daemon subscription readiness boundary so a second client

@@ -87,6 +87,46 @@ describe('runtime daemon client proxy', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('transports serializable Workflow host ceilings to the daemon', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: '0.7.72',
+      },
+      transport: fakeTransport(calls),
+    });
+
+    await client.runs.start({
+      sessionId: 'session-1',
+      prompt: 'explicit workflow request',
+      options: {
+        workflowHostPolicy: {
+          maxAgents: 4,
+          maxConcurrency: 2,
+          tokenBudget: 50_000,
+        },
+      },
+    });
+
+    expect(calls[0]).toMatchObject({
+      method: 'run.start',
+      params: {
+        options: {
+          workflowHostPolicy: {
+            maxAgents: 4,
+            maxConcurrency: 2,
+            tokenBudget: 50_000,
+          },
+        },
+      },
+    });
+    await client.close();
+  });
+
   it('exposes prompt daemon connection lifecycle and Runtime epochs', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls);
@@ -135,6 +175,12 @@ describe('runtime daemon client proxy', () => {
     });
 
     const state = await client.daemon.inspect();
+    expect(state.preflight.activeAgentTurns).toEqual([
+      expect.objectContaining({ turnId: 'turn-legacy' }),
+    ]);
+    expect(state.preflight.activeAgentTasks).toBe(state.preflight.activeAgentTurns);
+    const preflight = await client.status.preflight();
+    expect(preflight.activeAgentTasks).toBe(preflight.activeAgentTurns);
     await expect(client.daemon.stopForInline({
       expectedRuntimeId: state.runtimeId,
       expectedRevision: state.revision,
@@ -144,6 +190,7 @@ describe('runtime daemon client proxy', () => {
 
     expect(calls).toEqual([
       { method: 'daemon.management.get', params: undefined },
+      { method: 'daemon.preflight', params: undefined },
       {
         method: 'daemon.rollbackToInline',
         params: {
@@ -1007,6 +1054,12 @@ function fakeTransport(
         return { runId: 'run-1', sessionId: 'session-1' };
       }
       if (method === 'daemon.management.get') {
+        const activeAgentTasks = [{
+          sessionId: 'session-legacy',
+          actorPath: '/root',
+          turnId: 'turn-legacy',
+          kind: 'native',
+        }];
         return {
           runtimeId: 'runtime-management',
           revision: 4,
@@ -1020,11 +1073,33 @@ function fakeTransport(
             clientCount: 1,
             activeRuns: [],
             queuedRuns: [],
+            activeWorkflows: [],
+            activeAgentTasks,
             pendingPermissions: [],
             pendingUserInputs: [],
             blockers: [],
             canStop: true,
           },
+        };
+      }
+      if (method === 'daemon.preflight') {
+        const activeAgentTasks = [{
+          sessionId: 'session-legacy',
+          actorPath: '/root',
+          turnId: 'turn-legacy',
+          kind: 'native',
+        }];
+        return {
+          runtimeId: 'runtime-management',
+          clientCount: 1,
+          activeRuns: [],
+          queuedRuns: [],
+          activeWorkflows: [],
+          activeAgentTasks,
+          pendingPermissions: [],
+          pendingUserInputs: [],
+          blockers: ['active_agent_tasks'],
+          canStop: false,
         };
       }
       if (method === 'daemon.rollbackToInline') {

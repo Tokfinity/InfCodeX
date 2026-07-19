@@ -4,7 +4,7 @@
 
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -12,6 +12,8 @@ import {
   getAgentConfigHome,
   getAgentConfigPath,
   getAppDataDir,
+  isPathInsideDirectory,
+  resolveExecutionPath,
   setAgentConfigHome,
 } from './agent-home.js';
 
@@ -107,6 +109,35 @@ describe('agent-home — 3-tier resolution', () => {
       delete process.env.KODAX_HOME;
       expect(getAgentConfigHome()).toBe(join(homedir(), '.kodax'));
     });
+  });
+});
+
+describe('runtime path containment', () => {
+  it('contains the directory itself and descendants without prefix confusion', () => {
+    const root = join(homedir(), '.kodax');
+    expect(isPathInsideDirectory(root, root)).toBe(true);
+    expect(isPathInsideDirectory(join(root, 'runtime', 'state.json'), root)).toBe(true);
+    expect(isPathInsideDirectory(`${root}-backup`, root)).toBe(false);
+  });
+
+  it.runIf(process.platform === 'win32')('uses Windows case-insensitive semantics', () => {
+    expect(isPathInsideDirectory(
+      'C:\\Users\\Example\\.KODAX\\config.json',
+      'c:\\users\\example\\.kodax',
+    )).toBe(true);
+  });
+
+  it('handles filesystem roots without adding a duplicate separator', () => {
+    const root = parse(homedir()).root;
+    expect(isPathInsideDirectory(homedir(), root)).toBe(true);
+  });
+
+  it('resolves relative paths from executionCwd and expands home-relative paths', () => {
+    const cwd = join(homedir(), 'workspace');
+    expect(resolveExecutionPath('src/index.ts', cwd)).toBe(join(cwd, 'src', 'index.ts'));
+    expect(resolveExecutionPath('~/.kodax/config.json', cwd)).toBe(
+      join(homedir(), '.kodax', 'config.json'),
+    );
   });
 });
 

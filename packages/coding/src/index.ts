@@ -150,6 +150,7 @@ export type {
   KodaXMemoryStrategy,
   KodaXBudgetDisclosureZone,
   KodaXAgentMode,
+  KodaXCanonicalAgentMode,
   KodaXAgentProfile,
   KodaXEffectiveTaskConfig,
   KodaXToolVisibilityMeta,
@@ -206,6 +207,8 @@ export type {
   TodoList,
   SessionErrorMetadata,
 } from './types.js';
+
+export { normalizeKodaXAgentMode } from './types.js';
 
 // ============== Core Errors ==============
 
@@ -1230,6 +1233,7 @@ export { bashSignalCollector } from './guardrails/auto-mode/bash-signals.js';
 export { fileSignalCollector } from './guardrails/auto-mode/file-signals.js';
 export {
   checkAbsoluteDeny,
+  type AbsoluteDenyCheck,
   type AbsoluteDenyResult,
   type AbsoluteDenyMatch,
   type AbsoluteDenyMiss,

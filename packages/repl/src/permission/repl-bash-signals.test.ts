@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setAgentConfigHome } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
 
-import { replBashPathSignalCollector } from './repl-bash-signals.js';
+import {
+  replBashPathSignalCollector,
+  replBashUserKodaxWriteDeny,
+} from './repl-bash-signals.js';
 
 const PROJECT_ROOT = path.resolve('/tmp/kodax-repl-bash-signals-test');
 const USER_KODAX = path.resolve('/tmp/kodax-repl-bash-signals-test-home/.kodax');
@@ -119,5 +122,122 @@ describe('FEATURE_158 Step 9 — Windows-flag false-positive pipeline regression
     expect(signals.some((s) => s.kind === 'protected_path')).toBe(false);
     expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
     expect(signals.some((s) => s.kind === 'shell_redirect_outside')).toBe(false);
+  });
+});
+
+describe('replBashUserKodaxWriteDeny', () => {
+  beforeEach(() => {
+    setAgentConfigHome(USER_KODAX);
+  });
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+  });
+
+  it('hard-denies deterministic redirect writes to the configured credential zone', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash(`echo secret > ${USER_KODAX}/credentials.json`),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('hard-denies a proven redirect even when unrelated shell syntax is unparseable', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash(`echo secret > ${USER_KODAX}/credentials.json $(dynamic-source)`),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('hard-denies an unparseable redirect inside a nested shell payload', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash('bash -c "echo secret > ~/.kodax/credentials.json `dynamic-source`"'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it.runIf(process.platform === 'win32')('hard-denies case-varied Windows redirect targets', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash(`echo secret > ${USER_KODAX.toUpperCase()}\\CREDENTIALS.JSON`),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('hard-denies nested shell redirects to literal ~/.kodax', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash('bash -c "echo secret > ~/.kodax/credentials.json"'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('hard-denies shell-expanded home aliases that target ~/.kodax', () => {
+    const aliases = process.platform === 'win32'
+      ? ['$HOME', '${HOME}', '%USERPROFILE%', '$env:USERPROFILE']
+      : ['$HOME', '${HOME}'];
+    for (const alias of aliases) {
+      expect(replBashUserKodaxWriteDeny(
+        bash(`echo secret > "${alias}/.kodax/credentials.json"`),
+        PROJECT_ROOT,
+        PROJECT_ROOT,
+      ), alias).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+    }
+  });
+
+  it('distinguishes a protected read source from the actual write destination', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash('cp "$HOME/.kodax/config.json" ./config-backup.json'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
+    expect(replBashUserKodaxWriteDeny(
+      bash('cat "$HOME/.kodax/config.json" > ./config-backup.json'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
+    expect(replBashUserKodaxWriteDeny(
+      bash('echo "example > $HOME/.kodax/config.json" > ./example.txt'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
+    expect(replBashUserKodaxWriteDeny(
+      bash('cp ./replacement.json "$HOME/.kodax/config.json"'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('hard-denies redirects through an absolute nested shell executable', () => {
+    const shell = process.platform === 'win32'
+      ? '"C:\\Program Files\\Git\\bin\\bash.exe"'
+      : '/bin/bash';
+    expect(replBashUserKodaxWriteDeny(
+      bash(`${shell} -c "echo secret > ~/.kodax/credentials.json"`),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
+  it('does not interpret quoted Python or regex source as a write target', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash('python -c "print(\'~/.kodax/config.json\')"'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
+    expect(replBashUserKodaxWriteDeny(
+      bash('rg "~/.kodax/[a-z]+" src'),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
+  });
+
+  it('allows read-only access to continue to classifier policy', () => {
+    expect(replBashUserKodaxWriteDeny(
+      bash(`cat ${USER_KODAX}/config.json`),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toEqual({ denied: false });
   });
 });

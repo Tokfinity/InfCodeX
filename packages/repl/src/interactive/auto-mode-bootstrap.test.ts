@@ -42,7 +42,12 @@ vi.mock('@kodax-ai/coding', async () => {
 });
 
 import { bootstrapAutoMode } from './auto-mode-bootstrap.js';
-import { createAutoModeToolGuardrail } from '@kodax-ai/coding';
+import {
+  createAutoModeDenialTracker,
+  createAutoModeToolGuardrail,
+  createCircuitBreaker,
+  type AutoModeSharedState,
+} from '@kodax-ai/coding';
 
 const baseDeps = () => ({
   askUser: vi.fn(async () => 'allow' as const),
@@ -76,6 +81,19 @@ describe('bootstrapAutoMode', () => {
     const a = result.getGuardrail();
     const b = result.getGuardrail();
     expect(a).toBe(b);
+  });
+
+  it('forwards a Runtime-owned Session state into context-specific guardrails', async () => {
+    const sharedState: AutoModeSharedState = {
+      engine: 'llm',
+      denials: createAutoModeDenialTracker(),
+      breaker: createCircuitBreaker(),
+    };
+    const result = await bootstrapAutoMode({ ...baseDeps(), sharedState });
+    result.getGuardrail();
+
+    const config = vi.mocked(createAutoModeToolGuardrail).mock.calls.at(-1)?.[0];
+    expect(config?.sharedState).toBe(sharedState);
   });
 
   it('guardrail has stable kind=tool name=auto-mode (Runner registration contract)', async () => {

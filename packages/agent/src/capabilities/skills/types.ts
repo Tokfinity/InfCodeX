@@ -68,7 +68,7 @@ export interface SkillMetadata {
   userInvocable: boolean;
   argumentHint?: string;
   path: string;
-  source: SkillSource;
+  source: ResolvedSkillSource;
   /** If true, exclude from system prompt; still invokable by explicit slash forms. */
   disableModelInvocation: boolean;
 }
@@ -98,7 +98,7 @@ export interface Skill extends SkillFrontmatter {
 
   /** Runtime state */
   loaded: boolean;
-  source: SkillSource;
+  source: ResolvedSkillSource;
 }
 
 /**
@@ -117,8 +117,10 @@ export type SkillSource =
   | 'project' // <projectRoot>/.kodax/skills/
   | 'user' // ~/.kodax/skills/ or ~/.agent/skills/
   | 'plugin' // Plugin-provided skills
-  | 'builtin' // Built-in skills
-  | 'learned'; // Active Skills governed by the Learning Center
+  | 'builtin'; // Built-in skills
+
+/** Runtime discovery output; learned Skills remain lower precedence than formal sources. */
+export type ResolvedSkillSource = SkillSource | 'learned';
 
 // === Skill Registry ===
 
@@ -340,8 +342,8 @@ export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
  * - Builtin: Default skills shipped with KodaX
  * - Learned: Runtime-governed Skills, always lower precedence than formal sources
  */
-export function getSkillPathsFlat(config: SkillPathsConfig): Array<{ path: string; source: SkillSource }> {
-  const result: Array<{ path: string; source: SkillSource }> = [];
+export function getSkillPathsFlat(config: SkillPathsConfig): Array<{ path: string; source: ResolvedSkillSource }> {
+  const result: Array<{ path: string; source: ResolvedSkillSource }> = [];
 
   // Highest priority first - skills found first win
   for (const p of config.projectPaths) {
