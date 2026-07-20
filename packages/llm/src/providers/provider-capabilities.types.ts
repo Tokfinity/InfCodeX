@@ -107,16 +107,15 @@ const VALID_REASONING_CAPABILITIES: readonly KodaXReasoningCapability[] = [
   'unknown',
 ];
 
-// Allowlist for effortStrategy values appearing in provider-capabilities.json (built-in
-// providers only). 'anthropic-reasoning-effort' is DELIBERATELY absent: it is a runtime-only
-// strategy synthesized for CUSTOM providers by buildReasoningProfileFromSimple (the friendly
-// reasoning:{efforts} form on anthropic-compat), and is never authored in the JSON. A built-in
-// that needs that wire shape (enabled + reasoning_effort) uses a named preset instead.
+// Allowlist for effortStrategy values appearing in provider-capabilities.json.
+// `anthropic-reasoning-effort` is shared by custom providers and built-ins whose
+// non-Claude Anthropic-compatible wire shape has been verified directly.
 const VALID_EFFORT_STRATEGIES: readonly KodaXReasoningEffortWireStrategy[] = [
   'openai-responses-effort',
   'openai-chat-effort',
   'codex-cli-config',
   'anthropic-output-effort',
+  'anthropic-reasoning-effort',
   'provider-budget',
   'provider-toggle',
   'prompt-only',

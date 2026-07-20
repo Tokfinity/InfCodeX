@@ -83,6 +83,7 @@ describe('provider capability profiles', () => {
       'kimi',
       'kimi-code',
       'qwen',
+      'qwen-token-plan',
       'zhipu',
       'zhipu-coding',
       'zai-coding',

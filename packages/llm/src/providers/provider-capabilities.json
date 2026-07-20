@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-16",
+  "updatedAt": "2026-07-20",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -354,6 +354,185 @@
       "contextWindow": 256000,
       "maxOutputTokens": 32768,
       "verifyStrategy": "models-list"
+    },
+    "qwen-token-plan": {
+      "apiKeyEnv": "QWEN_TOKEN_API_KEY",
+      "model": "qwen3.8-max-preview",
+      "models": [
+        {
+          "id": "qwen3.7-max",
+          "displayName": "Qwen 3.7 Max",
+          "reasoningProfile": {
+            "reasoningPreset": "qwen-hybrid-thinking",
+            "effortStrategy": "provider-budget",
+            "thinkingStrategy": "provider-budget",
+            "defaultEffort": "medium",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Light thinking budget" },
+              { "value": "medium", "description": "Balanced thinking budget", "isDefault": true },
+              { "value": "high", "description": "High thinking budget" },
+              { "value": "xhigh", "description": "Very high thinking budget" },
+              { "value": "max", "description": "Maximum thinking budget" }
+            ],
+            "budgetByEffort": {
+              "low": 6000,
+              "medium": 10000,
+              "high": 16000,
+              "xhigh": 24000,
+              "max": 32000
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsManualThinkingBudget": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "qwen3.7-plus",
+          "displayName": "Qwen 3.7 Plus",
+          "reasoningProfile": {
+            "reasoningPreset": "qwen-hybrid-thinking",
+            "effortStrategy": "provider-budget",
+            "thinkingStrategy": "provider-budget",
+            "defaultEffort": "medium",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Light thinking budget" },
+              { "value": "medium", "description": "Balanced thinking budget", "isDefault": true },
+              { "value": "high", "description": "High thinking budget" },
+              { "value": "xhigh", "description": "Very high thinking budget" },
+              { "value": "max", "description": "Maximum thinking budget" }
+            ],
+            "budgetByEffort": {
+              "low": 6000,
+              "medium": 10000,
+              "high": 16000,
+              "xhigh": 24000,
+              "max": 32000
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsManualThinkingBudget": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "qwen3.6-flash",
+          "displayName": "Qwen 3.6 Flash",
+          "reasoningProfile": {
+            "reasoningPreset": "qwen-hybrid-thinking",
+            "effortStrategy": "provider-budget",
+            "thinkingStrategy": "provider-budget",
+            "defaultEffort": "medium",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Light thinking budget" },
+              { "value": "medium", "description": "Balanced thinking budget", "isDefault": true },
+              { "value": "high", "description": "High thinking budget" },
+              { "value": "xhigh", "description": "Very high thinking budget" },
+              { "value": "max", "description": "Maximum thinking budget" }
+            ],
+            "budgetByEffort": {
+              "low": 6000,
+              "medium": 10000,
+              "high": 16000,
+              "xhigh": 24000,
+              "max": 32000
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsManualThinkingBudget": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "glm-5.2",
+          "displayName": "GLM-5.2",
+          "maxOutputTokens": 131072,
+          "reasoningCapability": "native-effort",
+          "reasoningProfile": {
+            "reasoningPreset": "zai-glm-5.2",
+            "effortStrategy": "openai-chat-effort",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "max",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Alias to high" },
+              { "value": "medium", "description": "Alias to high" },
+              { "value": "high", "description": "GLM high reasoning" },
+              { "value": "xhigh", "description": "Alias to max" },
+              { "value": "max", "description": "GLM maximum reasoning", "isDefault": true }
+            ],
+            "effortAliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "reasoningCapability": "native-effort",
+          "reasoningProfile": {
+            "effortStrategy": "anthropic-reasoning-effort",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "high",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Alias to high" },
+              { "value": "medium", "description": "Alias to high" },
+              { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
+              { "value": "xhigh", "description": "Alias to max" },
+              { "value": "max", "description": "DeepSeek max reasoning" }
+            ],
+            "effortAliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        }
+      ],
+      "reasoningCapability": "native-budget",
+      "reasoningProfile": {
+        "reasoningPreset": "qwen-hybrid-thinking",
+        "effortStrategy": "provider-budget",
+        "thinkingStrategy": "provider-budget",
+        "defaultEffort": "medium",
+        "supportedEfforts": [
+          { "value": "low", "description": "Light thinking budget" },
+          { "value": "medium", "description": "Balanced thinking budget", "isDefault": true },
+          { "value": "high", "description": "High thinking budget" },
+          { "value": "xhigh", "description": "Very high thinking budget" },
+          { "value": "max", "description": "Maximum thinking budget" }
+        ],
+        "budgetByEffort": {
+          "low": 6000,
+          "medium": 10000,
+          "high": 16000,
+          "xhigh": 24000,
+          "max": 32000
+        },
+        "localRejectEfforts": ["none", "minimal"],
+        "supportsManualThinkingBudget": true,
+        "supportsDisabledThinking": false
+      },
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "thinkingBudgetCap": 32000,
+      "verifyStrategy": "count-tokens"
     },
     "zhipu": {
       "apiKeyEnv": "ZHIPU_API_KEY",

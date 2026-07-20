@@ -62,6 +62,9 @@ const SOURCE_BACKED_IMAGE_ROUTES = new Set([
   'ark-coding/kimi-k2.6',
   'ark-coding/kimi-k2.7-code',
   'ark-coding/minimax-m3',
+  'qwen-token-plan/qwen3.8-max-preview',
+  'qwen-token-plan/qwen3.7-plus',
+  'qwen-token-plan/qwen3.6-flash',
 ]);
 const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',

@@ -77,6 +77,56 @@ describe('provider registry', () => {
     expectReasoningPreset('mimo-coding', 'mimo-v2.5-pro', 'mimo-v2.5-toggle');
   });
 
+  it('registers Alibaba Cloud Token Plan as qwen-token-plan (Anthropic-compat)', () => {
+    vi.stubEnv('QWEN_TOKEN_API_KEY', 'token-plan-test-key');
+    const tokenPlan = getProvider('qwen-token-plan');
+
+    expect(tokenPlan.name).toBe('qwen-token-plan');
+    expect(tokenPlan.getModel()).toBe('qwen3.8-max-preview');
+    expect(tokenPlan.getAvailableModels()).toEqual([
+      'qwen3.8-max-preview',
+      'qwen3.7-max',
+      'qwen3.7-plus',
+      'qwen3.6-flash',
+      'glm-5.2',
+      'deepseek-v4-pro',
+    ]);
+
+    for (const model of tokenPlan.getAvailableModels()) {
+      expect(tokenPlan.getEffectiveContextWindow(model)).toBe(1_000_000);
+    }
+
+    expect(tokenPlan.getEffectiveMaxOutputTokens('qwen3.7-plus')).toBe(64_000);
+    expect(tokenPlan.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    expect(tokenPlan.getEffectiveMaxOutputTokens('deepseek-v4-pro')).toBe(64_000);
+    expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'qwen3.8-max-preview'))
+      .toBe('native-budget');
+    expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'glm-5.2'))
+      .toBe('native-effort');
+    expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'deepseek-v4-pro'))
+      .toBe('native-effort');
+    expectReasoningPreset('qwen-token-plan', 'qwen3.7-max', 'qwen-hybrid-thinking');
+    expectReasoningPreset('qwen-token-plan', 'glm-5.2', 'zai-glm-5.2');
+    expect(getModelCapabilities('qwen-token-plan', 'qwen3.8-max-preview')?.reasoningProfile)
+      .toMatchObject({ localRejectEfforts: ['none', 'minimal'] });
+    expect(getModelCapabilities('qwen-token-plan', 'qwen3.7-max')?.reasoningProfile)
+      .toMatchObject({ supportsDisabledThinking: true });
+    expect(getModelCapabilities('qwen-token-plan', 'deepseek-v4-pro')?.reasoningProfile)
+      .toMatchObject({
+        effortStrategy: 'anthropic-reasoning-effort',
+        thinkingStrategy: 'provider-toggle',
+      });
+
+    type ConfigCarrier = {
+      config: { baseUrl?: string; verifyStrategy?: string };
+    };
+    const config = (tokenPlan as unknown as ConfigCarrier).config;
+    expect(config.baseUrl).toBe(
+      'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
+    );
+    expect(config.verifyStrategy).toBe('count-tokens');
+  });
+
   it('registers Xiaomi MiMo pay-per-token as mimo (Anthropic-compat, MIMO_API_KEY)', () => {
     // Same upstream model family and capability shape as mimo-coding —
     // only the baseUrl and the API key env differ. Mirroring the

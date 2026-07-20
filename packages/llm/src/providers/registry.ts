@@ -36,6 +36,7 @@ export type ProviderName =
   | 'kimi'
   | 'kimi-code'
   | 'qwen'
+  | 'qwen-token-plan'
   | 'zhipu'
   | 'zhipu-coding'
   | 'zai-coding'
@@ -304,6 +305,17 @@ class QwenProvider extends KodaXOpenAICompatProvider {
   });
 }
 
+class QwenTokenPlanProvider extends KodaXAnthropicCompatProvider {
+  readonly name = 'qwen-token-plan';
+  protected readonly config: KodaXProviderConfig = buildProviderConfig('qwen-token-plan', {
+    // Live comparison on 2026-07-20 confirmed parity with the OpenAI endpoint
+    // for streaming thinking + tool use across Qwen / GLM / DeepSeek. Prefer
+    // Anthropic-compatible blocks here to reuse explicit cache boundaries and
+    // the production-proven coding-plan path.
+    baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
+  });
+}
+
 class ZhipuProvider extends KodaXOpenAICompatProvider {
   readonly name = 'zhipu';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('zhipu', {
@@ -322,6 +334,7 @@ export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   kimi: () => new KimiProvider(),
   'kimi-code': () => new KimiCodeProvider(),
   qwen: () => new QwenProvider(),
+  'qwen-token-plan': () => new QwenTokenPlanProvider(),
   zhipu: () => new ZhipuProvider(),
   'zhipu-coding': () => new ZhipuCodingProvider(),
   'zai-coding': () => new ZaiCodingProvider(),

@@ -424,7 +424,7 @@ KodaX uses a **monorepo architecture** with npm workspaces. Source layout curren
 ```
 KodaX/
 ├── packages/                # 4 workspace packages (FEATURE_194 v0.7.43)
-│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (15 built-in provider aliases)
+│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (16 built-in provider aliases)
 │   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
@@ -484,7 +484,7 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 
 | Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
-| `@kodax-ai/llm` | LLM abstraction (15 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
+| `@kodax-ai/llm` | LLM abstraction (16 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
 | `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, media/input artifacts, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/media`, `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, jimp, yaml |
 | `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. canonical Actor collaboration tools) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
@@ -1088,7 +1088,7 @@ import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-
 
 ### `@kodax-ai/kodax/llm` — LLM Abstraction
 
-15 built-in provider aliases (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Zhipu, Zhipu-Coding, Zai-Coding, MiniMax-Coding, MiMo, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
+16 built-in provider aliases (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Qwen-Token-Plan, Zhipu, Zhipu-Coding, Zai-Coding, MiniMax-Coding, MiMo, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
 
 ```typescript
 import { getProvider, KodaXBaseProvider } from '@kodax-ai/kodax/llm';
@@ -1226,7 +1226,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 
 | Use Case | Subpath | Why |
 |----------|---------|-----|
-| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 15 built-in aliases |
+| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 16 built-in aliases |
 | Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + session-lineage + capabilities |
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
@@ -1242,6 +1242,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code (262,144-token context; `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5` via `/model`) |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding (`k3-256k` for Moderato / `k3` 1M for Allegretto+ / `kimi-for-coding-highspeed` via `/model`; both K3 choices use upstream `k3`) |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
+| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview (Anthropic-compat; `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on Qwen 3.8 / 3.7 Plus / 3.6 Flash) |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2 (1M ctx; legacy `glm-5.1` and `glm-5-turbo` remain selectable via `/model`) |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |

@@ -10,6 +10,18 @@ const ARK_CODING_IMAGE_MODELS = [
   'MiniMax-M3',
 ] as const;
 
+const QWEN_TOKEN_PLAN_IMAGE_MODELS = [
+  'qwen3.8-max-preview',
+  'qwen3.7-plus',
+  'qwen3.6-flash',
+] as const;
+
+const QWEN_TOKEN_PLAN_TEXT_MODELS = [
+  'qwen3.7-max',
+  'glm-5.2',
+  'deepseek-v4-pro',
+] as const;
+
 describe('getModelInputCapabilities', () => {
   it('supports official OpenAI image input from provider-specific capability metadata', () => {
     const caps = getModelInputCapabilities({ provider: 'openai' });
@@ -43,6 +55,22 @@ describe('getModelInputCapabilities', () => {
     'keeps unverified nearby Ark Coding route %s image-unsupported',
     (model) => {
       expect(getModelInputCapabilities({ provider: 'ark-coding', model }).image.status).toBe('unsupported');
+    },
+  );
+
+  it.each(QWEN_TOKEN_PLAN_IMAGE_MODELS)(
+    'supports image input for verified Qwen Token Plan route %s',
+    (model) => {
+      expect(getModelInputCapabilities({ provider: 'qwen-token-plan', model }).image.status)
+        .toBe('supported');
+    },
+  );
+
+  it.each(QWEN_TOKEN_PLAN_TEXT_MODELS)(
+    'keeps Qwen Token Plan text-only route %s image-unsupported',
+    (model) => {
+      expect(getModelInputCapabilities({ provider: 'qwen-token-plan', model }).image.status)
+        .toBe('unsupported');
     },
   );
 

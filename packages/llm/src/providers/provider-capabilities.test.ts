@@ -52,6 +52,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           'mimo-coding',
           'openai',
           'qwen',
+          'qwen-token-plan',
           'zai-coding',
           'zhipu',
           'zhipu-coding',
@@ -382,14 +383,14 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
 
   // FEATURE_216 v0.7.45 — per-provider verifyStrategy drift guard.
   // Distribution (from 2026-05-28 12-provider real+fake key probe):
-  //   count-tokens (5):    anthropic + 4 anthropic-coding (zhipu/kimi/minimax/ark)
+  //   count-tokens (6):    anthropic + qwen-token-plan + 4 anthropic-coding (zhipu/kimi/minimax/ark)
   //   models-list (4):     openai, deepseek, kimi, qwen
   //   minimal-message (3): zhipu, mimo, mimo-coding (each empirical reason)
   //   unsupported (2):     gemini-cli, codex-cli
   describe('FEATURE_216 verifyStrategy per-provider', () => {
-    it('count-tokens providers (5): anthropic + 4 anthropic-coding', () => {
+    it('count-tokens providers (6): anthropic + 5 anthropic-compatible plans', () => {
       const snap = getProviderSnapshots();
-      for (const name of ['anthropic', 'zhipu-coding', 'kimi-code', 'minimax-coding', 'ark-coding']) {
+      for (const name of ['anthropic', 'zhipu-coding', 'kimi-code', 'minimax-coding', 'ark-coding', 'qwen-token-plan']) {
         expect(snap[name].verifyStrategy).toBe('count-tokens');
       }
     });
@@ -415,7 +416,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       }
     });
 
-    it('all 15 providers have an explicit verifyStrategy (no silent default)', () => {
+    it('all 16 providers have an explicit verifyStrategy (no silent default)', () => {
       const snap = getProviderSnapshots();
       const expected = new Set(['count-tokens', 'models-list', 'minimal-message', 'unsupported']);
       let total = 0;
@@ -423,7 +424,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         expect(expected.has(s.verifyStrategy)).toBe(true);
         total++;
       }
-      expect(total).toBe(15);
+      expect(total).toBe(16);
     });
   });
 });

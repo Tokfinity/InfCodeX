@@ -24,7 +24,7 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-07-18）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-07-20）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
@@ -34,6 +34,7 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `kimi` | `KIMI_API_KEY` | Yes | `kimi-k2.7-code` |
 | `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `kimi-for-coding` |
 | `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
+| `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max-preview` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
 | `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5.2` |
 | `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M3` |
@@ -43,9 +44,10 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-2026-07-16 模型快照重点：
+2026-07-20 模型快照重点：
 
 - OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
+- Qwen Token Plan 使用 Anthropic 兼容端点，默认 `qwen3.8-max-preview`，并提供 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；六个模型均为 1M context。`qwen3.8-max-preview`、`qwen3.7-plus`、`qwen3.6-flash` 支持图片理解，其余三个为纯文本；Qwen 3.8 的思考模式不可关闭。
 - Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；四者上下文均为 262,144 token。
 - Kimi Code 保持 `kimi-for-coding` 为稳定默认模型，并提供 `/model` 可选的 `k3-256k`（Moderato，262,144 token）、`k3`（Allegretto 及以上，1,048,576 token）与 `kimi-for-coding-highspeed`。两个 K3 选项实际都请求上游官方模型 `k3`，无需手工覆盖 compaction 上下文；K3 默认使用 `max` 思考强度，也支持显式关闭思考。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。

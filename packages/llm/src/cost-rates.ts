@@ -89,6 +89,17 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
   qwen: {
     'qwen3.5-plus': { inputPer1M: 0.003, outputPer1M: 0.006 },
   },
+  'qwen-token-plan': {
+    // Token Plan is Credits-based rather than pay-per-token. These nominal
+    // placeholders keep cost tracking non-zero; actual consumption lives in
+    // the Alibaba Cloud subscription console.
+    'qwen3.8-max-preview': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'qwen3.7-max': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'qwen3.7-plus': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'qwen3.6-flash': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'glm-5.2': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    'deepseek-v4-pro': { inputPer1M: 0.005, outputPer1M: 0.015 },
+  },
   zhipu: {
     'glm-5': { inputPer1M: 0.05, outputPer1M: 0.1 },
     'glm-5.1': { inputPer1M: 0.05, outputPer1M: 0.1 },

@@ -245,7 +245,7 @@ const result = await runKodaX(
 
 ```typescript
 import { Runner } from '@kodax-ai/kodax/agent';                // Agent runtime
-import { getProvider } from '@kodax-ai/kodax/llm';              // LLM 抽象（15 个内置 alias）
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM 抽象（16 个内置 alias）
 import { runKodaX } from '@kodax-ai/kodax/coding';              // Coding tools + prompts
 import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // 输入 artifact helpers
 import { SkillRegistry } from '@kodax-ai/kodax/skills';         // 零依赖 skill loader
@@ -482,6 +482,7 @@ dist/binary/linux-x64/
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code（262,144 token；可 `/model` 切换 `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5`） |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding（可 `/model` 切换 `k3-256k`〔Moderato，256K〕/ `k3`〔Allegretto+，1M〕/ `kimi-for-coding-highspeed`；两个 K3 选项均请求上游 `k3`） |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
+| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview（Anthropic 协议；可 `/model` 切换 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；均为 1M ctx；Qwen 3.8 / 3.7 Plus / 3.6 Flash 支持图片理解） |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2（1M ctx；仍可通过 `/model` 显式选择兼容模型 `glm-5.1` / `glm-5-turbo`） |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2（GLM Coding Plan 海外站，通过 `api.z.ai` 接入，Anthropic 协议 — 模型清单和 `zhipu-coding` 完全一致） |
@@ -578,7 +579,7 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
-| `@kodax-ai/llm` | LLM 抽象层（15 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
+| `@kodax-ai/llm` | LLM 抽象层（16 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
 | `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / AgentActorController / AgentTurnScheduler + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
 | `@kodax-ai/coding` | Coding Agent:50+ 工具（含 canonical Actor 协作工具）、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
@@ -719,7 +720,7 @@ REPL 显示、唤醒或消费。
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/
-│   ├── llm/                 # @kodax-ai/llm —— 15 个内置 provider alias
+│   ├── llm/                 # @kodax-ai/llm —— 16 个内置 provider alias
 │   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield + 子树:
 │   │   ├── session-lineage/ # 分支 session tree (v0.7.43 inline)
 │   │   ├── capabilities/
