@@ -568,7 +568,7 @@ describe('CLI interactive exit lifecycle', () => {
       sessionId: 'cli-session-1',
       prompt: 'inspect the repo',
       mode: 'managed_task',
-      permissionBroker: 'client',
+      permissionBroker: 'runtime',
     });
     expect(harness.runManagedTask).not.toHaveBeenCalled();
     expect(harness.calls).toContain('runtime-close');
