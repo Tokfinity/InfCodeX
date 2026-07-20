@@ -39,6 +39,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Reasoning, Auto Mode, and confirmation regressions.** Native
+  disabled-thinking requests now send the provider's explicit disabled form
+  only for models that declare support (including verified Qwen Token Plan 3.7
+  routes); always-thinking variants retain their declared behavior. Sidecar
+  queries preserve a supported `none` effort, persisted Runtime Auto engines
+  are not overwritten by a fresh REPL, `/mode` synchronizes before reporting
+  success, and concurrent confirmation prompts are serialized instead of
+  replacing one another.
 - **Legacy permission-grant upgrade safety.** Matcherless grants persisted by
   older releases remain visible and revocable but can no longer authorize a
   concrete tool call. The next invocation requires a fresh Runtime-issued
