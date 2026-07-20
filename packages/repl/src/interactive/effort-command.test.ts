@@ -11,6 +11,8 @@ import { BUILTIN_COMMANDS } from './commands.js';
 import type { CommandCallbacks, CurrentConfig, InteractiveContext } from '../commands/types.js';
 
 const effortCmd = BUILTIN_COMMANDS.find((command) => command.name === 'effort')!;
+const thinkingCmd = BUILTIN_COMMANDS.find((command) => command.name === 'thinking')!;
+const reasoningCmd = BUILTIN_COMMANDS.find((command) => command.name === 'reasoning')!;
 const ctx = {} as unknown as InteractiveContext;
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
@@ -142,5 +144,42 @@ describe('/effort command', () => {
     await effortCmd.handler(['high', 'now'], ctx, callbacks, createConfig());
 
     expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [thinkingCmd, 'deep'],
+    [reasoningCmd, 'deep'],
+  ])('routes legacy %s depth through the native effort writer', async (command, value) => {
+    const setEffort = vi.fn();
+    const setReasoningMode = vi.fn();
+    const callbacks = { setEffort, setReasoningMode } as unknown as CommandCallbacks;
+    const config = createConfig({ effort: 'max', effortOverride: true, reasoningMode: 'auto', thinking: true });
+
+    await command.handler([value], ctx, callbacks, config);
+
+    expect(saveConfig).toHaveBeenCalledWith({
+      effort: 'high',
+      reasoningMode: 'auto',
+      thinking: true,
+    });
+    expect(setEffort).toHaveBeenCalledWith('high');
+  });
+
+  it('rejects none before saving when the active model is always-on thinking', async () => {
+    const callbacks = { setEffort: vi.fn() } as unknown as CommandCallbacks;
+    const config = createConfig({
+      provider: 'qwen-token-plan',
+      model: 'qwen3.8-max-preview',
+      effort: 'high',
+      effortOverride: true,
+      reasoningMode: 'auto',
+      thinking: true,
+    });
+
+    await thinkingCmd.handler(['none'], ctx, callbacks, config);
+
+    expect(saveConfig).not.toHaveBeenCalled();
+    expect(callbacks.setEffort).not.toHaveBeenCalled();
+    expect(getLoggedOutput()).toContain('does not support disabling reasoning');
   });
 });

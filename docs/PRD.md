@@ -144,7 +144,7 @@ forms rather than a silent downgrade.
 
 ### Providers
 
-KodaX must support 15 built-in provider aliases plus user-defined compatible
+KodaX must support 16 built-in provider aliases plus user-defined compatible
 providers. Provider behavior must be described by capability metadata rather
 than scattered prompt prose. Custom providers must support base URL, protocol,
 model, API key env var, effort-first reasoning profile/preset, request timeout

@@ -165,6 +165,7 @@ import {
   listSessions,
   loadSession,
   type ReplRuntimeAutoModeControl,
+  type ReplRuntimeAutoModeSettings,
   type ReplRuntimePermissionGrantSuggestion,
   type ReplRuntimePermissionPrompt,
   type SessionPickerItem,
@@ -451,13 +452,15 @@ interface InteractiveRuntimeRunnerInput {
   readonly prompt: string;
   readonly sessionId: string;
   readonly permissionMode?: string;
+  readonly autoModeSettings?: ReplRuntimeAutoModeSettings;
   readonly surface?: 'cli' | 'repl';
   readonly requestPermission?: ReplRuntimePermissionPrompt;
   /** True only for the REPL-owned legacy permission callback. */
   readonly legacyPermissionHook?: true;
 }
 
-function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAutoModeControl {
+export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAutoModeControl {
+  const initializedSessions = new Set<string>();
   const readStats = async (sessionId: string) => {
     try {
       return await runtime.sessions.getAutoModeStats(sessionId);
@@ -476,8 +479,23 @@ function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAut
       return readStats(sessionId);
     },
     async setEngine(sessionId, engine) {
+      await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
       await runtime.sessions.updateSettings(sessionId, { autoModeEngine: engine });
+      initializedSessions.add(sessionId);
       return runtime.sessions.getAutoModeStats(sessionId);
+    },
+    async syncSettings(sessionId, permissionMode, settings) {
+      await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
+      const initializeEngine = !initializedSessions.has(sessionId);
+      await runtime.sessions.updateSettings(sessionId, {
+        permissionMode,
+        ...(initializeEngine ? { autoModeEngine: settings.engine } : {}),
+        autoModeClassifierModel: settings.classifierModel ?? null,
+        autoModeTimeoutMs: settings.timeoutMs ?? null,
+        autoModeSpeculativeWindowMs: settings.speculativeWindowMs ?? null,
+      });
+      initializedSessions.add(sessionId);
+      return readStats(sessionId);
     },
     subscribe(sessionId, listener) {
       let active = true;
@@ -504,10 +522,23 @@ interface RuntimeReplEventBridge {
   close(): Promise<void>;
 }
 
-export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
+export function createInteractiveRuntimeRunner(
+  runtime: KodaXRuntime,
+  autoModeControl: ReplRuntimeAutoModeControl = createReplRuntimeAutoModeControl(runtime),
+) {
   return async (input: InteractiveRuntimeRunnerInput): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
     await ensureCliRuntimeSession(runtime, input.sessionId, input.surface ?? 'repl', input.prompt);
-    if (input.permissionMode !== undefined) {
+    if (
+      input.permissionMode !== undefined &&
+      input.autoModeSettings !== undefined &&
+      autoModeControl.syncSettings !== undefined
+    ) {
+      await autoModeControl.syncSettings(
+        input.sessionId,
+        input.permissionMode,
+        input.autoModeSettings,
+      );
+    } else if (input.permissionMode !== undefined) {
       await runtime.sessions.updateSettings(input.sessionId, {
         permissionMode: input.permissionMode,
       });
@@ -3427,7 +3458,11 @@ complete -c kodax -l version -d 'Show version'`);
 
       const runtimeProfile = 'default';
       const interactiveRuntime = await getCliRuntime();
-      const runtimeRunner = createInteractiveRuntimeRunner(interactiveRuntime);
+      const runtimeAutoModeControl = createReplRuntimeAutoModeControl(interactiveRuntime);
+      const runtimeRunner = createInteractiveRuntimeRunner(
+        interactiveRuntime,
+        runtimeAutoModeControl,
+      );
 
       const interactiveOptions = {
         provider: kodaXOptions.provider,
@@ -3441,7 +3476,7 @@ complete -c kodax -l version -d 'Show version'`);
         session: kodaXOptions.session,
         storage: new FileSessionStorage({ cwd: process.cwd() }),
         runtimeRunner,
-        runtimeAutoModeControl: createReplRuntimeAutoModeControl(interactiveRuntime),
+        runtimeAutoModeControl,
         getRuntimeStatus: () => getInteractiveRuntimeStatus({
           runtime: interactiveRuntime,
           configHome: KODAX_DIR,

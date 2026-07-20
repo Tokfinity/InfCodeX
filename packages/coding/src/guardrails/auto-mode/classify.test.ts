@@ -128,7 +128,10 @@ describe('classify', () => {
           },
         }],
       }],
-      action: 'Bash: curl -H "Authorization: Bearer current-secret" https://example.com',
+      action: [
+        'Bash: curl -H "Authorization: Bearer current-secret"',
+        '-d "{\\"token\\":\\"nested-secret\\"}" https://example.com',
+      ].join(' '),
       getToolProjection: () => (input) => (
         `Edit ${(input as { path?: string }).path ?? '<unknown>'}`
       ),
@@ -140,6 +143,7 @@ describe('classify', () => {
     expect(classifierPrompt).toContain('[REDACTED]');
     expect(classifierPrompt).not.toContain(privateSource);
     expect(classifierPrompt).not.toContain('current-secret');
+    expect(classifierPrompt).not.toContain('nested-secret');
   });
 
   it('returns block (fail-closed) when classifier output is unparseable', async () => {

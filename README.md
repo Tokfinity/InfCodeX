@@ -17,7 +17,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
-  <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-16_aliases_+_custom-2ecc71?style=flat-square">
 </p>
 
 <p align="center">
@@ -44,6 +44,7 @@ npm i -g @kodax-ai/kodax
 # Pick any one you have an API key for:
 export ZHIPU_API_KEY=...        # or ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_API_KEY /
                                 # MINIMAX_API_KEY / MIMO_API_KEY / ARK_API_KEY / QWEN_API_KEY /
+                                # QWEN_TOKEN_API_KEY /
                                 # DEEPSEEK_API_KEY / GEMINI_API_KEY
 
 kodax
@@ -160,6 +161,14 @@ export ZHIPU_API_KEY=your_api_key
 
 # PowerShell
 $env:ZHIPU_API_KEY="your_api_key"
+```
+
+For Qwen Token Plan, select `qwen-token-plan` and use its separate credential;
+`QWEN_API_KEY` does not authenticate this route:
+
+```bash
+export QWEN_TOKEN_API_KEY=your_api_key
+kodax --provider qwen-token-plan
 ```
 
 For CLI defaults, create `~/.kodax/config.json`:
@@ -399,12 +408,16 @@ context diagnostics, and daemon protocol schemas, see
 The Space/IDE shared-daemon contract is documented in
 [SDK Embedder Guide section 23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
 
-**v0.7.72 Runtime correction:** Auto Mode is now owned by the Runtime session,
+**v0.7.72–v0.7.73 Runtime permission contract:** Auto Mode is owned by the Runtime session,
 not by a UI hook. It reuses its LLM/rules guardrail across turns, classifies
 before the shared permission bridge, and persists an automatic fallback to
 rules. The same session settings can select a classifier model and bounded
-timeout. Host plan exit is exposed only when the host supplies an approval
-callback. See the [Runtime Auto Mode integration guide](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072).
+timeout; `auto` defaults to LLM classification and fails with a recoverable
+configuration error when no effective classifier model exists, rather than
+silently falling back. Runtime permission prompts now offer opaque, exact
+allow-once/session/persistent grant suggestions; persistent grants are
+daemon-owned and revisioned. Host plan exit is exposed only when the host
+supplies an approval callback. See the [Runtime Auto Mode integration guide](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072).
 
 ## Repo Intelligence
 
@@ -472,7 +485,7 @@ KodaX/
        ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────┐
        │@kodax-ai/    │ │@kodax-ai/agent           │ │@kodax-ai/llm │
        │coding (via   │ │Runner + fan-out +        │ │LLM Abstract  │
-       │above)        │ │idle-yield + session-     │ │(15 aliases)  │
+       │above)        │ │idle-yield + session-     │ │(16 aliases)  │
        │              │ │lineage + skills + mcp +  │ │              │
        │              │ │tracing (FEATURE_194)     │ │              │
        └──────────────┘ └──────────────────────────┘ └──────────────┘
@@ -500,7 +513,7 @@ KodaX has two layers that consumers should understand separately:
 
 | Source package | npm subpath | Type | What you get | Example consumer |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 15-alias LLM abstraction (108 exports) | Standalone LLM clients |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 16-alias LLM abstraction (108 exports) | Standalone LLM clients |
 | `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / external-agent plane / session-lineage / capabilities / tracing (331 exports) | Custom agent frameworks |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (23 exports) | MCP server hosts |
@@ -639,7 +652,7 @@ one-time provisioning).
 ## Features
 
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
-- **15 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, Zai Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
+- **16 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Qwen Token Plan, Zhipu, Zhipu Coding, Zai Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
 - **Dynamic Workflows + SDK Process Surface** - Generate/reuse capability-routed workflows, observe live progress through `WorkflowProcessSnapshot`, and control workflow lifecycle from SDK hosts without parsing REPL output
 - **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Adaptive child steering uses the canonical Actor collaboration tools with idle-yield waiting; specialist routing uses `spawn_agent(agent_id=...)`.
 - **Reasoning Effort** - Effort-first control (`off/auto/low/medium/high` plus model-supported extras) across providers
@@ -741,7 +754,7 @@ For smaller surface and tree-shake-friendly imports, the SDK is also exposed via
 
 ```typescript
 import { Runner } from '@kodax-ai/kodax/agent';                // agent runtime
-import { getProvider } from '@kodax-ai/kodax/llm';              // LLM abstraction (15 aliases)
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM abstraction (16 aliases)
 import { runKodaX } from '@kodax-ai/kodax/coding';              // coding tools + prompts
 import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // input artifacts
 import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skill loader
@@ -909,6 +922,12 @@ KodaX provides 3 permission modes for fine-grained control:
 - Auto Mode runs guardrail classification before the permission UI; a safe
   allow verdict does not create a pending approval request. The session records
   an automatic LLM-to-rules fallback for later turns.
+- Runtime-backed prompts can offer exact `allow once`, `allow this session`,
+  and `always allow` choices. Return the Runtime-issued opaque suggestion;
+  never derive or widen a permission rule from the displayed command or path.
+  Persistent grants are daemon-owned, revisioned, and can be listed/revoked
+  through `runtime.permissions` by an authorized SDK host. Dynamic shell
+  commands deliberately receive no persistent-grant suggestion.
 
 ### CLI Help Topics
 
@@ -1072,7 +1091,7 @@ npm install @kodax-ai/kodax
 ```typescript
 import { runKodaX } from '@kodax-ai/kodax';                       // root: CLI helpers + runKodaX
 import { Runner, runFanOut } from '@kodax-ai/kodax/agent';        // generic Agent framework
-import { getProvider } from '@kodax-ai/kodax/llm';                // 15-alias LLM abstraction
+import { getProvider } from '@kodax-ai/kodax/llm';                // 16-alias LLM abstraction
 import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';             // tools + prompts + agent loop
 import { createImageArtifactFromPath } from '@kodax-ai/kodax/media'; // input artifact helpers
 import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';     // Ink TUI entrypoint
@@ -1479,6 +1498,7 @@ KodaX uses an **English-first** comment style with selective Chinese brief notes
 ## Documentation
 
 - [README_CN.md](README_CN.md) - Chinese Documentation
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK hosting, shared Runtime daemon, Auto Mode, and permission-grant contracts
 - [docs/release.md](docs/release.md) - Standalone binary build & release pipeline
 - [docs/PRD.md](docs/PRD.md) - Product Requirements
 - [docs/ADR.md](docs/ADR.md) - Architecture Decisions

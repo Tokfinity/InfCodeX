@@ -91,6 +91,7 @@ describe('confirmToolExecution', () => {
     expect(rendered).toContain('Session');
     expect(rendered).toContain('Always');
     expect(rendered).toContain('Runtime scope: Always allow this exact command');
+    expect(rendered).toContain('Runtime state: run active until this approval is resolved.');
   });
 
   it('does not offer persistent approval when Runtime omitted that candidate', async () => {

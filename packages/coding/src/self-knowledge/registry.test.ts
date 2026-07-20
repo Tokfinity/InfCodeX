@@ -66,6 +66,27 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('thinking.effort');
   });
 
+  it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {
+    const install = resolveKodaXManual({ topic: 'install' }).content;
+    const providers = resolveKodaXManual({ topic: 'providers' }).content;
+    const permissions = resolveKodaXManual({ topic: 'permissions' }).content;
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(install).toContain('kodax setup');
+    expect(install).toContain('never asks for or stores an API key');
+    expect(install).toContain('restart terminal');
+    expect(providers).toContain('qwen-token-plan');
+    expect(providers).toContain('QWEN_TOKEN_API_KEY');
+    expect(providers).toContain('qwen3.8-max-preview');
+    expect(permissions).toContain('Runtime-owned');
+    expect(permissions).toContain('allow once');
+    expect(permissions).toContain('session-scoped');
+    expect(permissions).toContain('persistent');
+    expect(sdk).toContain('grantSuggestions');
+    expect(sdk).toContain('RuntimePermissionMatcher');
+    expect(sdk).toContain('runtimeAutoModeGuardrail');
+  });
+
   it('documents the governed runtime and SDK memory surfaces', () => {
     const content = resolveKodaXManual({ topic: 'memory' }).content;
 

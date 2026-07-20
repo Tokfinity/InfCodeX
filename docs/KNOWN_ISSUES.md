@@ -14,6 +14,8 @@ _Last Updated: 2026-07-20_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 190 | High | Resolved | Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries | v0.7.72 and earlier; expanded v0.7.73 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
+| 189 | High | Resolved | Auto sidecar effort, Runtime session settings, and reasoning command state could diverge | v0.7.33; expanded v0.7.73 | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 188 | High | Resolved | Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete | v0.7.33; expanded v0.7.72 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 187 | High | Resolved | Shared-daemon Auto permission ownership, upgrade fencing, preview bounds, and SDK compatibility were incomplete | v0.7.72 RC | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 186 | High | Resolved | Daemon event subscriptions had no readiness boundary and could miss the first cross-client event | v0.7.66 | v0.7.72 | 2026-07-19 | 2026-07-19 |
@@ -98,6 +100,179 @@ _Last Updated: 2026-07-20_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 190: Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.73)
+- **Introduced**: v0.7.72 and earlier; expanded v0.7.73 RC
+- **Fixed**: v0.7.73
+- **Created**: 2026-07-20
+- **Resolved**: 2026-07-20
+
+#### Original Problem
+
+Permission grants written before concrete Runtime matchers were introduced had
+only `toolName` and optional `sessionId`. The v0.7.73 reader retained these
+records as persistent grants, and the matching path treated a missing matcher
+as an unconditional match. A legacy Bash grant could therefore authorize a
+different or dynamically expanded command without passing the new exact-call
+boundary.
+
+The same review questioned the new MCP classifier projection and credential
+redaction. Comparison with v0.7.72 confirmed that the older priority projection
+could hide a long `command` behind `method`; the new all-recognized-field
+projection closes that gap and is retained. Common credential forms were
+redacted before the classifier request, but an explicitly named credential in
+shell-escaped JSON, such as `{\"token\":\"...\"}`, was not.
+
+#### Root Cause
+
+Backward-compatible grant parsing was incorrectly coupled to authorization:
+management compatibility for legacy records implicitly became execution
+compatibility. Classifier redaction recognized ordinary JSON key/value syntax
+but not the escaped representation commonly embedded in shell arguments.
+
+#### Resolution
+
+- Keep matcherless legacy grants loadable, listable, and revocable, but never
+  let them authorize a concrete call. The next invocation requires a fresh
+  Runtime-issued matcher and approval.
+- Preserve the current MCP projection. It retains all bounded recognized risk
+  fields, represents bodies by size and unknown values by shape, and prevents
+  the reproducible priority-hiding behavior from v0.7.72.
+- Redact values for explicit credential keys in shell-escaped JSON before the
+  classifier side-provider request. The surrounding command, URL, and ordinary
+  operational fields remain visible.
+- Document redaction as defense in depth rather than an entropy detector.
+  Unlabelled Base64/hex strings are not blindly removed because they are
+  indistinguishable from legitimate hashes, identifiers, and file digests.
+
+#### Files Modified
+
+- `src/sdk-runtime.ts`
+- `src/sdk-runtime.test.ts`
+- `packages/coding/src/tools/classifier-projection.ts`
+- `packages/coding/src/tools/classifier-projection.test.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.test.ts`
+
+#### Verification
+
+- RED: the legacy coarse-grant test reproduced implicit authorization before
+  the matcherless-grant fix.
+- RED: the classifier provider-capture test reproduced escaped JSON credential
+  disclosure before the redaction fix.
+- `npx vitest run src/sdk-runtime.test.ts -t "Runtime-issued concrete grant|legacy allow_always|persistent grant|persisted dynamic command grant|grant labels|coalesces concurrent|legacy coarse grants|session grants"`
+  (11 passed)
+- `npx vitest run packages/coding/src/tools/classifier-projection.test.ts packages/coding/src/guardrails/auto-mode/classify.test.ts packages/coding/src/guardrails/auto-mode/transcript-strip.test.ts packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
+  (121 passed before the added negative control; focused projection/classifier
+  rerun: 40 passed)
+- `npx vitest run src/runtime-permission-scope.test.ts packages/repl/src/runtime-permission.test.ts`
+  (14 passed)
+- `npx tsc -b tsconfig.build.json --pretty false`
+
+### 189: Auto sidecar effort, Runtime session settings, and reasoning command state could diverge
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.73)
+- **Introduced**: v0.7.33; expanded v0.7.73
+- **Fixed**: v0.7.73
+- **Created**: 2026-07-20
+- **Resolved**: 2026-07-20
+
+#### Original Problem
+
+Auto classifier and bash-prefix side queries always sent explicit reasoning
+effort `none`. Always-thinking models such as Qwen Token Plan
+`qwen3.8-max-preview` rejected that value, which caused classifier failures,
+could downgrade Auto to `rules`, and produced avoidable permission prompts.
+The main status bar still showed the user's main-model effort (for example
+`high`), making the unrelated sidecar failure look like a failed status update.
+
+`/thinking` and `/reasoning` exposed the older
+`off|auto|quick|balanced|deep` vocabulary while `/effort` and the status bar
+used native provider efforts. Selecting `deep` did not replace an existing
+explicit `max`, so the command reported one mode while the status bar correctly
+continued to show another. Always-thinking models could also accept and persist
+an invalid explicit disable request before the provider rejected it.
+
+Runtime-backed REPL sessions loaded `KODAX_AUTO_MODE_CLASSIFIER_MODEL` for the
+legacy local guardrail but did not forward its effective value into Runtime
+Session settings. `/mode auto` updated React/classic REPL state before Runtime,
+so an immediate `/auto-engine llm` could report that the Session was not in
+Auto mode. Runs whose Auto engine was omitted displayed the documented `llm`
+default in diagnostics, but some permission-ownership paths still treated the
+missing field as “Runtime does not own Auto”; a Tier-1-exempt internal tool such
+as `todo_create` could then fall through to the generic permission broker.
+
+Finally, assistant text can stream before a tool call from the same model turn.
+A sentence such as “review complete” could therefore appear immediately before
+that tool's approval prompt even though the Runtime run was still active,
+making the prompt look as if it arrived after the task had terminated.
+
+#### Root Cause
+
+Side-query policy was hard-coded at each caller instead of resolving the active
+model's reasoning profile. Three slash commands wrote two different state
+models. REPL Auto configuration stopped at the process-local bootstrap boundary
+instead of crossing the Runtime Session API, and the mode callback was
+synchronous even though Runtime synchronization is asynchronous. Runtime's
+documented omitted-engine default was applied in stats/bootstrap but not in
+every live run record and permission-ownership check. The approval UI also did
+not explicitly say that an unresolved Runtime permission keeps the run active.
+
+#### Resolution
+
+- Make an omitted side-query effort capability-aware: use `none` when the model
+  advertises disable support, otherwise use its lowest visible enabled effort,
+  and omit the field when no safe advertised rung exists. Explicit caller
+  requests remain strict; no retry ladder hides invalid requests.
+- Remove hard-coded `none` from the Auto classifier and bash-prefix extractor.
+  This keeps the classifier on Qwen's lowest valid rung without changing the
+  main model's status-bar effort.
+- Route `/thinking`, `/think`, `/t`, `/reasoning`, `/reason`, and `/effort`
+  through one native effort writer with canonical
+  `none|auto|low|medium|high|xhigh|max` completion/help. Legacy inputs remain
+  accepted as hidden aliases. Reject `none` before persistence when the active
+  model cannot disable reasoning.
+- Resolve environment-over-file classifier configuration once and explicitly
+  synchronize permission mode, classifier model, timeout, and speculative
+  window into each Runtime Session. Initialize the engine once per Session so
+  later manual changes or automatic downgrades remain sticky. `/mode` now waits
+  for this synchronization before publishing/saving the new mode.
+- Normalize omitted Auto engines to `llm` in live run records and guardrail
+  refreshes, preserving the existing Tier-1 empty-projection bypass for
+  internal non-file-mutating tools. `/auto-engine` now reports the Runtime-owned
+  classifier model for direct verification.
+- State in Runtime approval prompts that the run remains active until the
+  approval is resolved, and add a bridge regression proving a runner cannot
+  report completion while an earlier permission event remains unresolved.
+
+#### Files Modified
+
+- `packages/llm/src/side-query.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.ts`
+- `packages/coding/src/guardrails/auto-mode/bash-prefix-extractor.ts`
+- `packages/repl/src/runtime-permission.ts`
+- `packages/repl/src/interactive/commands.ts`
+- `packages/repl/src/interactive/repl.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `src/kodax_cli.ts`
+- `src/sdk-runtime.ts`
+
+#### Verification
+
+- `packages/llm/src/side-query.test.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.test.ts`
+- `packages/coding/src/guardrails/auto-mode/bash-prefix-extractor.test.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
+- `packages/repl/src/interactive/effort-command.test.ts`
+- `packages/repl/src/interactive/completers/argument-completer.test.ts`
+- `packages/repl/src/interactive/commands-status.test.ts`
+- `packages/repl/src/interactive/prompts.test.ts`
+- `src/kodax_cli.runtime-runner.test.ts`
+- `src/sdk-runtime.test.ts`
+- `npx tsc -b tsconfig.build.json --pretty false`
 
 ### 188: Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete
 

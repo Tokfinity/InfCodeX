@@ -211,10 +211,13 @@ export type { PermissionMode, ConfirmResult, PermissionContext } from "./permiss
 export type {
   ReplRuntimePermissionDecision,
   ReplRuntimeAutoModeControl,
+  ReplRuntimeAutoModeSettings,
   ReplRuntimePermissionGrantSuggestion,
   ReplRuntimePermissionPrompt,
   ReplRuntimePermissionRequest,
 } from "./runtime-permission.js";
+export { toReplRuntimeAutoModeSettings } from "./runtime-permission.js";
+export { RUNTIME_PERMISSION_PENDING_NOTICE } from "./runtime-permission.js";
 export {
   computeConfirmTools,
   FILE_MODIFICATION_TOOLS,

@@ -30,9 +30,25 @@ All notable changes to this project will be documented in this file.
   loader and related types; `loadConfig().autoMode` is declared, Runtime Session
   settings persist `autoModeSpeculativeWindowMs` (including `0`), and side
   queries return prompt-free provider/model/timing/retry/phase diagnostics.
+- **Runtime-owned concrete permission grants.** Embedded and daemon SDK clients
+  can submit concrete `toolInput` and `executionCwd`, receive only opaque
+  Runtime-issued Session/persistent grant suggestions, and select a suggestion
+  without constructing or widening its hidden matcher. Exact command, known
+  file-tool path, and generic exact-call matchers remain revisioned and audited;
+  dynamic or dangerous shell calls never receive a persistent suggestion.
 
 ### Fixed
 
+- **Legacy permission-grant upgrade safety.** Matcherless grants persisted by
+  older releases remain visible and revocable but can no longer authorize a
+  concrete tool call. The next invocation requires a fresh Runtime-issued
+  matcher, so old coarse Bash grants cannot bypass exact-command, dynamic-shell,
+  or absolute-deny protections.
+- **Classifier credential boundary.** Auto[LLM] now redacts explicitly named
+  credential values inside shell-escaped JSON before sending an action to its
+  side provider, while retaining adjacent operational fields. Redaction is
+  documented as defense in depth; arbitrary Base64/hex values are not treated
+  as secrets without a credential signal.
 - **Todo/Actor semantic progress checkpoint (FEATURE_270 follow-up).** Worker
   guidance now treats Todo rows as user-visible milestones rather than Actor
   instances and requires timely updates at milestone boundaries. Structured
@@ -53,15 +69,26 @@ All notable changes to this project will be documented in this file.
   permission verdicts in 1.9–2.8 seconds, while the matching production session
   revealed a 1.625 MB tool result that had bypassed the existing sanitizer.
 - **Auto guardrail daemon and tracing semantics.** Auto-started Runtime clients
-  now require `runtimeAutoModeGuardrail:2`, whose metadata identifies effective
-  timeout/window defaults, bounded classifier input, and diagnostics version.
-  Capability negotiation is monotonic (v2 satisfies v1), idle v1 daemons use
-  the existing fenced upgrade path, and busy daemons are left untouched with a
-  recoverable error. Guardrail spans now cover the awaited callback instead of
-  timing only final verdict emission.
+  now require `runtimeAutoModeGuardrail:3`. It retains v2's effective
+  timeout/window defaults, bounded classifier input, and diagnostics metadata,
+  and adds opaque concrete-grant semantics. Capability negotiation is monotonic
+  (v3 satisfies v2/v1); idle older daemons use the existing fenced upgrade path,
+  while busy daemons are left untouched with a recoverable error. Guardrail
+  spans now cover the awaited callback instead of timing only final verdict
+  emission.
 - **Concurrent daemon startup publication race.** A cleanly exiting loser now
   gives the elected owner a bounded publication grace period, preventing an
   SDK starter from reporting failure during the short lock/state handoff gap.
+- **Guardrail/permission execution parity.** Both Runner paths now commit each
+  guardrail rewrite before permission policy and execution, reject correlation-
+  id rewrites, propagate blocks as visible audited tool results, and preserve
+  embedded host policy hooks while rejecting non-transportable daemon hooks.
+  Calls rewritten into Bash retain serialized shell ordering.
+- **Managed-run capacity and tool-dispatch accounting.** A complete system
+  prompt override no longer double-counts Skills, missing provider usage rebases
+  from the final request envelope, and authoritative provider usage remains
+  intact. Non-Bash tool calls keep parallel dispatch, Bash remains sequential,
+  and aggregate tool-result spill decisions use the complete batch budget.
 
 ## [0.7.72] - 2026-07-19
 

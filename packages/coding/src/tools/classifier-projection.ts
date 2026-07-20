@@ -272,7 +272,10 @@ export function projectToolHistoryInput(
   return projected;
 }
 
-/** Remove common credential forms while retaining the surrounding operation. */
+/**
+ * Defense-in-depth redaction for explicit common credential forms.
+ * This is not an entropy detector; projectors must still avoid forwarding raw bodies.
+ */
 export function redactClassifierProjection(value: string): string {
   return value
     .replace(
@@ -286,6 +289,10 @@ export function redactClassifierProjection(value: string): string {
     .replace(
       /\b((?=[a-z0-9_]*(?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|private[_-]?key|refresh[_-]?token|secret|token))[a-z_][a-z0-9_]*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s;&|]+)/gi,
       '$1=[REDACTED]',
+    )
+    .replace(
+      /(\\"(?:api[_-]?key|access[_-]?key|access[_-]?token|auth(?:orization)?[_-]?token|client[_-]?secret|cookie|credential|password|private[_-]?key|refresh[_-]?token|secret|token)\\"\s*:\s*)\\"[^"\r\n]*\\"/gi,
+      '$1\\"[REDACTED]\\"',
     )
     .replace(
       /((?:["']?(?:api[_-]?key|access[_-]?key|access[_-]?token|auth(?:orization)?[_-]?token|client[_-]?secret|cookie|credential|password|private[_-]?key|refresh[_-]?token|secret|token)["']?)\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi,

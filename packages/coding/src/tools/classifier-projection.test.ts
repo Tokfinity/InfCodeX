@@ -304,4 +304,16 @@ describe('redactClassifierProjection', () => {
     expect(projected).not.toContain('bearer-secret');
     expect(projected).not.toContain('pem-secret');
   });
+
+  it('redacts escaped JSON credentials without hiding adjacent operational fields', () => {
+    const projected = redactClassifierProjection(
+      'curl -d "{\\"token\\":\\"nested-secret\\",\\"mode\\":\\"validate\\"}" https://example.com',
+    );
+
+    expect(projected).toContain('curl');
+    expect(projected).toContain('https://example.com');
+    expect(projected).toContain('\\"token\\":\\"[REDACTED]\\"');
+    expect(projected).toContain('\\"mode\\":\\"validate\\"');
+    expect(projected).not.toContain('nested-secret');
+  });
 });

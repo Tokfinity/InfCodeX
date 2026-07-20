@@ -94,6 +94,41 @@ describe('status workspace output', () => {
     expect(output).toContain('workflows=3');
   });
 
+  it('shows the Runtime-owned classifier model in auto-engine diagnostics', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === 'auto-engine');
+
+    await command!.handler([], context, {
+      getAutoModeStats: async () => ({
+        engine: 'llm',
+        classifierModel: 'qwen-token-plan:qwen3.7-plus',
+        denials: { consecutive: 0, cumulative: 0 },
+        breaker: { timestamps: [] },
+      }),
+    } as unknown as CommandCallbacks, currentConfig);
+
+    expect(logSpy.mock.calls.flat().join('\n')).toContain(
+      'qwen-token-plan:qwen3.7-plus',
+    );
+  });
+
+  it('does not publish a mode change before Runtime settings synchronize', async () => {
+    const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === 'mode');
+    const setPermissionMode = vi.fn(async () => {
+      throw new Error('runtime sync failed');
+    });
+
+    await expect(command!.handler(
+      ['auto'],
+      context,
+      { setPermissionMode } as unknown as CommandCallbacks,
+      currentConfig,
+    )).rejects.toThrow('runtime sync failed');
+
+    expect(setPermissionMode).toHaveBeenCalledWith('auto');
+    expect(currentConfig.permissionMode).toBe('accept-edits');
+  });
+
   it('shows the client-specific Learning Center summary', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const statusCommand = BUILTIN_COMMANDS.find((command) => command.name === 'status');

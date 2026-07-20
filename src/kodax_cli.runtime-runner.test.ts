@@ -8,11 +8,49 @@ import type {
 } from './sdk-runtime.js';
 import {
   createInteractiveRuntimeRunner,
+  createReplRuntimeAutoModeControl,
   toDaemonRuntimeRunOptions,
   toRuntimeOwnedInteractiveOptions,
 } from './kodax_cli.js';
 
 describe('interactive daemon runtime bridge', () => {
+  it('synchronizes Auto settings once without resetting a later session engine choice', async () => {
+    const updateSettings = vi.fn(async () => ({ permissionMode: 'auto' }));
+    const runtime = {
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings,
+        getAutoModeStats: vi.fn(async () => ({
+          engine: 'llm' as const,
+          denials: {},
+          breaker: {},
+        })),
+      },
+    } as unknown as KodaXRuntime;
+    const control = createReplRuntimeAutoModeControl(runtime);
+
+    await control.syncSettings?.('session-1', 'auto', { engine: 'llm' });
+    await control.setEngine('session-1', 'rules');
+    await control.syncSettings?.('session-1', 'auto', { engine: 'llm' });
+
+    expect(updateSettings).toHaveBeenNthCalledWith(1, 'session-1', {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      autoModeClassifierModel: null,
+      autoModeTimeoutMs: null,
+      autoModeSpeculativeWindowMs: null,
+    });
+    expect(updateSettings).toHaveBeenNthCalledWith(2, 'session-1', {
+      autoModeEngine: 'rules',
+    });
+    expect(updateSettings).toHaveBeenNthCalledWith(3, 'session-1', {
+      permissionMode: 'auto',
+      autoModeClassifierModel: null,
+      autoModeTimeoutMs: null,
+      autoModeSpeculativeWindowMs: null,
+    });
+  });
+
   it('builds an explicit JSON-safe run-options DTO for bridged callbacks', () => {
     const controller = new AbortController();
     const options = {
@@ -143,11 +181,23 @@ describe('interactive daemon runtime bridge', () => {
       prompt: 'hello',
       sessionId: 'session-1',
       permissionMode: 'plan',
+      autoModeSettings: {
+        engine: 'llm',
+        classifierModel: 'qwen-token-plan:qwen3.7-plus',
+        timeoutMs: 20_000,
+        speculativeWindowMs: 1_200,
+      },
       requestPermission,
       legacyPermissionHook: true,
     })).resolves.toMatchObject({ success: true, lastText: 'done' });
 
-    expect(updateSettings).toHaveBeenCalledWith('session-1', { permissionMode: 'plan' });
+    expect(updateSettings).toHaveBeenCalledWith('session-1', {
+      permissionMode: 'plan',
+      autoModeEngine: 'llm',
+      autoModeClassifierModel: 'qwen-token-plan:qwen3.7-plus',
+      autoModeTimeoutMs: 20_000,
+      autoModeSpeculativeWindowMs: 1_200,
+    });
     expect(capturedStart?.permissionBroker).toBe('client');
     expect(capturedStart?.options).not.toHaveProperty('abortSignal');
     expect(onTextDelta).toHaveBeenCalledWith('streamed', undefined);
@@ -172,6 +222,78 @@ describe('interactive daemon runtime bridge', () => {
       { runId: 'run-1' },
     );
     expect(closeSubscription).toHaveBeenCalledOnce();
+  });
+
+  it('does not report a run as finished while an earlier permission event is unresolved', async () => {
+    let eventListener: ((event: RuntimeEvent) => void) | undefined;
+    let resolvePermission: ((decision: { type: 'allow_once' }) => void) | undefined;
+    const requestPermission = vi.fn(() => new Promise<{ type: 'allow_once' }>((resolve) => {
+      resolvePermission = resolve;
+    }));
+    const respond = vi.fn(async () => true);
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-ordering',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'auto' })),
+      },
+      runs: {
+        start: vi.fn(async () => {
+          eventListener?.(runtimeEvent('permission.requested', {
+            id: 'permission-before-terminal',
+            toolCallId: 'tool-1',
+            toolName: 'bash',
+            inputPreview: '{"command":"git log -1"}',
+          }));
+          return {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            result: Promise.resolve({
+              runId: 'run-1',
+              sessionId: 'session-1',
+              phase: 'completed' as const,
+              result: successfulResult(),
+            }),
+          };
+        }),
+      },
+      events: {
+        subscribe: vi.fn((_filter, listener: (event: RuntimeEvent) => void) => {
+          eventListener = listener;
+          return { close: vi.fn() };
+        }),
+      },
+      permissions: { respond },
+    } as unknown as KodaXRuntime;
+    let settled = false;
+
+    const run = createInteractiveRuntimeRunner(runtime)({
+      options: {} as KodaXOptions,
+      prompt: 'review',
+      sessionId: 'session-1',
+      permissionMode: 'auto',
+      requestPermission,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(requestPermission).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    resolvePermission?.({ type: 'allow_once' });
+    await expect(run).resolves.toMatchObject({ success: true });
+    expect(respond).toHaveBeenCalledWith(
+      'permission-before-terminal',
+      { type: 'allow_once' },
+      { runId: 'run-1' },
+    );
   });
 
   it('keeps embedded Runtime as the sole Auto owner and still bridges permission prompts', async () => {

@@ -6,6 +6,7 @@ import type {
   KodaXMessage,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningProfile,
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXTextBlock,
@@ -36,8 +37,15 @@ class StubProvider extends KodaXBaseProvider {
 
   public capturedCalls: StreamArgs[] = [];
 
-  constructor(private readonly streamImpl: StreamImpl) {
+  constructor(
+    private readonly streamImpl: StreamImpl,
+    private readonly reasoningProfile?: KodaXReasoningProfile,
+  ) {
     super();
+  }
+
+  override getReasoningProfile(): KodaXReasoningProfile | undefined {
+    return this.reasoningProfile ?? super.getReasoningProfile();
   }
 
   async stream(
@@ -127,6 +135,48 @@ describe('sideQuery — happy path', () => {
     });
 
     expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'high' });
+  });
+
+  it('uses the lowest visible effort when the model cannot disable thinking', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'openai-chat-effort',
+      defaultEffort: 'medium',
+      supportedEfforts: [
+        { value: 'low' },
+        { value: 'medium', isDefault: true },
+        { value: 'high' },
+      ],
+      localRejectEfforts: ['none', 'minimal'],
+    });
+
+    await sideQuery({
+      provider,
+      model: 'always-on-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+    });
+
+    expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'low' });
+  });
+
+  it('preserves an explicit none request so strict callers still see rejection', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'openai-chat-effort',
+      supportedEfforts: [{ value: 'low' }, { value: 'high' }],
+      localRejectEfforts: ['none', 'minimal'],
+    });
+
+    await sideQuery({
+      provider,
+      model: 'always-on-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'workflow',
+      reasoning: { effort: 'none' },
+    });
+
+    expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'none' });
   });
 
   it('forwards a valid per-request output-token cap without mutating provider state', async () => {

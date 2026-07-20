@@ -45,46 +45,43 @@ const MODE_ARGS: ArgumentDefinition[] = [
 /**
  * Thinking command arguments - /thinking 命令参数
  */
-const THINKING_ARGS: ArgumentDefinition[] = [
+const REASONING_EFFORT_ARGS: ArgumentDefinition[] = [
   {
-    name: 'on',
-    description: 'Map to reasoning auto',
-    type: 'enum',
-  },
-  {
-    name: 'off',
-    description: 'Disable reasoning',
+    name: 'none',
+    description: 'Disable reasoning when the model supports it',
     type: 'enum',
   },
   {
     name: 'auto',
-    description: 'Use semantic routing with adaptive depth',
+    description: 'Clear the explicit effort override',
     type: 'enum',
   },
   {
-    name: 'quick',
-    description: 'Low-depth reasoning mode',
+    name: 'low',
+    description: 'Use low reasoning effort',
     type: 'enum',
   },
   {
-    name: 'balanced',
-    description: 'Medium-depth reasoning mode',
+    name: 'medium',
+    description: 'Use medium reasoning effort',
     type: 'enum',
   },
   {
-    name: 'deep',
-    description: 'High-depth reasoning mode',
+    name: 'high',
+    description: 'Use high reasoning effort',
+    type: 'enum',
+  },
+  {
+    name: 'xhigh',
+    description: 'Use extra-high reasoning effort',
+    type: 'enum',
+  },
+  {
+    name: 'max',
+    description: 'Use maximum reasoning effort',
     type: 'enum',
   },
 ];
-
-const REASONING_ARGS = THINKING_ARGS.slice(2).concat([
-  {
-    name: 'off',
-    description: 'Disable reasoning',
-    type: 'enum',
-  },
-]);
 
 /**
  * Model command arguments - /model 命令参数
@@ -662,11 +659,12 @@ function getRepoIntelArgs(argParts: string[]): ArgumentDefinition[] {
  */
 export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['mode', MODE_ARGS],
-  ['thinking', THINKING_ARGS],
-  ['think', THINKING_ARGS], // alias
-  ['t', THINKING_ARGS], // alias
-  ['reasoning', REASONING_ARGS],
-  ['reason', REASONING_ARGS],
+  ['thinking', REASONING_EFFORT_ARGS],
+  ['think', REASONING_EFFORT_ARGS], // alias
+  ['t', REASONING_EFFORT_ARGS], // alias
+  ['reasoning', REASONING_EFFORT_ARGS],
+  ['reason', REASONING_EFFORT_ARGS],
+  ['effort', REASONING_EFFORT_ARGS],
   // 'model', 'm', and 'provider' handled dynamically in getCommandArguments()
   ['status', STATUS_ARGS],
   ['info', STATUS_ARGS],

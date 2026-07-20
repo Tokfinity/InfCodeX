@@ -185,8 +185,11 @@ import {
 } from "../permission/index.js";
 import type { PermissionContext } from "../permission/types.js";
 import {
+  RUNTIME_PERMISSION_PENDING_NOTICE,
   resolveReplRuntimePermissionDecision,
+  toReplRuntimeAutoModeSettings,
   type ReplRuntimeAutoModeControl,
+  type ReplRuntimeAutoModeSettings,
   type ReplRuntimePermissionGrantSuggestion,
   type ReplRuntimePermissionPrompt,
 } from "../runtime-permission.js";
@@ -563,6 +566,7 @@ export interface InkRuntimeRunnerInput {
   readonly prompt: string;
   readonly sessionId: string;
   readonly permissionMode: PermissionMode;
+  readonly autoModeSettings?: ReplRuntimeAutoModeSettings;
   readonly requestPermission?: ReplRuntimePermissionPrompt;
   /** Marks the callback installed by the REPL's legacy permission UI. */
   readonly legacyPermissionHook?: true;
@@ -587,6 +591,7 @@ interface InkREPLProps {
   context: InteractiveContext;
   startupRuntimeInfo: NonNullable<InteractiveContext["runtimeInfo"]>;
   storage: SessionStorage;
+  autoModeSettings: ReplRuntimeAutoModeSettings;
   compactionInfo?: {
     contextWindow: number;
     triggerPercent: number;
@@ -1463,6 +1468,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   context,
   startupRuntimeInfo,
   storage,
+  autoModeSettings,
   rendererMode,
   fullscreenPolicy,
   onExit,
@@ -3879,13 +3885,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         : undefined,
   );
   useEffect(() => {
-    if (!options.runtimeAutoModeControl || !isAutoMode(currentConfig.permissionMode)) {
+    if (!options.runtimeAutoModeControl) {
       if (!isAutoMode(currentConfig.permissionMode)) setAutoModeEngineState(undefined);
+      return;
+    }
+    if (!isAutoMode(currentConfig.permissionMode)) {
+      setAutoModeEngineState(undefined);
+      void options.runtimeAutoModeControl.syncSettings?.(
+        context.sessionId,
+        currentConfig.permissionMode,
+        autoModeSettings,
+      );
       return;
     }
     let active = true;
     const refresh = async (): Promise<void> => {
-      const stats = await options.runtimeAutoModeControl?.getStats(context.sessionId);
+      const stats = await options.runtimeAutoModeControl?.syncSettings?.(
+        context.sessionId,
+        currentConfig.permissionMode,
+        autoModeSettings,
+      ) ?? await options.runtimeAutoModeControl?.getStats(context.sessionId);
       if (active) setAutoModeEngineState(stats?.engine);
     };
     void refresh();
@@ -3899,7 +3918,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       active = false;
       subscription?.close();
     };
-  }, [context.sessionId, currentConfig.permissionMode, options.runtimeAutoModeControl]);
+  }, [autoModeSettings, context.sessionId, currentConfig.permissionMode, options.runtimeAutoModeControl]);
   const statusBarProps = useMemo(
     () =>
       buildSurfaceStatusBarProps({
@@ -5102,7 +5121,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setSessionPermissionMode = useCallback((mode: PermissionMode) => {
+  const setSessionPermissionMode = useCallback(async (mode: PermissionMode): Promise<void> => {
+    const runtimeStats = await options.runtimeAutoModeControl?.syncSettings?.(
+      context.sessionId,
+      mode,
+      autoModeSettings,
+    );
     setCurrentConfig((prev) => ({ ...prev, permissionMode: mode }));
     permissionModeRef.current = mode;
     const modeEffortResolution = resolveProviderReasoningRuntimeEffort({
@@ -5131,16 +5155,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!isAutoMode(mode)) {
       setAutoModeEngineState(undefined);
     } else if (options.runtimeAutoModeControl) {
-      void options.runtimeAutoModeControl.getStats(context.sessionId).then((stats) => {
-        setAutoModeEngineState(stats?.engine);
-      });
+      const stats = runtimeStats ?? await options.runtimeAutoModeControl.getStats(context.sessionId);
+      setAutoModeEngineState(stats?.engine);
     } else {
       setAutoModeEngineState(autoModeBootstrap.getGuardrail().getEngine());
     }
     if (mode === 'auto-in-project') {
       emitAutoInProjectDeprecationRef.current();
     }
-  }, [autoModeBootstrap, context.sessionId, options.runtimeAutoModeControl, options.runtimeRunner]);
+  }, [autoModeBootstrap, autoModeSettings, context.sessionId, options.runtimeAutoModeControl, options.runtimeRunner]);
   const pendingInputsRef = useRef<string[]>(streamingState.pendingInputs);
   const userInterruptedRef = useRef(false);
   const lastInterruptEscapeAtRef = useRef(0);
@@ -7421,8 +7444,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   ): Promise<ConfirmResult> => {
     const basePrompt = buildToolConfirmationPrompt(tool, input);
     const scopeLabels = runtimeGrantSuggestions?.map((suggestion) => suggestion.label) ?? [];
-    const promptText = scopeLabels.length > 0
-      ? `${basePrompt}\n${scopeLabels.map((label) => `Runtime scope: ${label}`).join('\n')}`
+    const runtimeLines = runtimeGrantSuggestions === undefined
+      ? []
+      : [
+          RUNTIME_PERMISSION_PENDING_NOTICE,
+          ...scopeLabels.map((label) => `Runtime scope: ${label}`),
+        ];
+    const promptText = runtimeLines.length > 0
+      ? `${basePrompt}\n${runtimeLines.join('\n')}`
       : basePrompt;
 
     // FEATURE_203 (v0.7.45): commit any pending streamed text before raising the
@@ -7634,6 +7663,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           prompt,
           sessionId: context.sessionId,
           permissionMode: permissionModeRef.current,
+          autoModeSettings,
           requestPermission: requestRuntimePermission,
           legacyPermissionHook: true,
         });
@@ -10509,6 +10539,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         context={context}
         startupRuntimeInfo={startupRuntime}
         storage={storage}
+        autoModeSettings={toReplRuntimeAutoModeSettings(autoModeSettings)}
         compactionInfo={compactionInfo}
         rendererMode={rendererMode}
         fullscreenPolicy={fullscreenPolicy}

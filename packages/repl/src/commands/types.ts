@@ -102,7 +102,7 @@ export interface CommandCallbacks {
   setThinking?: (enabled: boolean) => void;
   setReasoningMode?: (mode: KodaXReasoningMode) => void;
   setAgentMode?: (mode: KodaXAgentMode) => void;
-  setPermissionMode?: (mode: PermissionMode) => void;
+  setPermissionMode?: (mode: PermissionMode) => void | Promise<void>;
   setRepoIntelligenceRuntime?: (update: {
     mode?: KodaXRepoIntelligenceMode;
     trace?: boolean;

@@ -60,7 +60,9 @@ import type { AgentsFile, KodaXWorkflowAgentDigestEvent } from '@kodax-ai/coding
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
   resolveReplRuntimePermissionDecision,
+  toReplRuntimeAutoModeSettings,
   type ReplRuntimeAutoModeControl,
+  type ReplRuntimeAutoModeSettings,
   type ReplRuntimePermissionPrompt,
 } from '../runtime-permission.js';
 import {
@@ -400,6 +402,7 @@ export interface ReplRuntimeRunnerInput {
   readonly prompt: string;
   readonly sessionId: string;
   readonly permissionMode: PermissionMode;
+  readonly autoModeSettings?: ReplRuntimeAutoModeSettings;
   readonly requestPermission?: ReplRuntimePermissionPrompt;
   /** Marks the callback installed by the REPL's legacy permission UI. */
   readonly legacyPermissionHook?: true;
@@ -653,6 +656,12 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // Slice C: settings/env block resolved here so the bootstrap stays free
   // of file-system I/O — env override layers feed the resolver chain.
   const autoModeSettings = loadAutoModeSettings();
+  const runtimeAutoModeSettings = toReplRuntimeAutoModeSettings(autoModeSettings);
+  await options.runtimeAutoModeControl?.syncSettings?.(
+    context.sessionId,
+    currentPermissionMode,
+    runtimeAutoModeSettings,
+  );
   const autoModeBootstrap: AutoModeBootstrapResult = await bootstrapAutoMode({
     askUser: async (call, reason, signals) => {
       const result = await confirmToolExecution(
@@ -871,6 +880,7 @@ Keyboard Shortcuts:
         options.runtimeRunner,
         currentPermissionMode,
         requestRuntimePermission,
+        runtimeAutoModeSettings,
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1080,7 +1090,12 @@ Keyboard Shortcuts:
       currentConfig.agentMode = mode;
       currentOptions.agentMode = mode;
     },
-    setPermissionMode: (mode: PermissionMode) => {
+    setPermissionMode: async (mode: PermissionMode) => {
+      await options.runtimeAutoModeControl?.syncSettings?.(
+        context.sessionId,
+        mode,
+        runtimeAutoModeSettings,
+      );
       currentConfig.permissionMode = mode;
       currentPermissionMode = mode; // Sync with local permission state
       refreshCurrentEffort();
@@ -1605,6 +1620,7 @@ Keyboard Shortcuts:
         options.runtimeRunner,
         currentPermissionMode,
         requestRuntimePermission,
+        runtimeAutoModeSettings,
       );
 
       if (prepared.mode === 'fork') {
@@ -1871,6 +1887,7 @@ Keyboard Shortcuts:
         options.runtimeRunner,
         currentPermissionMode,
         requestRuntimePermission,
+        runtimeAutoModeSettings,
       );
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
@@ -1984,6 +2001,7 @@ async function runAgentRound(
   runtimeRunner?: ReplRuntimeRunner,
   permissionMode: PermissionMode = 'accept-edits',
   requestPermission?: ReplRuntimePermissionPrompt,
+  autoModeSettings?: ReplRuntimeAutoModeSettings,
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
   const events = {
@@ -2032,6 +2050,7 @@ async function runAgentRound(
       prompt,
       sessionId: context.sessionId,
       permissionMode,
+      ...(autoModeSettings !== undefined ? { autoModeSettings } : {}),
       ...(requestPermission !== undefined ? { requestPermission } : {}),
       legacyPermissionHook: true,
     });

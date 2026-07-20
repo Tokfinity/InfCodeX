@@ -17,7 +17,6 @@ import {
   type KodaXAgentMode,
   type KodaXRepoIntelligenceMode,
   type RepoIntelligenceRuntimeInspection,
-  KODAX_REASONING_MODE_SEQUENCE,
   getActiveExtensionRuntime,
   inspectRepoIntelligenceRuntime,
   isKnownProvider,
@@ -44,14 +43,11 @@ import {
   formatProviderSourceKind,
   formatReasoningEffortStatusLabel,
   getProviderReasoningEffortOptions,
-  describeReasoningCapabilityControl,
-  describeReasoningExecution,
   formatReasoningCapabilityShort,
   getProviderCapabilitySnapshot,
   getProviderCapabilityProfile,
   getProviderCommonPolicyScenarios,
   getProviderPolicyDecision,
-  getProviderReasoningCapability,
   getProviderAvailableModels,
   getProviderList,
   loadConfig,
@@ -1049,8 +1045,11 @@ export const BUILTIN_COMMANDS: Command[] = [
       }
       const newMode = args[0] as PermissionMode;
       if (PERMISSION_MODES.includes(newMode)) {
-        currentConfig.permissionMode = newMode;
-        callbacks.setPermissionMode?.(newMode);
+        if (callbacks.setPermissionMode) {
+          await callbacks.setPermissionMode(newMode);
+        } else {
+          currentConfig.permissionMode = newMode;
+        }
         savePermissionModeUser(newMode);
         console.log(chalk.cyan(`\n[Switched to ${newMode} mode] (saved)`));
       } else {
@@ -1090,6 +1089,9 @@ export const BUILTIN_COMMANDS: Command[] = [
       }
       if (args.length === 0) {
         console.log(chalk.dim(`\nClassifier engine: ${chalk.cyan(stats.engine)}`));
+        if (stats.classifierModel) {
+          console.log(chalk.dim(`  classifier model:     ${stats.classifierModel}`));
+        }
         console.log(chalk.dim(`  consecutive denials: ${stats.denials.consecutive}`));
         console.log(chalk.dim(`  cumulative denials:  ${stats.denials.cumulative}`));
         console.log(chalk.dim(`  breaker errors:      ${stats.breaker.timestamps.filter((t) => t >= Date.now() - 10 * 60 * 1000).length}`));
@@ -1662,94 +1664,31 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'thinking',
     aliases: ['think', 't'],
-    description: 'Show or change reasoning mode (compat alias)',
-    usage: '/thinking [on|off|auto|quick|balanced|deep]',
+    description: 'Show or set native reasoning effort',
+    usage: '/thinking [none|auto|low|medium|high|xhigh|max]',
     handler: async (args, _context, callbacks, currentConfig) => {
-      if (args.length === 0) {
-        const capability = getProviderReasoningCapability(currentConfig.provider, currentConfig.model);
-        const status = currentConfig.thinking ? chalk.green('ON') : chalk.dim('OFF');
-        console.log(chalk.dim(`\nThinking: ${status}`));
-        console.log(chalk.dim(`Reasoning mode: ${chalk.cyan(currentConfig.reasoningMode)}`));
-        console.log(chalk.dim(`Effective control: ${chalk.cyan(describeReasoningCapabilityControl(capability))}`));
-        console.log(chalk.dim(`Actual execution: ${describeReasoningExecution(currentConfig.reasoningMode, capability)}`));
-        console.log(chalk.dim('Usage: /thinking on|off|auto|quick|balanced|deep\n'));
-        return;
-      }
-
-      const value = args[0].toLowerCase();
-      if (
-        value === 'on' ||
-        value === 'off' ||
-        KODAX_REASONING_MODE_SEQUENCE.includes(value as KodaXReasoningMode)
-      ) {
-        const mode: KodaXReasoningMode =
-          value === 'on'
-            ? 'auto'
-            : value === 'off'
-              ? 'off'
-              : value as KodaXReasoningMode;
-        const persistence = applyReasoningMode(mode, callbacks, currentConfig);
-        printPersistedCommandStatus(`Reasoning mode: ${mode}`, persistence);
-        return;
-      }
-
-      console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
-      console.log(chalk.dim('Usage: /thinking on|off|auto|quick|balanced|deep\n'));
+      await handleReasoningEffortCommand('thinking', args, callbacks, currentConfig);
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/thinking - Legacy Alias for Reasoning Mode\n'));
+      console.log(chalk.cyan('\n/thinking - Set Native Reasoning Effort\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /thinking          ') + 'Show current reasoning status');
-      console.log(chalk.dim('  /thinking on       ') + 'Map to /reasoning auto');
-      console.log(chalk.dim('  /thinking off      ') + 'Map to /reasoning off');
-      console.log(chalk.dim('  /thinking auto     ') + 'Set reasoning mode to auto');
-      console.log(chalk.dim('  /thinking quick    ') + 'Set reasoning mode to quick');
-      console.log(chalk.dim('  /thinking balanced ') + 'Set reasoning mode to balanced');
-      console.log(chalk.dim('  /thinking deep     ') + 'Set reasoning mode to deep');
+      printReasoningEffortHelp('thinking');
       console.log(chalk.dim('  /t                 ') + 'Alias for /thinking');
-      console.log();
-      console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  Compatibility command for the new unified reasoning modes.'));
-      console.log(chalk.dim('  Use /reasoning for the primary interface.'));
       console.log();
     },
   },
   {
     name: 'reasoning',
     aliases: ['reason'],
-    description: 'Show or set reasoning mode',
-    usage: '/reasoning [off|auto|quick|balanced|deep]',
+    description: 'Show or set native reasoning effort',
+    usage: '/reasoning [none|auto|low|medium|high|xhigh|max]',
     handler: async (args, _context, callbacks, currentConfig) => {
-      if (args.length === 0) {
-        const capability = getProviderReasoningCapability(currentConfig.provider, currentConfig.model);
-        console.log(chalk.dim(`\nReasoning mode: ${chalk.cyan(currentConfig.reasoningMode)}`));
-        console.log(chalk.dim(`Thinking compatibility: ${currentConfig.thinking ? chalk.green('ON') : chalk.dim('OFF')}`));
-        console.log(chalk.dim(`Effective control: ${chalk.cyan(describeReasoningCapabilityControl(capability))}`));
-        console.log(chalk.dim(`Actual execution: ${describeReasoningExecution(currentConfig.reasoningMode, capability)}`));
-        console.log(chalk.dim('Usage: /reasoning off|auto|quick|balanced|deep\n'));
-        return;
-      }
-
-      const value = args[0].toLowerCase() as KodaXReasoningMode;
-      if (!KODAX_REASONING_MODE_SEQUENCE.includes(value)) {
-        console.log(chalk.red(`\n[Invalid reasoning mode: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /reasoning off|auto|quick|balanced|deep\n'));
-        return;
-      }
-
-      const persistence = applyReasoningMode(value, callbacks, currentConfig);
-      printPersistedCommandStatus(`Reasoning mode: ${value}`, persistence);
+      await handleReasoningEffortCommand('reasoning', args, callbacks, currentConfig);
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/reasoning - Set Reasoning Mode\n'));
+      console.log(chalk.cyan('\n/reasoning - Set Native Reasoning Effort\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /reasoning             ') + 'Show current reasoning mode');
-      console.log(chalk.dim('  /reasoning off         ') + 'Disable reasoning');
-      console.log(chalk.dim('  /reasoning auto        ') + 'Use semantic routing + adaptive depth');
-      console.log(chalk.dim('  /reasoning quick       ') + 'Low-depth reasoning');
-      console.log(chalk.dim('  /reasoning balanced    ') + 'Medium-depth reasoning');
-      console.log(chalk.dim('  /reasoning deep        ') + 'High-depth reasoning');
-      console.log(chalk.dim('  /reasoning:auto        ') + 'Inline form, equivalent to /reasoning auto');
+      printReasoningEffortHelp('reasoning');
       console.log(chalk.dim('  /reason                ') + 'Alias for /reasoning');
       console.log();
     },
@@ -1759,42 +1698,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Show or set native reasoning effort',
     usage: '/effort [level]',
     handler: async (args, _context, callbacks, currentConfig) => {
-      const usage = formatReasoningEffortUsage(currentConfig);
-      if (args.length === 0) {
-        const effortLabel = formatCurrentReasoningEffortStatus(currentConfig);
-        console.log(chalk.dim(`\nReasoning effort: ${chalk.cyan(effortLabel)}`));
-        console.log(chalk.dim(`Compatibility:    ${chalk.cyan(currentConfig.reasoningMode)}`));
-        console.log(chalk.dim(`Available:        ${getProviderReasoningEffortOptions(currentConfig.provider, currentConfig.model).join(', ')}`));
-        console.log(chalk.dim(`${usage}\n`));
-        return;
-      }
-
-      if (args.length > 1) {
-        console.log(chalk.red('\n[Reasoning effort accepts exactly one value]'));
-        console.log(chalk.dim(`${usage}\n`));
-        return;
-      }
-
-      const raw = args[0];
-      let value: string;
-      try {
-        value = normalizeReasoningEffortValue(raw);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.log(chalk.red(`\n[Invalid reasoning effort: ${message}]`));
-        console.log(chalk.dim(`${usage}\n`));
-        return;
-      }
-
-      const effort = value === 'auto' || value === 'unset' || value === 'clear' || value === 'reset'
-        ? undefined
-        : value;
-      const nextConfig = resolveConfigAfterReasoningEffort(effort, currentConfig);
-      const persistence = applyReasoningEffort(effort, callbacks, currentConfig);
-      printPersistedCommandStatus(
-        `Reasoning effort: ${formatCurrentReasoningEffortStatus(nextConfig)}`,
-        persistence,
-      );
+      await handleReasoningEffortCommand('effort', args, callbacks, currentConfig);
     },
     detailedHelp: () => {
       console.log(chalk.cyan('\n/effort - Set Native Reasoning Effort\n'));
@@ -2110,12 +2014,18 @@ function formatReasoningEffortDisplay(effort: string | undefined): string {
   return effort === 'none' ? 'off' : effort ?? 'auto';
 }
 
-function formatReasoningEffortUsage(currentConfig: CurrentConfig): string {
-  const options = getProviderReasoningEffortOptions(
+function getCanonicalReasoningEffortOptions(currentConfig: CurrentConfig): string[] {
+  return getProviderReasoningEffortOptions(
     currentConfig.provider,
     currentConfig.model,
-  );
-  return `Usage: /effort ${options.join('|')}|<provider-value>`;
+  ).map((effort) => effort === 'off' ? 'none' : effort);
+}
+
+function formatReasoningEffortUsage(
+  commandName: string,
+  currentConfig: CurrentConfig,
+): string {
+  return `Usage: /${commandName} ${getCanonicalReasoningEffortOptions(currentConfig).join('|')}|<provider-value>`;
 }
 
 function formatCurrentReasoningEffortStatus(config: CurrentConfig): string {
@@ -2211,35 +2121,85 @@ function printPersistedCommandStatus(
   console.log(chalk.red(`[Config save failed: ${result.error.message}]`));
 }
 
-function applyReasoningMode(
-  mode: KodaXReasoningMode,
+const LEGACY_REASONING_EFFORT_ALIASES: Readonly<Record<string, string>> = {
+  on: 'auto',
+  off: 'none',
+  quick: 'low',
+  balanced: 'medium',
+  deep: 'high',
+  med: 'medium',
+};
+
+async function handleReasoningEffortCommand(
+  commandName: string,
+  args: string[],
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig,
-): ConfigPersistenceResult {
-  const thinking = reasoningModeToLegacyThinking(mode);
-  const clearBlockingEffort = mode !== 'off' && currentConfig.effort === 'none';
-  const persistence = persistUserConfig({
-    reasoningMode: mode,
-    thinking,
-    ...(clearBlockingEffort ? { effort: undefined } : {}),
-  });
-
-  if (callbacks.setReasoningMode) {
-    callbacks.setReasoningMode(mode);
-  } else {
-    currentConfig.reasoningMode = mode;
-    currentConfig.thinking = thinking;
-  }
-  if (clearBlockingEffort) {
-    if (callbacks.setEffort) {
-      callbacks.setEffort(undefined);
-    } else {
-      currentConfig.effort = undefined;
-      currentConfig.effortOverride = false;
-    }
+): Promise<void> {
+  const usage = formatReasoningEffortUsage(commandName, currentConfig);
+  if (args.length === 0) {
+    const effortLabel = formatCurrentReasoningEffortStatus(currentConfig);
+    console.log(chalk.dim(`\nReasoning effort: ${chalk.cyan(effortLabel)}`));
+    console.log(chalk.dim(`Compatibility:    ${chalk.cyan(currentConfig.reasoningMode)}`));
+    console.log(chalk.dim(`Available:        ${getCanonicalReasoningEffortOptions(currentConfig).join(', ')}`));
+    console.log(chalk.dim(`${usage}\n`));
+    return;
   }
 
-  return persistence;
+  if (args.length > 1) {
+    console.log(chalk.red('\n[Reasoning effort accepts exactly one value]'));
+    console.log(chalk.dim(`${usage}\n`));
+    return;
+  }
+
+  const raw = args[0].toLowerCase();
+  let value: string;
+  try {
+    value = normalizeReasoningEffortValue(
+      LEGACY_REASONING_EFFORT_ALIASES[raw] ?? raw,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.red(`\n[Invalid reasoning effort: ${message}]`));
+    console.log(chalk.dim(`${usage}\n`));
+    return;
+  }
+
+  const effort = value === 'auto' || value === 'unset' || value === 'clear' || value === 'reset'
+    ? undefined
+    : value;
+  if (
+    effort === 'none' &&
+    !getProviderReasoningEffortOptions(
+      currentConfig.provider,
+      currentConfig.model,
+    ).includes('off')
+  ) {
+    const model = currentConfig.model
+      ? `${currentConfig.provider}/${currentConfig.model}`
+      : currentConfig.provider;
+    console.log(chalk.red(`\n[${model} does not support disabling reasoning]`));
+    console.log(chalk.dim(`${usage}\n`));
+    return;
+  }
+
+  const nextConfig = resolveConfigAfterReasoningEffort(effort, currentConfig);
+  const persistence = applyReasoningEffort(effort, callbacks, currentConfig);
+  printPersistedCommandStatus(
+    `Reasoning effort: ${formatCurrentReasoningEffortStatus(nextConfig)}`,
+    persistence,
+  );
+}
+
+function printReasoningEffortHelp(commandName: string): void {
+  console.log(chalk.dim(`  /${commandName}             `) + 'Show current native reasoning effort');
+  console.log(chalk.dim(`  /${commandName} none        `) + 'Disable reasoning when supported');
+  console.log(chalk.dim(`  /${commandName} auto        `) + 'Clear the explicit effort override');
+  console.log(chalk.dim(`  /${commandName} low         `) + 'Use low native reasoning effort');
+  console.log(chalk.dim(`  /${commandName} medium      `) + 'Use medium native reasoning effort');
+  console.log(chalk.dim(`  /${commandName} high        `) + 'Use high native reasoning effort');
+  console.log(chalk.dim(`  /${commandName} xhigh       `) + 'Use extra-high native reasoning effort');
+  console.log(chalk.dim(`  /${commandName} max         `) + 'Use maximum native reasoning effort');
 }
 
 // V2: `reasoningMode` is a derived compatibility field that is only ever 'off'

@@ -25,6 +25,9 @@ export type ReplRuntimePermissionPrompt = (
   request: ReplRuntimePermissionRequest,
 ) => Promise<ReplRuntimePermissionDecision>;
 
+export const RUNTIME_PERMISSION_PENDING_NOTICE =
+  'Runtime state: run active until this approval is resolved.';
+
 export function resolveReplRuntimePermissionDecision(
   request: ReplRuntimePermissionRequest,
   result: ConfirmResult,
@@ -46,10 +49,37 @@ export function resolveReplRuntimePermissionDecision(
 export interface ReplRuntimeAutoModeControl {
   getStats(sessionId: string): Promise<AutoModeStats | undefined>;
   setEngine(sessionId: string, engine: 'llm' | 'rules'): Promise<AutoModeStats | undefined>;
+  syncSettings?(
+    sessionId: string,
+    permissionMode: string,
+    settings: ReplRuntimeAutoModeSettings,
+  ): Promise<AutoModeStats | undefined>;
   subscribe?(
     sessionId: string,
     listener: (stats: AutoModeStats | undefined) => void,
   ): { close(): void };
 }
+
+export interface ReplRuntimeAutoModeSettings {
+  readonly engine: 'llm' | 'rules';
+  readonly classifierModel?: string;
+  readonly timeoutMs?: number;
+  readonly speculativeWindowMs?: number;
+}
+
+export function toReplRuntimeAutoModeSettings(
+  settings: ResolvedAutoModeSettings,
+): ReplRuntimeAutoModeSettings {
+  const classifierModel = settings.classifierModelEnv ?? settings.classifierModel;
+  return {
+    engine: settings.engine,
+    ...(classifierModel !== undefined ? { classifierModel } : {}),
+    ...(settings.timeoutMs !== undefined ? { timeoutMs: settings.timeoutMs } : {}),
+    ...(settings.speculativeWindowMs !== undefined
+      ? { speculativeWindowMs: settings.speculativeWindowMs }
+      : {}),
+  };
+}
 import type { AutoModeStats } from '@kodax-ai/coding';
+import type { ResolvedAutoModeSettings } from './common/permission-config.js';
 import type { ConfirmResult } from './permission/types.js';

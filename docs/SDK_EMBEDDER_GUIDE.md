@@ -1905,12 +1905,12 @@ Each provider has one `verifyStrategy` value baked into `provider-capabilities.j
 
 | Strategy | What runs | Cost | Used by built-ins |
 |---|---|---|---|
-| `count-tokens` | `client.messages.countTokens({ messages: [{role:'user',content:'hi'}] })` | 0 token | `anthropic`, `zhipu-coding`, `kimi-code`, `minimax-coding`, `ark-coding` |
+| `count-tokens` | `client.messages.countTokens({ messages: [{role:'user',content:'hi'}] })` | 0 token | `anthropic`, `kimi-code`, `qwen-token-plan`, `zhipu-coding`, `zai-coding`, `minimax-coding`, `ark-coding` |
 | `models-list` | `client.models.list()` | 0 token | `openai`, `deepseek`, `kimi`, `qwen` |
 | `minimal-message` | `chat.completions.create({max_tokens:1, content:'hi'})` (or Anthropic equivalent) | ~6–7 token | `zhipu`, `mimo`, `mimo-coding` |
 | `unsupported` | nothing — short-circuits | — | `gemini-cli`, `codex-cli` (cli-bridge: credentials live in CLI binary) |
 
-`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 provider probe matrix captured these empirically (12 providers at the time; 15 built-in aliases as of 2026-06-28); opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
+`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 provider probe matrix captured the original per-provider evidence (12 providers at the time; 15 built-in aliases as of 2026-06-28). The current capability catalog has 16 aliases, including `qwen-token-plan` with `count-tokens`; opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
 
 ### Custom providers
 

@@ -129,13 +129,9 @@ describe('ArgumentCompleter', () => {
       it('should return thinking arguments', async () => {
         const completions = await completer.getCompletions('/thinking ', 10);
 
-        expect(completions.length).toBe(6);
-        expect(completions.some(c => c.display === 'on')).toBe(true);
-        expect(completions.some(c => c.display === 'off')).toBe(true);
-        expect(completions.some(c => c.display === 'auto')).toBe(true);
-        expect(completions.some(c => c.display === 'quick')).toBe(true);
-        expect(completions.some(c => c.display === 'balanced')).toBe(true);
-        expect(completions.some(c => c.display === 'deep')).toBe(true);
+        expect(completions.map(c => c.display)).toEqual([
+          'none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max',
+        ]);
       });
     });
 
@@ -143,25 +139,23 @@ describe('ArgumentCompleter', () => {
       it('should return reasoning arguments for /reasoning with a space', async () => {
         const completions = await completer.getCompletions('/reasoning ', 11);
 
-        expect(completions.some(c => c.display === 'off')).toBe(true);
-        expect(completions.some(c => c.display === 'auto')).toBe(true);
-        expect(completions.some(c => c.display === 'quick')).toBe(true);
-        expect(completions.some(c => c.display === 'balanced')).toBe(true);
-        expect(completions.some(c => c.display === 'deep')).toBe(true);
+        expect(completions.map(c => c.display)).toEqual([
+          'none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max',
+        ]);
       });
 
       it('should return reasoning arguments for /reasoning without a trailing space', async () => {
         const completions = await completer.getCompletions('/reasoning', 10);
 
         expect(completions.some(c => c.display === 'auto')).toBe(true);
-        expect(completions.some(c => c.display === 'balanced')).toBe(true);
+        expect(completions.some(c => c.display === 'medium')).toBe(true);
       });
 
       it('should return reasoning arguments for /reason alias', async () => {
         const completions = await completer.getCompletions('/reason', 7);
 
         expect(completions.some(c => c.display === 'auto')).toBe(true);
-        expect(completions.some(c => c.display === 'deep')).toBe(true);
+        expect(completions.some(c => c.display === 'high')).toBe(true);
       });
     });
 
@@ -299,6 +293,10 @@ describe('ArgumentCompleter', () => {
           ['/mcp ', ['status', 'refresh']],
           ['/fallback ', ['status', 'off']],
           ['/auto-engine ', ['llm', 'rules']],
+          ['/thinking ', ['none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max']],
+          ['/think ', ['none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max']],
+          ['/reasoning ', ['none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max']],
+          ['/effort ', ['none', 'auto', 'low', 'medium', 'high', 'xhigh', 'max']],
           ['/agent-mode ', ['ama', 'sa', 'toggle']],
           ['/verifier-log ', ['on', 'off']],
           ['/stall-log ', ['on', 'off']],
@@ -619,7 +617,7 @@ describe('ArgumentCompleter', () => {
       it('should keep thinking alias completions working', async () => {
         const completions = await completer.getCompletions('/t ', 3);
         expect(completions.length).toBeGreaterThan(0);
-        expect(completions.some(c => c.display === 'on')).toBe(true);
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
       });
     });
   });

@@ -180,7 +180,7 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 
 `packages/llm` provides:
 
-- 15 built-in provider aliases,
+- 16 built-in provider aliases,
 - custom provider registration,
 - OpenAI- and Anthropic-compatible protocols,
 - CLI bridge providers for Gemini CLI and Codex CLI,

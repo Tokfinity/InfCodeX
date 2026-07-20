@@ -2273,7 +2273,7 @@ isolation: z.enum(['worktree']).optional().describe(
 
 ```
 packages/
-├── llm/        # 7.3k — LLM provider 抽象 (15 built-in aliases + stream 协议 + model registry)
+├── llm/        # 7.3k — LLM provider 抽象 (16 built-in aliases + stream 协议 + model registry)
 ├── agent/      # ~20.8k — Agent 框架 + capabilities + tracing + session-lineage
 │   └── src/
 │       ├── primitives/             # 现有：Agent / Runner / Handoff / Guardrail / Admission / Messaging / Memory / Team / Scratchpad / Construction

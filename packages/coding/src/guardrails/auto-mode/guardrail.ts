@@ -300,6 +300,7 @@ export interface AutoModeGuardrailConfig {
  */
 export interface AutoModeStats {
   readonly engine: AutoModeEngine;
+  readonly classifierModel?: string;
   readonly denials: DenialTracker;
   readonly breaker: CircuitBreaker;
 }

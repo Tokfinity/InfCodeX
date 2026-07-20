@@ -128,7 +128,6 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     model: opts.model,
     system: prompt.system,
     messages: prompt.messages,
-    reasoning: { effort: 'none' },
     maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
     timeoutMs: opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
     abortSignal: opts.abortSignal,

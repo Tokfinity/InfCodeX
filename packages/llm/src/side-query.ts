@@ -21,6 +21,7 @@ import { performance } from 'node:perf_hooks';
 import type {
   KodaXMessage,
   KodaXReasoningRequest,
+  KodaXReasoningProfile,
   KodaXTokenUsage,
 } from './types.js';
 import { KodaXBaseProvider } from './providers/base.js';
@@ -90,6 +91,33 @@ const EMPTY_USAGE: KodaXTokenUsage = {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+function resolveDefaultSideQueryReasoning(
+  profile: KodaXReasoningProfile | undefined,
+): KodaXReasoningRequest | undefined {
+  if (!profile) return { effort: 'none' };
+
+  const rejected = new Set([
+    ...(profile.disabledEfforts ?? []),
+    ...(profile.localRejectEfforts ?? []),
+  ]);
+  const visibleEfforts = profile.supportedEfforts
+    ?.filter((preset) => preset.isUserVisible !== false)
+    .map((preset) => preset.value)
+    .filter((effort) => !rejected.has(effort));
+
+  if (
+    !rejected.has('none') &&
+    (profile.supportsDisabledThinking === true || visibleEfforts?.includes('none'))
+  ) {
+    return { effort: 'none' };
+  }
+
+  const lowestEnabledEffort = visibleEfforts?.find((effort) => effort !== 'none');
+  return lowestEnabledEffort === undefined
+    ? undefined
+    : { effort: lowestEnabledEffort };
+}
+
 export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult> {
   const controller = new AbortController();
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -146,7 +174,9 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       [...req.messages],
       [],
       req.system,
-      req.reasoning ?? { effort: 'none' },
+      req.reasoning ?? resolveDefaultSideQueryReasoning(
+        req.provider.getReasoningProfile(req.model),
+      ),
       {
         modelOverride: req.model,
         ...(isPositiveInteger(req.maxOutputTokens)

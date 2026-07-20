@@ -4776,7 +4776,7 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
-  it('loads, matches, lists, and revokes legacy coarse grants without rewriting them', async () => {
+  it('loads, lists, and revokes legacy coarse grants without letting them authorize calls', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtimeDir = path.join(tempRoot, '.kodax', 'runtime');
     await fs.mkdir(runtimeDir, { recursive: true });
@@ -4799,13 +4799,21 @@ describe('createKodaXRuntime', () => {
         scope: { toolName: 'bash', sessionId: 'legacy-session' },
       })],
     });
-    await expect(runtime.permissions.request({
+    const decision = runtime.permissions.request({
       sessionId: 'legacy-session',
       runId: 'legacy-run',
       toolName: 'bash',
-      toolInput: { command: 'different legacy command' },
+      toolInput: { command: 'rm -rf C:/project/$env:LEGACY_TARGET' },
       executionCwd: tempRoot,
-    })).resolves.toEqual({ type: 'allow_always', suggestionId: 'legacy-bash-grant' });
+    });
+    const [pending] = await runtime.permissions.listPending({ runId: 'legacy-run' });
+    if (!pending) throw new Error('expected legacy grant to require fresh approval');
+    expect(pending).toMatchObject({
+      sessionId: 'legacy-session',
+      toolName: 'bash',
+    });
+    await runtime.permissions.respond(pending.id, { type: 'reject' });
+    await expect(decision).resolves.toEqual({ type: 'reject' });
     expect(await runtime.permissions.revokeGrant('legacy-bash-grant', listed.revision)).toBe(true);
     expect((await runtime.permissions.listGrants()).value).toEqual([]);
     await expect(runtime.events.replay({ type: 'permission.grant.changed' })).resolves.toEqual([

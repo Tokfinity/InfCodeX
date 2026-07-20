@@ -3653,6 +3653,9 @@ function createRuntimeSessionService(
       const live = readAutoModeStats(sessionId);
       return {
         engine: settings.autoModeEngine ?? live?.engine ?? 'llm',
+        ...(settings.autoModeClassifierModel !== undefined
+          ? { classifierModel: settings.autoModeClassifierModel }
+          : {}),
         denials: live?.denials ?? createAutoModeDenialTracker(),
         breaker: live?.breaker ?? createCircuitBreaker(),
       };
@@ -4204,7 +4207,11 @@ function createRuntimeRunService(deps: {
         )
           continue;
         record.permissionMode = current.value.permissionMode;
-        record.autoModeEngine = current.value.autoModeEngine;
+        record.autoModeEngine = replApi.normalizePermissionMode(
+          current.value.permissionMode,
+        ) === 'auto'
+          ? current.value.autoModeEngine ?? 'llm'
+          : current.value.autoModeEngine;
         record.autoModeClassifierModel = current.value.autoModeClassifierModel;
         record.autoModeTimeoutMs = current.value.autoModeTimeoutMs;
         record.autoModeSpeculativeWindowMs =
@@ -4380,9 +4387,11 @@ function createRuntimeRunService(deps: {
               settings.autoModeSpeculativeWindowMs,
           }
         : {}),
-      ...(settings.autoModeEngine !== undefined
-        ? { autoModeEngine: settings.autoModeEngine }
-        : {}),
+      ...(replApi.normalizePermissionMode(settings.permissionMode) === 'auto'
+        ? { autoModeEngine: settings.autoModeEngine ?? 'llm' }
+        : settings.autoModeEngine !== undefined
+          ? { autoModeEngine: settings.autoModeEngine }
+          : {}),
       ...(options.reasoningMode !== undefined
         ? { reasoning: options.reasoningMode }
         : {}),
@@ -6962,7 +6971,9 @@ function createRuntimePermissionRegistry(
     return [...sessionGrants.values(), ...persistent].find((grant) => {
       if (grant.scope.sessionId !== undefined && grant.scope.sessionId !== sessionId) return false;
       if (grant.scope.toolName !== undefined && grant.scope.toolName !== toolName) return false;
-      if (grant.scope.matcher === undefined) return true;
+      // Legacy coarse grants remain visible and revocable, but cannot authorize
+      // a concrete call without a Runtime-issued matcher.
+      if (grant.scope.matcher === undefined) return false;
       if (toolInput === undefined) return false;
       if (
         grant.persistence !== 'session'
@@ -9403,10 +9414,7 @@ function isRuntimeAutoModeGuardrail(
 function getRuntimeAutoModeGuardrail(
   record: RuntimeRunRecord,
 ): RuntimeOwnedAutoModeGuardrail | undefined {
-  if (
-    replApi.normalizePermissionMode(record.permissionMode) !== 'auto' ||
-    record.autoModeEngine === undefined
-  ) {
+  if (replApi.normalizePermissionMode(record.permissionMode) !== 'auto') {
     return undefined;
   }
   return record.start?.options.guardrails?.find(isRuntimeAutoModeGuardrail);
@@ -9573,7 +9581,11 @@ function createRuntimeSessionAutoModeGuardrail(input: {
     const record = input.getRecord();
     if (record) {
       record.permissionMode = settings.permissionMode;
-      record.autoModeEngine = settings.autoModeEngine;
+      record.autoModeEngine = replApi.normalizePermissionMode(
+        settings.permissionMode,
+      ) === 'auto'
+        ? settings.autoModeEngine ?? 'llm'
+        : settings.autoModeEngine;
       record.autoModeClassifierModel = settings.autoModeClassifierModel;
       record.autoModeTimeoutMs = settings.autoModeTimeoutMs;
       record.autoModeSpeculativeWindowMs =

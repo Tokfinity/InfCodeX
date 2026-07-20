@@ -17,7 +17,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-KAI--FCL_1.0-orange?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
-  <img alt="providers" src="https://img.shields.io/badge/LLMs-15_aliases_+_custom-2ecc71?style=flat-square">
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-16_aliases_+_custom-2ecc71?style=flat-square">
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@ npm i -g @kodax-ai/kodax
 # 选一个你有 API key 的 provider
 export ZHIPU_API_KEY=...        # 或 KIMI_API_KEY / MINIMAX_API_KEY / MIMO_API_KEY /
                                 # ARK_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY /
-                                # OPENAI_API_KEY / QWEN_API_KEY / GEMINI_API_KEY
+                                # OPENAI_API_KEY / QWEN_API_KEY / QWEN_TOKEN_API_KEY / GEMINI_API_KEY
 
 kodax
 ```
@@ -91,10 +91,14 @@ daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程�
 再使用 attach-only 模式连接。SDK 的 `homeDir` 是拥有 `.kodax` 的 CLI 风格基础目录，
 不是 `.kodax` 目录本身。
 
-**v0.7.72 Runtime 修正：**Auto Mode 的权限决策由 Runtime Session 持有，
+**v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
 仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到
-session。Session 也可设置 classifier model 和有界 timeout；没有宿主审批回调时，
+session。Session 也可设置 classifier model 和有界 timeout；`auto` 默认使用 LLM
+分类，没有有效 classifier model 时会在调用 provider 或创建审批前返回可恢复配置错误，
+绝不静默退回 rules。Runtime 权限请求可给出由 Runtime 生成的精确作用域建议：一次允许、
+本 Session 允许，或（仅安全场景）持久允许；客户端只能回传不透明 suggestion id，不能从
+预览内容自行扩大范围。持久授权由 daemon 持有并通过 revision 管理。没有宿主审批回调时，
 不会向模型暴露 `exit_plan_mode`。完整 SDK 接入见
 [Runtime Auto Mode 指引](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072)。
 
@@ -192,6 +196,14 @@ export ZHIPU_API_KEY=your_api_key
 
 # PowerShell
 $env:ZHIPU_API_KEY="your_api_key"
+```
+
+Qwen Token Plan 需要选择 `qwen-token-plan` 并使用单独的凭据；`QWEN_API_KEY`
+不能用于该路由：
+
+```bash
+export QWEN_TOKEN_API_KEY=your_api_key
+kodax --provider qwen-token-plan
 ```
 
 然后在 `~/.kodax/config.json` 里写一个最小配置：
@@ -828,7 +840,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime 与 v0.7.72 Auto Mode 契约
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime、v0.7.73 Auto Mode 与精确授权契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策

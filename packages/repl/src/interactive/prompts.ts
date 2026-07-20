@@ -2,7 +2,10 @@ import * as readline from 'readline';
 import chalk from 'chalk';
 import { buildToolConfirmationDisplay } from '../common/tool-confirmation.js';
 import type { ConfirmResult, PermissionMode } from '../permission/types.js';
-import type { ReplRuntimePermissionGrantSuggestion } from '../runtime-permission.js';
+import {
+  RUNTIME_PERMISSION_PENDING_NOTICE,
+  type ReplRuntimePermissionGrantSuggestion,
+} from '../runtime-permission.js';
 import { supportsUnicode as terminalSupportsUnicode } from '../ui/utils/terminalCapabilities.js';
 
 export interface ConfirmOption {
@@ -180,6 +183,7 @@ export async function confirmToolExecution(
       message += `\n${detailLines.join('\n')}`;
     }
     if (runtimeGrantSuggestions !== undefined) {
+      message += `\n  ${chalk.dim(RUNTIME_PERMISSION_PENDING_NOTICE)}`;
       message += `\n${runtimeGrantSuggestions
         .map((suggestion) => `  ${chalk.dim(`Runtime scope: ${suggestion.label}`)}`)
         .join('\n')}`;
