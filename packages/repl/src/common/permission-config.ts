@@ -106,9 +106,15 @@ export interface ResolvedAutoModeSettings {
   readonly speculativeWindowMs?: number;
 }
 
+export interface ResolveAutoModeSettingsInput {
+  readonly settings?: AutoModeSettings;
+  readonly env?: NodeJS.ProcessEnv | Readonly<Record<string, string | undefined>>;
+}
+
 /**
- * Resolve auto-mode settings from `~/.kodax/config.json` and the
- * `KODAX_AUTO_MODE_*` env override family. Pure (no side effects).
+ * Load auto-mode settings from `~/.kodax/config.json` and apply the
+ * `KODAX_AUTO_MODE_*` env override family. This wrapper performs one
+ * filesystem read; `resolveAutoModeSettings()` is the pure counterpart.
  *
  * Env priority (highest first):
  *   - KODAX_AUTO_MODE_ENGINE: 'llm' | 'rules' — overrides settings.engine
@@ -124,7 +130,22 @@ export interface ResolvedAutoModeSettings {
  */
 export function loadAutoModeSettings(env: NodeJS.ProcessEnv = process.env): ResolvedAutoModeSettings {
   const userConfig = readJsonFile(USER_CONFIG_FILE) as PermissionConfigData;
-  const fileSettings = userConfig.autoMode ?? {};
+  return resolveAutoModeSettings({ settings: userConfig.autoMode, env });
+}
+
+/**
+ * Resolve Auto settings from caller-owned data without reading global files.
+ * SDK hosts can therefore share the REPL's validation and precedence rules
+ * while retaining ownership of their own configuration source.
+ */
+export function resolveAutoModeSettings(
+  input: ResolveAutoModeSettingsInput = {},
+): ResolvedAutoModeSettings {
+  const fileSettings = input.settings ?? {};
+  // Keep the SDK resolver deterministic. The file-loading wrapper explicitly
+  // passes its environment; caller-owned settings do not inherit process state
+  // unless the caller opts in by supplying `env`.
+  const env = input.env ?? {};
 
   const envEngineRaw = env.KODAX_AUTO_MODE_ENGINE?.trim();
   const envEngine =

@@ -178,21 +178,11 @@ export async function bootstrapAutoMode(
       defaultModel: deps.getCurrentModel() ?? '',
       // FEATURE_092 v0.7.34 hotfix-3: live getters re-read provider/model on
       // every classify() so `/model` + `/provider` mid-session swaps retarget
-      // the classifier. The empty-model warn surfaces a misconfiguration
-      // (main session has no model set) instead of failing silently inside
-      // sideQuery.
+      // the classifier. The common guardrail owns the final non-empty-model
+      // check, so an empty live value becomes a local configuration block
+      // before provider, approval, breaker, or fallback work.
       getDefaultProvider: deps.getCurrentProviderName,
-      getDefaultModel: () => {
-        const m = deps.getCurrentModel();
-        if (!m) {
-          deps.log?.(
-            'warn',
-            '[auto-mode] classifier defaultModel is empty; main session has no model set — classifier will likely fail',
-          );
-          return '';
-        }
-        return m;
-      },
+      getDefaultModel: () => deps.getCurrentModel() ?? '',
       askUser: deps.askUser,
       log: deps.log,
       onEngineChange: deps.onEngineChange,

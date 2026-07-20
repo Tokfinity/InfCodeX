@@ -26,7 +26,7 @@
  *     agency without putting safety on the line.
  */
 
-import type { CostTracker } from '@kodax-ai/llm';
+import type { CostTracker, SideQueryDiagnostics } from '@kodax-ai/llm';
 import { KodaXBaseProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
@@ -34,6 +34,7 @@ import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';
 import type { AutoRules } from './rules.js';
 import type { ToolCallSignal } from './signals.js';
+import { stripAssistantText } from './transcript-strip.js';
 
 export interface ClassifyOptions {
   readonly provider: KodaXBaseProvider;
@@ -64,29 +65,54 @@ export interface ClassifyOptions {
   readonly setCostTracker?: (next: CostTracker) => void;
 }
 
+interface ClassifyDecisionDetails {
+  readonly reason: string;
+  /** Structured request metadata only; never includes prompt or response text. */
+  readonly diagnostics?: SideQueryDiagnostics;
+}
+
 export type ClassifyDecision =
-  | { readonly kind: 'allow'; readonly reason: string }
-  | { readonly kind: 'block'; readonly reason: string }
-  | { readonly kind: 'escalate'; readonly reason: string };
+  | ({ readonly kind: 'allow' } & ClassifyDecisionDetails)
+  | ({ readonly kind: 'block' } & ClassifyDecisionDetails)
+  | ({ readonly kind: 'escalate' } & ClassifyDecisionDetails);
 
 /**
- * Classifier requests share the foreground provider path and can queue behind
- * a long-running main response. Historical Auto[LLM] latency measurements put
- * P90 above eight seconds, so the old default caused ordinary operations to
- * fail closed into an approval dialog. Keep the timeout bounded, but leave
- * enough room for the classifier to answer under normal provider load.
+ * The deadline includes connection setup, provider-side queueing, inference,
+ * and any Retry-After/backoff handled by the provider adapter. Keep it bounded
+ * so infrastructure failure degrades to an explicit user decision.
  */
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
+/** The classifier returns two short XML tags; a coding-turn-sized budget is wasteful. */
+export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
+/** Very large shell/script projections cannot be safely truncated and auto-approved. */
+export const MAX_CLASSIFIER_ACTION_BYTES = 16 * 1024;
+/** Defense in depth for rules, signals, and all serialized prompt sections. */
+export const MAX_CLASSIFIER_PROMPT_BYTES = 32 * 1024;
 const QUERY_SOURCE = 'auto_mode';
 
 export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision> {
+  if (utf8Bytes(opts.action) > MAX_CLASSIFIER_ACTION_BYTES) {
+    return {
+      kind: 'escalate',
+      reason: `classifier input budget exceeded (action is larger than ${MAX_CLASSIFIER_ACTION_BYTES} bytes)`,
+    };
+  }
+
   const prompt = buildClassifierPrompt({
     rules: opts.rules,
     claudeMd: opts.claudeMd,
-    transcript: opts.transcript,
+    // Enforce the boundary at the classifier API itself so future callers
+    // cannot accidentally bypass the session-history cap.
+    transcript: stripAssistantText(opts.transcript),
     action: opts.action,
     signals: opts.signals,
   });
+  if (classifierPromptBytes(prompt.system, prompt.messages) > MAX_CLASSIFIER_PROMPT_BYTES) {
+    return {
+      kind: 'escalate',
+      reason: `classifier input budget exceeded (prompt is larger than ${MAX_CLASSIFIER_PROMPT_BYTES} bytes)`,
+    };
+  }
 
   const result = await sideQuery({
     provider: opts.provider,
@@ -94,6 +120,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     system: prompt.system,
     messages: prompt.messages,
     reasoning: { effort: 'none' },
+    maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
     timeoutMs: opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
     abortSignal: opts.abortSignal,
     querySource: QUERY_SOURCE,
@@ -112,15 +139,20 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
         return {
           kind: 'block',
           reason: 'classifier output was unparseable (fail-closed)',
+          diagnostics: result.diagnostics,
         };
       }
-      return decision;
+      return { ...decision, diagnostics: result.diagnostics };
     }
 
     case 'timeout':
       return {
         kind: 'escalate',
-        reason: `classifier timeout (${opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}ms exceeded)`,
+        reason: `classifier timeout (${formatSideQueryDiagnostics(
+          result.diagnostics,
+          opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        )})`,
+        diagnostics: result.diagnostics,
       };
 
     case 'aborted':
@@ -140,12 +172,38 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
         return {
           kind: 'block',
           reason: `classifier returned tool_use block (contract violation)`,
+          diagnostics: result.diagnostics,
         };
       }
       return {
         kind: 'escalate',
         reason: `classifier error: ${errMsg}`,
+        diagnostics: result.diagnostics,
       };
     }
   }
+}
+
+function formatSideQueryDiagnostics(
+  value: SideQueryDiagnostics | undefined,
+  fallbackTimeoutMs: number,
+): string {
+  if (!value) return `${fallbackTimeoutMs}ms exceeded`;
+  return [
+    `provider=${value.provider}`,
+    `model=${value.model}`,
+    `timeoutMs=${value.timeoutMs}`,
+    `elapsedMs=${value.elapsedMs}`,
+    `retries=${value.retryCount}`,
+    `retryWaitMs=${value.retryWaitMs}`,
+    `phase=${value.terminalPhase}`,
+  ].join(', ');
+}
+
+function classifierPromptBytes(system: string, messages: readonly KodaXMessage[]): number {
+  return utf8Bytes(system) + utf8Bytes(JSON.stringify(messages));
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
 }

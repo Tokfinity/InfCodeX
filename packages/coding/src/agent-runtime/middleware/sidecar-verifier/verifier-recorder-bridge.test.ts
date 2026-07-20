@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
 
 import {
   applySidecarVerdictToRecorder,
@@ -43,7 +44,7 @@ function makeObserver(): ObserverBridge {
 
 function makeTodoStore(): TodoStore {
   return {
-    autoCompleteOnAccept: vi.fn(),
+    autoCompleteOnAccept: vi.fn().mockReturnValue(0),
     markInProgressFailed: vi.fn(),
     reset: vi.fn(),
     init: vi.fn(),
@@ -242,6 +243,35 @@ describe('applySidecarVerdictToRecorder — side effects', () => {
     });
     expect(todoStore.autoCompleteOnAccept).toHaveBeenCalled();
     expect(todoStore.markInProgressFailed).not.toHaveBeenCalled();
+  });
+
+  it('emits a diagnostic when the accept fallback reconciles stale open todos', async () => {
+    const recorder = makeRecorder();
+    const observer = makeObserver();
+    const todoStore = makeTodoStore();
+    vi.mocked(todoStore.autoCompleteOnAccept).mockReturnValue(3);
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+
+    try {
+      await applySidecarVerdictToRecorder({
+        recorder,
+        observer,
+        todoStore,
+        verdict: { verdict: 'accept', reason: '', trace: 'verifier_ok' },
+      });
+    } finally {
+      restoreDiagnostics();
+    }
+
+    expect(diagnostics).toContainEqual({
+      source: 'coding:sidecar-verifier',
+      level: 'debug',
+      message: 'Sidecar accept reconciled 3 open Todo item(s) after the Worker terminal turn.',
+      detail: { todoReconciledCount: 3 },
+    });
   });
 
   it('revise → todoStore.markInProgressFailed + sets pendingFailedResetRef', async () => {

@@ -693,7 +693,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'wait_agent',
-    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot; root user input interrupts the wait and resumes the next turn.',
+    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot; root user input interrupts the wait and resumes the next turn. After a terminal result, integrate its evidence and reconcile the affected semantic plan milestone before waiting again or moving to another milestone.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1391,7 +1391,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       + '- AT THE START of a non-trivial multi-step task — commit the full plan up front by batching one `todo_create` call per planned step in the same response, so the user sees the intended trajectory.\n'
       + '- WHEN you receive a user request with multiple distinct sub-tasks — capture each as its own item.\n'
       + '- WHEN you discover an additional step mid-task — add it additively so the user sees the plan growing rather than the original list being silently rewritten.\n'
-      + '- BEFORE spawning several child Agents via `spawn_agent` — the plan list is the natural anchor for the work each child will execute.\n\n'
+      + '- BEFORE spawning several child Agents via `spawn_agent` — capture the user-visible semantic milestones, not one item per child Agent. Several Agents may support one milestone; split rows only when they produce genuinely separate deliverables.\n\n'
       + '## When NOT to Use This Tool\n\n'
       + '- For a single straightforward operation that completes in one step — skip the plan list entirely.\n'
       + '- For purely informational responses (answering a question, explaining code) where there is no execution work to track.\n'

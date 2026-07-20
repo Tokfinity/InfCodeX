@@ -6,6 +6,54 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **First-run provider setup (FEATURE_271).** A bare interactive `kodax`
+  launch with no selected provider and no supported local credential now opens
+  a focused provider/model setup flow before Runtime, daemon, session, or REPL
+  startup. `kodax setup` reruns the same flow explicitly. It stores only
+  non-secret metadata, preserves unrelated config through a revision-checked
+  atomic write, refuses malformed existing custom providers and credential-
+  bearing endpoint URLs, and then names the required environment variable and
+  terminal restart steps.
+- **Typed Auto Mode SDK contract (FEATURE_271).** The root and REPL SDK
+  entries now export one pure `resolveAutoModeSettings()` plus the authoritative
+  loader and related types; `loadConfig().autoMode` is declared, Runtime Session
+  settings persist `autoModeSpeculativeWindowMs` (including `0`), and side
+  queries return prompt-free provider/model/timing/retry/phase diagnostics.
+
+### Fixed
+
+- **Todo/Actor semantic progress checkpoint (FEATURE_270 follow-up).** Worker
+  guidance now treats Todo rows as user-visible milestones rather than Actor
+  instances and requires timely updates at milestone boundaries. Structured
+  terminal child results arm one deduplicated, warn-only reconciliation
+  reminder; transcript scans are append-incremental with safe compaction
+  fallback, and Sidecar accept-time residual reconciliation emits a diagnostic
+  without changing its existing bridge contract.
+- **Auto LLM classifier timeout and missing-model escalation.** Runtime now
+  treats omitted Auto engine as the documented LLM default and still owns the
+  guardrail, while a missing/blank/malformed effective classifier model fails
+  as a typed recoverable Runtime error or a local block in the shared
+  `createAutoModeToolGuardrail` boundary. The final guardrail check runs before
+  provider lookup and cannot invoke `askUser`, record a circuit-breaker error,
+  or downgrade to rules. Classifier requests strip assistant prose/thinking,
+  cap normalized transcript/tool-result/action/prompt bytes, remove image
+  paths, and cap the structured response at 256 tokens. The 20-second deadline remains bounded:
+  a four-call `zai-coding/glm-5.2` probe completed representative Windows
+  permission verdicts in 1.9–2.8 seconds, while the matching production session
+  revealed a 1.625 MB tool result that had bypassed the existing sanitizer.
+- **Auto guardrail daemon and tracing semantics.** Auto-started Runtime clients
+  now require `runtimeAutoModeGuardrail:2`, whose metadata identifies effective
+  timeout/window defaults, bounded classifier input, and diagnostics version.
+  Capability negotiation is monotonic (v2 satisfies v1), idle v1 daemons use
+  the existing fenced upgrade path, and busy daemons are left untouched with a
+  recoverable error. Guardrail spans now cover the awaited callback instead of
+  timing only final verdict emission.
+- **Concurrent daemon startup publication race.** A cleanly exiting loser now
+  gives the elected owner a bounded publication grace period, preventing an
+  SDK starter from reporting failure during the short lock/state handoff gap.
+
 ## [0.7.72] - 2026-07-19
 
 ### Added

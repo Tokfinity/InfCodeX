@@ -8,13 +8,15 @@
  * Constraints (deliberate):
  *   - tools=[] hardcoded — sideQuery is single-turn, no tool loop
  *   - text-only output — tool_use blocks from the model produce stopReason='error'
- *   - independent timeout (default 30s; classifier overrides to ~8s)
+ *   - independent timeout (default 30s; callers may supply a bounded deadline)
  *   - independent cost bucket via querySource (mapped to TokenUsageRecord.role)
  *
  * Failure handling: never throws. Timeout, abort, provider error, and
  * unexpected tool_use all produce a result with stopReason='timeout' /
  * 'aborted' / 'error' so callers implement their own degradation.
  */
+
+import { performance } from 'node:perf_hooks';
 
 import type {
   KodaXMessage,
@@ -37,6 +39,8 @@ export interface SideQueryRequest {
   readonly system: string;
   readonly messages: readonly KodaXMessage[];
   readonly reasoning?: KodaXReasoningRequest;
+  /** Optional per-request cap for small structured sidecar responses. */
+  readonly maxOutputTokens?: number;
   readonly timeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly querySource: string;
@@ -48,7 +52,34 @@ export interface SideQueryResult {
   readonly usage: KodaXTokenUsage;
   readonly costTracker?: CostTracker;
   readonly stopReason: SideQueryStopReason;
+  /**
+   * Bounded request metadata only; prompts and response text are never copied.
+   * The built-in `sideQuery()` always supplies it. Optionality preserves source
+   * compatibility for existing SDK mocks and structural result adapters.
+   */
+  readonly diagnostics?: SideQueryDiagnostics;
   readonly error?: Error;
+}
+
+export type SideQueryTerminalPhase =
+  | 'completed'
+  | 'pre_output'
+  | 'streaming'
+  | 'contract_error';
+
+export interface SideQueryDiagnostics {
+  readonly provider: string;
+  readonly model: string;
+  readonly timeoutMs: number;
+  readonly elapsedMs: number;
+  readonly retryCount: number;
+  readonly retryWaitMs: number;
+  /** Time until the first non-empty text delta, when the adapter exposes it. */
+  readonly firstOutputMs?: number;
+  /** Time from the first observed text delta until termination. */
+  readonly streamMs?: number;
+  /** Honest coarse phase; provider adapters cannot split DNS/connect/remote queue. */
+  readonly terminalPhase: SideQueryTerminalPhase;
 }
 
 const EMPTY_USAGE: KodaXTokenUsage = {
@@ -63,6 +94,31 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
   const controller = new AbortController();
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let costTracker = req.costTracker;
+  const startedAt = performance.now();
+  let firstOutputMs: number | undefined;
+  let retryCount = 0;
+  let retryWaitMs = 0;
+
+  const diagnostics = (
+    terminalPhase: SideQueryTerminalPhase,
+  ): SideQueryDiagnostics => {
+    const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
+    return {
+      provider: req.provider.name,
+      model: req.model,
+      timeoutMs,
+      elapsedMs,
+      retryCount,
+      retryWaitMs,
+      ...(firstOutputMs !== undefined
+        ? {
+            firstOutputMs,
+            streamMs: Math.max(0, elapsedMs - firstOutputMs),
+          }
+        : {}),
+      terminalPhase,
+    };
+  };
 
   // Track which source aborted FIRST so the resulting stopReason label is
   // deterministic when timeout and parent-abort fire near-simultaneously.
@@ -93,7 +149,20 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       req.reasoning ?? { effort: 'none' },
       {
         modelOverride: req.model,
+        ...(isPositiveInteger(req.maxOutputTokens)
+          ? { maxOutputTokensOverride: req.maxOutputTokens }
+          : {}),
+        onTextDelta: (text) => {
+          if (text.length > 0 && firstOutputMs === undefined) {
+            firstOutputMs = Math.max(
+              0,
+              Math.round(performance.now() - startedAt),
+            );
+          }
+        },
         onRetryAfter: (event) => {
+          retryCount += 1;
+          retryWaitMs += Math.max(0, event.waitMs);
           if (!costTracker) return;
           costTracker = recordRetry(costTracker, {
             provider: event.provider,
@@ -117,6 +186,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
         usage,
         costTracker,
         stopReason: 'error',
+        diagnostics: diagnostics('contract_error'),
         error: new Error(
           `sideQuery: provider returned ${toolBlocks.length} tool_use block(s); sideQuery expects text-only output`,
         ),
@@ -140,6 +210,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       usage,
       costTracker,
       stopReason: mapStopReason(result.stopReason),
+      diagnostics: diagnostics('completed'),
     };
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
@@ -154,6 +225,9 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       usage: EMPTY_USAGE,
       costTracker,
       stopReason,
+      diagnostics: diagnostics(
+        firstOutputMs === undefined ? 'pre_output' : 'streaming',
+      ),
       error,
     };
   } finally {
@@ -162,6 +236,10 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       req.abortSignal.removeEventListener('abort', onParentAbort);
     }
   }
+}
+
+function isPositiveInteger(value: number | undefined): value is number {
+  return value !== undefined && Number.isInteger(value) && value > 0;
 }
 
 // Provider stop reasons we recognize:

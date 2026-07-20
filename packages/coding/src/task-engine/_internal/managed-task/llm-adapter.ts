@@ -103,6 +103,7 @@ import {
   type TodoReminderState,
 } from '../../todo-throttle-reminder.js';
 import {
+  consumeAgentCompletionTodoReminderText,
   consumeTodoDriftReminderText,
   type TodoDriftReminderState,
 } from '../../todo-drift-reminder.js';
@@ -270,6 +271,16 @@ export function buildRunnerLlmAdapter(
       const reminder = consumeTodoDriftReminderText(todoDriftReminderState, todoStore);
       if (reminder) {
         system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
+      }
+      const completionReminder = consumeAgentCompletionTodoReminderText(
+        todoDriftReminderState,
+        todoStore,
+        transcript,
+      );
+      if (completionReminder) {
+        system = system.length > 0
+          ? `${system}\n\n${completionReminder}`
+          : completionReminder;
       }
     }
 

@@ -839,10 +839,14 @@ describe('runtime daemon dispatcher', () => {
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
           runtimeAutoModeGuardrail: {
-            version: 1,
+            version: 2,
             owner: 'session-runtime',
             escalationCreatesPermission: true,
             fallbackPersistsEngine: true,
+            defaultClassifierTimeoutMs: 20_000,
+            defaultSpeculativeWindowMs: 500,
+            boundedClassifierInput: true,
+            diagnosticsVersion: 1,
           },
           sharedSessionSettings: {
             version: 1,
@@ -851,6 +855,7 @@ describe('runtime daemon dispatcher', () => {
               'autoModeEngine',
               'autoModeClassifierModel',
               'autoModeTimeoutMs',
+              'autoModeSpeculativeWindowMs',
             ]),
           },
           durableRecoveryQueries: {

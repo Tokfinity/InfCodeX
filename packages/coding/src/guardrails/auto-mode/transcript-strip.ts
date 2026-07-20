@@ -62,13 +62,15 @@ function stripMessage(msg: KodaXMessage, maxToolResultBytes: number): KodaXMessa
     if (typeof msg.content === 'string') {
       return msg;
     }
-    // user message with block array — typically tool_result blocks. Truncate them.
+    // User message with block array — typically tool_result blocks. Images
+    // and local image paths are irrelevant to a permission verdict, so keep
+    // only text plus normalized tool results.
     const blocks: KodaXContentBlock[] = [];
     for (const block of msg.content) {
       if (block.type === 'tool_result') {
         const truncated = truncateToolResult(block, maxToolResultBytes);
         blocks.push(truncated);
-      } else {
+      } else if (block.type === 'text') {
         blocks.push(block);
       }
     }
@@ -96,9 +98,19 @@ function truncateToolResult(
   block: KodaXToolResultBlock,
   maxBytes: number,
 ): KodaXToolResultBlock {
-  if (block.content.length <= maxBytes) return block;
-  const truncated = block.content.slice(0, maxBytes) + TRUNCATION_SUFFIX;
-  return { ...block, content: truncated };
+  const text = typeof block.content === 'string'
+    ? block.content
+    : block.content
+      .filter((item) => item.type === 'text')
+      .map((item) => item.type === 'text' ? item.text : '')
+      .join('\n');
+  const content = truncateUtf8Text(text, maxBytes);
+  return {
+    type: 'tool_result',
+    tool_use_id: block.tool_use_id,
+    content,
+    ...(block.is_error !== undefined ? { is_error: block.is_error } : {}),
+  };
 }
 
 function enforceTotalBudget(
@@ -106,9 +118,9 @@ function enforceTotalBudget(
   maxBytes: number,
 ): KodaXMessage[] {
   if (messages.length === 0) return [];
-  const sized = messages.map((m) => ({ msg: m, bytes: JSON.stringify(m).length }));
-  const total = sized.reduce((sum, s) => sum + s.bytes, 0);
-  if (total <= maxBytes) return [...messages];
+  const sized = messages.map((msg) => ({ msg, bytes: serializedBytes(msg) }));
+  if (serializedTranscriptBytes(messages) <= maxBytes) return [...messages];
+  if (maxBytes <= 2) return [];
 
   // Identify the first user message — always preserve it as the original intent.
   const firstUserIdx = sized.findIndex((s) => s.msg.role === 'user');
@@ -118,20 +130,37 @@ function enforceTotalBudget(
   }
 
   const head = sized[firstUserIdx]!;
-  let remaining = maxBytes - head.bytes;
-  if (remaining < 0) remaining = 0;
+  const messageBudget = maxBytes - 2; // JSON array brackets
+  const after = sized.slice(firstUserIdx + 1);
+  // Reserve half for recent factual context whenever the original intent is
+  // itself large. A normal first prompt remains byte-for-byte.
+  const headBudget = after.length > 0 && head.bytes > Math.floor(messageBudget / 2)
+    ? Math.floor(messageBudget / 2)
+    : Math.min(head.bytes, messageBudget);
+  const retainedHead = truncateMessageToFit(head.msg, headBudget);
+  if (!retainedHead) return [];
+  let remaining = messageBudget - serializedBytes(retainedHead);
 
   // Take the recent tail that fits in the remaining budget
-  const after = sized.slice(firstUserIdx + 1);
-  const tail: typeof sized = [];
+  const tail: KodaXMessage[] = [];
   for (let i = after.length - 1; i >= 0; i -= 1) {
     const s = after[i]!;
-    if (s.bytes > remaining) break;
-    tail.unshift(s);
-    remaining -= s.bytes;
+    const availableForMessage = remaining - 1; // comma separator
+    if (availableForMessage <= 0) break;
+    if (s.bytes <= availableForMessage) {
+      tail.unshift(s.msg);
+      remaining -= s.bytes + 1;
+      continue;
+    }
+    // Preserve a bounded snapshot of the most recent oversized message.
+    if (tail.length === 0) {
+      const truncated = truncateMessageToFit(s.msg, availableForMessage);
+      if (truncated) tail.unshift(truncated);
+    }
+    break;
   }
 
-  return [head.msg, ...tail.map((t) => t.msg)];
+  return [retainedHead, ...tail];
 }
 
 function takeTail(
@@ -139,12 +168,94 @@ function takeTail(
   maxBytes: number,
 ): KodaXMessage[] {
   const out: KodaXMessage[] = [];
-  let remaining = maxBytes;
+  if (maxBytes <= 2) return out;
+  let remaining = maxBytes - 2; // JSON array brackets
   for (let i = sized.length - 1; i >= 0; i -= 1) {
     const s = sized[i]!;
-    if (s.bytes > remaining) break;
+    const availableForMessage = remaining - (out.length > 0 ? 1 : 0);
+    if (s.bytes > availableForMessage) {
+      if (out.length === 0 && availableForMessage > 0) {
+        const truncated = truncateMessageToFit(s.msg, availableForMessage);
+        if (truncated) out.unshift(truncated);
+      }
+      break;
+    }
     out.unshift(s.msg);
-    remaining -= s.bytes;
+    remaining -= s.bytes + (out.length > 1 ? 1 : 0);
   }
   return out;
+}
+
+function truncateMessageToFit(
+  message: KodaXMessage,
+  maxBytes: number,
+): KodaXMessage | null {
+  if (serializedBytes(message) <= maxBytes) return message;
+  const source = typeof message.content === 'string'
+    ? message.content
+    : JSON.stringify(message.content);
+  const empty: KodaXMessage = { role: message.role, content: '' };
+  if (serializedBytes(empty) > maxBytes) return null;
+
+  let low = 0;
+  let high = source.length;
+  let best = empty;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const prefix = safeCodeUnitSlice(source, mid);
+    const candidate: KodaXMessage = {
+      role: message.role,
+      content: prefix.length > 0 ? prefix + TRUNCATION_SUFFIX : '',
+    };
+    if (serializedBytes(candidate) <= maxBytes) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+function truncateUtf8Text(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  if (utf8Bytes(text) <= maxBytes) return text;
+  if (utf8Bytes(TRUNCATION_SUFFIX) > maxBytes) return '';
+
+  let low = 0;
+  let high = text.length;
+  let best = '';
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const prefix = safeCodeUnitSlice(text, mid);
+    const candidate = prefix + TRUNCATION_SUFFIX;
+    if (utf8Bytes(candidate) <= maxBytes) {
+      best = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+function safeCodeUnitSlice(text: string, end: number): string {
+  let safeEnd = end;
+  if (safeEnd > 0) {
+    const code = text.charCodeAt(safeEnd - 1);
+    if (code >= 0xD800 && code <= 0xDBFF) safeEnd -= 1;
+  }
+  return text.slice(0, safeEnd);
+}
+
+function serializedBytes(message: KodaXMessage): number {
+  return utf8Bytes(JSON.stringify(message));
+}
+
+function serializedTranscriptBytes(messages: readonly KodaXMessage[]): number {
+  return utf8Bytes(JSON.stringify(messages));
+}
+
+function utf8Bytes(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
 }

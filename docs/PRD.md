@@ -114,6 +114,23 @@ guardrail classification, then the host permission bridge only for an explicit
 `escalate` verdict, then tool execution. A static approval hook must not bypass
 that decision owner or manufacture requests for an `allow` verdict.
 
+The Auto LLM request must contain only bounded permission-relevant evidence,
+not the Runner's raw accumulated session. The current tool action remains
+separate from a transcript that removes assistant prose/thinking, images, and
+unbounded historical tool output. Missing classifier identity is a recoverable
+configuration error before provider/permission work; infrastructure timeout or
+an oversized unsafe-to-truncate action may escalate, but must never be
+reinterpreted as an automatic allow.
+
+SDK hosts must consume this behavior through one typed Auto settings resolver,
+and Runtime Session settings must represent the full public Auto configuration,
+including a zero-valued speculative window. Shared daemons advertise a unique
+capability version for the bounded-input/defaults/diagnostics contract; a
+newer capability satisfies an older minimum, while an older daemon is replaced
+only after a safe idle preflight. Timeout diagnostics expose bounded
+provider/model/timing/retry/phase metadata without prompt or tool-input text,
+and the guardrail trace span covers the actual awaited classification.
+
 Packaged Electron hosts may auto-start the shared daemon only through a bounded
 Node bootstrap that cannot relaunch the GUI or leak Electron Node mode into
 daemon-owned user processes. Disabling Electron's `RunAsNode` fuse requires an
@@ -142,6 +159,13 @@ alias keeps `kimi-for-coding` as its stable default and exposes `k3-256k` plus
 the upstream `k3` route with a 1,048,576-token local context tier;
 `thinking.effort` carries K3 reasoning intent without mixing public and
 subscription credentials.
+
+A bare interactive first launch with no valid provider selection and no
+supported credential must offer a provider/model setup flow before Runtime or
+REPL creation. This flow stores no key value: it persists only provider/model
+and validated public custom-provider metadata, names the required environment
+variable, asks the user to restart the terminal, and exits. Scripted, resumed,
+JSON, SDK, daemon, subcommand, and non-TTY paths remain non-interactive.
 
 ### Tools
 

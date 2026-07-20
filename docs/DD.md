@@ -70,6 +70,7 @@ Only `llm`, `agent`, `coding`, and `repl` are workspace package build roots.
 | Runtime Worker | `src/runtime-worker/` | MessagePort host that reuses the daemon dispatcher/client and supports hard termination. |
 | Generic agent | `packages/agent/src/primitives/runner.ts`, `agent.ts` | Layer-A Runner and Agent primitives. |
 | REPL | `packages/repl/src/index.ts` | `runInkInteractiveMode`, classic mode, config/session exports. |
+| First-run setup | `packages/repl/src/common/provider-setup.ts`, `packages/repl/src/interactive/provider-setup.ts`, `src/provider-setup-cli.ts` | Catalog-backed readiness inspection + revision-checked non-secret persistence, standalone pre-Runtime terminal flow, and CLI eligibility gate. |
 | LLM providers | `packages/llm/src/providers/registry.ts` | Built-in aliases and custom provider registration. |
 
 ### 3.1 Runtime Host Facade
@@ -108,6 +109,42 @@ persists these settings, advertises them through daemon capability negotiation,
 and uses them to build a session-owned auto guardrail. Changing classifier
 model or timeout invalidates the cached guardrail; an automatic LLM-to-rules
 fallback updates `autoModeEngine` for the next run.
+
+For Auto permission mode, an omitted engine is normalized to `llm` for both
+preflight and guardrail ownership. Missing/blank/malformed classifier identity
+raises `RuntimeAutoModeConfigurationError` before provider or permission work.
+`packages/coding/src/guardrails/auto-mode/classify.ts` owns transcript
+sanitization and request ceilings: 2 KiB per historical tool result, 8 KiB
+serialized transcript, 16 KiB action, 32 KiB prompt, and 256 output tokens.
+The 20-second deadline remains a bounded end-to-end side-query deadline.
+
+`resolveAutoModeSettings()` is the pure authority for config/environment/default
+precedence; `loadAutoModeSettings()` performs I/O then delegates. Runtime
+persists `autoModeSpeculativeWindowMs` as a non-negative safe integer and
+propagates it through effective settings, active/queued records, cache identity,
+and guardrail bootstrap. `0` is preserved rather than treated as absent.
+
+Daemon and embedded capability metadata advertise
+`runtimeAutoModeGuardrail.version = 2` with the effective 20-second timeout,
+500 ms default speculative window, bounded-input flag, and diagnostics version.
+Capability checks accept `advertised >= required`; auto-start can safely fence
+and replace an idle v1 daemon, but attach-only/busy paths return a recoverable
+error without mutation.
+
+`sideQuery()` owns a fixed-field `SideQueryDiagnostics` envelope: provider,
+model, effective timeout, elapsed time, retry count/wait, optional first-output
+and stream durations, and a coarse terminal phase. It copies no prompt or
+response content and does not invent connect/queue timings unavailable from
+provider adapters. Guardrail tracing creates a pending child span before the
+callback and finalizes its verdict/error after the await.
+
+On a bare TTY launch, `src/kodax_cli.ts` runs provider readiness after normal
+environment/config preparation but before Runtime/extension/session creation.
+Only `needs-provider` enters the setup interaction; selected providers missing
+credentials preserve their existing error path, and malformed config is never
+overwritten. `kodax setup` invokes the same interaction explicitly. The writer
+uses a SHA-256 content revision, same-directory temp file, restrictive mode,
+and atomic rename while preserving unrelated keys.
 
 The Worker and daemon facades reuse `runtime-daemon/server.ts` and
 `runtime-daemon/client.ts`; there is no duplicate service implementation.

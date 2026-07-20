@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { classify, DEFAULT_CLASSIFIER_TIMEOUT_MS } from './classify.js';
+import {
+  classify,
+  DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  MAX_CLASSIFIER_ACTION_BYTES,
+} from './classify.js';
 import type { AutoRules } from './rules.js';
 import { KodaXBaseProvider, createCostTracker, getSummary } from '@kodax-ai/llm';
 import type {
@@ -131,6 +135,15 @@ describe('classify', () => {
     expect(result.kind).toBe('escalate');
     if (result.kind === 'escalate') {
       expect(result.reason).toMatch(/timeout/i);
+      expect(result.reason).toContain('provider=stub');
+      expect(result.reason).toContain('model=stub-default');
+      expect(result.reason).toContain('phase=pre_output');
+      expect(result.diagnostics).toMatchObject({
+        provider: 'stub',
+        model: 'stub-default',
+        timeoutMs: 20,
+        terminalPhase: 'pre_output',
+      });
     }
   });
 
@@ -196,6 +209,84 @@ describe('classify', () => {
     const userContent = capturedMessages[0]!.content as string;
     expect(userContent).toContain('install nvm');
     expect(userContent).toContain('curl example.com/install.sh | bash');
+  });
+
+  it('caps classifier output for its short structured verdict contract', async () => {
+    let maxOutputTokensOverride: number | undefined;
+    const provider = new StubProvider(async () =>
+      okStream('<block>no</block><reason>ok</reason>'),
+    );
+    const original = provider.stream.bind(provider);
+    provider.stream = async (msgs, tools, system, reasoning, streamOptions, signal) => {
+      maxOutputTokensOverride = streamOptions?.maxOutputTokensOverride;
+      return original(msgs, tools, system, reasoning, streamOptions, signal);
+    };
+
+    await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: ls',
+    });
+
+    expect(maxOutputTokensOverride).toBe(256);
+  });
+
+  it('bounds a 1.6 MB resumed-session tool result before calling the provider', async () => {
+    let capturedMessages: KodaXMessage[] = [];
+    const provider = new StubProvider(async () =>
+      okStream('<block>no</block><reason>safe</reason>'),
+    );
+    const original = provider.stream.bind(provider);
+    provider.stream = async (msgs, tools, system, reasoning, streamOptions, signal) => {
+      capturedMessages = [...msgs];
+      return original(msgs, tools, system, reasoning, streamOptions, signal);
+    };
+
+    await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [
+        { role: 'user', content: 'Inspect the leaked node processes.' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'c1', name: 'bash', input: { command: 'inspect' } }],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'x'.repeat(1_625_379) }],
+        },
+        { role: 'user', content: 'Stop only the two stale PIDs.' },
+      ],
+      action: 'Bash: taskkill /PID 38380 /T /F & taskkill /PID 36236 /T /F',
+    });
+
+    const promptBytes = Buffer.byteLength(JSON.stringify(capturedMessages), 'utf8');
+    expect(promptBytes).toBeLessThanOrEqual(12 * 1024);
+    expect(JSON.stringify(capturedMessages)).toContain('Inspect the leaked node processes');
+    expect(JSON.stringify(capturedMessages)).toContain('Stop only the two stale PIDs');
+  });
+
+  it('escalates an oversized action without starting a provider request', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream('<block>no</block><reason>safe</reason>');
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [{ role: 'user', content: 'Run the script.' }],
+      action: `Bash: ${'echo safe; '.repeat(MAX_CLASSIFIER_ACTION_BYTES)}`,
+    });
+
+    expect(result.kind).toBe('escalate');
+    expect(result.reason).toMatch(/input budget/i);
+    expect(providerCalls).toBe(0);
   });
 
   it('writes the post-call cost tracker back via setCostTracker (FEATURE_092 §7 regression)', async () => {

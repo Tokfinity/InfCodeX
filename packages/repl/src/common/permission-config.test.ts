@@ -10,7 +10,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import fsSync from 'fs';
 
-import { loadAutoModeSettings } from './permission-config.js';
+import {
+  loadAutoModeSettings,
+  resolveAutoModeSettings,
+} from './permission-config.js';
 
 const writeFakeConfig = (autoMode: Record<string, unknown> | undefined): void => {
   const json = JSON.stringify(autoMode === undefined ? {} : { autoMode });
@@ -26,6 +29,7 @@ describe('loadAutoModeSettings — FEATURE_092 phase 2b.7b slice C', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns sensible defaults when no config and no env are set', () => {
@@ -151,5 +155,61 @@ describe('loadAutoModeSettings — FEATURE_092 phase 2b.7b slice C', () => {
     writeFakeConfig({ speculativeWindowMs: 480.9 });
     const r = loadAutoModeSettings({});
     expect(r.speculativeWindowMs).toBe(480);
+  });
+});
+
+describe('resolveAutoModeSettings — FEATURE_271 SDK contract', () => {
+  it('does not read process.env when the caller omits env', () => {
+    vi.stubEnv('KODAX_AUTO_MODE_ENGINE', 'rules');
+
+    expect(resolveAutoModeSettings({ settings: { engine: 'llm' } }).engine).toBe('llm');
+  });
+
+  it('resolves caller-supplied settings without reading the filesystem', () => {
+    const exists = vi.spyOn(fsSync, 'existsSync');
+
+    const resolved = resolveAutoModeSettings({
+      settings: {
+        engine: 'rules',
+        classifierModel: 'zai-coding:glm-5.2',
+        timeoutMs: 20_000.9,
+        speculativeWindowMs: 0,
+      },
+      env: {},
+    });
+
+    expect(resolved).toEqual({
+      engine: 'rules',
+      classifierModel: 'zai-coding:glm-5.2',
+      classifierModelEnv: undefined,
+      timeoutMs: 20_000,
+      speculativeWindowMs: 0,
+    });
+    expect(exists).not.toHaveBeenCalled();
+  });
+
+  it('applies the same environment precedence as the file-loading wrapper', () => {
+    const resolved = resolveAutoModeSettings({
+      settings: {
+        engine: 'rules',
+        classifierModel: 'from-settings',
+        timeoutMs: 8_000,
+        speculativeWindowMs: 500,
+      },
+      env: {
+        KODAX_AUTO_MODE_ENGINE: 'llm',
+        KODAX_AUTO_MODE_CLASSIFIER_MODEL: 'from-env',
+        KODAX_AUTO_MODE_TIMEOUT_MS: '20000',
+        KODAX_AUTO_SPECULATIVE_WINDOW_MS: '1200',
+      },
+    });
+
+    expect(resolved).toEqual({
+      engine: 'llm',
+      classifierModel: 'from-settings',
+      classifierModelEnv: 'from-env',
+      timeoutMs: 20_000,
+      speculativeWindowMs: 1_200,
+    });
   });
 });

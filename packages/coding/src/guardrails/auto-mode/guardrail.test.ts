@@ -454,6 +454,32 @@ describe('AutoModeToolGuardrail — wire-up details', () => {
     expect(userContent).toContain('install nvm please');
   });
 
+  it('strips assistant prose before sending the transcript to the classifier', async () => {
+    let classifierInput = '';
+    const provider = new StubProvider(async () => okResult('<block>no</block><reason>ok</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (msgs, tools, system, reasoning, streamOptions, signal) => {
+      classifierInput = String(msgs[0]?.content ?? '');
+      return original(msgs, tools, system, reasoning, streamOptions, signal);
+    };
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+    });
+
+    await g.beforeTool!(
+      callBash('ls'),
+      ctx([
+        { role: 'user', content: 'inspect the repository' },
+        { role: 'assistant', content: `internal reasoning: ${'do not send '.repeat(2_000)}` },
+      ]),
+    );
+
+    expect(classifierInput).toContain('inspect the repository');
+    expect(classifierInput).not.toContain('internal reasoning');
+    expect(classifierInput.length).toBeLessThan(2_000);
+  });
+
   it('records allow on classifier-allow (resets denial counter)', async () => {
     const g = createAutoModeToolGuardrail(baseConfig('<block>no</block><reason>ok</reason>'));
     await g.beforeTool!(callBash('ls'), ctx());
@@ -631,6 +657,58 @@ describe('AutoModeToolGuardrail — defaultProvider/defaultModel staleness fix (
     });
     await g.beforeTool!(callBash('ls'), ctx());
     expect(resolveProviderCalls.at(-1)).toBe('static-stub');
+  });
+
+  it('blocks locally when both static and live default models are empty', async () => {
+    const resolveProvider = vi.fn(() => new StubProvider(
+      okResult('<block>no</block><reason>must not run</reason>'),
+    ));
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'allow');
+    const onEngineChange = vi.fn<(engine: 'llm' | 'rules') => void>();
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      defaultModel: '',
+      getDefaultModel: () => '',
+      resolveProvider,
+      askUser,
+      onEngineChange,
+    });
+
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
+
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
+      expect(verdict.reason).toMatch(/classifier model.*not configured/i);
+    }
+    expect(resolveProvider).not.toHaveBeenCalled();
+    expect(askUser).not.toHaveBeenCalled();
+    expect(onEngineChange).not.toHaveBeenCalled();
+    const stats = g.getStats();
+    expect(stats.engine).toBe('llm');
+    expect(stats.denials).toEqual({ consecutive: 0, cumulative: 0 });
+    expect(stats.breaker.timestamps).toEqual([]);
+  });
+
+  it('uses an explicit classifier override when the main-session model is empty', async () => {
+    const provider = new StubProvider(okResult('<block>no</block><reason>safe</reason>'));
+    let requestedModel: string | undefined;
+    const originalStream = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      requestedModel = options?.modelOverride;
+      return originalStream(messages, tools, system, reasoning, options, signal);
+    };
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      defaultModel: '',
+      getDefaultModel: () => '   ',
+      sessionOverride: 'stub:classifier-model',
+      resolveProvider: () => provider,
+    });
+
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(requestedModel).toBe('classifier-model');
   });
 });
 

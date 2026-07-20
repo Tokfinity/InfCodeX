@@ -240,4 +240,26 @@ describe('runtime daemon child startup', () => {
       rmSync(configHome, { recursive: true, force: true });
     }
   });
+
+  it('allows a clean loser exit a bounded grace period for winner publication', async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 888,
+      exit: Promise.resolve({ code: 0, signal: null }),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+    let healthChecks = 0;
+    const delayedWinner = async () => {
+      healthChecks += 1;
+      return healthChecks < 3 ? missingHealth() : healthy(999)();
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 1_000,
+      pollIntervalMs: 1,
+    }, child, delayedWinner)).resolves.toMatchObject({ state: { pid: 999 } });
+    expect(healthChecks).toBeGreaterThanOrEqual(3);
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
 });

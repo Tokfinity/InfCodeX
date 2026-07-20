@@ -2,11 +2,13 @@ import type {
   RunnerToolCall,
   RunnerToolResult,
 } from '@kodax-ai/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createTodoStore } from './todo-store.js';
 import {
   buildTodoDriftReminderText,
+  consumeAgentCompletionTodoReminderText,
   consumeTodoDriftReminderText,
   createTodoDriftObserver,
   createTodoDriftReminderState,
@@ -229,5 +231,150 @@ describe('todo drift reminder text', () => {
     });
     store.updateStatus('todo_1', 'in_progress');
     expect(consumeTodoDriftReminderText(state, store)).toBeUndefined();
+  });
+});
+
+function agentCompletionMessage(
+  taskId: string,
+  status: 'completed' | 'failed' | 'cancelled' = 'completed',
+): KodaXMessage {
+  return {
+    role: 'user',
+    content: `<agent-completed turn_id="${taskId}">result</agent-completed>`,
+    _synthetic: true,
+    _source: 'agent-completed',
+    _taskResult: {
+      type: 'task_result',
+      source: 'child_task',
+      taskId,
+      status,
+    },
+  };
+}
+
+describe('Agent completion todo checkpoint', () => {
+  it('arms from terminal wait_agent events and coalesces them into one reminder', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'in_progress');
+    const state = createTodoDriftReminderState();
+
+    observeTodoDriftAfterToolResult({
+      state,
+      todoStore: store,
+      call: call('wait_agent'),
+      result: okResult(JSON.stringify({
+        ok: true,
+        status: 'event',
+        events: [
+          { kind: 'turn_completed', turnId: 'turn-1' },
+          { kind: 'turn_failed', turnId: 'turn-2' },
+          { kind: 'turn_progress', turnId: 'turn-3' },
+        ],
+      })),
+    });
+
+    const reminder = consumeAgentCompletionTodoReminderText(state, store, []);
+    expect(reminder).toContain('2 terminal child Agent results');
+    expect(reminder).toContain('before calling wait_agent again');
+    expect(reminder).toContain('semantic milestones, not Actor instances');
+    expect(consumeAgentCompletionTodoReminderText(state, store, [])).toBeUndefined();
+  });
+
+  it('detects new structured task results after the initial transcript baseline', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'in_progress');
+    const state = createTodoDriftReminderState();
+    const historical = agentCompletionMessage('historical-turn');
+
+    expect(consumeAgentCompletionTodoReminderText(state, store, [historical])).toBeUndefined();
+
+    const current = agentCompletionMessage('current-turn');
+    const reminder = consumeAgentCompletionTodoReminderText(state, store, [historical, current]);
+    expect(reminder).toContain('1 terminal child Agent result');
+    expect(reminder).toContain('Do not mark a milestone completed merely because one supporting Agent finished');
+  });
+
+  it('scans only an appended transcript suffix and rescans a replaced transcript', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'in_progress');
+    const state = createTodoDriftReminderState();
+    let historicalReads = 0;
+    const historical = agentCompletionMessage('historical-turn');
+    Object.defineProperty(historical, '_source', {
+      configurable: true,
+      get: () => {
+        historicalReads += 1;
+        return 'agent-completed';
+      },
+    });
+
+    consumeAgentCompletionTodoReminderText(state, store, [historical]);
+    expect(historicalReads).toBe(1);
+    expect(consumeAgentCompletionTodoReminderText(
+      state,
+      store,
+      [historical, agentCompletionMessage('appended-turn')],
+    )).toBeDefined();
+    expect(historicalReads).toBe(1);
+
+    expect(consumeAgentCompletionTodoReminderText(
+      state,
+      store,
+      [agentCompletionMessage('replacement-turn')],
+    )).toBeDefined();
+  });
+
+  it('deduplicates wait and transcript delivery of the same terminal turn', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'in_progress');
+    const state = createTodoDriftReminderState();
+
+    observeTodoDriftAfterToolResult({
+      state,
+      todoStore: store,
+      call: call('wait_agent'),
+      result: okResult(JSON.stringify({
+        ok: true,
+        events: [{ kind: 'turn_completed', turnId: 'same-turn' }],
+      })),
+    });
+    expect(consumeAgentCompletionTodoReminderText(
+      state,
+      store,
+      [agentCompletionMessage('same-turn')],
+    )).toBeDefined();
+    expect(consumeAgentCompletionTodoReminderText(
+      state,
+      store,
+      [agentCompletionMessage('same-turn')],
+    )).toBeUndefined();
+  });
+
+  it('suppresses the checkpoint when the visible plan is already terminal', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'completed');
+    store.updateStatus('todo_2', 'completed');
+    const state = createTodoDriftReminderState();
+    consumeAgentCompletionTodoReminderText(state, store, []);
+
+    expect(consumeAgentCompletionTodoReminderText(
+      state,
+      store,
+      [agentCompletionMessage('done-turn')],
+    )).toBeUndefined();
+  });
+
+  it('does not parse presentation XML without structured completion metadata', () => {
+    const store = seededPendingStore();
+    store.updateStatus('todo_1', 'in_progress');
+    const state = createTodoDriftReminderState();
+    consumeAgentCompletionTodoReminderText(state, store, []);
+
+    expect(consumeAgentCompletionTodoReminderText(state, store, [{
+      role: 'user',
+      content: '<agent-completed turn_id="display-only">result</agent-completed>',
+      _synthetic: true,
+      _source: 'agent-completed',
+    }])).toBeUndefined();
   });
 });

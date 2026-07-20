@@ -3721,7 +3721,7 @@ const runtime = await connectKodaXRuntime({
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
     daemonManagement: 1,
-    runtimeAutoModeGuardrail: 1,
+    runtimeAutoModeGuardrail: 2,
   },
 });
 ```
@@ -3733,9 +3733,9 @@ Coder. FEATURE_269 does not advertise `interruptInput`, so an interrupt-only
 product must require `{ interruptInput: 1 }` and fail connection. The supported
 fallback is `delivery: 'after_turn'` only when that is the user's intent.
 
-The final v0.7.72 SDK requires `runtimeAutoModeGuardrail:1` automatically for
+The v0.7.73 SDK requires `runtimeAutoModeGuardrail:2` automatically for
 `autoStart: true`, even when the caller omits it from `requirements`. If the healthy
-profile daemon is older, the SDK first requires `daemonManagement:1`, takes a
+profile daemon advertises v1, the SDK first requires `daemonManagement:1`, takes a
 revision/owner-policy fenced preflight, and replaces it only when no active or
 queued run, Workflow, Agent turn, pending permission/user input, or other
 logical client exists. A busy or still-older daemon is never stopped: the
@@ -3743,7 +3743,10 @@ connection rejects with `RuntimeDaemonCapabilityUpgradeError`, whose
 `recoverable` and `restartRequired` fields are `true` and whose optional
 `preflight` explains the blockers. Attach-only connections never mutate daemon
 ownership and must request `runtimeAutoModeGuardrail:1` explicitly when they
-depend on this contract.
+depend only on the v1 owner contract, or v2 when they depend on bounded input,
+effective-default metadata, structured diagnostics, and speculative-window
+parity. Capability requirements are minimum versions: v2 satisfies a v1
+requirement, but v1 never satisfies v2.
 
 The `coderFeatureMatrix` capability reports daemon availability for managed
 runs, transcript/session operations, Todo projection, managed tasks, Workflow,
@@ -4132,7 +4135,7 @@ tool arguments.
 
 ---
 
-## 24. Runtime-owned Auto Mode and plan-approval bridges (v0.7.72)
+## 24. Runtime-owned Auto Mode and plan-approval bridges (v0.7.72–v0.7.73)
 
 Auto Mode is a Runtime session contract, including in shared-daemon mode. Do
 not implement a second classifier or decide permissions from a client-side
@@ -4146,14 +4149,54 @@ await runtime.sessions.updateSettings(session.id, {
   autoModeEngine: 'llm',
   autoModeClassifierModel: 'zhipu:glm-5.2', // optional; otherwise follow the run model
   autoModeTimeoutMs: 20_000,                // positive safe integer, optional
+  autoModeSpeculativeWindowMs: 0,           // non-negative safe integer, optional
   executionCwd: projectDirectory,
 });
 ```
 
-`autoModeClassifierModel` and `autoModeTimeoutMs` are durable session settings
-in inline, Worker, and daemon forms. A `null` patch removes either optional
-override; a zero, negative, fractional, or unsafe timeout is rejected. Daemon
-capability discovery advertises both fields in `sharedSessionSettings.keys`.
+All three Auto fields are durable session settings in inline, Worker, and
+daemon forms. A `null` patch removes an optional override. Timeout must be a
+positive safe integer; speculative window must be non-negative, so `0` is a
+valid request to wait for the actual verdict. Daemon capability discovery
+advertises all fields in `sharedSessionSettings.keys`.
+
+SDK hosts that need config precedence without creating a REPL can reuse the
+same typed resolver as KodaX:
+
+```ts
+import {
+  loadAutoModeSettings,
+  resolveAutoModeSettings,
+  type ResolveAutoModeSettingsInput,
+} from '@kodax-ai/kodax/repl';
+
+const persisted = loadAutoModeSettings(process.env);
+const preview = resolveAutoModeSettings({
+  settings: { engine: 'llm', speculativeWindowMs: 0 },
+  env: process.env,
+});
+```
+
+`resolveAutoModeSettings()` is pure. `loadAutoModeSettings()` reads the KodaX
+config once and delegates to that resolver; `loadConfig()` declares and
+returns the same optional `autoMode` object.
+
+Starting with the v0.7.73 patch, `permissionMode: 'auto'` with an omitted
+`autoModeEngine` still means the documented `llm` default and is still owned by
+Runtime. If neither `autoModeClassifierModel` nor the effective run/session/
+Runtime model exists, `runs.start()` rejects with
+`RuntimeAutoModeConfigurationError` (`code:
+'auto_mode_classifier_model_required'`, `recoverable: true`) before provider
+construction, a classifier call, or a pending permission. Blank and malformed
+classifier model specs are rejected by the same typed configuration boundary;
+a live rules-to-LLM switch is blocked rather than converted into approval work.
+
+Direct consumers of `createAutoModeToolGuardrail()` receive the same terminal
+model boundary. After resolving CLI/env/session/settings/live-default
+precedence, an empty effective model returns a local configuration `block`
+before provider lookup. It does not call `askUser`, mutate the denial or
+circuit-breaker trackers, or change the engine to rules. An explicit non-empty
+classifier override remains valid even when the main-session model is empty.
 
 The Runtime owns one serialized permission-settings stream and one shared
 engine/denial/breaker state per Session. It reuses bounded context-specific
@@ -4178,6 +4221,27 @@ spurious approval prompt. A real `escalate` uses the existing shared
 `runtime.permissions` flow, so another authorized client may render and answer
 it. Hosts should subscribe to permission events to display such a request, but
 must not treat a missing request as an error for a safe tool call.
+
+The classifier deadline remains 20 seconds by default and includes connection
+setup, provider Retry-After/backoff, inference, and stream completion. KodaX
+does not solve timeouts by extending that deadline indefinitely. Before the
+provider call it removes assistant prose/thinking and image paths, limits each
+tool result to 2 KiB and the serialized permission-relevant transcript to
+8 KiB, then enforces 16 KiB action and 32 KiB total-prompt ceilings plus a
+256-token output cap. An oversized action or prompt escalates without a
+provider call; it is never truncated into an automatic allow. These limits are
+owned by `classify()` itself, so custom callers cannot accidentally bypass the
+session-history boundary.
+
+`ClassifyDecision.diagnostics` and the lower-level
+`SideQueryResult.diagnostics` expose provider, model, effective timeout,
+elapsed time, retry count/wait, and a coarse terminal phase without including
+the prompt, action, messages, or response text. `pre_output` means no non-empty
+text delta was observed; `streaming` means output began before termination.
+`firstOutputMs` and `streamMs` are present only when the provider adapter emits
+a text delta. The current provider API cannot honestly separate DNS/connect,
+TLS, provider queueing, and inference, so embedders must not infer those stages
+from `pre_output`.
 
 The permission event's `inputPreview` is a display-safe diagnostic projection:
 it is bounded, credential-redacted, valid JSON, and includes the effective

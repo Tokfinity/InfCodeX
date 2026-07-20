@@ -158,6 +158,9 @@ import {
   runInteractiveMode,
   runInkInteractiveMode,
   runSessionPicker,
+  inspectProviderSetupReadiness,
+  providerSetupRestartInstructions,
+  runProviderSetupWizard,
   listSessions,
   loadSession,
   type SessionPickerItem,
@@ -172,6 +175,7 @@ import {
 } from './a2a/runtime-config.js';
 import { runAsrtBrokerProcess } from './sandbox-runtime.js';
 import { createReplLearningBinding } from './repl-learning-binding.js';
+import { shouldAutoLaunchProviderSetup } from './provider-setup-cli.js';
 export {
   ACP_PERMISSION_MODES,
   getDefaultCommandDir,
@@ -1781,6 +1785,7 @@ const CLI_SUBCOMMAND_NAMES = new Set([
   'extensions',
   'a2a',
   'sandbox',
+  'setup',
 ]);
 
 function collectRepeatedOption(value: string, previous: string[] = []): string[] {
@@ -2033,6 +2038,7 @@ function showBasicHelp(): void {
   console.log('  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
   console.log('  --no-session            Disable session persistence (print mode only)');
   console.log('  --max-iter N            Max iterations per session (default: 200)\n');
+  process.stdout.write('  kodax setup             Configure provider/model metadata (never stores an API key)\n\n');
   console.log('Help Topics (use -h <topic>):');
   console.log('  acp, skill, sessions, project, auto, provider, thinking, print\n');
   console.log('Interactive Commands (in REPL mode):');
@@ -2045,6 +2051,7 @@ function showBasicHelp(): void {
   console.log('  /sessions               List saved sessions\n');
   console.log('Examples:');
   console.log('  kodax                             # Enter interactive mode');
+  process.stdout.write('  kodax setup                       # Configure provider/model, then restart terminal\n');
   console.log('  kodax "create a component"        # Run single task (with session)');
   console.log('  kodax acp serve                   # Start ACP stdio server');
   console.log('  kodax skill init my-skill         # Scaffold a new skill');
@@ -2075,6 +2082,28 @@ async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerI
       ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
       ...(session.runtimeInfo?.surface !== undefined ? { surface: session.runtimeInfo.surface } : {}),
     }));
+}
+
+function printProviderSetupCompletion(selection: {
+  readonly provider: string;
+  readonly model: string;
+  readonly apiKeyEnv: string;
+  readonly configPath: string;
+}): void {
+  process.stdout.write(`${chalk.green(`\nProvider setup saved: ${selection.provider}/${selection.model}`)}\n`);
+  process.stdout.write(`${chalk.dim(`Config: ${selection.configPath}`)}\n`);
+  for (const line of providerSetupRestartInstructions({ apiKeyEnv: selection.apiKeyEnv })) {
+    process.stdout.write(`  ${line}\n`);
+  }
+}
+
+async function executeProviderSetup(): Promise<void> {
+  const result = await runProviderSetupWizard();
+  if (result.status === 'cancelled') {
+    process.stdout.write(`${chalk.dim('Provider setup cancelled. Run `kodax setup` when you are ready.')}\n`);
+    return;
+  }
+  printProviderSetupCompletion(result.selection);
 }
 
 async function main() {
@@ -2131,6 +2160,11 @@ async function main() {
     .version(version));
   configureIntegrationCommands(program, { version });
 
+  program
+    .command('setup')
+    .description('Configure a provider and model without collecting or storing an API key')
+    .action(executeProviderSetup);
+
   // ============== completion subcommand ==============
   program
     .command('completion')
@@ -2142,7 +2176,7 @@ async function main() {
       const effortModes = 'off auto low medium high xhigh max';
       const agentModes = 'ama sa';
       const repoModes = 'auto full light off';
-      const rootSubcommands = 'acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
+      const rootSubcommands = 'setup acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
       const allOptions = [
         '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
         '--help', '--print', '--mode', '--runtime-mode', '--continue', '--resume', '--new',
@@ -2922,7 +2956,42 @@ complete -c kodax -l version -d 'Show version'`);
   }
 
   const opts = program.opts();
-  // Parse CLI options and merge with config defaults.
+  const outputMode = (opts.mode as CliOutputMode | undefined) ?? 'text';
+  if (shouldAutoLaunchProviderSetup({
+    outputMode,
+    prompt: opts.print ? [String(opts.print)] : program.args,
+    print: opts.print !== undefined,
+    continue: opts.continue === true,
+    resumeRequested: opts.resume !== undefined,
+    sessionRequested: opts.session !== undefined,
+    helpRequested: opts.help !== undefined,
+    extensionRequested: Array.isArray(opts.extension) && opts.extension.length > 0,
+    isInputTty: process.stdin.isTTY,
+    isOutputTty: process.stdout.isTTY,
+  })) {
+    const readiness = inspectProviderSetupReadiness({
+      configPath: KODAX_CONFIG_FILE,
+      environment: process.env,
+      explicitProvider: opts.provider ?? process.env.KODAX_PROVIDER,
+    });
+    if (readiness.status === 'needs-provider') {
+      await executeProviderSetup();
+      return;
+    }
+    if (readiness.status === 'invalid-config') {
+      process.stderr.write(`${chalk.yellow(
+        `KodaX cannot start first-run setup because ${readiness.configPath} is invalid: ${readiness.reason}`,
+      )}\n`);
+      process.stderr.write(`${chalk.dim(
+        'Repair or move that file, then run `kodax setup`. No configuration was changed.',
+      )}\n`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  // Runtime preparation hydrates shell state, projects config into process
+  // environment, and registers providers. Keep those side effects after the
+  // first-run gate so setup remains a cheap pre-Runtime path.
   const config = prepareRuntimeConfig();
   const configWithExtensions = config as typeof config & {
     extensions?: string[];
@@ -2992,7 +3061,7 @@ complete -c kodax -l version -d 'Show version'`);
     thinking: reasoningMode !== 'off',
     reasoningMode,
     agentMode,
-    outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
+    outputMode,
     runtimeMode: selectedRuntimeMode,
     extensions: activeExtensions,
     session: sessionFlags.session,

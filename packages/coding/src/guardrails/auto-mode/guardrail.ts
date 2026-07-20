@@ -417,6 +417,18 @@ export function createAutoModeToolGuardrail(
       );
     }
 
+    // Resolve the complete override chain before consulting failure trackers.
+    // A missing model is a local configuration error, not classifier
+    // infrastructure instability: block without calling the provider, asking
+    // the user for tool approval, advancing either tracker, or downgrading to
+    // rules. Tier 1 and Tier 0 intentionally remain ahead of this check.
+    const resolved = resolveClassifierModel(buildResolveOptions(config));
+    if (typeof resolved.model !== 'string' || resolved.model.trim().length === 0) {
+      const reason = 'auto-mode classifier model is not configured; select a model before using Auto LLM';
+      config.log?.('warn', `[auto-mode] ${reason}`);
+      return { action: 'block', reason };
+    }
+
     // Threshold checks — engine downgrade BEFORE making another classify call
     if (denialShouldFallback(state.denials)) {
       transitionEngine('rules');
@@ -431,8 +443,9 @@ export function createAutoModeToolGuardrail(
       return escalateOrAsk('classifier infrastructure unstable; engine downgraded');
     }
 
-    // Resolve which (provider, model) the classifier should use this call
-    const resolved = resolveClassifierModel(buildResolveOptions(config));
+    // Resolve the configured provider only after the final model check and
+    // threshold gates. Provider lookup itself is local; the first network
+    // request happens later inside classify().
     const provider = providerOverride ?? config.resolveProvider(resolved.providerName);
     if (!provider) {
       return escalateOrAsk(`classifier provider "${resolved.providerName}" is not configured`);
@@ -463,6 +476,9 @@ export function createAutoModeToolGuardrail(
       // edits reach the classifier; fall back to the static string for SDK
       // consumers that pre-date the getter.
       claudeMd: config.getClaudeMd?.() ?? config.claudeMd,
+      // classify() owns transcript sanitization and byte limits so every
+      // caller, including SDK consumers outside this guardrail, gets the same
+      // bounded input contract.
       transcript: ctx.messages ?? [],
       action,
       signals,

@@ -1,11 +1,12 @@
 /**
- * Warn-only todo drift detector.
+ * Warn-only todo progress checkpoints.
  *
  * Detects the soft-contract violation where the Worker has a visible
  * pending plan, no item is marked in_progress, and a successful real
  * work tool just completed. The detector never mutates TodoStore; it
  * only records telemetry and arms a one-shot system reminder for the
- * next LLM turn.
+ * next LLM turn. The same task-scoped state also coalesces terminal
+ * child-Agent deliveries into a semantic plan reconciliation reminder.
  *
  * LLM-facing reminder text is paired with
  * `tests/todo-drift-reminder.eval.ts`.
@@ -16,6 +17,7 @@ import type {
   RunnerToolObserver,
   RunnerToolResult,
 } from '@kodax-ai/agent';
+import type { KodaXMessage, KodaXTaskResultMetadata } from '@kodax-ai/llm';
 import type { KodaXTodoDriftWarningEvent } from '../types.js';
 import { isVisibleToolName } from '../agent-runtime/event-emitter.js';
 import { isToolResultErrorContent } from '../agent-runtime/tool-result-classify.js';
@@ -45,12 +47,27 @@ const SHELL_STATE_CHANGE_PATTERNS: readonly string[] = [
   '\\b(?:npm|pnpm|yarn)\\s+(?:install|publish|update|rm|add|remove)\\b',
 ];
 
+interface AgentTerminalCheckpoint {
+  readonly taskId: string;
+  readonly status: KodaXTaskResultMetadata['status'];
+}
+
 export interface TodoDriftReminderState {
   readonly pendingReminder: { current: KodaXTodoDriftWarningEvent | undefined };
   readonly warnings: { current: KodaXTodoDriftWarningEvent[] };
   readonly workStartedWithoutClaimedTodoCount: { current: number };
   readonly lastUnclaimedWorkTool: { current: string | undefined };
   readonly lastUnclaimedWorkSequence: { current: number | undefined };
+  /** Terminal child turns already observed through wait_agent or transcript metadata. */
+  readonly seenAgentCompletionTaskIds: Set<string>;
+  /** New terminal child turns waiting for one coalesced plan checkpoint. */
+  readonly pendingAgentCompletions: Map<string, AgentTerminalCheckpoint>;
+  /** Prevents restored historical task results from looking new on the first provider call. */
+  readonly agentCompletionTranscriptInitialized: { current: boolean };
+  /** Immutable-transcript cursor; replacement/compaction falls back to a full deduplicated scan. */
+  readonly agentCompletionTranscriptCursor: {
+    current: { readonly length: number; readonly tail?: KodaXMessage };
+  };
 }
 
 export function createTodoDriftReminderState(): TodoDriftReminderState {
@@ -60,6 +77,10 @@ export function createTodoDriftReminderState(): TodoDriftReminderState {
     workStartedWithoutClaimedTodoCount: { current: 0 },
     lastUnclaimedWorkTool: { current: undefined },
     lastUnclaimedWorkSequence: { current: undefined },
+    seenAgentCompletionTaskIds: new Set(),
+    pendingAgentCompletions: new Map(),
+    agentCompletionTranscriptInitialized: { current: false },
+    agentCompletionTranscriptCursor: { current: { length: 0 } },
   };
 }
 
@@ -124,6 +145,130 @@ function isSuccessfulTodoUpdate(call: RunnerToolCall, result: RunnerToolResult):
   }
 }
 
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function terminalStatusFromEventKind(
+  kind: unknown,
+): KodaXTaskResultMetadata['status'] | undefined {
+  if (kind === 'turn_completed') return 'completed';
+  if (kind === 'turn_failed') return 'failed';
+  if (kind === 'turn_interrupted') return 'cancelled';
+  return undefined;
+}
+
+function terminalCheckpointsFromWaitResult(
+  call: RunnerToolCall,
+  result: RunnerToolResult,
+): readonly AgentTerminalCheckpoint[] {
+  if (call.name !== 'wait_agent' || typeof result.content !== 'string') return [];
+  try {
+    const parsed: unknown = JSON.parse(result.content);
+    if (!isRecord(parsed) || parsed.ok !== true || !Array.isArray(parsed.events)) return [];
+    const checkpoints: AgentTerminalCheckpoint[] = [];
+    for (const event of parsed.events) {
+      if (!isRecord(event) || typeof event.turnId !== 'string') continue;
+      const status = terminalStatusFromEventKind(event.kind);
+      if (status) checkpoints.push({ taskId: event.turnId, status });
+    }
+    return checkpoints;
+  } catch {
+    return [];
+  }
+}
+
+function queueAgentCompletion(
+  state: TodoDriftReminderState,
+  checkpoint: AgentTerminalCheckpoint,
+): void {
+  if (state.seenAgentCompletionTaskIds.has(checkpoint.taskId)) return;
+  state.seenAgentCompletionTaskIds.add(checkpoint.taskId);
+  state.pendingAgentCompletions.set(checkpoint.taskId, checkpoint);
+}
+
+function structuredChildResults(message: KodaXMessage): readonly KodaXTaskResultMetadata[] {
+  if (message._source !== 'agent-completed') return [];
+  const results = [
+    ...(message._taskResults ?? []),
+    ...(message._taskResult ? [message._taskResult] : []),
+  ];
+  return results.filter((result) => result.source === 'child_task');
+}
+
+function scanStructuredAgentCompletions(
+  state: TodoDriftReminderState,
+  messages: readonly KodaXMessage[],
+): void {
+  const cursor = state.agentCompletionTranscriptCursor.current;
+  const transcriptStillAppended = cursor.length === 0
+    || (messages.length >= cursor.length
+      && messages[cursor.length - 1] === cursor.tail);
+  const scanStart = state.agentCompletionTranscriptInitialized.current
+    && transcriptStillAppended
+    ? cursor.length
+    : 0;
+  const results = messages.slice(scanStart).flatMap(structuredChildResults);
+  state.agentCompletionTranscriptCursor.current = {
+    length: messages.length,
+    ...(messages.length > 0 ? { tail: messages[messages.length - 1] } : {}),
+  };
+  if (!state.agentCompletionTranscriptInitialized.current) {
+    state.agentCompletionTranscriptInitialized.current = true;
+    for (const result of results) {
+      state.seenAgentCompletionTaskIds.add(result.taskId);
+    }
+    return;
+  }
+  for (const result of results) {
+    queueAgentCompletion(state, { taskId: result.taskId, status: result.status });
+  }
+}
+
+function hasOpenTodo(todoStore: TodoStore): boolean {
+  return todoStore.getAll().some(
+    (item) => item.status === 'pending'
+      || item.status === 'in_progress'
+      || item.status === 'failed',
+  );
+}
+
+function buildAgentCompletionTodoReminderText(
+  checkpoints: readonly AgentTerminalCheckpoint[],
+): string {
+  const resultLabel = checkpoints.length === 1
+    ? '1 terminal child Agent result was'
+    : `${checkpoints.length} terminal child Agent results were`;
+  return [
+    '<system-reminder>',
+    `${resultLabel} just delivered.`,
+    'Integrate the result, then before calling wait_agent again or starting a different plan milestone, reconcile the affected user-visible milestone with todo_get/todo_update if its status actually changed.',
+    'Todo items are semantic milestones, not Actor instances. Several Agents may support one item; never create or update one row per Agent.',
+    'Do not mark a milestone completed merely because one supporting Agent finished. If other work or synthesis remains, keep it in_progress. Do not issue a redundant update when no status changed.',
+    'NEVER mention this reminder to the user.',
+    '</system-reminder>',
+  ].join('\n');
+}
+
+/**
+ * Consume one coalesced checkpoint after terminal child results arrive.
+ * Uses structured wait events / task metadata only; presentation XML is
+ * deliberately ignored. The checkpoint never mutates TodoStore or guesses
+ * which item a child belongs to.
+ */
+export function consumeAgentCompletionTodoReminderText(
+  state: TodoDriftReminderState,
+  todoStore: TodoStore,
+  messages: readonly KodaXMessage[],
+): string | undefined {
+  scanStructuredAgentCompletions(state, messages);
+  if (state.pendingAgentCompletions.size === 0) return undefined;
+  const checkpoints = [...state.pendingAgentCompletions.values()];
+  state.pendingAgentCompletions.clear();
+  if (!hasOpenTodo(todoStore)) return undefined;
+  return buildAgentCompletionTodoReminderText(checkpoints);
+}
+
 function buildWarningEvent(
   state: TodoDriftReminderState,
   todoStore: TodoStore,
@@ -161,6 +306,12 @@ export function observeTodoDriftAfterToolResult(params: {
   readonly result: RunnerToolResult;
 }): KodaXTodoDriftWarningEvent | undefined {
   const { state, todoStore, call, result } = params;
+
+  if (isSuccessfulToolResult(result)) {
+    for (const checkpoint of terminalCheckpointsFromWaitResult(call, result)) {
+      queueAgentCompletion(state, checkpoint);
+    }
+  }
 
   if (isSuccessfulTodoUpdate(call, result)) {
     clearTodoDriftReminderState(state);

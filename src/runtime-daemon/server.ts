@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  DEFAULT_SPECULATIVE_WINDOW_MS,
   getActiveExtensionRuntime,
 } from '@kodax-ai/coding';
 import type { ExtensionRuntimeContract } from '@kodax-ai/coding';
@@ -1405,10 +1407,14 @@ function runtimeDaemonCapabilities(
       methodNamespace: 'agents',
     },
     runtimeAutoModeGuardrail: {
-      version: 1,
+      version: 2,
       owner: 'session-runtime',
       escalationCreatesPermission: true,
       fallbackPersistsEngine: true,
+      defaultClassifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+      defaultSpeculativeWindowMs: DEFAULT_SPECULATIVE_WINDOW_MS,
+      boundedClassifierInput: true,
+      diagnosticsVersion: 1,
     },
     ...(externalAgentAdmin ? {
       externalAgentAdmin: {
@@ -1465,6 +1471,7 @@ function runtimeDaemonCapabilities(
         'provider', 'model', 'effort', 'thinking', 'reasoningMode',
         'permissionMode', 'executionCwd', 'agentMode', 'autoModeEngine',
         'autoModeClassifierModel', 'autoModeTimeoutMs',
+        'autoModeSpeculativeWindowMs',
       ],
     },
     ...(controlJournal !== undefined

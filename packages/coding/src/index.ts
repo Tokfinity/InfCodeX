@@ -1151,7 +1151,10 @@ export type {
 // will internally consume these to register the guardrail and surface
 // /auto-engine, /auto-model commands; the eval suite consumes the same
 // surface to measure classifier quality.
-export { classify } from './guardrails/auto-mode/classify.js';
+export {
+  classify,
+  DEFAULT_CLASSIFIER_TIMEOUT_MS,
+} from './guardrails/auto-mode/classify.js';
 export type {
   ClassifyOptions,
   ClassifyDecision,

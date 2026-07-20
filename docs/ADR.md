@@ -4278,7 +4278,8 @@ and active-turn fencing remain mandatory until then.
 
 **Status**: Accepted (2026-07-18)
 
-**Driver**: `v0.7.72` shared-daemon permission-chain correction
+**Driver**: `v0.7.72` shared-daemon permission-chain correction and `v0.7.73`
+public Runtime reliability closure
 
 **Context**: Session settings could explicitly request
 `permissionMode: 'auto'` with an LLM classifier, yet a static
@@ -4314,18 +4315,41 @@ and large/raw permission previews were not a safe transport contract.
 6. Tool scope is capability-derived. `exit_plan_mode` is included only when
    the current run provides `events.exitPlanMode`; absent host capability means
    absent model tool, not a call that fails after model selection.
+7. The classifier API owns its own input boundary. The current action is
+   projected separately; historical Runner messages are reduced to bounded
+   user intent, tool calls, and normalized tool results. Missing classifier
+   identity fails as recoverable configuration before provider/permission work,
+   and omitting an Auto engine consistently means the LLM default for both
+   preflight and guardrail ownership.
+8. One exported typed resolver owns Auto config precedence. Session state also
+   owns the speculative window, including `0`, and propagates it through the
+   same persistence/mutation/cache/bootstrap path as engine/model/timeout.
+9. `runtimeAutoModeGuardrail` v2 identifies bounded input, effective timeout and
+   window defaults, and diagnostics semantics. Capability requirements are
+   monotonic minimums; v1 is replaced only through an idle fenced preflight.
+10. Side-query diagnostics are fixed-field and prompt-free. They report only
+    observed provider/model/elapsed/retry/first-output/stream facts and must not
+    invent unavailable connect or provider-queue timings. Guardrail spans begin
+    before the callback and end with its final verdict/error.
 
 **Consequences**:
 
 - Shared-daemon and inline sessions use the same auto permission decision owner
   and persist the same engine state across turns.
-- SDK hosts gain explicit durable `autoModeClassifierModel` and
-  `autoModeTimeoutMs` session settings; daemon capability discovery advertises
-  both keys.
+- SDK hosts gain explicit durable `autoModeClassifierModel`,
+  `autoModeTimeoutMs`, and `autoModeSpeculativeWindowMs` session settings;
+  daemon capability discovery advertises all keys and v2 behavior metadata.
 - A permission UI remains responsible for an actual escalation, but no longer
   acts as an implicit classifier or sees avoidable pending requests.
 - Host integrations can trust the preview as display-safe JSON while retaining
   the real typed tool input only in the owner execution path.
+- Historical tool output can no longer make every subsequent permission check
+  retransmit the full active session; the side-query deadline remains bounded
+  rather than being raised to mask an unbounded input.
+- Existing v1 clients can use a v2 daemon, while clients that depend on the v2
+  semantics can reject or safely upgrade v1 without reusing the old chain.
+- Timeout traces now measure the classification wait and expose actionable
+  bounded diagnostics without disclosing the classifier request.
 
 **Rejected alternatives**: keeping a static hook as the first auto decision,
 recreating a classifier on every turn, allowing a broad raw-input preview,

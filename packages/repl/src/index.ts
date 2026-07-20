@@ -107,6 +107,17 @@ export {
 } from "./common/utils.js";
 export type { ConfigTemplateName } from "./common/utils.js";
 
+// === Typed Auto-mode settings resolver (FEATURE_271, v0.7.73) ===
+export {
+  loadAutoModeSettings,
+  resolveAutoModeSettings,
+} from "./common/permission-config.js";
+export type {
+  AutoModeSettings,
+  ResolvedAutoModeSettings,
+  ResolveAutoModeSettingsInput,
+} from "./common/permission-config.js";
+
 // === Custom provider CRUD (v0.7.42 SDK export) ===
 // SDK embedders (KodaX Space etc.) can add / remove `customProviders`
 // entries in `~/.kodax/config.json` without re-implementing the schema
@@ -118,6 +129,30 @@ export {
   upsertCustomProvider,
   removeCustomProvider,
 } from "./common/custom-providers.js";
+
+// === First-run provider setup (FEATURE_271, v0.7.73) ===
+// Metadata-only setup: these APIs never accept an API-key value.
+export {
+  ProviderSetupConfigConflictError,
+  ProviderSetupInvalidConfigError,
+  getProviderSetupCatalog,
+  inspectProviderSetupReadiness,
+  persistProviderSetupChoice,
+  providerSetupRestartInstructions,
+} from "./common/provider-setup.js";
+export type {
+  ProviderSetupCatalogEntry,
+  ProviderSetupChoice,
+  ProviderSetupCustomProviderMetadata,
+  ProviderSetupReadiness,
+  PersistedProviderSetupChoice,
+} from "./common/provider-setup.js";
+export { runProviderSetupWizard } from "./interactive/provider-setup.js";
+export type {
+  ProviderSetupInteraction,
+  ProviderSetupWizardResult,
+  RunProviderSetupWizardInput,
+} from "./interactive/provider-setup.js";
 
 // === MCP server CRUD (v0.7.42 SDK export) ===
 // SDK embedders (KodaX Space etc.) can add / remove `mcpServers` entries

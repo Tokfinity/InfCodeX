@@ -54,11 +54,24 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('<agent-completed path="..." turn_id="..." state="completed">');
     expect(output).toContain('its body is the authoritative terminal result');
     expect(output).toContain('Do not call `agent_output` speculatively');
-    expect(output).toContain('only after a preceding `<agent-completed>` supplies the target');
+    expect(output).toContain('terminal `wait_agent` event or a preceding `<agent-completed>`');
+    expect(output).toContain('supplies the exact Actor/Turn target');
     expect(output).toContain('After `AgentLimitReached`');
     expect(output).toContain('do not retry `spawn_agent` while the reported capacity is still full');
     expect(output).toContain('canonical `agent_id` from `list_dispatchable_agents`');
+    expect(output).toContain('Todo items are user-visible semantic milestones, not Actor instances');
+    expect(output).toContain('before calling `wait_agent` again or starting a different plan milestone');
+    expect(output).toContain('Do not mark a milestone completed merely because one supporting Agent finished');
     expect(output).not.toContain('On a fresh request with independent lanes');
+  });
+
+  it('requires milestone updates when progress happens instead of batching them at termination', () => {
+    const output = buildWorkerInstructions(baseDecision, undefined, false);
+
+    expect(output).toContain('update it before starting the next item, calling `wait_agent` again, or writing the final response');
+    expect(output).toContain('Do not defer multiple status changes to final cleanup');
+    expect(output).toContain('perform a final consistency check');
+    expect(output).not.toContain('as your closing tool calls');
   });
 
   it('states the configured Actor capacity before the model announces a spawn wave', () => {

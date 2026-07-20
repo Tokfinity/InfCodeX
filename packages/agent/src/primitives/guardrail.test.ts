@@ -439,6 +439,57 @@ describe('Runner integration — GuardrailSpan emission', () => {
     expect(outputSpan?.decision).toBe('rewrite');
   });
 
+  it('starts the guardrail span before awaiting the guardrail callback', async () => {
+    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('../tracing/index.js');
+    setTracingProcessors([]);
+    const lifecycle: string[] = [];
+    addTracingProcessor({
+      onSpanStart: (span) => {
+        if (span.name === 'guardrail:slow') {
+          lifecycle.push(
+            `start:${String((span.data as { pending?: boolean }).pending)}`,
+          );
+        }
+      },
+      onSpanEnd: (span) => {
+        if (span.name === 'guardrail:slow') {
+          lifecycle.push(
+            `end:${(span.data as { decision?: string }).decision}:${String((span.data as { pending?: boolean }).pending)}`,
+          );
+        }
+      },
+      onTraceEnd: () => { /* noop */ },
+    });
+
+    let release: (() => void) | undefined;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: InputGuardrail = {
+      kind: 'input',
+      name: 'slow',
+      check: async () => {
+        await waiting;
+        return { action: 'allow' };
+      },
+    };
+    const agent = createAgent({
+      name: 'slow-guardrail-agent',
+      instructions: 'sys',
+      guardrails: [slow],
+    });
+
+    const run = Runner.run(agent, 'q', {
+      llm: async () => 'ok',
+      tracer: new Tracer(),
+    });
+    await vi.waitFor(() => expect(lifecycle).toEqual(['start:true']));
+    release?.();
+    await run;
+    expect(lifecycle).toEqual(['start:true', 'end:pass:false']);
+    setTracingProcessors([]);
+  });
+
   it('MED-3: a thrown guardrail emits a decision:"error" span and re-throws (fail-loud)', async () => {
     const { Tracer, addTracingProcessor, setTracingProcessors } = await import('../tracing/index.js');
     setTracingProcessors([]);

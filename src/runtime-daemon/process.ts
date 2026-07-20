@@ -68,6 +68,8 @@ export interface RuntimeDaemonStartupProcess {
   terminate(): Promise<void>;
 }
 
+const CLEAN_EXIT_OWNER_PUBLICATION_GRACE_MS = 1_000;
+
 export type RuntimeDaemonStartupFailureReason =
   | 'cancelled'
   | 'child_exit'
@@ -215,6 +217,34 @@ async function observeStartupHealth(
   if (outcome.kind === 'exit') {
     if (hasCompetingStartupOwner(paths, child)) {
       return observe(paths, options.healthCheck);
+    }
+    if (outcome.exit.code === 0 && outcome.exit.signal === null) {
+      const graceMs = Math.min(
+        CLEAN_EXIT_OWNER_PUBLICATION_GRACE_MS,
+        options.startupTimeoutMs ?? CLEAN_EXIT_OWNER_PUBLICATION_GRACE_MS,
+      );
+      const deadline = Date.now() + graceMs;
+      while (Date.now() <= deadline) {
+        const observation = await raceRuntimeDaemonStartupStep(
+          observe(paths, options.healthCheck),
+          options.startupSignal,
+        );
+        if (
+          classifyRuntimeDaemonHealth(observation) !== 'missing' ||
+          hasCompetingStartupOwner(paths, child)
+        ) {
+          return observation;
+        }
+        await raceRuntimeDaemonStartupStep(
+          delay(
+            Math.min(
+              options.pollIntervalMs ?? 100,
+              Math.max(1, deadline - Date.now()),
+            ),
+          ),
+          options.startupSignal,
+        );
+      }
     }
     throw runtimeDaemonExitedEarly(outcome.exit);
   }

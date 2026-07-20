@@ -195,21 +195,18 @@ describe('bootstrapAutoMode', () => {
     expect(cfg?.speculativeWindowMs).toBeUndefined();
   });
 
-  it('getDefaultModel surfaces empty-model warn through deps.log', async () => {
+  it('forwards an empty live model to the common guardrail without bootstrap-side effects', async () => {
     const log = vi.fn<(level: 'info' | 'warn', msg: string) => void>();
     const getCurrentModel = vi.fn(() => undefined);
-    // Use a separate scope to capture what bootstrap built. The
-    // guardrail itself reads the getter on classify, but we exercise the
-    // wired closure directly via the same path: by observing that log is
-    // never invoked at bootstrap (warn is gated behind getter-call) and
-    // would fire on a classify if the model were empty.
-    await bootstrapAutoMode({
+    const result = await bootstrapAutoMode({
       ...baseDeps(),
       getCurrentModel,
       log,
     });
-    // Bootstrap doesn't trigger the getter (only the guardrail's
-    // resolveClassifierModel does, on classify). So no warn yet.
+    result.getGuardrail();
+    const cfg = vi.mocked(createAutoModeToolGuardrail).mock.calls.at(-1)?.[0];
+    expect(cfg?.defaultModel).toBe('');
+    expect(cfg?.getDefaultModel?.()).toBe('');
     expect(log).not.toHaveBeenCalled();
   });
 });

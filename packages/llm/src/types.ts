@@ -165,14 +165,15 @@ export interface KodaXMessage {
    * Identifies which subsystem injected a synthetic message so consumers can
    * render/attribute it distinctly instead of treating it like a user query.
    * Absent on genuine user/assistant/system messages. Known values include
-   * `'sidecar-verifier'` (Sidecar Verifier revise feedback) and `'task-completed'`
-   * (a dispatch_child_task / run_workflow `<task-completed>` result banner spliced
-   * into the transcript; a rare same-wake mix with a system-reminder shares this
-   * one label, content preserved). Exposed verbatim through `KodaXResult.messages`
+   * `'sidecar-verifier'` (Sidecar Verifier revise feedback),
+   * `'agent-completed'` (an Actor `<agent-completed>` result banner), and the
+   * legacy `'task-completed'` workflow banner. A rare same-wake mix with a
+   * system-reminder shares the completion label, content preserved. Exposed
+   * verbatim through `KodaXResult.messages`
    * and session-load APIs for SDK consumers.
    */
   _source?: string;
-  /** Structured task/workflow result metadata for synthetic task-completed messages. */
+  /** Structured task/workflow result metadata for synthetic completion messages. */
   _taskResult?: KodaXTaskResultMetadata;
   /** Multiple task results when one synthetic wake message contains several banners. */
   _taskResults?: KodaXTaskResultMetadata[];

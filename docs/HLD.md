@@ -138,6 +138,27 @@ engine for later turns. Classifier model/timeout, project boundary, execution
 directory, and provider/model are part of the guardrail reuse key, so a setting
 change gets a fresh guardrail rather than stale classification state.
 
+The classifier input boundary is owned by `classify`, not by individual
+guardrail callers. It projects the current action independently and sanitizes
+the accumulated Runner transcript into a UTF-8-byte-bounded factual subset.
+This prevents a prior multi-megabyte tool result from consuming the current
+permission verdict's transport/inference deadline.
+
+The public Runtime contract mirrors that boundary. REPL and root SDK entries
+export one pure Auto settings resolver plus its config-loading wrapper;
+Session state owns classifier model, timeout, and speculative window through
+the same serialized mutation queue. Auto-started daemon clients require
+`runtimeAutoModeGuardrail` v2, and version negotiation treats requirements as
+minimums. Side-query diagnostics report only coarse, observed timing/retry
+facts, while guardrail spans start before and end after the awaited callback.
+
+First-run provider setup is a pre-Runtime CLI branch. A REPL-layer readiness
+inspection consults the canonical provider catalog, environment, and
+core config; a standalone terminal interaction produces a non-secret choice;
+and a revision-checked atomic mutation writes only provider metadata. The CLI
+then exits for terminal environment refresh. This branch never initializes the
+daemon, Runtime, session, extensions, or provider network client.
+
 The main coding path is:
 
 ```text

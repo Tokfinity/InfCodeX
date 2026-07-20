@@ -244,11 +244,18 @@ export async function applySidecarVerdictToRecorder(
 
   const metadata = buildSidecarVerdictMetadata(verdict);
   recorder.verdict = metadata;
-
   if (todoStore) {
     const status = verdict.verdict;
     if (status === 'accept') {
-      todoStore.autoCompleteOnAccept();
+      const todoReconciledCount = todoStore.autoCompleteOnAccept();
+      if (todoReconciledCount > 0) {
+        emitKodaXDiagnostic({
+          source: 'coding:sidecar-verifier',
+          level: 'debug',
+          message: `Sidecar accept reconciled ${todoReconciledCount} open Todo item(s) after the Worker terminal turn.`,
+          detail: { todoReconciledCount },
+        });
+      }
     } else if (status === 'revise') {
       todoStore.markInProgressFailed('Sidecar verifier requested revision');
       if (pendingFailedResetRef) {

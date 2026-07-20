@@ -105,6 +105,8 @@ export interface GuardrailSpanData {
   readonly kind: 'guardrail';
   readonly guardrailName: string;
   readonly hookPoint: 'input' | 'output' | 'tool';
+  /** True between span start and the guardrail callback settling. */
+  readonly pending?: boolean;
   readonly decision: 'pass' | 'veto' | 'rewrite' | 'error';
   readonly reason?: string;
   readonly error?: string;

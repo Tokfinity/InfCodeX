@@ -11,6 +11,7 @@ import { getAgentConfigHome, getCachedRejectedEfforts } from '@kodax-ai/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
+import type { AutoModeSettings } from './permission-config.js';
 import {
   CONFIG_TEMPLATES,
   getConfigTemplate,
@@ -946,6 +947,7 @@ export function loadConfig(): {
   reasoningCeiling?: KodaXReasoningMode;
   agentMode?: KodaXAgentMode;
   permissionMode?: string;
+  autoMode?: AutoModeSettings;
   locale?: string;
   providerModels?: Record<string, string[]>;
   customProviders?: KodaXCustomProviderConfig[];
@@ -1027,6 +1029,7 @@ export function loadConfig(): {
         agentMode?: string;
         schemaVersion?: number;
         permissionMode?: string;
+        autoMode?: AutoModeSettings;
         locale?: string;
         providerModels?: Record<string, string[]>;
         customProviders?: KodaXCustomProviderConfig[];

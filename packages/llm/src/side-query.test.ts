@@ -129,6 +129,21 @@ describe('sideQuery — happy path', () => {
     expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'high' });
   });
 
+  it('forwards a valid per-request output-token cap without mutating provider state', async () => {
+    const provider = new StubProvider(async () => okResult());
+
+    await sideQuery({
+      provider,
+      model: 'm',
+      system: 's',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      maxOutputTokens: 256,
+    });
+
+    expect(provider.capturedCalls[0]!.streamOptions?.maxOutputTokensOverride).toBe(256);
+  });
+
   it('maps provider stopReason max_tokens to SideQueryStopReason max_tokens', async () => {
     const provider = new StubProvider(async () => okResult({
       textBlocks: [text('truncated...')],
@@ -218,6 +233,15 @@ describe('sideQuery — cost tracking', () => {
       reason: 'rate-limit',
       source: 'retry-after-ms',
     });
+    expect(result.diagnostics).toMatchObject({
+      provider: 'stub',
+      model: 'stub-default',
+      timeoutMs: 30_000,
+      retryCount: 1,
+      retryWaitMs: 250,
+      terminalPhase: 'completed',
+    });
+    expect(result.diagnostics?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
   it('does not record usage when sideQuery contract is violated (tool_use blocks returned)', async () => {
@@ -295,6 +319,41 @@ describe('sideQuery — failure modes', () => {
     expect(result.stopReason).toBe('timeout');
     expect(result.text).toBe('');
     expect(result.error).toBeDefined();
+    expect(result.diagnostics).toMatchObject({
+      provider: 'stub',
+      model: 'm',
+      timeoutMs: 20,
+      retryCount: 0,
+      retryWaitMs: 0,
+      terminalPhase: 'pre_output',
+    });
+  });
+
+  it('reports whether a timeout happened after streaming began', async () => {
+    const provider = new StubProvider(async ({ streamOptions, signal }) => {
+      streamOptions?.onTextDelta?.('partial');
+      return new Promise<KodaXStreamResult>((_, reject) => {
+        signal!.addEventListener(
+          'abort',
+          () => reject(new DOMException('Request aborted', 'AbortError')),
+          { once: true },
+        );
+      });
+    });
+
+    const result = await sideQuery({
+      provider,
+      model: 'm',
+      system: 's',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      timeoutMs: 20,
+    });
+
+    expect(result.stopReason).toBe('timeout');
+    expect(result.diagnostics?.terminalPhase).toBe('streaming');
+    expect(result.diagnostics?.firstOutputMs).toBeGreaterThanOrEqual(0);
+    expect(result.diagnostics?.streamMs).toBeGreaterThanOrEqual(0);
   });
 
   it('returns aborted stopReason when caller signal fires before timeout', async () => {

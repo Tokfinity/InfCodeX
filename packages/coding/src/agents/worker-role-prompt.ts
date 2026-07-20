@@ -107,6 +107,8 @@ export function buildWorkerInstructions(
     '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_create` AT THAT MOMENT — one call per newly-realized step — to retrofit the plan. Do not silently grow scope.',
     '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`).',
     '- Mark exactly ONE item `in_progress` at a time.',
+    '- Todo items are user-visible semantic milestones, not Actor instances. Several Agents may support one milestone; create separate items only for genuinely separate deliverables.',
+    '- After a milestone is actually finished, update it before starting the next item, calling `wait_agent` again, or writing the final response. Do not defer multiple status changes to final cleanup.',
     '- Replan iteratively as the picture firms up — use the per-item API:',
     '    * INSERT ONE NEW STEP mid-task: `todo_create({subject:"...", description?:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
     '    * EDIT ONE STEP: `todo_update({id, subject?, description?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
@@ -158,7 +160,8 @@ export function buildWorkerInstructions(
     '- Read-only investigations use `read_only:true`; non-conflicting file-level edits may use `read_only:false`. Keep the task name stable and the objective specific.',
     '- Children may recursively spawn descendants. Every turn shares the same root concurrency and work budget, so recursion never creates extra capacity.',
     '- Continue useful local work after spawning. When an Agent result is required, call `wait_agent`; use its event sequence as the next `after_sequence` cursor.',
-    '- A host-delivered `<agent-completed path="..." turn_id="..." state="completed">` block already contains the completed turn summary; its body is the authoritative terminal result, so use the inline result directly to revise follow-up objectives or topology. Do not call `agent_output` speculatively: use it only after a preceding `<agent-completed>` supplies the target and its inline body omits exact structured output or artifact refs you need.',
+    '- A host-delivered `<agent-completed path="..." turn_id="..." state="completed">` block already contains the completed turn summary; its body is the authoritative terminal result, so use the inline result directly to revise follow-up objectives or topology. Do not call `agent_output` speculatively: use it only after a terminal `wait_agent` event or a preceding `<agent-completed>` supplies the exact Actor/Turn target and the inline delivery omits structured output or artifact refs you need.',
+    '- After a terminal Agent result arrives, integrate its evidence and reconcile the affected semantic plan milestone before calling `wait_agent` again or starting a different plan milestone. Do not mark a milestone completed merely because one supporting Agent finished; keep it `in_progress` when other work or synthesis remains.',
     '- After `AgentLimitReached` or another full-capacity result, do not retry `spawn_agent` while the reported capacity is still full. Wait/list, continue useful local work, or replan through an existing Agent.',
     '- `send_message` delivers bounded evidence without waking an idle actor. Use `followup_task` when an idle actor must start another turn or a running actor needs an objective update.',
     '- Use `list_agents` for tree/capacity state and `agent_output` for a completed turn result. Use `interrupt_agent` only when continued work is no longer useful.',
@@ -261,7 +264,7 @@ export function buildWorkerInstructions(
 
   const handoffRules = [
     'TERMINATION:',
-    '- Before writing that final summary, mark every finished item `completed` as your closing tool calls — this is the only way the plan reflects your progress in real time. The runner force-completes any still-open items on an accept verdict, but that correction is invisible to you and lands only after the user has already watched the list sit stale.',
+    '- Before writing the final summary, perform a final consistency check: update only genuinely finished items that are still open. This is a safety net, not the normal update point; progress updates belong at each milestone boundary.',
     '- Before finishing, wait for or interrupt every live child you still own; if descendants intentionally remain active, report their canonical paths and unresolved ownership explicitly.',
     '- When all non-cancelled plan items are `completed`, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
     '- If you cannot proceed (e.g. user-input blocker, irrecoverable failure), end your turn with a text-only summary of the blocker. Mark the affected plan items `failed` with a note BEFORE the final summary turn so the dashboard reflects the blocked state.',

@@ -228,6 +228,50 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(capturedSystems[1]).toBe('sys-text');
   });
 
+  it('injects one Agent-completion todo checkpoint and deduplicates transcript replay', async () => {
+    const todoStore = createTodoStore();
+    todoStore.init([{ id: 'todo_1', subject: 'Review child findings' }]);
+    todoStore.updateStatus('todo_1', 'in_progress');
+    const driftState = createTodoDriftReminderState();
+    const capturedSystems: string[] = [];
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      async (_transcript, _tools, system) => {
+        capturedSystems.push(system);
+        return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+      },
+      undefined,
+      undefined,
+      undefined,
+      todoStore,
+      undefined,
+      undefined,
+      driftState,
+    );
+    const baseline: KodaXMessage[] = [{ role: 'system', content: 'sys-text' }];
+    const completion: KodaXMessage = {
+      role: 'user',
+      content: '<agent-completed>done</agent-completed>',
+      _synthetic: true,
+      _source: 'agent-completed',
+      _taskResult: {
+        type: 'task_result',
+        source: 'child_task',
+        taskId: 'turn-1',
+        status: 'completed',
+      },
+    };
+
+    await adapter(baseline, { name: 'worker', instructions: 'ignored' });
+    await adapter([...baseline, completion], { name: 'worker', instructions: 'ignored' });
+    await adapter([...baseline, completion], { name: 'worker', instructions: 'ignored' });
+
+    expect(capturedSystems[0]).toBe('sys-text');
+    expect(capturedSystems[1]).toContain('terminal child Agent result');
+    expect(capturedSystems[1]).toContain('semantic milestones, not Actor instances');
+    expect(capturedSystems[2]).toBe('sys-text');
+  });
+
   // Regression: after compaction + `injectPostCompactAttachments`, the
   // transcript begins with `[compaction-summary, post-compact-ledger,
   // post-compact-file, ...]` — three or more contiguous role:'system'

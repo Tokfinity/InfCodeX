@@ -226,6 +226,7 @@ function createLegacyTransport(input: {
       if (method === 'initialize') {
         return initializeResult(RUNTIME_ID, {
           daemonManagement: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
         });
       }
       if (method === 'daemon.management.get') {
@@ -267,7 +268,7 @@ function createCurrentTransport(
         throw new Error(`Unexpected current daemon request: ${method}`);
       }
       return initializeResult('runtime_current', {
-        runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
+        runtimeAutoModeGuardrail: { version: 2, owner: 'session-runtime' },
       });
     },
     subscribe() {

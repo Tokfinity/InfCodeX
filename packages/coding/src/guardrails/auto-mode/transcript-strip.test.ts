@@ -56,8 +56,45 @@ describe('stripAssistantText', () => {
     const out = stripAssistantText([msg], { maxToolResultBytes: 100 });
     const blocks = out[0]!.content as ReadonlyArray<{ type: string; content?: string }>;
     expect(blocks[0]!.type).toBe('tool_result');
-    expect(blocks[0]!.content!.length).toBeLessThanOrEqual(100 + 20); // +ellipsis budget
+    expect(Buffer.byteLength(blocks[0]!.content!, 'utf8')).toBeLessThanOrEqual(100);
     expect(blocks[0]!.content!.endsWith('…')).toBe(true);
+  });
+
+  it('measures transcript and tool-result budgets in UTF-8 bytes', () => {
+    const msg = userBlocks([
+      { type: 'tool_result', tool_use_id: 'c1', content: '测'.repeat(5_000) },
+    ]);
+    const out = stripAssistantText([userText(`原始意图：${'测'.repeat(5_000)}`), msg], {
+      maxToolResultBytes: 100,
+      maxTranscriptBytes: 800,
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(out), 'utf8')).toBeLessThanOrEqual(800);
+    const last = out.at(-1)?.content;
+    if (Array.isArray(last)) {
+      const result = last.find((block) => block.type === 'tool_result');
+      if (result?.type === 'tool_result' && typeof result.content === 'string') {
+        expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it('normalizes multimodal tool results to bounded text without leaking image paths', () => {
+    const msg = userBlocks([
+      {
+        type: 'tool_result',
+        tool_use_id: 'c1',
+        content: [
+          { type: 'text', text: 'safe diagnostic output' },
+          { type: 'image', path: 'C:/Users/example/.secrets/screenshot.png' },
+        ],
+      },
+    ]);
+
+    const out = stripAssistantText([msg], { maxToolResultBytes: 100 });
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain('safe diagnostic output');
+    expect(serialized).not.toContain('.secrets');
   });
 
   it('preserves tool_result content under the truncation threshold unchanged', () => {
@@ -84,6 +121,16 @@ describe('stripAssistantText', () => {
     // Total serialized size respects the budget (with reasonable slack)
     const total = JSON.stringify(out).length;
     expect(total).toBeLessThan(2000);
+  });
+
+  it('truncates an oversized first user message so the total budget is real', () => {
+    const out = stripAssistantText([
+      userText(`original intent: ${'x'.repeat(10_000)}`),
+      userText('latest: inspect the process list'),
+    ], { maxTranscriptBytes: 800 });
+
+    expect(out[0]!.content).toContain('original intent');
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(900);
   });
 
   it('returns an empty array when given an empty transcript', () => {

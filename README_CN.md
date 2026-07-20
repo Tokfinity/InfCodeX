@@ -49,7 +49,10 @@ export ZHIPU_API_KEY=...        # 或 KIMI_API_KEY / MINIMAX_API_KEY / MIMO_API_
 kodax
 ```
 
-就这样。进 REPL，自然语言提问。
+就这样。进 REPL，自然语言提问。如果新机器既没有选择 provider，也没有任何
+受支持的 API Key 环境变量，直接运行 `kodax` 会先打开只配置元数据的向导；它不会
+要求输入或保存 Key。选择 provider/model 后，按提示设置对应环境变量、重启终端，
+再运行 `kodax`。需要主动重新配置时可运行 `kodax setup`。
 
 > **不装 Node 的目标机器**：从 [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) 拿 Bun 编译的单文件二进制（Win / macOS / Linux × x64 + arm64）。详见 [docs/release.md](docs/release.md)。
 
@@ -174,7 +177,14 @@ kodax
 
 ### 2. 配置模型提供商
 
-最简单的方式是先设置 API Key：
+可以先运行不会收集 Key 的交互配置：
+
+```bash
+kodax setup
+```
+
+命令会保存 provider/model，告诉你准确的环境变量名，然后退出以便重启终端。
+也可以直接设置 API Key：
 
 ```bash
 # macOS / Linux

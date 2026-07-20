@@ -259,6 +259,8 @@ export type {
   SideQueryRequest,
   SideQueryResult,
   SideQueryStopReason,
+  SideQueryDiagnostics,
+  SideQueryTerminalPhase,
 } from './side-query.js';
 
 // ============== Retry-After helper (FEATURE_130, v0.7.36) ==============

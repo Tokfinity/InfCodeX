@@ -44,4 +44,16 @@ describe('FEATURE_259 prompt contracts', () => {
     expect(prompt).not.toMatch(/PLAN-FIRST CONTRACT \([^)]*v0\./);
     expect(prompt).toContain('Configured `fast`/`deep` tiers select their operator-mapped route');
   });
+
+  it('keeps Agent lifecycle and user-visible plan granularity separate', () => {
+    const waitDescription = getToolDefinition('wait_agent')?.description ?? '';
+    const createDescription = getToolDefinition('todo_create')?.description ?? '';
+
+    expect(waitDescription).toContain('reconcile the affected semantic plan milestone');
+    expect(waitDescription).toContain('before waiting again');
+    expect(createDescription).toContain('semantic milestone');
+    expect(createDescription).toContain('not one item per child Agent');
+    expect(createDescription).toContain('Several Agents may support one milestone');
+    expect(createDescription).not.toContain('natural anchor for the work each child will execute');
+  });
 });

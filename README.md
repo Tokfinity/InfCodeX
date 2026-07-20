@@ -49,7 +49,12 @@ export ZHIPU_API_KEY=...        # or ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_A
 kodax
 ```
 
-That's it. You're in the REPL — ask anything in natural language.
+That's it. You're in the REPL — ask anything in natural language. If this is a
+new machine with no provider selection or supported API-key environment
+variable, the bare `kodax` launch opens a metadata-only setup flow first. It
+never asks for the key itself; after choosing a provider/model, set the named
+environment variable, restart the terminal, and run `kodax` again. Use
+`kodax setup` to rerun that flow explicitly.
 
 > **No-Node target machines:** download a Bun-compiled single binary for Windows / macOS / Linux × x64 + arm64 from the [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) page. See [docs/release.md](docs/release.md) for the build pipeline.
 
@@ -140,6 +145,14 @@ npm link
 ### 2. Configure a provider
 
 KodaX reads API keys from environment variables. For built-in providers, the fastest path is:
+
+```bash
+# Interactive metadata-only provider/model setup (does not collect a key)
+kodax setup
+```
+
+The command tells you the exact environment-variable name to set and exits so
+you can restart the terminal. You can also configure it directly:
 
 ```bash
 # macOS / Linux

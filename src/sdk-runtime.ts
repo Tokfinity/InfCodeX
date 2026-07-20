@@ -14,11 +14,14 @@ import path from 'node:path';
 import {
   getActiveExtensionRuntime,
   CodingActorSession,
+  DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  DEFAULT_SPECULATIVE_WINDOW_MS,
   createAutoModeDenialTracker,
   createCircuitBreaker,
   createExternalActorTurnExecutor,
   generateSessionId,
   listCodingDispatchableAgents,
+  parseModelSpec,
   registerCustomProviders,
   resolveToolBridgeTarget,
   runManagedTask,
@@ -200,6 +203,17 @@ export class RuntimeDaemonCapabilityUpgradeError extends Error {
   ) {
     super(message, options);
     this.name = 'RuntimeDaemonCapabilityUpgradeError';
+  }
+}
+
+/** A recoverable Auto LLM configuration error that must never become approval work. */
+export class RuntimeAutoModeConfigurationError extends Error {
+  readonly code = 'auto_mode_classifier_model_required' as const;
+  readonly recoverable = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'RuntimeAutoModeConfigurationError';
   }
 }
 export type {
@@ -610,7 +624,7 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonManagement?: 1;
   readonly actorControlPlane?: 1;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
-  readonly runtimeAutoModeGuardrail?: 1;
+  readonly runtimeAutoModeGuardrail?: 1 | 2;
 }
 
 export type RuntimeOperationState =
@@ -1010,6 +1024,7 @@ export interface RuntimeSessionSettings {
   readonly autoModeEngine?: 'llm' | 'rules';
   readonly autoModeClassifierModel?: string;
   readonly autoModeTimeoutMs?: number;
+  readonly autoModeSpeculativeWindowMs?: number;
 }
 
 export interface RuntimeSessionSettingsPatch {
@@ -1024,6 +1039,7 @@ export interface RuntimeSessionSettingsPatch {
   readonly autoModeEngine?: 'llm' | 'rules' | null;
   readonly autoModeClassifierModel?: string | null;
   readonly autoModeTimeoutMs?: number | null;
+  readonly autoModeSpeculativeWindowMs?: number | null;
 }
 
 export interface RuntimeAppendNoticeInput {
@@ -2062,6 +2078,7 @@ interface RuntimeRunRecord {
   autoModeEngine?: RuntimeSessionSettings['autoModeEngine'];
   autoModeClassifierModel?: string;
   autoModeTimeoutMs?: number;
+  autoModeSpeculativeWindowMs?: number;
   reasoning?: KodaXReasoningMode;
   error?: string;
   terminal?: RuntimeTerminalFact;
@@ -2262,7 +2279,7 @@ export async function createKodaXRuntime(
       clientInfo: options.clientInfo,
       capabilities: options.capabilities,
       requirements: autoStart
-        ? { ...options.requirements, runtimeAutoModeGuardrail: 1 }
+        ? { ...options.requirements, runtimeAutoModeGuardrail: 2 }
         : options.requirements,
     });
   }
@@ -2289,7 +2306,16 @@ export async function createKodaXRuntime(
     afterTurnInput: { version: 1 },
     learningCenter: { version: 1 },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
-    runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
+    runtimeAutoModeGuardrail: {
+      version: 2,
+      owner: 'session-runtime',
+      escalationCreatesPermission: true,
+      fallbackPersistsEngine: true,
+      defaultClassifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+      defaultSpeculativeWindowMs: DEFAULT_SPECULATIVE_WINDOW_MS,
+      boundedClassifierInput: true,
+      diagnosticsVersion: 1,
+    },
     ...(options.externalAgents !== undefined
       ? { externalAgentAdmin: { version: 1 } }
       : {}),
@@ -2745,7 +2771,11 @@ function assertVersionedRuntimeCapability(
   version: number,
 ): void {
   const capability = capabilities[name];
-  if (!isRecord(capability) || capability.version !== version) {
+  if (
+    !isRecord(capability) ||
+    !Number.isSafeInteger(capability.version) ||
+    Number(capability.version) < version
+  ) {
     throw new Error(
       `Runtime does not support the required ${name} capability.`,
     );
@@ -2790,7 +2820,11 @@ function hasVersionedRuntimeCapability(
   version: number,
 ): boolean {
   const capability = capabilities[name];
-  return isRecord(capability) && capability.version === version;
+  return (
+    isRecord(capability) &&
+    Number.isSafeInteger(capability.version) &&
+    Number(capability.version) >= version
+  );
 }
 
 async function replaceLegacyRuntimeDaemonForGuardrailUpgrade(input: {
@@ -2801,6 +2835,7 @@ async function replaceLegacyRuntimeDaemonForGuardrailUpgrade(input: {
   readonly journalEpoch?: string;
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
   readonly startupTimeoutMs: number;
+  readonly requiredVersion: 1 | 2;
 }): Promise<void> {
   if (
     !hasVersionedRuntimeCapability(
@@ -2829,7 +2864,7 @@ async function replaceLegacyRuntimeDaemonForGuardrailUpgrade(input: {
     management = await runtime.daemon.inspect();
     if (!management.preflight.canStop) {
       throw new RuntimeDaemonCapabilityUpgradeError(
-        `The running daemon needs runtimeAutoModeGuardrail v1 but cannot be replaced safely yet: ${management.preflight.blockers.join(', ')}. Finish or cancel that work and retry.`,
+        `The running daemon needs runtimeAutoModeGuardrail v${input.requiredVersion} but cannot be replaced safely yet: ${management.preflight.blockers.join(', ')}. Finish or cancel that work and retry.`,
         management.preflight,
       );
     }
@@ -3021,14 +3056,16 @@ async function connectKodaXRuntimeInternal(
     grantedScopes = parseRuntimeGrantedScopes(initialized.grantedScopes);
     const requirements =
       options.autoStart === true
-        ? { ...options.requirements, runtimeAutoModeGuardrail: 1 as const }
+        ? { ...options.requirements, runtimeAutoModeGuardrail: 2 as const }
         : options.requirements;
+    const requiredGuardrailVersion =
+      requirements?.runtimeAutoModeGuardrail;
     if (
-      requirements?.runtimeAutoModeGuardrail === 1 &&
+      requiredGuardrailVersion !== undefined &&
       !hasVersionedRuntimeCapability(
         daemonCapabilities,
         'runtimeAutoModeGuardrail',
-        1,
+        requiredGuardrailVersion,
       )
     ) {
       if (
@@ -3037,7 +3074,7 @@ async function connectKodaXRuntimeInternal(
         lease === undefined
       ) {
         throw new RuntimeDaemonCapabilityUpgradeError(
-          'Runtime daemon does not support runtimeAutoModeGuardrail v1. Stop all daemon work and restart it with the upgraded KodaX installation.',
+          `Runtime daemon does not support runtimeAutoModeGuardrail v${requiredGuardrailVersion}. Stop all daemon work and restart it with the upgraded KodaX installation.`,
         );
       }
       try {
@@ -3049,6 +3086,7 @@ async function connectKodaXRuntimeInternal(
           ...(journalEpoch !== undefined ? { journalEpoch } : {}),
           ...(grantedScopes !== undefined ? { grantedScopes } : {}),
           startupTimeoutMs: options.daemonStartupTimeoutMs ?? 60_000,
+          requiredVersion: requiredGuardrailVersion,
         });
       } finally {
         // The upgrade helper owns the daemon facade and therefore closes the
@@ -3880,6 +3918,12 @@ function createRuntimeRunService(deps: {
         ...(record.autoModeTimeoutMs !== undefined
           ? { autoModeTimeoutMs: record.autoModeTimeoutMs }
           : {}),
+        ...(record.autoModeSpeculativeWindowMs !== undefined
+          ? {
+              autoModeSpeculativeWindowMs:
+                record.autoModeSpeculativeWindowMs,
+            }
+          : {}),
         ...(runOptions.context?.executionCwd !== undefined
           ? { executionCwd: runOptions.context.executionCwd }
           : {}),
@@ -4069,6 +4113,8 @@ function createRuntimeRunService(deps: {
         record.autoModeEngine = current.value.autoModeEngine;
         record.autoModeClassifierModel = current.value.autoModeClassifierModel;
         record.autoModeTimeoutMs = current.value.autoModeTimeoutMs;
+        record.autoModeSpeculativeWindowMs =
+          current.value.autoModeSpeculativeWindowMs;
         publishRunUpdate(record);
       }
     },
@@ -4121,8 +4167,8 @@ function createRuntimeRunService(deps: {
       );
     const runtimeOwnsPermissionGuardrail =
       deps.enableSharedInteractions ||
-      (replApi.normalizePermissionMode(settings.permissionMode) === 'auto' &&
-        settings.autoModeEngine !== undefined);
+      replApi.normalizePermissionMode(settings.permissionMode) === 'auto';
+    assertRuntimeAutoModeClassifierModelConfigured(settings, model);
     if (
       runtimeOwnsPermissionGuardrail &&
       options.guardrails?.some(
@@ -4233,6 +4279,12 @@ function createRuntimeRunService(deps: {
         : {}),
       ...(settings.autoModeTimeoutMs !== undefined
         ? { autoModeTimeoutMs: settings.autoModeTimeoutMs }
+        : {}),
+      ...(settings.autoModeSpeculativeWindowMs !== undefined
+        ? {
+            autoModeSpeculativeWindowMs:
+              settings.autoModeSpeculativeWindowMs,
+          }
         : {}),
       ...(settings.autoModeEngine !== undefined
         ? { autoModeEngine: settings.autoModeEngine }
@@ -7777,6 +7829,11 @@ function applySessionSettingsPatch(
     'autoModeTimeoutMs',
     patch.autoModeTimeoutMs,
   );
+  applyNullableNonNegativeIntegerPatch(
+    next,
+    'autoModeSpeculativeWindowMs',
+    patch.autoModeSpeculativeWindowMs,
+  );
   return next;
 }
 
@@ -7803,6 +7860,22 @@ function applyNullablePositiveIntegerPatch(
   setMutableSetting(target, key, value);
 }
 
+function applyNullableNonNegativeIntegerPatch(
+  target: RuntimeSessionSettings,
+  key: 'autoModeSpeculativeWindowMs',
+  value: number | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, key);
+    return;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${key} must be a non-negative safe integer`);
+  }
+  setMutableSetting(target, key, value);
+}
+
 function applyNullableStringPatch(
   target: RuntimeSessionSettings,
   key: RuntimeStringSettingKey,
@@ -7817,7 +7890,68 @@ function applyNullableStringPatch(
   if (requireAbsolutePath && !path.isAbsolute(value)) {
     throw new Error(`${String(key)} must be an absolute path`);
   }
-  setMutableSetting(target, key, value as RuntimeSessionSettings[typeof key]);
+  const normalized = key === 'autoModeClassifierModel'
+    ? validateRuntimeAutoModeClassifierModel(value)
+    : value;
+  setMutableSetting(
+    target,
+    key,
+    normalized as RuntimeSessionSettings[typeof key],
+  );
+}
+
+function validateRuntimeAutoModeClassifierModel(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length === 0) {
+    throw new RuntimeAutoModeConfigurationError(
+      'autoModeClassifierModel must be a non-empty classifier model spec.',
+    );
+  }
+  try {
+    parseModelSpec(normalized);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new RuntimeAutoModeConfigurationError(
+      `autoModeClassifierModel must be a valid classifier model spec: ${detail}`,
+    );
+  }
+  return normalized;
+}
+
+function runtimeAutoModeClassifierModelError(
+  settings: RuntimeSessionSettings,
+  model: string | undefined,
+): RuntimeAutoModeConfigurationError | undefined {
+  if (
+    replApi.normalizePermissionMode(settings.permissionMode) !== 'auto' ||
+    (settings.autoModeEngine ?? 'llm') !== 'llm'
+  ) {
+    return undefined;
+  }
+  if (settings.autoModeClassifierModel !== undefined) {
+    try {
+      validateRuntimeAutoModeClassifierModel(settings.autoModeClassifierModel);
+    } catch (error) {
+      return error instanceof RuntimeAutoModeConfigurationError
+        ? error
+        : new RuntimeAutoModeConfigurationError(
+            'Auto LLM classifier model configuration is invalid.',
+          );
+    }
+    return undefined;
+  }
+  if (model?.trim().length) return undefined;
+  return new RuntimeAutoModeConfigurationError(
+    'Auto LLM requires a classifier model. Set autoModeClassifierModel, the Session/run model, or runtime defaultModel.',
+  );
+}
+
+function assertRuntimeAutoModeClassifierModelConfigured(
+  settings: RuntimeSessionSettings,
+  model: string | undefined,
+): void {
+  const error = runtimeAutoModeClassifierModelError(settings, model);
+  if (error) throw error;
 }
 
 function applyNullablePatch<K extends keyof RuntimeSessionSettings>(
@@ -7885,6 +8019,16 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
       settings,
       'autoModeTimeoutMs',
       Number(value.autoModeTimeoutMs),
+    );
+  }
+  if (
+    Number.isSafeInteger(value.autoModeSpeculativeWindowMs) &&
+    Number(value.autoModeSpeculativeWindowMs) >= 0
+  ) {
+    setMutableSetting(
+      settings,
+      'autoModeSpeculativeWindowMs',
+      Number(value.autoModeSpeculativeWindowMs),
     );
   }
   return settings;
@@ -8390,6 +8534,13 @@ function serializeSessionSettings(
   if (settings.autoModeTimeoutMs !== undefined) {
     setMutableSetting(result, 'autoModeTimeoutMs', settings.autoModeTimeoutMs);
   }
+  if (settings.autoModeSpeculativeWindowMs !== undefined) {
+    setMutableSetting(
+      result,
+      'autoModeSpeculativeWindowMs',
+      settings.autoModeSpeculativeWindowMs,
+    );
+  }
   return result;
 }
 
@@ -8756,6 +8907,7 @@ interface RuntimeAutoModeGuardrailCacheEntry {
   engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>;
   readonly classifierModel?: string;
   readonly timeoutMs?: number;
+  readonly speculativeWindowMs?: number;
   readonly guardrail: RuntimeOwnedAutoModeGuardrail;
 }
 
@@ -8954,6 +9106,7 @@ function createRuntimeSessionAutoModeGuardrail(input: {
 }): RuntimeOwnedAutoModeGuardrail {
   const allowedCalls = new Set<string>();
   let currentGuardrail: RuntimeOwnedAutoModeGuardrail | undefined;
+  let configurationError: RuntimeAutoModeConfigurationError | undefined;
   const resolveGuardrail = async (): Promise<
     RuntimeOwnedAutoModeGuardrail | undefined
   > => {
@@ -8964,12 +9117,22 @@ function createRuntimeSessionAutoModeGuardrail(input: {
       record.autoModeEngine = settings.autoModeEngine;
       record.autoModeClassifierModel = settings.autoModeClassifierModel;
       record.autoModeTimeoutMs = settings.autoModeTimeoutMs;
+      record.autoModeSpeculativeWindowMs =
+        settings.autoModeSpeculativeWindowMs;
+    }
+    configurationError = runtimeAutoModeClassifierModelError(
+      settings,
+      record?.model ?? input.model,
+    );
+    if (configurationError) {
+      currentGuardrail = undefined;
+      return undefined;
     }
     const guardrail = await createRuntimeAutoModeGuardrail({
       ...input,
       settings,
     });
-    if (guardrail) currentGuardrail = guardrail;
+    currentGuardrail = guardrail;
     return guardrail;
   };
   return {
@@ -8977,10 +9140,16 @@ function createRuntimeSessionAutoModeGuardrail(input: {
     name: 'auto-mode',
     async prepare() {
       await resolveGuardrail();
+      if (configurationError) throw configurationError;
     },
     async beforeTool(call, ctx) {
       const guardrail = await resolveGuardrail();
-      if (!guardrail?.beforeTool) return { action: 'allow' };
+      if (!guardrail?.beforeTool) {
+        if (configurationError) {
+          return { action: 'block', reason: configurationError.message };
+        }
+        return { action: 'allow' };
+      }
       currentGuardrail = guardrail;
       const verdict = await guardrail.beforeTool(call, ctx);
       if (verdict.action === 'allow') {
@@ -8993,11 +9162,11 @@ function createRuntimeSessionAutoModeGuardrail(input: {
       return verdict;
     },
     getEngine() {
-      return (
-        currentGuardrail?.getEngine() ??
-        input.settingsOwner.peek(input.sessionId)?.value.autoModeEngine ??
-        'rules'
-      );
+      if (currentGuardrail) return currentGuardrail.getEngine();
+      const settings = input.settingsOwner.peek(input.sessionId)?.value;
+      return replApi.normalizePermissionMode(settings?.permissionMode) === 'auto'
+        ? settings?.autoModeEngine ?? 'llm'
+        : 'rules';
     },
     consumeAllowedCall(call) {
       const key = runtimeAutoModeDecisionKey(call);
@@ -9026,13 +9195,10 @@ async function createRuntimeAutoModeGuardrail(input: {
     engine: NonNullable<RuntimeSessionSettings['autoModeEngine']>,
   ) => void;
 }): Promise<RuntimeOwnedAutoModeGuardrail | undefined> {
-  const engine = input.settings.autoModeEngine;
-  if (
-    replApi.normalizePermissionMode(input.settings.permissionMode) !== 'auto' ||
-    (engine !== 'llm' && engine !== 'rules')
-  ) {
+  if (replApi.normalizePermissionMode(input.settings.permissionMode) !== 'auto') {
     return undefined;
   }
+  const engine = input.settings.autoModeEngine ?? 'llm';
   let sharedState = input.states.get(input.sessionId);
   if (sharedState === undefined) {
     sharedState = {
@@ -9062,6 +9228,7 @@ async function createRuntimeAutoModeGuardrail(input: {
     engine,
     input.settings.autoModeClassifierModel ?? null,
     input.settings.autoModeTimeoutMs ?? null,
+    input.settings.autoModeSpeculativeWindowMs ?? null,
   ]);
   const sessionCache = input.cache.get(input.sessionId) ?? new Map();
   input.cache.set(input.sessionId, sessionCache);
@@ -9111,6 +9278,12 @@ async function createRuntimeAutoModeGuardrail(input: {
       ...(input.settings.autoModeTimeoutMs !== undefined
         ? { timeoutMs: input.settings.autoModeTimeoutMs }
         : {}),
+      ...(input.settings.autoModeSpeculativeWindowMs !== undefined
+        ? {
+            speculativeWindowMs:
+              input.settings.autoModeSpeculativeWindowMs,
+          }
+        : {}),
     },
     sharedState,
     extraCollectors: [replApi.replBashPathSignalCollector],
@@ -9131,6 +9304,12 @@ async function createRuntimeAutoModeGuardrail(input: {
       : {}),
     ...(input.settings.autoModeTimeoutMs !== undefined
       ? { timeoutMs: input.settings.autoModeTimeoutMs }
+      : {}),
+    ...(input.settings.autoModeSpeculativeWindowMs !== undefined
+      ? {
+          speculativeWindowMs:
+            input.settings.autoModeSpeculativeWindowMs,
+        }
       : {}),
     guardrail,
   };
@@ -9212,6 +9391,7 @@ const PERMISSION_PREVIEW_ARRAY_MAX_ITEMS = 16;
 const PERMISSION_PREVIEW_FIELD_LIMITS = {
   command: 2_048,
   description: 1_024,
+  file_path: 1_024,
   path: 1_024,
   paths: 1_024,
   cwd: 1_024,
@@ -9251,6 +9431,17 @@ function redactPermissionPreviewString(value: string): string {
 }
 
 function previewInput(input: Record<string, unknown>): string {
+  try {
+    return buildPermissionInputPreview(input);
+  } catch {
+    // Tool inputs may originate in extensions or remote hosts. Proxy traps and
+    // exotic descriptors must not crash the permission owner or leak their
+    // exception text into a shared request.
+    return '{"__truncated":true}';
+  }
+}
+
+function buildPermissionInputPreview(input: Record<string, unknown>): string {
   const summary: Record<string, unknown> = {};
   // A preview is intentionally a partial, fixed-field projection. Starting
   // truncated avoids enumerating an attacker-controlled input graph merely to
@@ -9308,7 +9499,7 @@ function previewInput(input: Record<string, unknown>): string {
   if (truncated) summary.__truncated = true;
   const summarized = JSON.stringify(summary);
   if (summarized.length <= PERMISSION_PREVIEW_MAX_LENGTH) return summarized;
-  return '{"__truncated":true,"__unavailable":"Tool input could not be serialized safely"}';
+  return '{"__truncated":true}';
 }
 
 function normalizePermissionInputPreview(inputPreview: string): string {

@@ -167,28 +167,57 @@ export function collectGuardrails(guardrails: readonly Guardrail[] | undefined):
   return { input, output, tool };
 }
 
-function emitGuardrailSpan(
+interface ActiveGuardrailSpan {
+  readonly span: Span;
+  readonly data: {
+    kind: 'guardrail';
+    guardrailName: string;
+    hookPoint: 'input' | 'output' | 'tool';
+    pending: boolean;
+    decision: 'pass' | 'veto' | 'rewrite' | 'error';
+    reason?: string;
+    error?: string;
+  };
+}
+
+function startGuardrailSpan(
   agentSpan: Span | null,
   guardrailName: string,
   hookPoint: 'input' | 'output' | 'tool',
+): ActiveGuardrailSpan | undefined {
+  if (!agentSpan) return undefined;
+  const data: ActiveGuardrailSpan['data'] = {
+    kind: 'guardrail',
+    guardrailName,
+    hookPoint,
+    pending: true,
+    // Keep the historical decision union source-compatible while `pending`
+    // makes this provisional value explicit until the callback settles.
+    decision: 'pass',
+  };
+  return {
+    span: agentSpan.addChild(`guardrail:${guardrailName}`, data),
+    data,
+  };
+}
+
+function finishGuardrailSpan(
+  active: ActiveGuardrailSpan | undefined,
   verdict: GuardrailVerdict,
 ): void {
-  if (!agentSpan) return;
+  if (!active) return;
   const decision: 'pass' | 'veto' | 'rewrite' =
     verdict.action === 'allow'
       ? 'pass'
       : verdict.action === 'rewrite'
         ? 'rewrite'
         : 'veto';
-  const reason = verdict.action === 'allow' ? undefined : (verdict as { reason?: string }).reason;
-  const span = agentSpan.addChild(`guardrail:${guardrailName}`, {
-    kind: 'guardrail',
-    guardrailName,
-    hookPoint,
-    decision,
-    reason,
-  });
-  span.end();
+  active.data.decision = decision;
+  active.data.pending = false;
+  if (verdict.action !== 'allow') {
+    active.data.reason = (verdict as { reason?: string }).reason;
+  }
+  active.span.end();
 }
 
 /**
@@ -198,21 +227,17 @@ function emitGuardrailSpan(
  * passing), but surface a `decision: 'error'` span so operators can
  * see which guardrail misbehaved without scraping stack traces.
  */
-function emitGuardrailErrorSpan(
-  agentSpan: Span | null,
-  guardrailName: string,
-  hookPoint: 'input' | 'output' | 'tool',
+function finishGuardrailErrorSpan(
+  active: ActiveGuardrailSpan | undefined,
   error: unknown,
 ): void {
-  if (!agentSpan) return;
-  const span = agentSpan.addChild(`guardrail:${guardrailName}`, {
-    kind: 'guardrail',
-    guardrailName,
-    hookPoint,
-    decision: 'error',
-    error: error instanceof Error ? error.message : String(error),
-  });
-  span.end();
+  if (!active) return;
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  active.data.decision = 'error';
+  active.data.pending = false;
+  active.data.error = normalized.message;
+  active.span.setError(normalized);
+  active.span.end();
 }
 
 /**
@@ -227,14 +252,19 @@ export async function runInputGuardrails(
 ): Promise<readonly AgentMessage[]> {
   let current = transcript;
   for (const guardrail of guardrails) {
+    const activeSpan = startGuardrailSpan(
+      agentSpan,
+      guardrail.name,
+      'input',
+    );
     let verdict: GuardrailVerdict;
     try {
       verdict = await guardrail.check(current, ctx);
     } catch (err) {
-      emitGuardrailErrorSpan(agentSpan, guardrail.name, 'input', err);
+      finishGuardrailErrorSpan(activeSpan, err);
       throw err;
     }
-    emitGuardrailSpan(agentSpan, guardrail.name, 'input', verdict);
+    finishGuardrailSpan(activeSpan, verdict);
     if (verdict.action === 'allow') {
       continue;
     }
@@ -269,14 +299,19 @@ export async function runOutputGuardrails(
 ): Promise<AgentMessage> {
   let current = output;
   for (const guardrail of guardrails) {
+    const activeSpan = startGuardrailSpan(
+      agentSpan,
+      guardrail.name,
+      'output',
+    );
     let verdict: GuardrailVerdict;
     try {
       verdict = await guardrail.check(current, ctx);
     } catch (err) {
-      emitGuardrailErrorSpan(agentSpan, guardrail.name, 'output', err);
+      finishGuardrailErrorSpan(activeSpan, err);
       throw err;
     }
-    emitGuardrailSpan(agentSpan, guardrail.name, 'output', verdict);
+    finishGuardrailSpan(activeSpan, verdict);
     if (verdict.action === 'allow') {
       continue;
     }
@@ -324,14 +359,19 @@ export async function runToolBeforeGuardrails(
   let currentCall = call;
   for (const guardrail of guardrails) {
     if (!guardrail.beforeTool) continue;
+    const activeSpan = startGuardrailSpan(
+      agentSpan,
+      guardrail.name,
+      'tool',
+    );
     let verdict: GuardrailVerdict;
     try {
       verdict = await guardrail.beforeTool(currentCall, ctx);
     } catch (err) {
-      emitGuardrailErrorSpan(agentSpan, guardrail.name, 'tool', err);
+      finishGuardrailErrorSpan(activeSpan, err);
       throw err;
     }
-    emitGuardrailSpan(agentSpan, guardrail.name, 'tool', verdict);
+    finishGuardrailSpan(activeSpan, verdict);
     if (verdict.action === 'allow') continue;
     if (verdict.action === 'rewrite') {
       const payload = verdict.payload as RunnerToolCall | undefined;
@@ -373,14 +413,19 @@ export async function runToolAfterGuardrails(
   let current = result;
   for (const guardrail of guardrails) {
     if (!guardrail.afterTool) continue;
+    const activeSpan = startGuardrailSpan(
+      agentSpan,
+      guardrail.name,
+      'tool',
+    );
     let verdict: GuardrailVerdict;
     try {
       verdict = await guardrail.afterTool(call, current, ctx);
     } catch (err) {
-      emitGuardrailErrorSpan(agentSpan, guardrail.name, 'tool', err);
+      finishGuardrailErrorSpan(activeSpan, err);
       throw err;
     }
-    emitGuardrailSpan(agentSpan, guardrail.name, 'tool', verdict);
+    finishGuardrailSpan(activeSpan, verdict);
     if (verdict.action === 'allow') continue;
     if (verdict.action === 'rewrite') {
       const payload = verdict.payload as RunnerToolResult | undefined;

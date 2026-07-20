@@ -14,20 +14,20 @@
 | Current released version | `v0.7.72` |
 | Current package version | `@kodax-ai/kodax@0.7.72` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `57` |
-| InProgress | `1` |
+| Total tracked features | `58` |
+| InProgress | `2` |
 | Planned | `11` |
 | Completed | `38` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 38 | `270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `266` and `270` shipped together in v0.7.72 (2026-07-19): the Learning Center/Learned Capability Runtime control plane and unified adaptive Actor/Turn control plane. Earlier completion history is unchanged. |
-| InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
+| Completed | 38 | `270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.72 is the current released baseline. |
+| InProgress | 2 | `271, 225` | `271` is engineering-complete and remains open only for v0.7.73 release validation; `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -56,7 +56,7 @@
 | `v0.7.70` | `0` |
 | `v0.7.71` | `0` |
 | `v0.7.72` | `2` |
-| `v0.7.73` | `0` |
+| `v0.7.73` | `1` |
 | `v0.7.74` | `0` |
 | `v0.7.75` | `1` |
 | `v0.7.80` | `1` |
@@ -311,6 +311,22 @@
 > admission, bounded executor/daemon lifecycle, and the public Kimi K2.7 plus
 > Kimi For Coding K3 capability refresh. No new Feature ID enters the slot;
 > F266/F270 remain scheduled together for v0.7.72.
+
+> **2026-07-19 v0.7.73 first-run setup insertion**: `FEATURE_271` makes a
+> fresh interactive CLI installation recoverable without requiring users to
+> discover provider aliases, config-file schema, and environment-variable names
+> from an eventual failed model call. It is intentionally coupled in release
+> timing, but not in authority, with the Auto LLM classifier-model patch: the
+> setup flow writes only non-secret provider/model configuration; Runtime Auto
+> LLM continues to fail clearly when no valid classifier model is available.
+> No API key is entered, persisted, or exposed by the wizard.
+> The original implementation slice completed on 2026-07-20 after the matching 1.625 MB historical
+> tool-result regression was bounded at the classifier API, implicit Auto LLM
+> ownership was corrected, the four-call GLM-5.2 diagnostic probe completed,
+> and the full 10,321-test suite passed. F271 was reopened the same day to close
+> the public typed-settings resolver, Runtime speculative-window parity,
+> capability-v2 daemon negotiation, and prompt-free sideQuery/guardrail
+> diagnostics before release.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
 > reverse-video StatusBar was proven write-only (`update()` calls with no
@@ -340,7 +356,27 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `271` | First-Run Provider Setup + Runtime Auto LLM Reliability Contract | Enhancement / Reliability | High | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_271-first-run-provider-setup-and-secure-restart-handoff) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+
+---
+
+## v0.7.73 Engineering Progress Record
+
+`271` completed its original onboarding and classifier-input slice, then was
+reopened for the SDK public-contract closure before v0.7.73 release. A bare
+interactive CLI with no valid provider selection or credential now enters a
+metadata-only provider/model setup before Runtime startup; explicit
+`kodax setup` reuses the same revision-checked atomic writer. Auto LLM now
+rejects missing classifier identity before permission work, treats omitted
+engine as the LLM default under Runtime ownership, and bounds historical
+Runner context at the classifier API. The SDK closure is now implemented: root
+and REPL entries export the typed resolver/loader, Session state owns the
+speculative window (including zero), v2 capability negotiation safely upgrades
+idle v1 daemons while preserving minimum-version compatibility, and prompt-free
+sideQuery diagnostics plus callback-lifetime guardrail spans make timeouts
+observable. The feature remains InProgress until v0.7.73 release validation;
+engineering implementation has no known remaining item.
 
 ---
 
