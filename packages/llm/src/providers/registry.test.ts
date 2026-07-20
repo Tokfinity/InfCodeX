@@ -43,6 +43,45 @@ describe('provider registry', () => {
     expect(getProviderConfiguredReasoningCapability('unknown-provider')).toBe('unknown');
   });
 
+  it.each([
+    ['zhipu-coding', 'glm-5.2'],
+    ['deepseek', 'deepseek-v4-flash'],
+    ['deepseek', 'deepseek-v4-pro'],
+    ['kimi-code', 'k3'],
+    ['kimi-code', 'k3-256k'],
+    ['minimax-coding', 'MiniMax-M3'],
+    ['mimo-coding', 'mimo-v2.5-pro'],
+    ['mimo', 'mimo-v2.5-pro'],
+    ['ark-coding', 'glm-5.2'],
+    ['ark-coding', 'kimi-k2.6'],
+    ['ark-coding', 'MiniMax-M3'],
+    ['ark-coding', 'deepseek-v4-pro'],
+    ['ark-coding', 'deepseek-v4-flash'],
+    ['qwen-token-plan', 'qwen3.7-max'],
+    ['qwen-token-plan', 'qwen3.7-plus'],
+    ['qwen-token-plan', 'qwen3.6-flash'],
+    ['qwen-token-plan', 'glm-5.2'],
+    ['qwen-token-plan', 'deepseek-v4-pro'],
+  ])('%s/%s explicitly supports disabling thinking', (provider, model) => {
+    expect(getModelCapabilities(provider, model)?.reasoningProfile).toMatchObject({
+      supportsDisabledThinking: true,
+    });
+  });
+
+  it.each([
+    ['kimi-code', 'kimi-for-coding'],
+    ['kimi-code', 'kimi-for-coding-highspeed'],
+    ['minimax-coding', 'MiniMax-M2.7'],
+    ['minimax-coding', 'MiniMax-M2.7-highspeed'],
+    ['ark-coding', 'kimi-k2.7-code'],
+    ['ark-coding', 'MiniMax-M2.7'],
+    ['qwen-token-plan', 'qwen3.8-max-preview'],
+  ])('%s/%s rejects attempts to disable always-on thinking', (provider, model) => {
+    expect(getModelCapabilities(provider, model)?.reasoningProfile).toMatchObject({
+      localRejectEfforts: expect.arrayContaining(['none']),
+    });
+  });
+
   it('throws a provider error for unknown providers', () => {
     expect(() => getProvider('missing-provider')).toThrowError(KodaXProviderError);
   });

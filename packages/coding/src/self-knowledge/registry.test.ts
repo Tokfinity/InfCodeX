@@ -87,6 +87,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('runtimeAutoModeGuardrail');
   });
 
+  it('documents the v0.7.73 regression closure for legacy grants and effort commands', () => {
+    const commands = resolveKodaXManual({ topic: 'commands' }).content;
+    const permissions = resolveKodaXManual({ topic: 'permissions' }).content;
+
+    expect(commands).toContain('same native reasoning-effort control');
+    expect(commands).toContain('none');
+    expect(commands).toContain('quick/balanced/deep');
+    expect(commands).toContain('when configured, the session classifier');
+    expect(permissions).toContain('Legacy grants without a Runtime-issued matcher');
+    expect(permissions).toContain('remain visible and revocable');
+    expect(permissions).toMatch(/never\s+authorize a concrete call/);
+  });
+
   it('documents the governed runtime and SDK memory surfaces', () => {
     const content = resolveKodaXManual({ topic: 'memory' }).content;
 

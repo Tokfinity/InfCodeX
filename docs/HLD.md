@@ -148,9 +148,11 @@ The public Runtime contract mirrors that boundary. REPL and root SDK entries
 export one pure Auto settings resolver plus its config-loading wrapper;
 Session state owns classifier model, timeout, and speculative window through
 the same serialized mutation queue. Auto-started daemon clients require
-`runtimeAutoModeGuardrail` v2, and version negotiation treats requirements as
-minimums. Side-query diagnostics report only coarse, observed timing/retry
-facts, while guardrail spans start before and end after the awaited callback.
+`runtimeAutoModeGuardrail` v3, whose Runtime-issued opaque exact grant
+suggestions and concrete matchers extend the v2 reliability contract; version
+negotiation treats requirements as minimums. Side-query diagnostics report only
+coarse, observed timing/retry facts, while guardrail spans start before and end
+after the awaited callback.
 
 First-run provider setup is a pre-Runtime CLI branch. A REPL-layer readiness
 inspection consults the canonical provider catalog, environment, and

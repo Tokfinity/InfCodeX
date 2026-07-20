@@ -2727,7 +2727,9 @@ exported `RuntimePermissionMatcher` union (`exact-command`, `exact-path`, and
 `@kodax-ai/kodax/runtime`; matcher construction remains Runtime-owned.
 Legacy `allow_always.scope` responses remain accepted for 0.7.x clients, but
 the Runtime narrows them to its concrete candidate and never persists the
-client-provided coarse scope.
+client-provided coarse scope. Legacy persisted grants that lack a Runtime
+matcher remain inspectable and revocable, but never authorize a concrete tool
+call; the user must approve a fresh Runtime-issued exact suggestion.
 
 ### Config, catalogs, MCP, and Space-style admin APIs
 
@@ -3744,7 +3746,7 @@ const runtime = await connectKodaXRuntime({
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
     daemonManagement: 1,
-    runtimeAutoModeGuardrail: 2,
+    runtimeAutoModeGuardrail: 3,
   },
 });
 ```
@@ -3756,20 +3758,21 @@ Coder. FEATURE_269 does not advertise `interruptInput`, so an interrupt-only
 product must require `{ interruptInput: 1 }` and fail connection. The supported
 fallback is `delivery: 'after_turn'` only when that is the user's intent.
 
-The v0.7.73 SDK requires `runtimeAutoModeGuardrail:2` automatically for
+The v0.7.73 SDK requires `runtimeAutoModeGuardrail:3` automatically for
 `autoStart: true`, even when the caller omits it from `requirements`. If the healthy
-profile daemon advertises v1, the SDK first requires `daemonManagement:1`, takes a
-revision/owner-policy fenced preflight, and replaces it only when no active or
-queued run, Workflow, Agent turn, pending permission/user input, or other
-logical client exists. A busy or still-older daemon is never stopped: the
+profile daemon advertises v1 or v2, the SDK first requires `daemonManagement:1`,
+takes a revision/owner-policy fenced preflight, and replaces it only when no
+active or queued run, Workflow, Agent turn, pending permission/user input, or
+other logical client exists. A busy or still-older daemon is never stopped: the
 connection rejects with `RuntimeDaemonCapabilityUpgradeError`, whose
 `recoverable` and `restartRequired` fields are `true` and whose optional
 `preflight` explains the blockers. Attach-only connections never mutate daemon
 ownership and must request `runtimeAutoModeGuardrail:1` explicitly when they
-depend only on the v1 owner contract, or v2 when they depend on bounded input,
-effective-default metadata, structured diagnostics, and speculative-window
-parity. Capability requirements are minimum versions: v2 satisfies a v1
-requirement, but v1 never satisfies v2.
+depend only on the v1 owner contract, v2 for bounded input, effective-default
+metadata, structured diagnostics, and speculative-window parity, or v3 for
+opaque exact grant suggestions and concrete permission matchers. Capability
+requirements are minimum versions: v3 satisfies v1/v2, v2 satisfies v1, and an
+older daemon never satisfies a newer requirement.
 
 The `coderFeatureMatrix` capability reports daemon availability for managed
 runs, transcript/session operations, Todo projection, managed tasks, Workflow,
@@ -3892,7 +3895,8 @@ create another run. Settings use compare-and-swap; a stale revision returns a
 structured conflict and must be reloaded, never silently overwritten. The
 shared settings keys are `provider`, `model`, `effort`, `thinking`,
 `reasoningMode`, `permissionMode`, `executionCwd`, `agentMode`, and
-`autoModeEngine`.
+`autoModeEngine`, `autoModeClassifierModel`, `autoModeTimeoutMs`, and
+`autoModeSpeculativeWindowMs`.
 
 ```ts
 const queued = await runtime.runs.submitInput({

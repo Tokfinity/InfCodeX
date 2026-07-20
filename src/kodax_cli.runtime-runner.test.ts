@@ -19,6 +19,7 @@ describe('interactive daemon runtime bridge', () => {
     const runtime = {
       sessions: {
         load: vi.fn(async () => ({ id: 'session-1' })),
+        getSettings: vi.fn(async () => ({ permissionMode: 'auto' })),
         updateSettings,
         getAutoModeStats: vi.fn(async () => ({
           engine: 'llm' as const,
@@ -44,6 +45,38 @@ describe('interactive daemon runtime bridge', () => {
       autoModeEngine: 'rules',
     });
     expect(updateSettings).toHaveBeenNthCalledWith(3, 'session-1', {
+      permissionMode: 'auto',
+      autoModeClassifierModel: null,
+      autoModeTimeoutMs: null,
+      autoModeSpeculativeWindowMs: null,
+    });
+  });
+
+  it('preserves a persisted Auto engine when a fresh REPL control synchronizes', async () => {
+    const updateSettings = vi.fn(async () => ({
+      permissionMode: 'auto',
+      autoModeEngine: 'rules' as const,
+    }));
+    const runtime = {
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        getSettings: vi.fn(async () => ({
+          permissionMode: 'auto',
+          autoModeEngine: 'rules' as const,
+        })),
+        updateSettings,
+        getAutoModeStats: vi.fn(async () => ({
+          engine: 'rules' as const,
+          denials: {},
+          breaker: {},
+        })),
+      },
+    } as unknown as KodaXRuntime;
+
+    const control = createReplRuntimeAutoModeControl(runtime);
+    await control.syncSettings?.('session-1', 'auto', { engine: 'llm' });
+
+    expect(updateSettings).toHaveBeenCalledWith('session-1', {
       permissionMode: 'auto',
       autoModeClassifierModel: null,
       autoModeTimeoutMs: null,
@@ -159,6 +192,7 @@ describe('interactive daemon runtime bridge', () => {
       },
       sessions: {
         load: vi.fn(async () => ({ id: 'session-1' })),
+        getSettings: vi.fn(async () => ({ permissionMode: 'plan' })),
         updateSettings,
       },
       runs: { start },

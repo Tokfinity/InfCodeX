@@ -285,6 +285,35 @@ describe('anthropic reasoning capability', () => {
     expect(kwargs).not.toHaveProperty('reasoning_effort');
   });
 
+  it('disables provider-budget thinking when the capability explicitly supports it', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'qwen-hybrid-thinking',
+        effortStrategy: 'provider-budget',
+        thinkingStrategy: 'provider-budget',
+        supportedEfforts: [{ value: 'none' }, { value: 'low' }],
+        budgetByEffort: { low: 6000 },
+        disabledEfforts: ['none'],
+        supportsManualThinkingBudget: true,
+        supportsDisabledThinking: true,
+      },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', {
+      enabled: true,
+      effort: 'none',
+      taskType: 'plan',
+      executionMode: 'planning',
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.thinking).toEqual({ type: 'disabled' });
+    expect(kwargs.thinking).not.toHaveProperty('budget_tokens');
+  });
+
   it('caps reasoning profile budgetByEffort values with thinkingBudgetCap for native-budget providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-budget', {

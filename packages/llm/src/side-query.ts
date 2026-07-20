@@ -96,10 +96,7 @@ function resolveDefaultSideQueryReasoning(
 ): KodaXReasoningRequest | undefined {
   if (!profile) return { effort: 'none' };
 
-  const rejected = new Set([
-    ...(profile.disabledEfforts ?? []),
-    ...(profile.localRejectEfforts ?? []),
-  ]);
+  const rejected = new Set(profile.localRejectEfforts ?? []);
   const visibleEfforts = profile.supportedEfforts
     ?.filter((preset) => preset.isUserVisible !== false)
     .map((preset) => preset.value)

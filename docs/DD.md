@@ -125,11 +125,12 @@ propagates it through effective settings, active/queued records, cache identity,
 and guardrail bootstrap. `0` is preserved rather than treated as absent.
 
 Daemon and embedded capability metadata advertise
-`runtimeAutoModeGuardrail.version = 2` with the effective 20-second timeout,
-500 ms default speculative window, bounded-input flag, and diagnostics version.
-Capability checks accept `advertised >= required`; auto-start can safely fence
-and replace an idle v1 daemon, but attach-only/busy paths return a recoverable
-error without mutation.
+`runtimeAutoModeGuardrail.version = 3`, retaining the effective 20-second
+timeout, 500 ms default speculative window, bounded-input flag, and diagnostics
+version while adding Runtime-issued opaque exact permission-grant suggestions
+and concrete matchers. Capability checks accept `advertised >= required`;
+auto-start can safely fence and replace an idle v1 or v2 daemon, but
+attach-only/busy paths return a recoverable error without mutation.
 
 `sideQuery()` owns a fixed-field `SideQueryDiagnostics` envelope: provider,
 model, effective timeout, elapsed time, retry count/wait, optional first-output

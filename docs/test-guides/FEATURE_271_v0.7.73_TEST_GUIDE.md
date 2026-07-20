@@ -410,27 +410,29 @@ provider 的 API-key 环境变量。
 
 ---
 
-### TC-015: capability v2 升级旧 daemon 且不破坏旧最低要求
+### TC-015: capability v3 升级旧 daemon 且不破坏旧最低要求
 
 **优先级**: 高
 **类型**: Daemon 升级 / 兼容性测试
 
 **测试步骤**:
 
-1. 让旧 daemon 广告 `runtimeAutoModeGuardrail: { version: 1 }` 和
-   `daemonManagement: { version: 1 }`。
+1. 分别让旧 daemon 广告 `runtimeAutoModeGuardrail: { version: 1 }` 与
+   `{ version: 2 }`，并广告 `daemonManagement: { version: 1 }`。
 2. 在无 active/queued run、Workflow、Agent turn、pending permission/user
    input 和其他 logical client 时，以 `autoStart: true` 连接。
 3. 重复步骤 2，但制造一个 queued run blocker。
-4. 用 v2 daemon 分别连接要求 v1 和要求 v2 的 attach-only 客户端。
+4. 用 v3 daemon 分别连接要求 v1、v2 和 v3 的 attach-only 客户端。
+5. 检查 v3 capability 同时广告 `permissionGrantSuggestions: true`、
+   `concretePermissionMatchers: true` 和 `clientScopeExpansion: false`。
 
 **预期效果**:
 
-- [ ] idle v1 daemon 经 revision/owner-policy fenced preflight 安全停止并换成 v2。
-- [ ] busy v1 daemon 不被停止，返回带 blocker 的可恢复升级错误。
-- [ ] v2 daemon 满足 v1 最低要求；v1 daemon 不满足显式 v2 要求。
-- [ ] v2 metadata 公布 effective timeout、speculative window、bounded input 和
-  diagnostics version，客户端不再靠版本号猜测语义。
+- [ ] idle v1/v2 daemon 经 revision/owner-policy fenced preflight 安全停止并换成 v3。
+- [ ] busy v1/v2 daemon 不被停止，返回带 blocker 的可恢复升级错误。
+- [ ] v3 daemon 满足 v1/v2/v3 最低要求；v1/v2 daemon 不满足显式 v3 要求。
+- [ ] v3 metadata 公布 effective timeout、speculative window、bounded input、
+  diagnostics version、精确授权建议和 matcher；客户端不能扩展粗粒度 scope。
 
 **实际结果**: 待填写
 **是否通过**: [ ] Pass / [ ] Fail
@@ -503,7 +505,7 @@ provider 的 API-key 环境变量。
 - [ ] 配置文件不可写时显示路径/OS 错误，且不继续启动 KodaX。
 - [ ] 规则到 LLM 的动态切换在无模型时 block 且不创建 permission。
 - [ ] classifier timeout 仍为 20 秒；不能通过无限延长 timeout 掩盖输入失控。
-- [ ] v2 capability 可被新版 SDK 识别，v1 客户仍可把 v2 当作兼容的更高版本。
+- [ ] v3 capability 可被新版 SDK 识别，v1/v2 客户仍可把 v3 当作兼容的更高版本。
 - [ ] `autoModeSpeculativeWindowMs: 0` 不会被 truthy 判断丢弃。
 
 ---

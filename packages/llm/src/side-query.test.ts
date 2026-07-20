@@ -160,6 +160,29 @@ describe('sideQuery — happy path', () => {
     expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'low' });
   });
 
+  it('uses none when the profile declares a disabled effort', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'provider-budget',
+      supportedEfforts: [
+        { value: 'none' },
+        { value: 'low' },
+        { value: 'medium', isDefault: true },
+      ],
+      disabledEfforts: ['none'],
+      supportsDisabledThinking: true,
+    });
+
+    await sideQuery({
+      provider,
+      model: 'hybrid-thinking-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+    });
+
+    expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'none' });
+  });
+
   it('preserves an explicit none request so strict callers still see rejection', async () => {
     const provider = new StubProvider(async () => okResult(), {
       effortStrategy: 'openai-chat-effort',

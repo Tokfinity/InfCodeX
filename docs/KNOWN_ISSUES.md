@@ -210,6 +210,15 @@ A sentence such as “review complete” could therefore appear immediately befo
 that tool's approval prompt even though the Runtime run was still active,
 making the prompt look as if it arrived after the task had terminated.
 
+A follow-up review found four remaining gaps in that first closure. The Ink
+command adapter discarded the asynchronous `/mode` synchronization promise; a
+fresh REPL control overwrote a persisted Auto engine with its startup default;
+side queries treated `disabledEfforts` as unsupported instead of as valid
+thinking-off rungs; and the Anthropic adapter omitted
+`thinking: { type: "disabled" }` for provider-budget Qwen 3.7 profiles. Parallel
+tool preparation could also present two confirmations concurrently and replace
+the first dialog resolver, leaving one tool call waiting forever.
+
 #### Root Cause
 
 Side-query policy was hard-coded at each caller instead of resolving the active
@@ -220,13 +229,22 @@ synchronous even though Runtime synchronization is asynchronous. Runtime's
 documented omitted-engine default was applied in stats/bootstrap but not in
 every live run record and permission-ownership check. The approval UI also did
 not explicitly say that an unresolved Runtime permission keeps the run active.
+The follow-up gaps came from conflating a valid disabling effort with a rejected
+effort, adapting an async callback through a void wrapper, using process-local
+initialization as the only persistence signal, and storing only one active
+confirmation resolver while tool preparation is parallel.
 
 #### Resolution
 
 - Make an omitted side-query effort capability-aware: use `none` when the model
-  advertises disable support, otherwise use its lowest visible enabled effort,
-  and omit the field when no safe advertised rung exists. Explicit caller
-  requests remain strict; no retry ladder hides invalid requests.
+  advertises disable support, including profiles whose `disabledEfforts`
+  explicitly identify the thinking-off rung; otherwise use its lowest visible
+  enabled effort, and omit the field when no safe advertised rung exists.
+  Explicit caller requests remain strict; no retry ladder hides invalid
+  requests.
+- When a capability explicitly advertises disabled thinking, send
+  `thinking: { type: "disabled" }` on Anthropic-compatible requests regardless
+  of whether enabled thinking uses a toggle, effort, adaptive, or budget shape.
 - Remove hard-coded `none` from the Auto classifier and bash-prefix extractor.
   This keeps the classifier on Qwen's lowest valid rung without changing the
   main model's status-bar effort.
@@ -237,32 +255,41 @@ not explicitly say that an unresolved Runtime permission keeps the run active.
   model cannot disable reasoning.
 - Resolve environment-over-file classifier configuration once and explicitly
   synchronize permission mode, classifier model, timeout, and speculative
-  window into each Runtime Session. Initialize the engine once per Session so
-  later manual changes or automatic downgrades remain sticky. `/mode` now waits
-  for this synchronization before publishing/saving the new mode.
+  window into each Runtime Session. Initialize the engine only when persisted
+  Session settings do not already contain one, so manual changes and automatic
+  downgrades survive a control/process restart. `/mode` passes the async Runtime
+  callback through intact and waits before publishing/saving the new mode.
 - Normalize omitted Auto engines to `llm` in live run records and guardrail
   refreshes, preserving the existing Tier-1 empty-projection bypass for
-  internal non-file-mutating tools. `/auto-engine` now reports the Runtime-owned
-  classifier model for direct verification.
+  internal non-file-mutating tools. `/auto-engine` now reports a configured
+  session classifier model for direct verification when one is present.
 - State in Runtime approval prompts that the run remains active until the
   approval is resolved, and add a bridge regression proving a runner cannot
   report completion while an earlier permission event remains unresolved.
+- Serialize Ink confirmation presentation with a small promise tail so parallel
+  tool preparation cannot overwrite the active resolver; a rejected presenter
+  does not stall later confirmations.
 
 #### Files Modified
 
 - `packages/llm/src/side-query.ts`
+- `packages/llm/src/providers/anthropic.ts`
 - `packages/coding/src/guardrails/auto-mode/classify.ts`
 - `packages/coding/src/guardrails/auto-mode/bash-prefix-extractor.ts`
 - `packages/repl/src/runtime-permission.ts`
 - `packages/repl/src/interactive/commands.ts`
 - `packages/repl/src/interactive/repl.ts`
 - `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/utils/confirmation-dialog-queue.ts`
+- `scripts/probe-reasoning.ts`
 - `src/kodax_cli.ts`
 - `src/sdk-runtime.ts`
 
 #### Verification
 
 - `packages/llm/src/side-query.test.ts`
+- `packages/llm/src/providers/anthropic-reasoning-capability.test.ts`
+- `packages/llm/src/providers/registry.test.ts`
 - `packages/coding/src/guardrails/auto-mode/classify.test.ts`
 - `packages/coding/src/guardrails/auto-mode/bash-prefix-extractor.test.ts`
 - `packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
@@ -270,9 +297,17 @@ not explicitly say that an unresolved Runtime permission keeps the run active.
 - `packages/repl/src/interactive/completers/argument-completer.test.ts`
 - `packages/repl/src/interactive/commands-status.test.ts`
 - `packages/repl/src/interactive/prompts.test.ts`
+- `packages/repl/src/ui/utils/confirmation-dialog-queue.test.ts`
 - `src/kodax_cli.runtime-runner.test.ts`
 - `src/sdk-runtime.test.ts`
 - `npx tsc -b tsconfig.build.json --pretty false`
+- Live single-turn probes confirmed disabled thinking with zero thinking output
+  for Qwen Token Plan Qwen 3.7 Max/Plus and Qwen 3.6 Flash, GLM-5.2,
+  DeepSeek V4 Pro/Flash, Kimi K3, MiniMax M3, and their tested Ark routes.
+  Controls confirmed Qwen 3.8 Max Preview, Kimi K2.7 Code, and MiniMax M2.7
+  remain always-thinking. MiMo could not be revalidated because the configured
+  public account had insufficient balance and the coding-plan credential was
+  rejected; its existing capability declaration remains unchanged.
 
 ### 188: Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete
 
@@ -5357,11 +5392,22 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 75 (26 Open, 49 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 77 (26 Open, 51 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-20: Issue 190 added and resolved (v0.7.73)
+- Made matcherless legacy grants non-authorizing while retaining management
+  compatibility, kept the bounded all-action classifier projection, and added
+  escaped-JSON credential redaction.
+
+### 2026-07-20: Issue 189 added and resolved (v0.7.73)
+- Unified native reasoning controls, synchronized environment-backed Auto
+  settings into Runtime, preserved persisted engine choices, made sidecar
+  `none` capability-aware, fixed Qwen hybrid thinking disable requests, and
+  serialized parallel confirmation dialogs.
 
 ### 2026-07-20: Issue 188 added and resolved (v0.7.73)
 - Replaced raw assistant tool arguments and results with bounded semantic

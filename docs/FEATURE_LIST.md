@@ -325,7 +325,7 @@
 > ownership was corrected, the four-call GLM-5.2 diagnostic probe completed,
 > and the full 10,321-test suite passed. F271 was reopened the same day to close
 > the public typed-settings resolver, Runtime speculative-window parity,
-> capability-v2 daemon negotiation, and prompt-free sideQuery/guardrail
+> capability-v3 daemon negotiation, and prompt-free sideQuery/guardrail
 > diagnostics before release.
 >
 > **2026-07-12 F225 early cleanup slice**: the Classic readline
@@ -371,8 +371,8 @@ rejects missing classifier identity before permission work, treats omitted
 engine as the LLM default under Runtime ownership, and bounds historical
 Runner context at the classifier API. The SDK closure is now implemented: root
 and REPL entries export the typed resolver/loader, Session state owns the
-speculative window (including zero), v2 capability negotiation safely upgrades
-idle v1 daemons while preserving minimum-version compatibility, and prompt-free
+speculative window (including zero), v3 capability negotiation safely upgrades
+idle v1/v2 daemons while preserving minimum-version compatibility, and prompt-free
 sideQuery diagnostics plus callback-lifetime guardrail spans make timeouts
 observable. The classifier-input closure now also replaces historical results
 with status-only metadata, deduplicates canonical history, unwraps portable
@@ -613,7 +613,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
-| `271` | First-Run Provider Setup + Runtime Auto LLM Reliability Contract | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_271-first-run-provider-setup-and-secure-restart-handoff) | Metadata-only pre-Runtime onboarding, typed Auto settings and diagnostics, bounded fail-closed classifier projection, Session speculative-window persistence, and monotonic daemon capability-v2 upgrade semantics. |
+| `271` | First-Run Provider Setup + Runtime Auto LLM Reliability Contract | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_271-first-run-provider-setup-and-secure-restart-handoff) | Metadata-only pre-Runtime onboarding, typed Auto settings and diagnostics, bounded fail-closed classifier projection, Session speculative-window persistence, and monotonic daemon capability-v3 upgrade semantics with opaque exact permission grants. |
 | `270` | Ultra-Aligned Adaptive Multi-Agent Actor Control Plane | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_270-ultra-aligned-adaptive-multi-agent-actor-control-plane) | One Runtime-owned Actor/Turn tree and scheduler replaces the parallel child-task authorities; AMA gains bounded adaptive recursion, durable observation, safe follow-up/interruption, unified Workflow/external execution, and the canonical collaboration surface while AMAW retires. |
 | `266` | Learning Center + Learned Capability Runtime Control Plane | `v0.7.72` | [v0.7.72](features/v0.7.72.md#feature_266-learning-center--learned-capability-runtime-control-plane) | Runtime-owned Learning Center, Learned Area lifecycle/events/cursors, lower-precedence learned Skills, governed actions, and inline/Worker/daemon SDK plus REPL parity. |
 | `269` | Shared Daemon Multi-Client Consistency + Secure Host Bridges | `v0.7.69` | [v0.7.69](features/v0.7.69.md#feature_269-shared-daemon-multi-client-consistency--secure-host-bridges) | Authoritative shared Coder daemon observation/resync, durable operations, transport-safe AskUser/permissions, run-scoped credential and Host Tool bridges, recovery facts, and daemon/inline owner fencing. |

@@ -98,7 +98,7 @@ npx vitest run packages/coding/src/guardrails/auto-mode/transcript-strip.test.ts
   packages/agent/src/primitives/guardrail.test.ts \
   packages/llm/src/side-query.test.ts
 
-# Typed SDK settings, Session persistence, and daemon capability-v2 upgrade
+# Typed SDK settings, Session persistence, and daemon capability-v3 upgrade
 npx vitest run packages/repl/src/common/permission-config.test.ts \
   src/sdk-runtime.test.ts src/sdk-runtime-daemon-upgrade.test.ts \
   src/runtime-daemon/server.test.ts

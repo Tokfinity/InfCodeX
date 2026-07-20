@@ -95,6 +95,7 @@ import {
 import { getActivePasteStore, type PastedContent } from "./utils/paste-store.js";
 import { hashPastedText, storePastedText, retrievePastedText, cleanupOldPastes } from "./utils/paste-cache.js";
 import { stripAnsi } from "./utils/strip-ansi.js";
+import { createConfirmationDialogQueue } from "./utils/confirmation-dialog-queue.js";
 import {
   appendMemoryClientNotice,
   appendMemoryOutcomeDigest,
@@ -2856,6 +2857,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
   } | null>(null);
   const confirmResolveRef = useRef<((result: ConfirmResult) => void) | null>(null);
+  const confirmationDialogQueueRef = useRef(createConfirmationDialogQueue());
   const [uiRequest, setUiRequest] = useState<
     | {
       kind: "select";
@@ -7454,20 +7456,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       ? `${basePrompt}\n${runtimeLines.join('\n')}`
       : basePrompt;
 
-    // FEATURE_203 (v0.7.45): commit any pending streamed text before raising the
-    // approval popup, so the popup never appears mid-sentence (the trailing
-    // ≤16ms foreground buffer is flushed into the same React render as the
-    // dialog). Replaces the heavier OverlayQueue rewrite — same core UX win.
-    flushForegroundTextBuffer();
+    return confirmationDialogQueueRef.current(() => {
+      // FEATURE_203 (v0.7.45): commit any pending streamed text before raising
+      // the approval popup, so the popup never appears mid-sentence.
+      flushForegroundTextBuffer();
 
-    // Return a promise that resolves when the user answers.
-    return new Promise<ConfirmResult>((resolve) => {
-      confirmResolveRef.current = resolve;
-      setConfirmRequest({
-        tool,
-        input,
-        prompt: promptText,
-        ...(runtimeGrantSuggestions !== undefined ? { runtimeGrantSuggestions } : {}),
+      return new Promise<ConfirmResult>((resolve) => {
+        confirmResolveRef.current = resolve;
+        setConfirmRequest({
+          tool,
+          input,
+          prompt: promptText,
+          ...(runtimeGrantSuggestions !== undefined ? { runtimeGrantSuggestions } : {}),
+        });
       });
     });
   };
@@ -8980,9 +8981,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             }));
             currentOptionsRef.current.agentMode = mode;
           },
-          setPermissionMode: (mode: PermissionMode) => {
-            setSessionPermissionMode(mode);
-          },
+          setPermissionMode: setSessionPermissionMode,
           setRepoIntelligenceRuntime: (update) => {
             setCurrentConfig((prev) => ({
               ...prev,

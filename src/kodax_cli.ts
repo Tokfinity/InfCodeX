@@ -486,7 +486,8 @@ export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRun
     },
     async syncSettings(sessionId, permissionMode, settings) {
       await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
-      const initializeEngine = !initializedSessions.has(sessionId);
+      const initializeEngine = !initializedSessions.has(sessionId)
+        && (await runtime.sessions.getSettings(sessionId)).autoModeEngine === undefined;
       await runtime.sessions.updateSettings(sessionId, {
         permissionMode,
         ...(initializeEngine ? { autoModeEngine: settings.engine } : {}),

@@ -292,6 +292,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
 
     if (intent.disabled) {
       if (
+        capability.supportsDisabledThinking === true ||
         preset === 'zai-glm-5.2' ||
         preset === 'zai-glm-toggle' ||
         preset === 'deepseek-v4-anthropic' ||

@@ -4330,9 +4330,11 @@ and large/raw permission previews were not a safe transport contract.
 8. One exported typed resolver owns Auto config precedence. Session state also
    owns the speculative window, including `0`, and propagates it through the
    same persistence/mutation/cache/bootstrap path as engine/model/timeout.
-9. `runtimeAutoModeGuardrail` v2 identifies bounded input, effective timeout and
-   window defaults, and diagnostics semantics. Capability requirements are
-   monotonic minimums; v1 is replaced only through an idle fenced preflight.
+9. `runtimeAutoModeGuardrail` v3 retains the v2 bounded-input, effective
+   timeout/window-default, and diagnostics semantics, and adds Runtime-issued
+   opaque exact grant suggestions plus concrete permission matchers. Capability
+   requirements are monotonic minimums; v1 or v2 is replaced only through an
+   idle fenced preflight.
 10. Side-query diagnostics are fixed-field and prompt-free. They report only
     observed provider/model/elapsed/retry/first-output/stream facts and must not
     invent unavailable connect or provider-queue timings. Guardrail spans begin
@@ -4344,7 +4346,7 @@ and large/raw permission previews were not a safe transport contract.
   and persist the same engine state across turns.
 - SDK hosts gain explicit durable `autoModeClassifierModel`,
   `autoModeTimeoutMs`, and `autoModeSpeculativeWindowMs` session settings;
-  daemon capability discovery advertises all keys and v2 behavior metadata.
+  daemon capability discovery advertises all keys and v3 behavior metadata.
 - A permission UI remains responsible for an actual escalation, but no longer
   acts as an implicit classifier or sees avoidable pending requests.
 - Host integrations can trust the preview as display-safe JSON while retaining
@@ -4352,8 +4354,9 @@ and large/raw permission previews were not a safe transport contract.
 - Historical tool output can no longer make every subsequent permission check
   retransmit the full active session; the side-query deadline remains bounded
   rather than being raised to mask an unbounded input.
-- Existing v1 clients can use a v2 daemon, while clients that depend on the v2
-  semantics can reject or safely upgrade v1 without reusing the old chain.
+- Existing v1/v2 clients can use a v3 daemon, while clients that depend on the
+  v3 exact-grant semantics can reject or safely upgrade v1/v2 without reusing
+  the old chain.
 - Timeout traces now measure the classification wait and expose actionable
   bounded diagnostics without disclosing the classifier request.
 
