@@ -166,6 +166,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
     result: objectAnySchema,
   },
+  'session.autoMode.getStats': {
+    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    result: nullableSchema(objectAnySchema),
+  },
   'session.settings.update': {
     params: objectSchema({
       sessionId: stringSchema,
@@ -987,6 +991,10 @@ function permissionRequestInputSchema(): RuntimeDaemonJsonSchema {
     // The Runtime replaces caller input with its own bounded/redacted JSON
     // summary before the request becomes observable or is returned.
     inputPreview: stringSchema,
+    // Public concrete-call input. The Runtime canonicalizes this value and
+    // issues opaque grant candidates; raw input is never copied to events or
+    // persisted grants.
+    toolInput: objectAnySchema,
     executionCwd: { type: 'string', maxLength: 4_096 },
     expiresAt: stringSchema,
     timeoutMs: integerSchema,
@@ -994,9 +1002,18 @@ function permissionRequestInputSchema(): RuntimeDaemonJsonSchema {
 }
 
 function permissionRequestSchema(): RuntimeDaemonJsonSchema {
+  const {
+    toolInput: _toolInput,
+    ...observableRequestProperties
+  } = permissionRequestInputSchema().properties ?? {};
   return objectSchema({
-    ...(permissionRequestInputSchema().properties ?? {}),
+    ...observableRequestProperties,
     inputPreview: { type: 'string', maxLength: 8_192 },
+    grantSuggestions: arraySchema(objectSchema({
+      id: stringSchema,
+      kind: { enum: ['session', 'persistent'] },
+      label: { type: 'string', maxLength: 512 },
+    }, ['id', 'kind', 'label'])),
     id: stringSchema,
     createdAt: stringSchema,
   }, ['id', 'sessionId', 'runId', 'toolName', 'createdAt'], true);
@@ -1007,16 +1024,63 @@ function permissionDecisionSchema(): RuntimeDaemonJsonSchema {
     oneOf: [
       objectSchema({ type: { enum: ['allow_once'] } }, ['type']),
       objectSchema({
+        type: { enum: ['allow_session'] },
+        suggestionId: stringSchema,
+      }, ['type', 'suggestionId']),
+      objectSchema({
+        type: { enum: ['allow_always'] },
+        suggestionId: stringSchema,
+      }, ['type', 'suggestionId']),
+      objectSchema({
         type: { enum: ['allow_always'] },
         scope: objectSchema({
           toolName: stringSchema,
           sessionId: stringSchema,
+          matcher: runtimePermissionMatcherSchema(),
         }),
       }, ['type', 'scope']),
       objectSchema({
         type: { enum: ['reject'] },
         reason: stringSchema,
       }, ['type']),
+    ],
+  };
+}
+
+function runtimePermissionMatcherSchema(): RuntimeDaemonJsonSchema {
+  const base = {
+    version: { type: 'integer' as const, enum: [1] },
+    toolName: stringSchema,
+    fingerprint: stringSchema,
+  };
+  return {
+    oneOf: [
+      objectSchema({
+        ...base,
+        kind: { enum: ['exact-command'] },
+        shell: { enum: ['cmd', 'posix'] },
+        commandFingerprint: stringSchema,
+        cwd: stringSchema,
+        executable: stringSchema,
+        argvFingerprint: stringSchema,
+        background: booleanSchema,
+      }, [
+        'version', 'kind', 'toolName', 'fingerprint', 'shell',
+        'commandFingerprint', 'cwd', 'background',
+      ]),
+      objectSchema({
+        ...base,
+        kind: { enum: ['exact-path'] },
+        path: stringSchema,
+      }, ['version', 'kind', 'toolName', 'fingerprint', 'path']),
+      objectSchema({
+        ...base,
+        kind: { enum: ['exact-call'] },
+        cwd: stringSchema,
+        inputFingerprint: stringSchema,
+      }, [
+        'version', 'kind', 'toolName', 'fingerprint', 'cwd', 'inputFingerprint',
+      ]),
     ],
   };
 }

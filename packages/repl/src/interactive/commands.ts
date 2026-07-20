@@ -1083,7 +1083,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Show or set auto-mode classifier engine (llm | rules)',
     usage: '/auto-engine [llm|rules]',
     handler: async (args, _context, callbacks) => {
-      const stats = callbacks.getAutoModeStats?.();
+      const stats = await callbacks.getAutoModeStats?.();
       if (!stats) {
         console.log(chalk.yellow('\n[auto-engine] not in auto mode — switch via /mode auto first'));
         return;
@@ -1101,7 +1101,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         console.log(chalk.red(`\n[auto-engine] unknown engine "${args[0]}" — use llm or rules`));
         return;
       }
-      callbacks.setAutoModeEngine?.(newEngine);
+      await callbacks.setAutoModeEngine?.(newEngine);
       console.log(chalk.cyan(`\n[auto-engine] switched to ${newEngine}`));
       if (newEngine === 'rules') {
         console.log(chalk.dim('  every non-Tier-1 tool call now escalates to user confirmation'));
@@ -1132,7 +1132,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Show auto-mode classifier denial tracker + circuit breaker stats',
     usage: '/auto-denials',
     handler: async (_args, _context, callbacks) => {
-      const stats = callbacks.getAutoModeStats?.();
+      const stats = await callbacks.getAutoModeStats?.();
       if (!stats) {
         console.log(chalk.yellow('\n[auto-denials] not in auto mode — switch via /mode auto first'));
         return;

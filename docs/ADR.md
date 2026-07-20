@@ -1,6 +1,12 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-19
+> Last updated: 2026-07-20
+>
+> **v0.7.73 onboarding/Auto reliability addendum:** FEATURE_271 keeps first-run
+> provider setup metadata-only and pre-Runtime, while the Runtime-owned Auto LLM
+> contract validates effective model identity, bounds classifier input/output,
+> exposes typed SDK settings and diagnostics, and upgrades only idle legacy
+> daemons through monotonic capability negotiation.
 >
 > **v0.7.72 agent-control-plane addendum:** FEATURE_266 centralizes learned
 > capability lifecycle, durable events, governance, and Runtime/REPL access in

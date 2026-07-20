@@ -268,7 +268,7 @@ function createCurrentTransport(
         throw new Error(`Unexpected current daemon request: ${method}`);
       }
       return initializeResult('runtime_current', {
-        runtimeAutoModeGuardrail: { version: 2, owner: 'session-runtime' },
+        runtimeAutoModeGuardrail: { version: 3, owner: 'session-runtime' },
       });
     },
     subscribe() {

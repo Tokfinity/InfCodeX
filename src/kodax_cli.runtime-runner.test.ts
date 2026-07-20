@@ -9,6 +9,7 @@ import type {
 import {
   createInteractiveRuntimeRunner,
   toDaemonRuntimeRunOptions,
+  toRuntimeOwnedInteractiveOptions,
 } from './kodax_cli.js';
 
 describe('interactive daemon runtime bridge', () => {
@@ -34,7 +35,10 @@ describe('interactive daemon runtime bridge', () => {
       },
     } as unknown as KodaXOptions;
 
-    const wire = toDaemonRuntimeRunOptions(options);
+    const wire = toDaemonRuntimeRunOptions(toRuntimeOwnedInteractiveOptions(
+      options,
+      { omitLegacyBeforeToolExecute: true },
+    ));
     const encoded = JSON.stringify(wire);
 
     expect(wire).toMatchObject({
@@ -64,9 +68,13 @@ describe('interactive daemon runtime bridge', () => {
     } as unknown as KodaXOptions)).toThrow(/context\.planModeBlockCheck.*cannot cross/i);
   });
 
-  it('forwards daemon stream events and resolves permissions with the local REPL policy', async () => {
+  it('forwards daemon stream events and returns the selected Runtime-issued grant', async () => {
     const onTextDelta = vi.fn();
-    const beforeToolExecute = vi.fn(async () => true);
+    const legacyBeforeToolExecute = vi.fn(async () => true);
+    const requestPermission = vi.fn(async () => ({
+      type: 'allow_always' as const,
+      suggestionId: 'grant-persistent-1',
+    }));
     const updateSettings = vi.fn(async () => ({ permissionMode: 'plan' }));
     const respond = vi.fn(async () => true);
     const closeSubscription = vi.fn();
@@ -83,6 +91,14 @@ describe('interactive daemon runtime bridge', () => {
         toolCallId: 'tool-1',
         toolName: 'write',
         inputPreview: '{"path":"wrong-fallback"}',
+        reason: 'Runtime classification requires confirmation.',
+        risk: 'medium',
+        executionCwd: 'C:/workspace',
+        grantSuggestions: [{
+          id: 'grant-persistent-1',
+          kind: 'persistent',
+          label: 'Always allow write for C:/workspace/a.ts',
+        }],
       }));
       return {
         runId: 'run-1',
@@ -122,28 +138,149 @@ describe('interactive daemon runtime bridge', () => {
       options: {
         provider: 'mock-provider',
         abortSignal: new AbortController().signal,
-        events: { onTextDelta, beforeToolExecute },
+        events: { onTextDelta, beforeToolExecute: legacyBeforeToolExecute },
       } as unknown as KodaXOptions,
       prompt: 'hello',
       sessionId: 'session-1',
       permissionMode: 'plan',
+      requestPermission,
+      legacyPermissionHook: true,
     })).resolves.toMatchObject({ success: true, lastText: 'done' });
 
     expect(updateSettings).toHaveBeenCalledWith('session-1', { permissionMode: 'plan' });
     expect(capturedStart?.permissionBroker).toBe('client');
     expect(capturedStart?.options).not.toHaveProperty('abortSignal');
     expect(onTextDelta).toHaveBeenCalledWith('streamed', undefined);
-    expect(beforeToolExecute).toHaveBeenCalledWith(
-      'write',
-      { path: 'C:/workspace/a.ts' },
-      expect.objectContaining({ sessionId: 'session-1', toolId: 'tool-1' }),
-    );
+    expect(legacyBeforeToolExecute).not.toHaveBeenCalled();
+    expect(requestPermission).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'perm-1',
+      toolName: 'write',
+      toolCallId: 'tool-1',
+      input: { path: 'C:/workspace/a.ts' },
+      reason: 'Runtime classification requires confirmation.',
+      risk: 'medium',
+      executionCwd: 'C:/workspace',
+      grantSuggestions: [{
+        id: 'grant-persistent-1',
+        kind: 'persistent',
+        label: 'Always allow write for C:/workspace/a.ts',
+      }],
+    }));
     expect(respond).toHaveBeenCalledWith(
       'perm-1',
-      { type: 'allow_once' },
+      { type: 'allow_always', suggestionId: 'grant-persistent-1' },
       { runId: 'run-1' },
     );
     expect(closeSubscription).toHaveBeenCalledOnce();
+  });
+
+  it('keeps embedded Runtime as the sole Auto owner and still bridges permission prompts', async () => {
+    const autoGuardrail = { kind: 'tool' as const, name: 'auto-mode' };
+    const customGuardrail = { kind: 'tool' as const, name: 'custom-policy' };
+    const legacyBeforeToolExecute = vi.fn(async () => true);
+    const requestPermission = vi.fn(async () => ({ type: 'allow_once' as const }));
+    const respond = vi.fn(async () => true);
+    let eventListener: ((event: RuntimeEvent) => void) | undefined;
+    let capturedStart: RuntimeStartRunInput | undefined;
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-embedded',
+        mode: 'embedded',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'auto' })),
+      },
+      runs: {
+        start: vi.fn(async (input: RuntimeStartRunInput) => {
+          capturedStart = input;
+          eventListener?.(runtimeEvent('permission.requested', {
+            id: 'perm-embedded',
+            toolCallId: 'tool-embedded',
+            toolName: 'read',
+            inputPreview: '{"path":"README.md"}',
+            grantSuggestions: [{ id: 'session-1', kind: 'session', label: 'This session' }],
+          }));
+          return {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            result: Promise.resolve({
+              runId: 'run-1',
+              sessionId: 'session-1',
+              phase: 'completed' as const,
+              result: successfulResult(),
+            }),
+          };
+        }),
+      },
+      events: {
+        subscribe: vi.fn((_filter, listener: (event: RuntimeEvent) => void) => {
+          eventListener = listener;
+          return { close: vi.fn() };
+        }),
+      },
+      permissions: { respond },
+    } as unknown as KodaXRuntime;
+
+    await createInteractiveRuntimeRunner(runtime)({
+      options: {
+        events: { beforeToolExecute: legacyBeforeToolExecute },
+        guardrails: [autoGuardrail, customGuardrail],
+      } as unknown as KodaXOptions,
+      prompt: 'inspect',
+      sessionId: 'session-1',
+      permissionMode: 'auto',
+      requestPermission,
+      legacyPermissionHook: true,
+    });
+
+    expect(capturedStart?.permissionBroker).toBe('client');
+    expect(capturedStart?.options?.guardrails).toEqual([customGuardrail]);
+    expect(capturedStart?.options?.events).not.toHaveProperty('beforeToolExecute');
+    expect(legacyBeforeToolExecute).not.toHaveBeenCalled();
+    expect(requestPermission).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'perm-embedded',
+      input: { path: 'README.md' },
+    }));
+    expect(respond).toHaveBeenCalledWith(
+      'perm-embedded',
+      { type: 'allow_once' },
+      { runId: 'run-1' },
+    );
+  });
+
+  it('preserves custom host policy hooks unless the REPL marks its legacy permission hook', () => {
+    const beforeToolExecute = vi.fn(async () => true);
+    const onTextDelta = vi.fn();
+    const customGuardrail = { kind: 'tool' as const, name: 'custom-policy' };
+    const preserved = toRuntimeOwnedInteractiveOptions({
+      guardrails: [{ kind: 'tool', name: 'auto-mode' }, customGuardrail],
+      events: { beforeToolExecute, onTextDelta },
+    } as unknown as KodaXOptions);
+
+    expect(preserved.guardrails).toEqual([customGuardrail]);
+    expect(preserved.events?.beforeToolExecute).toBe(beforeToolExecute);
+    expect(preserved.events?.onTextDelta).toBe(onTextDelta);
+
+    const sanitized = toRuntimeOwnedInteractiveOptions(
+      {
+        guardrails: [{ kind: 'tool', name: 'auto-mode' }, customGuardrail],
+        events: { beforeToolExecute, onTextDelta },
+      } as unknown as KodaXOptions,
+      { omitLegacyBeforeToolExecute: true },
+    );
+    expect(sanitized.guardrails).toEqual([customGuardrail]);
+    expect(sanitized.events?.beforeToolExecute).toBeUndefined();
+    expect(sanitized.events?.onTextDelta).toBe(onTextDelta);
+  });
+
+  it('rejects a custom beforeToolExecute policy that cannot cross the daemon boundary', () => {
+    expect(() => toDaemonRuntimeRunOptions({
+      events: { beforeToolExecute: async () => true },
+    } as unknown as KodaXOptions)).toThrow(/events\.beforeToolExecute.*cannot cross/i);
   });
 });
 

@@ -163,7 +163,7 @@ jobs:
 
       - name: Cache packaged Electron smoke toolchain
         id: electron-smoke-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .electron-smoke/node_modules
           key: electron-smoke-${{ runner.os }}-electron-42.5.0-builder-25.1.8

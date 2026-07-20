@@ -18,7 +18,12 @@ import {
   KodaXToolResultBlock,
   SessionErrorMetadata,
 } from '../types.js';
-import type { KodaXEphemeralSuffix, KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
+import type {
+  KodaXEphemeralSuffix,
+  KodaXMessage,
+  KodaXStreamResult,
+  KodaXToolUseBlock,
+} from '@kodax-ai/llm';
 import {
   classifyStopReason,
   createCostTracker,
@@ -99,9 +104,12 @@ import {
 // `agent.ts` shim re-export — no duplicate re-export here.
 import {
   cleanupIncompleteToolCalls,
+  collectGuardrails,
+  createAgent,
   ContextCapacityError,
   emitKodaXDiagnostic,
   validateAndFixToolHistory,
+  type Agent,
 } from '@kodax-ai/agent';
 // CAP-010 (`getToolExecutionOverride`) was used inline before CAP-024;
 // since CAP-024 moved into `agent-runtime/tool-dispatch.ts`, this
@@ -438,6 +446,24 @@ function renderMemoryReminderSuffix(content: string): KodaXEphemeralSuffix {
   };
 }
 
+function replaceLatestAssistantToolBlocks(
+  messages: KodaXMessage[],
+  result: KodaXStreamResult,
+): void {
+  const index = messages.length - 1;
+  const message = messages[index];
+  if (!message || message.role !== 'assistant') return;
+  const visibleToolBlocks = result.toolBlocks.filter((block) => isVisibleToolName(block.name));
+  messages[index] = {
+    ...message,
+    content: guardEmptyAssistantContent([
+      ...result.thinkingBlocks,
+      ...result.textBlocks,
+      ...visibleToolBlocks,
+    ]),
+  };
+}
+
 /**
  * Substrate executor body — the full SA execution pipeline (provider
  * resolution, tool loop, microcompact, edit recovery, extension queue,
@@ -452,7 +478,8 @@ function renderMemoryReminderSuffix(content: string): KodaXEphemeralSuffix {
  */
 export async function runSubstrate(
   options: KodaXOptions,
-  prompt: string
+  prompt: string,
+  declaredAgent?: Agent,
 ): Promise<KodaXResult> {
   const previousActiveRuntime = getActiveExtensionRuntime();
   const runtime = options.extensionRuntime ?? previousActiveRuntime;
@@ -469,6 +496,13 @@ export async function runSubstrate(
   try {
   const maxIter = options.maxIter ?? 200;
   let events = options.events ?? {};
+  const toolGuardrails = collectGuardrails(options.guardrails).tool;
+  const guardrailAgent = toolGuardrails.length > 0
+    ? declaredAgent ?? createAgent({
+        name: 'KodaX Coding Agent',
+        instructions: 'Execute the coding substrate with the declared run guardrails.',
+      })
+    : undefined;
   const runtimeDefaults = runtime?.getDefaults?.();
 
   // FEATURE_100 P3.6b/d/e — ten per-loop counters/latches/accumulators
@@ -1519,7 +1553,7 @@ export async function runSubstrate(
         messages,
         result.usage,
       );
-      const completedTurnTokenSnapshot = reportedCompletedTurnTokenSnapshot.source === 'api'
+      let completedTurnTokenSnapshot = reportedCompletedTurnTokenSnapshot.source === 'api'
         ? reportedCompletedTurnTokenSnapshot
         : rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
       contextTokenSnapshot = completedTurnTokenSnapshot;
@@ -1747,6 +1781,40 @@ export async function runSubstrate(
             runtimeSessionState,
             activeToolNames: activeToolNamesForTurn,
             abortSignal: options.abortSignal,
+            ...(toolGuardrails.length > 0 && guardrailAgent !== undefined
+              ? {
+                  toolGuardrails,
+                  guardrailContext: {
+                    agent: guardrailAgent,
+                    ...(options.abortSignal !== undefined
+                      ? { abortSignal: options.abortSignal }
+                      : {}),
+                    messages: messages.slice(0, -1),
+                  },
+                  getAfterGuardrailContext: () => ({
+                    agent: guardrailAgent,
+                    ...(options.abortSignal !== undefined
+                      ? { abortSignal: options.abortSignal }
+                      : {}),
+                    messages: [...messages],
+                  }),
+                  onToolCallsPrepared: (preparedBlocks: readonly KodaXToolUseBlock[]) => {
+                    if (!preparedBlocks.some((block, index) => {
+                      const original = result.toolBlocks[index];
+                      return original === undefined
+                        || block.name !== original.name
+                        || block.input !== original.input;
+                    })) return;
+                    result = { ...result, toolBlocks: [...preparedBlocks] };
+                    replaceLatestAssistantToolBlocks(messages, result);
+                    completedTurnTokenSnapshot = rebaseContextTokenSnapshot(
+                      messages,
+                      preAssistantTokenSnapshot,
+                    );
+                    contextTokenSnapshot = completedTurnTokenSnapshot;
+                  },
+                }
+              : {}),
           });
         } finally {
           if (previousToolResultCapacity === undefined) delete ctx.toolResultCapacityTokens;

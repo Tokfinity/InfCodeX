@@ -1,0 +1,55 @@
+export interface ReplRuntimePermissionGrantSuggestion {
+  readonly id: string;
+  readonly kind: 'session' | 'persistent';
+  readonly label: string;
+}
+
+export interface ReplRuntimePermissionRequest {
+  readonly id: string;
+  readonly toolName: string;
+  readonly toolCallId?: string;
+  readonly input: Readonly<Record<string, unknown>>;
+  readonly reason?: string;
+  readonly risk?: 'low' | 'medium' | 'high';
+  readonly executionCwd?: string;
+  readonly grantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
+}
+
+export type ReplRuntimePermissionDecision =
+  | { readonly type: 'allow_once' }
+  | { readonly type: 'allow_session'; readonly suggestionId: string }
+  | { readonly type: 'allow_always'; readonly suggestionId: string }
+  | { readonly type: 'reject'; readonly reason?: string };
+
+export type ReplRuntimePermissionPrompt = (
+  request: ReplRuntimePermissionRequest,
+) => Promise<ReplRuntimePermissionDecision>;
+
+export function resolveReplRuntimePermissionDecision(
+  request: ReplRuntimePermissionRequest,
+  result: ConfirmResult,
+): ReplRuntimePermissionDecision {
+  if (!result.confirmed) {
+    return { type: 'reject', reason: 'User rejected the tool call.' };
+  }
+  if (result.runtimeGrantKind === undefined) return { type: 'allow_once' };
+  const suggestion = request.grantSuggestions
+    ?.find((candidate) => candidate.kind === result.runtimeGrantKind);
+  if (!suggestion) {
+    return { type: 'reject', reason: 'Runtime grant suggestion expired.' };
+  }
+  return result.runtimeGrantKind === 'session'
+    ? { type: 'allow_session', suggestionId: suggestion.id }
+    : { type: 'allow_always', suggestionId: suggestion.id };
+}
+
+export interface ReplRuntimeAutoModeControl {
+  getStats(sessionId: string): Promise<AutoModeStats | undefined>;
+  setEngine(sessionId: string, engine: 'llm' | 'rules'): Promise<AutoModeStats | undefined>;
+  subscribe?(
+    sessionId: string,
+    listener: (stats: AutoModeStats | undefined) => void,
+  ): { close(): void };
+}
+import type { AutoModeStats } from '@kodax-ai/coding';
+import type { ConfirmResult } from './permission/types.js';

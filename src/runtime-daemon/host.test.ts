@@ -719,6 +719,9 @@ function makeRuntime(options: {
       async getSettingsVersioned() {
         return { revision: 0, value: {} };
       },
+      async getAutoModeStats() {
+        return undefined;
+      },
       async updateSettings() {
         return {};
       },

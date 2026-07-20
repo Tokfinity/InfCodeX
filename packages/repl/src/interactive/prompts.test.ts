@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import type * as readline from 'node:readline';
 import { confirmToolExecution } from './prompts.js';
 
 function stripAnsi(value: string): string {
@@ -61,5 +62,55 @@ describe('confirmToolExecution', () => {
       .join('\n');
 
     expect(rendered).toContain('Scope: Protected path');
+  });
+
+  it('renders Runtime-issued Session and Always choices and returns their kind', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const suggestions = [
+      { id: 'session-scope', kind: 'session' as const, label: 'This exact command for this session' },
+      { id: 'persistent-scope', kind: 'persistent' as const, label: 'Always allow this exact command' },
+    ];
+    const answer = (value: string): readline.Interface => ({
+      question: (_prompt: string, callback: (response: string) => void) => callback(value),
+    }) as unknown as readline.Interface;
+
+    await expect(confirmToolExecution(
+      answer('s'),
+      'bash',
+      { command: 'npm test' },
+      { runtimeGrantSuggestions: suggestions },
+    )).resolves.toEqual({ confirmed: true, runtimeGrantKind: 'session' });
+    await expect(confirmToolExecution(
+      answer('a'),
+      'bash',
+      { command: 'npm test' },
+      { runtimeGrantSuggestions: suggestions },
+    )).resolves.toEqual({ confirmed: true, runtimeGrantKind: 'persistent' });
+
+    const rendered = logSpy.mock.calls.flat().map((entry) => stripAnsi(String(entry))).join('\n');
+    expect(rendered).toContain('Session');
+    expect(rendered).toContain('Always');
+    expect(rendered).toContain('Runtime scope: Always allow this exact command');
+  });
+
+  it('does not offer persistent approval when Runtime omitted that candidate', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const rl = {
+      question: (_prompt: string, callback: (response: string) => void) => callback('a'),
+    } as unknown as readline.Interface;
+
+    await expect(confirmToolExecution(
+      rl,
+      'bash',
+      { command: 'rm -rf build' },
+      {
+        runtimeGrantSuggestions: [
+          { id: 'session-only', kind: 'session', label: 'This exact command for this session' },
+        ],
+      },
+    )).resolves.toEqual({ confirmed: false });
+    const rendered = logSpy.mock.calls.flat().map((entry) => stripAnsi(String(entry))).join('\n');
+    expect(rendered).toContain('Session');
+    expect(rendered).not.toMatch(/\[a\]\s+Always/);
   });
 });

@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-19
+> Last updated: 2026-07-20
 >
-> Current release baseline: `v0.7.72`
-> (`@kodax-ai/kodax@0.7.72` workspace package)
+> Current release baseline: `v0.7.73`
+> (`@kodax-ai/kodax@0.7.73` workspace package)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,8 +20,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.72`; FEATURE_266 and
-FEATURE_270 are released in the `v0.7.72` baseline.
+The root workspace package is `@kodax-ai/kodax@0.7.73`; FEATURE_271 and the
+Qwen Token Plan provider are released in the `v0.7.73` baseline.
 
 `package.json` exposes:
 
@@ -183,7 +183,20 @@ input is a real queued continuation run and accepts the same operation
 contract. `interrupt` is not advertised by the current daemon and returns an explicit
 unsupported result. AskUser and permission registries expose pending lists and
 first-winner responses over transport; persistent permission grants have one
-daemon-owned revisioned store.
+daemon-owned revisioned store. A concrete permission request may expose opaque
+Runtime-issued Session and persistent grant suggestions. Clients can select a
+suggestion id but cannot submit or widen its hidden matcher. Command matchers
+bind the normalized shell command fingerprint, effective cwd, shell family,
+background mode, executable, and argv fingerprint; quoting or wrapper changes
+remain distinct. Path matchers are limited to known built-in file tools and
+bind one tool to one normalized absolute path, not to one Write/Edit body.
+Extension, MCP, and other unknown tool shapes use an exact-call matcher even
+when their input happens to contain a field named `path`, and are eligible only
+for an in-memory Session grant. High-risk, absolute-deny,
+dangerous-pattern, and dynamically expanded shell calls never receive a
+persistent suggestion. New grants are revisioned and audited; legacy
+`toolName`/`sessionId` grants remain listable, matchable, and revocable but are
+never created by the new flow.
 
 The credential reverse bridge stores only lease metadata. It requests the
 secret from the registering connection for a bound provider/session/run and

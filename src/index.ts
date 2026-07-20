@@ -25,9 +25,17 @@ export {
   getKodaXRuntimeOwnerPolicy,
   getKodaXRuntimeOwnerState,
   parseRuntimeEvent,
+  RuntimePermissionScopeUpgradeRequiredError,
   RuntimeTransportBoundaryError,
   setKodaXRuntimeOwnerMode,
 } from './sdk-runtime.js';
+export type {
+  RuntimeExactCallPermissionMatcher,
+  RuntimeExactCommandPermissionMatcher,
+  RuntimeExactPathPermissionMatcher,
+  RuntimePermissionHostPlatform,
+  RuntimePermissionMatcher,
+} from './runtime-permission-scope.js';
 export type {
   CreateKodaXRuntimeOptions,
   KodaXDaemonRuntime,
@@ -75,7 +83,11 @@ export type {
   RuntimePermissionRequestInput,
   RuntimePermissionDecision,
   RuntimePermissionFilter,
+  RuntimePermissionGrant,
+  RuntimePermissionGrantChangedEventPayload,
+  RuntimePermissionGrantSuggestion,
   RuntimePermissionRequest,
+  RuntimePermissionRespondOptions,
   RuntimePermissionRisk,
   RuntimePermissionScope,
   RuntimePermissionService,

@@ -11,7 +11,8 @@ const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
   'run.started', 'run.updated', 'run.progress', 'turn.started', 'turn.completed', 'turn.failed',
   'assistant.delta', 'thinking.delta', 'thinking.finished', 'tool.started', 'tool.progress',
   'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
-  'permission.resolved', 'workflow.started', 'workflow.updated', 'workflow.finished',
+  'permission.resolved', 'permission.grant.changed', 'workflow.started', 'workflow.updated',
+  'workflow.finished',
   'context.compaction.started', 'context.compaction.stats', 'context.compaction.finished',
   'context.compaction.messages', 'context.compaction.ended', 'context.compaction.skipped',
   'context.budget.snapshot', 'tool.exposure.planned', 'child_activity.finished', 'provider.retry',
@@ -137,6 +138,15 @@ function validateKnownRuntimeEventPayload(
     return hasStrings(payload, ['id', 'sessionId', 'runId', 'toolName', 'createdAt'])
       ? undefined
       : 'requires a RuntimePermissionRequest payload.';
+  }
+  if (type === 'permission.grant.changed') {
+    return isRecord(payload)
+      && (payload.action === 'created' || payload.action === 'revoked' || payload.action === 'expired')
+      && isRecord(payload.grant)
+      && typeof payload.grant.id === 'string'
+      && Number.isSafeInteger(payload.revision)
+      ? undefined
+      : 'requires a permission grant audit payload.';
   }
   if (type === 'turn.started' || type === 'turn.completed' || type === 'turn.failed') {
     return hasStrings(payload, ['sessionId', 'turnId'])

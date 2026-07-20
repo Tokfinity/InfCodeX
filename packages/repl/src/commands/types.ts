@@ -172,13 +172,16 @@ export interface CommandCallbacks {
    * guardrail state through it. Used by `/auto-engine` (show), `/auto-denials`,
    * and the status bar engine indicator.
    */
-  getAutoModeStats?: () => import('@kodax-ai/coding').AutoModeStats | undefined;
+  getAutoModeStats?: () =>
+    | import('@kodax-ai/coding').AutoModeStats
+    | undefined
+    | Promise<import('@kodax-ai/coding').AutoModeStats | undefined>;
   /**
    * FEATURE_092 phase 2b.8: manual engine setter for `/auto-engine llm|rules`.
    * No-op when the guardrail hasn't been constructed yet. Threshold downgrades
    * still operate normally — a subsequent denial cross will downgrade again.
    */
-  setAutoModeEngine?: (engine: 'llm' | 'rules') => void;
+  setAutoModeEngine?: (engine: 'llm' | 'rules') => void | Promise<void>;
   ui: UIContext;
 }
 

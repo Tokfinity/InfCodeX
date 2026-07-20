@@ -2,6 +2,7 @@ import * as readline from 'readline';
 import chalk from 'chalk';
 import { buildToolConfirmationDisplay } from '../common/tool-confirmation.js';
 import type { ConfirmResult, PermissionMode } from '../permission/types.js';
+import type { ReplRuntimePermissionGrantSuggestion } from '../runtime-permission.js';
 import { supportsUnicode as terminalSupportsUnicode } from '../ui/utils/terminalCapabilities.js';
 
 export interface ConfirmOption {
@@ -142,12 +143,14 @@ export async function confirmToolExecution(
     reason?: string;
     isProtectedPath?: boolean;
     permissionMode?: PermissionMode;
+    runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
   },
 ): Promise<ConfirmResult> {
   const {
     isOutsideProject = false,
     isProtectedPath = false,
     permissionMode = 'accept-edits',
+    runtimeGrantSuggestions,
   } = options ?? {};
   const symbols = getSymbols();
 
@@ -176,13 +179,41 @@ export async function confirmToolExecution(
     if (detailLines.length > 0) {
       message += `\n${detailLines.join('\n')}`;
     }
+    if (runtimeGrantSuggestions !== undefined) {
+      message += `\n${runtimeGrantSuggestions
+        .map((suggestion) => `  ${chalk.dim(`Runtime scope: ${suggestion.label}`)}`)
+        .join('\n')}`;
+    }
 
-    promptOptions = permissionMode === 'accept-edits'
-      ? SAFETY_CONFIRM_OPTIONS
-      : [
-          { key: 'y', label: 'Yes', description: 'Confirm the action', value: 'yes' },
-          { key: 'n', label: 'No', description: 'Cancel', value: 'no' },
-        ];
+    if (runtimeGrantSuggestions !== undefined) {
+      promptOptions = [
+        { key: 'y', label: 'Once', description: 'Allow this operation once', value: 'yes' },
+        ...(runtimeGrantSuggestions.some((suggestion) => suggestion.kind === 'session')
+          ? [{
+              key: 's',
+              label: 'Session',
+              description: 'Allow this Runtime-issued scope for this session',
+              value: 'session',
+            }]
+          : []),
+        ...(runtimeGrantSuggestions.some((suggestion) => suggestion.kind === 'persistent')
+          ? [{
+              key: 'a',
+              label: 'Always',
+              description: 'Always allow this Runtime-issued scope',
+              value: 'always',
+            }]
+          : []),
+        { key: 'n', label: 'No', description: 'Cancel', value: 'no' },
+      ];
+    } else {
+      promptOptions = permissionMode === 'accept-edits'
+        ? SAFETY_CONFIRM_OPTIONS
+        : [
+            { key: 'y', label: 'Yes', description: 'Confirm the action', value: 'yes' },
+            { key: 'n', label: 'No', description: 'Cancel', value: 'no' },
+          ];
+    }
   }
 
   const result = await confirmEnhanced(rl, {
@@ -192,8 +223,11 @@ export async function confirmToolExecution(
   });
 
   if (result === 'always') {
-    return { confirmed: true, always: true };
+    return runtimeGrantSuggestions !== undefined
+      ? { confirmed: true, runtimeGrantKind: 'persistent' }
+      : { confirmed: true, always: true };
   }
+  if (result === 'session') return { confirmed: true, runtimeGrantKind: 'session' };
 
   return { confirmed: result === 'yes' };
 }

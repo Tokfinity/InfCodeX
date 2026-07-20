@@ -5198,6 +5198,13 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ### 2026-07-19: Issue 187 added and resolved (Unreleased)
 - Closed the shared-daemon Auto permission owner, safe old-daemon upgrade,
   Windows/Tier-0 path, bounded preview, and 0.7.x SDK compatibility gaps.
+- Post-review closure restricted path grants to known file tools, preserved
+  POSIX backslashes, rejected dynamic PowerShell persistent grants, aligned
+  concrete `toolInput` across embedded/daemon SDKs, preserved embedded host
+  policy hooks, committed rewritten calls before execution in both Runner
+  paths, derived trusted previews from concrete input, narrowed legacy scope
+  responses to Runtime-issued matchers, and propagated blocked calls through
+  Runner audit.
 
 ### 2026-07-19: Issue 186 added and resolved (v0.7.72)
 - Added an awaitable daemon subscription readiness boundary so a second client

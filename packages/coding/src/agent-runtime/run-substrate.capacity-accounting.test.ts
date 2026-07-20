@@ -16,6 +16,7 @@ import { estimateTokens, countTokens } from '../tokenizer.js';
 import { createRuntimeContextBudgetSnapshot } from './context-budget.js';
 import type { RuntimeContextBudgetSnapshot } from './context-budget.js';
 import { runSubstrate } from './run-substrate.js';
+import type { ToolGuardrail } from '@kodax-ai/agent';
 
 const PROVIDER_NAME = 'sa-capacity-accounting-test';
 const API_KEY_ENV = 'SA_CAPACITY_ACCOUNTING_TEST_API_KEY';
@@ -166,5 +167,54 @@ describe('runSubstrate physical request accounting', { timeout: 30_000 }, () => 
       source: 'api',
       usage: CapacityAccountingProvider.usage,
     });
+  });
+
+  it('runs ToolGuardrails before the concrete permission hook and records the final rewrite', async () => {
+    CapacityAccountingProvider.mode = 'tool';
+    const seen: string[] = [];
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'rewrite-path',
+      beforeTool: async (call) => ({
+        action: 'rewrite',
+        payload: { ...call, input: { path: 'final-fixture.txt' } },
+      }),
+    };
+    const receipt: ToolGuardrail = {
+      kind: 'tool',
+      name: 'receipt',
+      beforeTool: async (call) => {
+        seen.push(`guardrail:${call.id}:${call.name}:${String(call.input.path)}`);
+        return { action: 'allow' };
+      },
+      afterTool: async () => ({
+        action: 'rewrite',
+        payload: { content: 'guarded result' },
+      }),
+    };
+
+    const result = await runSubstrate({
+      provider: PROVIDER_NAME,
+      model: 'capacity-model',
+      maxIter: 1,
+      reasoningMode: 'off',
+      guardrails: [rewrite, receipt],
+      context: { systemPromptOverride: 'GUARDRAIL TEST PROMPT' },
+      events: {
+        beforeToolExecute: async (name, input, meta) => {
+          seen.push(`permission:${meta?.toolId}:${name}:${String(input.path)}`);
+          return true;
+        },
+      },
+    }, 'inspect guardrails');
+
+    expect(seen).toEqual([
+      'guardrail:read-1:read:final-fixture.txt',
+      'permission:read-1:read:final-fixture.txt',
+    ]);
+    const serialized = JSON.stringify(result.messages);
+    expect(serialized).toContain('final-fixture.txt');
+    expect(serialized).not.toContain('capacity-fixture.txt');
+    expect(serialized).toContain('guarded result');
   });
 });

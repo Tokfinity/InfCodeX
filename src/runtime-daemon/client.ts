@@ -129,6 +129,20 @@ export class RuntimeDaemonUpgradeRequiredError extends Error {
   }
 }
 
+export class RuntimePermissionScopeUpgradeRequiredError extends Error {
+  readonly code = 'daemon_upgrade_required' as const;
+  readonly capability = 'runtimeAutoModeGuardrail' as const;
+  readonly requiredVersion = 3 as const;
+  readonly restartRequired = true as const;
+
+  constructor() {
+    super(
+      'Runtime daemon does not advertise concrete permission scopes. Upgrade KodaX and restart the daemon before requesting grants for a concrete tool call.',
+    );
+    this.name = 'RuntimePermissionScopeUpgradeRequiredError';
+  }
+}
+
 export interface RuntimeDaemonClientOptions {
   readonly identity: RuntimeIdentity;
   readonly transport: RuntimeDaemonClientTransport;
@@ -182,6 +196,23 @@ export function createRuntimeDaemonClient(
       || capability.methodNamespace !== 'agents'
     ) {
       return new RuntimeDaemonUpgradeRequiredError();
+    }
+    return undefined;
+  };
+  const concretePermissionScopeError = (): RuntimePermissionScopeUpgradeRequiredError | undefined => {
+    const capability = options.capabilities?.runtimeAutoModeGuardrail;
+    if (
+      typeof capability !== 'object'
+      || capability === null
+      || !('version' in capability)
+      || typeof capability.version !== 'number'
+      || capability.version < 3
+      || !('concretePermissionMatchers' in capability)
+      || capability.concretePermissionMatchers !== true
+      || !('permissionGrantSuggestions' in capability)
+      || capability.permissionGrantSuggestions !== true
+    ) {
+      return new RuntimePermissionScopeUpgradeRequiredError();
     }
     return undefined;
   };
@@ -258,6 +289,9 @@ export function createRuntimeDaemonClient(
       },
       getSettingsVersioned(sessionId) {
         return request('session.settings.getVersioned', { sessionId }) as ReturnType<KodaXRuntime['sessions']['getSettingsVersioned']>;
+      },
+      getAutoModeStats(sessionId) {
+        return request('session.autoMode.getStats', { sessionId }) as ReturnType<KodaXRuntime['sessions']['getAutoModeStats']>;
       },
       async updateSettings(sessionId, patch) {
         const current = await this.getSettingsVersioned(sessionId);
@@ -356,6 +390,10 @@ export function createRuntimeDaemonClient(
     },
     permissions: {
       request(input: RuntimePermissionRequestInput) {
+        if (input.toolInput !== undefined) {
+          const unavailable = concretePermissionScopeError();
+          if (unavailable) return Promise.reject(unavailable);
+        }
         return request('permission.request', input) as Promise<RuntimePermissionDecision>;
       },
       listPending(filter?: RuntimePermissionFilter) {

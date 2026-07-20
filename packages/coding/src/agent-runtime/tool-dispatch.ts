@@ -109,7 +109,15 @@ import type {
   KodaXToolResultBlock,
 } from '../types.js';
 import type { CapabilityResult, KodaXToolUseBlock } from '@kodax-ai/llm';
-import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import {
+  emitKodaXDiagnostic,
+  runToolAfterGuardrails,
+  runToolBeforeGuardrails,
+  type GuardrailContext,
+  type RunnerToolCall,
+  type RunnerToolResult,
+  type ToolGuardrail,
+} from '@kodax-ai/agent';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import {
   executeTool,
@@ -477,6 +485,20 @@ export interface RunToolDispatchInput {
   readonly runtimeSessionState: RuntimeSessionState;
   readonly activeToolNames: string[] | undefined;
   readonly abortSignal: AbortSignal | undefined;
+  readonly toolGuardrails?: readonly ToolGuardrail[];
+  readonly guardrailContext?: GuardrailContext;
+  /** Supplies the post-commit transcript to after-tool guardrails. */
+  readonly getAfterGuardrailContext?: () => GuardrailContext;
+  /** Receives the post-rewrite call keyed by the immutable provider tool id. */
+  readonly finalToolBlocks?: Map<string, KodaXToolUseBlock>;
+  /** Fires after every before-guardrail settles and before any tool executes. */
+  readonly onToolCallsPrepared?: (blocks: readonly KodaXToolUseBlock[]) => void;
+}
+
+interface PreparedToolCall {
+  readonly index: number;
+  readonly call: RunnerToolCall;
+  readonly blockedContent?: string;
 }
 
 /**
@@ -492,52 +514,162 @@ export interface RunToolDispatchInput {
 export async function runToolDispatch(
   input: RunToolDispatchInput,
 ): Promise<Map<string, string>> {
-  const bashTools = input.toolBlocks.filter((tc) => tc.name === 'bash');
-  const nonBashTools = input.toolBlocks.filter((tc) => tc.name !== 'bash');
   const resultMap = new Map<string, string>();
+  const preparedByIndex = new Map<number, PreparedToolCall>();
+  const nonBashEntries = input.toolBlocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => block.name !== 'bash');
+  const preparedNonBash = await Promise.all(nonBashEntries.map(
+    ({ block, index }) => prepareToolBlock(input, block, index),
+  ));
+  for (const prepared of preparedNonBash) {
+    preparedByIndex.set(prepared.index, prepared);
+  }
+  for (let index = 0; index < input.toolBlocks.length; index += 1) {
+    const block = input.toolBlocks[index]!;
+    if (block.name !== 'bash') continue;
+    preparedByIndex.set(index, await prepareToolBlock(input, block, index));
+  }
+  const preparedCalls = input.toolBlocks.map((_, index) => {
+    const prepared = preparedByIndex.get(index);
+    if (!prepared) throw new Error(`Tool call at index ${index} was not prepared.`);
+    return prepared;
+  });
 
-  if (nonBashTools.length > 0) {
-    const promises = nonBashTools.map(async (tc) => ({
-      id: tc.id,
-      content: await executeToolCall(
-        input.events,
-        {
-          id: tc.id,
-          name: tc.name,
-          input: tc.input as Record<string, unknown> | undefined,
-        },
-        input.ctx,
-        input.runtimeSessionState,
-        input.activeToolNames,
-        input.abortSignal,
-      ),
-    }));
-    const results = await Promise.all(promises);
-    for (const r of results) resultMap.set(r.id, r.content);
+  // The host commits these canonical calls to transcript/session before any
+  // observer, permission hook, or executor can consume them.
+  input.onToolCallsPrepared?.(
+    preparedCalls.map((prepared) => runnerCallToToolBlock(prepared.call)),
+  );
+
+  for (const prepared of preparedCalls) {
+    if (prepared.blockedContent === undefined) continue;
+    await emitToolCallStart(input.events, prepared.call);
+    resultMap.set(prepared.call.id, prepared.blockedContent);
   }
 
-  for (const tc of bashTools) {
-    // Issue 088: Check abort signal before each sequential bash tool.
+  const parallel = preparedCalls.filter((prepared) => (
+    prepared.blockedContent === undefined
+    && input.toolBlocks[prepared.index]!.name !== 'bash'
+    && prepared.call.name !== 'bash'
+  ));
+  const parallelResults = await Promise.all(parallel.map(async (prepared) => ({
+    id: prepared.call.id,
+    content: await executePreparedToolCall(input, prepared.call),
+  })));
+  for (const result of parallelResults) resultMap.set(result.id, result.content);
+
+  const serial = preparedCalls.filter((prepared) => (
+    prepared.blockedContent === undefined
+    && (input.toolBlocks[prepared.index]!.name === 'bash' || prepared.call.name === 'bash')
+  ));
+  for (const prepared of serial) {
     if (input.abortSignal?.aborted) {
-      resultMap.set(tc.id, CANCELLED_TOOL_RESULT_MESSAGE);
+      resultMap.set(prepared.call.id, CANCELLED_TOOL_RESULT_MESSAGE);
       continue;
     }
-    const content = await executeToolCall(
-      input.events,
-      {
-        id: tc.id,
-        name: tc.name,
-        input: tc.input as Record<string, unknown> | undefined,
-      },
-      input.ctx,
-      input.runtimeSessionState,
-      input.activeToolNames,
-      input.abortSignal,
+    resultMap.set(
+      prepared.call.id,
+      await executePreparedToolCall(input, prepared.call),
     );
-    resultMap.set(tc.id, content);
   }
 
   return resultMap;
+}
+
+async function prepareToolBlock(
+  input: RunToolDispatchInput,
+  block: KodaXToolUseBlock,
+  index: number,
+): Promise<PreparedToolCall> {
+  const original: RunnerToolCall = {
+    id: block.id,
+    name: block.name,
+    input: block.input as Record<string, unknown>,
+  };
+  let prepared: PreparedToolCall = { index, call: original };
+  if (!input.abortSignal?.aborted && input.toolGuardrails?.length) {
+    if (!input.guardrailContext) {
+      throw new Error('Tool guardrails require a GuardrailContext.');
+    }
+    const outcome = await runToolBeforeGuardrails(
+      original,
+      input.toolGuardrails,
+      input.guardrailContext,
+      null,
+    );
+    prepared = outcome.kind === 'block'
+      ? {
+          index,
+          call: outcome.call,
+          blockedContent: normalizeGuardrailResult(outcome.result.content, true),
+        }
+      : { index, call: outcome.call };
+  }
+  input.finalToolBlocks?.set(block.id, runnerCallToToolBlock(prepared.call));
+  return prepared;
+}
+
+async function executePreparedToolCall(
+  input: RunToolDispatchInput,
+  call: RunnerToolCall,
+): Promise<string> {
+  let content = await executeToolCall(
+    input.events,
+    call,
+    input.ctx,
+    input.runtimeSessionState,
+    input.activeToolNames,
+    input.abortSignal,
+  );
+  if (input.toolGuardrails?.length && input.guardrailContext) {
+    const result = await runToolAfterGuardrails(
+      call,
+      { content, isError: isToolResultErrorContent(content) },
+      input.toolGuardrails,
+      input.getAfterGuardrailContext?.() ?? input.guardrailContext,
+      null,
+    );
+    content = normalizeGuardrailResult(result.content, result.isError === true);
+  }
+  return content;
+}
+
+function runnerCallToToolBlock(call: RunnerToolCall): KodaXToolUseBlock {
+  return {
+    id: call.id,
+    name: call.name,
+    type: 'tool_use',
+    input: call.input,
+  } as KodaXToolUseBlock;
+}
+
+function normalizeGuardrailResult(content: RunnerToolResult['content'], isError: boolean): string {
+  const text = typeof content === 'string'
+    ? content
+    : content.map((item) => (
+        item.type === 'text' ? item.text : `[Image: ${item.path}]`
+      )).join('\n');
+  return isError && !isToolResultErrorContent(text)
+    ? `[Blocked] ${text}`
+    : text;
+}
+
+async function emitToolCallStart(
+  events: KodaXEvents,
+  call: RunnerToolCall,
+): Promise<void> {
+  if (!isVisibleToolName(call.name)) return;
+  await emitActiveExtensionEvent('tool:start', {
+    name: call.name,
+    id: call.id,
+    input: call.input,
+  });
+  events.onToolUseStart?.({
+    name: call.name,
+    id: call.id,
+    input: call.input,
+  }, createToolEventMeta(events, call.id));
 }
 
 export interface PostToolProcessingInput {

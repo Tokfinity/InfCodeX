@@ -52,6 +52,8 @@ import { CANCELLED_TOOL_RESULT_MESSAGE } from '../../constants.js';
 import { countTokens } from '../../tokenizer.js';
 import { TOOL_OUTPUT_DIR_ENV } from '../../tools/truncate.js';
 import type { ToolResultBudget } from '../../tools/tool-result-budget.js';
+import { createAgent } from '@kodax-ai/agent';
+import type { GuardrailContext, ToolGuardrail } from '@kodax-ai/agent';
 
 function freshState(): RuntimeSessionState {
   return buildRuntimeSessionState({
@@ -249,6 +251,128 @@ describe('CAP-077: raw result handoff', () => {
     });
 
     expect(resultMap.get('t1')).toBe(shortContent);
+  });
+});
+
+describe('CAP-077: concrete ToolGuardrail dispatch', () => {
+  const guardrailContext: GuardrailContext = {
+    agent: createAgent({ name: 'substrate-guardrail-test', instructions: 'test' }),
+    messages: [],
+  };
+
+  it('runs before guardrails before permission and exposes the final rewritten call', async () => {
+    const observed: string[] = [];
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'rewrite-to-bash',
+      beforeTool: async (call) => {
+        observed.push(`guardrail:${call.name}`);
+        return {
+          action: 'rewrite',
+          payload: { id: call.id, name: 'bash', input: { command: 'npm test' } },
+        };
+      },
+    };
+    const finalToolBlocks = new Map<string, KodaXToolUseBlock>();
+    const resultMap = await runToolDispatch({
+      toolBlocks: [tool('rewrite-1', 'read')],
+      events: {
+        beforeToolExecute: async (name, input, meta) => {
+          observed.push(`permission:${name}:${String(input.command)}:${meta?.toolId}`);
+          return 'permission-result';
+        },
+      },
+      ctx: makeCtx(),
+      runtimeSessionState: freshState(),
+      activeToolNames: ['read', 'bash'],
+      abortSignal: undefined,
+      toolGuardrails: [rewrite],
+      guardrailContext,
+      finalToolBlocks,
+      onToolCallsPrepared: (blocks) => {
+        observed.push(`prepared:${blocks[0]?.name}`);
+      },
+    });
+
+    expect(observed).toEqual([
+      'guardrail:read',
+      'prepared:bash',
+      'permission:bash:npm test:rewrite-1',
+    ]);
+    expect(finalToolBlocks.get('rewrite-1')).toMatchObject({
+      id: 'rewrite-1',
+      name: 'bash',
+      input: { command: 'npm test' },
+    });
+    expect(resultMap.get('rewrite-1')).toBe('permission-result');
+  });
+
+  it('turns a before guardrail block into a visible blocked result without asking permission', async () => {
+    const beforeToolExecute = vi.fn(async () => true);
+    const block: ToolGuardrail = {
+      kind: 'tool',
+      name: 'blocker',
+      beforeTool: async () => ({ action: 'block', reason: 'policy denied' }),
+    };
+    const resultMap = await runToolDispatch({
+      toolBlocks: [tool('blocked-1', 'read')],
+      events: { beforeToolExecute },
+      ctx: makeCtx(),
+      runtimeSessionState: freshState(),
+      activeToolNames: ['read'],
+      abortSignal: undefined,
+      toolGuardrails: [block],
+      guardrailContext,
+    });
+
+    expect(beforeToolExecute).not.toHaveBeenCalled();
+    expect(resultMap.get('blocked-1')).toMatch(/^\[Blocked\].*policy denied/);
+  });
+
+  it('serializes non-bash calls that guardrails rewrite into bash', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    let preparedBeforeExecution = false;
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'rewrite-to-bash',
+      beforeTool: async (call) => ({
+        action: 'rewrite',
+        payload: {
+          id: call.id,
+          name: 'bash',
+          input: { command: `echo ${call.id}` },
+        },
+      }),
+    };
+
+    const resultMap = await runToolDispatch({
+      toolBlocks: [tool('rewrite-a', 'read'), tool('rewrite-b', 'grep')],
+      events: {
+        beforeToolExecute: async (_name, _input, meta) => {
+          expect(preparedBeforeExecution).toBe(true);
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          active -= 1;
+          return `result:${meta?.toolId}`;
+        },
+      },
+      ctx: makeCtx(),
+      runtimeSessionState: freshState(),
+      activeToolNames: ['read', 'grep', 'bash'],
+      abortSignal: undefined,
+      toolGuardrails: [rewrite],
+      guardrailContext,
+      onToolCallsPrepared: (blocks) => {
+        expect(blocks.map((block) => block.name)).toEqual(['bash', 'bash']);
+        preparedBeforeExecution = true;
+      },
+    });
+
+    expect(maximumActive).toBe(1);
+    expect(resultMap.get('rewrite-a')).toBe('result:rewrite-a');
+    expect(resultMap.get('rewrite-b')).toBe('result:rewrite-b');
   });
 });
 

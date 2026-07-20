@@ -6,8 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.73] - 2026-07-20
+
 ### Added
 
+- **Qwen Token Plan provider.** The new `qwen-token-plan` alias uses the
+  Anthropic-compatible Alibaba Cloud Token Plan endpoint and
+  `QWEN_TOKEN_API_KEY`. It defaults to `qwen3.8-max-preview`, exposes the
+  supported Qwen 3.7/3.6, GLM-5.2, and DeepSeek V4 Pro routes with one-million-
+  token context metadata, and declares verified reasoning, image-input, and
+  nominal subscription-cost capabilities without changing the existing `qwen`
+  provider.
 - **First-run provider setup (FEATURE_271).** A bare interactive `kodax`
   launch with no selected provider and no supported local credential now opens
   a focused provider/model setup flow before Runtime, daemon, session, or REPL

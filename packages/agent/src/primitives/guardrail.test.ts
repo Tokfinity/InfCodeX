@@ -32,6 +32,7 @@ import {
   type PresetDispatcher,
 } from './runner.js';
 import type { RunnerLlmResult } from './runner-tool-loop.js';
+import { createInMemorySession } from './session.js';
 
 const dummyAgent = createAgent({ name: 'guardrail-test', instructions: 'sys' });
 const dummyCtx = { agent: dummyAgent };
@@ -173,6 +174,42 @@ describe('runToolBeforeGuardrails', () => {
     };
     const outcome = await runToolBeforeGuardrails(call, [first], dummyCtx, null);
     expect(outcome.kind === 'allow' && (outcome.call.input as { text: string }).text).toBe('redacted');
+  });
+
+  it('rejects rewrites that change the provider correlation id', async () => {
+    const guardrail: ToolGuardrail = {
+      kind: 'tool',
+      name: 'invalid-id-rewrite',
+      beforeTool: async () => ({
+        action: 'rewrite',
+        payload: { id: 'different-id', name: 'echo', input: { text: 'redacted' } },
+      }),
+    };
+
+    await expect(runToolBeforeGuardrails(call, [guardrail], dummyCtx, null))
+      .rejects.toThrow(/must preserve.*id/i);
+  });
+
+  it('returns the last rewritten call when a downstream guardrail blocks', async () => {
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'rewrite',
+      beforeTool: async () => ({
+        action: 'rewrite',
+        payload: { id: 'c1', name: 'echo', input: { text: 'final' } },
+      }),
+    };
+    const block: ToolGuardrail = {
+      kind: 'tool',
+      name: 'block',
+      beforeTool: async () => ({ action: 'block', reason: 'no' }),
+    };
+
+    const outcome = await runToolBeforeGuardrails(call, [rewrite, block], dummyCtx, null);
+    expect(outcome).toMatchObject({
+      kind: 'block',
+      call: { id: 'c1', input: { text: 'final' } },
+    });
   });
 
   it('escalate still throws', async () => {
@@ -321,6 +358,82 @@ describe('Runner integration — guardrails active in generic path', () => {
     const result = await Runner.run(agent, 'q', { llm });
     expect(toolExecuted).toBe(false);
     expect(result.output).toBe('adapted');
+  });
+
+  it('uses the rewritten call for observer and result pairing when a later guardrail blocks', async () => {
+    const observedCalls: Array<{ name: string; input: Record<string, unknown> }> = [];
+    const session = createInMemorySession();
+    const rewrite: ToolGuardrail = {
+      kind: 'tool',
+      name: 'rewrite',
+      beforeTool: async (call) => ({
+        action: 'rewrite',
+        payload: { ...call, name: 'safe_echo', input: { value: 'rewritten' } },
+      }),
+    };
+    const block: ToolGuardrail = {
+      kind: 'tool',
+      name: 'block',
+      beforeTool: async () => ({ action: 'block', reason: 'blocked after rewrite' }),
+    };
+    const agent = createAgent({
+      name: 'rewrite-block-agent',
+      instructions: 'sys',
+      guardrails: [rewrite, block],
+    });
+    let turn = 0;
+    const llm = async (messages: readonly { role: string; content: unknown }[]): Promise<RunnerLlmResult> => {
+      turn += 1;
+      if (turn === 1) {
+        return { text: '', toolCalls: [{ id: 'c1', name: 'unsafe_echo', input: { value: 'raw' } }] };
+      }
+      const callBlocks = messages.at(-2)?.content as Array<{
+        type: string;
+        id: string;
+        name: string;
+        input: Record<string, unknown>;
+      }>;
+      expect(callBlocks[0]).toMatchObject({
+        type: 'tool_use',
+        id: 'c1',
+        name: 'safe_echo',
+        input: { value: 'rewritten' },
+      });
+      const resultBlocks = messages.at(-1)?.content as Array<{ tool_use_id: string; content: string }>;
+      expect(resultBlocks[0]).toMatchObject({
+        tool_use_id: 'c1',
+        content: expect.stringContaining('blocked after rewrite'),
+      });
+      return { text: 'adapted', toolCalls: [] };
+    };
+
+    await Runner.run(agent, 'q', {
+      llm,
+      session,
+      toolObserver: {
+        onToolCall: (call) => observedCalls.push(call),
+      },
+    });
+
+    expect(observedCalls).toEqual([{
+      id: 'c1',
+      name: 'safe_echo',
+      input: { value: 'rewritten' },
+    }]);
+    const sessionMessages: Array<{ role: string; content: unknown }> = [];
+    for await (const entry of session.entries()) {
+      if (entry.type !== 'message') continue;
+      sessionMessages.push(entry.payload as { role: string; content: unknown });
+    }
+    expect(sessionMessages[1]).toMatchObject({
+      role: 'assistant',
+      content: [expect.objectContaining({
+        type: 'tool_use',
+        id: 'c1',
+        name: 'safe_echo',
+        input: { value: 'rewritten' },
+      })],
+    });
   });
 
   it('tool-after rewrite replaces result content seen by LLM', async () => {
@@ -642,6 +755,7 @@ describe('GuardrailContext.messages propagation (FEATURE_092 v0.7.33)', () => {
     const roles = transcript.map((m) => m.role);
     const contents = transcript.map((m) => m.content);
     expect(roles).toContain('user');
+    expect(roles).not.toContain('assistant');
     expect(contents).toContain('classify-me');
   });
 });

@@ -62,6 +62,71 @@ describe('runtime daemon client proxy', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('requires concrete permission scope capability before sending raw tool input', async () => {
+    const oldCalls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const oldClient = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-old-permission-daemon',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-10T00:00:00.000Z',
+        version: '0.7.72',
+      },
+      transport: fakeTransport(oldCalls),
+      capabilities: {
+        runtimeAutoModeGuardrail: { version: 2, owner: 'session-runtime' },
+      },
+    });
+
+    await expect(oldClient.permissions.request({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+    })).rejects.toMatchObject({
+      code: 'daemon_upgrade_required',
+      capability: 'runtimeAutoModeGuardrail',
+      requiredVersion: 3,
+      restartRequired: true,
+    });
+    expect(oldCalls).toHaveLength(0);
+
+    const currentCalls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const currentClient = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-current-permission-daemon',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: '0.7.73',
+      },
+      transport: fakeTransport(currentCalls),
+      capabilities: {
+        runtimeAutoModeGuardrail: {
+          version: 3,
+          owner: 'session-runtime',
+          concretePermissionMatchers: true,
+          permissionGrantSuggestions: true,
+        },
+      },
+    });
+    await currentClient.permissions.request({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+    });
+    expect(currentCalls).toContainEqual({
+      method: 'permission.request',
+      params: {
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolName: 'bash',
+        toolInput: { command: 'npm test' },
+      },
+    });
+  });
+
   it('rejects host-only run options instead of silently dropping them on the wire', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const client = createRuntimeDaemonClient({

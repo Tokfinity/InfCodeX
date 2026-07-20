@@ -38,6 +38,10 @@ import type {
   RuntimeStartRunInput,
 } from './sdk-runtime.js';
 import type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
+import {
+  createRuntimePermissionMatcher,
+  runtimePermissionHostPlatform,
+} from './runtime-permission-scope.js';
 
 const codingMock = vi.hoisted(() => ({
   runManagedTask: vi.fn(),
@@ -3933,6 +3937,11 @@ describe('createKodaXRuntime', () => {
     });
     expect(replMock.bootstrapAutoMode.mock.calls.at(-1)?.[0].sharedState)
       .toBe(replMock.bootstrapAutoMode.mock.calls[0]?.[0].sharedState);
+    await expect(runtime.sessions.getAutoModeStats(session.id)).resolves.toMatchObject({
+      engine: 'rules',
+      denials: expect.any(Object),
+      breaker: expect.any(Object),
+    });
     await runtime.close();
   }, 60_000);
 
@@ -4438,6 +4447,486 @@ describe('createKodaXRuntime', () => {
     await runtime.permissions.respond(pending.id, { type: 'reject' });
     await expect(decision).resolves.toEqual({ type: 'reject' });
     await runtime.close();
+  });
+
+  it('derives the observable preview from concrete tool input instead of trusting caller text', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Trusted Permission Preview' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-trusted-preview',
+      toolName: 'bash',
+      inputPreview: '{"command":"npm test"}',
+      toolInput: { command: 'echo --token=private-preview-secret' },
+      executionCwd: tempRoot,
+    });
+
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-trusted-preview' });
+    if (!pending) throw new Error('expected concrete permission request');
+    expect(pending.inputPreview).toContain('echo');
+    expect(pending.inputPreview).not.toContain('npm test');
+    expect(pending.inputPreview).not.toContain('private-preview-secret');
+    expect(pending.inputPreview).toContain('[REDACTED]');
+    await runtime.permissions.respond(pending.id, { type: 'reject' });
+    await expect(decision).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('lets clients select only Runtime-issued concrete grant suggestions', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+    });
+    const session = await runtime.sessions.create({ title: 'Concrete Permission Grant' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-concrete-grant',
+      toolCallId: 'tool-concrete-grant',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-concrete-grant' });
+    if (!pending) throw new Error('expected concrete permission request');
+
+    expect(pending.grantSuggestions).toEqual([
+      expect.objectContaining({ kind: 'session', label: expect.stringContaining('npm test') }),
+      expect.objectContaining({ kind: 'persistent', label: expect.stringContaining('npm test') }),
+    ]);
+    const persistent = pending.grantSuggestions?.find((candidate) => candidate.kind === 'persistent');
+    if (!persistent) throw new Error('expected persistent grant suggestion');
+
+    await expect(runtime.permissions.respond(pending.id, {
+      type: 'allow_always',
+      suggestionId: 'scope_not_issued_by_runtime',
+    })).rejects.toThrow(/grant suggestion/i);
+    expect(await runtime.permissions.listPending({ runId: 'run-concrete-grant' })).toHaveLength(1);
+
+    expect(await runtime.permissions.respond(pending.id, {
+      type: 'allow_always',
+      suggestionId: persistent.id,
+    })).toBe(true);
+    await expect(decision).resolves.toEqual({
+      type: 'allow_always',
+      suggestionId: persistent.id,
+    });
+
+    const grants = await runtime.permissions.listGrants();
+    expect(grants.value).toEqual([
+      expect.objectContaining({
+        persistence: 'persistent',
+        scope: expect.objectContaining({
+          toolName: 'bash',
+          matcher: expect.objectContaining({ kind: 'exact-command' }),
+        }),
+      }),
+    ]);
+
+    await expect(runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-concrete-grant-reuse',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: tempRoot,
+    })).resolves.toMatchObject({ type: 'allow_always' });
+    const changed = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-concrete-grant-changed',
+      toolName: 'bash',
+      toolInput: { command: 'npm publish' },
+      executionCwd: tempRoot,
+    });
+    expect(await runtime.permissions.listPending({ runId: 'run-concrete-grant-changed' }))
+      .toHaveLength(1);
+    const [changedRequest] = await runtime.permissions.listPending({ runId: 'run-concrete-grant-changed' });
+    if (!changedRequest) throw new Error('expected changed permission request');
+    await runtime.permissions.respond(changedRequest.id, { type: 'reject' });
+    await expect(changed).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('narrows legacy allow_always scope responses to a Runtime-issued concrete matcher', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Legacy Scope Response' });
+    const filePath = path.join(tempRoot, 'legacy-response.md');
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-legacy-scope-response',
+      toolName: 'edit',
+      toolInput: { path: filePath, old_string: 'a', new_string: 'b' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({
+      runId: 'run-legacy-scope-response',
+    });
+    if (!pending) throw new Error('expected legacy compatibility request');
+
+    const legacyDecision = {
+      type: 'allow_always' as const,
+      scope: { toolName: 'edit', sessionId: session.id },
+    };
+    expect(await runtime.permissions.respond(pending.id, legacyDecision)).toBe(true);
+    await expect(decision).resolves.toEqual(legacyDecision);
+    const grants = await runtime.permissions.listGrants();
+    expect(grants.value).toEqual([
+      expect.objectContaining({
+        persistence: 'persistent',
+        scope: expect.objectContaining({
+          toolName: 'edit',
+          sessionId: session.id,
+          matcher: expect.objectContaining({ kind: 'exact-path' }),
+        }),
+      }),
+    ]);
+
+    await expect(runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-legacy-scope-reuse',
+      toolName: 'edit',
+      toolInput: { path: filePath, old_string: 'other', new_string: 'content' },
+      executionCwd: tempRoot,
+    })).resolves.toMatchObject({ type: 'allow_always' });
+    const otherSession = await runtime.sessions.create({ title: 'Other Session' });
+    const otherDecision = runtime.permissions.request({
+      sessionId: otherSession.id,
+      runId: 'run-legacy-scope-other-session',
+      toolName: 'edit',
+      toolInput: { path: filePath, old_string: 'other', new_string: 'content' },
+      executionCwd: tempRoot,
+    });
+    const [otherPending] = await runtime.permissions.listPending({
+      runId: 'run-legacy-scope-other-session',
+    });
+    if (!otherPending) throw new Error('expected another Session to require permission');
+    await runtime.permissions.respond(otherPending.id, { type: 'reject' });
+    await expect(otherDecision).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('never offers a persistent grant for dangerous or dynamically expanded shell commands', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Unsafe Grant Suggestions' });
+
+    const dangerous = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-dangerous-grant',
+      toolName: 'bash',
+      toolInput: { command: 'rm -rf build' },
+      executionCwd: tempRoot,
+    });
+    const dynamic = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-dynamic-grant',
+      toolName: 'bash',
+      toolInput: {
+        command: process.platform === 'win32'
+          ? 'echo %USERPROFILE% > output.txt'
+          : 'echo $HOME > output.txt',
+      },
+      executionCwd: tempRoot,
+    });
+    for (const runId of ['run-dangerous-grant', 'run-dynamic-grant']) {
+      const [request] = await runtime.permissions.listPending({ runId });
+      if (!request) throw new Error(`expected permission request for ${runId}`);
+      expect(request.grantSuggestions?.map((candidate) => candidate.kind)).toEqual(['session']);
+      await runtime.permissions.respond(request.id, { type: 'reject' });
+    }
+    await expect(dangerous).resolves.toEqual({ type: 'reject' });
+    await expect(dynamic).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('does not honor a previously persisted dynamic command grant', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtimeDir = path.join(tempRoot, '.kodax', 'runtime');
+    const command = process.platform === 'win32'
+      ? 'powershell -Command "Get-Content $HOME\\report.txt"'
+      : 'cat "$HOME/report.txt"';
+    const matcher = createRuntimePermissionMatcher({
+      toolName: 'bash',
+      toolInput: { command },
+      executionCwd: tempRoot,
+      platform: runtimePermissionHostPlatform(),
+    });
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, 'permission-grants.json'), JSON.stringify({
+      revision: 1,
+      value: [{
+        id: 'legacy-dynamic-command',
+        scope: { toolName: 'bash', matcher },
+        persistence: 'persistent',
+        createdAt: '2026-07-19T00:00:00.000Z',
+      }],
+    }), 'utf-8');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Dynamic Grant Migration' });
+
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-dynamic-grant-migration',
+      toolName: 'bash',
+      toolInput: { command },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({
+      runId: 'run-dynamic-grant-migration',
+    });
+    if (!pending) throw new Error('expected dynamic grant to require a new decision');
+    expect(pending.grantSuggestions?.map((candidate) => candidate.kind)).toEqual(['session']);
+    await runtime.permissions.respond(pending.id, { type: 'reject' });
+    await expect(decision).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('offers persistent grants only for Runtime-normalized command or path scopes', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Generic Grant Boundary' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-generic-grant',
+      toolName: 'extension_action',
+      toolInput: { action: 'publish', _target: 'staging' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-generic-grant' });
+    if (!pending) throw new Error('expected generic permission request');
+    expect(pending.grantSuggestions?.map((candidate) => candidate.kind)).toEqual(['session']);
+    await runtime.permissions.respond(pending.id, { type: 'reject' });
+    await expect(decision).resolves.toEqual({ type: 'reject' });
+    await runtime.close();
+  });
+
+  it('redacts secrets from Runtime-issued grant labels without weakening the exact matcher', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Redacted Permission Grant' });
+    const command = 'TOKEN=private-grant-secret npm test -- --token=private-grant-secret';
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-redacted-grant',
+      toolName: 'bash',
+      toolInput: { command },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-redacted-grant' });
+    if (!pending) throw new Error('expected redacted permission request');
+    expect(pending.grantSuggestions?.map((item) => item.label).join('\n'))
+      .not.toContain('private-grant-secret');
+    expect(pending.grantSuggestions?.map((item) => item.label).join('\n'))
+      .toContain('[REDACTED]');
+
+    const persistent = pending.grantSuggestions?.find((item) => item.kind === 'persistent');
+    if (!persistent) throw new Error('expected persistent grant suggestion');
+    await runtime.permissions.respond(pending.id, {
+      type: 'allow_always',
+      suggestionId: persistent.id,
+    });
+    await decision;
+    await expect(runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-redacted-grant-reuse',
+      toolName: 'bash',
+      toolInput: { command },
+      executionCwd: tempRoot,
+    })).resolves.toMatchObject({ type: 'allow_always' });
+    expect(JSON.stringify(await runtime.permissions.listGrants()))
+      .not.toContain('private-grant-secret');
+    const grantAudit = await runtime.events.replay({
+      type: 'permission.grant.changed',
+      sessionId: session.id,
+    });
+    expect(grantAudit.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        action: 'created',
+        grant: expect.objectContaining({ persistence: 'persistent' }),
+      }),
+    ]);
+    expect(JSON.stringify(grantAudit)).not.toContain('private-grant-secret');
+    await runtime.close();
+  });
+
+  it('coalesces concurrent identical concrete calls without widening their grant candidate', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Concurrent Permission Grant' });
+    const input = {
+      sessionId: session.id,
+      runId: 'run-concurrent-grant',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: tempRoot,
+    } as const;
+    const first = runtime.permissions.request({ ...input, toolCallId: 'tool-a' });
+    const second = runtime.permissions.request({ ...input, toolCallId: 'tool-b' });
+
+    const pending = await runtime.permissions.listPending({ runId: input.runId });
+    expect(pending).toHaveLength(1);
+    const suggestion = pending[0]?.grantSuggestions?.find((item) => item.kind === 'session');
+    if (!pending[0] || !suggestion) throw new Error('expected coalesced session suggestion');
+    const decision = { type: 'allow_session' as const, suggestionId: suggestion.id };
+    await runtime.permissions.respond(pending[0].id, decision);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([decision, decision]);
+    expect((await runtime.permissions.listGrants()).value).toHaveLength(1);
+    await runtime.close();
+  });
+
+  it('loads, matches, lists, and revokes legacy coarse grants without rewriting them', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtimeDir = path.join(tempRoot, '.kodax', 'runtime');
+    await fs.mkdir(runtimeDir, { recursive: true });
+    await fs.writeFile(path.join(runtimeDir, 'permission-grants.json'), JSON.stringify({
+      revision: 7,
+      value: [{
+        id: 'legacy-bash-grant',
+        scope: { toolName: 'bash', sessionId: 'legacy-session' },
+        createdAt: '2026-07-01T00:00:00.000Z',
+      }],
+    }), 'utf-8');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot });
+
+    const listed = await runtime.permissions.listGrants();
+    expect(listed).toEqual({
+      revision: 7,
+      value: [expect.objectContaining({
+        id: 'legacy-bash-grant',
+        persistence: 'persistent',
+        scope: { toolName: 'bash', sessionId: 'legacy-session' },
+      })],
+    });
+    await expect(runtime.permissions.request({
+      sessionId: 'legacy-session',
+      runId: 'legacy-run',
+      toolName: 'bash',
+      toolInput: { command: 'different legacy command' },
+      executionCwd: tempRoot,
+    })).resolves.toEqual({ type: 'allow_always', suggestionId: 'legacy-bash-grant' });
+    expect(await runtime.permissions.revokeGrant('legacy-bash-grant', listed.revision)).toBe(true);
+    expect((await runtime.permissions.listGrants()).value).toEqual([]);
+    await expect(runtime.events.replay({ type: 'permission.grant.changed' })).resolves.toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          action: 'revoked',
+          grant: expect.objectContaining({ id: 'legacy-bash-grant' }),
+        }),
+      }),
+    ]);
+    await runtime.close();
+  });
+
+  it('keeps session grants in memory and exposes them through revisioned list/revoke', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir: tempRoot });
+    const session = await runtime.sessions.create({ title: 'Session Permission Grant' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-session-grant',
+      toolName: 'edit',
+      toolInput: { path: 'src/index.ts', old_string: 'a', new_string: 'b' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({ runId: 'run-session-grant' });
+    const suggestion = pending?.grantSuggestions?.find((candidate) => candidate.kind === 'session');
+    if (!pending || !suggestion) throw new Error('expected session grant suggestion');
+    await runtime.permissions.respond(pending.id, {
+      type: 'allow_session',
+      suggestionId: suggestion.id,
+    });
+    await expect(decision).resolves.toMatchObject({ type: 'allow_session' });
+
+    const listed = await runtime.permissions.listGrants();
+    expect(listed.value).toEqual([
+      expect.objectContaining({ persistence: 'session' }),
+    ]);
+    await expect(runtime.permissions.revokeGrant('missing', listed.revision - 1))
+      .rejects.toThrow(/stale/i);
+    expect(await runtime.permissions.revokeGrant(listed.value[0]?.id ?? '', listed.revision)).toBe(true);
+    expect((await runtime.permissions.listGrants()).value).toEqual([]);
+    await runtime.close();
+  });
+
+  it('drops session grants on Session deletion while keeping the grant CAS revision durable', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const sessionsDir = path.join(tempRoot, 'sessions');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    const session = await runtime.sessions.create({ title: 'Session Grant Lifecycle' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-session-grant-lifecycle',
+      toolName: 'read',
+      toolInput: { path: 'README.md' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({
+      runId: 'run-session-grant-lifecycle',
+    });
+    const suggestion = pending?.grantSuggestions?.find((item) => item.kind === 'session');
+    if (!pending || !suggestion) throw new Error('expected session grant suggestion');
+    await runtime.permissions.respond(pending.id, {
+      type: 'allow_session',
+      suggestionId: suggestion.id,
+    });
+    await decision;
+    const beforeDelete = await runtime.permissions.listGrants();
+    expect(beforeDelete.value).toHaveLength(1);
+
+    await runtime.sessions.delete(session.id);
+    const afterDelete = await runtime.permissions.listGrants();
+    expect(afterDelete.value).toEqual([]);
+    expect(afterDelete.revision).toBeGreaterThan(beforeDelete.revision);
+    const grantAudit = await runtime.events.replay({
+      type: 'permission.grant.changed',
+      sessionId: session.id,
+    });
+    expect(grantAudit.map((event) => (
+      (event.payload as { action?: string }).action
+    ))).toEqual(['created', 'expired']);
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    await expect(recreated.permissions.listGrants()).resolves.toEqual({
+      revision: afterDelete.revision,
+      value: [],
+    });
+    await recreated.close();
+  });
+
+  it('advances the durable grant revision when Runtime close expires session grants', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const sessionsDir = path.join(tempRoot, 'sessions');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    const session = await runtime.sessions.create({ title: 'Runtime Grant Lifecycle' });
+    const decision = runtime.permissions.request({
+      sessionId: session.id,
+      runId: 'run-runtime-grant-lifecycle',
+      toolName: 'read',
+      toolInput: { path: 'README.md' },
+      executionCwd: tempRoot,
+    });
+    const [pending] = await runtime.permissions.listPending({
+      runId: 'run-runtime-grant-lifecycle',
+    });
+    const suggestion = pending?.grantSuggestions?.find((item) => item.kind === 'session');
+    if (!pending || !suggestion) throw new Error('expected session grant suggestion');
+    await runtime.permissions.respond(pending.id, {
+      type: 'allow_session',
+      suggestionId: suggestion.id,
+    });
+    await decision;
+    const beforeClose = await runtime.permissions.listGrants();
+    expect(beforeClose.value).toHaveLength(1);
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    const afterClose = await recreated.permissions.listGrants();
+    expect(afterClose.value).toEqual([]);
+    expect(afterClose.revision).toBeGreaterThan(beforeClose.revision);
+    await recreated.close();
   });
 
   it('brokers daemon AskUser and accepts exactly one concurrent answer', async () => {

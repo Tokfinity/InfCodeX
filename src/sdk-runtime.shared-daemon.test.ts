@@ -219,13 +219,18 @@ describe('F269 shared Runtime contracts', () => {
     const decision = runtime.permissions.request({
       sessionId: 'session-grant',
       runId: 'run-grant',
-      toolName: 'space_write',
+      toolName: 'write',
+      toolInput: { path: 'notes.md', content: 'hello' },
+      executionCwd: homeDir,
     });
     const [pending] = await runtime.permissions.listPending({ runId: 'run-grant' });
     if (!pending) throw new Error('expected permission request');
+    const persistent = pending.grantSuggestions
+      ?.find((suggestion) => suggestion.kind === 'persistent');
+    if (!persistent) throw new Error('expected Runtime-issued persistent suggestion');
     expect(await runtime.permissions.respond(pending.id, {
       type: 'allow_always',
-      scope: { sessionId: 'session-grant', toolName: 'space_write' },
+      suggestionId: persistent.id,
     })).toBe(true);
     await expect(decision).resolves.toMatchObject({ type: 'allow_always' });
     await runtime.close();
@@ -238,7 +243,10 @@ describe('F269 shared Runtime contracts', () => {
     await expect(reopened.permissions.listGrants()).resolves.toMatchObject({
       revision: 1,
       value: [expect.objectContaining({
-        scope: { sessionId: 'session-grant', toolName: 'space_write' },
+        scope: expect.objectContaining({
+          toolName: 'write',
+          matcher: expect.objectContaining({ kind: 'exact-path' }),
+        }),
       })],
     });
     await reopened.close();

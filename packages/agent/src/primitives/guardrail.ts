@@ -343,7 +343,11 @@ export async function runOutputGuardrails(
  */
 export type ToolBeforeOutcome =
   | { readonly kind: 'allow'; readonly call: RunnerToolCall }
-  | { readonly kind: 'block'; readonly result: RunnerToolResult };
+  | {
+      readonly kind: 'block';
+      readonly call: RunnerToolCall;
+      readonly result: RunnerToolResult;
+    };
 
 /**
  * Run before-tool guardrails in declaration order. Rewrite replaces the
@@ -375,9 +379,16 @@ export async function runToolBeforeGuardrails(
     if (verdict.action === 'allow') continue;
     if (verdict.action === 'rewrite') {
       const payload = verdict.payload as RunnerToolCall | undefined;
-      if (!payload || typeof payload !== 'object' || typeof payload.name !== 'string') {
+      if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string'
+        || typeof payload.name !== 'string' || typeof payload.input !== 'object'
+        || payload.input === null || Array.isArray(payload.input)) {
         throw new Error(
           `ToolGuardrail "${guardrail.name}" returned rewrite with invalid payload; expected RunnerToolCall.`,
+        );
+      }
+      if (payload.id !== call.id) {
+        throw new Error(
+          `ToolGuardrail "${guardrail.name}" rewrite must preserve the tool call id "${call.id}".`,
         );
       }
       currentCall = payload;
@@ -386,6 +397,7 @@ export async function runToolBeforeGuardrails(
     if (verdict.action === 'block') {
       return {
         kind: 'block',
+        call: currentCall,
         result: {
           content: `[Guardrail ${guardrail.name}] ${verdict.reason}`,
           isError: true,

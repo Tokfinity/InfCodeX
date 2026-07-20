@@ -51,11 +51,14 @@ const translations = {
     // Confirmation instructions
     "confirm.instruction.basic": "Press (y) yes, (n) no",
     "confirm.instruction.always": "Press (y) yes, (a) always yes for this tool, (n) no",
+    "confirm.instruction.runtime_session": "Press (y) allow once, (s) allow this Runtime scope for the session, (n) no",
+    "confirm.instruction.runtime_persistent": "Press (y) allow once, (s) allow this Runtime scope for the session, (a) always allow this Runtime scope, (n) no",
     "confirm.instruction.protected": "Press (y) to confirm, (n) to cancel (protected path)",
 
     // Confirmation result (for history)
     "confirm.result.approved": "Approved",
     "confirm.result.approved_always": "Approved (always)",
+    "confirm.result.approved_session": "Approved (this session)",
     "confirm.result.denied": "Denied",
 
     // Tool confirmation titles
@@ -142,10 +145,13 @@ const translations = {
 
     "confirm.instruction.basic": "按 (y) 确认, (n) 拒绝",
     "confirm.instruction.always": "按 (y) 确认, (a) 始终允许此工具, (n) 拒绝",
+    "confirm.instruction.runtime_session": "按 (y) 仅允许一次, (s) 本会话始终允许这项精确操作, (n) 拒绝",
+    "confirm.instruction.runtime_persistent": "按 (y) 仅允许一次, (s) 本会话始终允许这项精确操作, (a) 始终允许这项精确操作, (n) 拒绝",
     "confirm.instruction.protected": "按 (y) 确认, (n) 取消 (受保护路径)",
 
     "confirm.result.approved": "已批准",
     "confirm.result.approved_always": "已批准 (始终允许)",
+    "confirm.result.approved_session": "已批准 (本会话)",
     "confirm.result.denied": "已拒绝",
 
     "tool.bash.title": "执行 bash 命令？",

@@ -59,6 +59,11 @@ import type {
 import type { AgentsFile, KodaXWorkflowAgentDigestEvent } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
+  resolveReplRuntimePermissionDecision,
+  type ReplRuntimeAutoModeControl,
+  type ReplRuntimePermissionPrompt,
+} from '../runtime-permission.js';
+import {
   computeConfirmTools,
   createAutoInProjectDeprecationEmitter,
   FILE_MODIFICATION_TOOLS,
@@ -395,6 +400,9 @@ export interface ReplRuntimeRunnerInput {
   readonly prompt: string;
   readonly sessionId: string;
   readonly permissionMode: PermissionMode;
+  readonly requestPermission?: ReplRuntimePermissionPrompt;
+  /** Marks the callback installed by the REPL's legacy permission UI. */
+  readonly legacyPermissionHook?: true;
 }
 
 export type ReplRuntimeRunner = (input: ReplRuntimeRunnerInput) => Promise<KodaXResult>;
@@ -403,6 +411,7 @@ export type ReplRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | und
 export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
   runtimeRunner?: ReplRuntimeRunner;
+  runtimeAutoModeControl?: ReplRuntimeAutoModeControl;
   getRuntimeStatus?: ReplRuntimeStatusProvider;
   learning?: LearningBinding;
 }
@@ -619,6 +628,24 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       });
     },
   });
+
+  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request) => {
+    const result = await confirmToolExecution(
+      rl,
+      request.toolName,
+      {
+        ...request.input,
+        ...(request.reason !== undefined ? { _reason: request.reason } : {}),
+        ...(request.executionCwd !== undefined ? { _executionCwd: request.executionCwd } : {}),
+        ...(request.risk !== undefined ? { _runtimeRisk: request.risk } : {}),
+      },
+      {
+        permissionMode: currentPermissionMode,
+        runtimeGrantSuggestions: request.grantSuggestions ?? [],
+      },
+    );
+    return resolveReplRuntimePermissionDecision(request, result);
+  };
 
   // FEATURE_092 phase 2b.7b: bootstrap auto-mode guardrail (factory only;
   // the guardrail is constructed lazily on first 'auto' tool call so the
@@ -843,6 +870,7 @@ Keyboard Shortcuts:
         undefined,
         options.runtimeRunner,
         currentPermissionMode,
+        requestRuntimePermission,
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1190,12 +1218,19 @@ Keyboard Shortcuts:
     // for /auto-engine and /auto-denials. The accessors
     // delegate to the lazy guardrail factory — when REPL never enters auto
     // mode, the guardrail is never constructed and the stats are undefined.
-    getAutoModeStats: () => {
+    getAutoModeStats: async () => {
       if (!isAutoMode(currentPermissionMode)) return undefined;
+      if (options.runtimeAutoModeControl) {
+        return options.runtimeAutoModeControl.getStats(context.sessionId);
+      }
       return autoModeBootstrap.getGuardrail().getStats();
     },
-    setAutoModeEngine: (engine) => {
+    setAutoModeEngine: async (engine) => {
       if (!isAutoMode(currentPermissionMode)) return;
+      if (options.runtimeAutoModeControl) {
+        await options.runtimeAutoModeControl.setEngine(context.sessionId, engine);
+        return;
+      }
       autoModeBootstrap.getGuardrail().setEngine(engine);
     },
     createKodaXOptions: () => {
@@ -1211,7 +1246,7 @@ Keyboard Shortcuts:
       // 'auto-in-project' (alias), forward the AutoModeToolGuardrail to
       // Runner via KodaXOptions.guardrails. The lazy factory means we only
       // pay the construction + rules-load cost for users who use auto mode.
-      const guardrails = isAutoMode(currentPermissionMode)
+      const guardrails = !options.runtimeRunner && isAutoMode(currentPermissionMode)
         ? [autoModeBootstrap.getGuardrail()]
         : undefined;
       return {
@@ -1569,6 +1604,7 @@ Keyboard Shortcuts:
         undefined,
         options.runtimeRunner,
         currentPermissionMode,
+        requestRuntimePermission,
       );
 
       if (prepared.mode === 'fork') {
@@ -1834,6 +1870,7 @@ Keyboard Shortcuts:
         preparedArtifacts.inputArtifacts,
         options.runtimeRunner,
         currentPermissionMode,
+        requestRuntimePermission,
       );
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
@@ -1946,6 +1983,7 @@ async function runAgentRound(
   inputArtifacts?: readonly KodaXInputArtifact[],
   runtimeRunner?: ReplRuntimeRunner,
   permissionMode: PermissionMode = 'accept-edits',
+  requestPermission?: ReplRuntimePermissionPrompt,
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
   const events = {
@@ -1994,6 +2032,8 @@ async function runAgentRound(
       prompt,
       sessionId: context.sessionId,
       permissionMode,
+      ...(requestPermission !== undefined ? { requestPermission } : {}),
+      legacyPermissionHook: true,
     });
   }
   return runManagedTask(runOptions, prompt);

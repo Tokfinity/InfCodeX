@@ -149,5 +149,43 @@ describe('runtime daemon protocol schema', () => {
       toolName: 'bash',
       inputPreview: 'x'.repeat(8_193),
     })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      toolInput: { command: 'npm test', run_in_background: false },
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
+      projectRoot: 'C:\\untrusted',
+    })).toContain('$.projectRoot is not allowed.');
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['permission.list'].result.items?.properties)
+      .not.toHaveProperty('toolInput');
+  });
+
+  it('keeps deprecated scope decisions transport-compatible without trusting them', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['permission.respond'].params;
+    const fingerprint = 'a'.repeat(64);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      requestId: 'permission-1',
+      decision: {
+        type: 'allow_always',
+        scope: {
+          toolName: 'bash',
+          matcher: {
+            version: 1,
+            kind: 'exact-command',
+            toolName: 'bash',
+            fingerprint,
+            shell: 'posix',
+            commandFingerprint: fingerprint,
+            cwd: '/workspace',
+            background: false,
+          },
+        },
+      },
+    })).toEqual([]);
   });
 });

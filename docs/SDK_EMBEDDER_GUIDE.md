@@ -2659,6 +2659,12 @@ pass process-local objects such as `extensionRuntime`, callbacks, `AbortSignal`,
 LSP services, class instances, or cyclic structures. KodaX rejects them before
 transport instead of silently dropping fields.
 
+`events.beforeToolExecute` is an executable policy hook, not an observation
+callback. It is preserved in embedded mode and rejected in daemon mode; install
+the equivalent policy in the daemon owner instead. The KodaX REPL explicitly
+marks and removes only its own legacy approval hook because Runtime-owned
+permission brokering replaces that hook.
+
 Use the runtime APIs for cross-boundary behavior:
 
 - cancellation: `runtime.runs.abort(runId)`;
@@ -2705,6 +2711,23 @@ this creates an explicit cross-connection ordering boundary. Only the first
 valid response wins. Wrong-run or stale responses are rejected.
 Abort, runtime close, daemon stop, and timeout reject unresolved permission
 requests so tool approval promises do not hang forever.
+
+SDK clients that create a concrete request may pass `toolInput` and
+`executionCwd` to `runtime.permissions.request(...)` in both embedded and
+daemon mode. The Runtime removes raw `toolInput` before publishing the pending
+request, derives the bounded/redacted preview from that concrete input,
+canonicalizes it into a matcher, and returns only opaque `grantSuggestions`.
+A caller-supplied `inputPreview` cannot override this trusted summary.
+`projectRoot`, classifier signals, and other owner-only safety context are
+deliberately not client request fields.
+
+Grant administration is typed through `RuntimePermissionScope` and the
+exported `RuntimePermissionMatcher` union (`exact-command`, `exact-path`, and
+`exact-call`). These types are available from both the package root and
+`@kodax-ai/kodax/runtime`; matcher construction remains Runtime-owned.
+Legacy `allow_always.scope` responses remain accepted for 0.7.x clients, but
+the Runtime narrows them to its concrete candidate and never persists the
+client-provided coarse scope.
 
 ### Config, catalogs, MCP, and Space-style admin APIs
 
@@ -3912,9 +3935,13 @@ for (const request of await runtime.userInputs.listPending({ sessionId })) {
 }
 
 for (const request of await runtime.permissions.listPending({ sessionId })) {
+  const sessionScope = request.grantSuggestions
+    ?.find((candidate) => candidate.kind === 'session');
   const accepted = await runtime.permissions.respond(
     request.id,
-    { type: 'allow_once' },
+    sessionScope
+      ? { type: 'allow_session', suggestionId: sessionScope.id }
+      : { type: 'allow_once' },
     { runId: request.runId },
   );
   if (!accepted) refreshPendingInteractions();
@@ -3924,7 +3951,19 @@ for (const request of await runtime.permissions.listPending({ sessionId })) {
 Persistent `allow_always` grants are owned by the daemon and require
 `permission:grant-admin`. Use `permissions.listGrants()` and
 `revokeGrant(grantId, expectedRevision)` for revision-safe administration.
-Clients must not keep separate persistent permission rule stores.
+Clients must return one opaque `grantSuggestions[].id` from the pending request;
+they must not infer, construct, or widen a scope from the display label or input
+preview. A safe request can offer `allow_session` and `allow_always`; a risky or
+dynamic shell request deliberately omits the persistent candidate. Command
+grants match one exact normalized command/cwd/shell/background combination,
+while path grants match one tool and normalized absolute path (the future
+Write/Edit content may differ). Generic extension calls can receive only an
+exact in-memory Session grant. Raw command/argv data is not stored in the
+matcher; grants and audit contain only its fingerprint plus a bounded,
+secret-redacted operator label. Clients must not keep separate persistent
+permission rule stores. Runtime capability `runtimeAutoModeGuardrail` v3 advertises this
+opaque concrete-grant contract; restart or upgrade an older daemon instead of
+falling back to a client-side alias.
 
 ### Broker a Space keychain credential
 

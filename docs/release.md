@@ -76,7 +76,7 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.72 release verification
+## v0.7.73 release verification
 
 Run the normal build first; this refreshes `dist/kodax_bootstrap.js`, which is
 also the artifact used by a globally linked `kodax` command.
@@ -84,26 +84,41 @@ also the artifact used by a globally linked `kodax` command.
 ```bash
 npm run build
 
-# Bare-resume startup, terminal ownership, selection handoff, and replay path
-npx vitest run src/kodax_bootstrap.test.ts src/kodax_resume.test.ts \
-  packages/repl/src/cli-resume.test.ts \
-  packages/repl/src/ui/SessionPicker.test.tsx \
-  packages/repl/src/ui/SessionPicker.runner.test.tsx \
-  packages/repl/src/tui/renderer-runtime.test.ts
+# First-run provider setup and CLI eligibility
+npx vitest run packages/repl/src/common/provider-setup.test.ts \
+  packages/repl/src/interactive/provider-setup.test.ts \
+  src/provider-setup-cli.test.ts
 
-# Runtime Auto Mode ownership, session settings, and daemon capability contract
-npx vitest run src/sdk-runtime.test.ts src/runtime-daemon/server.test.ts \
+# Bounded Auto LLM classification, projection, and guardrail behavior
+npx vitest run packages/coding/src/guardrails/auto-mode/transcript-strip.test.ts \
   packages/coding/src/guardrails/auto-mode/classify.test.ts \
-  packages/coding/src/guardrails/auto-mode/guardrail.test.ts
+  packages/coding/src/guardrails/auto-mode/guardrail.test.ts \
+  packages/coding/src/tools/classifier-projection.test.ts \
+  packages/coding/src/tools/registry.test.ts \
+  packages/agent/src/primitives/guardrail.test.ts \
+  packages/llm/src/side-query.test.ts
+
+# Typed SDK settings, Session persistence, and daemon capability-v2 upgrade
+npx vitest run packages/repl/src/common/permission-config.test.ts \
+  src/sdk-runtime.test.ts src/sdk-runtime-daemon-upgrade.test.ts \
+  src/runtime-daemon/server.test.ts
+
+# Qwen Token Plan registry, capability, media, and cost metadata
+npx vitest run packages/llm/src/providers/registry.test.ts \
+  packages/llm/src/providers/provider-capabilities.test.ts \
+  packages/agent/src/media/capabilities.test.ts \
+  packages/llm/src/cost-rates.test.ts
 ```
 
-On Windows, manually validate the interactive terminal boundary after
-`npm link`: run `kodax -r`, press Esc, and confirm the PowerShell prompt returns
-without another keypress; repeat, select a session, and confirm normal text
-input reaches the resumed REPL. For an SDK auto-mode session, verify that a
-guardrail `allow` produces no pending permission while an explicit classifier
-`escalate` creates exactly one shared request. A headless/daemon run without
-`events.exitPlanMode` must not expose `exit_plan_mode`.
+For the manual TTY boundary, use an isolated `KODAX_HOME`: a bare launch with no
+provider credential must show the metadata-only setup before Runtime creation,
+and cancel must leave `config.json` untouched and immediately return terminal
+control. A completed built-in selection must write only `provider` and `model`,
+name the required environment variable, request a terminal restart, and exit
+without an LLM call. The full checklist is
+[`FEATURE_271_v0.7.73_TEST_GUIDE.md`](test-guides/FEATURE_271_v0.7.73_TEST_GUIDE.md).
+The documented four-call GLM-5.2 latency probe is diagnostic evidence, not a
+release gate, and must not be repeated for this release.
 
 ## Automated release (CI)
 

@@ -127,6 +127,7 @@ export function createAutoInProjectDeprecationEmitter(
 export interface ConfirmResult {
   confirmed: boolean;
   always?: boolean;
+  runtimeGrantKind?: 'session' | 'persistent';
 }
 
 // ============== Tool Categories ==============

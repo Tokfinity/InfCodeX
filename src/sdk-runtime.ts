@@ -18,6 +18,8 @@ import {
   DEFAULT_SPECULATIVE_WINDOW_MS,
   createAutoModeDenialTracker,
   createCircuitBreaker,
+  bashSignalCollector,
+  checkAbsoluteDeny,
   createExternalActorTurnExecutor,
   generateSessionId,
   listCodingDispatchableAgents,
@@ -59,6 +61,7 @@ import type {
   KodaXTurnCompletedEvent,
   KodaXTurnFailedEvent,
   KodaXTurnStartedEvent,
+  AutoModeStats,
   AutoModeSharedState,
   AutoModeToolGuardrail,
   RuntimeContextBudgetSnapshot,
@@ -82,6 +85,21 @@ import {
   upsertMcpServer,
   validateMcpServerConfig,
 } from '@kodax-ai/repl';
+import {
+  createRuntimePermissionMatcher,
+  hasDynamicShellExpansion,
+  parseRuntimePermissionMatcher,
+  runtimePermissionHostPlatform,
+  runtimePermissionMatcherMatches,
+  type RuntimePermissionMatcher,
+} from './runtime-permission-scope.js';
+export type {
+  RuntimeExactCallPermissionMatcher,
+  RuntimeExactCommandPermissionMatcher,
+  RuntimeExactPathPermissionMatcher,
+  RuntimePermissionHostPlatform,
+  RuntimePermissionMatcher,
+} from './runtime-permission-scope.js';
 import type {
   CommandInfo as ReplCommandInfo,
   CompactSessionResult,
@@ -188,7 +206,10 @@ import {
   resolveRuntimeDaemonPathsFromConfigHome,
   updateRuntimeOwnerPolicy,
 } from './runtime-daemon/state.js';
-export { RuntimeTransportBoundaryError } from './runtime-daemon/client.js';
+export {
+  RuntimePermissionScopeUpgradeRequiredError,
+  RuntimeTransportBoundaryError,
+} from './runtime-daemon/client.js';
 
 export class RuntimeDaemonCapabilityUpgradeError extends Error {
   readonly code = 'daemon_capability_upgrade_required' as const;
@@ -624,7 +645,7 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonManagement?: 1;
   readonly actorControlPlane?: 1;
   /** Runtime owns Auto LLM/rules classification before shared permission brokering. */
-  readonly runtimeAutoModeGuardrail?: 1 | 2;
+  readonly runtimeAutoModeGuardrail?: 1 | 2 | 3;
 }
 
 export type RuntimeOperationState =
@@ -1142,6 +1163,8 @@ export interface RuntimeSessionService {
   getSettingsVersioned(
     sessionId: string,
   ): Promise<RuntimeVersionedValue<RuntimeSessionSettings>>;
+  /** Runtime-owned Auto classifier state used by diagnostics and status UI. */
+  getAutoModeStats(sessionId: string): Promise<AutoModeStats | undefined>;
   updateSettings(
     sessionId: string,
     patch: RuntimeSessionSettingsPatch,
@@ -1506,6 +1529,7 @@ export type RuntimeEventType =
   | 'user_input.resolved'
   | 'permission.requested'
   | 'permission.resolved'
+  | 'permission.grant.changed'
   | 'workflow.started'
   | 'workflow.updated'
   | 'workflow.finished'
@@ -1608,6 +1632,12 @@ export interface RuntimeInteractionResolvedEventPayload {
   readonly kind?: RuntimeUserInputKind;
 }
 
+export interface RuntimePermissionGrantChangedEventPayload {
+  readonly action: 'created' | 'revoked' | 'expired';
+  readonly grant: RuntimePermissionGrant;
+  readonly revision: number;
+}
+
 export interface RuntimeWarningEventPayload {
   readonly message: string;
   readonly source?: string;
@@ -1657,6 +1687,7 @@ export type RuntimeEventPayloadMap = Omit<
   | 'user_input.resolved'
   | 'permission.requested'
   | 'permission.resolved'
+  | 'permission.grant.changed'
   | 'session.settings.updated'
   | 'turn.started'
   | 'turn.completed'
@@ -1689,6 +1720,7 @@ export type RuntimeEventPayloadMap = Omit<
   readonly 'user_input.resolved': RuntimeInteractionResolvedEventPayload;
   readonly 'permission.requested': RuntimePermissionRequest;
   readonly 'permission.resolved': RuntimeInteractionResolvedEventPayload;
+  readonly 'permission.grant.changed': RuntimePermissionGrantChangedEventPayload;
   readonly 'session.settings.updated': RuntimeSessionSettingsUpdatedEventPayload;
   readonly 'turn.started': KodaXTurnStartedEvent;
   readonly 'turn.completed': KodaXTurnCompletedEvent;
@@ -1760,6 +1792,15 @@ export type RuntimePermissionRisk = 'low' | 'medium' | 'high';
 export interface RuntimePermissionScope {
   readonly toolName?: string;
   readonly sessionId?: string;
+  /** Runtime-generated concrete matcher. Absent only on legacy 0.7.x grants. */
+  readonly matcher?: RuntimePermissionMatcher;
+}
+
+export interface RuntimePermissionGrantSuggestion {
+  /** Opaque pending-request-local identifier; clients must return it unchanged. */
+  readonly id: string;
+  readonly kind: 'session' | 'persistent';
+  readonly label: string;
 }
 
 export interface RuntimePermissionRequest {
@@ -1774,6 +1815,7 @@ export interface RuntimePermissionRequest {
   readonly inputPreview?: string;
   /** Effective directory used to resolve relative tool paths for this run. */
   readonly executionCwd?: string;
+  readonly grantSuggestions?: readonly RuntimePermissionGrantSuggestion[];
   readonly createdAt: string;
   readonly expiresAt?: string;
 }
@@ -1790,10 +1832,21 @@ export interface RuntimePermissionRequestInput {
   readonly executionCwd?: string;
   readonly expiresAt?: string;
   readonly timeoutMs?: number;
+  /**
+   * Concrete JSON tool input used by the Runtime to derive an opaque grant
+   * candidate. It is neither emitted on Runtime events nor persisted.
+   */
+  readonly toolInput?: Readonly<Record<string, unknown>>;
 }
 
 export type RuntimePermissionDecision =
   | { readonly type: 'allow_once' }
+  | { readonly type: 'allow_session'; readonly suggestionId: string }
+  | { readonly type: 'allow_always'; readonly suggestionId: string }
+  /**
+   * @deprecated v2 compatibility input. The Runtime maps this selection to
+   * its narrower concrete candidate and never persists the supplied scope.
+   */
   | { readonly type: 'allow_always'; readonly scope: RuntimePermissionScope }
   | { readonly type: 'reject'; readonly reason?: string };
 
@@ -1811,6 +1864,9 @@ export interface RuntimePermissionGrant {
   readonly id: string;
   readonly scope: RuntimePermissionScope;
   readonly createdAt: string;
+  readonly persistence?: 'session' | 'persistent';
+  readonly label?: string;
+  readonly sourcePermissionId?: string;
 }
 
 export interface RuntimePermissionService {
@@ -2099,7 +2155,20 @@ interface RuntimeRunRecord {
 interface PendingPermission {
   readonly request: RuntimePermissionRequest;
   readonly waiters: Array<(decision: RuntimePermissionDecision) => void>;
+  readonly grantCandidates: readonly RuntimePermissionGrantCandidate[];
   readonly timer?: ReturnType<typeof setTimeout>;
+}
+
+interface RuntimePermissionGrantCandidate {
+  readonly suggestion: RuntimePermissionGrantSuggestion;
+  readonly scope: RuntimePermissionScope;
+  readonly persistence: 'session' | 'persistent';
+}
+
+interface RuntimePermissionGrantContext {
+  readonly toolInput: Readonly<Record<string, unknown>>;
+  readonly projectRoot?: string;
+  readonly signals?: readonly ToolCallSignal[];
 }
 
 interface PendingUserInput {
@@ -2125,6 +2194,7 @@ type RuntimeArtifactStore = ReturnType<typeof createRuntimeArtifactStore>;
 interface RuntimeRunServiceInternal extends RuntimeRunService {
   closeAll(reason: string): void;
   releaseSession(sessionId: string): void;
+  getAutoModeStats(sessionId: string): AutoModeStats | undefined;
 }
 
 interface PendingRunStart {
@@ -2279,7 +2349,7 @@ export async function createKodaXRuntime(
       clientInfo: options.clientInfo,
       capabilities: options.capabilities,
       requirements: autoStart
-        ? { ...options.requirements, runtimeAutoModeGuardrail: 2 }
+        ? { ...options.requirements, runtimeAutoModeGuardrail: 3 }
         : options.requirements,
     });
   }
@@ -2307,7 +2377,7 @@ export async function createKodaXRuntime(
     learningCenter: { version: 1 },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
     runtimeAutoModeGuardrail: {
-      version: 2,
+      version: 3,
       owner: 'session-runtime',
       escalationCreatesPermission: true,
       fallbackPersistsEngine: true,
@@ -2315,6 +2385,9 @@ export async function createKodaXRuntime(
       defaultSpeculativeWindowMs: DEFAULT_SPECULATIVE_WINDOW_MS,
       boundedClassifierInput: true,
       diagnosticsVersion: 1,
+      permissionGrantSuggestions: true,
+      concretePermissionMatchers: true,
+      clientScopeExpansion: false,
     },
     ...(options.externalAgents !== undefined
       ? { externalAgentAdmin: { version: 1 } }
@@ -2437,7 +2510,11 @@ export async function createKodaXRuntime(
     settingsOwner,
     (sessionId) => runService.list({ sessionId }),
     (sessionId) => permissions.service.listPending({ sessionId }),
-    (sessionId) => runService.releaseSession(sessionId),
+    (sessionId) => runService.getAutoModeStats(sessionId),
+    (sessionId) => {
+      runService.releaseSession(sessionId);
+      permissions.releaseSession(sessionId);
+    },
     sessionAdmission,
   );
   const configHome = options.homeDir
@@ -2519,6 +2596,7 @@ export async function createKodaXRuntime(
       closed = true;
       runService.closeAll('runtime closed');
       permissions.rejectAll('runtime closed');
+      permissions.releaseAllSessionGrants();
       userInputs.rejectAll('runtime closed');
       await actorRegistry.close('runtime closed');
       await agentPlane?.close();
@@ -2835,7 +2913,7 @@ async function replaceLegacyRuntimeDaemonForGuardrailUpgrade(input: {
   readonly journalEpoch?: string;
   readonly grantedScopes?: readonly RuntimeGrantedScope[];
   readonly startupTimeoutMs: number;
-  readonly requiredVersion: 1 | 2;
+  readonly requiredVersion: 1 | 2 | 3;
 }): Promise<void> {
   if (
     !hasVersionedRuntimeCapability(
@@ -3056,7 +3134,7 @@ async function connectKodaXRuntimeInternal(
     grantedScopes = parseRuntimeGrantedScopes(initialized.grantedScopes);
     const requirements =
       options.autoStart === true
-        ? { ...options.requirements, runtimeAutoModeGuardrail: 2 as const }
+        ? { ...options.requirements, runtimeAutoModeGuardrail: 3 as const }
         : options.requirements;
     const requiredGuardrailVersion =
       requirements?.runtimeAutoModeGuardrail;
@@ -3342,6 +3420,7 @@ function createRuntimeSessionService(
   listPendingPermissions: (
     sessionId: string,
   ) => Promise<readonly RuntimePermissionRequest[]>,
+  readAutoModeStats: (sessionId: string) => AutoModeStats | undefined,
   onSessionDeleted: (sessionId: string) => void,
   admission: RuntimeSessionAdmission,
 ): RuntimeSessionService {
@@ -3562,6 +3641,21 @@ function createRuntimeSessionService(
 
     async getSettings(sessionId) {
       return (await this.getSettingsVersioned(sessionId)).value;
+    },
+
+    async getAutoModeStats(sessionId) {
+      ensureOpen();
+      await admission.loadRequired(sessionId);
+      const settings = (await settingsOwner.read(sessionId)).value;
+      if (replApi.normalizePermissionMode(settings.permissionMode) !== 'auto') {
+        return undefined;
+      }
+      const live = readAutoModeStats(sessionId);
+      return {
+        engine: settings.autoModeEngine ?? live?.engine ?? 'llm',
+        denials: live?.denials ?? createAutoModeDenialTracker(),
+        breaker: live?.breaker ?? createCircuitBreaker(),
+      };
     },
 
     async updateSettings(sessionId, patch) {
@@ -4530,6 +4624,16 @@ function createRuntimeRunService(deps: {
       }
       autoModeGuardrails.delete(sessionId);
       autoModeStates.delete(sessionId);
+    },
+    getAutoModeStats(sessionId) {
+      const state = autoModeStates.get(sessionId);
+      return state === undefined
+        ? undefined
+        : {
+            engine: state.engine,
+            denials: state.denials,
+            breaker: state.breaker,
+          };
     },
   };
 }
@@ -6665,10 +6769,13 @@ function createRuntimePermissionRegistry(
   persistence: RuntimePersistence,
 ) {
   const pending = new Map<string, PendingPermission>();
+  const sessionGrants = new Map<string, RuntimePermissionGrant>();
+  let grantRevision = 0;
 
   const trackAndWait = (
     request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
     timeoutMs = defaultTimeoutMs,
+    grantContext?: RuntimePermissionGrantContext,
   ): {
     readonly request: RuntimePermissionRequest;
     readonly response: Promise<RuntimePermissionDecision>;
@@ -6683,6 +6790,7 @@ function createRuntimePermissionRegistry(
       request,
       [resolveResponse],
       resolvePermissionTimeoutMs(request.expiresAt, timeoutMs),
+      grantContext,
     );
     return { request: created, response };
   };
@@ -6696,8 +6804,9 @@ function createRuntimePermissionRegistry(
     if (!item) return false;
     if (expectedRunId !== undefined && item.request.runId !== expectedRunId)
       return false;
-    if (decision.type === 'allow_always') {
-      saveRuntimePermissionGrant(persistence, item.request, decision.scope);
+    if (decision.type === 'allow_session' || decision.type === 'allow_always') {
+      const candidate = resolveRuntimePermissionGrantCandidate(item, decision);
+      saveRuntimePermissionCandidate(candidate, item.request);
     }
     pending.delete(requestId);
     if (item.timer) clearTimeout(item.timer);
@@ -6730,38 +6839,7 @@ function createRuntimePermissionRegistry(
 
   const service: RuntimePermissionService = {
     request(input) {
-      const grant = findRuntimePermissionGrant(
-        persistence,
-        input.sessionId,
-        input.toolName,
-      );
-      if (grant !== undefined) {
-        return Promise.resolve({ type: 'allow_always', scope: grant.scope });
-      }
-      const pendingPermission = trackAndWait(
-        {
-          sessionId: input.sessionId,
-          runId: input.runId,
-          ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
-          ...(input.toolCallId !== undefined
-            ? { toolCallId: input.toolCallId }
-            : {}),
-          toolName: input.toolName,
-          ...(input.reason !== undefined ? { reason: input.reason } : {}),
-          ...(input.risk !== undefined ? { risk: input.risk } : {}),
-          ...(input.inputPreview !== undefined
-            ? { inputPreview: input.inputPreview }
-            : {}),
-          ...(input.executionCwd !== undefined
-            ? { executionCwd: input.executionCwd }
-            : {}),
-          ...(input.expiresAt !== undefined
-            ? { expiresAt: input.expiresAt }
-            : {}),
-        },
-        input.timeoutMs ?? defaultTimeoutMs,
-      );
-      return pendingPermission.response;
+      return requestPermission(input);
     },
 
     async listPending(filter) {
@@ -6774,28 +6852,234 @@ function createRuntimePermissionRegistry(
       return resolvePending(requestId, decision, options?.runId);
     },
     async listGrants() {
-      return persistence.loadPermissionGrants();
+      const persistent = loadPersistentPermissionGrants();
+      return {
+        revision: grantRevision,
+        value: [...persistent.value, ...sessionGrants.values()],
+      };
     },
     async revokeGrant(grantId, expectedRevision) {
-      const current = persistence.loadPermissionGrants();
-      if (current.revision !== expectedRevision) {
+      const persistent = loadPersistentPermissionGrants();
+      if (grantRevision !== expectedRevision) {
         throw createRuntimeConflictError(
-          `Permission grant revision ${expectedRevision} is stale; current revision is ${current.revision}`,
-          current.revision,
+          `Permission grant revision ${expectedRevision} is stale; current revision is ${grantRevision}`,
+          grantRevision,
         );
       }
-      const next = current.value.filter((grant) => grant.id !== grantId);
-      if (next.length === current.value.length) return false;
+      const sessionGrant = sessionGrants.get(grantId);
+      if (sessionGrant !== undefined) {
+        sessionGrants.delete(grantId);
+        grantRevision += 1;
+        persistence.savePermissionGrants({
+          revision: grantRevision,
+          value: persistent.value,
+        });
+        emitPermissionGrantChanged('revoked', sessionGrant, grantRevision);
+        return true;
+      }
+      const revoked = persistent.value.find((grant) => grant.id === grantId);
+      const next = persistent.value.filter((grant) => grant.id !== grantId);
+      if (next.length === persistent.value.length) return false;
+      grantRevision += 1;
       persistence.savePermissionGrants({
-        revision: current.revision + 1,
+        revision: grantRevision,
         value: next,
       });
+      if (revoked !== undefined) {
+        emitPermissionGrantChanged('revoked', revoked, grantRevision);
+      }
       return true;
     },
   };
 
+  function requestPermission(
+    input: RuntimePermissionRequestInput,
+    ownerContext?: RuntimePermissionGrantContext,
+  ): Promise<RuntimePermissionDecision> {
+    const grantContext = ownerContext ?? (input.toolInput !== undefined
+      ? { toolInput: input.toolInput }
+      : undefined);
+    const grant = findPermissionGrant(
+      input.sessionId,
+      input.toolName,
+      grantContext?.toolInput,
+      input.executionCwd,
+    );
+    if (grant !== undefined) {
+      return grant.persistence === 'session'
+        ? Promise.resolve({ type: 'allow_session', suggestionId: grant.id })
+        : Promise.resolve({ type: 'allow_always', suggestionId: grant.id });
+    }
+    const { toolInput: _toolInput, ...requestInput } = input;
+    const trustedInputPreview = grantContext === undefined
+      ? requestInput.inputPreview
+      : previewInput(grantContext.toolInput);
+    const request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'> = {
+      sessionId: requestInput.sessionId,
+      runId: requestInput.runId,
+      ...(requestInput.turnId !== undefined ? { turnId: requestInput.turnId } : {}),
+      ...(requestInput.toolCallId !== undefined
+        ? { toolCallId: requestInput.toolCallId }
+        : {}),
+      toolName: requestInput.toolName,
+      ...(requestInput.reason !== undefined ? { reason: requestInput.reason } : {}),
+      ...(requestInput.risk !== undefined ? { risk: requestInput.risk } : {}),
+      ...(trustedInputPreview !== undefined
+        ? { inputPreview: trustedInputPreview }
+        : {}),
+      ...(requestInput.executionCwd !== undefined
+        ? { executionCwd: requestInput.executionCwd }
+        : {}),
+      ...(requestInput.expiresAt !== undefined
+        ? { expiresAt: requestInput.expiresAt }
+        : {}),
+    };
+    const coalesced = grantContext === undefined
+      ? undefined
+      : joinMatchingPendingPermission(request, grantContext);
+    if (coalesced !== undefined) return coalesced;
+    const pendingPermission = trackAndWait(
+      request,
+      requestInput.timeoutMs ?? defaultTimeoutMs,
+      grantContext,
+    );
+    return pendingPermission.response;
+  }
+
+  function loadPersistentPermissionGrants(): RuntimeVersionedValue<readonly RuntimePermissionGrant[]> {
+    const current = persistence.loadPermissionGrants();
+    grantRevision = Math.max(grantRevision, current.revision);
+    return current;
+  }
+
+  function findPermissionGrant(
+    sessionId: string,
+    toolName: string,
+    toolInput?: Readonly<Record<string, unknown>>,
+    executionCwd?: string,
+  ): RuntimePermissionGrant | undefined {
+    const persistent = loadPersistentPermissionGrants().value;
+    return [...sessionGrants.values(), ...persistent].find((grant) => {
+      if (grant.scope.sessionId !== undefined && grant.scope.sessionId !== sessionId) return false;
+      if (grant.scope.toolName !== undefined && grant.scope.toolName !== toolName) return false;
+      if (grant.scope.matcher === undefined) return true;
+      if (toolInput === undefined) return false;
+      if (
+        grant.persistence !== 'session'
+        && grant.scope.matcher.kind === 'exact-command'
+        && typeof toolInput.command === 'string'
+        && hasDynamicShellExpansion(toolInput.command, runtimePermissionHostPlatform())
+      ) return false;
+      return runtimePermissionMatcherMatches(grant.scope.matcher, {
+        toolName,
+        toolInput,
+        executionCwd: executionCwd ?? process.cwd(),
+      });
+    });
+  }
+
+  function joinMatchingPendingPermission(
+    request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
+    context: RuntimePermissionGrantContext,
+  ): Promise<RuntimePermissionDecision> | undefined {
+    const candidates = createRuntimePermissionGrantCandidates(request, context);
+    if (candidates.length === 0) return undefined;
+    const match = [...pending.values()].find((item) => (
+      item.request.sessionId === request.sessionId
+      && item.request.runId === request.runId
+      && item.grantCandidates.length === candidates.length
+      && candidates.every((candidate) => item.grantCandidates.some((existing) => (
+        existing.persistence === candidate.persistence
+        && permissionScopesEqual(existing.scope, candidate.scope)
+      )))
+    ));
+    if (!match) return undefined;
+    return new Promise<RuntimePermissionDecision>((resolve) => {
+      match.waiters.push(resolve);
+    });
+  }
+
+  function resolveRuntimePermissionGrantCandidate(
+    item: PendingPermission,
+    decision: Extract<RuntimePermissionDecision, { readonly type: 'allow_session' | 'allow_always' }>,
+  ): RuntimePermissionGrantCandidate {
+    const expectedKind = decision.type === 'allow_session' ? 'session' : 'persistent';
+    const candidate = 'suggestionId' in decision
+      ? item.grantCandidates.find((entry) => (
+          entry.suggestion.id === decision.suggestionId && entry.persistence === expectedKind
+        ))
+      : resolveLegacyRuntimePermissionGrantCandidate(
+          item,
+          decision.scope,
+          expectedKind,
+        );
+    if (!candidate) {
+      throw createRuntimeInvalidInputError(
+        'Permission decision does not select a Runtime-issued grant suggestion.',
+      );
+    }
+    return candidate;
+  }
+
+  function saveRuntimePermissionCandidate(
+    candidate: RuntimePermissionGrantCandidate,
+    request: RuntimePermissionRequest,
+  ): void {
+    const grant: RuntimePermissionGrant = {
+      id: `grant_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+      scope: candidate.scope,
+      createdAt: new Date().toISOString(),
+      persistence: candidate.persistence,
+      label: candidate.suggestion.label,
+      sourcePermissionId: request.id,
+    };
+    if (candidate.persistence === 'session') {
+      if ([...sessionGrants.values()].some((item) => permissionScopesEqual(item.scope, grant.scope))) return;
+      const persistent = loadPersistentPermissionGrants();
+      grantRevision += 1;
+      sessionGrants.set(grant.id, grant);
+      persistence.savePermissionGrants({
+        revision: grantRevision,
+        value: persistent.value,
+      });
+      emitPermissionGrantChanged('created', grant, grantRevision, request);
+      return;
+    }
+    const current = loadPersistentPermissionGrants();
+    if (current.value.some((item) => permissionScopesEqual(item.scope, grant.scope))) return;
+    grantRevision += 1;
+    persistence.savePermissionGrants({
+      revision: grantRevision,
+      value: [...current.value, grant],
+    });
+    emitPermissionGrantChanged('created', grant, grantRevision, request);
+  }
+
+  function emitPermissionGrantChanged(
+    action: RuntimePermissionGrantChangedEventPayload['action'],
+    grant: RuntimePermissionGrant,
+    revision: number,
+    request?: RuntimePermissionRequest,
+  ): void {
+    bus.emit(
+      'permission.grant.changed',
+      { action, grant, revision },
+      {
+        sessionId: request?.sessionId ?? grant.scope.sessionId ?? 'runtime',
+        runId: request?.runId ?? 'permission-grants',
+        ...(request?.turnId !== undefined ? { turnId: request.turnId } : {}),
+      },
+    );
+  }
+
   return {
     service,
+    requestOwned(
+      input: RuntimePermissionRequestInput,
+      context: RuntimePermissionGrantContext,
+    ): Promise<RuntimePermissionDecision> {
+      return requestPermission(input, context);
+    },
     track(
       request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
     ): RuntimePermissionRequest {
@@ -6809,17 +7093,20 @@ function createRuntimePermissionRegistry(
     trackAndWait(
       request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
       timeoutMs = defaultTimeoutMs,
+      grantContext?: RuntimePermissionGrantContext,
     ) {
-      return trackAndWait(request, timeoutMs);
+      return trackAndWait(request, timeoutMs, grantContext);
     },
     resolve(requestId: string, decision: RuntimePermissionDecision): void {
       resolvePending(requestId, decision);
     },
-    isGranted(sessionId: string, toolName: string): boolean {
-      return (
-        findRuntimePermissionGrant(persistence, sessionId, toolName) !==
-        undefined
-      );
+    isGranted(
+      sessionId: string,
+      toolName: string,
+      toolInput?: Readonly<Record<string, unknown>>,
+      executionCwd?: string,
+    ): boolean {
+      return findPermissionGrant(sessionId, toolName, toolInput, executionCwd) !== undefined;
     },
     rejectForRun(runId: string, reason: string): void {
       resolveMatching((request) => request.runId === runId, {
@@ -6830,23 +7117,60 @@ function createRuntimePermissionRegistry(
     rejectAll(reason: string): void {
       resolveMatching(() => true, { type: 'reject', reason });
     },
+    releaseSession(sessionId: string): void {
+      const persistent = loadPersistentPermissionGrants();
+      const removed = [...sessionGrants.values()].filter(
+        (grant) => grant.scope.sessionId === sessionId,
+      );
+      if (removed.length === 0) return;
+      for (const grant of removed) sessionGrants.delete(grant.id);
+      grantRevision += 1;
+      persistence.savePermissionGrants({
+        revision: grantRevision,
+        value: persistent.value,
+      });
+      for (const grant of removed) {
+        emitPermissionGrantChanged('expired', grant, grantRevision);
+      }
+    },
+    releaseAllSessionGrants(): void {
+      if (sessionGrants.size === 0) return;
+      const persistent = loadPersistentPermissionGrants();
+      const removed = [...sessionGrants.values()];
+      sessionGrants.clear();
+      grantRevision += 1;
+      persistence.savePermissionGrants({
+        revision: grantRevision,
+        value: persistent.value,
+      });
+      for (const grant of removed) {
+        emitPermissionGrantChanged('expired', grant, grantRevision);
+      }
+    },
   };
 
   function createPendingPermission(
     request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
     waiters: Array<(decision: RuntimePermissionDecision) => void>,
     timeoutMs = defaultTimeoutMs,
+    grantContext?: RuntimePermissionGrantContext,
   ): RuntimePermissionRequest {
     const inputPreview =
       request.inputPreview === undefined
         ? undefined
         : normalizePermissionInputPreview(request.inputPreview);
+    const grantCandidates = grantContext === undefined
+      ? []
+      : createRuntimePermissionGrantCandidates(request, grantContext);
     const created: RuntimePermissionRequest = {
       ...request,
       ...(inputPreview !== undefined ? { inputPreview } : {}),
       executionCwd: path.resolve(request.executionCwd ?? process.cwd()),
       id: `perm_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
       createdAt: new Date().toISOString(),
+      ...(grantCandidates.length > 0
+        ? { grantSuggestions: grantCandidates.map((candidate) => candidate.suggestion) }
+        : {}),
     };
     const timer =
       timeoutMs > 0
@@ -6876,6 +7200,7 @@ function createRuntimePermissionRegistry(
     pending.set(created.id, {
       request: created,
       waiters,
+      grantCandidates,
       ...(timer !== undefined ? { timer } : {}),
     });
     bus.emit('permission.requested', created, {
@@ -6885,6 +7210,168 @@ function createRuntimePermissionRegistry(
     });
     return created;
   }
+}
+
+function resolveLegacyRuntimePermissionGrantCandidate(
+  item: PendingPermission,
+  requestedScope: RuntimePermissionScope,
+  persistence: 'session' | 'persistent',
+): RuntimePermissionGrantCandidate | undefined {
+  if (
+    requestedScope.toolName !== undefined
+    && requestedScope.toolName !== item.request.toolName
+  ) return undefined;
+  if (
+    requestedScope.sessionId !== undefined
+    && requestedScope.sessionId !== item.request.sessionId
+  ) return undefined;
+  const candidate = item.grantCandidates.find((candidate) => {
+    if (candidate.persistence !== persistence) return false;
+    if (requestedScope.matcher !== undefined) {
+      return candidate.scope.matcher?.kind === requestedScope.matcher.kind
+        && candidate.scope.matcher.fingerprint === requestedScope.matcher.fingerprint;
+    }
+    // Compatibility callers can identify only the legacy tool/session
+    // projection. The Runtime persists the already-issued concrete candidate,
+    // never the broader caller-supplied projection.
+    return true;
+  });
+  if (!candidate || requestedScope.sessionId === undefined) return candidate;
+  return {
+    ...candidate,
+    scope: { ...candidate.scope, sessionId: requestedScope.sessionId },
+  };
+}
+
+function createRuntimePermissionGrantCandidates(
+  request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
+  context: RuntimePermissionGrantContext,
+): readonly RuntimePermissionGrantCandidate[] {
+  const executionCwd = path.resolve(request.executionCwd ?? process.cwd());
+  const matcher = createRuntimePermissionMatcher({
+    toolName: request.toolName,
+    toolInput: context.toolInput,
+    executionCwd,
+  });
+  if (
+    matcher.kind === 'exact-command'
+    && (typeof context.toolInput.command !== 'string'
+      || context.toolInput.command.trim().length === 0)
+  ) return [];
+  const label = runtimePermissionGrantLabel(matcher, context.toolInput);
+  const candidates: RuntimePermissionGrantCandidate[] = [
+    {
+      suggestion: {
+        id: `scope_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+        kind: 'session',
+        label: runtimePermissionGrantSuggestionLabel(
+          matcher,
+          label,
+          request.toolName,
+          'session',
+        ),
+      },
+      scope: {
+        toolName: request.toolName,
+        sessionId: request.sessionId,
+        matcher,
+      },
+      persistence: 'session',
+    },
+  ];
+  if (
+    matcher.kind !== 'exact-call'
+    && isPersistentRuntimePermissionSafe(request, context, executionCwd)
+  ) {
+    candidates.push({
+      suggestion: {
+        id: `scope_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+        kind: 'persistent',
+        label: runtimePermissionGrantSuggestionLabel(
+          matcher,
+          label,
+          request.toolName,
+          'persistent',
+        ),
+      },
+      scope: { toolName: request.toolName, matcher },
+      persistence: 'persistent',
+    });
+  }
+  return candidates;
+}
+
+function isPersistentRuntimePermissionSafe(
+  request: Omit<RuntimePermissionRequest, 'id' | 'createdAt'>,
+  context: RuntimePermissionGrantContext,
+  executionCwd: string,
+): boolean {
+  if (request.risk === 'high') return false;
+  const call = {
+    id: request.toolCallId ?? 'permission-scope',
+    name: request.toolName,
+    input: context.toolInput,
+  };
+  const projectRoot = path.resolve(context.projectRoot ?? executionCwd);
+  if (checkAbsoluteDeny(call, projectRoot, executionCwd).denied) return false;
+  const signals = [
+    ...(context.signals ?? []),
+    ...bashSignalCollector.collect(call, projectRoot, executionCwd),
+  ];
+  if (signals.some((signal) => signal.kind === 'dangerous_pattern')) return false;
+  if (request.toolName === 'bash') {
+    const command = typeof context.toolInput.command === 'string'
+      ? context.toolInput.command
+      : '';
+    if (hasDynamicShellExpansion(command, runtimePermissionHostPlatform())) return false;
+  }
+  return true;
+}
+
+function runtimePermissionGrantLabel(
+  matcher: RuntimePermissionMatcher,
+  toolInput: Readonly<Record<string, unknown>>,
+): string {
+  const raw = matcher.kind === 'exact-command'
+    ? typeof toolInput.command === 'string' ? toolInput.command : matcher.toolName
+    : matcher.kind === 'exact-path'
+      ? matcher.path
+      : matcher.toolName;
+  const normalized = redactPermissionPreviewString(
+    raw.slice(0, PERMISSION_PREVIEW_SCAN_MAX_LENGTH),
+  ).replace(/\s+/g, ' ').trim();
+  return normalized.length <= 120
+    ? normalized
+    : `${normalized.slice(0, 117)}...`;
+}
+
+function runtimePermissionGrantSuggestionLabel(
+  matcher: RuntimePermissionMatcher,
+  label: string,
+  toolName: string,
+  persistence: 'session' | 'persistent',
+): string {
+  if (matcher.kind === 'exact-command') {
+    return persistence === 'session'
+      ? `Allow this exact command for this Runtime session: ${label}`
+      : `Always allow this exact command: ${label}`;
+  }
+  if (matcher.kind === 'exact-path') {
+    return persistence === 'session'
+      ? `Allow ${toolName} on this path for this Runtime session: ${label}`
+      : `Always allow ${toolName} on this path: ${label}`;
+  }
+  return `Allow this exact ${toolName} call for this Runtime session`;
+}
+
+function permissionScopesEqual(
+  left: RuntimePermissionScope,
+  right: RuntimePermissionScope,
+): boolean {
+  return left.toolName === right.toolName
+    && left.sessionId === right.sessionId
+    && left.matcher?.kind === right.matcher?.kind
+    && left.matcher?.fingerprint === right.matcher?.fingerprint;
 }
 
 function wrapKodaXEvents(input: {
@@ -7247,7 +7734,12 @@ function wrapKodaXEvents(input: {
         if (planDecision !== true && planDecision !== undefined)
           return planDecision;
       }
-      if (permissions.isGranted(meta?.sessionId ?? record.sessionId, tool)) {
+      if (permissions.isGranted(
+        meta?.sessionId ?? record.sessionId,
+        tool,
+        toolInput,
+        resolveRuntimeExecutionCwd(record),
+      )) {
         return true;
       }
       // An in-process host hook is authoritative. The runtime policy is the
@@ -7272,6 +7764,11 @@ function wrapKodaXEvents(input: {
         toolName: tool,
         inputPreview: previewInput(toolInput),
         executionCwd: resolveRuntimeExecutionCwd(record),
+      }, undefined, {
+        toolInput,
+        ...(typeof record.start?.options.context?.gitRoot === 'string'
+          ? { projectRoot: record.start.options.context.gitRoot }
+          : {}),
       });
       try {
         if (!original?.beforeToolExecute) {
@@ -8040,20 +8537,31 @@ function parseRuntimePermissionGrant(value: unknown): RuntimePermissionGrant {
   }
   const toolName = value.scope.toolName;
   const sessionId = value.scope.sessionId;
+  const matcher = value.scope.matcher;
+  const persistence = value.persistence;
+  const label = value.label;
+  const sourcePermissionId = value.sourcePermissionId;
   if (
     typeof value.id !== 'string' ||
     typeof value.createdAt !== 'string' ||
     (toolName !== undefined && typeof toolName !== 'string') ||
-    (sessionId !== undefined && typeof sessionId !== 'string')
+    (sessionId !== undefined && typeof sessionId !== 'string') ||
+    (persistence !== undefined && persistence !== 'session' && persistence !== 'persistent') ||
+    (label !== undefined && typeof label !== 'string') ||
+    (sourcePermissionId !== undefined && typeof sourcePermissionId !== 'string')
   ) {
     throw new Error('invalid permission grant');
   }
   return {
     id: value.id,
     createdAt: value.createdAt,
+    persistence: persistence ?? 'persistent',
+    ...(label !== undefined ? { label } : {}),
+    ...(sourcePermissionId !== undefined ? { sourcePermissionId } : {}),
     scope: {
       ...(toolName !== undefined ? { toolName } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(matcher !== undefined ? { matcher: parseRuntimePermissionMatcher(matcher) } : {}),
     },
   };
 }
@@ -8802,55 +9310,6 @@ function normalizeRuntimeRunError(
   return safe;
 }
 
-function saveRuntimePermissionGrant(
-  persistence: RuntimePersistence,
-  request: RuntimePermissionRequest,
-  scope: RuntimePermissionScope,
-): void {
-  if (
-    (scope.toolName !== undefined && scope.toolName !== request.toolName) ||
-    (scope.sessionId !== undefined && scope.sessionId !== request.sessionId)
-  ) {
-    throw createRuntimeInvalidInputError(
-      'Persistent permission scope exceeds the pending request.',
-    );
-  }
-  const current = persistence.loadPermissionGrants();
-  if (
-    current.value.some(
-      (grant) =>
-        grant.scope.toolName === scope.toolName &&
-        grant.scope.sessionId === scope.sessionId,
-    )
-  )
-    return;
-  const grant: RuntimePermissionGrant = {
-    id: `grant_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
-    scope,
-    createdAt: new Date().toISOString(),
-  };
-  persistence.savePermissionGrants({
-    revision: current.revision + 1,
-    value: [...current.value, grant],
-  });
-}
-
-function findRuntimePermissionGrant(
-  persistence: RuntimePersistence,
-  sessionId: string,
-  toolName: string,
-): RuntimePermissionGrant | undefined {
-  return persistence
-    .loadPermissionGrants()
-    .value.find(
-      (grant) =>
-        (grant.scope.sessionId === undefined ||
-          grant.scope.sessionId === sessionId) &&
-        (grant.scope.toolName === undefined ||
-          grant.scope.toolName === toolName),
-    );
-}
-
 function permissionMatchesFilter(
   request: RuntimePermissionRequest,
   filter: RuntimePermissionFilter | undefined,
@@ -9244,7 +9703,7 @@ async function createRuntimeAutoModeGuardrail(input: {
       const previousPhase = record.phase;
       if (record.phase === 'running') record.phase = 'waiting_permission';
       try {
-        const decision = await input.permissions.service.request({
+        const decision = await input.permissions.requestOwned({
           sessionId: input.sessionId,
           runId: record.runId,
           ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
@@ -9254,8 +9713,13 @@ async function createRuntimeAutoModeGuardrail(input: {
           risk: autoModeEscalationRisk(signals),
           inputPreview: previewInput(call.input),
           executionCwd,
+        }, {
+          toolInput: call.input,
+          projectRoot,
+          ...(signals !== undefined ? { signals } : {}),
         });
         return decision.type === 'allow_once' ||
+          decision.type === 'allow_session' ||
           decision.type === 'allow_always'
           ? 'allow'
           : 'block';
@@ -9380,7 +9844,8 @@ function decisionToToolDecision(
   decision: RuntimePermissionDecision | undefined,
 ): RuntimePermissionToolDecision {
   if (!decision) return false;
-  if (decision.type === 'allow_once' || decision.type === 'allow_always')
+  if (decision.type === 'allow_once' || decision.type === 'allow_session'
+    || decision.type === 'allow_always')
     return true;
   return decision.reason ?? false;
 }
@@ -9430,7 +9895,7 @@ function redactPermissionPreviewString(value: string): string {
     .replace(/(https?:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
 }
 
-function previewInput(input: Record<string, unknown>): string {
+function previewInput(input: Readonly<Record<string, unknown>>): string {
   try {
     return buildPermissionInputPreview(input);
   } catch {
@@ -9441,7 +9906,7 @@ function previewInput(input: Record<string, unknown>): string {
   }
 }
 
-function buildPermissionInputPreview(input: Record<string, unknown>): string {
+function buildPermissionInputPreview(input: Readonly<Record<string, unknown>>): string {
   const summary: Record<string, unknown> = {};
   // A preview is intentionally a partial, fixed-field projection. Starting
   // truncated avoids enumerating an attacker-controlled input graph merely to

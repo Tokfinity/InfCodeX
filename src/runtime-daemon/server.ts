@@ -136,7 +136,7 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'ping', 'runtime.identity', 'runtime.status', 'runtime.capabilities',
     'daemon.status', 'daemon.logs', 'operation.get',
     'session.load', 'session.list', 'session.transcript', 'session.observe', 'session.settings.get',
-    'session.settings.getVersioned',
+    'session.settings.getVersioned', 'session.autoMode.getStats',
     'run.get', 'run.list', 'run.await', 'event.subscribe', 'event.unsubscribe',
     'event.replay', 'permission.list', 'permission.listPending', 'permission.grants.list',
     'user_input.listPending', 'workflow.list',
@@ -920,6 +920,8 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.sessions.getSettings(requireStringParam(request.params, 'sessionId'));
     case 'session.settings.getVersioned':
       return runtime.sessions.getSettingsVersioned(requireStringParam(request.params, 'sessionId'));
+    case 'session.autoMode.getStats':
+      return runtime.sessions.getAutoModeStats(requireStringParam(request.params, 'sessionId'));
     case 'session.settings.update': {
       if (options.requireOperationEnvelope === true) {
         throw daemonError(
@@ -1407,7 +1409,7 @@ function runtimeDaemonCapabilities(
       methodNamespace: 'agents',
     },
     runtimeAutoModeGuardrail: {
-      version: 2,
+      version: 3,
       owner: 'session-runtime',
       escalationCreatesPermission: true,
       fallbackPersistsEngine: true,
@@ -1415,6 +1417,9 @@ function runtimeDaemonCapabilities(
       defaultSpeculativeWindowMs: DEFAULT_SPECULATIVE_WINDOW_MS,
       boundedClassifierInput: true,
       diagnosticsVersion: 1,
+      permissionGrantSuggestions: true,
+      concretePermissionMatchers: true,
+      clientScopeExpansion: false,
     },
     ...(externalAgentAdmin ? {
       externalAgentAdmin: {

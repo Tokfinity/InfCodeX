@@ -185,6 +185,12 @@ import {
 } from "../permission/index.js";
 import type { PermissionContext } from "../permission/types.js";
 import {
+  resolveReplRuntimePermissionDecision,
+  type ReplRuntimeAutoModeControl,
+  type ReplRuntimePermissionGrantSuggestion,
+  type ReplRuntimePermissionPrompt,
+} from "../runtime-permission.js";
+import {
   InteractiveContext,
   createInteractiveContext,
   generateSessionId,
@@ -557,6 +563,9 @@ export interface InkRuntimeRunnerInput {
   readonly prompt: string;
   readonly sessionId: string;
   readonly permissionMode: PermissionMode;
+  readonly requestPermission?: ReplRuntimePermissionPrompt;
+  /** Marks the callback installed by the REPL's legacy permission UI. */
+  readonly legacyPermissionHook?: true;
 }
 
 export type InkRuntimeRunner = (input: InkRuntimeRunnerInput) => Promise<KodaXResult>;
@@ -566,6 +575,7 @@ export interface InkREPLOptions extends KodaXOptions {
   storage?: SessionStorage;
   hardExitOnClose?: boolean;
   runtimeRunner?: InkRuntimeRunner;
+  runtimeAutoModeControl?: ReplRuntimeAutoModeControl;
   getRuntimeStatus?: InkRuntimeStatusProvider;
   learning?: LearningBinding;
 }
@@ -2837,6 +2847,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     tool: string;
     input: Record<string, unknown>;
     prompt: string;
+    runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[];
   } | null>(null);
   const confirmResolveRef = useRef<((result: ConfirmResult) => void) | null>(null);
   const [uiRequest, setUiRequest] = useState<
@@ -2894,6 +2905,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   const confirmInstruction = useMemo(() => {
     if (!confirmRequest) return undefined;
+    const runtimeKinds = new Set(
+      confirmRequest.runtimeGrantSuggestions?.map((suggestion) => suggestion.kind) ?? [],
+    );
+    if (runtimeKinds.has('persistent')) return t("confirm.instruction.runtime_persistent");
+    if (runtimeKinds.has('session')) return t("confirm.instruction.runtime_session");
+    if (confirmRequest.runtimeGrantSuggestions !== undefined) {
+      return t("confirm.instruction.basic");
+    }
     const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
     const canAlways = currentConfig.permissionMode === "accept-edits" && !isProtectedPath;
 
@@ -3854,9 +3873,33 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [autoModeEngine, setAutoModeEngineState] = useState<'llm' | 'rules' | undefined>(
     () =>
       isAutoMode(currentConfig.permissionMode)
-        ? autoModeBootstrap.getGuardrail().getEngine()
+        ? options.runtimeAutoModeControl
+          ? undefined
+          : autoModeBootstrap.getGuardrail().getEngine()
         : undefined,
   );
+  useEffect(() => {
+    if (!options.runtimeAutoModeControl || !isAutoMode(currentConfig.permissionMode)) {
+      if (!isAutoMode(currentConfig.permissionMode)) setAutoModeEngineState(undefined);
+      return;
+    }
+    let active = true;
+    const refresh = async (): Promise<void> => {
+      const stats = await options.runtimeAutoModeControl?.getStats(context.sessionId);
+      if (active) setAutoModeEngineState(stats?.engine);
+    };
+    void refresh();
+    const subscription = options.runtimeAutoModeControl.subscribe?.(
+      context.sessionId,
+      (stats) => {
+        if (active) setAutoModeEngineState(stats?.engine);
+      },
+    );
+    return () => {
+      active = false;
+      subscription?.close();
+    };
+  }, [context.sessionId, currentConfig.permissionMode, options.runtimeAutoModeControl]);
   const statusBarProps = useMemo(
     () =>
       buildSurfaceStatusBarProps({
@@ -4995,9 +5038,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // the active-entry pointer on resume.
       persistedByHost: true,
     },
-    // FEATURE_092 phase 2b.7b: seed guardrails from the initial permission
-    // mode. setSessionPermissionMode keeps this in sync on subsequent toggles.
-    guardrails: buildAutoModeGuardrails(currentConfig.permissionMode, autoModeBootstrap),
+    // An external Runtime owns shared-session Auto classification and receipts.
+    // Keep the local guardrail only for the standalone REPL runner.
+    guardrails: options.runtimeRunner
+      ? undefined
+      : buildAutoModeGuardrails(currentConfig.permissionMode, autoModeBootstrap),
   });
   useEffect(() => {
     currentOptionsRef.current.effort = runtimeEffort;
@@ -5076,18 +5121,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     currentOptionsRef.current = {
       ...currentOptionsRef.current,
       effort: modeEffortResolution.runtimeEffort,
-      guardrails: buildAutoModeGuardrails(mode, autoModeBootstrap),
+      guardrails: options.runtimeRunner
+        ? undefined
+        : buildAutoModeGuardrails(mode, autoModeBootstrap),
     };
     // FEATURE_092 phase 2b.8: refresh the status-bar engine indicator. Outside
     // auto mode we clear it; inside auto mode we read the current engine off
     // the guardrail (may differ from default after a downgrade).
-    setAutoModeEngineState(
-      isAutoMode(mode) ? autoModeBootstrap.getGuardrail().getEngine() : undefined,
-    );
+    if (!isAutoMode(mode)) {
+      setAutoModeEngineState(undefined);
+    } else if (options.runtimeAutoModeControl) {
+      void options.runtimeAutoModeControl.getStats(context.sessionId).then((stats) => {
+        setAutoModeEngineState(stats?.engine);
+      });
+    } else {
+      setAutoModeEngineState(autoModeBootstrap.getGuardrail().getEngine());
+    }
     if (mode === 'auto-in-project') {
       emitAutoInProjectDeprecationRef.current();
     }
-  }, [autoModeBootstrap]);
+  }, [autoModeBootstrap, context.sessionId, options.runtimeAutoModeControl, options.runtimeRunner]);
   const pendingInputsRef = useRef<string[]>(streamingState.pendingInputs);
   const userInterruptedRef = useRef(false);
   const lastInterruptEscapeAtRef = useRef(0);
@@ -5693,9 +5746,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (!confirmRequest) return false;
 
       const answer = key.sequence.trim().toLowerCase();
+      const runtimeSessionGrant = confirmRequest.runtimeGrantSuggestions
+        ?.find((suggestion) => suggestion.kind === 'session');
+      const runtimePersistentGrant = confirmRequest.runtimeGrantSuggestions
+        ?.find((suggestion) => suggestion.kind === 'persistent');
       const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
-      // "Always" is only available in accept-edits mode.
-      const canAlways = currentConfig.permissionMode === "accept-edits" && !isProtectedPath;
+      const isRuntimePermission = confirmRequest.runtimeGrantSuggestions !== undefined;
+      // Runtime prompts can only select a Runtime-issued persistent candidate.
+      const canAlways = runtimePersistentGrant !== undefined
+        || (!isRuntimePermission
+          && currentConfig.permissionMode === "accept-edits"
+          && !isProtectedPath);
 
       // v0.7.26 parity: confirm-result history items must route through
       // the managed-foreground ledger when an AMA worker is active —
@@ -5704,7 +5765,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // the fix for onError (63330bc) and onRetry / onProviderRecovery
       // (09cd7ae). Without this gating, bash tool confirmations appear
       // "somewhere wrong on screen" while a managed task is running.
-      const recordConfirmResult = (suffixKey: 'approved' | 'approved_always' | 'denied') => {
+      const recordConfirmResult = (
+        suffixKey: 'approved' | 'approved_session' | 'approved_always' | 'denied',
+      ) => {
         const text = `${t("dialog.confirm")} ${confirmRequest.prompt}\n  → ${t(`confirm.result.${suffixKey}`)}`;
         const inManagedForeground = !!managedForegroundOwnerRef.current.workerId;
         if (inManagedForeground) {
@@ -5727,10 +5790,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         return true;
       }
 
+      if (runtimeSessionGrant && (answer === "s" || answer === "session")) {
+        recordConfirmResult('approved_session');
+        setConfirmRequest(null);
+        confirmResolveRef.current?.({ confirmed: true, runtimeGrantKind: 'session' });
+        confirmResolveRef.current = null;
+        return true;
+      }
+
       if (canAlways && (answer === "a" || answer === "always")) {
         recordConfirmResult('approved_always');
         setConfirmRequest(null);
-        confirmResolveRef.current?.({ confirmed: true, always: true });
+        confirmResolveRef.current?.(
+          runtimePersistentGrant
+            ? { confirmed: true, runtimeGrantKind: 'persistent' }
+            : { confirmed: true, always: true },
+        );
         confirmResolveRef.current = null;
         return true;
       }
@@ -7339,8 +7414,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Helper function to show confirmation dialog
 
-  const showConfirmDialog = (tool: string, input: Record<string, unknown>): Promise<ConfirmResult> => {
-    const promptText = buildToolConfirmationPrompt(tool, input);
+  const showConfirmDialog = (
+    tool: string,
+    input: Record<string, unknown>,
+    runtimeGrantSuggestions?: readonly ReplRuntimePermissionGrantSuggestion[],
+  ): Promise<ConfirmResult> => {
+    const basePrompt = buildToolConfirmationPrompt(tool, input);
+    const scopeLabels = runtimeGrantSuggestions?.map((suggestion) => suggestion.label) ?? [];
+    const promptText = scopeLabels.length > 0
+      ? `${basePrompt}\n${scopeLabels.map((label) => `Runtime scope: ${label}`).join('\n')}`
+      : basePrompt;
 
     // FEATURE_203 (v0.7.45): commit any pending streamed text before raising the
     // approval popup, so the popup never appears mid-sentence (the trailing
@@ -7351,8 +7434,27 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // Return a promise that resolves when the user answers.
     return new Promise<ConfirmResult>((resolve) => {
       confirmResolveRef.current = resolve;
-      setConfirmRequest({ tool, input, prompt: promptText });
+      setConfirmRequest({
+        tool,
+        input,
+        prompt: promptText,
+        ...(runtimeGrantSuggestions !== undefined ? { runtimeGrantSuggestions } : {}),
+      });
     });
+  };
+
+  const requestRuntimePermission: ReplRuntimePermissionPrompt = async (request) => {
+    const result = await showConfirmDialog(
+      request.toolName,
+      {
+        ...request.input,
+        ...(request.reason !== undefined ? { _reason: request.reason } : {}),
+        ...(request.executionCwd !== undefined ? { _executionCwd: request.executionCwd } : {}),
+        ...(request.risk !== undefined ? { _runtimeRisk: request.risk } : {}),
+      },
+      request.grantSuggestions ?? [],
+    );
+    return resolveReplRuntimePermissionDecision(request, result);
   };
 
   // FEATURE_092 phase 2b.7b: hand the bootstrap an Ink-flavored askUser. The
@@ -7532,6 +7634,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           prompt,
           sessionId: context.sessionId,
           permissionMode: permissionModeRef.current,
+          requestPermission: requestRuntimePermission,
+          legacyPermissionHook: true,
         });
       }
       return await runManagedTask(runOptions, prompt);
@@ -9030,12 +9134,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           // setter. Returning undefined when not in auto mode lets the slash
           // command print "not in auto mode" instead of leaking guardrail
           // internals to non-auto sessions.
-          getAutoModeStats: () => {
+          getAutoModeStats: async () => {
             if (!isAutoMode(permissionModeRef.current)) return undefined;
+            if (options.runtimeAutoModeControl) {
+              return options.runtimeAutoModeControl.getStats(context.sessionId);
+            }
             return autoModeBootstrap.getGuardrail().getStats();
           },
-          setAutoModeEngine: (engine) => {
+          setAutoModeEngine: async (engine) => {
             if (!isAutoMode(permissionModeRef.current)) return;
+            if (options.runtimeAutoModeControl) {
+              const stats = await options.runtimeAutoModeControl.setEngine(context.sessionId, engine);
+              setAutoModeEngineState(stats?.engine ?? engine);
+              return;
+            }
             autoModeBootstrap.getGuardrail().setEngine(engine);
             // Refresh the status-bar engine indicator after manual /auto-engine flip.
             setAutoModeEngineState(engine);
@@ -9048,11 +9160,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
             agentMode: currentConfig.agentMode,
-            // FEATURE_092 phase 2b.7b: inject the AutoModeToolGuardrail into
-            // KodaXOptions when the session is in auto mode (canonical 'auto'
-            // or deprecated 'auto-in-project'). The lazy bootstrap factory
-            // means non-auto sessions pay zero classifier construction cost.
-            guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
+            // Runtime-backed sessions classify in the Runtime owner. Standalone
+            // sessions retain the local guardrail for backwards compatibility.
+            guardrails: options.runtimeRunner
+              ? undefined
+              : buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
             // workflowRunsBaseDir is inherited from `...currentOptionsRef.current`
             // (set at session init for FEATURE_246 A5).
             events: createStreamingEvents(), // Include streaming events for /project commands

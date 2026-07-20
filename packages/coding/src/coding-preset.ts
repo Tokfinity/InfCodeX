@@ -126,15 +126,22 @@ export function extractFinalAssistantText(result: KodaXResult): string {
  * recorder, integration tests) recovers it without a second execution.
  */
 const codingSubstrate: PresetDispatcher = async (
-  _agent,
+  agent,
   input,
   opts,
   tracingContext,
 ) => {
   const presetOptions = (opts?.presetOptions ?? {}) as KodaXOptions;
-  const merged: KodaXOptions = opts?.abortSignal
+  const baseMerged: KodaXOptions = opts?.abortSignal
     ? { ...presetOptions, abortSignal: opts.abortSignal }
     : presetOptions;
+  const mergedGuardrails = [
+    ...(agent.guardrails ?? []),
+    ...(opts?.guardrails ?? presetOptions.guardrails ?? []),
+  ];
+  const merged: KodaXOptions = mergedGuardrails.length > 0
+    ? { ...baseMerged, guardrails: [...new Set(mergedGuardrails)] }
+    : baseMerged;
   const prompt = extractPrompt(input);
 
   // FEATURE_083 (v0.7.24): record a GenerationSpan around the substrate
@@ -156,8 +163,8 @@ const codingSubstrate: PresetDispatcher = async (
   let result: KodaXResult;
   try {
     result = tracingContext === undefined
-      ? await runSubstrate(merged, prompt)
-      : await withMemoryDecisionTrace(memoryDecisionReceipts, () => runSubstrate(merged, prompt));
+      ? await runSubstrate(merged, prompt, agent)
+      : await withMemoryDecisionTrace(memoryDecisionReceipts, () => runSubstrate(merged, prompt, agent));
   } catch (err) {
     if (genSpan) {
       genSpan.setError(err instanceof Error ? err : new Error(String(err)));

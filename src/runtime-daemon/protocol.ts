@@ -32,6 +32,7 @@ export type RuntimeDaemonMethod =
   | 'session.delete'
   | 'session.settings.get'
   | 'session.settings.getVersioned'
+  | 'session.autoMode.getStats'
   | 'session.settings.update'
   | 'session.settings.updateVersioned'
   | 'run.start'
@@ -315,6 +316,7 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'session.delete',
   'session.settings.get',
   'session.settings.getVersioned',
+  'session.autoMode.getStats',
   'session.settings.update',
   'session.settings.updateVersioned',
   'run.start',

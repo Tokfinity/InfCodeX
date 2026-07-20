@@ -70,7 +70,7 @@ describe('GitHub release workflow', () => {
       const install = steps.find((step) => step.name === 'Install packaged Electron smoke toolchain');
       const ensureBinary = steps.find((step) => step.name === 'Ensure packaged Electron binary');
       expect(cache).toMatchObject({
-        uses: 'actions/cache@v4',
+        uses: 'actions/cache@v5',
         id: 'electron-smoke-cache',
         with: { path: '.electron-smoke/node_modules' },
       });

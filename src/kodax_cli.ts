@@ -142,6 +142,7 @@ import {
 } from '@kodax-ai/coding';
 import {
   cleanupRegisteredManagedChildren,
+  emitKodaXDiagnostic,
   shutdownTracing,
   applyProcessHardening,
 } from '@kodax-ai/agent';
@@ -163,6 +164,9 @@ import {
   runProviderSetupWizard,
   listSessions,
   loadSession,
+  type ReplRuntimeAutoModeControl,
+  type ReplRuntimePermissionGrantSuggestion,
+  type ReplRuntimePermissionPrompt,
   type SessionPickerItem,
   type SessionDedupeReport,
 } from '@kodax-ai/repl';
@@ -448,9 +452,54 @@ interface InteractiveRuntimeRunnerInput {
   readonly sessionId: string;
   readonly permissionMode?: string;
   readonly surface?: 'cli' | 'repl';
+  readonly requestPermission?: ReplRuntimePermissionPrompt;
+  /** True only for the REPL-owned legacy permission callback. */
+  readonly legacyPermissionHook?: true;
 }
 
-interface DaemonReplEventBridge {
+function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAutoModeControl {
+  const readStats = async (sessionId: string) => {
+    try {
+      return await runtime.sessions.getAutoModeStats(sessionId);
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'cli:runtime-auto-mode',
+        level: 'warn',
+        message: 'Runtime auto-mode status is temporarily unavailable.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  };
+  return {
+    getStats(sessionId) {
+      return readStats(sessionId);
+    },
+    async setEngine(sessionId, engine) {
+      await runtime.sessions.updateSettings(sessionId, { autoModeEngine: engine });
+      return runtime.sessions.getAutoModeStats(sessionId);
+    },
+    subscribe(sessionId, listener) {
+      let active = true;
+      const subscription = runtime.events.subscribe(
+        { sessionId, type: 'session.settings.updated' },
+        () => {
+          void readStats(sessionId).then((stats) => {
+            if (active) listener(stats);
+          });
+        },
+      );
+      return {
+        close() {
+          active = false;
+          subscription.close();
+        },
+      };
+    },
+  };
+}
+
+interface RuntimeReplEventBridge {
   setRunId(runId: string): void;
   close(): Promise<void>;
 }
@@ -464,9 +513,10 @@ export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
       });
     }
 
-    const bridge = runtime.identity.mode === 'daemon'
-      ? createDaemonReplEventBridge(runtime, input)
-      : undefined;
+    const bridge = createRuntimeReplEventBridge(runtime, input);
+    const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
+      omitLegacyBeforeToolExecute: input.legacyPermissionHook === true,
+    });
     const abortSignal = input.options.abortSignal;
     let abortRun: (() => void) | undefined;
     try {
@@ -474,12 +524,12 @@ export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
         sessionId: input.sessionId,
         prompt: input.prompt,
         mode: 'managed_task',
-        ...(runtime.identity.mode === 'daemon' ? { permissionBroker: 'client' as const } : {}),
+        permissionBroker: input.requestPermission === undefined ? 'runtime' : 'client',
         options: runtime.identity.mode === 'daemon'
-          ? toDaemonRuntimeRunOptions(input.options)
-          : input.options,
+          ? toDaemonRuntimeRunOptions(runtimeOptions)
+          : runtimeOptions,
       });
-      bridge?.setRunId(handle.runId);
+      bridge.setRunId(handle.runId);
       abortRun = () => {
         void runtime.runs.abort(handle.runId).catch(() => undefined);
       };
@@ -500,9 +550,35 @@ export function createInteractiveRuntimeRunner(runtime: KodaXRuntime) {
       return result.result;
     } finally {
       if (abortRun) abortSignal?.removeEventListener('abort', abortRun);
-      await bridge?.close();
+      await bridge.close();
     }
   };
+}
+
+/** Keep the shared Session Runtime as the sole owner of Auto receipts. */
+export function toRuntimeOwnedInteractiveOptions(
+  options: KodaXOptions,
+  sanitization: { readonly omitLegacyBeforeToolExecute?: boolean } = {},
+): KodaXOptions {
+  const guardrails = options.guardrails?.filter((guardrail) => (
+    guardrail.kind !== 'tool' || guardrail.name !== 'auto-mode'
+  ));
+  const events = sanitization.omitLegacyBeforeToolExecute
+    ? omitBeforeToolExecute(options.events)
+    : options.events;
+  return {
+    ...options,
+    ...(guardrails !== undefined
+      ? { guardrails: guardrails.length > 0 ? guardrails : undefined }
+      : {}),
+    ...(events !== undefined ? { events } : {}),
+  };
+}
+
+function omitBeforeToolExecute(events: KodaXOptions['events']): KodaXOptions['events'] {
+  if (events === undefined) return undefined;
+  const { beforeToolExecute: _beforeToolExecute, ...rest } = events;
+  return rest;
 }
 
 async function ensureCliRuntimeSession(
@@ -626,6 +702,7 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
     ['sessionControl', options.sessionControl],
     ['memoryReviewer', options.memoryReviewer],
     ['guardrails', options.guardrails],
+    ['events.beforeToolExecute', options.events?.beforeToolExecute],
     ['skillDynamicContext.execute', options.skillDynamicContext?.execute],
     ['context.agentScope', options.context?.agentScope],
     ['context.mutationTracker', options.context?.mutationTracker],
@@ -642,17 +719,17 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
   );
 }
 
-function createDaemonReplEventBridge(
+function createRuntimeReplEventBridge(
   runtime: KodaXRuntime,
   input: InteractiveRuntimeRunnerInput,
-): DaemonReplEventBridge {
+): RuntimeReplEventBridge {
   const buffered: RuntimeEvent[] = [];
   const toolInputs = new Map<string, Record<string, unknown>>();
   let activeRunId: string | undefined;
   let eventChain = Promise.resolve();
   const enqueue = (event: RuntimeEvent): void => {
     eventChain = eventChain
-      .then(() => forwardDaemonReplEvent(runtime, input.options.events, event, toolInputs))
+      .then(() => forwardRuntimeReplEvent(runtime, input, event, toolInputs))
       .catch((error: unknown) => {
         try {
           input.options.events?.onError?.(normalizeCliError(error));
@@ -682,17 +759,19 @@ function createDaemonReplEventBridge(
   };
 }
 
-async function forwardDaemonReplEvent(
+async function forwardRuntimeReplEvent(
   runtime: KodaXRuntime,
-  events: KodaXOptions['events'],
+  input: InteractiveRuntimeRunnerInput,
   event: RuntimeEvent,
   toolInputs: Map<string, Record<string, unknown>>,
 ): Promise<void> {
   const payload = isRecord(event.payload) ? event.payload : {};
   if (event.type === 'permission.requested') {
-    await respondToDaemonPermission(runtime, events, event, payload, toolInputs);
+    await respondToRuntimePermission(runtime, input.requestPermission, event, payload, toolInputs);
     return;
   }
+  if (runtime.identity.mode !== 'daemon') return;
+  const events = input.options.events;
   if (forwardDaemonStreamEvent(events, event, payload, toolInputs)) return;
   if (forwardDaemonLifecycleEvent(events, event, payload)) return;
   forwardDaemonDiagnosticEvent(events, event, payload);
@@ -903,9 +982,9 @@ function forwardDaemonRecoveryEvent(
   }
 }
 
-async function respondToDaemonPermission(
+async function respondToRuntimePermission(
   runtime: KodaXRuntime,
-  events: KodaXOptions['events'],
+  requestPermission: ReplRuntimePermissionPrompt | undefined,
   event: RuntimeEvent,
   payload: Record<string, unknown>,
   toolInputs: ReadonlyMap<string, Record<string, unknown>>,
@@ -915,27 +994,44 @@ async function respondToDaemonPermission(
   const input = toolCallId !== undefined
     ? toolInputs.get(toolCallId) ?? parsePermissionInput(payload.inputPreview)
     : parsePermissionInput(payload.inputPreview);
+  const grantSuggestions = parseRuntimeGrantSuggestions(payload.grantSuggestions);
   let decision: RuntimePermissionDecision;
   try {
-    const hookDecision = events?.beforeToolExecute
-      ? await events.beforeToolExecute(payload.toolName, input, {
-          sessionId: event.sessionId,
-          ...(event.turnId !== undefined ? { turnId: event.turnId } : {}),
-          ...(toolCallId !== undefined ? { toolId: toolCallId } : {}),
+    decision = requestPermission
+      ? await requestPermission({
+          id: payload.id,
+          toolName: payload.toolName,
+          ...(toolCallId !== undefined ? { toolCallId } : {}),
+          input,
+          ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
+          ...(isRuntimePermissionRisk(payload.risk) ? { risk: payload.risk } : {}),
+          ...(typeof payload.executionCwd === 'string'
+            ? { executionCwd: payload.executionCwd }
+            : {}),
+          ...(grantSuggestions.length > 0 ? { grantSuggestions } : {}),
         })
-      : false;
-    decision = hookDecision === true
-      ? { type: 'allow_once' }
-      : {
-          type: 'reject',
-          reason: hookDecision === false
-            ? 'Interactive permission handler unavailable or rejected the tool.'
-            : hookDecision,
-        };
+      : { type: 'reject', reason: 'Interactive permission handler unavailable.' };
   } catch (error: unknown) {
     decision = { type: 'reject', reason: normalizeCliError(error).message };
   }
   await runtime.permissions.respond(payload.id, decision, { runId: event.runId });
+}
+
+function isRuntimePermissionRisk(value: unknown): value is 'low' | 'medium' | 'high' {
+  return value === 'low' || value === 'medium' || value === 'high';
+}
+
+function parseRuntimeGrantSuggestions(value: unknown): ReplRuntimePermissionGrantSuggestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (
+      !isRecord(candidate)
+      || typeof candidate.id !== 'string'
+      || (candidate.kind !== 'session' && candidate.kind !== 'persistent')
+      || typeof candidate.label !== 'string'
+    ) return [];
+    return [{ id: candidate.id, kind: candidate.kind, label: candidate.label }];
+  });
 }
 
 function parsePermissionInput(value: unknown): Record<string, unknown> {
@@ -3345,6 +3441,7 @@ complete -c kodax -l version -d 'Show version'`);
         session: kodaXOptions.session,
         storage: new FileSessionStorage({ cwd: process.cwd() }),
         runtimeRunner,
+        runtimeAutoModeControl: createReplRuntimeAutoModeControl(interactiveRuntime),
         getRuntimeStatus: () => getInteractiveRuntimeStatus({
           runtime: interactiveRuntime,
           configHome: KODAX_DIR,

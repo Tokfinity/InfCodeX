@@ -998,13 +998,57 @@ async function genericRun<TData>(
     const recoverableTranscriptBeforeToolTurn = transcript[0]?.role === 'system'
       ? transcript.slice(1)
       : [...transcript];
+    let results: RunnerToolResult[] = new Array(toolCalls.length);
+    const finalCalls: typeof toolCalls = [...toolCalls];
+    const guardrailBlockedIndices = new Set<number>();
+
+    // Resolve rewrites/blocks before committing the assistant turn. A
+    // before-tool guardrail intentionally sees only the transcript that led
+    // to the call; the provider-emitted tool_use block is not committed yet.
+    // Rewrites become the canonical call for every downstream consumer.
+    const prepareOneCall = async (index: number): Promise<void> => {
+      const outcome = await runToolBeforeGuardrails(
+        toolCalls[index]!,
+        guardrailSlots.tool,
+        { ...guardrailCtx, agent: currentAgent, messages: [...transcript] },
+        agentSpan,
+      );
+      (finalCalls as RunnerToolCall[])[index] = outcome.call;
+      if (outcome.kind === 'block') {
+        results[index] = outcome.result;
+        guardrailBlockedIndices.add(index);
+      }
+    };
+
+    if (guardrailSlots.tool.length > 0) {
+      const parallelPrepareIndices: number[] = [];
+      const serialPrepareIndices: number[] = [];
+      for (let index = 0; index < toolCalls.length; index += 1) {
+        if (toolCalls[index]!.name === 'bash') {
+          serialPrepareIndices.push(index);
+        } else {
+          parallelPrepareIndices.push(index);
+        }
+      }
+      if (parallelPrepareIndices.length > 0) {
+        await Promise.all(parallelPrepareIndices.map((index) => prepareOneCall(index)));
+      }
+      for (const index of serialPrepareIndices) {
+        await prepareOneCall(index);
+      }
+    }
+
+    // Rebuild the assistant tool-use turn from the resolved calls so the
+    // durable transcript records exactly what policy admitted and executed.
+    // The builder also preserves thinking/text block ordering.
+    assistantMessage = {
+      ...buildAssistantMessageFromLlmResult({ ...turn, toolCalls: finalCalls }),
+      timestamp: assistantMessage.timestamp,
+    };
     transcript.push(assistantMessage);
     if (opts.session) {
       await appendMessageEntry(opts.session, assistantMessage);
     }
-
-    let results: RunnerToolResult[] = new Array(toolCalls.length);
-    const finalCalls: typeof toolCalls = [...toolCalls];
 
     // v0.7.26 parity (C2): execute tool calls with the legacy concurrency
     // model — non-bash tools run in parallel (Promise.all), bash tools
@@ -1014,29 +1058,14 @@ async function genericRun<TData>(
     // Bash stays serial because shell side-effects can interfere
     // (git checkout followed by git diff, etc.).
     const executeOneCall = async (index: number): Promise<void> => {
-      let call = toolCalls[index]!;
-      if (guardrailSlots.tool.length > 0) {
-        // Tool guardrails are per-invocation (comment L313-316): the
-        // active agent may have changed via handoff, so the hook must
-        // see the CURRENT agent, not the run's start agent. Input /
-        // output guardrails keep run-scoped `guardrailCtx` as designed.
-        const beforeOutcome = await runToolBeforeGuardrails(
-          call,
-          guardrailSlots.tool,
-          { ...guardrailCtx, agent: currentAgent, messages: transcript },
-          agentSpan,
-        );
-        if (beforeOutcome.kind === 'block') {
-          results[index] = beforeOutcome.result;
-          // Still fire the observer so the REPL sees the blocked call +
-          // the guardrail-supplied result. Legacy task-engine treated a
-          // guardrail-blocked tool as a real invocation from the user's
-          // point of view (they see it happened and was rejected).
-          opts.toolObserver?.onToolCall?.(call);
-          return;
-        }
-        call = beforeOutcome.call;
-        (finalCalls as RunnerToolCall[])[index] = call;
+      const call = finalCalls[index]!;
+      if (guardrailBlockedIndices.has(index)) {
+        // Still fire the observer so the REPL sees the blocked call +
+        // the guardrail-supplied result. Legacy task-engine treated a
+        // guardrail-blocked tool as a real invocation from the user's
+        // point of view (they see it happened and was rejected).
+        opts.toolObserver?.onToolCall?.(call);
+        return;
       }
       // v0.7.26 parity: fire `onToolCall` BEFORE the execute so the REPL
       // worker ledger can render the pending tool immediately (matches
@@ -1110,7 +1139,7 @@ async function genericRun<TData>(
           call,
           result,
           guardrailSlots.tool,
-          { ...guardrailCtx, agent: currentAgent, messages: transcript },
+          { ...guardrailCtx, agent: currentAgent, messages: [...transcript] },
           agentSpan,
         );
       }
@@ -1130,7 +1159,10 @@ async function genericRun<TData>(
     const parallelIndices: number[] = [];
     const serialIndices: number[] = [];
     for (let i = 0; i < toolCalls.length; i += 1) {
-      if (toolCalls[i]!.name === 'bash') {
+      // Preserve original bash serialization and also serialize calls a
+      // guardrail rewrote into bash. Rewriting must not weaken shell
+      // side-effect ordering.
+      if (toolCalls[i]!.name === 'bash' || finalCalls[i]!.name === 'bash') {
         serialIndices.push(i);
       } else {
         parallelIndices.push(i);

@@ -839,7 +839,7 @@ describe('runtime daemon dispatcher', () => {
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
           runtimeAutoModeGuardrail: {
-            version: 2,
+            version: 3,
             owner: 'session-runtime',
             escalationCreatesPermission: true,
             fallbackPersistsEngine: true,
@@ -847,6 +847,9 @@ describe('runtime daemon dispatcher', () => {
             defaultSpeculativeWindowMs: 500,
             boundedClassifierInput: true,
             diagnosticsVersion: 1,
+            permissionGrantSuggestions: true,
+            concretePermissionMatchers: true,
+            clientScopeExpansion: false,
           },
           sharedSessionSettings: {
             version: 1,
@@ -1428,6 +1431,43 @@ describe('runtime daemon dispatcher', () => {
       options: { runId: 'run-1' },
     });
   });
+
+  it('forwards concrete permission input without exposing owner-only safety context', async () => {
+    const baseRuntime = makeRuntime();
+    const request = vi.fn(async (): Promise<RuntimePermissionDecision> => ({ type: 'reject' }));
+    const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
+      ...baseRuntime,
+      permissions: {
+        ...baseRuntime.permissions,
+        request,
+      },
+    };
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-concrete-permission',
+      'permission.request',
+      {
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolCallId: 'tool-1',
+        toolName: 'bash',
+        toolInput: { command: 'npm test' },
+        executionCwd: 'C:\\work\\repo',
+      },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    expect(request).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolCallId: 'tool-1',
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: 'C:\\work\\repo',
+    });
+  });
 });
 
 async function initializeDispatcher(
@@ -1498,6 +1538,7 @@ const METHOD_SMOKE_PARAMS = {
   'session.delete': { sessionId: 'session-1' },
   'session.settings.get': { sessionId: 'session-1' },
   'session.settings.getVersioned': { sessionId: 'session-1' },
+  'session.autoMode.getStats': { sessionId: 'session-1' },
   'session.settings.update': { sessionId: 'session-1', patch: { model: 'mock-model' } },
   'session.settings.updateVersioned': {
     sessionId: 'session-1',
@@ -1732,6 +1773,9 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       },
       async getSettingsVersioned() {
         return { revision: 0, value: {} };
+      },
+      async getAutoModeStats() {
+        return undefined;
       },
       async updateSettings(_sessionId, patch) {
         return Object.fromEntries(

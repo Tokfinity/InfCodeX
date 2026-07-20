@@ -208,6 +208,13 @@ export {
 
 // === Permission helpers ===
 export type { PermissionMode, ConfirmResult, PermissionContext } from "./permission/index.js";
+export type {
+  ReplRuntimePermissionDecision,
+  ReplRuntimeAutoModeControl,
+  ReplRuntimePermissionGrantSuggestion,
+  ReplRuntimePermissionPrompt,
+  ReplRuntimePermissionRequest,
+} from "./runtime-permission.js";
 export {
   computeConfirmTools,
   FILE_MODIFICATION_TOOLS,
