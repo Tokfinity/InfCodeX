@@ -2957,6 +2957,10 @@ complete -c kodax -l version -d 'Show version'`);
 
   const opts = program.opts();
   const outputMode = (opts.mode as CliOutputMode | undefined) ?? 'text';
+  // Hydrate login-shell and config-backed environment before first-run
+  // readiness inspects credentials. Reuse this same Runtime configuration for
+  // startup so the gate and the session cannot observe different environments.
+  const config = prepareRuntimeConfig();
   if (shouldAutoLaunchProviderSetup({
     outputMode,
     prompt: opts.print ? [String(opts.print)] : program.args,
@@ -2989,10 +2993,6 @@ complete -c kodax -l version -d 'Show version'`);
       return;
     }
   }
-  // Runtime preparation hydrates shell state, projects config into process
-  // environment, and registers providers. Keep those side effects after the
-  // first-run gate so setup remains a cheap pre-Runtime path.
-  const config = prepareRuntimeConfig();
   const configWithExtensions = config as typeof config & {
     extensions?: string[];
     runtimeMode?: 'embedded' | 'daemon';

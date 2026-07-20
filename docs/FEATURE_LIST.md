@@ -375,7 +375,14 @@ and REPL entries export the typed resolver/loader, Session state owns the
 speculative window (including zero), v2 capability negotiation safely upgrades
 idle v1 daemons while preserving minimum-version compatibility, and prompt-free
 sideQuery diagnostics plus callback-lifetime guardrail spans make timeouts
-observable. The feature remains InProgress until v0.7.73 release validation;
+observable. The classifier-input closure now also replaces historical results
+with status-only metadata, deduplicates canonical history, unwraps portable
+tool bridges, and gives MCP, constructed tools, and JavaScript extensions one
+fail-closed semantic projection contract. High-impact built-ins expose bounded
+operational facts rather than raw bodies; non-readonly empty projections require
+an explicit exemption, common snake/camel SDK fields share one priority-safe
+table, projector failures escalate, and Tier 0 runs before any opt-out. The
+feature remains InProgress until v0.7.73 release validation;
 engineering implementation has no known remaining item.
 
 ---

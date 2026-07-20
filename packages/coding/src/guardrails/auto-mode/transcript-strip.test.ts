@@ -38,6 +38,43 @@ describe('stripAssistantText', () => {
     expect(blocks[0]!.type).toBe('tool_use');
   });
 
+  it('keeps safe tool metadata without forwarding raw write content to the classifier', () => {
+    const privateContent = 'PRIVATE_SOURCE_MUST_NOT_LEAVE_THE_MAIN_PROVIDER';
+    const msg = assistantBlocks([
+      {
+        type: 'tool_use',
+        id: 'write-1',
+        name: 'write',
+        input: {
+          path: 'src/private.ts',
+          content: privateContent,
+        },
+      },
+    ]);
+
+    const out = stripAssistantText([userText('update the implementation'), msg], {
+      getToolProjection: (name) => name === 'write'
+        ? (input) => {
+            const value = input as { path?: string; content?: string };
+            return `Write ${value.path ?? '<unknown>'} (${value.content?.length ?? 0} chars)`;
+          }
+        : undefined,
+    });
+    const block = Array.isArray(out[1]?.content) ? out[1].content[0] : undefined;
+
+    expect(block).toMatchObject({
+      type: 'tool_use',
+      id: 'write-1',
+      name: 'write',
+      input: {
+        summary: `Write src/private.ts (${privateContent.length} chars)`,
+        content_chars: privateContent.length,
+      },
+    });
+    expect(JSON.stringify(out)).not.toContain(privateContent);
+    expect(JSON.stringify(out)).toContain('src/private.ts');
+  });
+
   it('drops the assistant message entirely if all its blocks were stripped', () => {
     const msg = assistantBlocks([
       { type: 'text', text: 'thinking out loud' },
@@ -48,16 +85,22 @@ describe('stripAssistantText', () => {
     expect(out[0]!.role).toBe('user');
   });
 
-  it('keeps tool_result blocks (on user-role messages) but truncates oversized content', () => {
+  it('replaces tool_result bodies with bounded status metadata', () => {
     const huge = 'x'.repeat(5000);
     const msg = userBlocks([
       { type: 'tool_result', tool_use_id: 'c1', content: huge },
     ]);
-    const out = stripAssistantText([msg], { maxToolResultBytes: 100 });
-    const blocks = out[0]!.content as ReadonlyArray<{ type: string; content?: string }>;
+    const out = stripAssistantText([
+      assistantBlocks([{ type: 'tool_use', id: 'c1', name: 'read', input: { path: '.env' } }]),
+      msg,
+    ], { maxToolResultBytes: 100 });
+    const blocks = out[1]!.content as ReadonlyArray<{ type: string; content?: string }>;
     expect(blocks[0]!.type).toBe('tool_result');
     expect(Buffer.byteLength(blocks[0]!.content!, 'utf8')).toBeLessThanOrEqual(100);
-    expect(blocks[0]!.content!.endsWith('…')).toBe(true);
+    expect(blocks[0]!.content).toContain('tool=read');
+    expect(blocks[0]!.content).toContain('status=success');
+    expect(blocks[0]!.content).toContain('text_chars=5000');
+    expect(blocks[0]!.content).not.toContain('xxx');
   });
 
   it('measures transcript and tool-result budgets in UTF-8 bytes', () => {
@@ -79,13 +122,14 @@ describe('stripAssistantText', () => {
     }
   });
 
-  it('normalizes multimodal tool results to bounded text without leaking image paths', () => {
+  it('normalizes multimodal tool results without forwarding text or image paths', () => {
     const msg = userBlocks([
       {
         type: 'tool_result',
         tool_use_id: 'c1',
         content: [
           { type: 'text', text: 'safe diagnostic output' },
+          { type: 'text', text: '测' },
           { type: 'image', path: 'C:/Users/example/.secrets/screenshot.png' },
         ],
       },
@@ -93,17 +137,39 @@ describe('stripAssistantText', () => {
 
     const out = stripAssistantText([msg], { maxToolResultBytes: 100 });
     const serialized = JSON.stringify(out);
-    expect(serialized).toContain('safe diagnostic output');
+    expect(serialized).toContain('media_items=1');
+    expect(serialized).toContain('text_chars=24');
+    expect(serialized).toContain('text_bytes=26');
+    expect(serialized).not.toContain('safe diagnostic output');
     expect(serialized).not.toContain('.secrets');
   });
 
-  it('preserves tool_result content under the truncation threshold unchanged', () => {
+  it('does not forward tool_result content even under the truncation threshold', () => {
     const msg = userBlocks([
-      { type: 'tool_result', tool_use_id: 'c1', content: 'short result' },
+      { type: 'tool_result', tool_use_id: 'c1', content: 'API_KEY=PRIVATE_RESULT' },
     ]);
     const out = stripAssistantText([msg], { maxToolResultBytes: 100 });
     const blocks = out[0]!.content as ReadonlyArray<{ content?: string }>;
-    expect(blocks[0]!.content).toBe('short result');
+    expect(blocks[0]!.content).toContain('status=success');
+    expect(blocks[0]!.content).toContain('text_chars=22');
+    expect(blocks[0]!.content).not.toContain('PRIVATE_RESULT');
+  });
+
+  it('retains error status without forwarding the error body', () => {
+    const out = stripAssistantText([
+      assistantBlocks([{ type: 'tool_use', id: 'c1', name: 'bash', input: { command: 'demo' } }]),
+      userBlocks([{
+        type: 'tool_result',
+        tool_use_id: 'c1',
+        content: 'PRIVATE_FAILURE_DETAIL',
+        is_error: true,
+      }]),
+    ]);
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain('tool=bash');
+    expect(serialized).toContain('status=error');
+    expect(serialized).toContain('"is_error":true');
+    expect(serialized).not.toContain('PRIVATE_FAILURE_DETAIL');
   });
 
   it('caps total transcript size by dropping middle messages while preserving first user message and recent tail', () => {
@@ -131,6 +197,42 @@ describe('stripAssistantText', () => {
 
     expect(out[0]!.content).toContain('original intent');
     expect(JSON.stringify(out).length).toBeLessThanOrEqual(900);
+  });
+
+  it('preserves the latest user constraint ahead of an oversized current tool call', () => {
+    const out = stripAssistantText([
+      userText(`initial authorization: ${'x'.repeat(10_000)}`),
+      userText('LATEST CONSTRAINT: do not delete anything'),
+      assistantBlocks([{
+        type: 'tool_use',
+        id: 'write-1',
+        name: 'write',
+        input: {
+          file_path: 'src/private.ts',
+          content: 'SECRET'.repeat(2_000),
+        },
+      }]),
+      userBlocks([{
+        type: 'tool_result',
+        tool_use_id: 'write-1',
+        content: 'large tool result '.repeat(500),
+      }]),
+      assistantBlocks([{
+        type: 'tool_use',
+        id: 'verify-1',
+        name: 'bash',
+        input: { command: 'npm test' },
+      }]),
+    ], { maxTranscriptBytes: 800 });
+
+    const serialized = JSON.stringify(out);
+    expect(Buffer.byteLength(serialized, 'utf8')).toBeLessThanOrEqual(800);
+    expect(serialized).toContain('initial authorization');
+    expect(serialized).toContain('LATEST CONSTRAINT: do not delete anything');
+    expect(serialized).toContain('tool_result tool=write');
+    expect(serialized).toContain('text_chars=9000');
+    expect(serialized).not.toContain('large tool result');
+    expect(serialized).not.toContain('SECRET');
   });
 
   it('returns an empty array when given an empty transcript', () => {

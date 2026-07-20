@@ -8,10 +8,7 @@
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 import { normalizeMcpCapabilityId, parseMcpCapabilityId } from '@kodax-ai/agent';
 import type { LocalToolDefinition } from './types.js';
-import {
-  defaultToClassifierInput,
-  mcpToClassifierInput,
-} from './classifier-projection.js';
+import { mcpToClassifierInput } from './classifier-projection.js';
 import { toolRead } from './read.js';
 import {
   MEMORY_RECALL_TOOL_DESCRIPTION,
@@ -141,6 +138,44 @@ function mcpCapabilityPreview(capabilityId: string | undefined, args: unknown): 
   }
 }
 
+function boundedText(value: unknown, limit = 200, fallback = '<missing>'): string {
+  if (typeof value !== 'string' || value.length === 0) return fallback;
+  if (value.length <= limit) return value;
+  const tailLength = Math.min(48, Math.floor((limit - 1) / 3));
+  const headLength = limit - tailLength - 1;
+  return `${value.slice(0, headLength)}…${value.slice(-tailLength)}`;
+}
+
+function stringArrayPreview(value: unknown, limit = 8): string {
+  if (!Array.isArray(value)) return '[]';
+  const items = value.slice(0, limit)
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => boundedText(item, 120));
+  return `[${items.join(', ')}${value.length > limit ? ', …' : ''}]`;
+}
+
+function mappedPathPreview(
+  value: unknown,
+  sourceKey: string,
+  targetKey: string,
+): string {
+  if (!Array.isArray(value)) return '[]';
+  const items = value.slice(0, 8).map((item) => {
+    if (item === null || typeof item !== 'object') return '<invalid>';
+    const record = item as Record<string, unknown>;
+    const source = boundedText(record[sourceKey], 120);
+    const target = boundedText(record[targetKey], 120, '');
+    return target ? `${source}->${target}` : source;
+  });
+  return `[${items.join(', ')}${value.length > 8 ? ', …' : ''}]`;
+}
+
+function objectKeysPreview(value: unknown): string {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return '[]';
+  const keys = Object.keys(value);
+  return `[${keys.slice(0, 16).join(', ')}${keys.length > 16 ? ', …' : ''}]`;
+}
+
 const RUN_WORKFLOW_DESCRIPTION = [
   EXPLICIT_WORKFLOW_POLICY,
   'Author and start a bounded deterministic JavaScript protocol over the Runtime-owned Actor tree. The call returns a run_id and Workflow actor path immediately; observe it with wait_agent/list_agents, read its structured WorkflowOutcome with agent_output, and stop it with interrupt_agent.',
@@ -234,6 +269,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolSkill,
     sideEffect: 'mutates-state',
+    classifierExemptReason: 'Loads local skill instructions; it does not execute the skill or mutate external state.',
     toClassifierInput: () => '',
   },
   {
@@ -278,8 +314,19 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolRunSkillScript,
     sideEffect: 'mutates-shell',
     toClassifierInput: (input) => {
-      const value = input as { skill?: unknown; script?: unknown };
-      return `Run admitted Skill script ${String(value.skill ?? '?')}/${String(value.script ?? '?')}`;
+      const value = input as {
+        skill?: unknown;
+        script?: unknown;
+        args?: unknown;
+        inputs?: unknown;
+        outputs?: unknown;
+      };
+      return [
+        `RunSkillScript ${boundedText(value.skill)}/${boundedText(value.script)}`,
+        `args=${stringArrayPreview(value.args)}`,
+        `inputs=${mappedPathPreview(value.inputs, 'path', 'as')}`,
+        `outputs=${mappedPathPreview(value.outputs, 'path', 'target')}`,
+      ].join(' ');
     },
   },
   {
@@ -309,7 +356,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     toClassifierInput: (input) => {
       const i = input as { path?: string; content?: string };
       const size = typeof i?.content === 'string' ? i.content.length : 0;
-      return `Write ${i?.path ?? '<unknown>'} (${size} bytes)`;
+      return `Write ${i?.path ?? '<unknown>'} (${size} chars)`;
     },
   },
   {
@@ -402,9 +449,8 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolInsertAfterAnchor,
     sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
-      const i = input as { path?: string; anchor?: string };
-      const anchor = typeof i?.anchor === 'string' ? i.anchor.slice(0, 40) : '<no-anchor>';
-      return `InsertAfterAnchor ${i?.path ?? '<unknown>'} after "${anchor}"`;
+      const i = input as { path?: string; anchor?: string; content?: string };
+      return `InsertAfterAnchor ${i?.path ?? '<unknown>'} anchor_chars=${i.anchor?.length ?? 0} content_chars=${i.content?.length ?? 0}`;
     },
   },
   {
@@ -575,10 +621,23 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolSpawnAgent,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
-      const i = input as { objective?: string; read_only?: boolean };
-      const obj = typeof i?.objective === 'string' ? i.objective.slice(0, 200) : '<no-objective>';
+      const i = input as Record<string, unknown>;
       const mutability = i?.read_only === false ? 'mutating' : 'readonly';
-      return `SpawnAgent(${mutability}): ${obj}`;
+      return [
+        `SpawnAgent(${mutability})`,
+        `task=${boundedText(i.task_name)}`,
+        `scope=${boundedText(i.scope, 160, '<inherit>')}`,
+        `evidence=${stringArrayPreview(i.evidence_refs)}`,
+        `isolation=${boundedText(i.isolation, 40, '<default>')}`,
+        `provider=${boundedText(i.provider, 80, '<inherit>')}`,
+        `model=${boundedText(i.model, 80, '<inherit>')}`,
+        `model_hint=${boundedText(i.model_hint, 40, '<inherit>')}`,
+        `effort=${boundedText(i.effort, 40, '<inherit>')}`,
+        `agent=${boundedText(i.agent_id, 80, '<generic>')}`,
+        `fork=${boundedText(i.fork_turns, 40, '<all>')}`,
+        `objective_chars=${typeof i.objective === 'string' ? i.objective.length : 0}`,
+        `constraints_count=${Array.isArray(i.constraints) ? i.constraints.length : 0}`,
+      ].join(' ');
     },
   },
   {
@@ -626,9 +685,19 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolRunWorkflow,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
-      const i = input as { manifest?: { name?: string; description?: string } };
-      const label = i?.manifest?.name ?? i?.manifest?.description ?? '<workflow>';
-      return `RunWorkflow: ${String(label).slice(0, 160)}`;
+      const i = input as { manifest?: Record<string, unknown>; source?: unknown; args?: unknown; resumeFromRunId?: unknown };
+      const manifest = i.manifest ?? {};
+      return [
+        `RunWorkflow name=${boundedText(manifest.name, 120, '<workflow>')}`,
+        `readOnly=${String(manifest.readOnly ?? '<missing>')}`,
+        `maxAgents=${String(manifest.maxAgents ?? '<missing>')}`,
+        `maxConcurrency=${String(manifest.maxConcurrency ?? '<missing>')}`,
+        `plannedAgents=${String(manifest.plannedAgents ?? '<missing>')}`,
+        `patterns=${stringArrayPreview(manifest.patterns)}`,
+        `source_chars=${typeof i.source === 'string' ? i.source.length : 0}`,
+        `args_keys=${objectKeysPreview(i.args)}`,
+        `resume=${boundedText(i.resumeFromRunId, 120, '<none>')}`,
+      ].join(' ');
     },
   },
   // Actor messaging and lifecycle controls share the Runtime-owned tree.
@@ -666,11 +735,13 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolSendAgentMessage,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
-      const i = input as { to?: string; content?: string };
-      const target = typeof i?.to === 'string' ? i.to : '<no-to>';
-      const body =
-        typeof i?.content === 'string' ? i.content.slice(0, 120) : '<no-content>';
-      return `SendMessage(${target}): ${body}`;
+      const i = input as Record<string, unknown>;
+      return [
+        `SendMessage target=${boundedText(i.to, 160, '<no-target>')}`,
+        `classification=${boundedText(i.classification, 32, 'internal')}`,
+        `forwarded=${typeof i.forwarded_message_id === 'string'}`,
+        `content_chars=${typeof i.content === 'string' ? i.content.length : 0}`,
+      ].join(' ');
     },
   },
   {
@@ -687,8 +758,8 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolFollowupTask,
     sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
-      const value = input as { target?: unknown };
-      return `FollowupTask: ${String(value.target ?? '<no-target>')}`;
+      const value = input as Record<string, unknown>;
+      return `FollowupTask target=${boundedText(value.target, 160, '<no-target>')} objective_chars=${typeof value.objective === 'string' ? value.objective.length : 0}`;
     },
   },
   {
@@ -758,10 +829,8 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     sideEffect: 'mutates-state',
     planModeAllowed: true,
     toClassifierInput: (input) => {
-      const i = input as { target?: string; reason?: string };
-      const target = typeof i?.target === 'string' ? i.target : '<no-target>';
-      const why = typeof i?.reason === 'string' ? i.reason.slice(0, 80) : '';
-      return `InterruptAgent(${target})${why ? ': ' + why : ''}`;
+      const i = input as Record<string, unknown>;
+      return `InterruptAgent target=${boundedText(i.target, 160, '<no-target>')} scope=${boundedText(i.scope, 32, 'turn')} reason_chars=${typeof i.reason === 'string' ? i.reason.length : 0}`;
     },
   },
   {
@@ -807,7 +876,10 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     // I propose the change"). web_fetch is NOT planModeAllowed because
     // it can issue POST/PUT requests that mutate remote state.
     planModeAllowed: true,
-    toClassifierInput: () => '',
+    toClassifierInput: (input) => {
+      const i = input as Record<string, unknown>;
+      return `WebSearch query=${boundedText(i.query, 200, '<no-query>')} provider=${boundedText(i.provider_id, 80, '<default>')}`;
+    },
   },
   {
     name: 'web_fetch',
@@ -823,8 +895,12 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolWebFetch,
     sideEffect: 'mutates-network',
     toClassifierInput: (input) => {
-      const i = input as { url?: string };
-      return `WebFetch ${typeof i?.url === 'string' ? i.url : '<no-url>'}`;
+      const i = input as Record<string, unknown>;
+      return [
+        `WebFetch url=${boundedText(i.url, 240, '<provider-backed>')}`,
+        `provider=${boundedText(i.provider_id, 80, '<default>')}`,
+        `capability=${boundedText(i.capability_id, 120, '<default>')}`,
+      ].join(' ');
     },
   },
   {
@@ -844,7 +920,15 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolCodeSearch,
     sideEffect: 'readonly',
-    toClassifierInput: () => '',
+    toClassifierInput: (input) => {
+      const i = input as Record<string, unknown>;
+      if (typeof i.provider_id !== 'string' || i.provider_id.length === 0) return '';
+      return [
+        `CodeSearch query=${boundedText(i.query, 200, '<no-query>')}`,
+        `path=${boundedText(i.path, 160, '<workspace>')}`,
+        `provider=${boundedText(i.provider_id, 80)}`,
+      ].join(' ');
+    },
   },
   {
     name: 'semantic_lookup',
@@ -874,11 +958,11 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     // refresh: true rebuilds the repo-intel snapshot (disk side effect),
     // so this is not strictly Tier 1 — surface name + truncated input via
     // the helper so the classifier can see when refresh is requested.
-    toClassifierInput: (input) => (
-      (input as { readonly refresh?: unknown }).refresh === true
-        ? defaultToClassifierInput('semantic_lookup', input)
-        : ''
-    ),
+    toClassifierInput: (input) => {
+      const i = input as Record<string, unknown>;
+      if (i.refresh !== true) return '';
+      return `SemanticLookup refresh=true kind=${boundedText(i.kind, 32, 'auto')} target=${boundedText(i.target_path, 160, '<workspace>')}`;
+    },
   },
   {
     name: 'mcp_search',
@@ -964,7 +1048,10 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     // planModeAllowed because it can invoke arbitrary MCP tools that
     // mutate remote state.
     planModeAllowed: true,
-    toClassifierInput: () => '',
+    toClassifierInput: (input) => {
+      const i = input as { id?: unknown };
+      return `McpReadResource id=${boundedText(i.id, 240, '<no-id>')}`;
+    },
   },
   {
     name: 'mcp_get_prompt',
@@ -986,7 +1073,11 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     // Plan mode permits MCP get-prompt: it's a read of a server-side
     // prompt definition, functionally a query.
     planModeAllowed: true,
-    toClassifierInput: () => '',
+    toClassifierInput: (input) => {
+      const i = input as { id?: string; args?: unknown };
+      const capability = typeof i.id === 'string' ? i.id : '<no-id>';
+      return mcpCapabilityPreview(capability, i.args ?? {});
+    },
   },
   {
     name: 'worktree_create',
@@ -1004,8 +1095,8 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       const i = input as { branch_name?: string; description?: string };
       const branch = typeof i?.branch_name === 'string'
         ? i.branch_name
-        : (typeof i?.description === 'string' ? `<auto from "${i.description.slice(0, 40)}">` : '<auto>');
-      return `WorktreeCreate ${branch}`;
+        : '<auto>';
+      return `WorktreeCreate ${branch} description_chars=${i.description?.length ?? 0}`;
     },
   },
   {
@@ -1203,6 +1294,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolCreateGoal,
     sideEffect: 'mutates-state',
     planModeAllowed: true,
+    classifierExemptReason: 'Creates only session-local goal bookkeeping after explicit user authorization.',
     toClassifierInput: () => '',
   },
   {
@@ -1229,6 +1321,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolUpdateGoal,
     sideEffect: 'mutates-state',
     planModeAllowed: false,
+    classifierExemptReason: 'Updates only session-local goal status and is independently runtime-verified.',
     toClassifierInput: () => '',
   },
   {
@@ -1247,6 +1340,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolExitPlanMode,
     sideEffect: 'mutates-state',
     planModeAllowed: true,
+    classifierExemptReason: 'Already requires a dedicated interactive plan-approval boundary.',
     toClassifierInput: () => '',
   },
   {
@@ -1381,6 +1475,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolTodoUpdate,
     sideEffect: 'mutates-state',
     planModeAllowed: true,
+    classifierExemptReason: 'Mutates only the visible session-local progress checklist.',
     toClassifierInput: () => '',
   },
   {
@@ -1437,6 +1532,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     handler: toolTodoCreate,
     sideEffect: 'mutates-state',
     planModeAllowed: true,
+    classifierExemptReason: 'Adds only a session-local progress checklist item.',
     toClassifierInput: () => '',
   },
   {
@@ -1917,6 +2013,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolTestTool,
     sideEffect: 'mutates-state',
+    classifierExemptReason: 'Runs the local validation pipeline without activating or expanding capability.',
     toClassifierInput: () => '',
   },
   {
@@ -2023,6 +2120,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolTestAgent,
     sideEffect: 'mutates-state',
+    classifierExemptReason: 'Runs the local admission test pipeline without activating the agent.',
     toClassifierInput: () => '',
   },
   {

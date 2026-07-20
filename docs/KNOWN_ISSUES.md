@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-19_
+_Last Updated: 2026-07-20_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-19_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 188 | High | Resolved | Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete | v0.7.33; expanded v0.7.72 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 187 | High | Resolved | Shared-daemon Auto permission ownership, upgrade fencing, preview bounds, and SDK compatibility were incomplete | v0.7.72 RC | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 186 | High | Resolved | Daemon event subscriptions had no readiness boundary and could miss the first cross-client event | v0.7.66 | v0.7.72 | 2026-07-19 | 2026-07-19 |
 | 185 | Medium | Open | Learning lock crash recovery can time out before stale ownership is reclaimable | v0.7.68; expanded v0.7.72 RC | - | 2026-07-19 | - |
@@ -97,6 +98,102 @@ _Last Updated: 2026-07-19_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 188: Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.73)
+- **Introduced**: v0.7.33; expanded v0.7.72 RC
+- **Fixed**: v0.7.73
+- **Created**: 2026-07-20
+- **Resolved**: 2026-07-20
+
+#### Original Problem
+
+The Auto[LLM] side-provider transcript retained complete assistant `tool_use`
+arguments. Write/edit bodies and credentials could therefore leave the main
+provider. The first local correction overcompensated by removing all arguments,
+including paths, targets, command intent, and scope that the classifier needs
+to interpret later actions. When the transcript exceeded its byte budget, an
+oversized current tool call or tool result could also consume the recent-context
+allocation and drop the user's newest explicit constraint.
+
+The first bounded correction still retained raw `tool_result` text up to 2 KiB,
+duplicated canonical action fields in historical metadata, and relied on every
+tool author to provide complete classifier metadata. Constructed tools and
+JavaScript extensions could therefore serialize arbitrary input or silently
+skip classification when metadata was absent. MCP projection also hid a long
+path or a second action field while forwarding unrelated short scalar values.
+
+Separately, interactive first-run provider readiness inspected `process.env`
+before Runtime preparation hydrated login-shell and config-backed credentials.
+Users whose provider credential existed only in that environment projection
+could be sent through setup even though normal Runtime startup was ready.
+
+#### Root Cause
+
+Transcript projection originally treated tool identity and raw arguments as one
+factual record; the first correction then treated identity as sufficient. The
+missing middle layer was the existing per-tool classifier projection plus a
+fixed, bounded metadata projection. Budgeting also anchored only the first
+`user` role and greedily truncated the newest oversized message. Tool-result
+envelopes use the `user` role, so role alone cannot identify a genuine user
+constraint. The first-run setup gate had been placed before the one existing
+Runtime configuration preparation call.
+
+The registry contract was compile-time only: JavaScript registrations could
+omit `sideEffect` or `toClassifierInput`, and an empty non-readonly projection
+had no auditable justification. Tier 0 also ran after the empty-projection
+shortcut, so a faulty exemption could bypass deterministic denial. MCP used a
+single priority action field plus opportunistic scalar previews instead of a
+field-semantics projection.
+
+#### Resolution
+
+- Project assistant tool history through exactly one canonical
+  `toClassifierInput` summary. Historical metadata no longer repeats paths or
+  commands already represented by that summary; it adds only body sizes and
+  collection counts. Portable `tool_call` history is unwrapped to the concrete
+  target before projection.
+- Replace every historical `tool_result` body, including errors and content
+  below the old 2 KiB threshold, with bounded status metadata: tool identity,
+  success/error, text character/byte counts, and media count. Result text,
+  image paths, and media payloads never reach the classifier.
+- Add one semantic fallback for constructed and extension tools. It retains
+  bounded operational locators, commands/scripts/argument arrays and control
+  flags; converts known free-form bodies to character counts; and describes
+  unknown values only by type/shape. MCP uses the same field semantics, keeps
+  every populated action field, and never forwards arbitrary short scalars.
+  Common snake_case/camelCase SDK fields share that table, recognized fields
+  are emitted before unknown shapes, and long locators preserve both their
+  beginning and final target segment.
+- Normalize runtime registrations: missing/invalid side effects become
+  `mutates-state`, missing non-readonly projectors receive the safe fallback,
+  and accidental empty non-readonly projections no longer bypass the
+  classifier. Intentional non-readonly exemptions require a documented
+  `classifierExemptReason`.
+- Run deterministic Tier 0 checks before projection opt-out. Missing projectors
+  fall back safely; throwing or invalid projectors escalate without disclosing
+  exception text. Local read-only tools keep the zero-cost bypass, while
+  network egress and remote provider-backed searches expose bounded query,
+  locator, provider, and capability facts.
+- Anchor the first and latest genuine user-intent messages before adding recent
+  factual context. Tool-result-only envelopes are excluded from intent anchors,
+  and only the remaining budget may hold a bounded snapshot of the newest
+  oversized factual message. The serialized UTF-8 budget remains exact.
+- Prepare Runtime configuration once after subcommand handling but before
+  first-run readiness, then reuse that same configuration for session startup.
+
+#### Verification
+
+Regression tests cover useful path/command/query retention, write/edit body
+non-disclosure, raw result non-disclosure, header/URL/CLI credential redaction,
+MCP multi-action/long-path retention, constructed/extension fallback,
+non-readonly exemption auditing, projector failure escalation, Tier-0 ordering,
+portable bridge unwrapping, first/latest intent retention across an oversized
+tool call and a tool-result envelope, exact transcript byte bounds, and
+login-shell credential hydration before provider readiness without launching
+the setup wizard.
 
 ### 187: Shared-daemon Auto permission ownership, upgrade fencing, preview bounds, and SDK compatibility were incomplete
 
@@ -5085,11 +5182,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 74 (26 Open, 48 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 75 (26 Open, 49 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-20: Issue 188 added and resolved (v0.7.73)
+- Replaced raw assistant tool arguments and results with bounded semantic
+  summaries/status metadata, added fail-closed constructed/extension/MCP
+  projection contracts and auditable exemptions, anchored both genuine
+  user-intent boundaries under byte pressure, and made first-run provider
+  readiness observe the hydrated Runtime environment.
 
 ### 2026-07-19: Issue 187 added and resolved (Unreleased)
 - Closed the shared-daemon Auto permission owner, safe old-daemon upgrade,

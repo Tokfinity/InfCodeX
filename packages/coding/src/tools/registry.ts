@@ -3,14 +3,25 @@ import type { KodaXToolExecutionContext } from '../types.js';
 import type {
   LocalToolDefinition,
   RegisteredToolDefinition,
+  ToolSideEffect,
   ToolDefinitionSource,
   ToolHandler,
   ToolRegistry,
   ToolRegistrationOptions,
 } from './types.js';
 import { BUILTIN_TOOL_DEFINITIONS } from './tool-definitions.js';
+import { safeFallbackToClassifierInput } from './classifier-projection.js';
 const TOOL_REGISTRY: ToolRegistry = new Map();
 let nextToolRegistrationId = 0;
+
+const VALID_SIDE_EFFECTS = new Set<ToolSideEffect>([
+  'readonly',
+  'reads-network',
+  'mutates-fs',
+  'mutates-shell',
+  'mutates-network',
+  'mutates-state',
+]);
 
 export const REPO_INTELLIGENCE_WORKING_TOOL_NAMES = [
   'repo_overview',
@@ -93,26 +104,66 @@ function registerToolInternal(
   definition: LocalToolDefinition,
   options: ToolRegistrationOptions = {},
 ): () => void {
+  const normalized = normalizeToolDefinition(definition);
   const registrationId = `tool:${++nextToolRegistrationId}`;
   const source: ToolDefinitionSource = options.source ?? {
     kind: 'extension',
     id: registrationId,
-    label: definition.name,
+    label: normalized.name,
   };
 
   const registration: RegisteredToolDefinition = {
-    ...definition,
+    ...normalized,
     registrationId,
-    requiredParams: extractRequiredParams(definition.input_schema),
+    requiredParams: extractRequiredParams(normalized.input_schema),
     source,
   };
 
-  const existing = TOOL_REGISTRY.get(definition.name) ?? [];
-  TOOL_REGISTRY.set(definition.name, [...existing, registration]);
+  const existing = TOOL_REGISTRY.get(normalized.name) ?? [];
+  TOOL_REGISTRY.set(normalized.name, [...existing, registration]);
 
   return () => {
     removeToolRegistration(registrationId);
   };
+}
+
+function normalizeToolDefinition(definition: LocalToolDefinition): LocalToolDefinition {
+  const runtimeDefinition = definition as unknown as {
+    readonly name: string;
+    readonly sideEffect?: unknown;
+    readonly toClassifierInput?: unknown;
+    readonly classifierExemptReason?: unknown;
+  };
+  const sideEffect = isToolSideEffect(runtimeDefinition.sideEffect)
+    ? runtimeDefinition.sideEffect
+    : 'mutates-state';
+  const originalProjector = typeof runtimeDefinition.toClassifierInput === 'function'
+    ? runtimeDefinition.toClassifierInput as (input: unknown) => unknown
+    : undefined;
+  const exempt = typeof runtimeDefinition.classifierExemptReason === 'string'
+    && runtimeDefinition.classifierExemptReason.trim().length > 0;
+
+  const toClassifierInput = (input: unknown): string => {
+    if (!originalProjector) {
+      return sideEffect === 'readonly' || exempt
+        ? ''
+        : safeFallbackToClassifierInput(runtimeDefinition.name, input);
+    }
+    const projected: unknown = originalProjector(input);
+    if (typeof projected !== 'string') {
+      throw new TypeError('classifier projector must return a string');
+    }
+    if (projected.trim().length === 0 && sideEffect !== 'readonly' && !exempt) {
+      return safeFallbackToClassifierInput(runtimeDefinition.name, input);
+    }
+    return projected.trim().length === 0 ? '' : projected;
+  };
+
+  return { ...definition, sideEffect, toClassifierInput };
+}
+
+function isToolSideEffect(value: unknown): value is ToolSideEffect {
+  return typeof value === 'string' && VALID_SIDE_EFFECTS.has(value as ToolSideEffect);
 }
 
 

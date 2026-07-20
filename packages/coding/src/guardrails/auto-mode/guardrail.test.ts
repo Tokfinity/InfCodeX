@@ -104,6 +104,55 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(verdict.action).toBe('allow');
     expect(classifierCalled).toBe(false);
   });
+
+  it('classifies an unknown tool through the safe fallback instead of treating it as readonly', async () => {
+    let classifierCalled = false;
+    const provider = new StubProvider(async () => {
+      classifierCalled = true;
+      return okResult('<block>no</block><reason>safe</reason>');
+    });
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => undefined,
+      resolveProvider: () => provider,
+    });
+
+    const verdict = await g.beforeTool!({
+      id: 'unknown-1',
+      name: 'legacy_writer',
+      input: { path: 'src/a.ts', content: 'PRIVATE_BODY' },
+    }, ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(classifierCalled).toBe(true);
+  });
+
+  it('escalates an invalid custom projector instead of crashing or allowing', async () => {
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => () => { throw new Error('broken projector'); },
+    });
+
+    const verdict = await g.beforeTool!(callBash('echo ok'), ctx());
+    expect(verdict.action).toBe('escalate');
+    if (verdict.action === 'escalate') {
+      expect(verdict.reason).toMatch(/projection failed/i);
+    }
+  });
+
+  it('escalates when a custom projector returns a non-string value', async () => {
+    const invalidProjector = (() => 42) as unknown as (input: unknown) => string;
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => invalidProjector,
+    });
+
+    const verdict = await g.beforeTool!(callBash('echo ok'), ctx());
+    expect(verdict.action).toBe('escalate');
+    if (verdict.action === 'escalate') {
+      expect(verdict.reason).toMatch(/projection failed/i);
+    }
+  });
 });
 
 describe('AutoModeToolGuardrail — classifier verdicts', () => {
@@ -715,6 +764,16 @@ describe('AutoModeToolGuardrail — defaultProvider/defaultModel staleness fix (
 // ============== FEATURE_158 (v0.7.39) ==============
 
 describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () => {
+  it('runs Tier 0 before an empty classifier projection', async () => {
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => () => '',
+    });
+
+    const verdict = await g.beforeTool!(callBash('rm -rf /'), ctx());
+    expect(verdict.action).toBe('block');
+  });
+
   it('applies Tier 0 to the concrete target behind tool_call', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {

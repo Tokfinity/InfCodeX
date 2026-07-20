@@ -28,6 +28,9 @@ interface InteractiveMainHarness {
   readonly runtimeStarts: unknown[];
   readonly runtimeDeletes: string[];
   readonly runManagedTask: ReturnType<typeof vi.fn>;
+  readonly prepareRuntimeConfig: ReturnType<typeof vi.fn>;
+  readonly inspectProviderSetupReadiness: ReturnType<typeof vi.fn>;
+  readonly runProviderSetupWizard: ReturnType<typeof vi.fn>;
 }
 
 const originalArgv = process.argv;
@@ -83,6 +86,10 @@ async function importMainWithMocks(options: {
   readonly lspShutdown?: () => Promise<void>;
   readonly runtimeClose?: () => Promise<void>;
   readonly mockSdkRuntime?: boolean;
+  readonly prepareRuntimeConfig?: () => RuntimeConfig;
+  readonly inspectProviderSetupReadiness?: (
+    input: Readonly<Record<string, unknown>>,
+  ) => Readonly<Record<string, unknown>>;
 } = {}): Promise<{
   readonly main: () => Promise<void>;
   readonly harness: InteractiveMainHarness;
@@ -125,6 +132,16 @@ async function importMainWithMocks(options: {
     messages: [],
     sessionId: 'legacy-session',
   }));
+  const prepareRuntimeConfig = vi.fn(() => options.prepareRuntimeConfig?.() ?? config);
+  const inspectProviderSetupReadiness = vi.fn((input: Readonly<Record<string, unknown>>) => (
+    options.inspectProviderSetupReadiness?.(input) ?? {
+      status: 'ready',
+      configPath: 'C:/Users/test/.kodax/config.json',
+      configRevision: 'test-revision',
+      provider: 'mock-provider',
+    }
+  ));
+  const runProviderSetupWizard = vi.fn(async () => ({ status: 'cancelled' as const }));
   const createKodaXRuntime = vi.fn(async (runtimeOptionsInput: unknown) => {
     runtimeOptions.push(runtimeOptionsInput);
     const runtimeOptionsRecord = runtimeOptionsInput !== null && typeof runtimeOptionsInput === 'object'
@@ -301,7 +318,7 @@ async function importMainWithMocks(options: {
       createCliEvents: vi.fn(() => ({})),
       createJsonEvents: vi.fn(() => ({})),
       loadConfig: vi.fn(() => ({})),
-      prepareRuntimeConfig: vi.fn(() => config),
+      prepareRuntimeConfig,
       FileSessionStorage: MockFileSessionStorage,
       dedupeSessions: vi.fn(),
       KODAX_CONFIG_FILE: 'C:/Users/test/.kodax/config.json',
@@ -315,6 +332,9 @@ async function importMainWithMocks(options: {
       resolveInteractiveSurfacePreference: vi.fn(() => surface),
       runInteractiveMode,
       runInkInteractiveMode,
+      inspectProviderSetupReadiness,
+      providerSetupRestartInstructions: vi.fn(() => []),
+      runProviderSetupWizard,
     };
   });
 
@@ -350,11 +370,53 @@ async function importMainWithMocks(options: {
       runtimeStarts,
       runtimeDeletes,
       runManagedTask,
+      prepareRuntimeConfig,
+      inspectProviderSetupReadiness,
+      runProviderSetupWizard,
     },
   };
 }
 
 describe('CLI interactive exit lifecycle', () => {
+  it('hydrates Runtime configuration before deciding whether first-run setup is needed', async () => {
+    const shellCredential = 'KODAX_TEST_SHELL_PROFILE_CREDENTIAL';
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    delete process.env[shellCredential];
+
+    try {
+      const { main, harness } = await importMainWithMocks({
+        prepareRuntimeConfig: () => {
+          process.env[shellCredential] = 'hydrated-by-login-shell';
+          return { provider: 'mock-provider' };
+        },
+        inspectProviderSetupReadiness: () => ({
+          status: process.env[shellCredential] ? 'ready' : 'needs-provider',
+          configPath: 'C:/Users/test/.kodax/config.json',
+          configRevision: 'test-revision',
+        }),
+      });
+      vi.spyOn(process, 'exit').mockImplementation((() => undefined as never) as typeof process.exit);
+
+      await main();
+
+      expect(harness.prepareRuntimeConfig).toHaveBeenCalledOnce();
+      expect(harness.inspectProviderSetupReadiness).toHaveBeenCalledOnce();
+      expect(harness.prepareRuntimeConfig.mock.invocationCallOrder[0])
+        .toBeLessThan(harness.inspectProviderSetupReadiness.mock.invocationCallOrder[0]!);
+      expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
+      expect(harness.runInkInteractiveMode).toHaveBeenCalledOnce();
+    } finally {
+      delete process.env[shellCredential];
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
   it('keeps Ink cleanup host-owned and exits only after top-level cleanup', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: string | number | null) => {
       expect(code).toBe(0);

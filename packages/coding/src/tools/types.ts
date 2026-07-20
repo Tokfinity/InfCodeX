@@ -175,17 +175,18 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
    * THREE-TIER STRATEGY (pick by tool's risk profile):
    *
    *   1. ZERO RISK (read-only, structural):
-   *      → return ''  (Tier 1 — classifier is skipped entirely, zero token cost)
-   *      Examples: read, grep, glob, ask_user_question, exit_plan_mode
+   *      → return '' (Tier 1; classifier is skipped, zero token cost)
+   *      Non-readonly tools need an explicit `classifierExemptReason`.
+   *      Examples: read, grep, glob, ask_user_question
    *
    *   2. HIGH RISK (mutates state, network, exec, spawn):
    *      → write a CUSTOM projection that surfaces the risk-bearing fields
    *      Examples: bash (`Bash: ${i.command}`), web_fetch (`WebFetch ${i.url}`)
    *      See `classifier-projection.ts` for examples by category.
    *
-   *   3. LOW RISK (structured input, side-effect-capable):
-   *      → return defaultToClassifierInput(name, input)  (one-line helper)
-   *      Examples: semantic_lookup (refresh: true rebuilds index)
+   *   3. UNKNOWN / EXTENSION INPUT:
+   *      → use `safeFallbackToClassifierInput(name, input)`. It retains
+   *      operational metadata and body sizes without serializing raw JSON.
    *
    * KEEP IT SHORT: ≤ 100 chars typical. Variable-length user-provided fields
    * (bash command, URL, `spawn_agent` objective) may legitimately
@@ -199,6 +200,13 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
    * See `docs/features/v0.7.33.md` "Tool 接口扩展" for design rationale.
    */
   toClassifierInput: (input: unknown) => string;
+
+  /**
+   * Required justification when a non-readonly tool intentionally returns
+   * an empty classifier projection. This makes classifier bypasses auditable
+   * instead of allowing an accidental `() => ''` to fail open.
+   */
+  classifierExemptReason?: string;
 }
 
 export interface ToolDefinitionSource {

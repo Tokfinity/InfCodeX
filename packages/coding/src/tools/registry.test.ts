@@ -13,6 +13,7 @@ import {
   registerTool,
 } from './index.js';
 import type { KodaXToolExecutionContext } from '../types.js';
+import type { LocalToolDefinition } from './types.js';
 
 const TEST_CONTEXT: KodaXToolExecutionContext = {
   backups: new Map(),
@@ -141,6 +142,57 @@ describe('tool registry', () => {
 
     expect(getTool('read')).toBe(originalHandler);
   });
+
+  it('normalizes legacy JavaScript tools to a fail-closed classifier contract', () => {
+    const dispose = registerTool({
+      name: 'legacy_writer_without_metadata',
+      description: 'Legacy JavaScript extension shape',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+        },
+      },
+      handler: async () => 'ok',
+    } as unknown as LocalToolDefinition);
+
+    try {
+      const definition = getAllRegisteredTools()
+        .find((tool) => tool.name === 'legacy_writer_without_metadata');
+      const projection = definition?.toClassifierInput({
+        path: 'src/a.ts',
+        content: 'PRIVATE_EXTENSION_BODY',
+      });
+
+      expect(definition?.sideEffect).toBe('mutates-state');
+      expect(projection).toContain('path=src/a.ts');
+      expect(projection).toContain('content_chars=22');
+      expect(projection).not.toContain('PRIVATE_EXTENSION_BODY');
+    } finally {
+      dispose();
+    }
+  });
+
+  it('does not let a non-readonly extension bypass classification with an accidental empty projection', () => {
+    const dispose = registerTool({
+      name: 'extension_with_empty_projection',
+      description: 'Mutating extension',
+      input_schema: { type: 'object', properties: { path: { type: 'string' } } },
+      handler: async () => 'ok',
+      sideEffect: 'mutates-fs',
+      toClassifierInput: () => '',
+    });
+
+    try {
+      const definition = getAllRegisteredTools()
+        .find((tool) => tool.name === 'extension_with_empty_projection');
+      expect(definition?.toClassifierInput({ path: 'src/a.ts' }))
+        .toContain('path=src/a.ts');
+    } finally {
+      dispose();
+    }
+  });
 });
 
 // v0.7.42 — tool sideEffect metadata + plan-mode-allowed predicate.
@@ -174,6 +226,108 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     }
   });
 
+  it('requires an explicit exemption for non-readonly tools with empty projections', () => {
+    for (const tool of listBuiltinToolDefinitions()) {
+      if (tool.sideEffect === 'readonly') continue;
+      if (tool.toClassifierInput({}) !== '') continue;
+      expect(
+        tool.classifierExemptReason,
+        `non-readonly tool "${tool.name}" needs an explicit classifier exemption`,
+      ).toBeTruthy();
+    }
+  });
+
+  it('surfaces risk-bearing fields for high-impact built-in tools', () => {
+    const projection = (name: string, input: Record<string, unknown>): string => {
+      const tool = listBuiltinToolDefinitions().find((entry) => entry.name === name);
+      expect(tool, `missing built-in ${name}`).toBeDefined();
+      return tool!.toClassifierInput(input);
+    };
+
+    expect(projection('run_skill_script', {
+      skill: 'reports',
+      script: 'render.py',
+      args: ['--delete-stale'],
+      inputs: [{ path: 'data/input.csv', as: 'input.csv' }],
+      outputs: [{ path: 'report.pdf', target: 'deliverables/report.pdf' }],
+    })).toMatch(/--delete-stale.*data\/input\.csv.*deliverables\/report\.pdf/);
+    const longSkillPath = `C:/workspace/${'nested/'.repeat(30)}source-tail.csv`;
+    const longSkillProjection = projection('run_skill_script', {
+      skill: 'reports',
+      script: 'render.py',
+      inputs: [{ path: longSkillPath, as: 'staged.csv' }],
+    });
+    expect(longSkillProjection).toContain('C:/workspace/');
+    expect(longSkillProjection).toContain('source-tail.csv');
+
+    expect(projection('run_workflow', {
+      manifest: {
+        name: 'writer', readOnly: false, maxAgents: 6, maxConcurrency: 3,
+        patterns: ['pipeline'],
+      },
+      source: 'async function run(wf) { return wf.runAgent({ readOnly: false }); }',
+      args: { request: 'private body' },
+    })).toMatch(/readOnly=false.*maxAgents=6.*maxConcurrency=3.*source_chars=/);
+    expect(projection('run_workflow', {
+      manifest: { name: 'writer', readOnly: false },
+      source: 'PRIVATE_WORKFLOW_SOURCE',
+      args: { request: 'PRIVATE_WORKFLOW_ARGUMENT' },
+    })).not.toMatch(/PRIVATE_WORKFLOW_(SOURCE|ARGUMENT)/);
+
+    const spawnProjection = projection('spawn_agent', {
+      task_name: 'reviewer', objective: 'PRIVATE_AGENT_OBJECTIVE', read_only: false,
+      scope: 'packages/auth', evidence_refs: ['file:packages/auth/src/index.ts'],
+      constraints: ['PRIVATE_AGENT_CONSTRAINT'], model_hint: 'deep',
+      isolation: 'worktree', provider: 'zai', model: 'glm-5',
+    });
+    expect(spawnProjection).toMatch(
+      /task=reviewer.*scope=packages\/auth.*isolation=worktree.*provider=zai.*model=glm-5.*model_hint=deep/,
+    );
+    expect(spawnProjection).toContain('evidence=[file:packages/auth/src/index.ts]');
+    expect(spawnProjection).toContain('objective_chars=23');
+    expect(spawnProjection).toContain('constraints_count=1');
+    expect(spawnProjection).not.toMatch(/PRIVATE_AGENT_(OBJECTIVE|CONSTRAINT)/);
+
+    const followupProjection = projection('followup_task', {
+      target: 'reviewer', objective: 'PRIVATE_FOLLOWUP_OBJECTIVE',
+    });
+    expect(followupProjection).toMatch(/target=reviewer.*objective_chars=26/);
+    expect(followupProjection).not.toContain('PRIVATE_FOLLOWUP_OBJECTIVE');
+    expect(projection('interrupt_agent', {
+      target: 'reviewer', scope: 'subtree', reason: 'user redirected',
+    })).toContain('scope=subtree');
+    const sendProjection = projection('send_message', {
+      to: 'reviewer', classification: 'sensitive', content: 'PRIVATE_AGENT_MESSAGE',
+    });
+    expect(sendProjection).toMatch(/target=reviewer.*classification=sensitive.*content_chars=21/);
+    expect(sendProjection).not.toContain('PRIVATE_AGENT_MESSAGE');
+    expect(projection('web_fetch', {
+      provider_id: 'remote-fetch', capability_id: 'fetch:get',
+    })).toMatch(/provider=remote-fetch.*capability=fetch:get/);
+    expect(projection('web_search', {
+      query: 'current API documentation', provider_id: 'search-provider',
+    })).toMatch(/current API documentation.*provider=search-provider/);
+    expect(projection('code_search', {
+      query: 'local symbol', path: 'src',
+    })).toBe('');
+    expect(projection('code_search', {
+      query: 'remote symbol', path: 'src', provider_id: 'remote-code',
+    })).toMatch(/remote symbol.*provider=remote-code/);
+    const worktreeProjection = projection('worktree_create', {
+      description: 'PRIVATE_WORKTREE_DESCRIPTION',
+    });
+    expect(worktreeProjection).toContain('description_chars=28');
+    expect(worktreeProjection).not.toContain('PRIVATE_WORKTREE_DESCRIPTION');
+    expect(projection('mcp_get_prompt', {
+      id: 'mcp:prompts:prompt:release',
+      args: { path: 'docs/release.md', body: 'PRIVATE_PROMPT_BODY' },
+    })).toMatch(/path=docs\/release.md.*body_chars=19/);
+    expect(projection('mcp_get_prompt', {
+      id: 'mcp:prompts:prompt:release',
+      args: { body: 'PRIVATE_PROMPT_BODY' },
+    })).not.toContain('PRIVATE_PROMPT_BODY');
+  });
+
   it('only projects semantic_lookup when refresh rebuilds the index', () => {
     const semanticLookup = listBuiltinToolDefinitions()
       .find((tool) => tool.name === 'semantic_lookup');
@@ -182,7 +336,11 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     expect(semanticLookup?.toClassifierInput({
       query: 'actor routing',
       refresh: true,
-    })).toContain('"refresh":true');
+    })).toContain('refresh=true');
+    expect(semanticLookup?.toClassifierInput({
+      query: 'PRIVATE_LOCAL_QUERY',
+      refresh: true,
+    })).not.toContain('PRIVATE_LOCAL_QUERY');
   });
 
   it('classifies read/glob/grep as readonly', () => {

@@ -28,7 +28,7 @@ import crypto from 'crypto';
 import { Runner, emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { LocalToolDefinition } from '../tools/types.js';
 import { registerTool } from '../tools/registry.js';
-import { defaultToClassifierInput } from '../tools/classifier-projection.js';
+import { safeFallbackToClassifierInput } from '../tools/classifier-projection.js';
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 
 import { buildAdmissionManifest } from './admission-bridge.js';
@@ -982,11 +982,9 @@ async function registerActiveToolArtifact(artifact: ToolArtifact): Promise<void>
     // mode from auto-permitting a constructed tool whose true class is
     // unknown.
     sideEffect: 'mutates-state',
-    // Constructed tools don't yet declare a custom classifier projection.
-    // FEATURE_092 v1: fail-closed via the conservative default helper —
-    // tool name + truncated JSON. Future artifact schema may add an
-    // optional `classifierProjection` template (see v0.7.33.md Q2).
-    toClassifierInput: (input) => defaultToClassifierInput(artifact.name, input),
+    // Constructed tools have no trusted custom projection. Preserve bounded
+    // operational metadata and body sizes without serializing arbitrary input.
+    toClassifierInput: (input) => safeFallbackToClassifierInput(artifact.name, input),
   };
 
   const existing = _activated.get(activeKey(artifact));

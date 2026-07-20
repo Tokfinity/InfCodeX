@@ -8,10 +8,10 @@
  *
  * Decision flow (per design doc "三层权限金字塔"):
  *
- *   1. Tool projection is '' (Tier 1)        → allow (zero token cost)
- *   2. Engine has been downgraded to rules   → escalate (user confirms)
- *   3. denialTracker.shouldFallback (3/20)   → engine downgrade, then escalate
- *   4. circuitBreaker.shouldFallback (5/10m) → engine downgrade, then escalate
+ *   1. Tier-0 deterministic deny             → block
+ *   2. Tool projection is '' (Tier 1)        → allow (zero token cost)
+ *   3. Engine has been downgraded to rules   → escalate (user confirms)
+ *   4. denial/circuit threshold              → engine downgrade, then escalate
  *   5. classify(...) sideQuery
  *        allow                               → allow (record allow → reset consecutive)
  *        block                               → block + reason (record block)
@@ -75,6 +75,7 @@ import {
 import type { AutoRules } from './rules.js';
 import { collectAllSignals, type SignalCollector, type ToolCallSignal } from './signals.js';
 import { speculativeRace } from './speculative.js';
+import { safeFallbackToClassifierInput } from '../../tools/classifier-projection.js';
 import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 
 export type AutoModeEngine = 'llm' | 'rules';
@@ -144,9 +145,8 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * Look up a tool's `toClassifierInput` projection by tool name.
-   * Returns `undefined` when the tool isn't in the registry — guardrail
-   * treats that as "no projection ⇒ Tier 1 skip" (conservative for
-   * unknown tools is debatable; v1 favors not blocking on noise).
+   * Returns `undefined` when the tool isn't in the registry. Unknown tools
+   * receive a metadata-only fail-closed projection rather than a Tier-1 skip.
    */
   readonly getToolProjection: (
     toolName: string,
@@ -382,13 +382,6 @@ export function createAutoModeToolGuardrail(
       return { action: 'block', reason };
     };
 
-    // Tier 1: tool opted out of classifier via empty projection
-    const projector = config.getToolProjection(guardedCall.name);
-    const action = projector ? projector(guardedCall.input) : '';
-    if (action === '') {
-      return { action: 'allow' };
-    }
-
     // FEATURE_158 — Tier 0: absolute denylist. Runs BEFORE engine check so
     // catastrophic patterns (rm -rf /, mkfs, dd of=/dev/sd*, fork bomb,
     // ~/.kodax write) are blocked even when engine is downgraded to 'rules'.
@@ -407,6 +400,24 @@ export function createAutoModeToolGuardrail(
       );
       return { action: 'block', reason: tier0.reason };
     }
+
+    // Tier 1: registered read-only or explicitly exempt tools may opt out
+    // through an empty projection. Unknown tools use a metadata-only fallback
+    // so missing extension metadata cannot silently bypass Auto[LLM].
+    let action: string;
+    try {
+      const projector = config.getToolProjection(guardedCall.name);
+      const projected: unknown = projector
+        ? projector(guardedCall.input)
+        : safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
+      if (typeof projected !== 'string') throw new TypeError('invalid classifier projection');
+      action = projected;
+    } catch {
+      const reason = `tool classifier projection failed for "${guardedCall.name}"`;
+      config.log?.('warn', `[auto-mode] ${reason}`);
+      return escalateOrAsk(reason);
+    }
+    if (action === '') return { action: 'allow' };
 
     // Engine has previously downgraded — rules-engine behavior is
     // "Tier 1/2 allow, else escalate to user"; v1 doesn't yet implement
@@ -481,6 +492,7 @@ export function createAutoModeToolGuardrail(
       // bounded input contract.
       transcript: ctx.messages ?? [],
       action,
+      getToolProjection: config.getToolProjection,
       signals,
       timeoutMs,
       abortSignal: ctx.abortSignal,

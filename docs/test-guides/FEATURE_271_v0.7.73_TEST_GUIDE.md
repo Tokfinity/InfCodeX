@@ -45,6 +45,8 @@ npx vitest run packages/repl/src/common/provider-setup.test.ts \
 npx vitest run packages/coding/src/guardrails/auto-mode/transcript-strip.test.ts \
   packages/coding/src/guardrails/auto-mode/classify.test.ts \
   packages/coding/src/guardrails/auto-mode/guardrail.test.ts \
+  packages/coding/src/tools/classifier-projection.test.ts \
+  packages/coding/src/tools/registry.test.ts \
   packages/agent/src/primitives/guardrail.test.ts \
   packages/llm/src/side-query.test.ts
 npx vitest run packages/repl/src/common/permission-config.test.ts \
@@ -322,8 +324,9 @@ provider 的 API-key 环境变量。
 **预期效果**:
 
 - [ ] 大数据来自历史 tool result，而不是被误认为当前 action。
-- [ ] 单条历史 tool result 不超过 2 KiB，序列化 transcript 不超过 8 KiB。
-- [ ] assistant prose/thinking、图片和本地图片路径均未进入 classifier。
+- [ ] 每条历史 tool result 仅包含 tool/status/text_chars/text_bytes/media_items 元数据，正文即使小于 2 KiB 也不进入 classifier。
+- [ ] 单条 result 元数据不超过 2 KiB，序列化 transcript 不超过 8 KiB。
+- [ ] assistant prose/thinking、图片、本地图片路径和 tool result 正文均未进入 classifier。
 - [ ] 输出上限为 256 tokens，正常 allow 不产生弹窗。
 
 **实际结果**: 待填写
@@ -462,6 +465,35 @@ provider 的 API-key 环境变量。
 
 ---
 
+### TC-017: Auto LLM 工具语义投影保持风险事实且不泄露正文
+
+**优先级**: 高
+**类型**: 安全测试 / 兼容性测试 / 回归测试
+
+**测试步骤**:
+
+1. 用 mock classifier 分别触发 `run_skill_script`、`run_workflow`、`spawn_agent`、`send_message`、`web_search`、provider-backed `code_search`、`mcp_call` 和 `mcp_get_prompt`。
+2. 参数中加入长路径、snake_case/camelCase 路径和控制字段、两个同时存在的 MCP action 字段、40 个排在 action 前面的未知字段，以及可唯一识别的 Write/Edit/Workflow/Message/Agent objective 私有正文。
+3. 注册一个省略 `sideEffect`/`toClassifierInput` 的 JavaScript 扩展，再注册一个非只读但错误返回空投影的扩展。
+4. 让另一个 projector 抛出异常，并构造一个空投影但命中 Tier-0 denylist 的调用。
+5. 捕获发送给 classifier 的 action 和历史 transcript；不要记录真实凭据。
+
+**预期效果**:
+
+- [ ] 路径、URL、命令/script、args、scope、isolation、provider/model、能力 ID 和控制 flags 以有界形式保留。
+- [ ] snake_case/camelCase SDK 字段语义一致；已知字段不会被前置未知字段挤掉，长路径同时保留根部与最终目标名。
+- [ ] MCP 的多个 action 字段同时保留；未知短字符串只显示 `string:<length>`，不会因为“短”而原样外传。
+- [ ] Write/Edit/Workflow/Message/Agent objective/result 正文只显示长度或状态元数据，唯一识别文本不存在于 classifier 请求中。
+- [ ] 本地 `code_search` 继续跳过 classifier；provider-backed `code_search` 和网络读取携带 provider/capability 事实进入分类。
+- [ ] 缺元数据或意外空投影的非只读扩展使用安全 fallback，不会自动放行。
+- [ ] projector 抛错时明确升级；Tier 0 在任何空投影前阻断。
+- [ ] 历史 `tool_call` 展开为真实目标，canonical summary 不重复长路径/命令。
+
+**实际结果**: 待填写
+**是否通过**: [ ] Pass / [ ] Fail
+
+---
+
 ## 边界与兼容性清单
 
 - [ ] Windows PowerShell、Windows Terminal 和至少一个 Unix-like shell 的向导输入/退出正常。
@@ -480,7 +512,7 @@ provider 的 API-key 环境变量。
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |--------|------|------|------|
-| 16 | - | - | - |
+| 17 | - | - | - |
 
 **测试结论**: 待填写
 

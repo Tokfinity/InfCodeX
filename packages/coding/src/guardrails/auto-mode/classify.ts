@@ -35,6 +35,10 @@ import { parseClassifierOutput } from './parse-output.js';
 import type { AutoRules } from './rules.js';
 import type { ToolCallSignal } from './signals.js';
 import { stripAssistantText } from './transcript-strip.js';
+import {
+  redactClassifierProjection,
+  type ClassifierToolProjectionResolver,
+} from '../../tools/classifier-projection.js';
 
 export interface ClassifyOptions {
   readonly provider: KodaXBaseProvider;
@@ -43,6 +47,8 @@ export interface ClassifyOptions {
   readonly claudeMd?: string;
   readonly transcript: readonly KodaXMessage[];
   readonly action: string;
+  /** Resolve canonical per-tool projections for safe historical context. */
+  readonly getToolProjection?: ClassifierToolProjectionResolver;
   /**
    * FEATURE_158 (v0.7.39): static-analysis signals forwarded to the
    * classifier prompt. Empty / undefined preserves the FEATURE_092 prompt
@@ -97,14 +103,17 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
       reason: `classifier input budget exceeded (action is larger than ${MAX_CLASSIFIER_ACTION_BYTES} bytes)`,
     };
   }
+  const action = redactClassifierProjection(opts.action);
 
   const prompt = buildClassifierPrompt({
     rules: opts.rules,
     claudeMd: opts.claudeMd,
     // Enforce the boundary at the classifier API itself so future callers
     // cannot accidentally bypass the session-history cap.
-    transcript: stripAssistantText(opts.transcript),
-    action: opts.action,
+    transcript: stripAssistantText(opts.transcript, {
+      getToolProjection: opts.getToolProjection,
+    }),
+    action,
     signals: opts.signals,
   });
   if (classifierPromptBytes(prompt.system, prompt.messages) > MAX_CLASSIFIER_PROMPT_BYTES) {

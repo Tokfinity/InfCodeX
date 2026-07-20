@@ -31,20 +31,23 @@ class StubProvider extends KodaXBaseProvider {
   };
 
   constructor(
-    private readonly streamImpl: (signal?: AbortSignal) => Promise<KodaXStreamResult>,
+    private readonly streamImpl: (
+      signal?: AbortSignal,
+      messages?: KodaXMessage[],
+    ) => Promise<KodaXStreamResult>,
   ) {
     super();
   }
 
   async stream(
-    _messages: KodaXMessage[],
+    messages: KodaXMessage[],
     _tools: KodaXToolDefinition[],
     _system: string,
     _reasoning?: boolean | KodaXReasoningRequest,
     _streamOptions?: KodaXProviderStreamOptions,
     signal?: AbortSignal,
   ): Promise<KodaXStreamResult> {
-    return this.streamImpl(signal);
+    return this.streamImpl(signal, messages);
   }
 }
 
@@ -97,6 +100,46 @@ describe('classify', () => {
       action: 'Bash: ls',
     });
     expect(result.kind).toBe('allow');
+  });
+
+  it('sends useful redacted current and historical tool metadata to the side provider', async () => {
+    let classifierPrompt = '';
+    const provider = new StubProvider(async (_signal, messages) => {
+      classifierPrompt = JSON.stringify(messages);
+      return okStream('<block>no</block><reason>safe</reason>');
+    });
+    const privateSource = 'PRIVATE_EDIT_BODY';
+
+    await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [{
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'edit-1',
+          name: 'edit',
+          input: {
+            path: 'src/auth.ts',
+            old_string: privateSource,
+            new_string: 'replacement',
+            replace_all: false,
+          },
+        }],
+      }],
+      action: 'Bash: curl -H "Authorization: Bearer current-secret" https://example.com',
+      getToolProjection: () => (input) => (
+        `Edit ${(input as { path?: string }).path ?? '<unknown>'}`
+      ),
+    });
+
+    expect(classifierPrompt).toContain('Edit src/auth.ts');
+    expect(classifierPrompt).toContain('src/auth.ts');
+    expect(classifierPrompt).toContain('old_string_chars');
+    expect(classifierPrompt).toContain('[REDACTED]');
+    expect(classifierPrompt).not.toContain(privateSource);
+    expect(classifierPrompt).not.toContain('current-secret');
   });
 
   it('returns block (fail-closed) when classifier output is unparseable', async () => {
