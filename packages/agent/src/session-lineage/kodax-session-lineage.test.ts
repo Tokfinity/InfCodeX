@@ -343,7 +343,12 @@ describe('session lineage helpers', () => {
       }),
     }));
     expect(getSessionMessagesFromLineage(compacted)).toEqual([
-      { role: 'system', content: '[对话历史摘要]\n\nCompacted summary' },
+      {
+        role: 'user',
+        content: '[对话历史摘要]\n\nCompacted summary',
+        _synthetic: true,
+        _source: 'compaction-checkpoint',
+      },
       createTextMessage('assistant', 'latest pass'),
     ]);
     expect(compacted.activeEntryId).toBe(compacted.entries[compacted.entries.length - 1]?.id ?? null);
@@ -1100,7 +1105,12 @@ describe('FEATURE_072 Phase B: attachments routing + strip invariant + benchmark
     // array the agent sent — if this ever drifts, the REPL's context.messages
     // (which is set = flat array) would diverge from what future lineage
     // derivations produce, reintroducing dual-source-of-truth.
-    const summary = msg('system', '[对话历史摘要]\n\nAcceptance5-summary');
+    const summary: KodaXMessage = {
+      role: 'user',
+      content: '[对话历史摘要]\n\nAcceptance5-summary',
+      _synthetic: true,
+      _source: 'compaction-checkpoint',
+    };
     const att1 = msg('system', '[Post-compact: ledger summary]');
     const att2 = msg('system', '[Post-compact: file-a contents]');
     const kept1 = msg('user', 'kept-user-1');
@@ -1331,7 +1341,12 @@ describe('FEATURE_180 (v0.7.42): system message content-hash dedup at applySessi
 
   it('is a no-op when there are no duplicates (zero behaviour change for normal sessions)', () => {
     const compacted: KodaXMessage[] = [
-      { role: 'system', content: '[对话历史摘要]\n\nS' },
+      {
+        role: 'user',
+        content: '[对话历史摘要]\n\nS',
+        _synthetic: true,
+        _source: 'compaction-checkpoint',
+      },
       keptUser,
     ];
     const lineage = applySessionCompaction(
@@ -1341,7 +1356,8 @@ describe('FEATURE_180 (v0.7.42): system message content-hash dedup at applySessi
     );
     const derived = getSessionMessagesFromLineage(lineage);
     expect(derived.length).toBe(2);
-    expect(derived[0]?.role).toBe('system');
+    expect(derived[0]?.role).toBe('user');
+    expect(derived[0]?._source).toBe('compaction-checkpoint');
     expect(derived[1]?.content).toBe('follow up');
   });
 

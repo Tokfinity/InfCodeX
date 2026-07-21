@@ -4369,3 +4369,68 @@ path, or exposing a no-op plan-exit compatibility tool.
 least three concrete deployment forms that cannot share Runtime session state.
 Any broadening of tool scope or preview content requires a distinct transport
 security review and cross-host compatibility tests.
+
+---
+
+## ADR-057: Large Compaction Is an Always-On, Context-Scoped, Full-Coverage Transaction
+
+**Status**: Accepted for v0.7.74 implementation
+
+**Context**: The SDK compact path could force a 100% threshold while the core
+derived protected and rolling budgets from the full model context window. On a
+one-million-token model, a 323k-token active context therefore protected about
+200k and summarized only one 100k rolling chunk. Session-level event state and
+monolithic Runtime observations then made the real provider input difficult to
+distinguish from child-context or full-transcript size. ADR-050's capacity-only
+default also conflicts with the now-explicit product policy that automatic
+large compaction is always present and defaults to an earlier bounded trigger.
+
+**Decision**:
+
+1. Automatic large compaction cannot be disabled. `triggerPercent` defaults to
+   75 and is clamped to 15-90. Optional `triggerTokens` is inactive when absent
+   or zero; otherwise the smaller percentage/absolute/physical threshold wins.
+2. Protect 20% of that effective trigger on atomic message boundaries, not 20%
+   of the model's maximum window. Manual compact bypasses only the comparison,
+   never the normalized policy.
+3. A major compact is one transaction over the complete eligible prefix. The
+   normal path performs one full-prefix summary; physical overflow alone uses
+   independent raw chunks followed by one reduce. Serial rolling summary and
+   partial canonical commits are prohibited.
+4. Every genuine user query is owned by a canonical lineage ledger. A compact
+   commit is invalid unless each query is still raw in the protected tail or
+   rendered from that ledger. Tool-result wire messages and synthetic prompts
+   are not user queries.
+5. The normal summary call reuses the exact cache-affecting main-request prefix
+   and appends a text-only ephemeral instruction. A synthetic user checkpoint,
+   not an inline system message, represents compacted history.
+6. The structured checkpoint is installed only by a successful major compact;
+   v0.7.74 does not add a second background memory owner.
+7. Token state, query ledger, checkpoint, generations, and canonical compact
+   events are keyed by stable `contextId` with root/child lineage. Session-only
+   and `scope: worker` attribution is insufficient.
+8. Runtime observation carries a bounded transcript tail and revision-bound
+   cursor. Full transcript recovery uses explicit pagination; no daemon message
+   depends on a frame near the fixed 8 MiB transport limit.
+
+**Consequences**:
+
+- FEATURE_251/ADR-050 remains authoritative for lossless tool-output admission
+  and micro-compaction but no longer defines the default trigger for major
+  history compaction.
+- Final post-compact tokens are component-accounted rather than targeted to an
+  arbitrary number; the invariant is full eligible-prefix coverage.
+- Cache-capable providers can preserve the main prefix cache, while providers
+  without it retain identical correctness.
+- SDK/UI clients can distinguish root active provider input, child contexts,
+  full transcript recovery, and the last compact transition.
+- Older v0.7.x `enabled: false` inputs remain source-compatible but are ignored.
+
+**Rejected alternatives**: protecting a fraction of the model maximum,
+summarizing one arbitrary oldest chunk per trigger, repeated compact-until-low
+loops, summary-of-summary query preservation, partial-progress commits,
+session-only event ownership, and silent transcript truncation.
+
+**Reconsideration gates**: changing the 20% protection ratio, internal
+checkpoint cadence, or all-query ledger guarantee requires a versioned eval and
+a new ADR. Public knobs require three concrete independently useful host cases.

@@ -9,30 +9,38 @@ import type {
 } from '../../types.js';
 
 export interface CompactionConfig {
-  /** Whether automatic compaction is enabled. */
+  /** @deprecated Automatic large compaction is always enabled. */
   enabled: boolean;
   /**
-   * Optional early trigger percentage. `100` means capacity-only; values below
-   * 100 explicitly opt in to semantic compaction before physical pressure.
+   * Automatic large-compaction threshold percentage. Defaults to 75 and is
+   * normalized to the inclusive 15-90 range.
    */
   triggerPercent: number;
   /**
+   * Optional absolute token threshold. Missing or zero is inactive; otherwise
+   * the smaller percentage/absolute/physical threshold wins.
+   */
+  triggerTokens?: number;
+  /**
    * @deprecated V2 compaction no longer uses this option.
-   *
-   * The system now combines protected recent context, lightweight pruning, and
-   * rolling summaries automatically.
+   * FEATURE_272 derives protection from the effective trigger and covers the
+   * complete eligible prefix in one logical wave.
    */
   keepRecentPercent?: number;
-  /** Percentage of the most recent context that is never compacted or pruned. Defaults to 20. */
+  /**
+   * @deprecated Large compaction protects 20% of its effective trigger.
+   * Retained only for source compatibility with v0.7.x callers.
+   */
   protectionPercent?: number;
   /**
-   * Percentage of the context window used as the chunk size for each rolling
-   * summary pass. Defaults to 10.
+   * @deprecated FEATURE_272 replaces rolling summary passes with one complete
+   * eligible-prefix wave. Retained for source compatibility.
    */
   rollingSummaryPercent?: number;
   /**
-   * Explicit legacy opt-in for destructive pre-summary tool-result pruning.
-   * Undefined keeps the complete evidence for semantic summarization.
+   * Explicit legacy opt-in for destructive emergency pruning after semantic
+   * compaction cannot restore a physically valid request. Undefined keeps the
+   * fallback disabled.
    */
   pruningThresholdTokens?: number;
   /**
@@ -75,6 +83,20 @@ export interface CompactionUpdate {
    * is the persistence source of truth.
    */
   postCompactAttachments?: readonly KodaXMessage[];
+  /** Canonical metrics for one committed large-compaction transaction. */
+  report?: CompactionReport;
+}
+
+export interface CompactionReport {
+  readonly strategy: 'full_prefix' | 'map_reduce';
+  readonly triggerSource: 'percentage' | 'absolute' | 'physical_capacity';
+  readonly effectiveTriggerTokens: number;
+  readonly protectedBudgetTokens: number;
+  readonly fixedInputTokens: number;
+  readonly eligibleTokens: number;
+  readonly rawTailTokens: number;
+  readonly summaryTokens: number;
+  readonly queryLedgerTokens: number;
 }
 
 export interface CompactionResult {
@@ -88,6 +110,7 @@ export interface CompactionResult {
   artifactLedger?: KodaXSessionArtifactLedgerEntry[];
   anchor?: CompactionAnchor;
   memorySeed?: KodaXCompactMemorySeed;
+  report?: CompactionReport;
 }
 
 export interface FileOperations {

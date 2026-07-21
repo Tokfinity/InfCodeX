@@ -58,6 +58,8 @@ import type {
   RuntimeSubscription,
   RuntimeToolExposurePlan,
   RuntimeTranscript,
+  RuntimeTranscriptEntryChunk,
+  RuntimeTranscriptSlice,
   RuntimeUserInputRequest,
   RuntimeUserInputResolution,
   RuntimeWorkflowFilter,
@@ -277,6 +279,12 @@ export function createRuntimeDaemonClient(
       },
       transcript(sessionId) {
         return request('session.transcript', { sessionId }) as Promise<RuntimeTranscript | null>;
+      },
+      transcriptPage(input) {
+        return request('session.transcript.page', input) as Promise<RuntimeTranscriptSlice | null>;
+      },
+      transcriptEntryChunk(input) {
+        return request('session.transcript.entryChunk', input) as Promise<RuntimeTranscriptEntryChunk | null>;
       },
       observe(sessionId, listener) {
         return observeDaemonSession(options.transport, request, sessionId, listener);

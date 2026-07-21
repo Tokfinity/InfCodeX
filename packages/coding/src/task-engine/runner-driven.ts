@@ -288,6 +288,7 @@ import {
 } from './_internal/managed-task/agent-chain.js';
 import {
   buildRunnerLlmAdapter,
+  resolveManagedProviderReasoning,
   type RunnerAdapterTokenState,
 } from './_internal/managed-task/llm-adapter.js';
 import { buildManagedTaskPayload } from './_internal/managed-task/payload-builder.js';
@@ -628,12 +629,24 @@ export async function runManagedTaskViaRunner(
     }
     : effectiveOptions;
   const requestedLiveTurn = effectiveOptions.context?.liveTurn;
+  const currentAgentId = effectiveOptions.context?.currentAgentId;
+  const parentAgentId = effectiveOptions.context?.parentAgentId;
   const liveTurnScope = createLiveTurnScope({
     sessionId: initialSessionId,
     deliveryKind: requestedLiveTurn?.deliveryKind ?? 'initial',
     turnId: requestedLiveTurn?.turnId,
     deliveryId: requestedLiveTurn?.deliveryId,
     promptId: requestedLiveTurn?.promptId,
+    ...(currentAgentId !== undefined
+      ? {
+          contextId: `${initialSessionId}/agent/${encodeURIComponent(currentAgentId)}`,
+          contextKind: 'child' as const,
+          parentContextId: parentAgentId === undefined
+            ? initialSessionId
+            : `${initialSessionId}/agent/${encodeURIComponent(parentAgentId)}`,
+          agentId: currentAgentId,
+        }
+      : {}),
   });
   const liveTurnScopeRef = { current: liveTurnScope };
   const terminalTurnIds = new Set<string>();
@@ -666,6 +679,10 @@ export async function runManagedTaskViaRunner(
         sessionId: initialSessionId,
         deliveryKind: input.deliveryKind,
         promptId: input.promptId,
+        contextId: liveTurnScope.contextId,
+        contextKind: liveTurnScope.contextKind,
+        parentContextId: liveTurnScope.parentContextId,
+        agentId: liveTurnScope.agentId,
       });
       emitTurnStarted(liveEvents, liveTurnScopeRef.current);
       return liveTurnScopeRef.current.turnId;
@@ -1516,6 +1533,7 @@ async function runManagedTaskViaRunnerInner(
     resolvedContextCapacity,
     contextTokenSnapshotRef,
     activeToolDefinitions: entryAgent.tools,
+    reasoning: resolveManagedProviderReasoning(options, entryAgent),
     // FEATURE_177 v0.7.42 — clear the read-file-state cache after a
     // real compaction. The cache returns stubs that point the LLM at
     // earlier `tool_result` blocks; after summarization those blocks

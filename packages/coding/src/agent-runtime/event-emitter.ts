@@ -68,6 +68,7 @@ const LIVE_TURN_ID_HEX_LENGTH = 16;
 // Process-lifetime by design: without a session-close signal, evicting an entry
 // can make a later resume of the same sessionId reuse seq values.
 const liveSessionSeq = new Map<string, number>();
+const liveContextRevision = new Map<string, number>();
 
 type AttributedEvents = KodaXEvents & {
   readonly [LIVE_TURN_ATTRIBUTED]: true;
@@ -77,10 +78,15 @@ type AttributedEvents = KodaXEvents & {
 export interface LiveTurnScope {
   readonly sessionId: string;
   readonly turnId: string;
+  readonly contextId: string;
+  readonly contextKind: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
   readonly deliveryId?: string;
   readonly deliveryKind: KodaXTurnDeliveryKind;
   readonly promptId?: string;
   nextMeta(): KodaXLiveEventMeta;
+  advanceContextRevision(): number;
 }
 
 export interface LiveTurnScopeRef {
@@ -93,12 +99,23 @@ export function createLiveTurnScope(input: {
   readonly turnId?: string;
   readonly deliveryId?: string;
   readonly promptId?: string;
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
 }): LiveTurnScope {
   const turnId = input.turnId ?? `turn_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
   const deliveryId = input.deliveryId ?? `delivery_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
+  const contextId = input.contextId ?? input.sessionId;
+  const contextKind = input.contextKind ?? 'root';
+  if (!liveContextRevision.has(contextId)) liveContextRevision.set(contextId, 0);
   return {
     sessionId: input.sessionId,
     turnId,
+    contextId,
+    contextKind,
+    parentContextId: input.parentContextId,
+    agentId: input.agentId,
     deliveryId,
     deliveryKind: input.deliveryKind ?? 'initial',
     promptId: input.promptId,
@@ -110,8 +127,20 @@ export function createLiveTurnScope(input: {
         seq,
         turnId,
         deliveryId,
+        contextId,
+        contextKind,
+        ...(input.parentContextId !== undefined
+          ? { parentContextId: input.parentContextId }
+          : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+        contextRevision: liveContextRevision.get(contextId) ?? 0,
         timestamp: new Date().toISOString(),
       };
+    },
+    advanceContextRevision() {
+      const revision = (liveContextRevision.get(contextId) ?? 0) + 1;
+      liveContextRevision.set(contextId, revision);
+      return revision;
     },
   };
 }
@@ -128,9 +157,21 @@ function withActivityMeta<TMeta extends KodaXActivityEventMeta>(
   scope: LiveTurnScope | LiveTurnScopeRef,
   meta: TMeta | undefined,
 ): TMeta & KodaXLiveEventMeta {
+  const explicitContext = meta?.contextId === undefined
+    || meta.contextKind === undefined
+    || meta.contextRevision === undefined
+    ? {}
+    : {
+        contextId: meta.contextId,
+        contextKind: meta.contextKind,
+        parentContextId: meta.parentContextId,
+        agentId: meta.agentId,
+        contextRevision: meta.contextRevision,
+      };
   return {
     ...(meta ?? ({} as TMeta)),
     ...resolveLiveTurnScope(scope).nextMeta(),
+    ...explicitContext,
   } as TMeta & KodaXLiveEventMeta;
 }
 
@@ -138,9 +179,22 @@ function withLiveMeta<TEvent extends object>(
   scope: LiveTurnScope | LiveTurnScopeRef,
   event: TEvent,
 ): TEvent & KodaXLiveEventMeta {
+  const candidate = event as Partial<KodaXLiveEventMeta>;
+  const explicitContext = candidate.contextId === undefined
+    || candidate.contextKind === undefined
+    || candidate.contextRevision === undefined
+    ? {}
+    : {
+        contextId: candidate.contextId,
+        contextKind: candidate.contextKind,
+        parentContextId: candidate.parentContextId,
+        agentId: candidate.agentId,
+        contextRevision: candidate.contextRevision,
+      };
   return {
     ...event,
     ...resolveLiveTurnScope(scope).nextMeta(),
+    ...explicitContext,
   };
 }
 
@@ -197,7 +251,11 @@ export function withLiveTurnAttribution(
       baseEvents.onCompactStats?.(withLiveMeta(scope, info));
     },
     onCompactedMessages: (messages, update, meta) => {
+      resolveLiveTurnScope(scope).advanceContextRevision();
       baseEvents.onCompactedMessages?.(messages, update, withActivityMeta(scope, meta));
+    },
+    onContextCompactionFinished: (event) => {
+      baseEvents.onContextCompactionFinished?.(withLiveMeta(scope, event));
     },
     onCompactEnd: (meta) => {
       baseEvents.onCompactEnd?.(withActivityMeta(scope, meta));

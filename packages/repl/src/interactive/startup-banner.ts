@@ -26,7 +26,7 @@ export function printWorkspaceEntryNotice(runtimeInfo: InteractiveContext['runti
 }
 
 
-export function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean }, agentsFiles?: AgentsFile[]): void {
+export function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; triggerTokens?: number; enabled: boolean }, agentsFiles?: AgentsFile[]): void {
   const theme = getCurrentTheme();
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
 
@@ -73,6 +73,7 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     const policyText = formatCompactionPolicy(
       compactionInfo.contextWindow,
       compactionInfo.triggerPercent,
+      compactionInfo.triggerTokens,
     );
     console.log(bar(theme.colors.accent) + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` · ${policyText}`));
   }

@@ -15,6 +15,7 @@ _Last Updated: 2026-07-21_
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 193 | Medium | Resolved | Runtime daemon rejects interrupt input instead of injecting it into the active Run | v0.7.69 | v0.7.73 development | 2026-07-21 | 2026-07-21 |
+| 192 | High | Resolved | Large compaction used the model window for protection, covered only one rolling chunk, and exposed ambiguous/unbounded SDK state | v0.7.73 and earlier | v0.7.74 | 2026-07-21 | 2026-07-21 |
 | 191 | High | Resolved | Auto permission review lacked a complete, compact mutation model | v0.7.33 | v0.7.73 | 2026-07-21 | 2026-07-21 |
 | 190 | High | Resolved | Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries | v0.7.72 and earlier; expanded v0.7.73 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 189 | High | Resolved | Auto sidecar effort, Runtime session settings, and reasoning command state could diverge | v0.7.33; expanded v0.7.73 | v0.7.73 | 2026-07-20 | 2026-07-20 |
@@ -221,6 +222,95 @@ submission paths fail closed.
   Run, snapshot/event lifecycle, SA unsupported behavior, stale/cross-Session
   fencing, terminal queue cleanup, exact consumed-message acknowledgement,
   clone-failure rollback, durable-event failure, and restart reconciliation.
+
+### 192: Large compaction used the model window for protection, covered only one rolling chunk, and exposed ambiguous/unbounded SDK state
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.74)
+- **Introduced**: v0.7.73 and earlier
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-21
+- **Resolved**: 2026-07-21
+
+#### Original Problem
+
+A KodaX SDK host reported a manual/automatic-looking compaction transition of
+`322,973 -> 222,460` tokens. The compaction notification indicated success, but
+only about 100k tokens disappeared, while the host UI continued to display a
+330k-class value that kept growing. The product requirement also differs from
+the implementation: automatic compaction must never be disabled; its percentage
+must default to 75 and remain within 15-90; an optional absolute token threshold
+must participate by minimum; and recent protection must be based on the
+effective trigger rather than 20% of a one-million-token model window.
+
+Further investigation found two adjacent correctness risks. Parent and child
+iteration events shared session-level presentation state without a stable
+context owner, so a child could replace the root token count. Runtime
+observation also embedded a complete transcript in a transport with an 8 MiB
+frame limit.
+
+#### Expected Behavior
+
+- Automatic large compaction is always active.
+- Percentage and optional absolute thresholds have one public SDK contract;
+  the smaller active threshold wins and protection is 20% of it.
+- Manual and automatic large compaction cover the full eligible prefix once,
+  preserve recent raw context and every genuine user query, and commit atomically.
+- Summary generation reuses the stable main-request prefix where supported.
+- Root/child token and compaction events have unambiguous context identity.
+- Observation of arbitrarily large persisted transcripts is bounded and
+  explicitly pageable rather than silently truncated or sent in one frame.
+
+#### Root Cause
+
+- The imperative SDK compact path forced `triggerPercent: 100`.
+- Protection and rolling chunk budgets were derived independently from the full
+  model context window (`20%` and `10%`). On a one-million-token model this
+  protected about 200k and summarized one roughly 100k chunk, explaining the
+  observed transition.
+- The rolling summarizer could install partial progress after a later failure
+  and repeatedly summarized earlier material through serial summary chaining.
+- Summary requests used a separate system/tools shape instead of the main
+  request prefix, losing available KV/prompt-cache reuse.
+- User-query preservation was prompt guidance rather than a mechanically
+  validated invariant.
+- Session-level event/UI state did not carry a stable root/child context key.
+- Runtime snapshots embedded the complete transcript despite the daemon's
+  fixed maximum frame size.
+
+#### Resolution
+
+Implemented `FEATURE_272` as specified in
+[`v0.7.74`](features/v0.7.74.md#feature_272-reliable-full-coverage-context-compaction-and-sdk-observability): shared
+threshold normalization, coverage-driven atomic compaction, a canonical user
+query ledger, exact-prefix cache reuse, context-scoped canonical events, and
+bounded transcript pagination through the SDK/daemon and KodaX Space.
+
+The final adversarial implementation review found and fixed five integration
+drifts before release: the managed-task hook reported the pre-compact count and
+omitted the canonical completion event/report; its summary request did not use
+the exact active system/tools/reasoning cache prefix; protected-tail queries
+were duplicated into the exact ledger; persisted anchors excluded admitted
+post-compact attachments; and Space attempted the legacy monolithic transcript
+method before falling back to pages. Space compact start/end and activity/cost
+consumers now also preserve and filter child context identity, so child work
+cannot transiently replace root UI state. The closing review additionally
+found that imperative Runtime compaction emitted only `finished`; it now emits
+one ordered `started -> finished -> ended` lifecycle even for unchanged or
+failed attempts. Space now consumes the SDK-resolved effective threshold,
+including physical capacity, and clamps every percentage entry point to 15-90.
+
+#### Verification
+
+Focused policy/core/query-ledger/manual compact tests, lineage and JSONL
+round-trips, root/child event isolation, daemon legacy-frame rejection, 9 MiB
+SDK page/chunk recovery, and KodaX Space paging/projection tests pass. Root and
+Space typechecks pass, as does the complete 0.7.74 package/bundle/DTS build.
+The post-review run passed 352 focused core/caller/REPL tests, 51 daemon tests,
+the canonical-event and 9 MiB SDK probes, 103 Space adapter/telemetry/config tests, the
+published Runtime compatibility probe, and the Space renderer/main smoke build.
+Manual UI and semantic summary checks are tracked in the v0.7.74 human test
+guide.
 
 ### 191: Auto permission review lacked a complete, compact mutation model
 
@@ -5684,7 +5774,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 79 (26 Open, 53 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 80 (27 Open, 53 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -5695,6 +5785,10 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   canonical Actor queue for same-Run FIFO safe-boundary delivery, exposed
   queued/delivered status and ordered batch events, and prevented terminal or
   restarted Runs from leaking undelivered input.
+
+### 2026-07-21: Issue 192 added and resolved (v0.7.74)
+- Recorded and fixed the large-compaction policy/coverage defect, root/child
+  event ambiguity, and unbounded observation transport through FEATURE_272.
 
 ### 2026-07-20: Issue 190 added and resolved (v0.7.73)
 - Made matcherless legacy grants non-authorizing while retaining management

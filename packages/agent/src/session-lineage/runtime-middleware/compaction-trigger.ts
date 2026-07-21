@@ -8,12 +8,8 @@
  * output reserve, and shared safety margin against the model window. A
  * trigger below 100 remains an explicit early-compaction opt-in.
  *
- * The wrapper preserves the historical short-circuit `compactionConfig.enabled`
- * gate from `agent.ts` even though the underlying `needsCompaction`
- * helper already returns `false` when the config is disabled. The
- * double-gate matches the pre-FEATURE_100 baseline byte-for-byte —
- * removing the redundancy is a P3.6 cleanup concern, not a P3.4
- * extraction concern.
+ * Since FEATURE_272 automatic large compaction is always enabled. The legacy
+ * `enabled` field remains source-compatible but cannot short-circuit pressure.
  *
  * Migration history:
  *   - extracted from `agent.ts:598-600` — pre-FEATURE_100 baseline —
@@ -46,14 +42,11 @@ export interface ShouldCompactInput {
  * the final system/tool/framing overhead selected for this provider turn.
  */
 export function shouldCompact(input: ShouldCompactInput): boolean {
-  return (
-    input.compactionConfig.enabled
-    && needsCompaction(
-      input.messages,
-      input.compactionConfig,
-      input.contextWindow,
-      input.currentTokens,
-      input.reservedResponseTokens,
-    )
+  return needsCompaction(
+    input.messages,
+    input.compactionConfig,
+    input.contextWindow,
+    input.currentTokens,
+    input.reservedResponseTokens,
   );
 }

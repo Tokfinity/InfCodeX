@@ -51,7 +51,12 @@
  * baseline — during FEATURE_100 P3.4c.
  */
 
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
+import type {
+  KodaXBaseProvider,
+  KodaXMessage,
+  KodaXReasoningRequest,
+  KodaXToolDefinition,
+} from '@kodax-ai/llm';
 import {
   ContextCapacityError,
   compact as intelligentCompact,
@@ -94,6 +99,8 @@ export interface TryIntelligentCompactInput {
   readonly model?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
+  readonly toolDefinitions?: readonly KodaXToolDefinition[];
+  readonly reasoning?: boolean | KodaXReasoningRequest;
   readonly currentTokens: number;
   readonly reservedResponseTokens?: number;
   readonly events: KodaXEvents;
@@ -139,11 +146,13 @@ export async function tryIntelligentCompact(
     };
   }
 
-  if (shouldSkipLlmCompaction(antiThrash) && !requiresCapacityRelief) {
+  if (shouldSkipLlmCompaction(antiThrash, input.currentTokens) && !requiresCapacityRelief) {
     const nextAntiThrash = consumeCompactionCooldown(antiThrash);
     if (input.emitCompactionDiagnostics) {
       input.events.onContextCompactionSkipped?.({
-        reason: 'low_savings_cooldown',
+        reason: antiThrash.cooldownTurnsRemaining > 0
+          ? 'low_savings_cooldown'
+          : 'covered_context_unchanged',
         currentTokens: input.currentTokens,
         contextWindow: input.contextWindow,
         triggerPercent: input.compactionConfig.triggerPercent,
@@ -181,6 +190,9 @@ export async function tryIntelligentCompact(
       input.model,
       false,
       input.reservedResponseTokens,
+      input.toolDefinitions
+        ? { tools: input.toolDefinitions, reasoning: input.reasoning }
+        : undefined,
     );
 
     if (result.compacted) {
@@ -253,7 +265,7 @@ export async function tryIntelligentCompact(
           detail: {
             contextWindow: input.contextWindow,
             triggerPercent: input.compactionConfig.triggerPercent,
-            capacityDriven: input.compactionConfig.triggerPercent >= 100,
+            capacityDriven: requiresCapacityRelief,
             tokensBefore: input.currentTokens,
             tokensAfter: postCompactTokens,
             reduction: input.currentTokens - postCompactTokens,
@@ -290,7 +302,7 @@ export async function tryIntelligentCompact(
             message: 'Compaction partial success remained above trigger.',
             detail: {
               postCompactTokens,
-              capacityDriven: input.compactionConfig.triggerPercent >= 100,
+              capacityDriven: requiresCapacityRelief,
               attempt: nextFailures,
               limit,
             },
@@ -299,9 +311,12 @@ export async function tryIntelligentCompact(
       }
 
       compactionUpdate = {
-        anchor: result.anchor,
+        anchor: result.anchor
+          ? { ...result.anchor, tokensAfter: postCompactTokens }
+          : undefined,
         artifactLedger: result.artifactLedger,
         memorySeed: result.memorySeed,
+        report: result.report,
         postCompactAttachments:
           postCompactAttachmentsForLineage.length > 0
             ? postCompactAttachmentsForLineage
@@ -311,7 +326,7 @@ export async function tryIntelligentCompact(
         tokensBefore: input.currentTokens,
         tokensAfter: postCompactTokens,
       });
-      input.events.onCompact?.(input.currentTokens);
+      input.events.onCompact?.(postCompactTokens);
     } else {
       compacted = result.messages;
     }
@@ -366,17 +381,6 @@ export interface GracefulDegradationGateOutput {
 }
 
 /**
- * CAP-062: graceful degradation gate. Triggers when
- * `needsCompact` AND `estimateTokens(compacted) > triggerTokens × pruningGapRatio`
- * (default `pruningGapRatio = 0.8`). Catches three real-world cases:
- *   (a) LLM compact threw,
- *   (b) circuit breaker tripped,
- *   (c) LLM compact "partial success" left context still high.
- * Gating by remaining tokens rather than reference equality catches
- * case (c), which is the root cause of monotonic context growth
- * observed in 0.7.18+.
- */
-/**
  * Current CAP-062 contract: default no-op. Explicit legacy deterministic
  * pruning can run only when `pruningThresholdTokens` is configured and the
  * complete request remains physically over capacity.
@@ -412,11 +416,12 @@ export function applyGracefulDegradationGate(
   }
   // Pruning happened — emit and surface didCompactMessages so commit
   // step (CAP-063) fires `onCompactedMessages`.
+  const tokensAfter = fixedOverheadTokens + estimateTokens(degraded);
   input.events.onCompactStats?.({
     tokensBefore: input.currentTokens,
-    tokensAfter: fixedOverheadTokens + estimateTokens(degraded),
+    tokensAfter,
   });
-  input.events.onCompact?.(input.currentTokens);
+  input.events.onCompact?.(tokensAfter);
   return { compacted: degraded, didCompactMessages: true };
 }
 
@@ -430,6 +435,9 @@ export interface CommitCompactedHistoryInput {
   readonly compactionUpdate: CompactionUpdate | undefined;
   readonly events: KodaXEvents;
   readonly physicalTokensAfter?: number;
+  readonly tokensBefore?: number;
+  readonly elapsedMs?: number;
+  readonly source?: 'automatic_threshold' | 'physical_capacity';
 }
 
 export interface CommitCompactedHistoryOutput {
@@ -471,6 +479,19 @@ export function commitCompactedHistory(
     source: 'estimate',
   };
   input.events.onCompactedMessages?.(validated, input.compactionUpdate);
+  const report = input.compactionUpdate?.report;
+  if (input.tokensBefore !== undefined && input.elapsedMs !== undefined) {
+    input.events.onContextCompactionFinished?.({
+      source: input.source ?? (report?.triggerSource === 'physical_capacity'
+        ? 'physical_capacity'
+        : 'automatic_threshold'),
+      tokensBefore: input.tokensBefore,
+      tokensAfter: snapshot.currentTokens,
+      committed: true,
+      elapsedMs: input.elapsedMs,
+      ...(report ?? {}),
+    });
+  }
   return { messages: validated, contextTokenSnapshot: snapshot };
 }
 
@@ -487,6 +508,8 @@ export interface CompactionLifecycleInput {
   readonly model?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
+  readonly toolDefinitions?: readonly KodaXToolDefinition[];
+  readonly reasoning?: boolean | KodaXReasoningRequest;
   readonly currentTokens: number;
   readonly reservedResponseTokens?: number;
   readonly events: KodaXEvents;
@@ -523,6 +546,7 @@ export interface CompactionLifecycleOutput {
 export async function runCompactionLifecycle(
   input: CompactionLifecycleInput,
 ): Promise<CompactionLifecycleOutput> {
+  const startedAt = Date.now();
   const llmPhase = await tryIntelligentCompact({
     messages: input.messages,
     needsCompact: input.needsCompact,
@@ -532,6 +556,8 @@ export async function runCompactionLifecycle(
     model: input.model,
     contextWindow: input.contextWindow,
     systemPrompt: input.systemPrompt,
+    toolDefinitions: input.toolDefinitions,
+    reasoning: input.reasoning,
     currentTokens: input.currentTokens,
     reservedResponseTokens: input.reservedResponseTokens,
     events: input.events,
@@ -576,6 +602,15 @@ export async function runCompactionLifecycle(
     compactionUpdate: llmPhase.compactionUpdate,
     events: input.events,
     physicalTokensAfter,
+    tokensBefore: input.currentTokens,
+    elapsedMs: Date.now() - startedAt,
+    source: exceedsContextCapacity({
+      contextWindow: input.contextWindow,
+      currentTokens: input.currentTokens,
+      reservedResponseTokens: input.reservedResponseTokens,
+    })
+      ? 'physical_capacity'
+      : 'automatic_threshold',
   });
   return {
     messages: commitPhase.messages,

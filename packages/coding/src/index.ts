@@ -109,6 +109,8 @@ export type {
   KodaXEvents,
   KodaXSidecarMessageEvent,
   KodaXWorkflowAgentDigestEvent,
+  KodaXContextIdentity,
+  KodaXContextCompactionFinishedEvent,
   KodaXLiveEventMeta,
   KodaXTurnCompletedEvent,
   KodaXTurnDeliveryKind,

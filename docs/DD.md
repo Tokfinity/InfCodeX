@@ -651,7 +651,35 @@ Do not introduce:
   ownership form;
 - Worker or daemon boundaries described as a security sandbox.
 
-## 20. Related Documents
+## 20. v0.7.74 Large Compaction Chain
+
+The agent layer owns one normalized policy:
+
+```text
+percent = clamp(triggerPercent ?? 75, 15, 90)
+effective = min(contextWindow * percent, positive(triggerTokens), physicalCapacity)
+protectedTail = floor(effective * 0.20)
+```
+
+Automatic triggering is request-bound and cannot be disabled. One major wave
+partitions atomic tool groups into the complete eligible prefix and protected
+raw tail. It summarizes the full eligible prefix once, using map/reduce only
+when that request cannot physically fit. Temporary summaries never mutate
+canonical history. The committed synthetic user checkpoint combines the
+structured semantic summary with an exact JSONL ledger of genuine user queries.
+
+Coding owns per-context anti-thrash and stable root/child attribution. The
+canonical post-commit callback increments `contextRevision`; Runtime projects it
+as `context.compaction.finished`. KodaX Space updates its Session meter only for
+root facts.
+
+Runtime observations carry a bounded `RuntimeTranscriptSlice`. Older pages use
+opaque revision-bound cursors; a single oversized entry uses bounded
+`base64-json` chunks. The legacy daemon full-transcript method is capped at 512
+KiB and points callers to page/chunk recovery before the transport's 8 MiB
+frame can be approached.
+
+## 21. Related Documents
 
 - Product requirements: [PRD.md](PRD.md)
 - High-level design: [HLD.md](HLD.md)

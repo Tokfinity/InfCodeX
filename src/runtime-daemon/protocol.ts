@@ -20,6 +20,8 @@ export type RuntimeDaemonMethod =
   | 'session.load'
   | 'session.list'
   | 'session.transcript'
+  | 'session.transcript.page'
+  | 'session.transcript.entryChunk'
   | 'session.observe'
   | 'session.fork'
   | 'session.notice.append'
@@ -304,6 +306,8 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'session.load',
   'session.list',
   'session.transcript',
+  'session.transcript.page',
+  'session.transcript.entryChunk',
   'session.observe',
   'session.fork',
   'session.notice.append',

@@ -595,6 +595,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   printStartupBanner(currentConfig, currentConfig.permissionMode, {
     contextWindow: effectiveContextWindow,
     triggerPercent: compactionConfig.triggerPercent,
+    triggerTokens: compactionConfig.triggerTokens,
     enabled: compactionConfig.enabled,
   }, agentsFiles);
   printWorkspaceEntryNotice(startupRuntime);

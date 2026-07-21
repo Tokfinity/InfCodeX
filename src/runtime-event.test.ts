@@ -60,7 +60,6 @@ describe('parseRuntimeEvent', () => {
       options: { questions: [] },
     })).ok).toBe(true);
   });
-});
 
   it('accepts queued and ordered-batch interrupt input events', () => {
     expect(parseRuntimeEvent(event('run.input.queued', {
@@ -101,3 +100,27 @@ describe('parseRuntimeEvent', () => {
       error: 'run.input.delivered requires an ordered interrupt input batch.',
     });
   });
+
+  it('accepts only complete canonical compaction facts', () => {
+    const payload = {
+      contextId: 'session-1',
+      contextKind: 'root',
+      contextRevision: 3,
+      beforeRevision: 2,
+      afterRevision: 3,
+      source: 'automatic_threshold',
+      tokensBefore: 322_973,
+      tokensAfter: 92_000,
+      committed: true,
+      elapsedMs: 250,
+    };
+    expect(parseRuntimeEvent(event('context.compaction.finished', payload)).ok).toBe(true);
+    expect(parseRuntimeEvent(event('context.compaction.finished', {
+      ...payload,
+      tokensAfter: undefined,
+    }))).toEqual({
+      ok: false,
+      error: 'context.compaction.finished requires a canonical compaction payload.',
+    });
+  });
+});

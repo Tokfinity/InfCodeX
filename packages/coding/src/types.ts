@@ -235,7 +235,15 @@ export interface KodaXWorkflowEventMeta {
 
 export type KodaXTurnDeliveryKind = 'initial' | 'queued' | 'interrupt' | 'resume';
 
-export interface KodaXLiveEventMeta {
+export interface KodaXContextIdentity {
+  readonly contextId: string;
+  readonly contextKind: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
+  readonly contextRevision: number;
+}
+
+export interface KodaXLiveEventMeta extends Partial<KodaXContextIdentity> {
   readonly sessionId: string;
   readonly seq: number;
   readonly turnId: string;
@@ -294,6 +302,23 @@ export interface KodaXWorkflowAgentDigestEvent {
 
 export interface KodaXToolEventMeta extends KodaXActivityEventMeta {
   readonly toolId?: string;
+}
+
+export interface KodaXContextCompactionFinishedEvent
+  extends Partial<KodaXLiveEventMeta> {
+  readonly source: 'manual' | 'automatic_threshold' | 'physical_capacity';
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+  readonly committed: boolean;
+  readonly elapsedMs: number;
+  readonly strategy?: 'full_prefix' | 'map_reduce';
+  readonly effectiveTriggerTokens?: number;
+  readonly protectedBudgetTokens?: number;
+  readonly fixedInputTokens?: number;
+  readonly eligibleTokens?: number;
+  readonly rawTailTokens?: number;
+  readonly summaryTokens?: number;
+  readonly queryLedgerTokens?: number;
 }
 
 export interface KodaXSidecarMessageEvent {
@@ -393,6 +418,10 @@ export interface KodaXEvents {
     messages: KodaXMessage[],
     update?: CompactionUpdate,
     meta?: KodaXActivityEventMeta,
+  ) => void;
+  /** Canonical, post-commit compaction fact. Legacy callbacks are projections. */
+  onContextCompactionFinished?: (
+    event: KodaXContextCompactionFinishedEvent,
   ) => void;
   /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
   onCompactEnd?: (meta?: KodaXActivityEventMeta) => void;
@@ -1562,16 +1591,18 @@ export interface KodaXSelfManualConfig {
  * over both the adaptive default and `~/.kodax/config.json`. Lets an
  * embedder that calls `runManagedTask` in-process pin the context window /
  * trigger for a model the built-in capability table doesn't cover (or that
- * it resolves through a custom provider), or disable auto-compaction for a
- * run — without writing to the user's home-dir config file. Omitted fields
+ * it resolves through a custom provider), or tune the always-on compaction
+ * policy for a run — without writing to the user's home-dir config file. Omitted fields
  * fall through to the normal resolution cascade.
  */
 export interface KodaXCompactionOverride {
   /** Override the resolved provider context window, in tokens. */
   contextWindow?: number;
-  /** Override the auto-compaction trigger percentage (0-100). */
+  /** Override the auto-compaction trigger percentage (normalized to 15-90). */
   triggerPercent?: number;
-  /** Set false to disable automatic compaction for this run. */
+  /** Optional absolute token threshold. Missing/zero is inactive. */
+  triggerTokens?: number;
+  /** @deprecated Automatic large compaction is always enabled. */
   enabled?: boolean;
 }
 

@@ -160,6 +160,21 @@ function estimateFinalEnvelopeTokens(
   return estimateTokens(messages) + countTokens(system) + toolSchemaTokens;
 }
 
+/** Resolve the provider reasoning envelope shared by the managed request and
+ * its cache-stable compaction request. Keeping this in one function prevents
+ * the two payload prefixes from drifting and invalidating provider KV cache. */
+export function resolveManagedProviderReasoning(
+  options: KodaXOptions,
+  agent: Agent,
+): KodaXReasoningRequest {
+  const userCeiling: KodaXWireReasoningEffort =
+    options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options));
+  const effort = resolveRoleEffort(userCeiling, agent.reasoning);
+  return effort === 'none'
+    ? { enabled: false, effort: 'none' }
+    : { enabled: true, effort };
+}
+
 export function buildRunnerLlmAdapter(
   options: KodaXOptions,
   overrideStream?: (
@@ -315,13 +330,7 @@ export function buildRunnerLlmAdapter(
     //   L2 (agent default) ← agent.reasoning.default + .max (mapped to effort)
     // FEATURE_193 (v0.7.43): V1 chain retired — the Worker is the sole agent,
     // so the per-role split and the Scout hint (L3) are gone.
-    const userCeiling: KodaXWireReasoningEffort =
-      options.effort ?? mapLegacyReasoningModeToEffortIntent(resolveReasoningMode(options));
-    const effort = resolveRoleEffort(userCeiling, agent.reasoning);
-    const providerReasoning: KodaXReasoningRequest | undefined =
-      effort === 'none'
-        ? { enabled: false, effort: 'none' }
-        : { enabled: true, effort };
+    const providerReasoning = resolveManagedProviderReasoning(options, agent);
 
     iterationState.current += 1;
     options.events?.onIterationStart?.(iterationState.current, MAX_ITER_HINT);

@@ -220,9 +220,13 @@ function createSummaryContextMessage(
   prefix: string,
   suffix: string,
 ): KodaXMessage {
+  const isCompactionCheckpoint = prefix === COMPACTION_SUMMARY_PREFIX && suffix === '';
   return {
-    role: suffix ? 'user' : 'system',
+    role: 'user',
     content: `${prefix}${summary}${suffix}`,
+    ...(isCompactionCheckpoint
+      ? { _synthetic: true, _source: 'compaction-checkpoint' }
+      : {}),
   };
 }
 
@@ -297,6 +301,22 @@ function entryMatchesContextMessage(
   entry: NavigableSessionEntry,
   message: KodaXMessage,
 ): boolean {
+  if (
+    entry.type === 'compaction'
+    && entry.reason !== 'rewind'
+    && typeof message.content === 'string'
+    && message.content === `${COMPACTION_SUMMARY_PREFIX}${entry.summary}`
+    && (
+      message.role === 'system'
+      || (
+        message.role === 'user'
+        && message._synthetic === true
+        && message._source === 'compaction-checkpoint'
+      )
+    )
+  ) {
+    return true;
+  }
   const rendered = getContextMessagesForEntry(entry);
   return rendered.length === 1 && messagesEqual(rendered[0]!, message);
 }

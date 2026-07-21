@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
+  KodaXReasoningRequest,
   KodaXProviderStreamOptions,
   KodaXStreamResult,
   KodaXToolDefinition,
@@ -25,12 +26,16 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
   public prompts: string[] = [];
   public systems: string[] = [];
   public modelOverrides: Array<string | undefined> = [];
+  public messageBatches: KodaXMessage[][] = [];
+  public toolBatches: KodaXToolDefinition[][] = [];
+  public reasoningRequests: Array<boolean | KodaXReasoningRequest | undefined> = [];
+  public ephemeralSuffixes: Array<string | undefined> = [];
 
   async stream(
     messages: KodaXMessage[],
-    _tools: KodaXToolDefinition[],
+    tools: KodaXToolDefinition[],
     system: string,
-    _thinking?: boolean,
+    thinking?: boolean | KodaXReasoningRequest,
     streamOptions?: KodaXProviderStreamOptions,
   ): Promise<KodaXStreamResult> {
     const prompt = messages[0];
@@ -41,6 +46,10 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
     );
     this.systems.push(system);
     this.modelOverrides.push(streamOptions?.modelOverride);
+    this.messageBatches.push(messages);
+    this.toolBatches.push(tools);
+    this.reasoningRequests.push(thinking);
+    this.ephemeralSuffixes.push(streamOptions?.ephemeralSuffix?.content);
 
     return {
       textBlocks: [{ type: 'text', text: '## Goal\nContinue safely.' }],
@@ -157,6 +166,59 @@ describe('buildCompactionPromptSnapshot', () => {
     );
 
     expect(provider.modelOverrides[0]).toBe('active-model');
+  });
+
+  it('reuses the exact main-request prefix through an ephemeral summary suffix', async () => {
+    const provider = new RecordingSummaryProvider();
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'first request' },
+      { role: 'assistant', content: 'first response' },
+    ];
+    const tools: KodaXToolDefinition[] = [{
+      name: 'read',
+      description: 'Read a file',
+      input_schema: { type: 'object', properties: { path: { type: 'string' } } },
+    }];
+    const reasoning: KodaXReasoningRequest = { effort: 'high' };
+
+    await generateSummary(
+      messages,
+      provider,
+      { readFiles: [], modifiedFiles: [] },
+      undefined,
+      'MAIN SYSTEM',
+      undefined,
+      undefined,
+      undefined,
+      'active-model',
+      { tools, reasoning, protectedTailMessageCount: 1 },
+    );
+
+    expect(provider.messageBatches[0]).toEqual(messages);
+    expect(provider.toolBatches[0]).toEqual(tools);
+    expect(provider.systems[0]).toBe('MAIN SYSTEM');
+    expect(provider.reasoningRequests[0]).toEqual(reasoning);
+    expect(provider.ephemeralSuffixes[0]).toContain('TEXT ONLY');
+    expect(provider.ephemeralSuffixes[0]).toContain('final 1 message');
+    expect(provider.ephemeralSuffixes[0]).not.toContain('<conversation>');
+  });
+
+  it('rejects tool use even when the provider also returns text', async () => {
+    class ToolUsingProvider extends RecordingSummaryProvider {
+      override async stream(): Promise<KodaXStreamResult> {
+        return {
+          textBlocks: [{ type: 'text', text: 'A plausible summary' }],
+          toolBlocks: [{ type: 'tool_use', id: 'tool-1', name: 'read', input: {} }],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    await expect(generateSummary(
+      [{ role: 'user', content: 'continue' }],
+      new ToolUsingProvider(),
+      { readFiles: [], modifiedFiles: [] },
+    )).rejects.toThrow(/tool_use/i);
   });
 
   it('generateSummary throws when the provider returns no usable text', async () => {

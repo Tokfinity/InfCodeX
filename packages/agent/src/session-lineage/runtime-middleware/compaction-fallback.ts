@@ -8,9 +8,9 @@
  * token overflow during summarization, etc.) so the run can continue
  * instead of hard-failing.
  *
- * Strategy: drop the oldest atomic blocks (tool_use + tool_result
- * pairs) one at a time from the front until token estimate is below
- * the target threshold (`triggerPercent * 80%` of context window).
+ * Strategy: first materialize a synthetic recovery checkpoint containing the
+ * prior summary and an exact user-query ledger, then drop the oldest remaining
+ * atomic blocks until the shared effective trigger is met.
  * Three invariants are load-bearing:
  *
  *   1. **Summary preservation** — if the very first message is a
@@ -71,6 +71,14 @@ import { estimateTokens } from '../../tokenizer.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { CompactionConfig } from '../compaction/types.js';
+import { resolveCompactionPolicy } from '../compaction/policy.js';
+import {
+  mergeUserQueryLedger,
+  parseUserQueryLedger,
+  renderUserQueryLedger,
+} from '../compaction/query-ledger.js';
+
+const COMPACTION_CHECKPOINT_PREFIX = '[对话历史摘要]\n\n';
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
 
@@ -85,26 +93,56 @@ function isToolResultContentBlock(
 }
 
 /**
- * Graceful compact degradation: drop oldest atomic blocks (tool_use + tool_result pairs)
- * one at a time from the front until tokens are below the target threshold.
- * Preserves summary messages, message structure integrity, and recent context.
+ * Graceful compact degradation: protect an exact user-query checkpoint, then
+ * drop oldest atomic blocks until the shared effective trigger is met.
  */
 export function gracefulCompactDegradation(
   messages: KodaXMessage[],
   contextWindow: number,
   config: CompactionConfig,
 ): KodaXMessage[] {
-  const targetTokens = Math.floor(contextWindow * (config.triggerPercent / 100) * 0.8);
+  const targetTokens = resolveCompactionPolicy(config, contextWindow).triggerTokens;
+  if (messages.length === 0 || estimateTokens(messages) <= targetTokens) return messages;
 
-  // Find the first non-summary message index
-  let startIdx = 0;
-  const firstMsg = messages[0];
-  if (firstMsg && (firstMsg.role === 'system' || (
-    firstMsg.role === 'user' && typeof firstMsg.content === 'string'
-    && firstMsg.content.includes('[对话历史摘要]')
-  ))) {
-    startIdx = 1;
-  }
+  const firstMessage = messages[0];
+  const firstContent = typeof firstMessage?.content === 'string'
+    ? firstMessage.content
+    : '';
+  const hasPriorCheckpoint = firstContent.includes(COMPACTION_CHECKPOINT_PREFIX.trim());
+  const priorLedger = hasPriorCheckpoint ? parseUserQueryLedger(firstContent) : [];
+  const queryLedger = mergeUserQueryLedger(priorLedger, messages);
+  const immutableSystem = firstMessage?.role === 'system' && !hasPriorCheckpoint
+    ? firstMessage
+    : undefined;
+  const remaining = messages.slice(immutableSystem || hasPriorCheckpoint ? 1 : 0);
+  const priorSummary = hasPriorCheckpoint
+    ? firstContent
+        .slice(firstContent.indexOf(COMPACTION_CHECKPOINT_PREFIX.trim())
+          + COMPACTION_CHECKPOINT_PREFIX.trim().length)
+        .split('## User Queries & Corrections')[0]
+        ?.trim()
+    : undefined;
+  const checkpoint: KodaXMessage | undefined = queryLedger.length > 0 || priorSummary
+    ? {
+        role: 'user',
+        content: [
+          COMPACTION_CHECKPOINT_PREFIX.trimEnd(),
+          priorSummary || 'Emergency recovery checkpoint after semantic compaction failure.',
+          renderUserQueryLedger(queryLedger),
+        ].join('\n\n'),
+        _synthetic: true,
+        _source: 'compaction-checkpoint',
+      }
+    : undefined;
+  messages = [
+    ...(immutableSystem ? [immutableSystem] : []),
+    ...(checkpoint ? [checkpoint] : []),
+    ...remaining,
+  ];
+
+  // The immutable provider system message and mechanical user-query checkpoint
+  // are mandatory layers. Emergency pruning may remove only history after them.
+  const startIdx = (immutableSystem ? 1 : 0) + (checkpoint ? 1 : 0);
 
   let dropIdx = startIdx;
   while (dropIdx < messages.length && estimateTokens(messages) > targetTokens) {

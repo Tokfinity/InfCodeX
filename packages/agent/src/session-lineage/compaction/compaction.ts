@@ -1,8 +1,8 @@
 /**
  * ../../index.js Compaction Core
  *
- * Progressive compaction with lightweight tool-result pruning and rolling
- * summarization to an internal low-water mark.
+ * Full-coverage large compaction with deterministic recent-context and
+ * user-query preservation.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -11,22 +11,27 @@ import type { CompactionAnchor, CompactionConfig, CompactionResult } from './typ
 import { countTokens, estimateTokens } from '../../tokenizer.js';
 import { extractArtifactLedger, extractFileOps } from './file-tracker.js';
 import {
+  buildCompactionCacheInstruction,
   buildCompactionPromptSnapshot,
   extractCompactMemorySeed,
   generateSummary,
 } from './summary-generator.js';
+import type { CompactionCacheContext } from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';
-import { emitKodaXDiagnostic } from '../../diagnostics.js';
 import { preserveToolResultRecovery } from './result-extractors.js';
 import {
   calculateMaxContextInputTokens,
   ContextCapacityError,
   exceedsContextCapacity,
 } from '../../context-capacity.js';
+import { resolveCompactionPolicy } from './policy.js';
+import {
+  mergeUserQueryLedger,
+  parseUserQueryLedger,
+  renderUserQueryLedger,
+} from './query-ledger.js';
 
 const DEFAULT_CONTEXT_WINDOW = 200000;
-const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
-const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
 
 /**
  * FEATURE_183 (v0.7.42) — tool names whose tool_result content is NEVER
@@ -155,7 +160,6 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
  */
 export const PROTECTED_TOOL_NAMES: ReadonlySet<string> = PRUNE_PROTECTED_TOOLS;
 
-const SUMMARIZATION_RETRY_DELAY_MS = 2000;
 /**
  * Marker prefix on the synthesized summary system message. Other packages
  * use this literal as the discriminator to tell CompactionSummary system
@@ -184,22 +188,6 @@ interface ToolContextSeed {
   target?: string;
   query?: string;
   previewOverride?: string;
-}
-
-interface PruneDecision {
-  idsToPrune: Set<string>;
-  prunableTokens: number;
-}
-
-interface PruneResult {
-  messages: KodaXMessage[];
-  hasPruned: boolean;
-}
-
-interface SummaryAttemptResult {
-  summary: string;
-  summarizedMessages: number;
-  failed: boolean;
 }
 
 /**
@@ -241,17 +229,17 @@ export function needsCompaction(
   tokenCountOverride?: number,
   reservedResponseTokens = 0,
 ): boolean {
-  if (!config.enabled) return false;
-
   const tokens = tokenCountOverride ?? estimateTokens(messages);
-  const exceedsPhysicalCapacity = exceedsContextCapacity({
+  const maxPhysicalInputTokens = calculateMaxContextInputTokens(
     contextWindow,
-    currentTokens: tokens,
     reservedResponseTokens,
-  });
-  const configuredEarlyTrigger = config.triggerPercent < 100
-    && tokens > getTriggerTokens(config, contextWindow);
-  return exceedsPhysicalCapacity || configuredEarlyTrigger;
+  );
+  const policy = resolveCompactionPolicy(
+    config,
+    contextWindow,
+    maxPhysicalInputTokens,
+  );
+  return tokens >= policy.triggerTokens;
 }
 
 export async function compact(
@@ -267,6 +255,7 @@ export async function compact(
   modelOverride?: string,
   force: boolean = false,
   reservedResponseTokens = 0,
+  cacheContext?: CompactionCacheContext,
 ): Promise<CompactionResult> {
   const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
   const estimatedTranscriptTokensBefore = estimateTokens(messages);
@@ -278,13 +267,11 @@ export async function compact(
     contextWindow,
     reservedResponseTokens,
   );
-  const configuredEarlyTarget = force || (
-    config.triggerPercent < 100
-    && tokensBefore > getTriggerTokens(config, contextWindow)
+  const policy = resolveCompactionPolicy(
+    config,
+    contextWindow,
+    maxPhysicalInputTokens,
   );
-  const targetPhysicalTokens = configuredEarlyTarget
-    ? Math.min(maxPhysicalInputTokens, getTargetTokens(config, contextWindow))
-    : maxPhysicalInputTokens;
   const physicalTokensFor = (candidate: KodaXMessage[]): number => (
     fixedOverheadTokens + estimateTokens(candidate)
   );
@@ -306,23 +293,25 @@ export async function compact(
   }
 
   let previousSummary: string | undefined;
+  let previousQueryLedger = parseUserQueryLedger('');
   let remainingMessages = messages;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (
-      msg?.role === 'system'
+      (msg?.role === 'system' || msg?.role === 'user')
       && typeof msg.content === 'string'
       && msg.content.startsWith(COMPACTION_SUMMARY_PREFIX)
+      && (msg.role === 'system' || msg._source === 'compaction-checkpoint')
     ) {
       previousSummary = msg.content.slice(COMPACTION_SUMMARY_PREFIX.length);
+      previousQueryLedger = parseUserQueryLedger(previousSummary);
       remainingMessages = [...messages.slice(0, i), ...messages.slice(i + 1)];
       break;
     }
   }
 
-  const protectionPercent = config.protectionPercent ?? 20;
-  const protectionTokens = Math.floor(contextWindow * (protectionPercent / 100));
+  const protectionTokens = policy.protectionTokens;
   const protectCutIndex = findCutPoint(remainingMessages, protectionTokens);
   const toProcess = remainingMessages.slice(0, protectCutIndex);
   const toProtect = remainingMessages.slice(protectCutIndex);
@@ -351,148 +340,49 @@ export async function compact(
   const totalFileOps = extractFileOps(toProcess);
   const artifactLedger = extractArtifactLedger(toProcess);
 
-  // Deterministic tool-result/user-message pruning is lossy and cannot be
-  // reconstructed from the transcript. Keep it as an explicit legacy opt-in;
-  // the default path gives the semantic summarizer the complete evidence.
-  let pruneResult: PruneResult = { messages: toProcess, hasPruned: false };
-  if (config.pruningThresholdTokens !== undefined) {
-    const toolContextMap = buildToolContextMap(toProcess);
-    pruneResult = pruneToolResults(
-      toProcess,
-      toolContextMap,
-      collectStructuredPruneIds(toProcess, toolContextMap),
-      config.pruningThresholdTokens,
-    );
-  }
-
-  const prunedMessages = pruneResult.messages;
-  const prunedQueue = [...prunedMessages, ...toProtect];
-  // FEATURE_182 (v0.7.42): fast-path is ONLY safe when a previousSummary
-  // exists to retain. Without one, fast-path returns
-  // buildFallbackCompactionSummary which cements the generic "Continue the
-  // current task" template as the session summary forever (subsequent
-  // fast-path compactions then reuse that template as previousSummary).
-  // 48% of compactions take fast-path per the 788-session scan; many are
-  // session-first compactions that get permanently stuck on the fallback.
-  // Force slow-path in this case so LLM seeds a real summary at least
-  // once. If slow-path also breaks early (currentMessages ≤ targetTokens),
-  // the existing fallback at finalSummary || ... line still applies — same
-  // outcome as before, no regression.
-  if (
-    previousSummary
-    && pruneResult.hasPruned
-    && physicalTokensFor([createSummaryMessage(previousSummary), ...prunedQueue])
-      <= maxPhysicalInputTokens
-  ) {
-    const retainedSummary = previousSummary;
-    const finalMessages = [createSummaryMessage(retainedSummary), ...prunedQueue];
-    const tokensAfter = physicalTokensFor(finalMessages);
-    const memorySeed = extractCompactMemorySeed(retainedSummary, totalFileOps);
-
-    return {
-      compacted: true,
-      messages: finalMessages,
-      summary: retainedSummary,
-      tokensBefore,
-      tokensAfter,
-      entriesRemoved: 0,
+  // FEATURE_272: a major compact covers the complete eligible prefix in one
+  // transaction. Temporary map/reduce results never become canonical history.
+  // A query has exactly one canonical representation after compaction:
+  // compacted-prefix queries live in the exact ledger, while protected-tail
+  // queries remain as raw messages. Recording the tail here as well duplicates
+  // it and directly consumes the savings the compaction just created.
+  const queryLedger = mergeUserQueryLedger(previousQueryLedger, toProcess);
+  const cacheInstructionTokens = countTokens(buildCompactionCacheInstruction(
+    buildCompactionPromptSnapshot({
+      messages: [],
       details: totalFileOps,
-      artifactLedger,
-      memorySeed,
-      anchor: createCompactionAnchor(
-        retainedSummary,
-        tokensBefore,
-        tokensAfter,
-        0,
-        totalFileOps,
-        artifactLedger,
-        memorySeed,
-      ),
-    };
-  }
-
-  const rollingSummaryPercent = config.rollingSummaryPercent ?? 10;
-  const rollingSummaryTokens = Math.max(
-    1,
-    Math.floor(contextWindow * (rollingSummaryPercent / 100)),
-  );
-
-  let summary = previousSummary || '';
-  let workingProcess = prunedMessages;
-  let workingCanonical = toProcess;
-  let entriesRemoved = 0;
-
-  while (workingProcess.length > 0) {
-    const currentMessages = buildCompactedMessages(summary, workingProcess, toProtect);
-    const forceFirstSemanticPass = force
-      && entriesRemoved === 0
-      && !pruneResult.hasPruned;
-    if (!forceFirstSemanticPass && physicalTokensFor(currentMessages) <= targetPhysicalTokens) {
-      break;
-    }
-
-    const summarizeCutIndex = Math.max(
-      1,
-      findForwardCutPoint(workingProcess, rollingSummaryTokens),
-    );
-    const toSummarize = workingProcess.slice(0, summarizeCutIndex);
-    if (toSummarize.length === 0) {
-      break;
-    }
-
-    const summaryAttempt = await summarizeMessages(
-      toSummarize,
-      provider,
       customInstructions,
       systemPrompt,
-      summary,
+      previousSummary,
       summaryPrompt,
       updateSummaryPrompt,
-      modelOverride,
-      contextWindow,
-      reservedResponseTokens,
-    );
-
-    if (summaryAttempt.summarizedMessages === 0) {
-      break;
-    }
-
-    summary = summaryAttempt.summary;
-    workingProcess = workingProcess.slice(summaryAttempt.summarizedMessages);
-    workingCanonical = workingCanonical.slice(summaryAttempt.summarizedMessages);
-    entriesRemoved += summaryAttempt.summarizedMessages;
-
-    if (summaryAttempt.failed) {
-      break;
-    }
-  }
-
-  const summaryChanged = summary !== (previousSummary || '');
-  const didCompact = entriesRemoved > 0 || summaryChanged;
-  if (!didCompact) {
-    if (exceedsContextCapacity({
-      contextWindow,
-      currentTokens: tokensBefore,
-      reservedResponseTokens,
-    })) {
-      throw new ContextCapacityError({
-        contextWindow,
-        currentTokens: tokensBefore,
-        reservedResponseTokens,
-      }, 'History compaction');
-    }
-    return {
-      compacted: false,
-      messages,
-      tokensBefore,
-      tokensAfter: tokensBefore,
-      entriesRemoved: 0,
-      details: totalFileOps,
-    };
-  }
-
-  const finalSummary = summary || buildFallbackCompactionSummary(totalFileOps, artifactLedger);
-  const compactedMessages = buildCompactedMessages(finalSummary, workingCanonical, toProtect);
+    }),
+    toProtect.length,
+  ));
+  const effectiveCacheContext = cacheContext
+    && tokensBefore + cacheInstructionTokens <= maxPhysicalInputTokens
+    ? { ...cacheContext, protectedTailMessageCount: toProtect.length }
+    : undefined;
+  const generated = await summarizeCompletePrefix({
+    messages: toProcess,
+    cacheMessages: effectiveCacheContext ? messages : undefined,
+    cacheContext: effectiveCacheContext,
+    provider,
+    customInstructions,
+    systemPrompt,
+    previousSummary,
+    summaryPrompt,
+    updateSummaryPrompt,
+    modelOverride,
+    contextWindow,
+    reservedResponseTokens,
+  });
+  const finalSummary = [
+    stripRenderedUserQueryLedger(generated.summary),
+    renderUserQueryLedger(queryLedger),
+  ].filter(Boolean).join('\n\n');
+  const entriesRemoved = toProcess.length;
+  const compactedMessages = buildCompactedMessages(finalSummary, [], toProtect);
   const tokensAfter = physicalTokensFor(compactedMessages);
   if (exceedsContextCapacity({
     contextWindow,
@@ -510,13 +400,24 @@ export async function compact(
   return {
     compacted: true,
     messages: compactedMessages,
-    summary: finalSummary || undefined,
+    summary: finalSummary,
     tokensBefore,
     tokensAfter,
     entriesRemoved,
     details: totalFileOps,
     artifactLedger,
     memorySeed,
+    report: {
+      strategy: generated.strategy,
+      triggerSource: policy.triggerSource,
+      effectiveTriggerTokens: policy.triggerTokens,
+      protectedBudgetTokens: protectionTokens,
+      fixedInputTokens: fixedOverheadTokens,
+      eligibleTokens: estimateTokens(toProcess),
+      rawTailTokens: estimateTokens(toProtect),
+      summaryTokens: countTokens(stripRenderedUserQueryLedger(finalSummary)),
+      queryLedgerTokens: countTokens(renderUserQueryLedger(queryLedger)),
+    },
     anchor: createCompactionAnchor(
       finalSummary,
       tokensBefore,
@@ -529,79 +430,183 @@ export async function compact(
   };
 }
 
-async function summarizeMessages(
-  messages: KodaXMessage[],
-  provider: KodaXBaseProvider,
-  customInstructions: string | undefined,
-  systemPrompt: string | undefined,
-  previousSummary: string,
-  summaryPrompt: string | undefined,
-  updateSummaryPrompt: string | undefined,
-  modelOverride: string | undefined,
-  contextWindow: number,
-  reservedResponseTokens: number,
-): Promise<SummaryAttemptResult> {
-  let summary = previousSummary;
-  let summarizedMessages = 0;
-  let remaining = messages;
+interface CompletePrefixSummaryInput {
+  readonly messages: KodaXMessage[];
+  readonly cacheMessages?: KodaXMessage[];
+  readonly cacheContext?: CompactionCacheContext;
+  readonly provider: KodaXBaseProvider;
+  readonly customInstructions?: string;
+  readonly systemPrompt?: string;
+  readonly previousSummary?: string;
+  readonly summaryPrompt?: string;
+  readonly updateSummaryPrompt?: string;
+  readonly modelOverride?: string;
+  readonly contextWindow: number;
+  readonly reservedResponseTokens: number;
+}
 
-  while (remaining.length > 0) {
-    const chunkEnd = findSummaryChunkEnd(
-      remaining,
-      customInstructions,
-      systemPrompt,
-      summary,
-      summaryPrompt,
-      updateSummaryPrompt,
-      contextWindow,
-      reservedResponseTokens,
+interface CompletePrefixSummaryResult {
+  readonly summary: string;
+  readonly strategy: 'full_prefix' | 'map_reduce';
+}
+
+function stripRenderedUserQueryLedger(summary: string): string {
+  const marker = '## User Queries & Corrections';
+  const index = summary.indexOf(marker);
+  return (index >= 0 ? summary.slice(0, index) : summary).trim();
+}
+
+function assertUsableSummary(summary: string, previousSummary?: string): void {
+  const semanticSummary = stripRenderedUserQueryLedger(summary);
+  if (isEmptyLikeSummary(semanticSummary)) {
+    throw new Error('Compaction summary did not contain usable semantic content');
+  }
+  if (
+    previousSummary
+    && semanticSummary === stripRenderedUserQueryLedger(previousSummary)
+  ) {
+    throw new Error('Compaction summary did not incorporate the eligible prefix');
+  }
+}
+
+async function summarizeCompletePrefix(
+  input: CompletePrefixSummaryInput,
+): Promise<CompletePrefixSummaryResult> {
+  if (input.cacheContext && input.cacheMessages) {
+    const summary = await generateSummary(
+      input.cacheMessages,
+      input.provider,
+      extractFileOps(input.messages),
+      input.customInstructions,
+      input.systemPrompt,
+      input.previousSummary,
+      input.summaryPrompt,
+      input.updateSummaryPrompt,
+      input.modelOverride,
+      input.cacheContext,
     );
-    const chunk = remaining.slice(0, chunkEnd);
-
-    try {
-      const candidateSummary = await generateSummary(
-        chunk,
-        provider,
-        extractFileOps(chunk),
-        customInstructions,
-        systemPrompt,
-        summary || undefined,
-        summaryPrompt,
-        updateSummaryPrompt,
-        modelOverride,
-      );
-      const unchangedSummary = summary.trim().length > 0
-        && candidateSummary.trim() === summary.trim();
-      if (isEmptyLikeSummary(candidateSummary) || unchangedSummary) {
-        emitKodaXDiagnostic({
-          source: 'agent:compaction',
-          level: 'warn',
-          message: 'Summary chunk returned no usable semantic content; canonical messages were retained.',
-        });
-        return { summary, summarizedMessages, failed: true };
-      }
-      summary = candidateSummary;
-      summarizedMessages += chunk.length;
-      remaining = remaining.slice(chunk.length);
-    } catch (error) {
-      if (error instanceof ContextCapacityError) {
-        throw error;
-      }
-      emitKodaXDiagnostic({
-        source: 'agent:compaction',
-        level: 'error',
-        message: 'Summary chunk failed, keeping partial summary progress.',
-        detail: error,
-      });
-      return { summary, summarizedMessages, failed: true };
-    }
-
-    if (remaining.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, SUMMARIZATION_RETRY_DELAY_MS));
-    }
+    assertUsableSummary(summary, input.previousSummary);
+    return { summary, strategy: 'full_prefix' };
   }
 
-  return { summary, summarizedMessages, failed: false };
+  const promptTokens = countSummaryRequestTokens(input.messages, {
+    customInstructions: input.customInstructions,
+    systemPrompt: input.systemPrompt,
+    previousSummary: input.previousSummary,
+    summaryPrompt: input.summaryPrompt,
+    updateSummaryPrompt: input.updateSummaryPrompt,
+  });
+  if (!exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: promptTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  })) {
+    const summary = await generateSummary(
+      input.messages,
+      input.provider,
+      extractFileOps(input.messages),
+      input.customInstructions,
+      input.systemPrompt,
+      input.previousSummary,
+      input.summaryPrompt,
+      input.updateSummaryPrompt,
+      input.modelOverride,
+    );
+    assertUsableSummary(summary, input.previousSummary);
+    return { summary, strategy: 'full_prefix' };
+  }
+
+  const mappedSummaries: string[] = [];
+  let remaining = input.messages;
+  while (remaining.length > 0) {
+    let chunkEnd: number;
+    let chunk: KodaXMessage[];
+    try {
+      chunkEnd = findSummaryChunkEnd(
+        remaining,
+        input.customInstructions,
+        input.systemPrompt,
+        '',
+        input.summaryPrompt,
+        input.updateSummaryPrompt,
+        input.contextWindow,
+        input.reservedResponseTokens,
+      );
+      chunk = remaining.slice(0, chunkEnd);
+    } catch (error) {
+      if (!(error instanceof ContextCapacityError)) throw error;
+      const firstBlock = getAtomicBlocks(remaining)[0];
+      if (!firstBlock) throw error;
+      chunkEnd = firstBlock.end + 1;
+      chunk = createCapacitySafeSummaryBlock(remaining.slice(0, chunkEnd));
+      const compactedPromptTokens = countSummaryRequestTokens(chunk, {
+        customInstructions: input.customInstructions,
+        systemPrompt: input.systemPrompt,
+        summaryPrompt: input.summaryPrompt,
+        updateSummaryPrompt: input.updateSummaryPrompt,
+      });
+      if (exceedsContextCapacity({
+        contextWindow: input.contextWindow,
+        currentTokens: compactedPromptTokens,
+        reservedResponseTokens: input.reservedResponseTokens,
+      })) {
+        throw error;
+      }
+    }
+    const summary = await generateSummary(
+      chunk,
+      input.provider,
+      extractFileOps(chunk),
+      input.customInstructions,
+      input.systemPrompt,
+      undefined,
+      input.summaryPrompt,
+      input.updateSummaryPrompt,
+      input.modelOverride,
+    );
+    assertUsableSummary(summary);
+    mappedSummaries.push(summary);
+    remaining = remaining.slice(chunkEnd);
+  }
+
+  const reductionMessages: KodaXMessage[] = mappedSummaries.map((summary, index) => ({
+    role: 'user',
+    content: `<compaction-part index="${index + 1}">\n${summary}\n</compaction-part>`,
+    _synthetic: true,
+    _source: 'compaction-map-result',
+  }));
+  const reduced = await generateSummary(
+    reductionMessages,
+    input.provider,
+    extractFileOps(input.messages),
+    input.customInstructions,
+    input.systemPrompt,
+    input.previousSummary,
+    input.summaryPrompt,
+    input.updateSummaryPrompt,
+    input.modelOverride,
+  );
+  assertUsableSummary(reduced, input.previousSummary);
+  return { summary: reduced, strategy: 'map_reduce' };
+}
+
+function createCapacitySafeSummaryBlock(messages: KodaXMessage[]): KodaXMessage[] {
+  return messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: message.content.map((block) => {
+        if (block.type !== 'tool_result') return block;
+        const placeholder = `[Compacted oversized tool result for summary: ${countTokens(
+          typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+        )} tokens]`;
+        return {
+          ...block,
+          content: preserveToolResultRecovery(block.content, placeholder, block.metadata),
+        };
+      }),
+    };
+  });
 }
 
 function findSummaryChunkEnd(
@@ -688,8 +693,10 @@ function buildCompactedMessages(
 
 function createSummaryMessage(summary: string): KodaXMessage {
   return {
-    role: 'system',
+    role: 'user',
     content: `${COMPACTION_SUMMARY_PREFIX}${summary}`,
+    _synthetic: true,
+    _source: 'compaction-checkpoint',
   };
 }
 
@@ -714,76 +721,6 @@ function createCompactionAnchor(
     details,
     memorySeed,
   };
-}
-
-function buildFallbackCompactionSummary(
-  details: NonNullable<CompactionResult['details']>,
-  artifactLedger: NonNullable<CompactionResult['artifactLedger']>,
-): string {
-  const importantTargets = Array.from(new Set([
-    ...details.readFiles,
-    ...details.modifiedFiles,
-    ...artifactLedger.map((entry) => entry.displayTarget ?? entry.target),
-  ])).slice(0, 8);
-
-  const keyContextLines = importantTargets.length > 0
-    ? importantTargets.map((target) => `- ${target}`)
-    : ['- No high-value targets recorded'];
-  const readFiles = details.readFiles.length > 0 ? details.readFiles : [''];
-  const modifiedFiles = details.modifiedFiles.length > 0 ? details.modifiedFiles : [''];
-
-  return [
-    '## Goal',
-    'Continue the current task from the latest preserved context.',
-    '',
-    '## Constraints & Preferences',
-    '- Preserve existing user intent and repo-local constraints.',
-    '',
-    '## Progress',
-    '### Completed',
-    '- [x] Older context was compacted into a durable anchor.',
-    '',
-    '### In Progress',
-    '- [ ] Continue from the latest preserved tail.',
-    '',
-    '### Blockers',
-    '- None',
-    '',
-    '## Key Decisions',
-    '- **Compaction**: Keep only continuation-critical history.',
-    '',
-    '## Next Steps',
-    '1. Re-open the most relevant targets before continuing if needed.',
-    '',
-    '## Key Context',
-    ...keyContextLines,
-    '',
-    '---',
-    '',
-    '<read-files>',
-    ...readFiles,
-    '</read-files>',
-    '',
-    '<modified-files>',
-    ...modifiedFiles,
-    '</modified-files>',
-  ].join('\n');
-}
-
-function getTriggerTokens(config: CompactionConfig, contextWindow: number): number {
-  return contextWindow * (config.triggerPercent / 100);
-}
-
-function getTargetTokens(config: CompactionConfig, contextWindow: number): number {
-  const protectionPercent = config.protectionPercent ?? 20;
-  const triggerPercent = config.triggerPercent;
-
-  if (triggerPercent <= protectionPercent) {
-    return getTriggerTokens(config, contextWindow);
-  }
-
-  const targetPercent = protectionPercent + 0.4 * (triggerPercent - protectionPercent);
-  return Math.floor(contextWindow * (targetPercent / 100));
 }
 
 function splitPathSegments(target: string): string[] {
@@ -918,128 +855,6 @@ export function buildToolContextMap(messages: KodaXMessage[]): Map<string, ToolC
   return toolContextMap;
 }
 
-function collectStructuredPruneIds(
-  messages: KodaXMessage[],
-  toolContextMap: Map<string, ToolContextInfo>,
-): PruneDecision {
-  let protectedTurns = 0;
-  let protectedToolTokens = 0;
-  let prunableTokens = 0;
-  const idsToPrune = new Set<string>();
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg) continue;
-
-    if (msg.role === 'user') {
-      protectedTurns++;
-    }
-
-    if (protectedTurns < 2 || msg.role !== 'user' || !Array.isArray(msg.content)) {
-      continue;
-    }
-
-    for (let j = msg.content.length - 1; j >= 0; j--) {
-      const block = msg.content[j];
-      if (block?.type !== 'tool_result' || typeof block.content !== 'string') continue;
-
-      const toolInfo = toolContextMap.get(block.tool_use_id);
-      if (toolInfo && PRUNE_PROTECTED_TOOLS.has(toolInfo.name)) continue;
-
-      const blockTokens = countToolResultTokens(block.content);
-      protectedToolTokens += blockTokens;
-
-      if (protectedToolTokens > STRUCTURED_PRUNE_PROTECT_TOKENS) {
-        idsToPrune.add(block.tool_use_id);
-        prunableTokens += blockTokens;
-      }
-    }
-  }
-
-  if (prunableTokens < STRUCTURED_PRUNE_MINIMUM_TOKENS) {
-    return { idsToPrune: new Set<string>(), prunableTokens: 0 };
-  }
-
-  return { idsToPrune, prunableTokens };
-}
-
-function pruneToolResults(
-  messages: KodaXMessage[],
-  toolContextMap: Map<string, ToolContextInfo>,
-  structuredPrune: PruneDecision,
-  pruningThresholdTokens: number,
-): PruneResult {
-  let hasPruned = false;
-  const prunedMessages = messages.map((msg) => {
-    // Child-result envelopes have already passed aggregate capacity admission.
-    // Let the summary model see the complete, recoverable envelope once; the
-    // generic user-message head/tail crop can otherwise erase a middle child
-    // banner or its artifact reference before summarization.
-    if (msg.role === 'user'
-      && (msg._source === 'agent-completed' || msg._source === 'task-completed')) {
-      return msg;
-    }
-
-    if (msg.role !== 'user' || !Array.isArray(msg.content)) {
-      // Truncate long string-content user messages (non-array)
-      if (msg.role === 'user' && typeof msg.content === 'string') {
-        return truncateUserMessage(msg);
-      }
-      return msg;
-    }
-
-    let changed = false;
-    const newContent = msg.content.map((block) => {
-      // Truncate long user text blocks
-      if (block.type === 'text' && 'text' in block) {
-        const truncated = truncateUserText(block.text);
-        if (truncated !== block.text) {
-          changed = true;
-          hasPruned = true;
-          return { ...block, text: truncated };
-        }
-        return block;
-      }
-
-      if (block.type !== 'tool_result' || typeof block.content !== 'string') {
-        return block;
-      }
-
-      // FEATURE_183 (v0.7.42): protected tools are immune to BOTH
-      // structured-prune AND oversize-prune. Pre-F183 the oversize path
-      // ignored the protected set entirely — meaning a single >50K-token
-      // result from `skill` / `mcp_call` / child-Agent output would still
-      // be replaced with `[Pruned: ...]`. That's exactly the failure mode
-      // PROTECTED is supposed to prevent. The structured-prune layer already
-      // skips protected tools in `collectStructuredPruneIds`; this same
-      // belt-and-suspenders check on the oversize path closes the gap.
-      const toolInfoForProtection = toolContextMap.get(block.tool_use_id);
-      if (toolInfoForProtection && PRUNE_PROTECTED_TOOLS.has(toolInfoForProtection.name)) {
-        return block;
-      }
-
-      const shouldStructuredPrune = structuredPrune.idsToPrune.has(block.tool_use_id);
-      const shouldOversizePrune = countTokens(block.content) > pruningThresholdTokens;
-      if (!shouldStructuredPrune && !shouldOversizePrune) {
-        return block;
-      }
-
-      changed = true;
-      hasPruned = true;
-      const toolInfo = toolContextMap.get(block.tool_use_id);
-      const placeholder = toolInfo ? `[Pruned: ${toolInfo.preview}]` : '[Pruned]';
-      return {
-        ...block,
-        content: preserveToolResultRecovery(block.content, placeholder, block.metadata),
-      };
-    });
-
-    return changed ? { ...msg, content: newContent } : msg;
-  });
-
-  return { messages: prunedMessages, hasPruned };
-}
-
 /**
  * Truncate a long user text string, preserving head and tail.
  * Short texts (≤ USER_MESSAGE_PROTECTION_TOKENS) are returned as-is.
@@ -1054,17 +869,6 @@ export function truncateUserText(text: string): string {
   const tail = text.slice(-tailChars);
 
   return `${head}\n[…user message truncated, original ~${tokens} tokens…]\n${tail}`;
-}
-
-/** Truncate a string-content user message */
-function truncateUserMessage(msg: KodaXMessage): KodaXMessage {
-  if (typeof msg.content !== 'string') return msg;
-  const truncated = truncateUserText(msg.content);
-  return truncated !== msg.content ? { ...msg, content: truncated } : msg;
-}
-
-function countToolResultTokens(content: string): number {
-  return 4 + countTokens(content);
 }
 
 /**
@@ -1122,40 +926,23 @@ function getAtomicBlocks(messages: KodaXMessage[]): Array<{ start: number; end: 
 
 function findCutPoint(messages: KodaXMessage[], keepRecentTokens: number): number {
   let tokenCount = 0;
+  let protectedBlocks = 0;
   const atomicBlocks = getAtomicBlocks(messages);
 
   for (let i = atomicBlocks.length - 1; i >= 0; i--) {
     const block = atomicBlocks[i];
     if (!block) continue;
 
-    tokenCount += block.tokens;
-    if (tokenCount > keepRecentTokens) {
-      return block.start;
+    if (tokenCount + block.tokens > keepRecentTokens) {
+      // Always retain at least the newest atomic block, even when that one
+      // block exceeds the budget. Once a newer block is already protected,
+      // do not pull the older block across the boundary merely because it is
+      // the first one that would overflow the tail budget.
+      return protectedBlocks === 0 ? block.start : block.end + 1;
     }
+    tokenCount += block.tokens;
+    protectedBlocks++;
   }
 
   return 0;
-}
-
-function findForwardCutPoint(messages: KodaXMessage[], targetTokens: number): number {
-  let tokenCount = 0;
-  const atomicBlocks = getAtomicBlocks(messages);
-
-  if (atomicBlocks.length === 0) {
-    return messages.length > 0 ? 1 : 0;
-  }
-
-  let cutEndIndex = 0;
-  for (let i = 0; i < atomicBlocks.length; i++) {
-    const block = atomicBlocks[i];
-    if (!block) continue;
-
-    tokenCount += block.tokens;
-    cutEndIndex = block.end + 1;
-    if (tokenCount >= targetTokens) {
-      break;
-    }
-  }
-
-  return Math.min(cutEndIndex, messages.length);
 }

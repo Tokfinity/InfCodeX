@@ -106,6 +106,7 @@ describe('CAP-062 explicit legacy degradation gate', () => {
     });
     expect(out).toEqual({ compacted: pruned, didCompactMessages: true });
     expect(events.onCompactStats).toHaveBeenCalledOnce();
-    expect(events.onCompact).toHaveBeenCalledWith(90_000);
+    const stats = vi.mocked(events.onCompactStats!).mock.calls[0]?.[0];
+    expect(events.onCompact).toHaveBeenCalledWith(stats?.tokensAfter);
   });
 });

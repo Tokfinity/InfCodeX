@@ -9,10 +9,32 @@ export type {
   CompactionAnchor,
   CompactionConfig,
   CompactionDetails,
+  CompactionReport,
   CompactionUpdate,
   CompactionResult,
   FileOperations,
 } from './types.js';
+
+export {
+  COMPACTION_PROTECTION_RATIO,
+  DEFAULT_COMPACTION_TRIGGER_PERCENT,
+  MAX_COMPACTION_TRIGGER_PERCENT,
+  MIN_COMPACTION_TRIGGER_PERCENT,
+  normalizeCompactionConfig,
+  resolveCompactionPolicy,
+} from './policy.js';
+
+export {
+  collectUserQueryLedger,
+  mergeUserQueryLedger,
+  parseUserQueryLedger,
+  renderUserQueryLedger,
+} from './query-ledger.js';
+export type { UserQueryLedgerEntry } from './query-ledger.js';
+export type {
+  CompactionTriggerSource,
+  ResolvedCompactionPolicy,
+} from './policy.js';
 
 // File Tracking
 export { extractArtifactLedger, extractFileOps, mergeArtifactLedger, mergeFileOps } from './file-tracker.js';
@@ -24,10 +46,12 @@ export { serializeConversation } from './utils.js';
 export {
   generateSummary,
   buildCompactionPromptSnapshot,
+  buildCompactionCacheInstruction,
   DEFAULT_SUMMARY_PROMPT,
   DEFAULT_UPDATE_SUMMARY_PROMPT,
 } from './summary-generator.js';
 export type {
+  CompactionCacheContext,
   KodaXCompactionPromptVariant,
   KodaXCompactionPromptSection,
   KodaXCompactionPromptSnapshot,

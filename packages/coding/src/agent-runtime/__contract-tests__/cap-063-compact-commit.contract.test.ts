@@ -42,7 +42,11 @@ const cleanMessages: KodaXMessage[] = [
 describe('CAP-063: commitCompactedHistory — no compaction this turn', () => {
   it('CAP-COMPACT-COMMIT-NOOP: didCompactMessages=false → snapshot is undefined, onCompactedMessages NOT fired, validated messages still returned', () => {
     const onCompactedMessages = vi.fn();
-    const events: KodaXEvents = { onCompactedMessages };
+    const onContextCompactionFinished = vi.fn();
+    const events: KodaXEvents = {
+      onCompactedMessages,
+      onContextCompactionFinished,
+    };
 
     const out = commitCompactedHistory({
       compacted: cleanMessages,
@@ -62,12 +66,27 @@ describe('CAP-063: commitCompactedHistory — no compaction this turn', () => {
 describe('CAP-063: commitCompactedHistory — compaction fired this turn', () => {
   it('CAP-COMPACT-COMMIT-001: didCompactMessages=true → onCompactedMessages fired with (messages, compactionUpdate); fresh snapshot returned', () => {
     const onCompactedMessages = vi.fn();
-    const events: KodaXEvents = { onCompactedMessages };
+    const onContextCompactionFinished = vi.fn();
+    const events: KodaXEvents = {
+      onCompactedMessages,
+      onContextCompactionFinished,
+    };
     const compactionUpdate: CompactionUpdate = {
       anchor: undefined,
       artifactLedger: [],
       memorySeed: undefined,
       postCompactAttachments: undefined,
+      report: {
+        strategy: 'full_prefix',
+        triggerSource: 'absolute',
+        effectiveTriggerTokens: 1_000,
+        protectedBudgetTokens: 200,
+        fixedInputTokens: 50,
+        eligibleTokens: 700,
+        rawTailTokens: 200,
+        summaryTokens: 80,
+        queryLedgerTokens: 20,
+      },
     } as unknown as CompactionUpdate;
 
     const out = commitCompactedHistory({
@@ -75,12 +94,25 @@ describe('CAP-063: commitCompactedHistory — compaction fired this turn', () =>
       didCompactMessages: true,
       compactionUpdate,
       events,
+      tokensBefore: 1_100,
+      elapsedMs: 25,
     });
 
     expect(out.contextTokenSnapshot).toBeDefined();
     expect(onCompactedMessages).toHaveBeenCalledExactlyOnceWith(
       out.messages,
       compactionUpdate,
+    );
+    expect(onContextCompactionFinished).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        source: 'automatic_threshold',
+        tokensBefore: 1_100,
+        tokensAfter: out.contextTokenSnapshot?.currentTokens,
+        committed: true,
+        elapsedMs: 25,
+        strategy: 'full_prefix',
+        effectiveTriggerTokens: 1_000,
+      }),
     );
   });
 

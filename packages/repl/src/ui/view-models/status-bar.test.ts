@@ -198,6 +198,20 @@ describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_09
     const text = getStatusBarText(baseProps({ agentMode: "ama" }));
     expect(text).toContain("KodaX - AMA");
   });
+
+  it("uses the absolute trigger when it is lower than the percentage", () => {
+    const viewModel = buildStatusBarViewModel(baseProps({
+      contextUsage: {
+        currentTokens: 121_000,
+        contextWindow: 200_000,
+        triggerPercent: 75,
+        triggerTokens: 120_000,
+        reservedResponseTokens: 32_000,
+      },
+    }));
+
+    expect(viewModel.segments.find((segment) => segment.id === "context-usage")?.color).toBe("red");
+  });
 });
 
 describe("status-bar (Ink view-model) — surface-status integration", () => {

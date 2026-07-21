@@ -556,12 +556,24 @@ export async function runSubstrate(
   const resolvedSessionId = await discoverAutoResumeSessionId(options);
   const sessionId = resolvedSessionId ?? await generateSessionId();
   const requestedLiveTurn = options.context?.liveTurn;
+  const currentAgentId = options.context?.currentAgentId;
+  const parentAgentId = options.context?.parentAgentId;
   const liveTurnScope = createLiveTurnScope({
     sessionId,
     deliveryKind: requestedLiveTurn?.deliveryKind ?? 'initial',
     turnId: requestedLiveTurn?.turnId,
     deliveryId: requestedLiveTurn?.deliveryId,
     promptId: requestedLiveTurn?.promptId,
+    ...(currentAgentId !== undefined
+      ? {
+          contextId: `${sessionId}/agent/${encodeURIComponent(currentAgentId)}`,
+          contextKind: 'child' as const,
+          parentContextId: parentAgentId === undefined
+            ? sessionId
+            : `${sessionId}/agent/${encodeURIComponent(parentAgentId)}`,
+          agentId: currentAgentId,
+        }
+      : {}),
   });
   events = withLiveTurnAttribution(events, liveTurnScope);
   const memoryIdentity = options.context?.memoryIdentity
@@ -1187,6 +1199,8 @@ export async function runSubstrate(
         model: turnState.currentModelOverride,
         contextWindow,
         systemPrompt: effectiveSystemPrompt,
+        toolDefinitions: activeToolDefinitions,
+        reasoning: effectiveProviderReasoning,
         currentTokens,
         reservedResponseTokens,
         events,

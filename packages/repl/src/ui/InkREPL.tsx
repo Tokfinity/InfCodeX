@@ -596,6 +596,7 @@ interface InkREPLProps {
   compactionInfo?: {
     contextWindow: number;
     triggerPercent: number;
+    triggerTokens?: number;
     enabled: boolean;
     reservedResponseTokens?: number;
     /**
@@ -677,6 +678,7 @@ interface BannerProps {
   compactionInfo?: {
     contextWindow: number;
     triggerPercent: number;
+    triggerTokens?: number;
     enabled: boolean;
     reservedResponseTokens?: number;
     /**
@@ -1303,7 +1305,11 @@ const Banner: React.FC<BannerProps> = ({
   // Compute compaction display values
   const ctxK = compactionInfo ? Math.round(compactionInfo.contextWindow / 1000) : 0;
   const compactionPolicy = compactionInfo
-    ? formatCompactionPolicy(compactionInfo.contextWindow, compactionInfo.triggerPercent)
+    ? formatCompactionPolicy(
+        compactionInfo.contextWindow,
+        compactionInfo.triggerPercent,
+        compactionInfo.triggerTokens,
+      )
     : undefined;
 
   return (
@@ -1373,6 +1379,7 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     ? formatCompactionPolicy(
         props.compactionInfo.contextWindow,
         props.compactionInfo.triggerPercent,
+        props.compactionInfo.triggerTokens,
       )
     : undefined;
   const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
@@ -2897,7 +2904,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const contextUsage = useMemo(() => {
     if (!effectiveCompactionInfo) return undefined;
 
-    const { contextWindow, triggerPercent, reservedResponseTokens } = effectiveCompactionInfo;
+    const {
+      contextWindow,
+      triggerPercent,
+      triggerTokens,
+      reservedResponseTokens,
+    } = effectiveCompactionInfo;
     const currentTokens =
       liveTokenCount ??
       context.contextTokenSnapshot?.currentTokens ??
@@ -2907,6 +2919,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentTokens,
       contextWindow,
       triggerPercent,
+      triggerTokens,
       reservedResponseTokens,
     };
   }, [context.messages, context.contextTokenSnapshot, effectiveCompactionInfo, liveTokenCount]);
@@ -10331,6 +10344,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     | {
         contextWindow: number;
         triggerPercent: number;
+        triggerTokens?: number;
         enabled: boolean;
         reservedResponseTokens?: number;
         userOverrideContextWindow?: number;
@@ -10346,6 +10360,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     compactionInfo = {
       contextWindow: effectiveContextWindow,
       triggerPercent: compConfig.triggerPercent,
+      triggerTokens: compConfig.triggerTokens,
       enabled: compConfig.enabled,
       reservedResponseTokens: providerInstance.getEffectiveMaxOutputTokens?.(initialModel),
       // Track the raw user override separately so the React layer can

@@ -43,6 +43,8 @@ import type {
   ExtensionRuntimeDiagnostics,
   LoadedExtensionDiagnostic,
   KodaXCustomProviderConfig,
+  KodaXContextCompactionFinishedEvent,
+  KodaXContextIdentity,
   KodaXContextOptions,
   KodaXActivityEventMeta,
   KodaXEvents,
@@ -115,6 +117,7 @@ import {
   emitKodaXDiagnostic,
   getAgentConfigHome,
   isPathInsideDirectory,
+  normalizeCompactionConfig,
   resolveExecutionPath,
   getDefaultWorkflowRunManager,
   initializeSkillRegistry,
@@ -639,6 +642,10 @@ export interface RuntimeCapabilityRequirements {
   readonly coderFeatureMatrix?: 1;
   readonly sessionAdmission?: 1;
   readonly completeObservationSnapshot?: 1;
+  /** Require always-on thresholds, stable context identity, and canonical compact events. */
+  readonly contextCompaction?: 2;
+  /** Require bounded transcript slices plus page/chunk recovery. */
+  readonly transcriptPaging?: 1;
   readonly connectionLifecycle?: 1;
   readonly typedRuntimeEvents?: 1;
   readonly daemonSafeRunInput?: 1;
@@ -1017,6 +1024,44 @@ export interface RuntimeSessionSummary extends RuntimeSession {
 
 export type RuntimeTranscript = FullTranscriptSessionData;
 
+export interface RuntimeTranscriptSliceEntry {
+  readonly index: number;
+  readonly entryId?: string;
+  readonly byteLength: number;
+  readonly oversized: boolean;
+  readonly entry?: SessionTranscriptEntry;
+}
+
+export interface RuntimeTranscriptSlice {
+  readonly revision: string;
+  readonly entries: readonly RuntimeTranscriptSliceEntry[];
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
+export interface RuntimeTranscriptPageInput {
+  readonly sessionId: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+export interface RuntimeTranscriptEntryChunkInput {
+  readonly sessionId: string;
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly cursor?: string;
+}
+
+export interface RuntimeTranscriptEntryChunk {
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly entryId?: string;
+  readonly encoding: 'base64-json';
+  readonly data: string;
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
 export interface RuntimeSessionFilter {
   readonly projectRoot?: string;
   readonly scope?: 'user' | 'managed-task-worker' | 'all';
@@ -1048,6 +1093,10 @@ export interface RuntimeSessionSettings {
   readonly autoModeClassifierModel?: string;
   readonly autoModeTimeoutMs?: number;
   readonly autoModeSpeculativeWindowMs?: number;
+  /** Auto-compaction percentage threshold, normalized to the inclusive 15-90 range. */
+  readonly compactionTriggerPercent?: number;
+  /** Optional absolute auto-compaction threshold. Missing or zero is inactive. */
+  readonly compactionTriggerTokens?: number;
 }
 
 export interface RuntimeSessionSettingsPatch {
@@ -1063,6 +1112,8 @@ export interface RuntimeSessionSettingsPatch {
   readonly autoModeClassifierModel?: string | null;
   readonly autoModeTimeoutMs?: number | null;
   readonly autoModeSpeculativeWindowMs?: number | null;
+  readonly compactionTriggerPercent?: number | null;
+  readonly compactionTriggerTokens?: number | null;
 }
 
 export interface RuntimeAppendNoticeInput {
@@ -1087,6 +1138,10 @@ export interface RuntimeCompactSessionInput {
   readonly model?: string;
   readonly customInstructions?: string;
   readonly contextWindow?: number;
+  /** Override the Session percentage threshold used to size the protected tail. */
+  readonly triggerPercent?: number;
+  /** Override the Session absolute threshold used to size the protected tail. */
+  readonly triggerTokens?: number;
 }
 
 export interface RuntimeCompactSessionResult extends CompactSessionResult {
@@ -1138,7 +1193,7 @@ export interface RuntimeSessionObservationSnapshot {
   /** Content-derived token for the transcript captured at this observation boundary. */
   readonly transcriptRevision: string;
   readonly session: RuntimeSession;
-  readonly transcript: RuntimeTranscript | null;
+  readonly transcript: RuntimeTranscriptSlice | null;
   readonly settings: RuntimeVersionedValue<RuntimeSessionSettings>;
   readonly runs: readonly RuntimeRunStatus[];
   readonly pendingPermissions: readonly RuntimePermissionRequest[];
@@ -1156,6 +1211,12 @@ export interface RuntimeSessionService {
     filter?: RuntimeSessionFilter,
   ): Promise<readonly RuntimeSessionSummary[]>;
   transcript(sessionId: string): Promise<RuntimeTranscript | null>;
+  transcriptPage(
+    input: RuntimeTranscriptPageInput,
+  ): Promise<RuntimeTranscriptSlice | null>;
+  transcriptEntryChunk(
+    input: RuntimeTranscriptEntryChunkInput,
+  ): Promise<RuntimeTranscriptEntryChunk | null>;
   observe(
     sessionId: string,
     listener: RuntimeEventListener,
@@ -1689,6 +1750,13 @@ export interface RuntimeWarningEventPayload {
   readonly sourceEventId?: string;
 }
 
+export type RuntimeContextCompactionFinishedEventPayload = KodaXContextCompactionFinishedEvent &
+  KodaXContextIdentity & {
+    readonly beforeRevision: number;
+    readonly afterRevision: number;
+    readonly reason?: string;
+  };
+
 export interface RuntimeSessionSettingsUpdatedEventPayload {
   readonly sessionId: string;
   readonly revision: number;
@@ -1743,6 +1811,7 @@ export type RuntimeEventPayloadMap = Omit<
   | 'workflow.finished'
   | 'context.budget.snapshot'
   | 'tool.exposure.planned'
+  | 'context.compaction.finished'
   | 'runtime.warning'
 > & {
   readonly 'session.created': RuntimeSession;
@@ -1778,6 +1847,7 @@ export type RuntimeEventPayloadMap = Omit<
   readonly 'workflow.finished': WorkflowProcessEvent;
   readonly 'context.budget.snapshot': RuntimeContextBudgetSnapshot;
   readonly 'tool.exposure.planned': RuntimeToolExposurePlan;
+  readonly 'context.compaction.finished': RuntimeContextCompactionFinishedEventPayload;
   readonly 'runtime.warning': RuntimeWarningEventPayload;
 };
 
@@ -2318,6 +2388,11 @@ const MAX_RUNTIME_EVENT_FILE_BYTES = 16 * 1024 * 1024;
 const TARGET_RUNTIME_EVENT_FILE_BYTES = MAX_RUNTIME_EVENT_FILE_BYTES / 2;
 const MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES = 128 * 1024;
 const MAX_RUNTIME_SNAPSHOT_ATTEMPTS = 8;
+const MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES = 512 * 1024;
+const MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES = 128 * 1024;
+const MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES = 256 * 1024;
+const DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 50;
+const MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 200;
 const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
 const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
   'assistant.delta',
@@ -2432,6 +2507,17 @@ export async function createKodaXRuntime(
     externalAgents: options.externalAgents !== undefined,
     afterTurnInput: { version: 1 },
     interruptInput: { version: 1, availability: 'per_run' },
+    contextCompaction: {
+      version: 2,
+      alwaysOn: true,
+      absoluteThreshold: true,
+      contextIdentity: true,
+      canonicalFinishedEvent: true,
+    },
+    transcriptPaging: {
+      version: 1,
+      maxPageBytes: MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES,
+    },
     learningCenter: { version: 1 },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
     runtimeAutoModeGuardrail: {
@@ -2842,6 +2928,8 @@ function assertRuntimeCapabilities(
     requirements?.coderFeatureMatrix === undefined &&
     requirements?.sessionAdmission === undefined &&
     requirements?.completeObservationSnapshot === undefined &&
+    requirements?.contextCompaction === undefined &&
+    requirements?.transcriptPaging === undefined &&
     requirements?.connectionLifecycle === undefined &&
     requirements?.typedRuntimeEvents === undefined &&
     requirements?.daemonSafeRunInput === undefined &&
@@ -2886,6 +2974,8 @@ function assertRuntimeCapabilities(
     ['coderFeatureMatrix', requirements.coderFeatureMatrix],
     ['sessionAdmission', requirements.sessionAdmission],
     ['completeObservationSnapshot', requirements.completeObservationSnapshot],
+    ['contextCompaction', requirements.contextCompaction],
+    ['transcriptPaging', requirements.transcriptPaging],
     ['connectionLifecycle', requirements.connectionLifecycle],
     ['typedRuntimeEvents', requirements.typedRuntimeEvents],
     ['daemonSafeRunInput', requirements.daemonSafeRunInput],
@@ -3501,6 +3591,17 @@ function createRuntimeSessionService(
     ...(createdAt ? { createdAt } : {}),
   });
 
+  let transcriptChunkCache:
+    | {
+        readonly sessionId: string;
+        readonly sessionSeq: number;
+        readonly revision: string;
+        readonly entryIndex: number;
+        readonly entryId?: string;
+        readonly encoded: Buffer;
+      }
+    | undefined;
+
   const captureObservationSnapshot = async (
     sessionId: string,
   ): Promise<RuntimeSessionObservationSnapshot> => {
@@ -3524,7 +3625,7 @@ function createRuntimeSessionService(
         cursor: after,
         transcriptRevision: createRuntimeTranscriptRevision(transcript),
         session: toRuntimeSession(sessionId, data),
-        transcript,
+        transcript: transcript === null ? null : createRuntimeTranscriptSlice(transcript),
         settings,
         runs,
         pendingPermissions,
@@ -3609,6 +3710,52 @@ function createRuntimeSessionService(
       ensureOpen();
       await admission.loadRequired(sessionId);
       return manager.loadFullTranscript(sessionId);
+    },
+
+    async transcriptPage(input) {
+      ensureOpen();
+      await admission.loadRequired(input.sessionId);
+      const transcript = await manager.loadFullTranscript(input.sessionId);
+      return transcript === null ? null : createRuntimeTranscriptSlice(transcript, input.cursor, input.limit);
+    },
+
+    async transcriptEntryChunk(input) {
+      ensureOpen();
+      await admission.loadRequired(input.sessionId);
+      const sessionSeq = bus.currentSessionSeq(input.sessionId);
+      if (
+        transcriptChunkCache?.sessionId === input.sessionId &&
+        transcriptChunkCache.sessionSeq === sessionSeq &&
+        transcriptChunkCache.revision === input.revision &&
+        transcriptChunkCache.entryIndex === input.entryIndex
+      ) {
+        return createRuntimeTranscriptEntryChunkFromEncoded(
+          input,
+          transcriptChunkCache.revision,
+          transcriptChunkCache.entryId,
+          transcriptChunkCache.encoded,
+        );
+      }
+      const transcript = await manager.loadFullTranscript(input.sessionId);
+      if (transcript === null) return null;
+      const revision = createRuntimeTranscriptRevision(transcript);
+      if (input.revision !== revision) {
+        throw createRuntimeResyncError('Transcript revision changed; request a fresh observation snapshot');
+      }
+      const entry = transcript.transcriptEntries[input.entryIndex];
+      if (entry === undefined) {
+        throw new Error(`Transcript entry index is out of range: ${input.entryIndex}`);
+      }
+      const encoded = Buffer.from(JSON.stringify(entry), 'utf8');
+      transcriptChunkCache = {
+        sessionId: input.sessionId,
+        sessionSeq,
+        revision,
+        entryIndex: input.entryIndex,
+        ...(typeof entry.entryId === 'string' ? { entryId: entry.entryId } : {}),
+        encoded,
+      };
+      return createRuntimeTranscriptEntryChunkFromEncoded(input, revision, transcriptChunkCache.entryId, encoded);
     },
 
     async observe(sessionId, listener) {
@@ -3802,52 +3949,96 @@ function createRuntimeSessionService(
 
     async compact(input) {
       ensureOpen();
-      await admission.loadRequired(input.sessionId);
+      const admitted = await admission.loadRequired(input.sessionId);
       assertSessionMutationAllowed(input.sessionId, hasActiveRun);
-      const result = await manager.compactSession(input.sessionId, {
-        ...(input.provider !== undefined ? { provider: input.provider } : {}),
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.customInstructions !== undefined
-          ? { customInstructions: input.customInstructions }
-          : {}),
-        ...(input.contextWindow !== undefined
-          ? { contextWindow: input.contextWindow }
-          : {}),
-      });
-      const loaded = await manager.loadSession(input.sessionId);
-      const session = loaded
-        ? toRuntimeSession(input.sessionId, loaded)
-        : undefined;
+      const startedAt = Date.now();
+      const beforeRevision =
+        admitted.lineage?.entries.filter(
+          (entry) => entry.type === 'compaction',
+        ).length ?? 0;
       bus.emit(
-        'context.compaction.finished',
+        'context.compaction.started',
         {
-          sessionId: input.sessionId,
-          compacted: result.compacted,
-          tokensBefore: result.tokensBefore,
-          tokensAfter: result.tokensAfter,
-          ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          meta: {
+            contextId: input.sessionId,
+            contextKind: 'root',
+            contextRevision: beforeRevision,
+          },
         },
         { sessionId: input.sessionId, runId: input.sessionId },
       );
-      if (result.compacted) {
+      let finalRevision = beforeRevision;
+      try {
+        const settings = (await settingsOwner.read(input.sessionId)).value;
+        const result = await manager.compactSession(input.sessionId, {
+          ...(input.provider !== undefined ? { provider: input.provider } : {}),
+          ...(input.model !== undefined ? { model: input.model } : {}),
+          ...(input.customInstructions !== undefined ? { customInstructions: input.customInstructions } : {}),
+          ...(input.contextWindow !== undefined ? { contextWindow: input.contextWindow } : {}),
+          ...((input.triggerPercent ?? settings.compactionTriggerPercent) !== undefined
+            ? {
+                triggerPercent: input.triggerPercent ?? settings.compactionTriggerPercent,
+              }
+            : {}),
+          ...((input.triggerTokens ?? settings.compactionTriggerTokens) !== undefined
+            ? {
+                triggerTokens: input.triggerTokens ?? settings.compactionTriggerTokens,
+              }
+            : {}),
+        });
+        const loaded = await manager.loadSession(input.sessionId);
+        const session = loaded ? toRuntimeSession(input.sessionId, loaded) : undefined;
+        finalRevision = loaded?.lineage?.entries.filter(entry => entry.type === 'compaction').length ?? beforeRevision;
         bus.emit(
-          'session.compacted',
+          'context.compaction.finished',
           {
-            sessionId: input.sessionId,
-            result: {
-              compacted: result.compacted,
-              tokensBefore: result.tokensBefore,
-              tokensAfter: result.tokensAfter,
+            contextId: input.sessionId,
+            contextKind: 'root',
+            contextRevision: finalRevision,
+            source: 'manual',
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter,
+            committed: result.compacted,
+            elapsedMs: Date.now() - startedAt,
+            beforeRevision,
+            afterRevision: finalRevision,
+            ...(result.report ?? {}),
+            ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          },
+          { sessionId: input.sessionId, runId: input.sessionId },
+        );
+        if (result.compacted) {
+          bus.emit(
+            'session.compacted',
+            {
+              sessionId: input.sessionId,
+              result: {
+                compacted: result.compacted,
+                tokensBefore: result.tokensBefore,
+                tokensAfter: result.tokensAfter,
+              },
+              ...(session !== undefined ? { session } : {}),
             },
-            ...(session !== undefined ? { session } : {}),
+            { sessionId: input.sessionId, runId: input.sessionId },
+          );
+        }
+        return {
+          ...result,
+          ...(session !== undefined ? { session } : {}),
+        };
+      } finally {
+        bus.emit(
+          'context.compaction.ended',
+          {
+            meta: {
+              contextId: input.sessionId,
+              contextKind: 'root',
+              contextRevision: finalRevision,
+            },
           },
           { sessionId: input.sessionId, runId: input.sessionId },
         );
       }
-      return {
-        ...result,
-        ...(session !== undefined ? { session } : {}),
-      };
     },
 
     async archive(sessionId) {
@@ -4081,6 +4272,12 @@ function createRuntimeRunService(deps: {
               autoModeSpeculativeWindowMs:
                 record.autoModeSpeculativeWindowMs,
             }
+          : {}),
+        ...(runOptions.compaction?.triggerPercent !== undefined
+          ? { compactionTriggerPercent: runOptions.compaction.triggerPercent }
+          : {}),
+        ...(runOptions.compaction?.triggerTokens !== undefined
+          ? { compactionTriggerTokens: runOptions.compaction.triggerTokens }
           : {}),
         ...(runOptions.context?.executionCwd !== undefined
           ? { executionCwd: runOptions.context.executionCwd }
@@ -7921,7 +8118,6 @@ function wrapKodaXEvents(input: {
       original?.onCompactStart?.(meta);
     },
     onCompact(estimatedTokens, meta) {
-      emit('context.compaction.finished', { estimatedTokens, meta }, meta);
       original?.onCompact?.(estimatedTokens, meta);
     },
     onCompactStats(info) {
@@ -7939,6 +8135,22 @@ function wrapKodaXEvents(input: {
         meta,
       );
       original?.onCompactedMessages?.(messages, update, meta);
+    },
+    onContextCompactionFinished(event) {
+      const afterRevision = event.contextRevision ?? 0;
+      emit(
+        'context.compaction.finished',
+        {
+          ...event,
+          contextId: event.contextId ?? record.sessionId,
+          contextKind: event.contextKind ?? 'root',
+          contextRevision: afterRevision,
+          beforeRevision: Math.max(0, afterRevision - 1),
+          afterRevision,
+        },
+        event,
+      );
+      original?.onContextCompactionFinished?.(event);
     },
     onCompactEnd(meta) {
       emit('context.compaction.ended', { meta }, meta);
@@ -8498,6 +8710,20 @@ function buildEffectiveRuntimeOptions(
   const reasoningMode = options.reasoningMode ?? settings.reasoningMode;
   const requestedAgentMode = options.agentMode ?? settings.agentMode;
   const agentMode = requestedAgentMode === 'amaw' ? 'ama' : requestedAgentMode;
+  const compaction =
+    options.compaction !== undefined ||
+    settings.compactionTriggerPercent !== undefined ||
+    settings.compactionTriggerTokens !== undefined
+      ? {
+          ...(settings.compactionTriggerPercent !== undefined
+            ? { triggerPercent: settings.compactionTriggerPercent }
+            : {}),
+          ...(settings.compactionTriggerTokens !== undefined
+            ? { triggerTokens: settings.compactionTriggerTokens }
+            : {}),
+          ...(options.compaction ?? {}),
+        }
+      : undefined;
   return {
     ...options,
     ...(provider !== undefined ? { provider } : {}),
@@ -8506,6 +8732,7 @@ function buildEffectiveRuntimeOptions(
     ...(thinking !== undefined ? { thinking } : {}),
     ...(reasoningMode !== undefined ? { reasoningMode } : {}),
     ...(agentMode !== undefined ? { agentMode } : {}),
+    ...(compaction !== undefined ? { compaction } : {}),
     ...(Object.keys(context).length > 0 ? { context } : {}),
   };
 }
@@ -8625,6 +8852,159 @@ function createRuntimeTranscriptRevision(
   return `sha256:${createHash('sha256').update(JSON.stringify(transcript)).digest('hex')}`;
 }
 
+interface RuntimeTranscriptPageCursor {
+  readonly kind: 'page';
+  readonly revision: string;
+  readonly end: number;
+}
+
+interface RuntimeTranscriptChunkCursor {
+  readonly kind: 'entry';
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly offset: number;
+}
+
+function encodeRuntimeTranscriptCursor(cursor: RuntimeTranscriptPageCursor | RuntimeTranscriptChunkCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeRuntimeTranscriptCursor(cursor: string): RuntimeTranscriptPageCursor | RuntimeTranscriptChunkCursor {
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  } catch (error: unknown) {
+    throw createRuntimeResyncError(`Invalid transcript cursor: ${normalizeError(error).message}`);
+  }
+  if (!isRecord(value) || typeof value.revision !== 'string') {
+    throw createRuntimeResyncError('Invalid transcript cursor payload');
+  }
+  if (value.kind === 'page' && Number.isSafeInteger(value.end) && Number(value.end) >= 0) {
+    return {
+      kind: 'page',
+      revision: value.revision,
+      end: Number(value.end),
+    };
+  }
+  if (
+    value.kind === 'entry' &&
+    Number.isSafeInteger(value.entryIndex) &&
+    Number(value.entryIndex) >= 0 &&
+    Number.isSafeInteger(value.offset) &&
+    Number(value.offset) >= 0
+  ) {
+    return {
+      kind: 'entry',
+      revision: value.revision,
+      entryIndex: Number(value.entryIndex),
+      offset: Number(value.offset),
+    };
+  }
+  throw createRuntimeResyncError('Invalid transcript cursor payload');
+}
+
+function createRuntimeTranscriptSlice(
+  transcript: RuntimeTranscript,
+  cursor?: string,
+  requestedLimit?: number,
+): RuntimeTranscriptSlice {
+  const revision = createRuntimeTranscriptRevision(transcript);
+  const limit = requestedLimit ?? DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error('transcript page limit must be a positive safe integer');
+  }
+  const normalizedLimit = Math.min(limit, MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT);
+  let end = transcript.transcriptEntries.length;
+  if (cursor !== undefined) {
+    const parsed = decodeRuntimeTranscriptCursor(cursor);
+    if (parsed.kind !== 'page' || parsed.revision !== revision) {
+      throw createRuntimeResyncError('Transcript cursor is stale; request a fresh observation snapshot');
+    }
+    end = Math.min(parsed.end, transcript.transcriptEntries.length);
+  }
+
+  const entries: RuntimeTranscriptSliceEntry[] = [];
+  let encodedBytes = 0;
+  let start = end;
+  for (let index = end - 1; index >= 0; index -= 1) {
+    if (entries.length >= normalizedLimit) break;
+    const entry = transcript.transcriptEntries[index]!;
+    const serialized = JSON.stringify(entry);
+    const byteLength = Buffer.byteLength(serialized, 'utf8');
+    const item: RuntimeTranscriptSliceEntry = {
+      index,
+      ...(typeof entry.entryId === 'string' ? { entryId: entry.entryId } : {}),
+      byteLength,
+      oversized: byteLength > MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES,
+      ...(byteLength <= MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES ? { entry } : {}),
+    };
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+    if (entries.length > 0 && encodedBytes + itemBytes > MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES) {
+      break;
+    }
+    entries.unshift(item);
+    encodedBytes += itemBytes;
+    start = index;
+  }
+  const hasMore = start > 0;
+  return {
+    revision,
+    entries,
+    hasMore,
+    ...(hasMore
+      ? {
+          nextCursor: encodeRuntimeTranscriptCursor({
+            kind: 'page',
+            revision,
+            end: start,
+          }),
+        }
+      : {}),
+  };
+}
+
+function createRuntimeTranscriptEntryChunkFromEncoded(
+  input: RuntimeTranscriptEntryChunkInput,
+  revision: string,
+  entryId: string | undefined,
+  encoded: Buffer,
+): RuntimeTranscriptEntryChunk {
+  if (input.revision !== revision) {
+    throw createRuntimeResyncError('Transcript revision changed; request a fresh observation snapshot');
+  }
+  let offset = 0;
+  if (input.cursor !== undefined) {
+    const parsed = decodeRuntimeTranscriptCursor(input.cursor);
+    if (parsed.kind !== 'entry' || parsed.revision !== revision || parsed.entryIndex !== input.entryIndex) {
+      throw createRuntimeResyncError('Transcript entry cursor is stale; restart entry retrieval');
+    }
+    offset = parsed.offset;
+  }
+  if (offset > encoded.length) {
+    throw createRuntimeResyncError('Transcript entry cursor offset is invalid');
+  }
+  const nextOffset = Math.min(encoded.length, offset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES);
+  const hasMore = nextOffset < encoded.length;
+  return {
+    revision,
+    entryIndex: input.entryIndex,
+    ...(entryId !== undefined ? { entryId } : {}),
+    encoding: 'base64-json',
+    data: encoded.subarray(offset, nextOffset).toString('base64'),
+    hasMore,
+    ...(hasMore
+      ? {
+          nextCursor: encodeRuntimeTranscriptCursor({
+            kind: 'entry',
+            revision,
+            entryIndex: input.entryIndex,
+            offset: nextOffset,
+          }),
+        }
+      : {}),
+  };
+}
+
 function previewQueuedInput(prompt: string): string {
   return prompt.length <= MAX_RUNTIME_INPUT_PREVIEW_LENGTH
     ? prompt
@@ -8679,7 +9059,51 @@ function applySessionSettingsPatch(
     'autoModeSpeculativeWindowMs',
     patch.autoModeSpeculativeWindowMs,
   );
+  applyNullableCompactionPercentPatch(
+    next,
+    patch.compactionTriggerPercent,
+  );
+  applyNullableCompactionTokensPatch(
+    next,
+    patch.compactionTriggerTokens,
+  );
   return next;
+}
+
+function applyNullableCompactionPercentPatch(
+  target: RuntimeSessionSettings,
+  value: number | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, 'compactionTriggerPercent');
+    return;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('compactionTriggerPercent must be a finite number');
+  }
+  setMutableSetting(
+    target,
+    'compactionTriggerPercent',
+    normalizeCompactionConfig({ triggerPercent: value }).triggerPercent,
+  );
+}
+
+function applyNullableCompactionTokensPatch(
+  target: RuntimeSessionSettings,
+  value: number | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null || value === 0) {
+    deleteMutableSetting(target, 'compactionTriggerTokens');
+    return;
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      'compactionTriggerTokens must be a positive safe integer or zero',
+    );
+  }
+  setMutableSetting(target, 'compactionTriggerTokens', value);
 }
 
 type RuntimeStringSettingKey =
@@ -8875,6 +9299,12 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
       'autoModeSpeculativeWindowMs',
       Number(value.autoModeSpeculativeWindowMs),
     );
+  }
+  if (typeof value.compactionTriggerPercent === 'number') {
+    applyNullableCompactionPercentPatch(settings, value.compactionTriggerPercent);
+  }
+  if (Number.isSafeInteger(value.compactionTriggerTokens) && Number(value.compactionTriggerTokens) > 0) {
+    setMutableSetting(settings, 'compactionTriggerTokens', Number(value.compactionTriggerTokens));
   }
   return settings;
 }
@@ -9396,6 +9826,12 @@ function serializeSessionSettings(
       'autoModeSpeculativeWindowMs',
       settings.autoModeSpeculativeWindowMs,
     );
+  }
+  if (settings.compactionTriggerPercent !== undefined) {
+    setMutableSetting(result, 'compactionTriggerPercent', settings.compactionTriggerPercent);
+  }
+  if (settings.compactionTriggerTokens !== undefined) {
+    setMutableSetting(result, 'compactionTriggerTokens', settings.compactionTriggerTokens);
   }
   return result;
 }

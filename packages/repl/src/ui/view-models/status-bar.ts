@@ -94,6 +94,7 @@ function getContextColor(
   contextWindow: number,
   triggerPercent: number,
   reservedResponseTokens?: number,
+  triggerTokens?: number,
 ): string {
   if (contextWindow === 0) {
     return "green";
@@ -102,6 +103,7 @@ function getContextColor(
     contextWindow,
     triggerPercent,
     reservedResponseTokens,
+    triggerTokens,
   );
   if (currentTokens >= compactionThreshold) {
     return "red";
@@ -537,6 +539,7 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
         contextUsage.contextWindow,
         contextUsage.triggerPercent,
         contextUsage.reservedResponseTokens,
+        contextUsage.triggerTokens,
       ),
     });
   }

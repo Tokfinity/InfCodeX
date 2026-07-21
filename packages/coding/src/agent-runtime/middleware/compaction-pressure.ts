@@ -1,6 +1,8 @@
 export interface CompactionAntiThrashState {
   readonly lowSavingsStreak: number;
   readonly cooldownTurnsRemaining: number;
+  readonly coveredTokensAfter?: number;
+  readonly rearmAtTokens?: number;
 }
 
 export interface CompactionSavingsSample {
@@ -21,7 +23,7 @@ export interface CompactionSavingsDecision {
   readonly enteredCooldown: boolean;
 }
 
-export type CompactionSkipReason = 'low_savings_cooldown';
+export type CompactionSkipReason = 'low_savings_cooldown' | 'covered_context_unchanged';
 
 export interface RuntimeCompactionSkippedEvent {
   readonly reason: CompactionSkipReason;
@@ -43,8 +45,14 @@ export function createCompactionAntiThrashState(): CompactionAntiThrashState {
   };
 }
 
-export function shouldSkipLlmCompaction(state: CompactionAntiThrashState | undefined): boolean {
-  return (state?.cooldownTurnsRemaining ?? 0) > 0;
+export function shouldSkipLlmCompaction(
+  state: CompactionAntiThrashState | undefined,
+  currentTokens?: number,
+): boolean {
+  if ((state?.cooldownTurnsRemaining ?? 0) > 0) return true;
+  return currentTokens !== undefined
+    && state?.rearmAtTokens !== undefined
+    && currentTokens < state.rearmAtTokens;
 }
 
 export function consumeCompactionCooldown(
@@ -54,6 +62,8 @@ export function consumeCompactionCooldown(
   return {
     lowSavingsStreak: current.lowSavingsStreak,
     cooldownTurnsRemaining: Math.max(0, current.cooldownTurnsRemaining - 1),
+    coveredTokensAfter: current.coveredTokensAfter,
+    rearmAtTokens: current.rearmAtTokens,
   };
 }
 
@@ -68,10 +78,17 @@ export function recordCompactionSavings(
   const cooldownTurns = config.cooldownTurns ?? DEFAULT_COOLDOWN_TURNS;
   const savingsRatio = computeSavingsRatio(sample);
   const lowSavings = savingsRatio < lowSavingsRatio;
+  const coverage = {
+    coveredTokensAfter: sample.tokensAfter,
+    rearmAtTokens: sample.tokensAfter + Math.max(
+      2_048,
+      Math.ceil(sample.tokensAfter * 0.1),
+    ),
+  };
 
   if (!lowSavings) {
     return {
-      state: createCompactionAntiThrashState(),
+      state: { ...createCompactionAntiThrashState(), ...coverage },
       savingsRatio,
       lowSavings: false,
       enteredCooldown: false,
@@ -84,6 +101,7 @@ export function recordCompactionSavings(
       state: {
         lowSavingsStreak: 0,
         cooldownTurnsRemaining: Math.max(1, cooldownTurns),
+        ...coverage,
       },
       savingsRatio,
       lowSavings: true,
@@ -95,6 +113,7 @@ export function recordCompactionSavings(
     state: {
       lowSavingsStreak: nextStreak,
       cooldownTurnsRemaining: current.cooldownTurnsRemaining,
+      ...coverage,
     },
     savingsRatio,
     lowSavings: true,

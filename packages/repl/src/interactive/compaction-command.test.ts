@@ -82,7 +82,7 @@ describe('/compact command', () => {
     });
   });
 
-  it('keeps manual /compact available when auto-compaction is disabled', async () => {
+  it('keeps manual /compact available for a legacy enabled false config', async () => {
     const compactCommand = BUILTIN_COMMANDS.find(command => command.name === 'compact');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -105,7 +105,7 @@ describe('/compact command', () => {
     logSpy.mockRestore();
   });
 
-  it('documents enabled as auto-only in detailed help', () => {
+  it('documents the always-on bounded trigger contract', () => {
     const compactCommand = BUILTIN_COMMANDS.find(command => command.name === 'compact');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -113,9 +113,10 @@ describe('/compact command', () => {
     compactCommand!.detailedHelp!();
 
     const output = logSpy.mock.calls.flat().join('\n');
-    expect(output).toContain('/compact still works even if auto-compaction is disabled');
-    expect(output).toContain('compaction.enabled: Controls auto-compaction only');
-    expect(output).toContain('100 uses physical capacity');
+    expect(output).toContain('Automatic large compaction is always enabled');
+    expect(output).toContain('15-90, default 75');
+    expect(output).toContain('compaction.triggerTokens');
+    expect(output).toContain('deprecated and ignored');
 
     logSpy.mockRestore();
   });

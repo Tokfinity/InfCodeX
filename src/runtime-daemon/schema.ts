@@ -132,6 +132,8 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   },
   'session.list': { params: sessionFilterSchema(), result: arraySchema(sessionSchema()) },
   'session.transcript': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: nullOrObjectSchema },
+  'session.transcript.page': { params: objectAnySchema, result: nullOrObjectSchema },
+  'session.transcript.entryChunk': { params: objectAnySchema, result: nullOrObjectSchema },
   'session.observe': {
     params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
     result: objectAnySchema,

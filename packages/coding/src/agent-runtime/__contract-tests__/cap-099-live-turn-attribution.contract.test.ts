@@ -29,6 +29,51 @@ describe('CAP-099: live turn attribution', () => {
 
     expect(scope.turnId).toMatch(/^turn_[0-9a-f]{16}$/);
     expect(scope.deliveryId).toMatch(/^delivery_[0-9a-f]{16}$/);
+    expect(scope.nextMeta()).toMatchObject({
+      contextId: 'session-generated',
+      contextKind: 'root',
+      contextRevision: 0,
+    });
+  });
+
+  it('keeps child ownership stable and advances only that context on commit', () => {
+    const onCompactStats = vi.fn();
+    const onCompactedMessages = vi.fn();
+    const onIterationStart = vi.fn();
+    const scope = createLiveTurnScope({
+      sessionId: 'session-context',
+      contextId: 'session-context/child/reviewer',
+      contextKind: 'child',
+      parentContextId: 'session-context',
+      agentId: 'reviewer',
+    });
+    const events = withLiveTurnAttribution({
+      onCompactStats,
+      onCompactedMessages,
+      onIterationStart,
+    }, scope);
+
+    events.onCompactStats?.({ tokensBefore: 1_000, tokensAfter: 400 });
+    events.onCompactedMessages?.([{ role: 'user', content: 'checkpoint' }]);
+    events.onIterationStart?.(2, 10);
+
+    expect(onCompactStats).toHaveBeenCalledWith(expect.objectContaining({
+      contextId: 'session-context/child/reviewer',
+      contextKind: 'child',
+      parentContextId: 'session-context',
+      agentId: 'reviewer',
+      contextRevision: 0,
+    }));
+    expect(onCompactedMessages).toHaveBeenCalledWith(
+      expect.any(Array),
+      undefined,
+      expect.objectContaining({ contextRevision: 1 }),
+    );
+    expect(onIterationStart).toHaveBeenCalledWith(
+      2,
+      10,
+      expect.objectContaining({ contextRevision: 1 }),
+    );
   });
 
   it('stamps live callbacks and turn boundaries with one session sequence', () => {

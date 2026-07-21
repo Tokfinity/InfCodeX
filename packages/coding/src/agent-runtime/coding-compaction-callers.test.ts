@@ -165,6 +165,41 @@ describe('B-R1 byte-equivalence — runtime routing', () => {
   });
 });
 
+it('rebases the persisted anchor to the final physical post-compact count', async () => {
+  const result: CompactionResult = {
+    compacted: true,
+    messages: [{ role: 'system', content: '[对话历史摘要]\n\nsummary' }],
+    tokensBefore: 9_000,
+    tokensAfter: 100,
+    entriesRemoved: 1,
+    anchor: {
+      summary: 'summary',
+      tokensBefore: 9_000,
+      tokensAfter: 100,
+      entriesRemoved: 1,
+      reason: 'automatic',
+    },
+  };
+  compactMock.mockResolvedValue(result);
+  const onCompactStats = vi.fn();
+
+  const output = await tryIntelligentCompact({
+    messages: [{ role: 'user', content: 'hello' }],
+    needsCompact: true,
+    compactConsecutiveFailures: 0,
+    compactionConfig: { ...compactionConfig(), triggerPercent: 99 },
+    provider: new StubProvider(),
+    contextWindow: 10_000,
+    systemPrompt: 'sys',
+    currentTokens: 9_000,
+    events: { onCompactStats },
+  });
+
+  expect(output.compactionUpdate?.anchor?.tokensAfter).toBe(
+    onCompactStats.mock.calls[0]?.[0]?.tokensAfter,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // TUI-safety: the compaction diagnostic trace must be debug-gated.
 //
@@ -229,7 +264,8 @@ describe('compaction diagnostic trace is debug-gated (TUI safety)', () => {
     expect(onCompactStats).toHaveBeenCalledWith(
       expect.objectContaining({ tokensBefore: 1000 }),
     );
-    expect(onCompact).toHaveBeenCalledTimes(1);
+    const tokensAfter = onCompactStats.mock.calls[0]?.[0]?.tokensAfter;
+    expect(onCompact).toHaveBeenCalledWith(tokensAfter);
   });
 
   it('emits the compaction diagnostic trace only when KODAX_DEBUG_COMPACTION is set', async () => {

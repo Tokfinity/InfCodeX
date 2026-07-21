@@ -5,7 +5,7 @@
  */
 
 import { readFile } from 'fs/promises';
-import { getAgentConfigPath } from '@kodax-ai/agent';
+import { getAgentConfigPath, normalizeCompactionConfig } from '@kodax-ai/agent';
 import type { CompactionConfig } from '@kodax-ai/agent';
 /**
  * 默认压缩配置
@@ -30,12 +30,15 @@ export async function loadCompactionConfig(
   try {
     const userConfig = await readConfigFile(userConfigPath);
     if (userConfig?.compaction) {
-      return { ...DEFAULT_CONFIG, ...userConfig.compaction as Partial<CompactionConfig> };
+      return normalizeCompactionConfig({
+        ...DEFAULT_CONFIG,
+        ...userConfig.compaction as Partial<CompactionConfig>,
+      });
     }
   } catch {
     // 忽略错误，使用默认值
   }
-  return DEFAULT_CONFIG;
+  return normalizeCompactionConfig(DEFAULT_CONFIG);
 }
 
 /**

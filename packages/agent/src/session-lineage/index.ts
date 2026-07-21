@@ -69,10 +69,32 @@ export type {
   CompactionAnchor,
   CompactionConfig,
   CompactionDetails,
+  CompactionReport,
   CompactionUpdate,
   CompactionResult,
   FileOperations,
 } from './compaction/types.js';
+
+export {
+  COMPACTION_PROTECTION_RATIO,
+  DEFAULT_COMPACTION_TRIGGER_PERCENT,
+  MAX_COMPACTION_TRIGGER_PERCENT,
+  MIN_COMPACTION_TRIGGER_PERCENT,
+  normalizeCompactionConfig,
+  resolveCompactionPolicy,
+} from './compaction/policy.js';
+
+export {
+  collectUserQueryLedger,
+  mergeUserQueryLedger,
+  parseUserQueryLedger,
+  renderUserQueryLedger,
+} from './compaction/query-ledger.js';
+export type { UserQueryLedgerEntry } from './compaction/query-ledger.js';
+export type {
+  CompactionTriggerSource,
+  ResolvedCompactionPolicy,
+} from './compaction/policy.js';
 
 export {
   extractArtifactLedger,
@@ -88,10 +110,12 @@ export {
 export {
   generateSummary,
   buildCompactionPromptSnapshot,
+  buildCompactionCacheInstruction,
   DEFAULT_SUMMARY_PROMPT,
   DEFAULT_UPDATE_SUMMARY_PROMPT,
 } from './compaction/summary-generator.js';
 export type {
+  CompactionCacheContext,
   KodaXCompactionPromptVariant,
   KodaXCompactionPromptSection,
   KodaXCompactionPromptSnapshot,

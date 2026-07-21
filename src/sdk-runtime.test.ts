@@ -516,7 +516,10 @@ describe('createKodaXRuntime', () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const profile = `sdk-default-${randomUUID()}`;
     const endpoint = defaultRuntimeDaemonEndpoint(profile, tempRoot);
-    const requests: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const requests: Array<{
+      readonly method: string;
+      readonly params: unknown;
+    }> = [];
     const server = await createRuntimeDaemonSocketServer({
       endpoint,
       createDispatcher: () => ({
@@ -986,6 +989,8 @@ describe('createKodaXRuntime', () => {
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
+      compactionTriggerPercent: 110,
+      compactionTriggerTokens: 120_000,
     });
     expect(settings).toMatchObject({
       provider: 'settings-provider',
@@ -998,14 +1003,20 @@ describe('createKodaXRuntime', () => {
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
+      compactionTriggerPercent: 90,
+      compactionTriggerTokens: 120_000,
     });
     await expect(runtime.sessions.updateSettings(session.id, { autoModeTimeoutMs: 0 }))
       .rejects.toThrow(/positive safe integer/);
     await expect(runtime.sessions.updateSettings(session.id, { autoModeSpeculativeWindowMs: -1 }))
       .rejects.toThrow(/non-negative safe integer/);
+    await expect(runtime.sessions.updateSettings(session.id, { compactionTriggerTokens: -1 }))
+      .rejects.toThrow(/positive safe integer or zero/);
     await expect(runtime.sessions.getSettings(session.id)).resolves.toMatchObject({
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
+      compactionTriggerPercent: 90,
+      compactionTriggerTokens: 120_000,
     });
 
     let capturedOptions: KodaXOptions | undefined;
@@ -1028,6 +1039,10 @@ describe('createKodaXRuntime', () => {
       effort: 'high',
       thinking: true,
       reasoningMode: 'balanced',
+      compaction: {
+        triggerPercent: 90,
+        triggerTokens: 120_000,
+      },
       context: { executionCwd: path.resolve(tempRoot) },
     });
     expect(settingsEvents).toHaveLength(1);
@@ -1042,6 +1057,8 @@ describe('createKodaXRuntime', () => {
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
+      compactionTriggerPercent: 90,
+      compactionTriggerTokens: 120_000,
     });
 
     await runtime.close();
@@ -1056,7 +1073,18 @@ describe('createKodaXRuntime', () => {
       model: 'settings-model',
       permissionMode: 'accept-edits',
       autoModeSpeculativeWindowMs: 0,
+      compactionTriggerPercent: 90,
+      compactionTriggerTokens: 120_000,
     });
+    await expect(
+      recreated.sessions.updateSettings(session.id, {
+        compactionTriggerPercent: -5,
+        compactionTriggerTokens: 0,
+      }),
+    ).resolves.toMatchObject({
+      compactionTriggerPercent: 15,
+    });
+    await expect(recreated.sessions.getSettings(session.id)).resolves.not.toHaveProperty('compactionTriggerTokens');
     await recreated.close();
   });
 
@@ -1969,6 +1997,128 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('emits one canonical post-commit compaction event with stable context ownership', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({
+      title: 'Canonical Compact Event',
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      queueMicrotask(() => {
+        options.events?.onCompactStats?.({
+          tokensBefore: 1_000,
+          tokensAfter: 400,
+        });
+        options.events?.onCompact?.(400);
+        options.events?.onContextCompactionFinished?.({
+          sessionId: session.id,
+          seq: 4,
+          turnId: 'turn-compact',
+          contextId: session.id,
+          contextKind: 'root',
+          contextRevision: 1,
+          source: 'automatic_threshold',
+          tokensBefore: 1_000,
+          tokensAfter: 400,
+          committed: true,
+          elapsedMs: 12,
+          strategy: 'full_prefix',
+        });
+      });
+      return fakeRunningSession(
+        options,
+        Promise.resolve({
+          success: true,
+          lastText: 'done',
+          messages: [],
+          sessionId: session.id,
+        }),
+      );
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'compact',
+    });
+    await handle.result;
+    await flushMicrotasks();
+    const events = await runtime.events.replay({
+      runId: handle.runId,
+      type: 'context.compaction.finished',
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      contextId: session.id,
+      contextKind: 'root',
+      contextRevision: 1,
+      beforeRevision: 0,
+      afterRevision: 1,
+      tokensBefore: 1_000,
+      tokensAfter: 400,
+      committed: true,
+    });
+    await runtime.close();
+  });
+
+  it('emits one ordered canonical lifecycle for manual session compaction', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({
+      title: 'Manual Compact Lifecycle',
+    });
+    const events: Array<{ readonly type: string; readonly payload: unknown }> = [];
+    runtime.events.subscribe({ sessionId: session.id }, event => {
+      if (event.type.startsWith('context.compaction.')) {
+        events.push({ type: event.type, payload: event.payload });
+      }
+    });
+
+    const result = await runtime.sessions.compact({
+      sessionId: session.id,
+      provider: 'mock-provider',
+    });
+
+    expect(result.compacted).toBe(false);
+    expect(events.map(event => event.type)).toEqual([
+      'context.compaction.started',
+      'context.compaction.finished',
+      'context.compaction.ended',
+    ]);
+    expect(events[0]?.payload).toMatchObject({
+      meta: {
+        contextId: session.id,
+        contextKind: 'root',
+        contextRevision: 0,
+      },
+    });
+    expect(events[1]?.payload).toMatchObject({
+      contextId: session.id,
+      contextKind: 'root',
+      contextRevision: 0,
+      beforeRevision: 0,
+      afterRevision: 0,
+      source: 'manual',
+      committed: false,
+    });
+    expect(events[2]?.payload).toMatchObject({
+      meta: {
+        contextId: session.id,
+        contextKind: 'root',
+        contextRevision: 0,
+      },
+    });
+    await runtime.close();
+  });
+
   it('keeps active live projection complete after durable event history is trimmed', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -2008,6 +2158,69 @@ describe('createKodaXRuntime', () => {
       expect.objectContaining({ runId: run.runId }),
     ]);
     expect(observation.snapshot.live.assistantTextByRun[run.runId]).toHaveLength(chunk.length * 9);
+    observation.close();
+    await runtime.close();
+  });
+
+  it('bounds observation transcripts and pages oversized entries explicitly', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+    });
+    const session = await runtime.sessions.create({
+      title: 'Paged Transcript',
+    });
+    await runtime.sessions.appendNotice({
+      sessionId: session.id,
+      source: 'large-test',
+      content: 'x'.repeat(9 * 1024 * 1024),
+    });
+
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    const slice = observation.snapshot.transcript;
+    expect(Buffer.byteLength(JSON.stringify(slice), 'utf8')).toBeLessThan(1024 * 1024);
+    expect(slice?.entries).toEqual([
+      expect.objectContaining({
+        index: 0,
+        oversized: true,
+        byteLength: expect.any(Number),
+      }),
+    ]);
+
+    const recovered: Buffer[] = [];
+    let cursor: string | undefined;
+    do {
+      const chunk = await runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: slice!.revision,
+        entryIndex: 0,
+        ...(cursor ? { cursor } : {}),
+      });
+      expect(chunk?.encoding).toBe('base64-json');
+      expect(Buffer.byteLength(JSON.stringify(chunk), 'utf8')).toBeLessThan(512 * 1024);
+      recovered.push(Buffer.from(chunk!.data, 'base64'));
+      cursor = chunk!.hasMore ? chunk!.nextCursor : undefined;
+    } while (cursor);
+    const recoveredEntry = JSON.parse(Buffer.concat(recovered).toString('utf8')) as {
+      message?: { content?: string };
+    };
+    expect(recoveredEntry.message?.content).toContain('x'.repeat(1024));
+    expect(recoveredEntry.message?.content?.length).toBeGreaterThanOrEqual(9 * 1024 * 1024);
+
+    await runtime.sessions.appendNotice({
+      sessionId: session.id,
+      source: 'revision-change',
+      content: 'newer',
+    });
+    await expect(
+      runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: slice!.revision,
+        entryIndex: 0,
+      }),
+    ).rejects.toThrow(/revision changed/i);
+
     observation.close();
     await runtime.close();
   });
@@ -2218,7 +2431,10 @@ describe('createKodaXRuntime', () => {
     const session = await runtime.sessions.create({ title: 'Queue Test' });
     const starts: string[] = [];
     const queuedEvents: string[] = [];
-    const persistedAtPublication: Array<{ readonly event: string; readonly phase: string }> = [];
+    const persistedAtPublication: Array<{
+      readonly event: string;
+      readonly phase: string;
+    }> = [];
     let finishFirst: ((value: KodaXResult) => void) | undefined;
     let finishSecond: ((value: KodaXResult) => void) | undefined;
 
@@ -2813,13 +3029,19 @@ describe('createKodaXRuntime', () => {
       homeDir: tempRoot,
       sessionsDir: path.join(tempRoot, 'sessions'),
     });
-    const session = await runtime.sessions.create({ title: 'Queued Settings Snapshot' });
+    const session = await runtime.sessions.create({
+      title: 'Queued Settings Snapshot',
+    });
     await runtime.sessions.updateSettings(session.id, {
       provider: 'settings-provider-a',
       model: 'settings-model-a',
     });
 
-    const starts: Array<{ readonly prompt: string; readonly provider?: string; readonly model?: string }> = [];
+    const starts: Array<{
+      readonly prompt: string;
+      readonly provider?: string;
+      readonly model?: string;
+    }> = [];
     let finishFirst: ((value: KodaXResult) => void) | undefined;
     let finishSecond: ((value: KodaXResult) => void) | undefined;
     codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string): RunningSession => {

@@ -496,8 +496,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         callbacks.startCompacting?.();
 
         try {
-          // Manual compaction stays available even when auto-compaction is disabled
-          // or the automatic threshold has not been reached yet.
+          // Manual compaction bypasses threshold comparison; automatic compaction remains on.
           const result = await compact(
             context.messages,
             manualConfig,
@@ -566,22 +565,23 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Manually triggers context compaction using LLM-generated summaries.'));
-      console.log(chalk.dim('  Older messages are replaced with a structured summary, keeping recent context.'));
-      console.log(chalk.dim('  /compact still works even if auto-compaction is disabled or the auto threshold is not reached.'));
+      console.log(chalk.dim('  All eligible older messages are replaced atomically with a structured checkpoint.'));
+      console.log(chalk.dim('  Automatic large compaction is always enabled; /compact bypasses its trigger comparison.'));
       console.log();
       console.log(chalk.bold('What it does:'));
-      console.log(chalk.dim('  1. Protects a recent slice of context from pruning/summary'));
-      console.log(chalk.dim('  2. Generates structured summary of older messages using LLM'));
+      console.log(chalk.dim('  1. Protects 20% of the effective trigger as recent raw context'));
+      console.log(chalk.dim('  2. Summarizes the complete eligible prefix in one atomic wave'));
       console.log(chalk.dim('  3. Tracks files that were read/modified in the conversation'));
       console.log(chalk.dim('  4. Replaces old messages with summary to save tokens'));
       console.log();
       console.log(chalk.bold('Configuration:'));
       console.log(chalk.dim('  Config file: ~/.kodax/config.json'));
       console.log(chalk.dim('  Settings:'));
-      console.log(chalk.dim('    - compaction.triggerPercent: Optional early trigger below 100; 100 uses physical capacity'));
-      console.log(chalk.dim('    - compaction.enabled: Controls auto-compaction only; /compact always remains available'));
+      console.log(chalk.dim('    - compaction.triggerPercent: 15-90, default 75'));
+      console.log(chalk.dim('    - compaction.triggerTokens: Optional absolute token threshold; 0 disables this limiter'));
+      console.log(chalk.dim('    - The smaller percentage/absolute threshold wins'));
+      console.log(chalk.dim('    - compaction.enabled: deprecated and ignored; automatic compaction stays on'));
       console.log(chalk.dim('    - compaction.contextWindow: Optional token-window override'));
-      console.log(chalk.dim('    - compaction.protectionPercent / rollingSummaryPercent / pruningThresholdTokens: Advanced tuning'));
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /compact                        ') + '# Compact with default instructions');

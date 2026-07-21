@@ -127,6 +127,26 @@ function validateKnownRuntimeEventPayload(
       ? undefined
       : 'requires an ordered interrupt input batch.';
   }
+  if (type === 'context.compaction.finished') {
+    const valid = isRecord(payload)
+      && typeof payload.contextId === 'string'
+      && (payload.contextKind === 'root' || payload.contextKind === 'child')
+      && Number.isSafeInteger(payload.contextRevision)
+      && Number.isSafeInteger(payload.beforeRevision)
+      && Number.isSafeInteger(payload.afterRevision)
+      && (
+        payload.source === 'manual'
+        || payload.source === 'automatic_threshold'
+        || payload.source === 'physical_capacity'
+      )
+      && typeof payload.tokensBefore === 'number'
+      && typeof payload.tokensAfter === 'number'
+      && typeof payload.committed === 'boolean'
+      && typeof payload.elapsedMs === 'number';
+    return valid
+      ? undefined
+      : 'requires a canonical compaction payload.';
+  }
   if (type === 'todo.updated') {
     return isRecord(payload) && Array.isArray(payload.items)
       ? undefined

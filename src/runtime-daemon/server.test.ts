@@ -927,6 +927,53 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('authorizes paged transcript reads with the session observation scope', async () => {
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      grantedScopes: ['session:observe'],
+    });
+    await initializeDispatcher(dispatcher);
+
+    const page = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-transcript-page',
+      'session.transcript.page',
+      { sessionId: 'session-1' },
+    ));
+    const chunk = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-transcript-chunk',
+      'session.transcript.entryChunk',
+      { sessionId: 'session-1', revision: 'rev-1', entryIndex: 0 },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(page)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(chunk)).toBe(true);
+    dispatcher.close();
+  });
+
+  it('rejects an oversized legacy transcript before it can exceed the wire frame', async () => {
+    const runtime = makeRuntime();
+    vi.spyOn(runtime.sessions, 'transcript').mockResolvedValue({
+      id: 'session-1',
+      title: 'Large transcript',
+      messages: [{ role: 'user', content: 'x'.repeat(600_000) }],
+    } as never);
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-large-legacy-transcript',
+      'session.transcript',
+      { sessionId: 'session-1' },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.error.code).toBe('invalid_request');
+      expect(response.error.message).toContain('session.transcript.page');
+    }
+    dispatcher.close();
+  });
+
   it('advertises versioned shared-daemon facts including interrupt support', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-server-capabilities-'));
     try {
@@ -1648,6 +1695,12 @@ const METHOD_SMOKE_PARAMS = {
   'session.load': { sessionId: 'session-1' },
   'session.list': { limit: 5 },
   'session.transcript': { sessionId: 'session-1' },
+  'session.transcript.page': { sessionId: 'session-1' },
+  'session.transcript.entryChunk': {
+    sessionId: 'session-1',
+    revision: 'sha256:smoke',
+    entryIndex: 0,
+  },
   'session.observe': { sessionId: 'session-1' },
   'session.fork': { sessionId: 'session-1' },
   'session.notice.append': { sessionId: 'session-1', content: 'smoke' },
@@ -1882,6 +1935,12 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
         return [{ id: 'session-1', title: 'Test Session', msgCount: 0 }];
       },
       async transcript() {
+        return null;
+      },
+      async transcriptPage() {
+        return null;
+      },
+      async transcriptEntryChunk() {
         return null;
       },
       async observe(sessionId) {

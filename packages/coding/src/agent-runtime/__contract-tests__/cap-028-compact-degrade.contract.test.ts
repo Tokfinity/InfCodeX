@@ -22,7 +22,7 @@
  *   2. Tool pairing invariant — `tool_use` (assistant) and `tool_result`
  *      (user) must stay paired; orphans are skipped, not dropped.
  *   3. Recent-context preservation — loop terminates as soon as token
- *      estimate dips below `triggerPercent * 80%` of the context window.
+ *      estimate dips below the shared effective compaction trigger.
  *
  * Deferred (P3 — needs primary-compactor mock + warning emission):
  * - CAP-COMPACT-DEGRADE-001 end-to-end "primary fails → fallback fires
@@ -86,6 +86,18 @@ describe('CAP-028: gracefulCompactDegradation — termination + identity', () =>
 });
 
 describe('CAP-028: gracefulCompactDegradation — summary preservation invariant', () => {
+  it('mechanically preserves genuine user queries when emergency pruning drops raw history', () => {
+    const query = `KEEP-EXACT-QUERY ${'intent '.repeat(100)}`;
+    const result = gracefulCompactDegradation([
+      { ...userMsg(query), turnId: 'turn-query' },
+      systemMsg('old assistant context '.repeat(100)),
+      userMsg('recent request'),
+    ], 200, config(80));
+
+    expect(result.some((message) => typeof message.content === 'string'
+      && message.content.includes(JSON.stringify(query)))).toBe(true);
+  });
+
   it('CAP-COMPACT-DEGRADE-SYSTEM: a leading system message is never the first to be dropped (startIdx=1)', () => {
     const long = 'x'.repeat(500);
     const messages: KodaXMessage[] = [

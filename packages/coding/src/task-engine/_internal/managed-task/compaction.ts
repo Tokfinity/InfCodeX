@@ -17,7 +17,7 @@ import {
   type CompactionResult,
   type CompactionUpdate,
 } from '@kodax-ai/agent';
-import type { KodaXToolDefinition } from '@kodax-ai/llm';
+import type { KodaXReasoningRequest, KodaXToolDefinition } from '@kodax-ai/llm';
 
 import { resolveProvider } from '../../../providers/index.js';
 import { loadCompactionConfig } from '../../../compaction-config.js';
@@ -50,6 +50,8 @@ export interface BuildManagedTaskCompactionHookOptions {
   >;
   readonly contextTokenSnapshotRef?: ContextTokenSnapshotRef;
   readonly activeToolDefinitions?: readonly KodaXToolDefinition[];
+  /** Exact reasoning envelope used by the managed provider request. */
+  readonly reasoning?: KodaXReasoningRequest;
   readonly onPostCompact?: () => void;
 }
 
@@ -118,14 +120,17 @@ async function attachManagedCompactionContext(
 
 function buildCompactionUpdate(
   result: CompactionResult,
+  tokensAfter: number,
   postCompactAttachments?: readonly KodaXMessage[],
-): CompactionUpdate | undefined {
-  if (!result.anchor) return undefined;
+): CompactionUpdate {
   return {
-    anchor: result.anchor,
+    anchor: result.anchor
+      ? { ...result.anchor, tokensAfter }
+      : undefined,
     artifactLedger: result.artifactLedger,
     memorySeed: result.memorySeed,
     postCompactAttachments,
+    report: result.report,
   };
 }
 
@@ -215,7 +220,6 @@ export async function buildManagedTaskCompactionHook(
   const resolved = hookOptions.resolvedContextCapacity
     ?? await resolveManagedTaskContextCapacity(options);
   const { provider, activeModel, compactionConfig, contextWindow } = resolved;
-  if (!compactionConfig.enabled) return undefined;
 
   const events = options.events;
   const snapshotRef = hookOptions.contextTokenSnapshotRef;
@@ -249,22 +253,34 @@ export async function buildManagedTaskCompactionHook(
       return undefined;
     }
 
+    const startedAt = Date.now();
     events?.onCompactStart?.();
     try {
       const { immutableSystem, mutableMessages } = splitImmutableSystem(messages);
+      const systemPrompt = typeof immutableSystem?.content === 'string'
+        ? immutableSystem.content
+        : undefined;
+      const cacheContext = systemPrompt !== undefined
+        && hookOptions.activeToolDefinitions !== undefined
+        ? {
+            tools: hookOptions.activeToolDefinitions,
+            reasoning: hookOptions.reasoning,
+          }
+        : undefined;
       const result = await intelligentCompact(
         mutableMessages,
         compactionConfig,
         provider,
         contextWindow,
         undefined,
-        undefined,
+        systemPrompt,
         currentTokens,
         CODING_SUMMARY_PROMPT,
         CODING_UPDATE_SUMMARY_PROMPT,
         activeModel,
         false,
         reservedResponseTokens,
+        cacheContext,
       );
       if (!result.compacted) {
         if (hardPressure) {
@@ -310,12 +326,24 @@ export async function buildManagedTaskCompactionHook(
         finalTokens,
         reservedResponseTokens,
       ) ? consecutiveFailures + 1 : 0;
-      const update = buildCompactionUpdate(result, attached.postCompactAttachments);
+      const update = buildCompactionUpdate(
+        result,
+        finalTokens,
+        attached.postCompactAttachments,
+      );
       events?.onCompactStats?.({ tokensBefore: currentTokens, tokensAfter: finalTokens });
-      events?.onCompact?.(currentTokens);
+      events?.onCompact?.(finalTokens);
       events?.onCompactedMessages?.(finalMessages, update);
       notifyPostCompact(hookOptions.onPostCompact);
       updateSnapshot(snapshotRef, finalMessages, finalTokens);
+      events?.onContextCompactionFinished?.({
+        source: hardPressure ? 'physical_capacity' : 'automatic_threshold',
+        tokensBefore: currentTokens,
+        tokensAfter: finalTokens,
+        committed: true,
+        elapsedMs: Date.now() - startedAt,
+        ...(result.report ?? {}),
+      });
       return finalMessages as readonly AgentMessage[];
     } catch (error) {
       consecutiveFailures += 1;

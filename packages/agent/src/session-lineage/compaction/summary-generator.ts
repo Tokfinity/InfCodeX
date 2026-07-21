@@ -5,7 +5,12 @@
  */
 
 import { createHash } from 'crypto';
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
+import type {
+  KodaXBaseProvider,
+  KodaXMessage,
+  KodaXReasoningRequest,
+  KodaXToolDefinition,
+} from '@kodax-ai/llm';
 import type { CompactionDetails } from './types.js';
 import type { KodaXCompactMemorySeed } from '../../index.js';
 import { serializeConversation } from './utils.js';
@@ -219,6 +224,31 @@ export interface KodaXCompactionPromptSnapshot {
   hash: string;
 }
 
+export interface CompactionCacheContext {
+  readonly tools: readonly KodaXToolDefinition[];
+  readonly reasoning?: boolean | KodaXReasoningRequest;
+  /** Raw tail already present in the cached prefix but excluded from this summary. */
+  readonly protectedTailMessageCount?: number;
+}
+
+export function buildCompactionCacheInstruction(
+  promptSnapshot: KodaXCompactionPromptSnapshot,
+  protectedTailMessageCount = 0,
+): string {
+  const coverageInstruction = protectedTailMessageCount > 0
+    ? `Summarize only the messages before the final ${protectedTailMessageCount} message${
+        protectedTailMessageCount === 1 ? '' : 's'
+      }; that final raw tail remains verbatim and must not be duplicated in the summary.`
+    : 'Summarize the complete conversation prefix above; do not continue or answer it.';
+  return [
+    'CRITICAL COMPACTION MODE: Respond with TEXT ONLY. Do NOT call any tools.',
+    coverageInstruction,
+    renderCompactionPromptSections(
+      promptSnapshot.sections.filter((section) => section.id !== 'conversation'),
+    ),
+  ].join('\n\n');
+}
+
 function createCompactionPromptSection(
   section: Omit<KodaXCompactionPromptSection, 'owner'>,
 ): KodaXCompactionPromptSection {
@@ -398,6 +428,7 @@ export async function generateSummary(
   summaryPrompt?: string,
   updateSummaryPrompt?: string,
   modelOverride?: string,
+  cacheContext?: CompactionCacheContext,
 ): Promise<string> {
   const promptSnapshot = buildCompactionPromptSnapshot({
     messages,
@@ -409,14 +440,36 @@ export async function generateSummary(
     updateSummaryPrompt,
   });
 
-  const result = await provider.stream(
-    [{ role: 'user', content: promptSnapshot.userPrompt }],
-    [],
-    promptSnapshot.systemPrompt,
-    false,
-    modelOverride ? { modelOverride } : undefined,
-    undefined
+  const cacheInstruction = buildCompactionCacheInstruction(
+    promptSnapshot,
+    cacheContext?.protectedTailMessageCount,
   );
+  const result = cacheContext
+    ? await provider.stream(
+        messages,
+        [...cacheContext.tools],
+        promptSnapshot.systemPrompt,
+        cacheContext.reasoning,
+        {
+          ...(modelOverride ? { modelOverride } : {}),
+          ephemeralSuffix: { content: cacheInstruction },
+        },
+        undefined,
+      )
+    : await provider.stream(
+        [{ role: 'user', content: promptSnapshot.userPrompt }],
+        [],
+        promptSnapshot.systemPrompt,
+        false,
+        modelOverride ? { modelOverride } : undefined,
+        undefined,
+      );
+
+  if (result.toolBlocks.length > 0) {
+    throw new Error(
+      `Compaction summary returned ${result.toolBlocks.length} tool_use block(s); text-only output is required`,
+    );
+  }
 
   const rawText = result.textBlocks.map(block => block.text).join('\n');
   const cleaned = stripAnalysisBlock(rawText);

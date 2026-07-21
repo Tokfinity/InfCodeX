@@ -19,6 +19,47 @@ All notable changes to this project will be documented in this file.
   idle-yield boundaries, input is cloned before enqueue, and the complete batch
   event is durably committed before the delivered projection.
 
+## [0.7.74] - 2026-07-21
+
+### Added
+
+- **Absolute automatic-compaction threshold (FEATURE_272).** SDK, Runtime
+  Session settings, daemon protocol, REPL, and KodaX Space now expose an
+  optional token threshold. Missing/zero is inactive; otherwise the smaller of
+  the absolute limit, bounded percentage policy, and physical provider capacity
+  triggers compaction. Percentage defaults to 75% and clamps to 15-90%, while
+  automatic large compaction remains always enabled.
+- **Context-owned compaction telemetry and transcript paging.** Root and child
+  turns now carry stable `contextId`/revision ownership. The canonical
+  `context.compaction.finished` event reports committed before/after and
+  component metrics. Runtime observations use bounded transcript slices,
+  revision-bound pages, and lossless chunks for oversized entries; clients can
+  require `contextCompaction:2` and `transcriptPaging:1`.
+
+### Fixed
+
+- **Large compaction coverage and protected-tail basis.** Major compaction now
+  protects 20% of the effective trigger rather than 20% of the model maximum,
+  summarizes the complete eligible prefix in one transaction, and uses
+  map-once/reduce-once only for physical overflow. Exact main-request prefix
+  reuse preserves prompt/KV cache on both ordinary and managed-task paths while
+  explicitly excluding the protected raw tail from the summary.
+- **User intent retention across repeated and degraded compaction.** Genuine
+  user queries are mechanically retained in a stable JSONL checkpoint ledger,
+  including text carried beside tool results. A query is represented exactly
+  once: raw while it remains in the protected tail, then in the ledger when its
+  prefix is compacted. The explicit emergency-pruning fallback installs query
+  recovery before removing old raw evidence.
+- **SDK/UI accounting and daemon frame safety.** The legacy compact callback now
+  reports post-compact tokens on both execution paths, and automatic managed
+  compaction emits the same post-commit canonical event/report as the standard
+  agent path. Persisted anchors include admitted post-compact attachments.
+  Space ignores child context metrics for the root gauge/activity/cost display,
+  displays the last root transition, labels active model input separately from
+  complete visible history, and reads transcripts directly through bounded
+  page/chunk calls. The legacy full-transcript daemon method rejects responses
+  above 512 KiB instead of risking the 8 MiB frame.
+
 ## [0.7.73] - 2026-07-20
 
 ### Added

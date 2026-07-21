@@ -15,6 +15,7 @@
 export interface LiveCompactionInfo {
   contextWindow: number;
   triggerPercent: number;
+  triggerTokens?: number;
   enabled: boolean;
   /** Provider response capacity reserved from the same model descriptor. */
   reservedResponseTokens?: number;

@@ -33,6 +33,8 @@ import type {
   RuntimeSessionFilter,
   RuntimeSessionSettingsPatch,
   RuntimeSessionObservationSnapshot,
+  RuntimeTranscriptEntryChunkInput,
+  RuntimeTranscriptPageInput,
   RuntimeStartRunInput,
   RuntimeSubmitInput,
   RuntimeSubscription,
@@ -72,6 +74,10 @@ import {
 export type RuntimeDaemonNotificationSink = (
   notification: RuntimeDaemonNotification,
 ) => void;
+
+// Keep the compatibility endpoint comfortably below the 8 MiB transport
+// ceiling. Larger histories must use the bounded page/chunk protocol.
+const LEGACY_TRANSCRIPT_WIRE_BUDGET_BYTES = 512 * 1024;
 
 export interface RuntimeDaemonDispatcherOptions {
   readonly runtime: KodaXRuntime;
@@ -135,7 +141,8 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
   ...scopeEntries('session:observe', [
     'ping', 'runtime.identity', 'runtime.status', 'runtime.capabilities',
     'daemon.status', 'daemon.logs', 'operation.get',
-    'session.load', 'session.list', 'session.transcript', 'session.observe', 'session.settings.get',
+    'session.load', 'session.list', 'session.transcript', 'session.transcript.page',
+    'session.transcript.entryChunk', 'session.observe', 'session.settings.get',
     'session.settings.getVersioned', 'session.autoMode.getStats',
     'run.get', 'run.list', 'run.await', 'event.subscribe', 'event.unsubscribe',
     'event.replay', 'permission.list', 'permission.listPending', 'permission.grants.list',
@@ -882,8 +889,30 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.sessions.load(requireStringParam(request.params, 'sessionId'));
     case 'session.list':
       return runtime.sessions.list(optionalRecord(request.params) as RuntimeSessionFilter | undefined);
-    case 'session.transcript':
-      return runtime.sessions.transcript(requireStringParam(request.params, 'sessionId'));
+    case 'session.transcript': {
+      const transcript = await runtime.sessions.transcript(
+        requireStringParam(request.params, 'sessionId'),
+      );
+      if (
+        transcript !== null
+        && Buffer.byteLength(JSON.stringify(transcript), 'utf8')
+          > LEGACY_TRANSCRIPT_WIRE_BUDGET_BYTES
+      ) {
+        throw daemonError(
+          'invalid_request',
+          'Transcript is too large for the legacy endpoint; use session.transcript.page and session.transcript.entryChunk.',
+        );
+      }
+      return transcript;
+    }
+    case 'session.transcript.page':
+      return runtime.sessions.transcriptPage(
+        requireRecord(request.params) as unknown as RuntimeTranscriptPageInput,
+      );
+    case 'session.transcript.entryChunk':
+      return runtime.sessions.transcriptEntryChunk(
+        requireRecord(request.params) as unknown as RuntimeTranscriptEntryChunkInput,
+      );
     case 'session.observe': {
       const subscriptionId = createSubscriptionId();
       const observation = await runtime.sessions.observe(
@@ -1518,6 +1547,14 @@ function runtimeDaemonCapabilities(
       : {}),
     afterTurnInput: { version: 1 },
     interruptInput: { version: 1, availability: 'per_run' },
+    contextCompaction: {
+      version: 2,
+      alwaysOn: true,
+      absoluteThreshold: true,
+      contextIdentity: true,
+      canonicalFinishedEvent: true,
+    },
+    transcriptPaging: { version: 1, maxPageBytes: 512 * 1024 },
     learningCenter: { version: 1 },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },

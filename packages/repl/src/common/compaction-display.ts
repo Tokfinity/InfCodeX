@@ -1,16 +1,25 @@
-import { calculateMaxContextInputTokens } from '@kodax-ai/agent';
+import {
+  calculateMaxContextInputTokens,
+  resolveCompactionPolicy,
+} from '@kodax-ai/agent';
 
 /** Human-readable auto-compaction policy for banners and help surfaces. */
 export function formatCompactionPolicy(
   contextWindow: number,
   triggerPercent: number,
+  triggerTokens?: number,
 ): string {
-  if (triggerPercent >= 100) {
-    return 'capacity-driven';
+  const policy = resolveCompactionPolicy(
+    { triggerPercent, triggerTokens },
+    contextWindow,
+  );
+  const percentage = policy.config.triggerPercent;
+  const effectiveK = Math.round(policy.triggerTokens / 1000);
+  if (policy.absoluteTriggerTokens === undefined) {
+    return `@ ${percentage}% (${effectiveK}k)`;
   }
-
-  const triggerTokens = Math.round(contextWindow * triggerPercent / 100 / 1000);
-  return `@ ${triggerPercent}% (${triggerTokens}k)`;
+  const absoluteK = Math.round(policy.absoluteTriggerTokens / 1000);
+  return `@ min(${percentage}%, ${absoluteK}k) (${effectiveK}k)`;
 }
 
 /** Effective pressure threshold used only for status-bar colouring. */
@@ -18,17 +27,15 @@ export function resolveCompactionThresholdTokens(
   contextWindow: number,
   triggerPercent: number,
   reservedResponseTokens = 0,
+  triggerTokens?: number,
 ): number {
   const capacityLimit = calculateMaxContextInputTokens(
     contextWindow,
     reservedResponseTokens,
   );
-  if (triggerPercent >= 100) {
-    return capacityLimit;
-  }
-
-  return Math.min(
+  return resolveCompactionPolicy(
+    { triggerPercent, triggerTokens },
+    contextWindow,
     capacityLimit,
-    Math.floor(contextWindow * triggerPercent / 100),
-  );
+  ).triggerTokens;
 }

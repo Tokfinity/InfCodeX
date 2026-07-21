@@ -16,6 +16,7 @@ export interface SurfaceStatusContextUsage {
   currentTokens: number;
   contextWindow: number;
   triggerPercent: number;
+  triggerTokens?: number;
   reservedResponseTokens?: number;
 }
 

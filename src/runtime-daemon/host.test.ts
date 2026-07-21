@@ -707,6 +707,12 @@ function makeRuntime(options: {
       async transcript() {
         return null;
       },
+      async transcriptPage() {
+        return null;
+      },
+      async transcriptEntryChunk() {
+        return null;
+      },
       async observe(sessionId) {
         return createTestObservation(sessionId);
       },

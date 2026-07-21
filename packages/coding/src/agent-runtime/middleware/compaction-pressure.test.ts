@@ -63,4 +63,15 @@ describe('compaction anti-thrashing state', () => {
     expect(twice.cooldownTurnsRemaining).toBe(0);
     expect(third.cooldownTurnsRemaining).toBe(0);
   });
+
+  it('does not recompact the same covered context until meaningful new growth', () => {
+    const compacted = recordCompactionSavings(
+      createCompactionAntiThrashState(),
+      { tokensBefore: 100_000, tokensAfter: 76_000 },
+    );
+
+    expect(shouldSkipLlmCompaction(compacted.state, 76_000)).toBe(true);
+    expect(shouldSkipLlmCompaction(compacted.state, 77_000)).toBe(true);
+    expect(shouldSkipLlmCompaction(compacted.state, 84_000)).toBe(false);
+  });
 });

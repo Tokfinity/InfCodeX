@@ -271,6 +271,8 @@ export interface StatusBarProps {
     contextWindow: number;
     /** Compaction trigger percentage (0-100) */
     triggerPercent: number;
+    /** Optional absolute threshold; zero/undefined is inactive. */
+    triggerTokens?: number;
     /** Provider output capacity reserved from the physical context window. */
     reservedResponseTokens?: number;
   };

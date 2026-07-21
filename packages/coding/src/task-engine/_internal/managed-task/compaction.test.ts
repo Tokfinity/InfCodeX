@@ -13,7 +13,11 @@ import {
   type AgentMessage,
   type CompactionResult,
 } from '@kodax-ai/agent';
-import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import type {
+  KodaXMessage,
+  KodaXReasoningRequest,
+  KodaXToolDefinition,
+} from '@kodax-ai/llm';
 import { resolveProvider } from '../../../providers/index.js';
 import { estimateTokens } from '../../../tokenizer.js';
 import type { KodaXContextTokenSnapshot, KodaXOptions } from '../../../types.js';
@@ -45,13 +49,33 @@ function compactedResult(messages: KodaXMessage[]): CompactionResult {
     role: 'system' as const,
     content: '[对话历史摘要]\n\nComplete semantic summary with preserved decisions.',
   }];
+  const tokensBefore = estimateTokens(messages);
+  const tokensAfter = estimateTokens(compacted);
   return {
     compacted: true,
     messages: compacted,
     summary: 'Complete semantic summary with preserved decisions.',
-    tokensBefore: estimateTokens(messages),
-    tokensAfter: estimateTokens(compacted),
+    tokensBefore,
+    tokensAfter,
     entriesRemoved: messages.length,
+    report: {
+      strategy: 'full_prefix',
+      triggerSource: 'percentage',
+      effectiveTriggerTokens: 75_000,
+      protectedBudgetTokens: 15_000,
+      fixedInputTokens: 0,
+      eligibleTokens: tokensBefore,
+      rawTailTokens: 0,
+      summaryTokens: tokensAfter,
+      queryLedgerTokens: 0,
+    },
+    anchor: {
+      summary: 'Complete semantic summary with preserved decisions.',
+      tokensBefore,
+      tokensAfter,
+      entriesRemoved: messages.length,
+      reason: 'automatic',
+    },
   };
 }
 
@@ -81,6 +105,15 @@ beforeEach(() => {
 });
 
 describe('managed history compaction', () => {
+  it('builds the automatic hook even when a legacy caller passes enabled false', async () => {
+    const capacity = resolvedCapacity(75);
+    capacity.compactionConfig.enabled = false;
+
+    await expect(buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: capacity,
+    })).resolves.toBeTypeOf('function');
+  });
+
   it('does nothing while the complete request fits physical capacity', async () => {
     const messages = makeMessages();
     const ref: ContextTokenSnapshotRef = { current: snapshot(70_000, messages) };
@@ -120,14 +153,22 @@ describe('managed history compaction', () => {
     const messages = [immutableSystem, ...mutableMessages];
     const ref: ContextTokenSnapshotRef = { current: snapshot(88_000, messages) };
     compactMock.mockResolvedValue(compactedResult(mutableMessages));
+    const reasoning: KodaXReasoningRequest = { enabled: true, effort: 'high' };
     const hook = await buildManagedTaskCompactionHook(options(), {
       resolvedContextCapacity: resolvedCapacity(100),
       contextTokenSnapshotRef: ref,
+      activeToolDefinitions: [],
+      reasoning,
     });
 
     const result = await hook?.(messages);
 
     expect(compactMock.mock.calls[0]?.[0]).toEqual(mutableMessages);
+    expect(compactMock.mock.calls[0]?.[5]).toBe(immutableSystem.content);
+    expect(compactMock.mock.calls[0]?.[12]).toEqual({
+      tools: [],
+      reasoning,
+    });
     expect(result?.[0]).toEqual(immutableSystem);
     expect(result?.[1]?.content).toContain('Complete semantic summary');
   });
@@ -281,12 +322,16 @@ describe('managed history compaction', () => {
     const onCompactStart = vi.fn();
     const onCompactEnd = vi.fn();
     const onCompactedMessages = vi.fn();
+    const onCompact = vi.fn();
+    const onContextCompactionFinished = vi.fn();
     const onPostCompact = vi.fn();
     compactMock.mockResolvedValue(compactedResult(messages));
     const hook = await buildManagedTaskCompactionHook(options({
       onCompactStart,
       onCompactEnd,
+      onCompact,
       onCompactedMessages,
+      onContextCompactionFinished,
     }), {
       resolvedContextCapacity: resolvedCapacity(100),
       contextTokenSnapshotRef: { current: snapshot(88_000, messages) },
@@ -297,6 +342,23 @@ describe('managed history compaction', () => {
     expect(onCompactStart).toHaveBeenCalledTimes(1);
     expect(onCompactEnd).toHaveBeenCalledTimes(1);
     expect(onCompactedMessages).toHaveBeenCalledTimes(1);
+    const finalMessages = onCompactedMessages.mock.calls[0]?.[0] as KodaXMessage[];
+    const finalTokens = 88_000 - estimateTokens(messages) + estimateTokens(finalMessages);
+    expect(onCompact).toHaveBeenCalledWith(finalTokens);
+    expect(onCompactedMessages.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      anchor: expect.objectContaining({ tokensAfter: finalTokens }),
+      report: compactedResult(messages).report,
+    }));
+    expect(onContextCompactionFinished).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'physical_capacity',
+      tokensBefore: 88_000,
+      tokensAfter: finalTokens,
+      committed: true,
+      strategy: 'full_prefix',
+    }));
+    expect(onCompactedMessages.mock.invocationCallOrder[0]).toBeLessThan(
+      onContextCompactionFinished.mock.invocationCallOrder[0]!,
+    );
     expect(onPostCompact).toHaveBeenCalledTimes(1);
   });
 });

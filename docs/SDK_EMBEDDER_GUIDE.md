@@ -4366,6 +4366,111 @@ for the final capability-upgrade and compatibility closure.
 
 ---
 
+## 25. Always-on context compaction and bounded transcript recovery (v0.7.74)
+
+Automatic large compaction is always enabled. `enabled` remains accepted for
+v0.7.x source compatibility, but `false` is normalized to `true`.
+`triggerPercent` defaults to `75` and is clamped to `15..90`. The optional
+absolute threshold is inactive when omitted or zero; otherwise the smaller
+percentage, absolute, and physical-capacity threshold wins.
+
+```ts
+const run = await startKodaX({
+  provider: 'zhipu-coding',
+  model: 'glm-5.2',
+  compaction: {
+    triggerPercent: 60,
+    triggerTokens: 300_000,
+  },
+});
+```
+
+The recent raw tail is 20% of that effective trigger, not 20% of the model's
+maximum context window. A manual Runtime compact bypasses only the trigger
+comparison and uses the Session's same effective policy:
+
+```ts
+await runtime.sessions.updateSettings(session.id, {
+  compactionTriggerPercent: 60,
+  compactionTriggerTokens: 300_000,
+});
+
+await runtime.sessions.compact({ sessionId: session.id });
+```
+
+Setting `compactionTriggerTokens: 0` removes the absolute Session override.
+Percentage updates are normalized to `15..90`; negative/fractional absolute
+values are rejected. Explicit per-run `options.compaction` values override
+Session settings.
+
+Large compaction covers the complete eligible prefix once, preserves an atomic
+recent tail, and installs a synthetic user checkpoint. Every genuine user query
+is rendered mechanically in its checkpoint ledger; tool-result wire messages
+and synthetic prompts are excluded. The normal summary request preserves the
+main request's system, message, tool, model, and reasoning prefix and appends a
+text-only ephemeral instruction so providers can reuse prompt/KV cache.
+
+### Context-owned events
+
+`context.compaction.finished` is the canonical post-commit Runtime fact. It
+includes stable root/child identity, revision, before/after tokens, strategy,
+effective trigger, protected budget, and component accounting. Consumers must
+not use `scope: 'worker'` as a parent/child identity substitute.
+
+```ts
+const subscription = runtime.events.subscribe(
+  { sessionId: session.id, types: ['context.compaction.finished'] },
+  (event) => {
+    if (event.type !== 'context.compaction.finished') return;
+    const fact = event.payload;
+    if (fact.contextKind === 'root' && fact.committed) {
+      renderRootContext(fact.tokensAfter, fact.tokensBefore);
+    }
+  },
+);
+```
+
+Legacy `onCompactStats`/`onCompact` callbacks remain compatibility projections.
+The old `onCompact` callback now receives the post-compact count; it no longer
+echoes the pre-compact `currentTokens` value. Hosts that need ownership or
+component metrics should use `onContextCompactionFinished` or the Runtime
+event.
+
+### Transcript observation below the daemon frame limit
+
+`sessions.observe()` no longer embeds `FullTranscriptSessionData`. Its snapshot
+contains a bounded `RuntimeTranscriptSlice`. Inline entries carry the complete
+transcript entry; an oversized entry carries an explicit descriptor.
+
+```ts
+const observation = await runtime.sessions.observe(session.id, onLiveEvent);
+let page = observation.snapshot.transcript;
+
+while (page) {
+  for (const descriptor of page.entries) {
+    if (descriptor.entry) consume(descriptor.entry);
+    else await consumeEntryChunks(runtime, session.id, page.revision, descriptor.index);
+  }
+  if (!page.hasMore) break;
+  page = await runtime.sessions.transcriptPage({
+    sessionId: session.id,
+    cursor: page.nextCursor,
+  });
+}
+```
+
+`transcriptEntryChunk()` returns lossless `base64-json` chunks. Concatenate the
+decoded bytes and parse JSON only after `hasMore` becomes false. Page and entry
+cursors are opaque and revision-bound; a changed transcript produces an
+explicit resync error, so restart from a fresh observation. The shared daemon's
+legacy `session.transcript` method rejects payloads above 512 KiB and names the
+page/chunk methods rather than attempting a frame near the 8 MiB ceiling.
+
+Clients that depend on these guarantees should require
+`contextCompaction: 2` and `transcriptPaging: 1` during connection.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start

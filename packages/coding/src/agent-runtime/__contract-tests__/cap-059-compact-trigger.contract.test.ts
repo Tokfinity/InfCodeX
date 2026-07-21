@@ -10,14 +10,14 @@ function config(triggerPercent = 100, enabled = true): CompactionConfig {
 }
 
 describe('CAP-059 physical compaction trigger', () => {
-  it('keeps the disabled short-circuit even at hard pressure', () => {
+  it('normalizes the legacy disabled flag to always-on compaction', () => {
     expect(shouldCompact({
       messages,
       compactionConfig: config(100, false),
       contextWindow: 100_000,
       currentTokens: 90_000,
       reservedResponseTokens: 10_000,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('does not compact while request, response reserve, and safety fit', () => {
