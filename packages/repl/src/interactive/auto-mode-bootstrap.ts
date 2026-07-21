@@ -2,7 +2,7 @@
  * Auto-Mode Guardrail Bootstrap — FEATURE_092 phase 2b.7b (v0.7.33).
  *
  * Builds an `AutoModeToolGuardrail` wired to the live REPL's provider
- * registry, tool registry, AGENTS.md content, and confirm-dialog askUser
+ * registry, tool registry, compact permission facts, and confirm-dialog askUser
  * surface. The factory returns a lazy accessor: the guardrail is constructed
  * on first call so REPLs that never enter `auto` mode pay zero cost.
  *
@@ -21,21 +21,17 @@
  *     config (FEATURE_092 v0.7.34 hotfix-3). They are evaluated on every
  *     classify() call, so mid-session `/model` and `/provider` swaps DO
  *     retarget the classifier without the user re-entering auto mode.
- *     AGENTS.md is wired the same way via the `getClaudeMd` live getter
- *     (FEATURE_092 follow-up) — it reads `loadAgentsFiles` (mtime-cached)
- *     on every classify so mid-session AGENTS.md edits reach the classifier
- *     without a restart or `/reload`. Only `rules`
- *     (`~/.kodax/auto-rules.jsonc`) remains captured-at-init; those edits
- *     are rare and a restart applies them.
+ *   - Permission review receives compact deterministic operation facts and
+ *     user-only authority evidence. AGENTS.md, assistant narration, and tool
+ *     outputs are intentionally excluded. `rules` (`~/.kodax/auto-rules.jsonc`)
+ *     remains captured-at-init; a restart applies edits to that file.
  */
 
 import {
   createAutoModeToolGuardrail,
-  formatAgentsForPrompt,
   getBuiltinRegisteredToolDefinition,
   getKodaxGlobalDir,
   getRegisteredToolDefinition,
-  loadAgentsFiles,
   loadAutoRules,
   resolveProvider as resolveCodingProvider,
   type AutoModeAskUser,
@@ -47,6 +43,7 @@ import {
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
 import { replBashUserKodaxWriteDeny } from '../permission/repl-bash-signals.js';
+import { analyzeAutoModeCall, evaluateAutoRulesCall } from '../permission/auto-rules.js';
 
 export interface AutoModeBootstrapDeps {
   /**
@@ -149,15 +146,6 @@ export async function bootstrapAutoMode(
     if (guardrail) return guardrail;
     guardrail = createAutoModeToolGuardrail({
       rules: rulesLoadResult.merged,
-      // FEATURE_092 follow-up: live getter instead of a captured string so the
-      // classifier never reads a frozen AGENTS.md snapshot. Goes straight to
-      // `loadAgentsFiles` (mtime-cached) so mid-session edits take effect on
-      // the next classify with no `/reload` needed — same source the system
-      // prompt uses. Cheap: a cache hit is a per-level statSync + byte reuse.
-      getClaudeMd: () =>
-        formatAgentsForPrompt(
-          loadAgentsFiles({ cwd: process.cwd(), projectRoot: deps.projectRoot }),
-        ),
       getToolProjection: (toolName) => {
         const def =
           getRegisteredToolDefinition(toolName)
@@ -184,6 +172,8 @@ export async function bootstrapAutoMode(
       getDefaultProvider: deps.getCurrentProviderName,
       getDefaultModel: () => deps.getCurrentModel() ?? '',
       askUser: deps.askUser,
+      evaluateRulesCall: evaluateAutoRulesCall,
+      analyzeCall: analyzeAutoModeCall,
       log: deps.log,
       onEngineChange: deps.onEngineChange,
       sharedState: deps.sharedState,

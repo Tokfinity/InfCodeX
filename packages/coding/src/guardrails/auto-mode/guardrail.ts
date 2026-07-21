@@ -10,7 +10,7 @@
  *
  *   1. Tier-0 deterministic deny             → block
  *   2. Tool projection is '' (Tier 1)        → allow (zero token cost)
- *   3. Engine has been downgraded to rules   → escalate (user confirms)
+ *   3. Engine is rules → deterministic Tier 2, otherwise user confirms
  *   4. denial/circuit threshold              → engine downgrade, then escalate
  *   5. classify(...) sideQuery
  *        allow                               → allow (record allow → reset consecutive)
@@ -29,12 +29,13 @@
  *   shared (per design doc "防绕阈值"). Without it each guardrail is
  *   independent.
  *
- * Capability check, Tier 2 path-shortcuts, and the explicit
- * `supportsAutoModeClassifier` provider flag are deferred to follow-up
- * phases — v1 of the guardrail relies on Tier 1 (projection==='') as the
- * structural opt-out and forwards everything else to the classifier.
+ * Provider capability checks and the explicit `supportsAutoModeClassifier`
+ * flag are deferred to follow-up phases. Tier 2 is supplied by the Runtime
+ * host because canonical filesystem and shell parsing live in @kodax/repl;
+ * the guardrail remains the single decision point.
  */
 
+import { createHash } from 'node:crypto';
 import type { CostTracker, KodaXBaseProvider } from '@kodax-ai/llm';
 import type {
   GuardrailContext,
@@ -75,6 +76,7 @@ import {
 import type { AutoRules } from './rules.js';
 import { collectAllSignals, type SignalCollector, type ToolCallSignal } from './signals.js';
 import { speculativeRace } from './speculative.js';
+import { buildPermissionIntentEvidence } from './permission-intent.js';
 import { safeFallbackToClassifierInput } from '../../tools/classifier-projection.js';
 import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 
@@ -119,10 +121,76 @@ export type AutoModeAskUser = (
   signals?: readonly ToolCallSignal[],
 ) => Promise<AutoModeAskUserVerdict>;
 
+export interface AutoModeRulesContext {
+  readonly projectRoot: string;
+  readonly executionCwd: string;
+  readonly signals: readonly ToolCallSignal[];
+}
+
+export type AutoModePermissionBoundary =
+  | 'workspace'
+  | 'system-temp'
+  | 'outside-workspace'
+  | 'protected'
+  | 'unresolved';
+
+export interface AutoModePermissionTarget {
+  readonly path: string;
+  readonly boundary: AutoModePermissionBoundary;
+}
+
+export type AutoModePermissionOperation =
+  | {
+    readonly kind: 'read' | 'write' | 'create' | 'delete';
+    readonly target: AutoModePermissionTarget;
+    readonly options?: Readonly<Record<string, boolean | number | string>>;
+  }
+  | {
+    readonly kind: 'copy' | 'move' | 'rename';
+    readonly source: AutoModePermissionTarget;
+    readonly destination: AutoModePermissionTarget;
+    readonly options?: Readonly<Record<string, boolean | number | string>>;
+  }
+  | {
+    readonly kind: 'execute' | 'unknown';
+    readonly summary: string;
+    readonly options?: Readonly<Record<string, boolean | number | string>>;
+  };
+
+/** Compact deterministic facts supplied to the permission reviewer. */
+export interface AutoModePermissionReview {
+  readonly schemaVersion: 1;
+  readonly analysis: {
+    readonly status: 'complete' | 'incomplete';
+    readonly shell: 'powershell' | 'shell' | 'tool';
+    readonly binding: 'exact' | 'partial';
+    readonly reason?: string;
+  };
+  readonly operations: readonly AutoModePermissionOperation[];
+  readonly risks: readonly string[];
+}
+
+export type AutoModeCallAnalyzer = (
+  call: RunnerToolCall,
+  context: AutoModeRulesContext,
+) => AutoModePermissionReview | Promise<AutoModePermissionReview>;
+
+export type AutoModeRulesDecision =
+  | { readonly action: 'allow' }
+  | { readonly action: 'block'; readonly reason: string }
+  | { readonly action: 'escalate'; readonly reason: string };
+
+/** Deterministic Tier-2 evaluator used only while the rules engine is active. */
+export type AutoModeRulesEvaluator = (
+  call: RunnerToolCall,
+  context: AutoModeRulesContext,
+) => AutoModeRulesDecision | Promise<AutoModeRulesDecision>;
+
 export interface AutoModeGuardrailConfig {
   readonly rules: AutoRules;
   readonly claudeMd?: string;
   /**
+   * Legacy classifier path only. Runtime compact review excludes AGENTS.md.
    * FEATURE_092 follow-up (auto-mode classifier AGENTS.md staleness fix):
    * live getter for the project AGENTS.md content. Takes precedence over the
    * static `claudeMd` string and is evaluated INSIDE the classify path on
@@ -142,6 +210,17 @@ export interface AutoModeGuardrailConfig {
    * paths. See `AutoModeAskUser` for semantics.
    */
   readonly askUser?: AutoModeAskUser;
+
+  /**
+   * Runtime-owned deterministic Tier-2 evaluator. It is injected rather than
+   * implemented in @kodax/coding because canonical path and shell-AST helpers
+   * live in @kodax/repl. Omitting it preserves fail-closed SDK compatibility:
+   * every non-Tier-1 rules call escalates.
+   */
+  readonly evaluateRulesCall?: AutoModeRulesEvaluator;
+
+  /** Runtime-owned compact facts used by the LLM permission reviewer. */
+  readonly analyzeCall?: AutoModeCallAnalyzer;
 
   /**
    * Look up a tool's `toClassifierInput` projection by tool name.
@@ -210,8 +289,8 @@ export interface AutoModeGuardrailConfig {
   /**
    * FEATURE_092 phase 2b.7b slice C: starting engine. Defaults to `'llm'`.
    * Set to `'rules'` to skip the classifier entirely from session start
-   * (the rules-mode escalate path runs immediately on the first non-Tier-1
-   * tool call). Resolved by the REPL from `~/.kodax/config.json`
+   * (the deterministic Tier-2 evaluator runs for non-Tier-1 calls). Resolved
+   * by the REPL from `~/.kodax/config.json`
    * `autoMode.engine` and the `KODAX_AUTO_MODE_ENGINE` env var.
    */
   readonly initialEngine?: AutoModeEngine;
@@ -420,13 +499,30 @@ export function createAutoModeToolGuardrail(
     }
     if (action === '') return { action: 'allow' };
 
-    // Engine has previously downgraded — rules-engine behavior is
-    // "Tier 1/2 allow, else escalate to user"; v1 doesn't yet implement
-    // Tier 2 path-shortcuts so all non-Tier-1 calls escalate.
+    // Rules engine: Tier 1 already returned above. Runtime supplies the
+    // deterministic Tier-2 evaluator and this guardrail remains the sole
+    // decision point. Direct SDK consumers that omit it retain a fail-closed
+    // escalation path.
     if (state.engine === 'rules') {
-      return escalateOrAsk(
-        'auto-mode engine is in rules mode (downgraded); user confirmation required',
-      );
+      if (!config.evaluateRulesCall) {
+        return escalateOrAsk('auto-mode rules engine requires user confirmation for this call');
+      }
+      let decision: AutoModeRulesDecision;
+      try {
+        decision = await config.evaluateRulesCall(guardedCall, {
+          projectRoot,
+          executionCwd,
+          signals,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const reason = `auto-mode rules could not evaluate this call: ${detail}`;
+        config.log?.('warn', `[auto-mode] ${reason}`);
+        return escalateOrAsk(reason);
+      }
+      if (decision.action === 'allow') return { action: 'allow' };
+      if (decision.action === 'block') return decision;
+      return escalateOrAsk(decision.reason);
     }
 
     // Resolve the complete override chain before consulting failure trackers.
@@ -463,6 +559,25 @@ export function createAutoModeToolGuardrail(
       return escalateOrAsk(`classifier provider "${resolved.providerName}" is not configured`);
     }
 
+    let permissionAction = action;
+    let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
+    if (config.analyzeCall) {
+      let permissionReview: AutoModePermissionReview;
+      try {
+        permissionReview = await config.analyzeCall(guardedCall, {
+          projectRoot,
+          executionCwd,
+          signals,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        config.log?.('warn', `[auto-mode] permission analyzer failed: ${detail}`);
+        permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
+      }
+      permissionAction = serializePermissionReview(permissionReview, action);
+      intentEvidence = buildPermissionIntentEvidence(ctx.messages ?? [], permissionAction);
+    }
+
     // FEATURE_158: kick off classifier with signals attached. The promise is
     // held locally so speculativeRace can race it against a quiet window — when
     // the verdict arrives within the window, we use it directly with no
@@ -484,15 +599,14 @@ export function createAutoModeToolGuardrail(
       provider,
       model: resolved.model,
       rules: config.rules,
-      // FEATURE_092 follow-up: prefer the live getter so mid-session AGENTS.md
-      // edits reach the classifier; fall back to the static string for SDK
-      // consumers that pre-date the getter.
-      claudeMd: config.getClaudeMd?.() ?? config.claudeMd,
-      // classify() owns transcript sanitization and byte limits so every
-      // caller, including SDK consumers outside this guardrail, gets the same
-      // bounded input contract.
+      // Runtime compact review deliberately excludes AGENTS.md. Legacy SDK
+      // consumers without an analyzer retain the prior live/static behavior.
+      claudeMd: intentEvidence ? undefined : config.getClaudeMd?.() ?? config.claudeMd,
+      // classify() ignores transcript when intentEvidence is present; keeping
+      // the parameter here preserves its standalone/legacy API.
       transcript: ctx.messages ?? [],
-      action,
+      action: permissionAction,
+      intentEvidence,
       getToolProjection: config.getToolProjection,
       signals,
       timeoutMs,
@@ -545,10 +659,12 @@ export function createAutoModeToolGuardrail(
         return { action: 'allow' };
 
       case 'block':
-        state.denials = recordDenialBlock(state.denials);
-        if (denialShouldFallback(state.denials)) {
-          transitionEngine('rules');
-          config.log?.('warn', '[auto-mode] denial threshold crossed — engine downgraded to rules');
+        if (decision.trackDenial !== false) {
+          state.denials = recordDenialBlock(state.denials);
+          if (denialShouldFallback(state.denials)) {
+            transitionEngine('rules');
+            config.log?.('warn', '[auto-mode] denial threshold crossed — engine downgraded to rules');
+          }
         }
         return { action: 'block', reason: decision.reason };
 
@@ -598,5 +714,158 @@ function buildResolveOptions(
     userSettings: config.userSettings,
     defaultProvider: config.getDefaultProvider?.() ?? config.defaultProvider,
     defaultModel: config.getDefaultModel?.() ?? config.defaultModel,
+  };
+}
+
+const MAX_PERMISSION_REVIEW_BYTES = 8 * 1024;
+const MAX_PERMISSION_ACTION_EVIDENCE_BYTES = 1536;
+
+function serializePermissionReview(review: AutoModePermissionReview, action: string): string {
+  const actionEvidence = review.analysis.status === 'incomplete'
+    ? buildPermissionActionEvidence(action)
+    : undefined;
+  const envelope = actionEvidence ? { ...review, actionEvidence } : review;
+  const serialized = JSON.stringify(envelope);
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_PERMISSION_REVIEW_BYTES) return serialized;
+
+  const kindCounts: Record<string, number> = {};
+  const boundaryCounts: Record<string, number> = {};
+  for (const operation of review.operations) {
+    kindCounts[operation.kind] = (kindCounts[operation.kind] ?? 0) + 1;
+    for (const target of permissionOperationTargets(operation)) {
+      boundaryCounts[target.boundary] = (boundaryCounts[target.boundary] ?? 0) + 1;
+    }
+  }
+  const sampleOperations = selectPermissionOperationSamples(review.operations);
+  const sample = sampleOperations.map(compactPermissionOperation);
+  return JSON.stringify({
+    schemaVersion: review.schemaVersion,
+    analysis: review.analysis,
+    evidence: {
+      status: 'targeted',
+      sourceBytes: Buffer.byteLength(serialized, 'utf8'),
+      sha256: createHash('sha256').update(serialized).digest('hex'),
+    },
+    operationSummary: {
+      count: review.operations.length,
+      kindCounts,
+      boundaryCounts,
+      sample,
+    },
+    risks: review.risks,
+    ...(actionEvidence ? { actionEvidence } : {}),
+  });
+}
+
+function selectPermissionOperationSamples(
+  operations: readonly AutoModePermissionOperation[],
+): readonly AutoModePermissionOperation[] {
+  if (operations.length <= 8) return operations;
+  const risky = operations.filter((operation) => (
+    operation.kind === 'delete' || operation.kind === 'move' || operation.kind === 'rename'
+    || permissionOperationTargets(operation).some((target) => (
+      target.boundary !== 'workspace' && target.boundary !== 'system-temp'
+    ))
+  ));
+  if (risky.length === 0) return [...operations.slice(0, 4), ...operations.slice(-4)];
+
+  const candidates = [
+    ...risky.slice(0, 3), ...risky.slice(-3), operations[0]!, operations.at(-1)!,
+  ];
+  return [...new Set(candidates)].slice(0, 8);
+}
+
+function buildPermissionActionEvidence(action: string): Readonly<Record<string, string | number>> {
+  const sourceBytes = Buffer.byteLength(action, 'utf8');
+  const sha256 = createHash('sha256').update(action).digest('hex');
+  if (sourceBytes <= MAX_PERMISSION_ACTION_EVIDENCE_BYTES) {
+    return { status: 'complete', text: action, sourceBytes, sha256 };
+  }
+
+  const head = sliceUtf8(action, 1024, false);
+  const tail = sliceUtf8(action, 512, true);
+  const includedBytes = Buffer.byteLength(head, 'utf8') + Buffer.byteLength(tail, 'utf8');
+  return {
+    status: 'targeted',
+    text: `${head}\n… omitted …\n${tail}`,
+    sourceBytes,
+    includedBytes,
+    omittedBytes: sourceBytes - includedBytes,
+    sha256,
+  };
+}
+
+function sliceUtf8(value: string, maxBytes: number, fromEnd: boolean): string {
+  const characters = Array.from(value);
+  const selected: string[] = [];
+  let bytes = 0;
+  const start = fromEnd ? characters.length - 1 : 0;
+  const limit = fromEnd ? -1 : characters.length;
+  const step = fromEnd ? -1 : 1;
+  for (let index = start; index !== limit; index += step) {
+    const character = characters[index];
+    if (character === undefined) break;
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > maxBytes) break;
+    if (fromEnd) selected.unshift(character);
+    else selected.push(character);
+    bytes += characterBytes;
+  }
+  return selected.join('');
+}
+
+function permissionOperationTargets(
+  operation: AutoModePermissionOperation,
+): readonly AutoModePermissionTarget[] {
+  if ('target' in operation) return [operation.target];
+  if ('source' in operation) return [operation.source, operation.destination];
+  return [];
+}
+
+function compactPermissionOperation(
+  operation: AutoModePermissionOperation,
+): Readonly<Record<string, unknown>> {
+  if ('target' in operation) {
+    return {
+      kind: operation.kind,
+      target: { ...operation.target, path: compactPermissionPath(operation.target.path) },
+      ...(operation.options ? { options: operation.options } : {}),
+    };
+  }
+  if ('source' in operation) {
+    return {
+      kind: operation.kind,
+      source: { ...operation.source, path: compactPermissionPath(operation.source.path) },
+      destination: {
+        ...operation.destination,
+        path: compactPermissionPath(operation.destination.path),
+      },
+      ...(operation.options ? { options: operation.options } : {}),
+    };
+  }
+  return { ...operation, summary: compactPermissionPath(operation.summary) };
+}
+
+function compactPermissionPath(value: string): string {
+  if (value.length <= 320) return value;
+  return `${value.slice(0, 224)}…${value.slice(-95)}`;
+}
+
+function fallbackPermissionReview(
+  toolName: string,
+  action: string,
+  risk: string,
+): AutoModePermissionReview {
+  return {
+    schemaVersion: 1,
+    analysis: {
+      status: 'incomplete', shell: 'tool', binding: 'partial',
+      reason: 'deterministic permission facts are unavailable',
+    },
+    operations: [{
+      kind: 'unknown',
+      summary: `tool ${toolName}; projection_bytes=${Buffer.byteLength(action, 'utf8')}`,
+    }],
+    risks: [risk],
   };
 }

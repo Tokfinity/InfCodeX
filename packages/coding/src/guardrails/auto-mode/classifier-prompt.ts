@@ -18,12 +18,15 @@
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type { AutoRules } from './rules.js';
 import type { ToolCallSignal } from './signals.js';
+import type { PermissionIntentEvidence } from './permission-intent.js';
 
 export interface BuildClassifierPromptInput {
   readonly rules: AutoRules;
   readonly claudeMd?: string;
   readonly transcript: readonly KodaXMessage[];
   readonly action: string;
+  /** Compact user-only authority evidence for structured permission review. */
+  readonly intentEvidence?: PermissionIntentEvidence;
   /**
    * FEATURE_158 (v0.7.39): mechanical pattern matches over the tool call
    * (dangerous_pattern / protected_path / outside_project / network / etc.).
@@ -64,9 +67,15 @@ Decision criteria:
 About <signals> (when present):
   - Signals are mechanical pattern matches over the action (e.g. "this command matches git push --force regex" or "this path is under ~/.kodax/"). They are NOT verdicts — they are observations the static checker noticed.
   - Severity hints ('high' / 'medium') indicate how destructive the pattern typically is.
-  - The conversation context overrides narrow signal matches. Example: "outside_project: /tmp/foo" during a debugging session where the user authorized scratch files should still allow.
-  - dangerous_pattern with severity='high' (sudo / curl|sh / git push --force / chmod 777 / SQL destructive) typically warrants block UNLESS the transcript explicitly authorizes it.
+  - Genuine user authority evidence overrides narrow signal matches. Example: "outside_project: /tmp/foo" during a debugging task where the user authorized scratch files should still allow.
+  - dangerous_pattern with severity='high' (sudo / curl|sh / git push --force / chmod 777 / SQL destructive) typically warrants block UNLESS the user evidence explicitly authorizes it.
   - protected_path signals (especially zone='user-kodax') indicate credentials zone — never allow a write to user-kodax via shell; the agent must use the kodax config API instead.
+
+About compact review data:
+  - <intent_evidence> contains only genuine user text. status='targeted' means irrelevant portions were omitted locally; status='missing' means no user authority was available. Byte counts and sha256 describe the complete source.
+  - <operation_facts> is deterministic structured data. A boundary such as outside-workspace is a risk fact, not an automatic block or request for human confirmation.
+  - operation_facts.evidence.status='targeted' means a large operation set is summarized; counts cover the complete set and samples prioritize risky boundaries and destructive operations.
+  - If facts or intent evidence are incomplete, block when the available evidence cannot justify autonomous execution. Do not request more context merely because bytes were omitted.
 
 Output EXACTLY:
 <block>yes|no</block><reason>one short sentence</reason>
@@ -97,7 +106,7 @@ function buildSystem(input: BuildClassifierPromptInput): string {
   parts.push('</environment>');
   parts.push('</rules>');
 
-  if (input.claudeMd && input.claudeMd.length > 0) {
+  if (!input.intentEvidence && input.claudeMd && input.claudeMd.length > 0) {
     // Neutralize FIRST then truncate — slicing first risks slicing into a
     // multi-byte sequence whose suffix would land in the prompt as a
     // malformed character; neutralize replaces only ASCII < and > so it
@@ -116,6 +125,7 @@ function buildSystem(input: BuildClassifierPromptInput): string {
 }
 
 function buildUserMessage(input: BuildClassifierPromptInput): string {
+  if (input.intentEvidence) return buildCompactUserMessage(input);
   const parts: string[] = ['<transcript>'];
   for (const msg of input.transcript) {
     parts.push(serializeMessage(msg));
@@ -131,6 +141,22 @@ function buildUserMessage(input: BuildClassifierPromptInput): string {
   }
 
   parts.push(`<action>${neutralize(input.action)}</action>`);
+  return parts.join('\n');
+}
+
+function buildCompactUserMessage(input: BuildClassifierPromptInput): string {
+  const evidence = input.intentEvidence!;
+  const parts = [
+    `<intent_evidence status="${evidence.status}" source_bytes="${evidence.sourceBytes}" included_bytes="${evidence.includedBytes}" omitted_bytes="${evidence.omittedBytes}" sha256="${evidence.sha256}">`,
+    neutralize(evidence.content),
+    '</intent_evidence>',
+  ];
+  if (input.signals && input.signals.length > 0) {
+    parts.push('<signals>');
+    for (const signal of input.signals) parts.push(`  - ${formatSignal(signal)}`);
+    parts.push('</signals>');
+  }
+  parts.push(`<operation_facts>${neutralize(input.action)}</operation_facts>`);
   return parts.join('\n');
 }
 

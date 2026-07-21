@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-20_
+_Last Updated: 2026-07-21_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-20_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 191 | High | Resolved | Auto permission review lacked a complete, compact mutation model | v0.7.33 | v0.7.73 | 2026-07-21 | 2026-07-21 |
 | 190 | High | Resolved | Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries | v0.7.72 and earlier; expanded v0.7.73 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 189 | High | Resolved | Auto sidecar effort, Runtime session settings, and reasoning command state could diverge | v0.7.33; expanded v0.7.73 | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 188 | High | Resolved | Auto classifier projection, transcript boundaries, and first-run environment ordering were incomplete | v0.7.33; expanded v0.7.72 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
@@ -100,6 +101,177 @@ _Last Updated: 2026-07-20_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 191: Auto permission review lacked a complete, compact mutation model
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.73)
+- **Introduced**: v0.7.33
+- **Fixed**: v0.7.73
+- **Created**: 2026-07-21
+- **Resolved**: 2026-07-21
+
+#### Original Problem
+
+`createAutoModeToolGuardrail` documented a deterministic Tier-2 rules layer,
+but the `rules` engine only implemented Tier 1. Every non-Tier-1 call was
+therefore escalated to `askUser`, including `write`, `edit`, and `multi_edit`
+calls whose normalized targets were inside the Runtime project boundary. SDK
+embedders such as KodaX Space consequently received `permission.requested`
+events for ordinary workspace edits in explicit `Auto[rules]` mode.
+
+The shared reason string also claimed that the engine was "downgraded" even
+when the user had explicitly selected `rules`.
+
+Release review then exposed the unsafe inverse: Tier 2 reused a generic target
+collector as if it were an exhaustive authorization model. PowerShell named
+and positional binding was command-dependent, so the following commands could
+bind their real outside-workspace target to a later argument while Tier 2
+validated an earlier value and returned `allow`: `Copy-Item`, `Move-Item`,
+`Set-Content`, `Out-File`, `New-Item`, and `Remove-Item`.
+
+The LLM path also forwarded a bounded session transcript plus AGENTS.md and a
+raw action projection. That input was larger and less precise than the facts
+needed for authorization, and a byte-budget overflow escalated directly to the
+user instead of changing evidence strategy.
+
+#### Expected Behavior
+
+- Deterministic file mutations inside the Runtime workspace or a system temp
+  directory are allowed without a prompt, except for protected KodaX/config
+  zones.
+- Read-only shell commands are allowed regardless of their target directory.
+- In explicit rules mode, writes outside workspace/temp, unresolved paths,
+  link escapes, unknown tools, and unmodelled/high-risk shell operations are
+  never auto-allowed. In LLM mode these facts go to the permission reviewer.
+- Runtime remains the sole permission decision owner; embedders must not add
+  unconditional per-tool bypasses.
+- The permission LLM receives the user's authority plus complete, atomic
+  mutation facts. An outside-workspace boundary is evidence for that reviewer,
+  not an automatic request for human confirmation.
+- Explicit `rules` mode remains LLM-free by definition: it may auto-allow only
+  fully resolved in-boundary operations and otherwise uses its existing
+  confirmation path.
+- Input size alone never triggers a confirmation dialog in the compact review
+  path. Oversized intent and operation lists become explicit, content-addressed
+  targeted evidence; if even that contract is violated, the call fails closed.
+
+#### Root Cause
+
+The common guardrail stopped after Tier 1 whenever its engine was `rules` and
+immediately escalated. The original Tier-2 design had never been connected to
+the REPL's canonical path and shell-AST utilities. Because those utilities
+belong to `@kodax-ai/repl`, implementing the missing decision directly inside
+`@kodax-ai/coding` would either duplicate parsing logic or violate package
+layer independence.
+
+The first Tier-2 implementation then treated
+`collectDeterministicBashWriteTargets()` as complete. Its PowerShell helper
+recognized only a few target-looking flags and otherwise selected the first
+non-flag token. It did not model which parameters consume values or the
+source/destination relationship of copy, move, and rename operations.
+
+Separately, the classifier prompt conflated conversational history with
+authorization evidence. Truncating that mixed payload reduced precision, while
+overflow escalation converted an internal representation limit into user work.
+
+#### Resolution
+
+- Add a typed Tier-2 evaluator hook to the common guardrail and inject the
+  deterministic implementation from the Runtime bootstrap. The guardrail is
+  still the single authorization decision point; a direct SDK consumer that
+  omits the hook continues to fail closed.
+- Allow `write`, `edit`, `multi_edit`, and `insert_after_anchor` only when the
+  canonical target is inside the Runtime project or a system temp directory.
+  Resolve the deepest existing prefix through symlinks/junctions so a lexical
+  in-workspace path cannot hide an external target.
+- In explicit rules mode, escalate missing/unresolvable paths, link escapes,
+  sensitive config or credential paths, out-of-boundary writes, unknown tools,
+  high-risk shell patterns, dynamic shell targets, partially unmodelled
+  compound commands, and effects whose actual mutation cannot be determined.
+- In rules mode, allow established read-only shell commands outside the
+  project. Allow fully modeled shell writes (including compounds and
+  pipelines) only when every deterministic mutation target passes the same
+  canonical project/temp boundary.
+- Replace the unconditional "downgraded" copy with neutral rules-engine text;
+  automatic transition logs still accurately say "downgraded" at the moment
+  a denial/circuit threshold causes that transition.
+- Replace PowerShell target guessing with command-specific parameter models.
+  Named parameters bind before positional arguments; known value/switch
+  parameters, unambiguous abbreviations, `-Path`/`-LiteralPath`, destination,
+  and command-specific fields are modeled explicitly. Unknown, ambiguous,
+  dynamic, wildcard, array, non-filesystem provider, or remote-session syntax
+  is marked incomplete and cannot be rules-auto-allowed.
+- Match supported PowerShell positional metadata and aliases such as
+  `-PSPath`, `-Type`, `-UseTx`, and `-NoOverwrite`. Preserve `-WhatIf` as a
+  non-mutating fact, while link-producing `New-Item` types remain incomplete
+  until their target relationship can be represented atomically.
+- Represent move/copy/rename as atomic source-to-destination operations. The
+  review preserves operation kind, canonical boundary, force/recursive/
+  overwrite facts, and risks such as source removal, cross-boundary mutation,
+  protected paths, and possible destination overwrite.
+- Feed the LLM a compact JSON permission review plus user-only intent evidence.
+  Assistant prose, tool-result bodies, and AGENTS.md are excluded. Oversized
+  user intent and unusually large operation lists are locally selected into
+  bounded evidence with source byte counts and SHA-256 identity; budget alone
+  does not ask the user to decide.
+- Large operation summaries prioritize outside/protected/unresolved and
+  destructive operations instead of sampling only the list edges. A local
+  compact-evidence budget block does not count as a model denial and therefore
+  cannot indirectly downgrade the session to rules mode.
+- When deterministic analysis is incomplete, retain a bounded command
+  projection (complete up to 1.5 KiB, otherwise head/tail targeted evidence)
+  plus byte counts and SHA-256 identity. This keeps the reviewer informed about
+  unmodelled commands without restoring the full raw-context payload.
+- Keep the legacy classifier API backward compatible for external callers that
+  do not inject a deterministic analyzer. Runtime and REPL paths always inject
+  the new analyzer.
+
+#### Files Modified
+
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
+- `packages/coding/src/index.ts`
+- `packages/repl/src/permission/auto-rules.ts`
+- `packages/repl/src/permission/auto-rules.test.ts`
+- `packages/repl/src/permission/powershell-mutation.ts`
+- `packages/repl/src/permission/powershell-mutation.test.ts`
+- `packages/repl/src/permission/permission.ts`
+- `packages/repl/src/permission/permission.test.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.test.ts`
+- `packages/repl/src/common/permission-config.ts`
+- `packages/repl/src/interactive/commands.ts`
+- `packages/repl/src/ui/types.ts`
+- `packages/repl/src/ui/view-models/status-bar.ts`
+- `packages/repl/src/ui/view-models/status-bar.test.ts`
+- `packages/coding/src/guardrails/auto-mode/permission-intent.ts`
+- `packages/coding/src/guardrails/auto-mode/permission-intent.test.ts`
+- `packages/coding/src/guardrails/auto-mode/classifier-prompt.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.ts`
+- `docs/test-guides/ISSUE_191_v0.7.73_REGRESSION_GUIDE.md`
+
+#### Verification
+
+- RED: the Tier-2 suite first reproduced the missing evaluator. The PowerShell
+  regression then failed all six reported forms because no command-level
+  assessment existed. Compact-review tests reproduced transcript/AGENTS.md
+  forwarding and the 16 KiB action-overflow escalation.
+- Final focused permission regression: 9 files, 390 passed, 1 existing
+  platform skip.
+- `npm test --workspace @kodax-ai/repl -- --reporter=dot`
+  (final run: 221 files passed / 2496 tests passed / 1 skipped, plus one
+  unrelated session hook timeout under concurrent package load; the isolated
+  session file then passed 35/35)
+- `npm test --workspace @kodax-ai/coding -- --reporter=dot`
+  (final run: 385 files passed / 4048 tests passed / 21 todo, plus one
+  unrelated delayed-stream timing assertion; the isolated assertion then
+  passed 1/1)
+- Focused V8 coverage over the four core modules: 92.42% statements/lines,
+  85.31% branches, and 97.36% functions.
+- `npx vitest run src/sdk-runtime.test.ts -t "runs explicit auto engines inside Runtime|derives Runtime auto path context|executes the Runtime auto guardrail before|activates the Runtime-owned Auto guardrail" --reporter=dot`
+  (4 passed)
+- `npx tsc -b tsconfig.build.json --pretty false`
 
 ### 190: Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries
 
@@ -5392,7 +5564,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 77 (26 Open, 51 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 78 (26 Open, 52 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

@@ -76,7 +76,7 @@ export interface AutoModeSettings {
   /**
    * Starting engine for the session.
    * - `'llm'` (default): classifier runs on every non-Tier-1 tool call
-   * - `'rules'`: classifier skipped; every non-Tier-1 call escalates to askUser
+   * - `'rules'`: classifier skipped; deterministic workspace/temp Tier 2 applies
    * Engine downgrades stay sticky within the session regardless of this value.
    */
   engine?: 'llm' | 'rules';

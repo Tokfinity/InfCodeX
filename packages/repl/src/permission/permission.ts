@@ -25,6 +25,7 @@ import { isToolPlanModeAllowed } from '@kodax-ai/coding';
 
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 import { isNullDevice, parseBashCommand } from './bash-ast.js';
+import { analyzePowerShellMutation } from './powershell-mutation.js';
 
 const PLAN_MODE_PROJECT_DOC_RELATIVE_PATH = path.join('.agent', 'plan_mode_doc.md');
 const existingPathPrefixCache = new Map<string, string>();
@@ -1290,32 +1291,13 @@ function collectTeeTargets(stage: { readonly argv: readonly string[] }): string[
   return targets;
 }
 
-/**
- * From a stage whose `argv[0]` is a PowerShell write verb (Set-Content,
- * Out-File, New-Item, etc.), find the target path. PowerShell verbs use
- * `-Path <value>` for the target; if absent, the first non-flag
- * positional is the target (`Set-Content foo.txt`).
- */
 function collectPowerShellWriteTargets(stage: { readonly argv: readonly string[] }): string[] {
+  const analysis = analyzePowerShellMutation(stage.argv);
   const targets: string[] = [];
-  let i = 1;
-  let positionalSeen = false;
-  while (i < stage.argv.length) {
-    const tok = stage.argv[i]!;
-    const lower = tok.toLowerCase();
-    if (lower === '-path' || lower === '-literalpath' || lower === '-destination') {
-      const next = stage.argv[i + 1];
-      if (next !== undefined && !next.startsWith('-')) {
-        targets.push(next);
-        i += 2;
-        continue;
-      }
-    }
-    if (!tok.startsWith('-') && !positionalSeen) {
-      targets.push(tok);
-      positionalSeen = true;
-    }
-    i += 1;
+  for (const operation of analysis.operations) {
+    if ('target' in operation) targets.push(operation.target);
+    else if (operation.kind === 'copy') targets.push(operation.destination);
+    else targets.push(operation.source, operation.destination);
   }
   return targets;
 }

@@ -209,6 +209,21 @@ describe('replBashUserKodaxWriteDeny', () => {
     )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
   });
 
+  it.each([
+    `Copy-Item replacement.json "${USER_KODAX}/copied.json"`,
+    `Move-Item -Force replacement.json "${USER_KODAX}/moved.json"`,
+    `Set-Content -Value data "${USER_KODAX}/set.json"`,
+    `Out-File -InputObject data -FilePath "${USER_KODAX}/out.json"`,
+    `New-Item -ItemType File "${USER_KODAX}/new.json"`,
+    `Remove-Item -Filter harmless.txt "${USER_KODAX}/old.json"`,
+  ])('hard-denies command-bound PowerShell mutation target: %s', (command) => {
+    expect(replBashUserKodaxWriteDeny(
+      bash(command),
+      PROJECT_ROOT,
+      PROJECT_ROOT,
+    )).toMatchObject({ denied: true, patternId: 'user_kodax_write' });
+  });
+
   it('hard-denies redirects through an absolute nested shell executable', () => {
     const shell = process.platform === 'win32'
       ? '"C:\\Program Files\\Git\\bin\\bash.exe"'

@@ -336,6 +336,29 @@ describe('classify', () => {
     expect(providerCalls).toBe(0);
   });
 
+  it('fail-closes compact review evidence instead of asking the user solely because of size', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream('<block>no</block><reason>safe</reason>');
+    });
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      intentEvidence: {
+        status: 'targeted', content: 'Run the generator.', sourceBytes: 18,
+        includedBytes: 18, omittedBytes: 0, sha256: 'a'.repeat(64),
+      },
+      action: 'x'.repeat(MAX_CLASSIFIER_ACTION_BYTES + 1),
+    });
+
+    expect(result.kind).toBe('block');
+    expect(result.reason).toMatch(/budget|evidence/i);
+    expect(providerCalls).toBe(0);
+  });
+
   it('writes the post-call cost tracker back via setCostTracker (FEATURE_092 §7 regression)', async () => {
     // Regression for the bug surfaced by tests/auto-mode-cross-provider.eval.ts:
     // sideQuery's CostTracker is immutable; recordUsage returns a new copy that

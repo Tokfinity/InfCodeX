@@ -483,6 +483,23 @@ describe('collectBashWriteTargets — FEATURE_152 AST hardening', () => {
     expect(targets).toContain('foo.txt');
   });
 
+  it.each([
+    ['Copy-Item inside.txt outside.txt', ['outside.txt'], ['inside.txt']],
+    ['Move-Item -Force inside.txt outside.txt', ['inside.txt', 'outside.txt'], []],
+    ['Set-Content -Value data outside.txt', ['outside.txt'], ['data']],
+    ['Out-File -InputObject data -FilePath outside.txt', ['outside.txt'], ['data']],
+    ['New-Item -ItemType File outside.txt', ['outside.txt'], ['File']],
+    ['Remove-Item -Filter harmless.txt outside.txt', ['outside.txt'], ['harmless.txt']],
+  ] as const)(
+    'binds PowerShell mutation targets by command semantics: %s',
+    async (command, included, excluded) => {
+      const { collectDeterministicBashWriteTargets } = await import('./permission.js');
+      const targets = collectDeterministicBashWriteTargets(command);
+      for (const target of included) expect(targets).toContain(target);
+      for (const value of excluded) expect(targets).not.toContain(value);
+    },
+  );
+
   it('returns paths-only on unparseable input (fallback safety)', async () => {
     // `$(...)` makes AST unparseable, so the AST pass in
     // extractPathsFromCommand contributes nothing. The legacy regex pass
@@ -746,9 +763,7 @@ describe('isBashWriteCommand — FEATURE_152 attack-surface hardening', () => {
   });
 
   it('flags Out-File even when invoked with -FilePath instead of -Path', () => {
-    // -FilePath is an Out-File-specific alias. Our collectPowerShellWriteTargets
-    // recognises -Path / -LiteralPath / -Destination explicitly; -FilePath
-    // is treated as a flag and the first positional becomes the target.
+    // -FilePath is bound by the command-specific Out-File parameter model.
     // The write-detection itself only needs argv[0] match → still flags.
     expect(isBashWriteCommand('Get-Content foo | Out-File -FilePath bar.txt')).toBe(true);
   });

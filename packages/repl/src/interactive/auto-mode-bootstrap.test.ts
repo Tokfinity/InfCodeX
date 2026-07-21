@@ -15,7 +15,9 @@
  * so here we only verify wiring.
  */
 
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type { GuardrailContext } from '@kodax-ai/agent';
 
 // `bootstrapAutoMode` calls `loadAutoRules` against the real filesystem.
 // We mock it to return an empty merge so the test doesn't depend on the
@@ -48,6 +50,7 @@ import {
   createCircuitBreaker,
   type AutoModeSharedState,
 } from '@kodax-ai/coding';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 
 const baseDeps = () => ({
   askUser: vi.fn(async () => 'allow' as const),
@@ -121,6 +124,61 @@ describe('bootstrapAutoMode', () => {
     });
     const g = result.getGuardrail();
     expect(g.getEngineForTest()).toBe('rules');
+  });
+
+  it('wires Runtime-owned Tier 2 so an in-workspace edit in rules mode needs no prompt', async () => {
+    const projectRoot = createTempDirSync('kodax-bootstrap-rules-', process.cwd());
+    const askUser = vi.fn(async () => 'allow' as const);
+    try {
+      const result = await bootstrapAutoMode({
+        ...baseDeps(),
+        askUser,
+        projectRoot,
+        executionCwd: projectRoot,
+        autoModeSettings: { engine: 'rules' as const },
+      });
+      const verdict = await result.getGuardrail().beforeTool!(
+        { id: 'edit-1', name: 'edit', input: { path: 'src/inside.ts' } },
+        {
+          agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+          abortSignal: new AbortController().signal,
+        },
+      );
+
+      expect(verdict.action).toBe('allow');
+      expect(askUser).not.toHaveBeenCalled();
+    } finally {
+      removeTempDirSync(projectRoot);
+    }
+  });
+
+  it('keeps an out-of-workspace edit behind confirmation without falsely calling rules a downgrade', async () => {
+    const projectRoot = createTempDirSync('kodax-bootstrap-rules-', process.cwd());
+    const outsideRoot = createTempDirSync('kodax-bootstrap-outside-', process.cwd());
+    const askUser = vi.fn(async () => 'allow' as const);
+    try {
+      const result = await bootstrapAutoMode({
+        ...baseDeps(),
+        askUser,
+        projectRoot,
+        executionCwd: projectRoot,
+        autoModeSettings: { engine: 'rules' as const },
+      });
+      const verdict = await result.getGuardrail().beforeTool!(
+        { id: 'edit-2', name: 'edit', input: { path: path.join(outsideRoot, 'outside.ts') } },
+        {
+          agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+          abortSignal: new AbortController().signal,
+        },
+      );
+
+      expect(verdict.action).toBe('allow');
+      expect(askUser).toHaveBeenCalledOnce();
+      expect(askUser.mock.calls[0]?.[1]).not.toMatch(/downgraded/i);
+    } finally {
+      removeTempDirSync(projectRoot);
+      removeTempDirSync(outsideRoot);
+    }
   });
 
   it('does not eagerly construct the guardrail (lazy on first getGuardrail)', async () => {

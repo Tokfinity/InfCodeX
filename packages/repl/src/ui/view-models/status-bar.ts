@@ -138,7 +138,7 @@ function getPermissionModeColor(permissionMode: StatusBarProps["permissionMode"]
  * display because the deprecation notice surfaces once at startup; the
  * status bar doesn't need to re-litigate it every frame.
  *
- * The engine suffix (`[LLM]` healthy / `[RULES]` downgraded) is uppercase
+ * The engine suffix (`[LLM]` classifier / `[RULES]` deterministic) is uppercase
  * regardless — LLM is an acronym, and `[OK]` / `[ERROR]` / `[WARN]`-style
  * uppercase status indicators are the terminal convention.
  */

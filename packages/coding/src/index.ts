@@ -1220,6 +1220,14 @@ export type {
   AutoModeToolGuardrail,
   AutoModeAskUser,
   AutoModeAskUserVerdict,
+  AutoModeRulesContext,
+  AutoModeRulesDecision,
+  AutoModeRulesEvaluator,
+  AutoModePermissionBoundary,
+  AutoModePermissionTarget,
+  AutoModePermissionOperation,
+  AutoModePermissionReview,
+  AutoModeCallAnalyzer,
   AutoModeStats,
 } from './guardrails/auto-mode/guardrail.js';
 

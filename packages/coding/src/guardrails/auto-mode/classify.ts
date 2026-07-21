@@ -34,6 +34,7 @@ import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';
 import type { AutoRules } from './rules.js';
 import type { ToolCallSignal } from './signals.js';
+import type { PermissionIntentEvidence } from './permission-intent.js';
 import { stripAssistantText } from './transcript-strip.js';
 import {
   redactClassifierProjection,
@@ -47,6 +48,7 @@ export interface ClassifyOptions {
   readonly claudeMd?: string;
   readonly transcript: readonly KodaXMessage[];
   readonly action: string;
+  readonly intentEvidence?: PermissionIntentEvidence;
   /** Resolve canonical per-tool projections for safe historical context. */
   readonly getToolProjection?: ClassifierToolProjectionResolver;
   /**
@@ -73,6 +75,8 @@ export interface ClassifyOptions {
 
 interface ClassifyDecisionDetails {
   readonly reason: string;
+  /** False for a local representation-limit block that should not degrade the engine. */
+  readonly trackDenial?: boolean;
   /** Structured request metadata only; never includes prompt or response text. */
   readonly diagnostics?: SideQueryDiagnostics;
 }
@@ -99,8 +103,9 @@ const QUERY_SOURCE = 'auto_mode';
 export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision> {
   if (utf8Bytes(opts.action) > MAX_CLASSIFIER_ACTION_BYTES) {
     return {
-      kind: 'escalate',
+      kind: opts.intentEvidence ? 'block' : 'escalate',
       reason: `classifier input budget exceeded (action is larger than ${MAX_CLASSIFIER_ACTION_BYTES} bytes)`,
+      ...(opts.intentEvidence ? { trackDenial: false } : {}),
     };
   }
   const action = redactClassifierProjection(opts.action);
@@ -110,16 +115,18 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     claudeMd: opts.claudeMd,
     // Enforce the boundary at the classifier API itself so future callers
     // cannot accidentally bypass the session-history cap.
-    transcript: stripAssistantText(opts.transcript, {
+    transcript: opts.intentEvidence ? [] : stripAssistantText(opts.transcript, {
       getToolProjection: opts.getToolProjection,
     }),
     action,
+    intentEvidence: opts.intentEvidence,
     signals: opts.signals,
   });
   if (classifierPromptBytes(prompt.system, prompt.messages) > MAX_CLASSIFIER_PROMPT_BYTES) {
     return {
-      kind: 'escalate',
+      kind: opts.intentEvidence ? 'block' : 'escalate',
       reason: `classifier input budget exceeded (prompt is larger than ${MAX_CLASSIFIER_PROMPT_BYTES} bytes)`,
+      ...(opts.intentEvidence ? { trackDenial: false } : {}),
     };
   }
 

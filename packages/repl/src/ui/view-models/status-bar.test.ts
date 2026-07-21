@@ -146,7 +146,7 @@ describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_09
     expect(text).not.toMatch(/\bAUTO\b/);
   });
 
-  it("renders Auto[RULES] when engine=rules (downgraded)", () => {
+  it("renders Auto[RULES] when the deterministic rules engine is active", () => {
     const text = getStatusBarText(baseProps({ permissionMode: "auto", autoModeEngine: "rules" }));
     expect(text).toContain("Auto[RULES]");
   });

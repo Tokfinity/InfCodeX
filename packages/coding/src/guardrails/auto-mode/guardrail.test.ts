@@ -321,7 +321,33 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
     expect(verdict.action).toBe('allow');
     expect(classifierCalled).toBe(false);
     expect(askUser).toHaveBeenCalledOnce();
-    expect(askUser.mock.calls[0]![1]).toMatch(/rules mode/i);
+    expect(askUser.mock.calls[0]![1]).toMatch(/rules engine/i);
+    expect(askUser.mock.calls[0]![1]).not.toMatch(/downgraded/i);
+  });
+
+  it('uses the Runtime Tier-2 evaluator before asking the user in rules mode', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const evaluateRulesCall = vi.fn(() => ({ action: 'allow' as const }));
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      askUser,
+      evaluateRulesCall,
+      initialEngine: 'rules',
+      projectRoot: '/project',
+      executionCwd: '/project/packages/app',
+    });
+
+    const verdict = await g.beforeTool!(callBash('echo ok > result.txt'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(askUser).not.toHaveBeenCalled();
+    expect(evaluateRulesCall).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'bash' }),
+      expect.objectContaining({
+        projectRoot: '/project',
+        executionCwd: '/project/packages/app',
+      }),
+    );
   });
 
   it('initialEngine omitted defaults to "llm" (existing behaviour preserved)', async () => {
@@ -433,7 +459,30 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(verdict.action).toBe('allow');
     expect(askUser).toHaveBeenCalledOnce();
-    expect(askUser.mock.calls[0]![1]).toMatch(/rules mode/i);
+    expect(askUser.mock.calls[0]![1]).toMatch(/rules engine/i);
+    expect(askUser.mock.calls[0]![1]).not.toMatch(/downgraded/i);
+  });
+
+  it('uses the Tier-2 escalation reason when rules cannot safely allow a call', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      askUser,
+      initialEngine: 'rules',
+      evaluateRulesCall: () => ({
+        action: 'escalate',
+        reason: 'outside workspace boundary',
+      }),
+    });
+
+    const verdict = await g.beforeTool!(callBash('echo no > ../outside.txt'), ctx());
+
+    expect(verdict).toEqual({ action: 'block', reason: 'outside workspace boundary' });
+    expect(askUser).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'bash' }),
+      'outside workspace boundary',
+      expect.any(Array),
+    );
   });
 
   it('askUser NOT supplied → existing escalate verdict preserved (backward compat)', async () => {
@@ -947,6 +996,200 @@ describe('AutoModeToolGuardrail — signals threading (FEATURE_158)', () => {
     await g.beforeTool!(callBash('ls'), ctx());
     expect(extraCalled).toBe(true);
     expect(capturedContent).toContain('protected_path');
+  });
+});
+
+describe('AutoModeToolGuardrail — compact permission review', () => {
+  const moveReview = {
+    schemaVersion: 1 as const,
+    analysis: {
+      status: 'complete' as const,
+      shell: 'powershell' as const,
+      binding: 'exact' as const,
+    },
+    operations: [{
+      kind: 'move' as const,
+      source: { path: 'src/a.txt', boundary: 'workspace' as const },
+      destination: { path: 'D:/outside/b.txt', boundary: 'outside-workspace' as const },
+      options: { force: true },
+    }],
+    risks: ['cross_boundary_mutation', 'source_removed'],
+  };
+
+  it('sends exact operation facts and user intent without AGENTS.md or tool-output history', async () => {
+    let userContent = '';
+    let systemContent = '';
+    const provider = new StubProvider(okResult('<block>no</block><reason>authorized move</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      userContent = messages[0]?.content as string;
+      systemContent = system;
+      return original(messages, tools, system, reasoning, options, signal);
+    };
+    const getClaudeMd = vi.fn(() => 'LARGE PROJECT DOCUMENT MUST NOT BE FORWARDED');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      getClaudeMd,
+      analyzeCall: () => moveReview,
+    });
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Move the generated artifact to D:/outside/b.txt.' },
+      { role: 'assistant', content: 'ASSISTANT NARRATION MUST NOT BE FORWARDED' },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'old-call',
+          content: 'RAW TOOL OUTPUT MUST NOT BE FORWARDED',
+        }],
+      },
+    ];
+
+    const verdict = await guardrail.beforeTool!(
+      callBash('Move-Item -Force src/a.txt D:/outside/b.txt'),
+      ctx(messages),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(userContent).toContain('<intent_evidence');
+    expect(userContent).toContain('Move the generated artifact');
+    expect(userContent).toContain('"kind":"move"');
+    expect(userContent).toContain('"boundary":"outside-workspace"');
+    expect(userContent).not.toContain('ASSISTANT NARRATION');
+    expect(userContent).not.toContain('RAW TOOL OUTPUT');
+    expect(systemContent).not.toContain('LARGE PROJECT DOCUMENT');
+    expect(getClaudeMd).not.toHaveBeenCalled();
+  });
+
+  it('does not escalate solely because the raw command exceeds the legacy action budget', async () => {
+    let userContent = '';
+    const provider = new StubProvider(okResult('<block>yes</block><reason>opaque payload</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      userContent = messages[0]?.content as string;
+      return original(messages, tools, system, reasoning, options, signal);
+    };
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: {
+          status: 'incomplete',
+          shell: 'shell',
+          binding: 'partial',
+          reason: 'inline program body omitted from permission facts',
+        },
+        operations: [{ kind: 'unknown', summary: 'python inline program (50000 bytes)' }],
+        risks: ['opaque_payload'],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      callBash(`python -c "${'x'.repeat(50_000)}"`),
+      ctx([{ role: 'user', content: 'Run the local generator.' }]),
+    );
+
+    expect(verdict).toMatchObject({ action: 'block', reason: 'opaque payload' });
+    expect(userContent).toContain('"actionEvidence"');
+    expect(userContent).toContain('"status":"targeted"');
+    expect(userContent).toContain('python -c');
+    expect(Buffer.byteLength(userContent, 'utf8')).toBeLessThan(20 * 1024);
+  });
+
+  it('summarizes an oversized operation list with counts, samples, and content identity', async () => {
+    let userContent = '';
+    const provider = new StubProvider(okResult('<block>no</block><reason>batch authorized</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      userContent = messages[0]?.content as string;
+      return original(messages, tools, system, reasoning, options, signal);
+    };
+    const operations = Array.from({ length: 300 }, (_, index) => ({
+      kind: 'write' as const,
+      target: {
+        path: index === 150
+          ? `D:/outside/${String(index).padStart(4, '0')}-risky.txt`
+          : `src/generated/${String(index).padStart(4, '0')}-${'long-name-'.repeat(20)}.txt`,
+        boundary: index === 150 ? 'outside-workspace' as const : 'workspace' as const,
+      },
+    }));
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+        operations,
+        risks: ['outside_workspace_mutation'],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'batch', name: 'write', input: { path: 'src/generated' } },
+      ctx([{ role: 'user', content: 'Generate the workspace fixtures.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(userContent).toContain('"status":"targeted"');
+    expect(userContent).toContain('"count":300');
+    expect(userContent).toContain('D:/outside/0150-risky.txt');
+    expect(userContent).toMatch(/"sha256":"[a-f0-9]{64}"/);
+    expect(Buffer.byteLength(userContent, 'utf8')).toBeLessThan(20 * 1024);
+  });
+
+  it('does not downgrade to rules when compact evidence is locally blocked by its byte budget', async () => {
+    const provider = new StubProvider(okResult('<block>no</block><reason>unused</reason>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+        operations: [{
+          kind: 'write', target: { path: 'src/generated.ts', boundary: 'workspace' },
+        }],
+        risks: Array.from({ length: 40 }, (_, index) => `risk-${index}-${'x'.repeat(1000)}`),
+      }),
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      const verdict = await guardrail.beforeTool!(
+        { id: `oversized-${index}`, name: 'write', input: { path: 'src/generated.ts' } },
+        ctx([{ role: 'user', content: 'Generate the workspace file.' }]),
+      );
+      expect(verdict).toMatchObject({ action: 'block' });
+    }
+
+    expect(guardrail.getEngine()).toBe('llm');
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it('keeps analyzer failure inside LLM review instead of prompting by default', async () => {
+    let userContent = '';
+    const provider = new StubProvider(okResult('<block>yes</block><reason>facts unavailable</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      userContent = messages[0]?.content as string;
+      return original(messages, tools, system, reasoning, options, signal);
+    };
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'allow');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''), resolveProvider: () => provider, askUser,
+      analyzeCall: () => { throw new Error('parser crashed'); },
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      callBash('custom-writer'),
+      ctx([{ role: 'user', content: 'Run the custom writer.' }]),
+    );
+
+    expect(verdict).toMatchObject({ action: 'block', reason: 'facts unavailable' });
+    expect(userContent).toContain('analyzer_failed');
+    expect(userContent).toContain('projection_bytes=');
+    expect(askUser).not.toHaveBeenCalled();
   });
 });
 

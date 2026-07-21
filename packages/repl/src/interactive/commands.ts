@@ -1106,7 +1106,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       await callbacks.setAutoModeEngine?.(newEngine);
       console.log(chalk.cyan(`\n[auto-engine] switched to ${newEngine}`));
       if (newEngine === 'rules') {
-        console.log(chalk.dim('  every non-Tier-1 tool call now escalates to user confirmation'));
+        console.log(chalk.dim('  deterministic workspace/temp rules are now active'));
       } else {
         console.log(chalk.dim('  classifier consultation resumed; threshold downgrades still apply'));
       }
@@ -1116,7 +1116,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /auto-engine                 ') + 'Show current engine + denial/breaker counts');
       console.log(chalk.dim('  /auto-engine llm             ') + 'Resume classifier consultation (default)');
-      console.log(chalk.dim('  /auto-engine rules           ') + 'Skip classifier; every non-Tier-1 call asks user');
+      console.log(chalk.dim('  /auto-engine rules           ') + 'Skip classifier; use deterministic workspace/temp rules');
       console.log();
       console.log(chalk.bold('Notes:'));
       console.log(chalk.dim('  - Only meaningful in auto mode (/mode auto).'));
@@ -1148,7 +1148,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim(`    errors in window:   ${stats.breaker.timestamps.filter((t) => t >= Date.now() - 10 * 60 * 1000).length} / 5 (10 min)`));
       console.log();
       if (stats.engine === 'rules') {
-        console.log(chalk.yellow('  ↪ engine has downgraded to rules. /auto-engine llm to flip back.'));
+        console.log(chalk.yellow('  ↪ rules engine is active. /auto-engine llm to enable the classifier.'));
       }
       console.log();
     },
