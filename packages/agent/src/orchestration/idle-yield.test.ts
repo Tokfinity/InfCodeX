@@ -123,6 +123,6 @@ describe('Actor-aware idle yield', () => {
     }, () => [], undefined, onUserPrompts);
 
     expect(messages).toMatchObject([{ role: 'user', content: 'change direction' }]);
-    expect(onUserPrompts).toHaveBeenCalledWith(['change direction']);
+    expect(onUserPrompts).toHaveBeenCalledWith(['change direction'], ['msg-1']);
   });
 });

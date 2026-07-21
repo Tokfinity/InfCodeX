@@ -35,6 +35,7 @@ import type { AutoModeBootstrapDeps } from '@kodax-ai/repl';
 import type {
   RuntimeDaemonClientTransport,
   RuntimeEvent,
+  RuntimeInput,
   RuntimeStartRunInput,
 } from './sdk-runtime.js';
 import type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
@@ -1229,6 +1230,14 @@ describe('createKodaXRuntime', () => {
       phase: 'running',
       startedAt: '2026-07-09T00:00:00.000Z',
       provider: 'mock-provider',
+      interruptInputs: [{
+        inputId: 'input-crashed',
+        afterRunId: 'run-crashed',
+        delivery: 'interrupt',
+        state: 'queued',
+        contentPreview: 'lost on restart',
+        queuedAt: '2026-07-09T00:00:01.000Z',
+      }],
     }), 'utf-8');
     await fs.writeFile(path.join(queuedRunDir, 'status.json'), JSON.stringify({
       runId: 'run-queued',
@@ -1250,6 +1259,10 @@ describe('createKodaXRuntime', () => {
         code: 'daemon_crashed',
         effectOutcome: 'unknown',
       },
+      interruptInputs: [expect.objectContaining({
+        inputId: 'input-crashed',
+        state: 'terminal',
+      })],
     });
     await expect(runtime.runs.get('run-queued')).resolves.toMatchObject({
       runId: 'run-queued',
@@ -1321,6 +1334,60 @@ describe('createKodaXRuntime', () => {
     await expect(runtime.events.replay({ runId })).resolves.toEqual([
       expect.objectContaining({ type: 'run.completed' }),
     ]);
+    await runtime.close();
+  });
+
+  it('recovers delivered interrupt state from its durable batch event', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runId = 'run-durable-interrupt-event';
+    const sessionId = 'session-durable-interrupt-event';
+    const runDir = path.join(tempRoot, '.kodax', 'runtime', 'runs', runId);
+    const queuedAt = '2026-07-09T00:00:01.000Z';
+    const deliveredAt = '2026-07-09T00:00:02.000Z';
+    await fs.mkdir(runDir, { recursive: true });
+    await fs.writeFile(path.join(runDir, 'status.json'), JSON.stringify({
+      runId,
+      sessionId,
+      phase: 'running',
+      startedAt: '2026-07-09T00:00:00.000Z',
+      provider: 'mock-provider',
+      interruptInputs: [{
+        inputId: 'input-durable',
+        afterRunId: runId,
+        delivery: 'interrupt',
+        state: 'queued',
+        contentPreview: 'already consumed',
+        queuedAt,
+      }],
+    }), 'utf-8');
+    await fs.writeFile(path.join(runDir, 'events.jsonl'), `${JSON.stringify({
+      id: 'evt-durable-interrupt',
+      seq: 1,
+      time: deliveredAt,
+      sessionId,
+      runId,
+      type: 'run.input.delivered',
+      payload: {
+        inputs: [{
+          inputId: 'input-durable',
+          afterRunId: runId,
+          input: { type: 'text', text: 'already consumed' },
+          queuedAt,
+          deliveredAt,
+        }],
+      },
+    })}\n`, 'utf-8');
+
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot });
+
+    await expect(runtime.runs.get(runId)).resolves.toMatchObject({
+      phase: 'interrupted',
+      interruptInputs: [expect.objectContaining({
+        inputId: 'input-durable',
+        state: 'delivered',
+        deliveredAt,
+      })],
+    });
     await runtime.close();
   });
 
@@ -2257,7 +2324,7 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
-  it('creates ordered after-turn continuation runs and rejects stale or interrupt delivery', async () => {
+  it('creates ordered after-turn continuation runs and rejects stale delivery', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -2281,28 +2348,16 @@ describe('createKodaXRuntime', () => {
       delivery: 'after_turn',
       input: { type: 'text', text: 'second' },
     });
-    const unsupported = await runtime.runs.submitInput({
-      sessionId: session.id,
-      afterRunId: first.runId,
-      delivery: 'interrupt',
-      input: { type: 'text', text: 'urgent' },
-    });
-
     expect(continuation).toMatchObject({
       accepted: true,
       delivery: 'after_turn',
       afterRunId: first.runId,
       sessionOrder: 2,
     });
-    expect(unsupported).toEqual({
-      accepted: false,
-      delivery: 'interrupt',
-      sessionId: session.id,
-      afterRunId: first.runId,
-      reason: 'unsupported_capability',
-    });
     expect(starts).toEqual(['first']);
-    if (!continuation.accepted) throw new Error('Expected accepted continuation');
+    if (!continuation.accepted || continuation.delivery !== 'after_turn') {
+      throw new Error('Expected accepted continuation');
+    }
     await expect(runtime.runs.get(continuation.runId)).resolves.toMatchObject({
       phase: 'queued',
       continuation: {
@@ -2333,6 +2388,357 @@ describe('createKodaXRuntime', () => {
       sessionId: session.id,
       afterRunId: first.runId,
       delivery: 'after_turn',
+      input: { type: 'text', text: 'too late' },
+    })).resolves.toMatchObject({ accepted: false, reason: 'stale_run' });
+    await runtime.close();
+  });
+
+  it('queues active-run interrupts and reports their FIFO delivery as one batch', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Interrupt Test' });
+    const starts: string[] = [];
+    let activeEvents: KodaXOptions['events'];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string) => {
+      starts.push(prompt);
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const first = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    await vi.waitFor(() => expect(starts).toEqual(['first']));
+    expect(runtime.capabilities).toMatchObject({
+      interruptInput: { version: 1, availability: 'per_run' },
+    });
+
+    const firstInterrupt = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'urgent one' },
+    });
+    const secondInterrupt = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'urgent two' },
+    });
+
+    expect(firstInterrupt).toMatchObject({
+      accepted: true,
+      delivery: 'interrupt',
+      runId: first.runId,
+      sessionId: session.id,
+      afterRunId: first.runId,
+    });
+    expect(secondInterrupt).toMatchObject({
+      accepted: true,
+      delivery: 'interrupt',
+      runId: first.runId,
+      sessionId: session.id,
+      afterRunId: first.runId,
+    });
+    expect(starts).toEqual(['first']);
+
+    const queueAgentId = actorQueueId(session.id, '/root');
+    const queued = getMessageQueue().peek({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    });
+    expect(queued.map((message) => message.content)).toEqual(['urgent one', 'urgent two']);
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      interruptInputs: [
+        expect.objectContaining({ delivery: 'interrupt', state: 'queued' }),
+        expect.objectContaining({ delivery: 'interrupt', state: 'queued' }),
+      ],
+    });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+    expect(observation.snapshot.runs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        runId: first.runId,
+        interruptInputs: [
+          expect.objectContaining({ state: 'queued' }),
+          expect.objectContaining({ state: 'queued' }),
+        ],
+      }),
+    ]));
+    observation.close();
+
+    const drained = getMessageQueue().dequeue({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    });
+    activeEvents?.onMidTurnUserMessages?.(
+      drained.map((message) => message.content),
+      { queuedMessageIds: drained.map((message) => message.id) },
+    );
+    await flushMicrotasks();
+
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      interruptInputs: [
+        expect.objectContaining({ state: 'delivered' }),
+        expect.objectContaining({ state: 'delivered' }),
+      ],
+    });
+    const replay = await runtime.events.replay({ runId: first.runId });
+    expect(replay.filter((event) => event.type === 'run.input.queued')).toHaveLength(2);
+    expect(replay.filter((event) => event.type === 'run.input.delivered')).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          inputs: [
+            expect.objectContaining({ input: { type: 'text', text: 'urgent one' } }),
+            expect.objectContaining({ input: { type: 'text', text: 'urgent two' } }),
+          ],
+        }),
+      }),
+    ]);
+    expect(starts).toEqual(['first']);
+
+    await runtime.runs.abort(first.runId);
+    await expectSettles(first.result, 'interrupt run abort result');
+    await runtime.close();
+  });
+
+  it('marks only the exact interrupt batch consumed at a safe boundary', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Interrupt Race Test' });
+    let activeEvents: KodaXOptions['events'];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'consumed now' },
+    });
+    const queueAgentId = actorQueueId(session.id, '/root');
+    const consumed = getMessageQueue().dequeue({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+      limit: 1,
+    });
+    await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'arrived during boundary work' },
+    });
+
+    activeEvents?.onMidTurnUserMessages?.(
+      consumed.map((message) => message.content),
+      { queuedMessageIds: consumed.map((message) => message.id) },
+    );
+
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      interruptInputs: [
+        expect.objectContaining({ state: 'delivered' }),
+        expect.objectContaining({ state: 'queued' }),
+      ],
+    });
+    const deliveryEvents = await runtime.events.replay({
+      runId: run.runId,
+      type: 'run.input.delivered',
+    });
+    expect(deliveryEvents).toHaveLength(1);
+    expect(deliveryEvents[0]?.payload).toMatchObject({
+      inputs: [expect.objectContaining({
+        input: { type: 'text', text: 'consumed now' },
+      })],
+    });
+
+    await runtime.runs.abort(run.runId);
+    await expectSettles(run.result, 'interrupt race abort result');
+    expect(getMessageQueue().size()).toBe(0);
+    await runtime.close();
+  });
+
+  it('does not publish delivered state when the durable batch event cannot be written', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Interrupt Persistence Failure Test' });
+    let activeEvents: KodaXOptions['events'];
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'must remain unconfirmed' },
+    });
+    const consumed = getMessageQueue().dequeue({
+      agentId: actorQueueId(session.id, '/root'),
+      maxPriority: 'user',
+      mode: 'prompt',
+    });
+    const eventsFile = path.join(
+      tempRoot,
+      '.kodax',
+      'runtime',
+      'runs',
+      encodeURIComponent(run.runId),
+      'events.jsonl',
+    );
+    const eventsBackup = `${eventsFile}.bak`;
+    await fs.rename(eventsFile, eventsBackup);
+    await fs.mkdir(eventsFile);
+
+    let deliveryError: unknown;
+    try {
+      activeEvents?.onMidTurnUserMessages?.(
+        consumed.map((message) => message.content),
+        { queuedMessageIds: consumed.map((message) => message.id) },
+      );
+    } catch (error: unknown) {
+      deliveryError = error;
+    } finally {
+      await fs.rm(eventsFile, { recursive: true, force: true });
+      await fs.rename(eventsBackup, eventsFile);
+    }
+
+    expect(deliveryError).toBeInstanceOf(Error);
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      interruptInputs: [expect.objectContaining({ state: 'queued' })],
+    });
+    await expect(runtime.events.replay({
+      runId: run.runId,
+      type: 'run.input.delivered',
+    })).resolves.toEqual([]);
+
+    await runtime.runs.abort(run.runId);
+    await expectSettles(run.result, 'interrupt persistence failure abort result');
+    await runtime.close();
+  });
+
+  it('rejects interrupt delivery when the active run has no safe Actor boundary', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'SA Interrupt Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+
+    const first = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'first',
+      options: { agentMode: 'sa' },
+    });
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'unsupported here' },
+    })).resolves.toEqual({
+      accepted: false,
+      delivery: 'interrupt',
+      sessionId: session.id,
+      afterRunId: first.runId,
+      reason: 'unsupported_capability',
+    });
+    expect(getMessageQueue().size()).toBe(0);
+
+    await runtime.runs.abort(first.runId);
+    await expectSettles(first.result, 'SA interrupt run abort result');
+    await runtime.close();
+  });
+
+  it('does not leave queued input behind when interrupt cloning fails', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Interrupt Clone Failure Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const malformed = {
+      type: 'text',
+      text: 'must not be queued',
+      nonCloneable: () => undefined,
+    } as unknown as RuntimeInput;
+
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: malformed,
+    })).rejects.toThrow();
+    expect(getMessageQueue().size()).toBe(0);
+    const status = await runtime.runs.get(run.runId);
+    expect(status.interruptInputs).toBeUndefined();
+
+    await runtime.runs.abort(run.runId);
+    await expectSettles(run.result, 'interrupt clone failure abort result');
+    await runtime.close();
+  });
+
+  it('terminalizes and removes an interrupt that the active run never consumes', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Interrupt Cleanup Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+
+    const first = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const submitted = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'never delivered' },
+    });
+    expect(submitted).toMatchObject({ accepted: true, delivery: 'interrupt' });
+    expect(getMessageQueue().size()).toBe(1);
+
+    await runtime.runs.abort(first.runId);
+    await expectSettles(first.result, 'undelivered interrupt abort result');
+
+    expect(getMessageQueue().size()).toBe(0);
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      phase: 'cancelled',
+      interruptInputs: [expect.objectContaining({ state: 'terminal' })],
+    });
+    await expect(runtime.events.replay({
+      runId: first.runId,
+      type: 'run.input.delivered',
+    })).resolves.toEqual([]);
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
       input: { type: 'text', text: 'too late' },
     })).resolves.toMatchObject({ accepted: false, reason: 'stale_run' });
     await runtime.close();

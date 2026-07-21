@@ -1752,7 +1752,10 @@ async function runManagedTaskViaRunnerInner(
       turnId: queuedTurnId,
       timestamp,
     }));
-    options.events?.onMidTurnUserMessages?.(drained.map((m) => m.content));
+    options.events?.onMidTurnUserMessages?.(
+      drained.map((message) => message.content),
+      { queuedMessageIds: drained.map((message) => message.id) },
+    );
     return validatedMessages;
   };
   // Transcript snapshot ref — populated by the adapter's beforeNextTurn
@@ -2024,8 +2027,8 @@ async function runManagedTaskViaRunnerInner(
     // NOT the `beforeNextTurn` mid-turn drain, so it reached the agent but
     // never the UI. Route it to the same `onMidTurnUserMessages` sink so it is
     // recorded + rendered in the transcript exactly like a mid-turn message.
-    onResumedUserPrompts: (contents) => {
-      options.events?.onMidTurnUserMessages?.(contents);
+    onResumedUserPrompts: (contents, queuedMessageIds) => {
+      options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
     // `maxIterations` omitted — wrapper defaults to 64, matching the

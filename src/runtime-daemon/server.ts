@@ -988,13 +988,37 @@ async function dispatchRuntimeDaemonRequest(
         };
       }
       if (delivery === 'interrupt') {
-        return {
-          accepted: false,
-          delivery,
+        if (afterRun.phase === 'queued') {
+          return {
+            accepted: false,
+            delivery,
+            sessionId,
+            afterRunId,
+            reason: 'stale_run',
+          };
+        }
+        if (params.credential !== undefined || params.hostTools !== undefined) {
+          throw daemonError(
+            'invalid_params',
+            'Interrupt input cannot replace active-run credential or host-tool bindings.',
+          );
+        }
+        const trustedInputId = `input_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+        return runtime.runs.submitInput({
+          ...params,
           sessionId,
           afterRunId,
-          reason: 'unsupported_capability',
-        };
+          delivery: 'interrupt',
+          trustedInputId,
+          origin: {
+            principalId,
+            ...(clientName !== undefined ? { clientName } : {}),
+            ...(clientVersion !== undefined ? { clientVersion } : {}),
+            ...(request.operation?.operationId !== undefined
+              ? { operationId: request.operation.operationId }
+              : {}),
+          },
+        } as unknown as RuntimeSubmitInput);
       }
       const trustedRunId = `run_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
       const trustedInput = await bindTrustedRunInput({
@@ -1008,7 +1032,7 @@ async function dispatchRuntimeDaemonRequest(
         reverseBridge,
       }) as unknown as RuntimeSubmitInput;
       const result = await runtime.runs.submitInput(trustedInput);
-      if (result.accepted) {
+      if (result.accepted && result.delivery === 'after_turn') {
         const pending = runtime.runs.await(result.runId);
         runResults.remember(result.runId, pending);
       }
@@ -1493,6 +1517,7 @@ function runtimeDaemonCapabilities(
         }
       : {}),
     afterTurnInput: { version: 1 },
+    interruptInput: { version: 1, availability: 'per_run' },
     learningCenter: { version: 1 },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },

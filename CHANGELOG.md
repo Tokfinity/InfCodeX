@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Runtime interrupt input delivery.** Embedded Runtime and the shared daemon
+  now advertise `interruptInput:1` and route interrupt submissions into the
+  current active Actor Run. Inputs queued before one safe Runner boundary are
+  delivered FIFO as separate user messages in one next LLM request, without
+  creating continuation Runs. Run snapshots and typed queued/delivered events
+  expose lifecycle state and the complete ordered delivery batch; terminal
+  cleanup prevents undelivered inputs from leaking into later Runs. Delivery
+  acknowledgement is fenced to the exact consumed queue IDs across ordinary and
+  idle-yield boundaries, input is cloned before enqueue, and the complete batch
+  event is durably committed before the delivered projection.
+
 ## [0.7.73] - 2026-07-20
 
 ### Added

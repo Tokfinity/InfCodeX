@@ -863,6 +863,38 @@ describe('Runner', () => {
       expect(result.output).toBe('done');
     });
 
+    it('injects a FIFO batch as separate user messages in one next LLM call', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'batch-inject-agent',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      let secondCallBatch: readonly { readonly role: string; readonly content: unknown }[] = [];
+      const llm = vi.fn(async (messages): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        secondCallBatch = messages.slice(-2);
+        return { text: 'done', toolCalls: [] };
+      });
+      const beforeNextTurn = vi.fn(async () => [
+        { role: 'user' as const, content: 'first interrupt' },
+        { role: 'user' as const, content: 'second interrupt' },
+      ]);
+
+      await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+
+      expect(llm).toHaveBeenCalledTimes(2);
+      expect(beforeNextTurn).toHaveBeenCalledTimes(1);
+      expect(secondCallBatch).toEqual([
+        { role: 'user', content: 'first interrupt' },
+        { role: 'user', content: 'second interrupt' },
+      ]);
+    });
+
     it('is a no-op when hook returns an empty array', async () => {
       const echoTool = makeEchoTool();
       const agent = createAgent({

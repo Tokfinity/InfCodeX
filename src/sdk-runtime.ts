@@ -119,6 +119,8 @@ import {
   getDefaultWorkflowRunManager,
   initializeSkillRegistry,
   actorQueueId,
+  enqueueWithArtifacts,
+  getMessageQueue,
   registerActiveRootQueueRoute,
   resolveLearningProposalStore,
 } from '@kodax-ai/agent';
@@ -1288,6 +1290,7 @@ interface RuntimeTrustedSubmitInput extends RuntimeSubmitInput {
   readonly providerCredentialProvider?: string;
   readonly origin?: RuntimeRunStatus['origin'];
   readonly trustedRunId?: string;
+  readonly trustedInputId?: string;
   readonly options?: RuntimeKodaXOptions;
 }
 
@@ -1295,6 +1298,16 @@ export type RuntimeSubmitInputResult =
   | {
       readonly accepted: true;
       readonly delivery: 'after_turn';
+      readonly runId: string;
+      readonly sessionId: string;
+      readonly afterRunId: string;
+      readonly sessionOrder: number;
+    }
+  | {
+      readonly accepted: true;
+      readonly delivery: 'interrupt';
+      readonly inputId: string;
+      /** The existing active Run that owns this input; no new Run is created. */
       readonly runId: string;
       readonly sessionId: string;
       readonly afterRunId: string;
@@ -1426,6 +1439,7 @@ export interface RuntimeRunStatus {
   readonly error?: string;
   readonly terminal?: RuntimeTerminalFact;
   readonly continuation?: RuntimeContinuationStatus;
+  readonly interruptInputs?: readonly RuntimeInterruptInputStatus[];
   readonly requirements?: RuntimeRunRequirements;
 }
 
@@ -1447,6 +1461,17 @@ export interface RuntimeContinuationStatus {
   readonly delivery: 'after_turn';
   readonly state: 'queued' | 'delivered' | 'terminal';
   readonly contentPreview: string;
+}
+
+export interface RuntimeInterruptInputStatus {
+  readonly inputId: string;
+  readonly afterRunId: string;
+  readonly delivery: 'interrupt';
+  readonly state: 'queued' | 'delivered' | 'terminal';
+  readonly contentPreview: string;
+  readonly queuedAt: string;
+  readonly deliveredAt?: string;
+  readonly origin?: RuntimeRunStatus['origin'];
 }
 
 export type RuntimeTerminalCode =
@@ -1516,6 +1541,8 @@ export type RuntimeEventType =
   | 'run.started'
   | 'run.updated'
   | 'run.progress'
+  | 'run.input.queued'
+  | 'run.input.delivered'
   | 'turn.started'
   | 'turn.completed'
   | 'turn.failed'
@@ -1625,6 +1652,23 @@ export interface RuntimeTodoUpdatedEventPayload {
   readonly meta?: KodaXActivityEventMeta;
 }
 
+export interface RuntimeRunInputQueuedEventPayload {
+  readonly input: RuntimeInterruptInputStatus;
+}
+
+export interface RuntimeDeliveredInterruptInput {
+  readonly inputId: string;
+  readonly afterRunId: string;
+  readonly input: RuntimeInput | readonly RuntimeInput[];
+  readonly queuedAt: string;
+  readonly deliveredAt: string;
+  readonly origin?: RuntimeRunStatus['origin'];
+}
+
+export interface RuntimeRunInputDeliveredEventPayload {
+  readonly inputs: readonly RuntimeDeliveredInterruptInput[];
+}
+
 export interface RuntimeInteractionResolvedEventPayload {
   readonly requestId: string;
   readonly status?: string;
@@ -1682,6 +1726,8 @@ export type RuntimeEventPayloadMap = Omit<
   | 'tool.progress'
   | 'tool.finished'
   | 'run.progress'
+  | 'run.input.queued'
+  | 'run.input.delivered'
   | 'todo.updated'
   | 'user_input.requested'
   | 'user_input.resolved'
@@ -1715,6 +1761,8 @@ export type RuntimeEventPayloadMap = Omit<
   readonly 'tool.progress': RuntimeToolProgressEventPayload;
   readonly 'tool.finished': RuntimeToolFinishedEventPayload;
   readonly 'run.progress': RuntimeRunProgressEventPayload;
+  readonly 'run.input.queued': RuntimeRunInputQueuedEventPayload;
+  readonly 'run.input.delivered': RuntimeRunInputDeliveredEventPayload;
   readonly 'todo.updated': RuntimeTodoUpdatedEventPayload;
   readonly 'user_input.requested': RuntimeUserInputRequestedEventPayload;
   readonly 'user_input.resolved': RuntimeInteractionResolvedEventPayload;
@@ -2144,12 +2192,20 @@ interface RuntimeRunRecord {
   mode: RuntimeRunMode;
   readonly origin?: RuntimeRunStatus['origin'];
   readonly continuation?: Omit<RuntimeContinuationStatus, 'state'>;
+  readonly interruptInputs: RuntimeInterruptInputRecord[];
   providerCredential?: string;
   readonly hadProviderCredential: boolean;
   readonly agentContext?: AgentDispatchContext;
   readonly actorSession?: CodingActorSession;
   start?: PendingRunStart;
   terminalEmitted: boolean;
+}
+
+interface RuntimeInterruptInputRecord extends RuntimeInterruptInputStatus {
+  state: RuntimeInterruptInputStatus['state'];
+  deliveredAt?: string;
+  readonly input?: RuntimeInput | readonly RuntimeInput[];
+  queueMessageId?: string;
 }
 
 interface PendingPermission {
@@ -2207,6 +2263,7 @@ interface PendingRunStart {
 interface RuntimePersistence {
   readonly runtimeDir: string;
   appendEvent(event: RuntimeEvent): void;
+  appendDurableEvent(event: RuntimeEvent): void;
   close(): void;
   nextEventSeq(): number;
   currentEventSeq(): number;
@@ -2374,6 +2431,7 @@ export async function createKodaXRuntime(
     hardDispose: false,
     externalAgents: options.externalAgents !== undefined,
     afterTurnInput: { version: 1 },
+    interruptInput: { version: 1, availability: 'per_run' },
     learningCenter: { version: 1 },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
     runtimeAutoModeGuardrail: {
@@ -3974,6 +4032,9 @@ function createRuntimeRunService(deps: {
       userInputs: deps.userInputs,
       enableSharedInteractions: deps.enableSharedInteractions,
       record,
+      onMidTurnUserMessages: (queuedMessageIds) => (
+        deliverInterruptInputs(record, queuedMessageIds)
+      ),
     });
     const runOptions = buildRunOptions({
       agentPlane: deps.agentPlane,
@@ -4198,6 +4259,53 @@ function createRuntimeRunService(deps: {
     });
   };
 
+  const deliverInterruptInputs = (
+    record: RuntimeRunRecord,
+    queuedMessageIds: readonly string[],
+  ): void => {
+    const queuedByMessageId = new Map<string, RuntimeInterruptInputRecord>();
+    for (const input of record.interruptInputs) {
+      if (input.state === 'queued' && input.queueMessageId !== undefined) {
+        queuedByMessageId.set(input.queueMessageId, input);
+      }
+    }
+    const delivered: RuntimeInterruptInputRecord[] = [];
+    const seen = new Set<string>();
+    for (const messageId of queuedMessageIds) {
+      if (seen.has(messageId)) continue;
+      seen.add(messageId);
+      const input = queuedByMessageId.get(messageId);
+      if (input !== undefined) delivered.push(input);
+    }
+    if (delivered.length === 0) return;
+    const deliveredAt = new Date().toISOString();
+    const batch = delivered.map((input): RuntimeDeliveredInterruptInput => {
+      if (input.input === undefined) {
+        throw new Error(`Runtime interrupt input is unavailable: ${input.inputId}`);
+      }
+      return {
+        inputId: input.inputId,
+        afterRunId: input.afterRunId,
+        input: input.input,
+        queuedAt: input.queuedAt,
+        deliveredAt,
+        ...(input.origin !== undefined ? { origin: input.origin } : {}),
+      };
+    });
+    deps.bus.emitDurable('run.input.delivered', { inputs: batch }, {
+      sessionId: record.sessionId,
+      runId: record.runId,
+      ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
+    }, () => {
+      for (const input of delivered) {
+        input.state = 'delivered';
+        input.deliveredAt = deliveredAt;
+        delete input.queueMessageId;
+      }
+    });
+    publishRunUpdate(record);
+  };
+
   const settingsSubscription = deps.settingsOwner.subscribe(
     (sessionId, current) => {
       for (const record of deps.runs.values()) {
@@ -4418,6 +4526,7 @@ function createRuntimeRunService(deps: {
             },
           }
         : {}),
+      interruptInputs: [],
       ...((input.agentContext ?? deps.defaultAgentContext)
         ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
         : {}),
@@ -4487,12 +4596,85 @@ function createRuntimeRunService(deps: {
         };
       }
       if (input.delivery === 'interrupt') {
+        if (
+          !isActiveRunPhase(afterRun.phase) ||
+          activeRunBySession.get(input.sessionId) !== afterRun.runId
+        ) {
+          return {
+            accepted: false,
+            delivery: input.delivery,
+            sessionId: input.sessionId,
+            afterRunId: input.afterRunId,
+            reason: 'stale_run',
+          };
+        }
+        if (afterRun.actorSession === undefined) {
+          return {
+            accepted: false,
+            delivery: input.delivery,
+            sessionId: input.sessionId,
+            afterRunId: input.afterRunId,
+            reason: 'unsupported_capability',
+          };
+        }
+        if (input.credential !== undefined || input.hostTools !== undefined) {
+          throw new Error(
+            'runtime.runs.submitInput interrupt delivery cannot replace active-run credential or host-tool bindings',
+          );
+        }
+        const normalized = normalizeRuntimeRunInput(
+          { sessionId: input.sessionId, input: input.input },
+          deps.artifacts,
+        );
+        const persistedInput = structuredClone(input.input);
+        const trusted = input as RuntimeTrustedSubmitInput;
+        const inputId = trusted.trustedInputId ?? createInputId();
+        if (
+          afterRun.interruptInputs.some(
+            (candidate) => candidate.inputId === inputId,
+          )
+        ) {
+          throw createRuntimeConflictError(
+            `Runtime interrupt input already exists: ${inputId}`,
+            0,
+          );
+        }
+        const queueMessageId = enqueueWithArtifacts({
+          sessionId: input.sessionId,
+          content: normalized.prompt,
+          inputArtifacts: normalized.inputArtifacts,
+          provider: afterRun.provider,
+          ...(afterRun.model !== undefined ? { model: afterRun.model } : {}),
+        });
+        const queuedAt = new Date().toISOString();
+        const interrupt: RuntimeInterruptInputRecord = {
+          inputId,
+          afterRunId: input.afterRunId,
+          delivery: 'interrupt',
+          state: 'queued',
+          contentPreview: previewQueuedInput(normalized.prompt),
+          queuedAt,
+          ...(trusted.origin !== undefined ? { origin: trusted.origin } : {}),
+          input: persistedInput,
+          queueMessageId,
+        };
+        afterRun.interruptInputs.push(interrupt);
+        publishRunUpdate(afterRun);
+        deps.bus.emit('run.input.queued', {
+          input: runtimeInterruptInputStatus(interrupt),
+        }, {
+          sessionId: afterRun.sessionId,
+          runId: afterRun.runId,
+          ...(afterRun.turnId !== undefined ? { turnId: afterRun.turnId } : {}),
+        });
         return {
-          accepted: false,
-          delivery: input.delivery,
+          accepted: true,
+          delivery: 'interrupt',
+          inputId,
+          runId: afterRun.runId,
           sessionId: input.sessionId,
           afterRunId: input.afterRunId,
-          reason: 'unsupported_capability',
+          sessionOrder: afterRun.sessionOrder,
         };
       }
 
@@ -5623,6 +5805,28 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       for (const emitted of notifyEvents) notify(emitted);
       return event;
     },
+    emitDurable(
+      type: RuntimeEventType,
+      payload: unknown,
+      scope: {
+        readonly sessionId: string;
+        readonly runId: string;
+        readonly turnId?: string;
+      },
+      afterPersist?: () => void,
+    ): RuntimeEvent {
+      const event = createEvent(type, payload, scope);
+      persistence.appendDurableEvent(event);
+      afterPersist?.();
+      latestSeqBySession.set(event.sessionId, event.seq);
+      const live = liveBySession.get(event.sessionId)
+        ?? createRuntimeSessionLiveProjectionState();
+      liveBySession.set(event.sessionId, live);
+      applyRuntimeSessionEvent(live, event);
+      remember(event);
+      notify(event);
+      return event;
+    },
     projectSession(sessionId: string): RuntimeSessionLiveProjection {
       const live = liveBySession.get(sessionId);
       return live === undefined
@@ -6073,6 +6277,22 @@ function createRuntimePersistence(
 
   return {
     runtimeDir,
+    appendDurableEvent(event) {
+      flushBufferedEvents();
+      const dir = runDir(event.runId);
+      const file = eventFile(event.runId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(file, `${JSON.stringify(event)}\n`, 'utf-8');
+      try {
+        trimEventFile(file);
+      } catch (error: unknown) {
+        pushPersistenceWarning(
+          `${file}:trim`,
+          `Failed to trim runtime event file: ${normalizeError(error).message}`,
+          { runId: event.runId, file },
+        );
+      }
+    },
     appendEvent(event) {
       const line = `${JSON.stringify(event)}\n`;
       const lines = bufferedEventLines.get(event.runId) ?? [];
@@ -6398,6 +6618,9 @@ function parseRuntimeRunStatus(value: unknown): RuntimeRunStatus | undefined {
     ...(parseRuntimeContinuationStatus(value.continuation) !== undefined
       ? { continuation: parseRuntimeContinuationStatus(value.continuation)! }
       : {}),
+    ...(parseRuntimeInterruptInputStatuses(value.interruptInputs) !== undefined
+      ? { interruptInputs: parseRuntimeInterruptInputStatuses(value.interruptInputs)! }
+      : {}),
   };
 }
 
@@ -6421,6 +6644,64 @@ function parseRuntimeContinuationStatus(
     delivery: value.delivery,
     state: value.state,
     contentPreview: value.contentPreview,
+  };
+}
+
+function parseRuntimeInterruptInputStatuses(
+  value: unknown,
+): readonly RuntimeInterruptInputStatus[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const parsed = value.map(parseRuntimeInterruptInputStatus);
+  return parsed.every(
+    (item): item is RuntimeInterruptInputStatus => item !== undefined,
+  )
+    ? parsed
+    : undefined;
+}
+
+function parseRuntimeInterruptInputStatus(
+  value: unknown,
+): RuntimeInterruptInputStatus | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.inputId !== 'string' ||
+    typeof value.afterRunId !== 'string' ||
+    value.delivery !== 'interrupt' ||
+    (value.state !== 'queued' &&
+      value.state !== 'delivered' &&
+      value.state !== 'terminal') ||
+    typeof value.contentPreview !== 'string' ||
+    typeof value.queuedAt !== 'string' ||
+    (value.deliveredAt !== undefined && typeof value.deliveredAt !== 'string')
+  ) {
+    return undefined;
+  }
+  const origin = isRecord(value.origin) && typeof value.origin.principalId === 'string'
+    ? {
+        principalId: value.origin.principalId,
+        ...(typeof value.origin.clientName === 'string'
+          ? { clientName: value.origin.clientName }
+          : {}),
+        ...(typeof value.origin.clientVersion === 'string'
+          ? { clientVersion: value.origin.clientVersion }
+          : {}),
+        ...(typeof value.origin.operationId === 'string'
+          ? { operationId: value.origin.operationId }
+          : {}),
+      }
+    : undefined;
+  return {
+    inputId: value.inputId,
+    afterRunId: value.afterRunId,
+    delivery: 'interrupt',
+    state: value.state,
+    contentPreview: value.contentPreview,
+    queuedAt: value.queuedAt,
+    ...(typeof value.deliveredAt === 'string'
+      ? { deliveredAt: value.deliveredAt }
+      : {}),
+    ...(origin !== undefined ? { origin } : {}),
   };
 }
 
@@ -6513,6 +6794,7 @@ function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
           },
         }
       : {}),
+    interruptInputs: (status.interruptInputs ?? []).map((input) => ({ ...input })),
     mode: status.mode ?? 'coding',
     hadProviderCredential: false,
     result: Promise.resolve(resultFromStatus(status)),
@@ -6525,37 +6807,54 @@ function interruptPersistedNonTerminalRun(
   bus: RuntimeEventBus,
   persistence: RuntimePersistence,
 ): RuntimeRunStatus {
-  if (isTerminalRunPhase(status.phase)) return status;
-  const durableTerminal = [...persistence.replay({ runId: status.runId })]
+  const durableEvents = [...persistence.replay({ runId: status.runId })];
+  const reconciledStatus = reconcilePersistedInterruptDeliveries(status, durableEvents);
+  if (isTerminalRunPhase(reconciledStatus.phase)) {
+    if (reconciledStatus !== status) {
+      saveRunStatusSafely(bus, persistence, undefined, reconciledStatus);
+    }
+    return reconciledStatus;
+  }
+  const durableTerminal = [...durableEvents]
     .reverse()
     .find((event) => {
       if (!isTerminalRuntimeEvent(event.type)) return false;
       const eventStatus = parseRuntimeRunStatus(event.payload);
       return (
-        eventStatus?.runId === status.runId &&
-        eventStatus.sessionId === status.sessionId &&
+        eventStatus?.runId === reconciledStatus.runId &&
+        eventStatus.sessionId === reconciledStatus.sessionId &&
         eventStatus.phase === terminalPhaseFromEvent(event.type)
       );
     });
   if (durableTerminal !== undefined) {
     const recovered = parseRuntimeRunStatus(durableTerminal.payload);
     if (recovered !== undefined) {
-      saveRunStatusSafely(bus, persistence, undefined, recovered);
-      return recovered;
+      const reconciled = reconcilePersistedInterruptDeliveries(recovered, durableEvents);
+      saveRunStatusSafely(bus, persistence, undefined, reconciled);
+      return reconciled;
     }
   }
   const reason: RuntimeTerminalCode =
-    status.phase === 'queued' ? 'runtime_restarted' : 'daemon_crashed';
+    reconciledStatus.phase === 'queued' ? 'runtime_restarted' : 'daemon_crashed';
   const recovered: RuntimeRunStatus = {
-    ...status,
+    ...reconciledStatus,
     phase: 'interrupted',
     endedAt: new Date().toISOString(),
     error: reason,
+    ...(reconciledStatus.interruptInputs !== undefined
+      ? {
+          interruptInputs: reconciledStatus.interruptInputs.map((input) => (
+            input.state === 'queued'
+              ? { ...input, state: 'terminal' as const }
+              : input
+          )),
+        }
+      : {}),
     terminal: {
       revision: 1,
       kind: 'interrupted',
       code: reason,
-      effectOutcome: status.phase === 'queued' ? 'none' : 'unknown',
+      effectOutcome: reconciledStatus.phase === 'queued' ? 'none' : 'unknown',
       message:
         'Runtime process restarted before this run reached a durable terminal state.',
     },
@@ -6567,6 +6866,41 @@ function interruptPersistedNonTerminalRun(
   });
   saveRunStatusSafely(bus, persistence, undefined, recovered);
   return recovered;
+}
+
+function reconcilePersistedInterruptDeliveries(
+  status: RuntimeRunStatus,
+  events: readonly RuntimeEvent[],
+): RuntimeRunStatus {
+  if (status.interruptInputs === undefined) return status;
+  const deliveredAtByInputId = new Map<string, string>();
+  for (const event of events) {
+    if (
+      event.type !== 'run.input.delivered'
+      || event.runId !== status.runId
+      || event.sessionId !== status.sessionId
+      || !isRecord(event.payload)
+    ) continue;
+    const inputs = event.payload.inputs;
+    if (!Array.isArray(inputs)) continue;
+    for (const input of inputs) {
+      if (!isRecord(input)) continue;
+      if (
+        typeof input.inputId !== 'string'
+        || input.afterRunId !== status.runId
+        || typeof input.deliveredAt !== 'string'
+      ) continue;
+      deliveredAtByInputId.set(input.inputId, input.deliveredAt);
+    }
+  }
+  let changed = false;
+  const interruptInputs = status.interruptInputs.map((input) => {
+    const deliveredAt = deliveredAtByInputId.get(input.inputId);
+    if (input.state !== 'queued' || deliveredAt === undefined) return input;
+    changed = true;
+    return { ...input, state: 'delivered' as const, deliveredAt };
+  });
+  return changed ? { ...status, interruptInputs } : status;
 }
 
 function terminalPhaseFromEvent(
@@ -7392,6 +7726,7 @@ function wrapKodaXEvents(input: {
   readonly userInputs: RuntimeUserInputRegistry;
   readonly enableSharedInteractions: boolean;
   readonly record: RuntimeRunRecord;
+  readonly onMidTurnUserMessages: (queuedMessageIds: readonly string[]) => void;
 }): KodaXEvents {
   const {
     bus,
@@ -7400,6 +7735,7 @@ function wrapKodaXEvents(input: {
     userInputs,
     enableSharedInteractions,
     record,
+    onMidTurnUserMessages,
   } = input;
   const scopeFromMeta = (meta?: Partial<KodaXActivityEventMeta>) => ({
     sessionId: meta?.sessionId ?? record.sessionId,
@@ -7609,6 +7945,7 @@ function wrapKodaXEvents(input: {
       original?.onCompactEnd?.(meta);
     },
     onMidTurnUserMessages(contents, meta) {
+      onMidTurnUserMessages(meta?.queuedMessageIds ?? []);
       emit(
         'run.progress',
         { kind: 'mid_turn_user_messages', contents, meta },
@@ -9067,6 +9404,27 @@ function createRunId(): string {
   return `run_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
 }
 
+function createInputId(): string {
+  return `input_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+}
+
+function runtimeInterruptInputStatus(
+  input: RuntimeInterruptInputRecord,
+): RuntimeInterruptInputStatus {
+  return {
+    inputId: input.inputId,
+    afterRunId: input.afterRunId,
+    delivery: input.delivery,
+    state: input.state,
+    contentPreview: input.contentPreview,
+    queuedAt: input.queuedAt,
+    ...(input.deliveredAt !== undefined
+      ? { deliveredAt: input.deliveredAt }
+      : {}),
+    ...(input.origin !== undefined ? { origin: input.origin } : {}),
+  };
+}
+
 function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
   return {
     runId: run.runId,
@@ -9095,6 +9453,11 @@ function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
             ...run.continuation,
             state: runtimeContinuationState(run.phase),
           },
+        }
+      : {}),
+    ...(run.interruptInputs.length > 0
+      ? {
+          interruptInputs: run.interruptInputs.map(runtimeInterruptInputStatus),
         }
       : {}),
   };
@@ -9170,6 +9533,7 @@ function markRunTerminal(
   terminal?: Omit<RuntimeTerminalFact, 'revision' | 'kind'>,
 ): void {
   if (run.terminalEmitted) return;
+  terminalizeQueuedInterruptInputs(run);
   run.phase = phase;
   run.endedAt = new Date().toISOString();
   run.terminalEmitted = true;
@@ -9203,6 +9567,22 @@ function markRunTerminal(
     runId: run.runId,
     ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
   });
+}
+
+function terminalizeQueuedInterruptInputs(run: RuntimeRunRecord): void {
+  for (const input of run.interruptInputs) {
+    if (input.state !== 'queued') continue;
+    if (input.queueMessageId !== undefined) {
+      getMessageQueue().dequeue({
+        agentId: actorQueueId(run.sessionId, '/root'),
+        maxPriority: 'user',
+        mode: 'prompt',
+        id: input.queueMessageId,
+      });
+      delete input.queueMessageId;
+    }
+    input.state = 'terminal';
+  }
 }
 
 function saveRunStatusSafely(

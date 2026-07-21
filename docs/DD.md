@@ -181,9 +181,15 @@ Electron Main and never receive the profile token.
 
 Same-session run creation allocates a monotonic `sessionOrder`. `after_turn`
 input is a real queued continuation run and accepts the same operation
-contract. `interrupt` is not advertised by the current daemon and returns an explicit
-unsupported result. AskUser and permission registries expose pending lists and
-first-winner responses over transport; persistent permission grants have one
+contract. `interruptInput:1` routes input into the current active Actor Run's
+process-local queue. One safe Runner boundary drains all accumulated interrupt
+inputs FIFO, preserves their separate user-message boundaries, and emits one
+ordered `run.input.delivered` batch before the next LLM request. It creates no
+continuation Run. Run status exposes queued/delivered/terminal input state;
+terminal cleanup removes undelivered queue entries. Runs without a same-Run
+safe Actor boundary return `unsupported_capability`, while queued or terminal
+targets return `stale_run`. AskUser and permission registries expose pending
+lists and first-winner responses over transport; persistent permission grants have one
 daemon-owned revisioned store. A concrete permission request may expose opaque
 Runtime-issued Session and persistent grant suggestions. Clients can select a
 suggestion id but cannot submit or widen its hidden matcher. Command matchers

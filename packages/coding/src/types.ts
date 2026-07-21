@@ -271,6 +271,8 @@ export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta, Partial<
    * session. Absent on paths that do not yet thread the resolved session id.
    */
   readonly sessionId?: string;
+  /** Exact queue identities consumed by a mid-turn user-message boundary. */
+  readonly queuedMessageIds?: readonly string[];
   /**
    * FEATURE_247 (R8) — SDK-consumer agent profile that produced this event.
    * Absent ⇒ default Coding Agent (or an event emitted before a profile is known).

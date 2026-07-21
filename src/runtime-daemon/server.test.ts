@@ -531,6 +531,128 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('queues an interrupt once across an exact operation retry', async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-server-interrupt-'));
+    try {
+      const runtime = makeRuntime();
+      vi.spyOn(runtime.runs, 'get').mockResolvedValue({
+        runId: 'run-active',
+        sessionId: 'session-1',
+        phase: 'running',
+        startedAt: '2026-07-14T00:00:00.000Z',
+        provider: 'mock',
+      });
+      const submit = vi.spyOn(runtime.runs, 'submitInput').mockResolvedValue({
+        accepted: true,
+        delivery: 'interrupt',
+        inputId: 'input-interrupt-1',
+        runId: 'run-active',
+        sessionId: 'session-1',
+        afterRunId: 'run-active',
+        sessionOrder: 1,
+      });
+      const controlJournal = createRuntimeControlJournal({ rootDir });
+      const dispatcher = createRuntimeDaemonDispatcher({
+        runtime,
+        controlJournal,
+        requireOperationEnvelope: true,
+      });
+      await initializeDispatcher(dispatcher, { operationDeduplication: true });
+      const operation = {
+        operationId: 'op-interrupt-1',
+        journalEpoch: controlJournal.journalEpoch,
+      } as const;
+      const params = {
+        sessionId: 'session-1',
+        afterRunId: 'run-active',
+        delivery: 'interrupt',
+        input: { type: 'text', text: 'urgent' },
+      } as const;
+
+      const first = await dispatcher.handle(createRuntimeDaemonRequest(
+        'req-interrupt-1',
+        'run.input.submit',
+        params,
+        operation,
+      ));
+      const retry = await dispatcher.handle(createRuntimeDaemonRequest(
+        'req-interrupt-2',
+        'run.input.submit',
+        params,
+        operation,
+      ));
+
+      expect(isRuntimeDaemonSuccessResponse(first)).toBe(true);
+      if (isRuntimeDaemonSuccessResponse(first)) {
+        expect(first.result).toMatchObject({
+          accepted: true,
+          delivery: 'interrupt',
+          inputId: 'input-interrupt-1',
+        });
+      }
+      expect(retry).toEqual({ ...first, id: 'req-interrupt-2' });
+      expect(submit).toHaveBeenCalledTimes(1);
+      expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'session-1',
+        afterRunId: 'run-active',
+        delivery: 'interrupt',
+        origin: expect.objectContaining({ operationId: 'op-interrupt-1' }),
+      }));
+      dispatcher.close();
+    } finally {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps interrupt input fenced to the current active session run', async () => {
+    const runtime = makeRuntime();
+    const get = vi.spyOn(runtime.runs, 'get').mockResolvedValue({
+      runId: 'run-queued',
+      sessionId: 'session-1',
+      phase: 'queued',
+      startedAt: '2026-07-14T00:00:00.000Z',
+      provider: 'mock',
+    });
+    const submit = vi.spyOn(runtime.runs, 'submitInput');
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+    const params = {
+      sessionId: 'session-1',
+      afterRunId: 'run-queued',
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'urgent' },
+    } as const;
+
+    const queued = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-interrupt-queued',
+      'run.input.submit',
+      params,
+    ));
+    expect(isRuntimeDaemonSuccessResponse(queued)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(queued)) {
+      expect(queued.result).toMatchObject({ accepted: false, reason: 'stale_run' });
+    }
+
+    get.mockResolvedValue({
+      runId: 'run-other-session',
+      sessionId: 'session-2',
+      phase: 'running',
+      startedAt: '2026-07-14T00:00:00.000Z',
+      provider: 'mock',
+    });
+    const crossSession = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-interrupt-cross-session',
+      'run.input.submit',
+      { ...params, afterRunId: 'run-other-session' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(crossSession)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(crossSession)) {
+      expect(crossSession.error.code).toBe('conflict');
+    }
+    expect(submit).not.toHaveBeenCalled();
+    dispatcher.close();
+  });
+
   it('binds credential and host-tool reverse calls only to the requesting run', async () => {
     const runtime = makeRuntime();
     const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub();
@@ -805,7 +927,7 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
-  it('advertises versioned shared-daemon facts without claiming interrupt support', async () => {
+  it('advertises versioned shared-daemon facts including interrupt support', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-server-capabilities-'));
     try {
       const controlJournal = createRuntimeControlJournal({ rootDir });
@@ -827,6 +949,7 @@ describe('runtime daemon dispatcher', () => {
             managementOwner: true,
           },
           afterTurnInput: { version: 1 },
+          interruptInput: { version: 1, availability: 'per_run' },
           askUserTransport: { version: 1 },
           permissionCas: { version: 1 },
           providerCredentialBroker: { version: 1 },
@@ -869,7 +992,6 @@ describe('runtime daemon dispatcher', () => {
           },
         },
       });
-      expect((initialized.capabilities as Record<string, unknown>).interruptInput).toBeUndefined();
       dispatcher.close();
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });

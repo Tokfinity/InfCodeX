@@ -8,7 +8,8 @@ import type {
 const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
   'session.created', 'session.loaded', 'session.settings.updated', 'session.notice.appended',
   'session.rewound', 'session.active_entry.updated', 'session.compacted', 'run.queued',
-  'run.started', 'run.updated', 'run.progress', 'turn.started', 'turn.completed', 'turn.failed',
+  'run.started', 'run.updated', 'run.progress', 'run.input.queued', 'run.input.delivered',
+  'turn.started', 'turn.completed', 'turn.failed',
   'assistant.delta', 'thinking.delta', 'thinking.finished', 'tool.started', 'tool.progress',
   'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
   'permission.resolved', 'permission.grant.changed', 'workflow.started', 'workflow.updated',
@@ -113,6 +114,19 @@ function validateKnownRuntimeEventPayload(
       : 'requires a tool result payload.';
   }
   if (type === 'run.progress') return validateRunProgressPayload(payload);
+  if (type === 'run.input.queued') {
+    return isRecord(payload) && isRuntimeInterruptInputStatus(payload.input, 'queued')
+      ? undefined
+      : 'requires a queued interrupt input payload.';
+  }
+  if (type === 'run.input.delivered') {
+    return isRecord(payload)
+      && Array.isArray(payload.inputs)
+      && payload.inputs.length > 0
+      && payload.inputs.every(isDeliveredInterruptInput)
+      ? undefined
+      : 'requires an ordered interrupt input batch.';
+  }
   if (type === 'todo.updated') {
     return isRecord(payload) && Array.isArray(payload.items)
       ? undefined
@@ -201,6 +215,41 @@ function isRuntimeRunStatusPayload(value: unknown): boolean {
     && typeof value.startedAt === 'string'
     && typeof value.provider === 'string'
     && typeof value.phase === 'string';
+}
+
+function isRuntimeInterruptInputStatus(
+  value: unknown,
+  expectedState?: 'queued' | 'delivered' | 'terminal',
+): boolean {
+  return isRecord(value)
+    && typeof value.inputId === 'string'
+    && typeof value.afterRunId === 'string'
+    && value.delivery === 'interrupt'
+    && (value.state === 'queued' || value.state === 'delivered' || value.state === 'terminal')
+    && (expectedState === undefined || value.state === expectedState)
+    && typeof value.contentPreview === 'string'
+    && typeof value.queuedAt === 'string'
+    && (value.deliveredAt === undefined || typeof value.deliveredAt === 'string');
+}
+
+function isDeliveredInterruptInput(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.inputId === 'string'
+    && typeof value.afterRunId === 'string'
+    && typeof value.queuedAt === 'string'
+    && typeof value.deliveredAt === 'string'
+    && isRuntimeInput(value.input);
+}
+
+function isRuntimeInput(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0 && value.every(isRuntimeInput);
+  if (!isRecord(value) || typeof value.type !== 'string') return false;
+  if (value.type === 'text') return typeof value.text === 'string';
+  if (value.type === 'artifact_ref') return typeof value.artifactId === 'string';
+  if (value.type === 'image' || value.type === 'file') return typeof value.path === 'string';
+  return value.type === 'video'
+    && typeof value.path === 'string'
+    && typeof value.mediaType === 'string';
 }
 
 function hasStrings(value: unknown, keys: readonly string[]): boolean {

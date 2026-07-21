@@ -122,7 +122,10 @@ export interface RunWithIdleYieldOptions<
    * for a sub-agent reaches the agent (it answers) but never appears in the
    * transcript. Coding wires this to the same `onMidTurnUserMessages` UI sink.
    */
-  readonly onResumedUserPrompts?: (contents: readonly string[]) => void;
+  readonly onResumedUserPrompts?: (
+    contents: readonly string[],
+    queuedMessageIds: readonly string[],
+  ) => void;
   /**
    * Optional attribution hook for real user prompts spliced during an
    * idle-yield resume. The agent layer stays transport-agnostic; callers that

@@ -14,6 +14,7 @@ _Last Updated: 2026-07-21_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 193 | Medium | Resolved | Runtime daemon rejects interrupt input instead of injecting it into the active Run | v0.7.69 | v0.7.73 development | 2026-07-21 | 2026-07-21 |
 | 191 | High | Resolved | Auto permission review lacked a complete, compact mutation model | v0.7.33 | v0.7.73 | 2026-07-21 | 2026-07-21 |
 | 190 | High | Resolved | Legacy matcherless grants and escaped JSON credentials bypassed new safety boundaries | v0.7.72 and earlier; expanded v0.7.73 RC | v0.7.73 | 2026-07-20 | 2026-07-20 |
 | 189 | High | Resolved | Auto sidecar effort, Runtime session settings, and reasoning command state could diverge | v0.7.33; expanded v0.7.73 | v0.7.73 | 2026-07-20 | 2026-07-20 |
@@ -101,6 +102,125 @@ _Last Updated: 2026-07-21_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 193: Runtime daemon rejects interrupt input instead of injecting it into the active Run
+
+- **Priority**: Medium
+- **Status**: **Resolved**
+- **Introduced**: v0.7.69
+- **Fixed**: v0.7.73 development
+- **Created**: 2026-07-21
+- **Resolved**: 2026-07-21
+
+#### Original Problem
+
+`runtime.runs.submitInput({ delivery: 'interrupt' })` is part of the public
+request type, but both embedded Runtime and the shared daemon return
+`unsupported_capability`. The daemon deliberately omits `interruptInput` from
+its capability record. A client therefore cannot deliver input to an active
+Coder Run at the next safe Runner/LLM boundary and must wait for an
+`after_turn` continuation Run instead.
+
+Expected behavior:
+
+- Runtime and daemon advertise `interruptInput` version 1.
+- Interrupt input is scoped to the supplied Session and currently active Run.
+- Inputs accepted before one safe boundary drain together in FIFO order, retain
+  separate user-message boundaries, and enter one next LLM request.
+- Interrupt submission does not create continuation Runs.
+- Snapshot and typed events expose queued and delivered input state, including
+  one complete ordered delivery batch.
+- Exact `operationId` retries are idempotent; stale Run and unsupported active
+  execution modes fail explicitly; `after_turn` behavior does not change.
+
+#### Context
+
+Affected components:
+
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/server.ts`
+- `src/runtime-event.ts`
+- `packages/agent/src/messaging/queue.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+
+#### Root Cause
+
+FEATURE_269 modeled queued input only as a new `after_turn` Run. Although the
+Coding Runner already drains its Actor-scoped `MessageQueue` at a safe boundary
+and converts the whole FIFO batch into separate user messages, Runtime has no
+interrupt input record, no daemon-to-Actor queue bridge, and no queued/delivered
+event contract. The capability was therefore intentionally withheld and both
+submission paths fail closed.
+
+#### Proposed Solution
+
+- Reuse the active Run's canonical Actor queue instead of adding another queue.
+- Track interrupt input identity, origin, preview, timestamps, and lifecycle on
+  the owning Run; persist that projection into Run status and observations.
+- Emit one typed queued event per accepted input and one typed delivered event
+  containing the exact ordered batch consumed at the safe boundary.
+- Terminalize and remove undelivered queue entries when their owning Run ends so
+  they cannot leak into a later continuation.
+- Route daemon requests through the existing operation journal and ownership
+  checks, then advertise the versioned capability only after the contract tests
+  pass.
+
+#### Resolution
+
+- Embedded Runtime and the shared daemon now advertise `interruptInput` version
+  1. The daemon binds a trusted input identity and authenticated operation
+  origin, while its existing control journal returns the canonical result for
+  an exact `operationId` retry.
+- Active Actor Runs enqueue interrupt input on their canonical Session root
+  queue. The existing Runner safe-boundary drain preserves FIFO order and each
+  user-message boundary, so all inputs accumulated before that boundary enter
+  one next LLM request without creating continuation Runs.
+- Run status and Session observation expose each interrupt as
+  `queued`/`delivered`/`terminal`. `run.input.queued` records acceptance, and one
+  `run.input.delivered` event carries the exact complete ordered batch consumed
+  at the boundary.
+- Terminal Runs remove their still-queued message IDs and mark those input
+  records terminal, preventing cross-Run leakage. Restart recovery likewise
+  terminalizes a persisted queued projection because the process-local queue is
+  intentionally non-durable.
+- Safe-boundary callbacks now carry the exact queue message IDs consumed by both
+  the ordinary tool boundary and idle-yield resume path. Runtime marks only that
+  ordered batch delivered, so an interrupt arriving while idle-yield awaits
+  aggregate-budget work remains queued for the following boundary.
+- Runtime clones and validates the complete interrupt input before mutating the
+  Actor queue, preventing rejected embedded-SDK input from leaving an
+  untracked queue entry.
+- The complete `run.input.delivered` batch is synchronously persisted before
+  status changes to `delivered`. Restart recovery reconciles a stale queued
+  projection from that durable fact; if the event cannot be written, delivery
+  confirmation fails without publishing a false delivered state.
+- Session ownership, current-active-Run checks, `stale_run`, per-Run
+  `unsupported_capability` for execution without a safe Actor boundary, and
+  existing `after_turn` continuation semantics remain unchanged.
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`, `src/index.ts`
+- `src/runtime-daemon/server.ts`
+- `src/runtime-event.ts`
+- `packages/coding/src/types.ts`, `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/agent/src/orchestration/idle-yield.ts`
+- `packages/agent/src/orchestration/runner-with-idle-yield.ts`
+- `src/sdk-runtime.test.ts`, `src/runtime-daemon/server.test.ts`
+- `packages/agent/src/orchestration/idle-yield.test.ts`
+- `src/runtime-event.test.ts`, `packages/agent/src/primitives/runner.test.ts`
+- `docs/DD.md`, `docs/SDK_EMBEDDER_GUIDE.md`, `docs/features/v0.7.69.md`
+- `docs/KNOWN_ISSUES.md`, `CHANGELOG.md`
+
+#### Verification
+
+- `npx tsc --noEmit`
+- `npm run build`
+- `npx vitest run src/runtime-daemon/server.test.ts src/runtime-daemon/client.test.ts src/runtime-daemon/protocol.test.ts src/runtime-daemon/schema.test.ts src/runtime-event.test.ts packages/agent/src/primitives/runner.test.ts`
+- Focused SDK regression coverage verifies FIFO batch delivery, no continuation
+  Run, snapshot/event lifecycle, SA unsupported behavior, stale/cross-Session
+  fencing, terminal queue cleanup, exact consumed-message acknowledgement,
+  clone-failure rollback, durable-event failure, and restart reconciliation.
 
 ### 191: Auto permission review lacked a complete, compact mutation model
 
@@ -5564,11 +5684,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 78 (26 Open, 52 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 79 (26 Open, 53 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-21: Issue 193 added and resolved (v0.7.73 development)
+- Added the versioned Runtime/daemon interrupt-input contract, reused the
+  canonical Actor queue for same-Run FIFO safe-boundary delivery, exposed
+  queued/delivered status and ordered batch events, and prevented terminal or
+  restarted Runs from leaking undelivered input.
 
 ### 2026-07-20: Issue 190 added and resolved (v0.7.73)
 - Made matcherless legacy grants non-authorizing while retaining management

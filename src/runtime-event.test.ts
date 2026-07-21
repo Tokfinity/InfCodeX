@@ -61,3 +61,43 @@ describe('parseRuntimeEvent', () => {
     })).ok).toBe(true);
   });
 });
+
+  it('accepts queued and ordered-batch interrupt input events', () => {
+    expect(parseRuntimeEvent(event('run.input.queued', {
+      input: {
+        inputId: 'input-1',
+        afterRunId: 'run-1',
+        delivery: 'interrupt',
+        state: 'queued',
+        contentPreview: 'first',
+        queuedAt: '2026-07-14T00:00:01.000Z',
+      },
+    })).ok).toBe(true);
+    expect(parseRuntimeEvent(event('run.input.delivered', {
+      inputs: [
+        {
+          inputId: 'input-1',
+          afterRunId: 'run-1',
+          input: { type: 'text', text: 'first' },
+          queuedAt: '2026-07-14T00:00:01.000Z',
+          deliveredAt: '2026-07-14T00:00:03.000Z',
+        },
+        {
+          inputId: 'input-2',
+          afterRunId: 'run-1',
+          input: { type: 'text', text: 'second' },
+          queuedAt: '2026-07-14T00:00:02.000Z',
+          deliveredAt: '2026-07-14T00:00:03.000Z',
+        },
+      ],
+    })).ok).toBe(true);
+  });
+
+  it('rejects a malformed interrupt delivery batch', () => {
+    expect(parseRuntimeEvent(event('run.input.delivered', {
+      inputs: [{ inputId: 'input-1', input: { type: 'text' } }],
+    }))).toEqual({
+      ok: false,
+      error: 'run.input.delivered requires an ordered interrupt input batch.',
+    });
+  });

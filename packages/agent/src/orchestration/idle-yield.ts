@@ -54,6 +54,7 @@ import type {
 } from '../messaging/index.js';
 
 interface PromptFragment {
+  readonly id: string;
   readonly content: string;
   readonly inputArtifacts?: readonly QueuedInputArtifact[];
 }
@@ -440,7 +441,10 @@ export async function composeIdleYieldUserMessage(
   // drained on this wake, so the caller can surface them to the UI. The wake
   // path splices the prompt into the agent transcript directly; this is the
   // only signal the UI gets about a follow-up typed during idle-yield.
-  onUserPrompts?: (prompts: readonly string[]) => void,
+  onUserPrompts?: (
+    prompts: readonly string[],
+    queuedMessageIds: readonly string[],
+  ) => void,
   resolveTurnId?: () => string | undefined,
   priorMessages: readonly KodaXMessage[] = [],
 ): Promise<readonly KodaXMessage[]> {
@@ -459,6 +463,7 @@ export async function composeIdleYieldUserMessage(
     if (typeof msg.content !== 'string' || msg.content.length === 0) return;
     if (msg.mode === 'prompt') {
       promptFragments.push({
+        id: msg.id,
         content: msg.content,
         inputArtifacts: msg.inputArtifacts,
       });
@@ -528,7 +533,10 @@ export async function composeIdleYieldUserMessage(
     // FEATURE_213 — tell the caller about the user's typed prompt(s) so the UI
     // records them. The message below only reaches the AGENT transcript; the UI
     // renders from its own history/ledger and would otherwise never see this.
-    onUserPrompts?.(promptFragments.map((fragment) => fragment.content));
+    onUserPrompts?.(
+      promptFragments.map((fragment) => fragment.content),
+      promptFragments.map((fragment) => fragment.id),
+    );
     // No `_synthetic` flag — this IS the user's typed input echoed into
     // the transcript as a normal user bubble.
     messages.push(promptMessage);

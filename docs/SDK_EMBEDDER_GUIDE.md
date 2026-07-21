@@ -2191,8 +2191,10 @@ producers may continue to pass an explicit `agentId`.
 
 `enqueueWithArtifacts()` is an in-process queue helper for direct/inline runs.
 Runtime Worker and daemon clients must use `runtime.runs.submitInput(...)` (with
-the same `sessionId`, `afterRunId`, and `delivery:'after_turn'`) because a
-process-local MessageQueue cannot cross those transport boundaries.
+the same `sessionId` and `afterRunId`) because a process-local MessageQueue
+cannot cross those transport boundaries. Use `delivery:'after_turn'` to create
+a continuation Run after the current Run ends, or `delivery:'interrupt'` to
+inject into the current active Actor Run at its next safe Runner boundary.
 
 ### Boundaries
 
@@ -3731,6 +3733,7 @@ const runtime = await connectKodaXRuntime({
     operationDeduplication: 1,
     sessionObservation: 1,
     afterTurnInput: 1,
+    interruptInput: 1,
     askUserTransport: 1,
     permissionCas: 1,
     providerCredentialBroker: 1,
@@ -3754,9 +3757,10 @@ const runtime = await connectKodaXRuntime({
 Requirements are server facts, not authorization requests. Check
 `runtime.grantedScopes` before enabling controls. Missing capabilities or
 scopes must disable the affected UI; Space must not silently start inline
-Coder. FEATURE_269 does not advertise `interruptInput`, so an interrupt-only
-product must require `{ interruptInput: 1 }` and fail connection. The supported
-fallback is `delivery: 'after_turn'` only when that is the user's intent.
+Coder. Products that depend on same-Run delivery should require
+`{ interruptInput: 1 }`. Individual active Runs without a safe Actor boundary
+(for example, SA execution) still return `unsupported_capability`; do not
+silently substitute `delivery:'after_turn'` unless that is the user's intent.
 
 The v0.7.73 SDK requires `runtimeAutoModeGuardrail:3` automatically for
 `autoStart: true`, even when the caller omits it from `requirements`. If the healthy
@@ -3910,6 +3914,25 @@ const queued = await runtime.runs.submitInput({
 if (!queued.accepted) {
   // stale_run or unsupported_capability: show the factual result.
 }
+```
+
+For input that must join the current active Run, submit `delivery:'interrupt'`.
+This does not create a Run. Each accepted input appears as `queued` in the
+owning Run's `interruptInputs`. At the next safe boundary, all accumulated
+interrupts are drained FIFO, remain separate user messages in one next LLM
+request, and produce one `run.input.delivered` event whose `inputs` array is the
+complete ordered batch. Exact operation retries return the same `inputId`.
+The accepted result's `runId` is the existing owning Run (equal to
+`afterRunId`), not a newly created continuation.
+
+```ts
+const interrupted = await runtime.runs.submitInput({
+  sessionId: session.id,
+  afterRunId: handle.runId,
+  delivery: 'interrupt',
+  input: { type: 'text', text: 'Also preserve the public API.' },
+  operation: { operationId: loadOrCreatePendingOperationId('space-input-18') },
+});
 ```
 
 Run status exposes acceptance/start/queue times, authenticated origin,
