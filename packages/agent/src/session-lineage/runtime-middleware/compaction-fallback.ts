@@ -68,6 +68,7 @@
  */
 
 import { estimateTokens } from '../../tokenizer.js';
+import { calculateMaxContextInputTokens } from '../../context-capacity.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { CompactionConfig } from '../compaction/types.js';
@@ -79,6 +80,14 @@ import {
 } from '../compaction/query-ledger.js';
 
 const COMPACTION_CHECKPOINT_PREFIX = '[对话历史摘要]\n\n';
+
+/** Request capacity that is not represented by the message array itself. */
+export interface GracefulCompactionCapacity {
+  /** System prompt and tool-definition tokens outside `messages`. */
+  readonly fixedOverheadTokens?: number;
+  /** Provider output tokens reserved from the context window. */
+  readonly reservedResponseTokens?: number;
+}
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
 
@@ -100,8 +109,24 @@ export function gracefulCompactDegradation(
   messages: KodaXMessage[],
   contextWindow: number,
   config: CompactionConfig,
+  capacity?: GracefulCompactionCapacity,
 ): KodaXMessage[] {
-  const targetTokens = resolveCompactionPolicy(config, contextWindow).triggerTokens;
+  const physicalCapacityTokens = capacity === undefined
+    ? contextWindow
+    : calculateMaxContextInputTokens(
+        contextWindow,
+        capacity.reservedResponseTokens,
+      );
+  const totalTargetTokens = resolveCompactionPolicy(
+    config,
+    contextWindow,
+    physicalCapacityTokens,
+  ).triggerTokens;
+  const fixedOverheadTokens = Math.max(
+    0,
+    Math.floor(capacity?.fixedOverheadTokens ?? 0),
+  );
+  const targetTokens = Math.max(0, totalTargetTokens - fixedOverheadTokens);
   if (messages.length === 0 || estimateTokens(messages) <= targetTokens) return messages;
 
   const firstMessage = messages[0];

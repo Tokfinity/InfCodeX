@@ -422,10 +422,22 @@ function directPositionals(command: string, argv: readonly string[]): string[] {
       continue;
     }
     if (token === '--') continue;
-    if (token.startsWith('-') || /^\/[a-z]+$/i.test(token)) continue;
+    if (token.startsWith('-') || isDirectWindowsSwitch(command, token)) continue;
     result.push(token);
   }
   return result;
+}
+
+const DIRECT_WINDOWS_SWITCHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  copy: new Set(['/a', '/b', '/d', '/j', '/l', '/n', '/v', '/y', '/-y', '/z']),
+  del: new Set(['/p', '/f', '/s', '/q', '/a']),
+  erase: new Set(['/p', '/f', '/s', '/q', '/a']),
+  move: new Set(['/y', '/-y']),
+  rd: new Set(['/s', '/q']),
+};
+
+function isDirectWindowsSwitch(command: string, token: string): boolean {
+  return DIRECT_WINDOWS_SWITCHES[command]?.has(token.toLowerCase()) === true;
 }
 
 function directOptionTakesValue(command: string, token: string): boolean {

@@ -345,6 +345,41 @@ describe('Auto[rules] deterministic Tier 2', () => {
     ]);
   });
 
+  it.each(['/tmp', '/home'])(
+    'keeps a single-segment POSIX absolute path as an rm target: %s',
+    (target) => {
+      const projectRoot = createRoot('kodax-auto-rules-project-');
+      const assessment = assessAutoModeCall(
+        call('bash', { command: `rm ${target}` }),
+        context(projectRoot),
+      );
+
+      expect(assessment.review.operations).toEqual([
+        expect.objectContaining({
+          kind: 'delete',
+          target: expect.objectContaining({ path: target }),
+        }),
+      ]);
+    },
+  );
+
+  it('still recognizes a documented Windows copy switch', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'copy /y src/a.txt build/a.txt' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.review.operations).toEqual([
+      expect.objectContaining({
+        kind: 'copy',
+        source: expect.objectContaining({ path: 'src/a.txt' }),
+        destination: expect.objectContaining({ path: 'build/a.txt' }),
+        options: expect.objectContaining({ force: true }),
+      }),
+    ]);
+  });
+
   it('marks unknown PowerShell parameter binding incomplete instead of guessing', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(

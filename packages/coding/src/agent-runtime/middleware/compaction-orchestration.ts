@@ -410,6 +410,10 @@ export function applyGracefulDegradationGate(
     input.compacted,
     input.contextWindow,
     input.compactionConfig,
+    {
+      fixedOverheadTokens,
+      reservedResponseTokens: input.reservedResponseTokens,
+    },
   );
   if (degraded === input.compacted) {
     return { compacted: input.compacted, didCompactMessages: false };

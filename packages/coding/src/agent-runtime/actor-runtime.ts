@@ -16,7 +16,7 @@ import {
   type AgentTurn,
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
-import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
+import { normalizeReasoningEffortValue, type KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 import { executeChildAgents } from '../child-executor.js';
 import type {
@@ -267,10 +267,13 @@ async function executeCodingActorTurn(
   const mailbox = await input.drainMailbox();
   const initialMessages = [
     ...actorHistoryMessages(input.priorTurns, input.turn.forkTurns),
-    ...mailbox.map(mailboxMessageAsPrompt),
+    ...mailbox.map((message) => mailboxMessageAsPrompt(
+      message,
+      completionTaskResult(actorControl, message),
+    )),
   ];
   const pumpStop = new AbortController();
-  const mailboxPump = pumpMailbox(input, parentCtx.sessionId, pumpStop.signal);
+  const mailboxPump = pumpMailbox(input, parentCtx.sessionId, actorControl, pumpStop.signal);
   let result: Awaited<ReturnType<typeof executeChildAgents>>;
   try {
     result = await executeChildAgents([bundle], parentCtx, {
@@ -463,27 +466,55 @@ function actorHistoryMessages(
   });
 }
 
-function mailboxMessageAsPrompt(message: AgentMailboxMessage): KodaXMessage {
-  return { role: 'user', content: renderMailboxMessage(message) };
+function mailboxMessageAsPrompt(
+  message: AgentMailboxMessage,
+  taskResult?: KodaXTaskResultMetadata,
+): KodaXMessage {
+  return { role: 'user', content: renderMailboxMessage(message, taskResult) };
 }
 
 async function pumpMailbox(
   input: AgentExecutionInput,
   sessionId: string | undefined,
+  actorControl: AgentActorClient,
   stopSignal: AbortSignal,
 ): Promise<void> {
   while (!stopSignal.aborted && !input.signal.aborted) {
     await waitForMailboxPoll(stopSignal);
     if (stopSignal.aborted || input.signal.aborted) return;
     for (const message of await input.drainMailbox()) {
+      const taskResult = completionTaskResult(actorControl, message);
       getMessageQueue().enqueue({
         priority: message.kind === 'followup' ? 'user' : 'background',
         mode: message.kind === 'completion' ? 'task-notification' : 'prompt',
         agentId: actorQueueId(sessionId, input.actor.path),
-        content: renderMailboxMessage(message),
+        content: renderMailboxMessage(message, taskResult),
+        ...(taskResult ? { taskResult } : {}),
       });
     }
   }
+}
+
+function completionTaskResult(
+  actorControl: AgentActorClient,
+  message: AgentMailboxMessage,
+): KodaXTaskResultMetadata | undefined {
+  if (message.kind !== 'completion' || !message.turnId) return undefined;
+  const output = actorControl.output(message.senderPath, message.turnId);
+  const status = output.state === 'completed'
+    ? 'completed'
+    : output.state === 'failed'
+      ? 'failed'
+      : 'cancelled';
+  return {
+    type: 'task_result',
+    source: 'child_task',
+    taskId: message.turnId,
+    status,
+    title: message.senderPath,
+    summary: output.output ?? output.error ?? message.content,
+    ...(output.artifacts.length > 0 ? { artifactRefs: [...output.artifacts] } : {}),
+  };
 }
 
 async function waitForMailboxPoll(stopSignal: AbortSignal): Promise<void> {
@@ -499,9 +530,17 @@ async function waitForMailboxPoll(stopSignal: AbortSignal): Promise<void> {
   });
 }
 
-function renderMailboxMessage(message: AgentMailboxMessage): string {
-  const tag = message.kind === 'completion' ? 'agent-completed' : 'agent-message';
-  return `<${tag} id="${escapeXml(message.messageId)}" from="${escapeXml(message.senderPath)}" classification="${message.classification}">\n${escapeXml(message.content)}\n</${tag}>`;
+function renderMailboxMessage(
+  message: AgentMailboxMessage,
+  taskResult?: KodaXTaskResultMetadata,
+): string {
+  if (message.kind === 'completion') {
+    const turnId = message.turnId ? ` turn_id="${escapeXml(message.turnId)}"` : '';
+    const terminalState = taskResult?.status === 'cancelled' ? 'interrupted' : taskResult?.status;
+    const state = terminalState ? ` state="${terminalState}"` : '';
+    return `<agent-completed id="${escapeXml(message.messageId)}" path="${escapeXml(message.senderPath)}"${turnId}${state} classification="${message.classification}">\n${escapeXml(message.content)}\n</agent-completed>`;
+  }
+  return `<agent-message id="${escapeXml(message.messageId)}" from="${escapeXml(message.senderPath)}" classification="${message.classification}">\n${escapeXml(message.content)}\n</agent-message>`;
 }
 
 function assertProviderAuthority(input: AgentExecutionInput, provider: string | undefined): void {

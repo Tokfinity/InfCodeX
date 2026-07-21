@@ -244,6 +244,8 @@ export interface AgentActorSnapshot {
   readonly actors: readonly AgentActor[];
   readonly turns: readonly AgentTurn[];
   readonly mailboxes: Readonly<Record<string, readonly AgentMailboxMessage[]>>;
+  /** Terminal child turns explicitly observed by their direct parent. */
+  readonly acknowledgedCompletionTurnIds?: readonly string[];
   readonly events: readonly AgentEvent[];
 }
 
@@ -269,6 +271,7 @@ export interface AgentActorClient {
     options?: AgentMutationOptions,
   ): Promise<AgentFollowupResult>;
   interrupt(targetPath: string, reason?: string, scope?: AgentInterruptScope): Promise<void>;
+  acknowledgeCompletions(turnIds: readonly string[]): Promise<number>;
   list(): AgentTreeSnapshot;
   get(targetPath: string): AgentDetail;
   output(targetPath: string, turnId?: string): AgentOutput;

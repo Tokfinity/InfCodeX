@@ -4528,9 +4528,14 @@ function createRuntimeRunService(deps: {
 
   const startRun = async (
     input: RuntimeStartRunInput,
+    operation: RuntimeRunInputOperation,
   ): Promise<RuntimeRunHandle> => {
     deps.ensureOpen();
-    const normalizedInput = normalizeRuntimeRunInput(input, deps.artifacts);
+    const normalizedInput = normalizeRuntimeRunInput(
+      input,
+      deps.artifacts,
+      operation,
+    );
     const session = await deps.sessionAdmission.loadRequired(input.sessionId);
     const settings = (await deps.settingsOwner.read(input.sessionId)).value;
     assertSessionSettingsAllowed(session, settings);
@@ -4754,10 +4759,13 @@ function createRuntimeRunService(deps: {
     };
   };
 
-  const start = (input: RuntimeStartRunInput): Promise<RuntimeRunHandle> => {
+  const start = (
+    input: RuntimeStartRunInput,
+    operation: RuntimeRunInputOperation = 'runtime.runs.start',
+  ): Promise<RuntimeRunHandle> => {
     const previous =
       startOrderBySession.get(input.sessionId) ?? Promise.resolve();
-    const result = previous.then(() => startRun(input));
+    const result = previous.then(() => startRun(input, operation));
     const tail = result.then(
       () => undefined,
       () => undefined,
@@ -4822,6 +4830,7 @@ function createRuntimeRunService(deps: {
         const normalized = normalizeRuntimeRunInput(
           { sessionId: input.sessionId, input: input.input },
           deps.artifacts,
+          'runtime.runs.submitInput',
         );
         const persistedInput = structuredClone(input.input);
         const trusted = input as RuntimeTrustedSubmitInput;
@@ -4878,24 +4887,27 @@ function createRuntimeRunService(deps: {
       const trusted = input as RuntimeTrustedSubmitInput;
       let handle: RuntimeRunHandle;
       try {
-        handle = await start({
-          sessionId: input.sessionId,
-          input: input.input,
-          ...(trusted.options !== undefined
-            ? { options: trusted.options }
-            : {}),
-          ...(trusted.providerCredential !== undefined
-            ? { providerCredential: trusted.providerCredential }
-            : {}),
-          ...(trusted.providerCredentialProvider !== undefined
-            ? { providerCredentialProvider: trusted.providerCredentialProvider }
-            : {}),
-          ...(trusted.origin !== undefined ? { origin: trusted.origin } : {}),
-          ...(trusted.trustedRunId !== undefined
-            ? { trustedRunId: trusted.trustedRunId }
-            : {}),
-          requiredAfterRunId: input.afterRunId,
-        } as RuntimeTrustedStartRunInput);
+        handle = await start(
+          {
+            sessionId: input.sessionId,
+            input: input.input,
+            ...(trusted.options !== undefined
+              ? { options: trusted.options }
+              : {}),
+            ...(trusted.providerCredential !== undefined
+              ? { providerCredential: trusted.providerCredential }
+              : {}),
+            ...(trusted.providerCredentialProvider !== undefined
+              ? { providerCredentialProvider: trusted.providerCredentialProvider }
+              : {}),
+            ...(trusted.origin !== undefined ? { origin: trusted.origin } : {}),
+            ...(trusted.trustedRunId !== undefined
+              ? { trustedRunId: trusted.trustedRunId }
+              : {}),
+            requiredAfterRunId: input.afterRunId,
+          } as RuntimeTrustedStartRunInput,
+          'runtime.runs.submitInput',
+        );
       } catch (error: unknown) {
         if (!(error instanceof RuntimeContinuationStaleError)) throw error;
         return {
@@ -8474,9 +8486,14 @@ interface NormalizedRuntimeRunInput {
   readonly inputArtifacts: readonly KodaXInputArtifact[];
 }
 
+type RuntimeRunInputOperation =
+  | 'runtime.runs.start'
+  | 'runtime.runs.submitInput';
+
 function normalizeRuntimeRunInput(
   input: RuntimeStartRunInput,
   artifacts: RuntimeArtifactStore,
+  operation: RuntimeRunInputOperation,
 ): NormalizedRuntimeRunInput {
   const items =
     input.input === undefined
@@ -8489,15 +8506,15 @@ function normalizeRuntimeRunInput(
   );
   if (input.prompt !== undefined && textItems.length > 0) {
     throw new Error(
-      'runtime.runs.start accepts either prompt or text input, not both',
+      `${operation} accepts either prompt or text input, not both`,
     );
   }
   if (textItems.length > 1) {
-    throw new Error('runtime.runs.start accepts at most one text input item');
+    throw new Error(`${operation} accepts at most one text input item`);
   }
   const prompt = input.prompt ?? textItems[0]?.text;
   if (prompt === undefined) {
-    throw new Error('runtime.runs.start requires prompt or text input');
+    throw new Error(`${operation} requires prompt or text input`);
   }
   return {
     prompt,

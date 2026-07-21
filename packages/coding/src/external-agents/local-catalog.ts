@@ -5,6 +5,7 @@ import type {
   DispatchableAgentDescriptor,
 } from '@kodax-ai/agent';
 
+import type { KodaXToolExecutionContext } from '../types.js';
 import {
   listConstructedAgentsWithSource,
   type ConstructedAgentEntry,
@@ -17,6 +18,16 @@ export interface CodingDispatchableAgentRoute {
   readonly kind: 'native' | 'constructed';
   readonly descriptor: DispatchableAgentDescriptor;
   readonly subagentType?: string;
+}
+
+export function codingDispatchContext(
+  ctx: KodaXToolExecutionContext,
+): AgentDispatchContext {
+  if (ctx.agentExecutorPlane) return ctx.agentExecutorPlane.context;
+  return {
+    actorId: ctx.actorControl?.callerPath ?? (ctx.sessionId ? `session:${ctx.sessionId}` : 'kodax:local'),
+    ...(ctx.agentScope ? { projectId: ctx.agentScope.id } : {}),
+  };
 }
 
 function nativeDescriptor(): DispatchableAgentDescriptor {
@@ -111,10 +122,13 @@ export function resolveCodingDispatchableAgent(
   scope?: KodaXAgentScope,
 ): CodingDispatchableAgentRoute | undefined {
   for (const descriptor of listCodingDispatchableAgents(context, scope)) {
-    if (descriptor.agentId !== agentId) continue;
+    const matchesCanonicalId = descriptor.agentId === agentId;
+    const matchesConstructedAlias = descriptor.origin === 'constructed'
+      && descriptor.displayName === agentId;
+    if (!matchesCanonicalId && !matchesConstructedAlias) continue;
     if (descriptor.origin === 'native') return { kind: 'native', descriptor };
     const entry = listConstructedAgentsWithSource(scope)
-      .find((candidate) => constructedAgentId(candidate, context, scope) === agentId);
+      .find((candidate) => constructedAgentId(candidate, context, scope) === descriptor.agentId);
     return entry
       ? { kind: 'constructed', descriptor, subagentType: entry.agent.name }
       : undefined;

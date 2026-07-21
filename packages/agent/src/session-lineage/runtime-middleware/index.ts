@@ -22,6 +22,7 @@ export { shouldCompact } from './compaction-trigger.js';
 export type { ShouldCompactInput } from './compaction-trigger.js';
 
 export { gracefulCompactDegradation } from './compaction-fallback.js';
+export type { GracefulCompactionCapacity } from './compaction-fallback.js';
 
 export {
   DEFAULT_CONTEXT_WINDOW,

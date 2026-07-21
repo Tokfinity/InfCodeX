@@ -10,6 +10,10 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import {
+  _resetAgentResolverForTesting,
+  registerConstructedAgent,
+} from '../construction/agent-resolver.js';
 import { executeTool, getToolDefinition } from './registry.js';
 
 interface PendingExecution {
@@ -48,6 +52,7 @@ async function context(
 describe('F270 canonical collaboration tools', () => {
   afterEach(() => {
     _resetMessageQueueForTests();
+    _resetAgentResolverForTesting();
   });
 
   it('offers only the canonical model-visible names', () => {
@@ -123,6 +128,48 @@ describe('F270 canonical collaboration tools', () => {
     expect(listed.actors.some((actor) => actor.path === '/root/d')).toBe(false);
   });
 
+  it('lists and spawns a local constructed specialist without an external executor plane', async () => {
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'repo-explorer',
+      version: '1.0.0',
+      createdAt: '2026-07-22T00:00:00.000Z',
+      content: {
+        instructions: 'Explore repositories without modifying them.',
+        description: 'Read-only repository explorer',
+      },
+      testedAt: '2026-07-22T00:00:00.000Z',
+      testReport: { passed: true, results: [] },
+    }, { source: 'built-in' });
+    const { ctx, executor } = await context();
+
+    const listed = JSON.parse(await executeTool('list_dispatchable_agents', {}, ctx)) as {
+      readonly agents?: readonly { readonly agent_id: string; readonly origin: string }[];
+    };
+    const specialist = listed.agents?.find((agent) => agent.origin === 'constructed');
+    expect(specialist?.agent_id).toContain('repo-explorer');
+
+    const shortAlias = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'short-alias',
+      objective: 'Inspect the repository.',
+      agent_id: 'repo-explorer',
+    }, ctx)) as Record<string, unknown>;
+    expect(shortAlias).toMatchObject({ ok: true, actorPath: '/root/short-alias' });
+    expect(executor.pending[0]?.input.actor.kind).toBe('constructed');
+    expect(executor.pending[0]?.input.turn.metadata).toMatchObject({
+      agentId: 'repo-explorer',
+      specialistName: 'repo-explorer',
+    });
+
+    const canonical = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'canonical-id',
+      objective: 'Inspect another boundary.',
+      agent_id: specialist?.agent_id,
+    }, ctx)) as Record<string, unknown>;
+    expect(canonical).toMatchObject({ ok: true, actorPath: '/root/canonical-id' });
+    expect(executor.pending[1]?.input.actor.kind).toBe('constructed');
+  });
+
   it('filters and paginates only the caller-visible actor projection', async () => {
     const { ctx } = await context();
     for (const taskName of ['a', 'b', 'c']) {
@@ -184,6 +231,10 @@ describe('F270 canonical collaboration tools', () => {
       timeout_ms: 0,
       max_events: 21,
     }, ctx)) as Record<string, unknown>;
+    const returnOnResult = JSON.parse(await executeTool('wait_agent', {
+      timeout_ms: 0,
+      return_on: 'progress',
+    }, ctx)) as Record<string, unknown>;
 
     expect(listResult).toMatchObject({
       ok: false,
@@ -192,6 +243,10 @@ describe('F270 canonical collaboration tools', () => {
     expect(waitResult).toMatchObject({
       ok: false,
       error: { message: 'max_events must be an integer between 1 and 20.' },
+    });
+    expect(returnOnResult).toMatchObject({
+      ok: false,
+      error: { message: 'return_on must be event or terminal.' },
     });
   });
 
@@ -405,6 +460,145 @@ describe('F270 canonical collaboration tools', () => {
       ok: true,
       status: 'user_input_pending',
     });
+  });
+
+  it('terminal wait ignores progress events, returns the terminal output, and consumes its queued banner', async () => {
+    const executor = new DeferredExecutor();
+    const sessionId = 'session-terminal';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const controller = await createAgentActorController({
+      executor,
+      onMessageCommitted: (message) => {
+        if (message.kind !== 'completion' || message.recipientPath !== '/root' || !message.turnId) return;
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'background',
+          mode: 'task-notification',
+          content: `<agent-completed turn_id="${message.turnId}">${message.content}</agent-completed>`,
+          taskResult: {
+            type: 'task_result',
+            source: 'child_task',
+            taskId: message.turnId,
+            status: 'completed',
+            summary: message.content,
+          },
+        });
+      },
+    });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root'),
+      sessionId,
+    };
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    const cursor = ctx.actorControl.eventSnapshot().at(-1)?.sequence ?? 0;
+    let settled = false;
+    const waiting = executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 1_000,
+      return_on: 'terminal',
+    }, ctx).then((value) => {
+      settled = true;
+      return JSON.parse(value) as {
+        readonly status?: string;
+        readonly events?: readonly { readonly kind: string }[];
+        readonly terminalOutputs?: readonly { readonly output?: string }[];
+      };
+    });
+
+    await executor.pending[0]?.input.reportProgress({ kind: 'tool', summary: 'First read.' });
+    await executor.pending[0]?.input.reportProgress({ kind: 'tool', summary: 'Second read.' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    executor.pending[0]?.resolve({ output: 'terminal evidence' });
+
+    const result = await waiting;
+    expect(result.status).toBe('event');
+    expect(result.events?.map((event) => event.kind)).toEqual(['turn_completed']);
+    expect(result.terminalOutputs).toEqual([
+      expect.objectContaining({ state: 'completed', output: 'terminal evidence' }),
+    ]);
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toBe(0);
+  });
+
+  it('terminal wait acknowledges the Actor mailbox completion without consuming prior evidence', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Coordinate.' });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root/parent'),
+      sessionId: 'session-nested-terminal',
+    };
+    await executeTool('spawn_agent', { task_name: 'child', objective: 'Inspect.' }, ctx);
+    const cursor = ctx.actorControl.eventSnapshot().at(-1)?.sequence ?? 0;
+    await controller.send('/root/parent/child', '/root/parent', 'Important evidence.');
+    executor.pending[1]?.resolve({ output: 'nested terminal evidence' });
+
+    const result = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 1_000,
+      return_on: 'terminal',
+    }, ctx)) as { readonly terminalOutputs?: readonly { readonly output?: string }[] };
+
+    expect(result.terminalOutputs).toEqual([
+      expect.objectContaining({ output: 'nested terminal evidence' }),
+    ]);
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([
+      expect.objectContaining({ kind: 'message', content: 'Important evidence.' }),
+    ]);
+  });
+
+  it('agent_output consumes the matching queued terminal banner exactly once', async () => {
+    const executor = new DeferredExecutor();
+    const sessionId = 'session-output';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const controller = await createAgentActorController({
+      executor,
+      onMessageCommitted: (message) => {
+        if (message.kind !== 'completion' || message.recipientPath !== '/root' || !message.turnId) return;
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'background',
+          mode: 'task-notification',
+          content: message.content,
+          taskResult: {
+            type: 'task_result',
+            source: 'child_task',
+            taskId: message.turnId,
+            status: 'completed',
+            summary: message.content,
+          },
+        });
+      },
+    });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root'),
+      sessionId,
+    };
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    executor.pending[0]?.resolve({ output: 'terminal evidence' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toBe(1);
+
+    const output = JSON.parse(await executeTool('agent_output', { target: 'worker' }, ctx)) as {
+      readonly output?: string;
+    };
+    expect(output.output).toBe('terminal evidence');
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toBe(0);
   });
 
   it('returns a bounded event batch without skipping the remaining committed events', async () => {

@@ -7,7 +7,7 @@
  * Robustness:
  *   - case-insensitive yes/no
  *   - whitespace inside / around tags tolerated
- *   - reason is optional (treated as '' if missing)
+ *   - allow reason is optional; a blocking decision always gets a diagnostic
  *   - if block tag missing or value is neither yes/no → unparseable (caller
  *     fail-closes to block, per design doc)
  *   - reasons longer than 500 chars are truncated (defense against
@@ -24,6 +24,7 @@ export type ClassifierDecision =
 const BLOCK_RE = /<block>\s*([^<]+?)\s*<\/block>/i;
 const REASON_RE = /<reason>\s*([\s\S]*?)\s*<\/reason>/i;
 const MAX_REASON_LEN = 500;
+const MISSING_BLOCK_REASON = 'Auto-mode classifier denied this tool call without a reason.';
 
 export function parseClassifierOutput(raw: string): ClassifierDecision {
   const blockMatch = raw.match(BLOCK_RE);
@@ -41,5 +42,8 @@ export function parseClassifierOutput(raw: string): ClassifierDecision {
     reason = reason.slice(0, MAX_REASON_LEN - 1) + '…';
   }
 
-  return verdict === 'yes' ? { kind: 'block', reason } : { kind: 'allow', reason };
+  if (verdict === 'yes') {
+    return { kind: 'block', reason: reason || MISSING_BLOCK_REASON };
+  }
+  return { kind: 'allow', reason };
 }

@@ -159,7 +159,20 @@ describe('runToolBeforeGuardrails', () => {
     expect(outcome.kind).toBe('block');
     if (outcome.kind === 'block') {
       expect(outcome.result.isError).toBe(true);
+      expect(outcome.result.content).toMatch(/^\[Tool Error\].*before execution/i);
       expect(outcome.result.content).toMatch(/path-escape/);
+    }
+  });
+
+  it('renders a non-empty diagnostic when a blocking guardrail omits its reason', async () => {
+    const g: ToolGuardrail = {
+      kind: 'tool', name: 'veto', beforeTool: async () => ({ action: 'block', reason: '' }),
+    };
+    const outcome = await runToolBeforeGuardrails(call, [g], dummyCtx, null);
+    expect(outcome.kind).toBe('block');
+    if (outcome.kind === 'block') {
+      expect(outcome.result.content).toMatch(/blocked by guardrail "veto" before execution/i);
+      expect(outcome.result.content).toMatch(/without a reason/i);
     }
   });
 

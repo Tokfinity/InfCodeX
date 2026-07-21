@@ -128,62 +128,24 @@ function persistedUiHistoryItemToCreatableHistoryItem(
     : undefined;
 }
 
-function splitCreatableHistoryRounds(
+function dedupePersistedToolGroups(
   items: readonly CreatableHistoryItem[],
-): CreatableHistoryItem[][] {
-  const rounds: CreatableHistoryItem[][] = [];
-  let current: CreatableHistoryItem[] = [];
-
-  for (const item of items) {
-    if (item.type === "user" && current.length > 0) {
-      rounds.push(current);
-      current = [];
-    }
-    current.push(item);
-  }
-
-  if (current.length > 0) {
-    rounds.push(current);
-  }
-  return rounds;
-}
-
-function roundHasToolGroup(round: readonly CreatableHistoryItem[]): boolean {
-  return round.some((item) => item.type === "tool_group");
-}
-
-function isLegacyToolSummaryItem(item: CreatableHistoryItem): boolean {
-  return item.type === "event" && item.icon === "tool";
-}
-
-function insertDerivedToolGroupsIntoRound(
-  persistedRound: readonly CreatableHistoryItem[],
-  derivedToolGroups: readonly Extract<CreatableHistoryItem, { type: "tool_group" }>[],
 ): CreatableHistoryItem[] {
-  if (derivedToolGroups.length === 0 || roundHasToolGroup(persistedRound)) {
-    return [...persistedRound];
-  }
-
-  const round = persistedRound.filter((item) => !isLegacyToolSummaryItem(item));
-  let lastThinkingIndex = -1;
-  for (let index = round.length - 1; index >= 0; index -= 1) {
-    if (round[index]?.type === "thinking") {
-      lastThinkingIndex = index;
-      break;
+  const seenToolIds = new Set<string>();
+  const result: CreatableHistoryItem[] = [];
+  for (const item of items) {
+    if (item.type !== "tool_group") {
+      result.push(item);
+      continue;
     }
+    const tools = item.tools.filter((tool) => {
+      if (seenToolIds.has(tool.id)) return false;
+      seenToolIds.add(tool.id);
+      return true;
+    });
+    if (tools.length > 0) result.push({ ...item, tools });
   }
-  const firstAssistantIndex = round.findIndex((item) => item.type === "assistant");
-  const insertIndex = lastThinkingIndex >= 0
-    ? lastThinkingIndex + 1
-    : firstAssistantIndex >= 0
-      ? firstAssistantIndex
-      : round.length;
-
-  return [
-    ...round.slice(0, insertIndex),
-    ...derivedToolGroups,
-    ...round.slice(insertIndex),
-  ];
+  return result;
 }
 
 function matchesTimestampSource(
@@ -226,24 +188,127 @@ function recoverMissingTimestamps(
   });
 }
 
-function enrichTextOnlyUiHistory(
+function alignCanonicalTextItems(
+  persistedItems: readonly CreatableHistoryItem[],
+  derivedItems: readonly CreatableHistoryItem[],
+): ReadonlyMap<number, number> {
+  const anchors = new Map<number, number>();
+  let persistedCursor = 0;
+  for (let derivedIndex = 0; derivedIndex < derivedItems.length; derivedIndex += 1) {
+    const derived = derivedItems[derivedIndex];
+    if (!derived || derived.type === "tool_group") continue;
+    for (let index = persistedCursor; index < persistedItems.length; index += 1) {
+      const persisted = persistedItems[index];
+      if (!persisted || persisted.type === "tool_group") continue;
+      if (!matchesTimestampSource(persisted, derived)) continue;
+      anchors.set(derivedIndex, index);
+      persistedCursor = index + 1;
+      break;
+    }
+  }
+  return anchors;
+}
+
+function previousAnchor(
+  anchors: ReadonlyMap<number, number>,
+  derivedIndex: number,
+): number | undefined {
+  for (let index = derivedIndex - 1; index >= 0; index -= 1) {
+    const anchor = anchors.get(index);
+    if (anchor !== undefined) return anchor;
+  }
+  return undefined;
+}
+
+function nextAnchor(
+  anchors: ReadonlyMap<number, number>,
+  derivedIndex: number,
+  derivedLength: number,
+): number | undefined {
+  for (let index = derivedIndex + 1; index < derivedLength; index += 1) {
+    const anchor = anchors.get(index);
+    if (anchor !== undefined) return anchor;
+  }
+  return undefined;
+}
+
+function enrichPersistedUiHistory(
   persistedItems: readonly CreatableHistoryItem[],
   derivedItems: readonly CreatableHistoryItem[],
 ): CreatableHistoryItem[] {
-  const persistedRounds = splitCreatableHistoryRounds(persistedItems);
-  const derivedRounds = splitCreatableHistoryRounds(derivedItems);
-  const offset = Math.max(0, derivedRounds.length - persistedRounds.length);
+  const anchors = alignCanonicalTextItems(persistedItems, derivedItems);
+  const insertions = new Map<number, Extract<CreatableHistoryItem, { type: "tool_group" }>[]>();
+  const persistedTools = new Map<string, {
+    tool: Extract<CreatableHistoryItem, { type: "tool_group" }>["tools"][number];
+    timestamp?: number;
+  }>();
+  for (const item of persistedItems) {
+    if (item.type !== "tool_group") continue;
+    for (const tool of item.tools) {
+      if (!persistedTools.has(tool.id)) {
+        persistedTools.set(tool.id, { tool, timestamp: item.timestamp });
+      }
+    }
+  }
+  const positionedToolIds = new Set<string>();
+  const anchoredPersistedIndices = new Set(anchors.values());
+  const legacyToolSummaryIndices = new Set<number>();
 
-  return persistedRounds.flatMap((round, index) => {
-    const derivedRound = derivedRounds[index + offset] ?? [];
-    const roundToolGroups = derivedRound.filter(
-      (item): item is Extract<CreatableHistoryItem, { type: "tool_group" }> => item.type === "tool_group",
-    );
-    return recoverMissingTimestamps(
-      insertDerivedToolGroupsIntoRound(round, roundToolGroups),
-      derivedRound,
-    );
-  });
+  for (let index = 0; index < derivedItems.length; index += 1) {
+    const item = derivedItems[index];
+    if (!item || item.type !== "tool_group") continue;
+    const tools = item.tools.filter((tool) => {
+      if (positionedToolIds.has(tool.id)) return false;
+      positionedToolIds.add(tool.id);
+      return true;
+    }).map((tool) => persistedTools.get(tool.id)?.tool ?? tool);
+    const before = previousAnchor(anchors, index);
+    if (before === undefined || tools.length === 0) {
+      for (const tool of tools) positionedToolIds.delete(tool.id);
+      continue;
+    }
+    const after = nextAnchor(anchors, index, derivedItems.length);
+    const boundary = after !== undefined && after > before ? after : before + 1;
+    const legacySearchEnd = after ?? persistedItems.findIndex((candidate, candidateIndex) => (
+      candidateIndex > before && candidate.type === "user"
+    ));
+    const boundedLegacySearchEnd = legacySearchEnd < 0 ? persistedItems.length : legacySearchEnd;
+    for (let persistedIndex = before + 1; persistedIndex < boundedLegacySearchEnd; persistedIndex += 1) {
+      const candidate = persistedItems[persistedIndex];
+      if (
+        candidate?.type === "event"
+        && candidate.icon === "tool"
+        && !anchoredPersistedIndices.has(persistedIndex)
+      ) {
+        legacyToolSummaryIndices.add(persistedIndex);
+      }
+    }
+    const groups = insertions.get(boundary) ?? [];
+    const persistedTimestamp = tools
+      .map((tool) => persistedTools.get(tool.id)?.timestamp)
+      .find((timestamp) => timestamp !== undefined);
+    groups.push({
+      ...item,
+      tools,
+      ...(persistedTimestamp === undefined ? {} : { timestamp: persistedTimestamp }),
+    });
+    insertions.set(boundary, groups);
+  }
+
+  const merged: CreatableHistoryItem[] = [];
+  for (let boundary = 0; boundary <= persistedItems.length; boundary += 1) {
+    merged.push(...(insertions.get(boundary) ?? []));
+    const persisted = persistedItems[boundary];
+    if (!persisted) continue;
+    if (legacyToolSummaryIndices.has(boundary)) continue;
+    if (persisted.type !== "tool_group") {
+      merged.push(persisted);
+      continue;
+    }
+    const tools = persisted.tools.filter((tool) => !positionedToolIds.has(tool.id));
+    if (tools.length > 0) merged.push({ ...persisted, tools });
+  }
+  return recoverMissingTimestamps(merged, derivedItems);
 }
 
 export function restoreHistoryItemsFromSession(
@@ -255,9 +320,9 @@ export function restoreHistoryItemsFromSession(
     return derivedItems;
   }
 
-  const persistedItems = persistedHistory
+  const persistedItems = dedupePersistedToolGroups(persistedHistory
     .map(persistedUiHistoryItemToCreatableHistoryItem)
-    .filter((item): item is CreatableHistoryItem => Boolean(item));
+    .filter((item): item is CreatableHistoryItem => Boolean(item)));
 
-  return enrichTextOnlyUiHistory(persistedItems, derivedItems);
+  return enrichPersistedUiHistory(persistedItems, derivedItems);
 }

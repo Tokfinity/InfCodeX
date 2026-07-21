@@ -8,6 +8,23 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Agent coordination and resumed transcript reliability.** Local constructed
+  specialists can now be listed and spawned without an external executor
+  plane. Worker coordination uses a terminal-only wait mode that skips progress
+  events inside one tool call, while queued user input still interrupts the
+  wait. Explicit terminal observation durably acknowledges the matching Actor
+  completion by turn ID, preventing later duplicate `<agent-completed>`
+  delivery. Session restore now deduplicates and canonically repositions tool
+  groups by tool-use ID, including snapshots already polluted after `/quit`.
+  Pre-execution guardrail denials always carry an explicit reason and tool-result
+  messages retain their execution-time timestamp.
+- **Release-review boundary fixes.** Emergency compaction fallback now subtracts
+  the actual system/tool overhead and reserved response budget from physical
+  input capacity before pruning. Compact Auto[LLM] permission evidence samples
+  the middle of long risky-operation lists as well as both ends, and Auto[rules]
+  no longer mistakes single-segment POSIX paths such as `/tmp` for generic
+  Windows switches. Invalid continuation input errors now identify
+  `runtime.runs.submitInput` rather than incorrectly naming `runs.start`.
 - **Runtime interrupt input delivery.** Embedded Runtime and the shared daemon
   now advertise `interruptInput:1` and route interrupt submissions into the
   current active Actor Run. Inputs queued before one safe Runner boundary are

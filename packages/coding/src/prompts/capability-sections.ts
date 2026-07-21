@@ -417,7 +417,7 @@ function buildSpecialistAgentsBlock(agentScope: KodaXAgentScope | undefined): st
     '=== Available specialist agents ===',
     lines,
     '',
-    'Start one with spawn_agent(agent_id="<name>").',
+    'Start one with spawn_agent(agent_id="<name>"); list_dispatchable_agents returns the equivalent canonical id.',
   ].join('\n');
 }
 

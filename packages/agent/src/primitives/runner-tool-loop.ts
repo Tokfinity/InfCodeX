@@ -301,7 +301,7 @@ export function buildToolResultMessage(
     };
     blocks.push(block);
   }
-  return { role: 'user', content: blocks };
+  return { role: 'user', content: blocks, timestamp: new Date().toISOString() };
 }
 
 function safePreview(input: unknown): string {

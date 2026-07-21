@@ -132,6 +132,176 @@ describe("restore-history / timestamps", () => {
   });
 });
 
+describe("restore-history / tool identity", () => {
+  const canonicalMessages = [
+    { role: "user" as const, content: "review" },
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "tool_use" as const, id: "tool-1", name: "read", input: { path: "README.md" } },
+        { type: "text" as const, text: "first answer" },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: [{ type: "tool_result" as const, tool_use_id: "tool-1", content: "one" }],
+    },
+    { role: "user" as const, content: "continue" },
+    {
+      role: "assistant" as const,
+      content: [
+        { type: "tool_use" as const, id: "tool-2", name: "grep", input: { pattern: "TODO" } },
+        { type: "text" as const, text: "second answer" },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: [{ type: "tool_result" as const, tool_use_id: "tool-2", content: "two" }],
+    },
+  ];
+
+  it("repairs tool groups duplicated after a UI-only quit round and stays idempotent", () => {
+    const uiHistory: KodaXSessionUiHistoryItem[] = [
+      { type: "user", text: "review" },
+      {
+        type: "tool_group",
+        tools: [{ id: "tool-1", name: "read", status: "success", output: "one" }],
+      },
+      { type: "assistant", text: "first answer" },
+      { type: "user", text: "continue" },
+      {
+        type: "tool_group",
+        tools: [{ id: "tool-2", name: "grep", status: "success", output: "two" }],
+      },
+      { type: "assistant", text: "second answer" },
+      { type: "user", text: "/quit" },
+      {
+        type: "tool_group",
+        tools: [{ id: "tool-1", name: "read", status: "success", output: "one" }],
+      },
+      {
+        type: "tool_group",
+        tools: [{ id: "tool-2", name: "grep", status: "success", output: "two" }],
+      },
+    ];
+
+    const restored = restoreHistoryItemsFromSession({ messages: canonicalMessages, uiHistory });
+    const toolIds = restored.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : []);
+    expect(toolIds).toEqual(["tool-1", "tool-2"]);
+    expect(restored.at(-1)).toEqual({ type: "user", text: "/quit" });
+
+    const repairedUiHistory: KodaXSessionUiHistoryItem[] = restored.map((item) => {
+      if (item.type === "tool_group") {
+        return {
+          type: "tool_group",
+          tools: item.tools.map((tool) => ({
+            id: tool.id,
+            name: tool.name,
+            status: tool.status,
+            input: tool.input,
+            output: tool.output,
+            error: tool.error,
+          })),
+        };
+      }
+      return { type: item.type, text: item.text } as KodaXSessionUiHistoryItem;
+    });
+    const restoredAgain = restoreHistoryItemsFromSession({
+      messages: canonicalMessages,
+      uiHistory: repairedUiHistory,
+    });
+    expect(restoredAgain.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : [])).toEqual(["tool-1", "tool-2"]);
+  });
+
+  it("moves a uniquely persisted canonical tool group out of a polluted quit suffix", () => {
+    const restored = restoreHistoryItemsFromSession({
+      messages: canonicalMessages,
+      uiHistory: [
+        { type: "user", text: "review" },
+        {
+          type: "tool_group",
+          tools: [{ id: "tool-1", name: "read", status: "success", output: "one" }],
+        },
+        { type: "assistant", text: "first answer" },
+        { type: "user", text: "continue" },
+        { type: "assistant", text: "second answer" },
+        { type: "user", text: "/quit" },
+        {
+          type: "tool_group",
+          tools: [{ id: "tool-2", name: "grep", status: "success", output: "two" }],
+        },
+      ],
+    });
+
+    expect(restored.at(-1)).toEqual({ type: "user", text: "/quit" });
+    expect(restored.map((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id).join(",")
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:review",
+      "tool-1",
+      "assistant:first answer",
+      "user:continue",
+      "tool-2",
+      "assistant:second answer",
+      "user:/quit",
+    ]);
+  });
+
+  it("replaces an unanchored legacy tool summary with the canonical tool group", () => {
+    const restored = restoreHistoryItemsFromSession({
+      messages: canonicalMessages.slice(0, 3),
+      uiHistory: [
+        { type: "user", text: "review" },
+        { type: "event", text: "⚙ read(README.md)", icon: "tool" },
+        { type: "assistant", text: "first answer" },
+      ],
+    });
+
+    expect(restored.map((item) => item.type)).toEqual(["user", "tool_group", "assistant"]);
+  });
+
+  it("filters duplicate members inside a mixed tool group without dropping new tools", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: [],
+      uiHistory: [
+        {
+          type: "tool_group",
+          tools: [{ id: "tool-1", name: "read", status: "success" }],
+        },
+        {
+          type: "tool_group",
+          tools: [
+            { id: "tool-1", name: "read", status: "success" },
+            { id: "tool-2", name: "grep", status: "success" },
+          ],
+        },
+      ],
+    });
+
+    expect(result.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : [])).toEqual(["tool-1", "tool-2"]);
+  });
+
+  it("does not reinsert tool groups from canonical rounds outside a trimmed persisted window", () => {
+    const result = restoreHistoryItemsFromSession({
+      messages: canonicalMessages,
+      uiHistory: [
+        { type: "user", text: "continue" },
+        { type: "assistant", text: "second answer" },
+      ],
+    });
+
+    expect(result.flatMap((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id)
+      : [])).toEqual(["tool-2"]);
+  });
+});
+
 describe("restore-history / task-completed recovery (GOAL 1)", () => {
   const taskCompletedMsg = {
     role: "user" as const,

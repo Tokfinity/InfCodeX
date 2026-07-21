@@ -764,13 +764,18 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'wait_agent',
-    description: 'Yield for the next caller-visible actor-tree event. Waiting does not release the current Agent turn slot; root user input interrupts the wait and resumes the next turn. After a terminal result, integrate its evidence and reconcile the affected semantic plan milestone before waiting again or moving to another milestone.',
+    description: 'Yield for caller-visible actor-tree events. Use return_on="terminal" when coordinating child results so UI progress does not wake the parent model; raw event mode remains available for event-stream consumers. Waiting does not release the current Agent turn slot, and root user input interrupts promptly. After a terminal result, integrate its evidence and reconcile the affected semantic plan milestone before waiting again or moving to another milestone.',
     input_schema: {
       type: 'object',
       properties: {
         after_sequence: { type: 'number', description: 'Last event sequence already observed. Defaults to 0.' },
-        timeout_ms: { type: 'number', description: 'Bounded wait window, 0-120000 ms. Defaults to 30000.' },
+        timeout_ms: { type: 'number', description: 'Bounded wait window, 0-120000 ms. Defaults to 30000 in event mode and 120000 in terminal mode.' },
         max_events: { type: 'number', description: 'Maximum committed events returned together, 1-20. Defaults to 8.' },
+        return_on: {
+          type: 'string',
+          enum: ['event', 'terminal'],
+          description: 'event (default) returns the next visible event; terminal skips progress internally and returns completed, failed, or interrupted turns with terminalOutputs.',
+        },
       },
     },
     handler: toolWaitAgent,

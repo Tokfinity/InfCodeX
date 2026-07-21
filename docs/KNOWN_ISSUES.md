@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-21_
+_Last Updated: 2026-07-22_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-21_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 194 | High | Resolved | Agent coordination could reject local specialists, amplify progress polling, duplicate terminal output, and corrupt resumed tool history | v0.7.72-v0.7.74 | v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 193 | Medium | Resolved | Runtime daemon rejects interrupt input instead of injecting it into the active Run | v0.7.69 | v0.7.73 development | 2026-07-21 | 2026-07-21 |
 | 192 | High | Resolved | Large compaction used the model window for protection, covered only one rolling chunk, and exposed ambiguous/unbounded SDK state | v0.7.73 and earlier | v0.7.74 | 2026-07-21 | 2026-07-21 |
 | 191 | High | Resolved | Auto permission review lacked a complete, compact mutation model | v0.7.33 | v0.7.73 | 2026-07-21 | 2026-07-21 |
@@ -103,6 +104,140 @@ _Last Updated: 2026-07-21_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 194: Agent coordination could reject local specialists, amplify progress polling, duplicate terminal output, and corrupt resumed tool history
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.74)
+- **Introduced**: v0.7.72-v0.7.74
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+An npm-linked v0.7.74 REPL session exposed several coupled coordination and
+resume failures:
+
+- `spawn_agent(agent_id="repo-explorer")` was rejected because a local
+  constructed specialist incorrectly required an external Runtime executor
+  catalog. Retrying without `agent_id` started generic children and silently
+  lost the requested specialist semantics.
+- `wait_agent` woke the parent model for ordinary `turn_progress` events. Three
+  children produced dozens of parent model turns even though only three
+  terminal results affected the review.
+- Results already observed through terminal Actor APIs were later injected
+  again as full `<agent-completed>` notifications, duplicating large child
+  outputs in model context.
+- Quitting and resuming with `kodax -c` appended previously rendered tool calls
+  to the end of the transcript. Repeated resumes persisted and multiplied the
+  duplicates in `uiHistory`.
+- Auto-mode could reject a command before execution with an empty reason, which
+  rendered as an ambiguous tool error and led the model to misdiagnose the
+  failure as a shell output-capture problem.
+- Tool-result messages lacked execution-time timestamps and collapsed to the
+  later session-accounting timestamp.
+
+Expected behavior:
+
+- Prompted local specialist IDs are dispatchable without an external plane and
+  never silently degrade to a generic Agent.
+- Parent coordination can wait for terminal events without consuming every UI
+  progress update; queued user input still interrupts promptly.
+- Each child turn's terminal body enters model context at most once.
+- Session restoration is tool-ID based and idempotent across arbitrary UI-only
+  commands and repeated resume/save cycles.
+- Pre-execution policy denials carry an explicit non-empty reason, and every
+  message retains its real finalize-time timestamp.
+
+#### Context
+
+Affected components:
+
+- `packages/coding/src/tools/agent-collaboration.ts`
+- `packages/coding/src/tools/list-dispatchable-agents.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `packages/agent/src/orchestration/idle-yield.ts`
+- `packages/repl/src/ui/utils/restore-history.ts`
+- `packages/coding/src/guardrails/auto-mode/parse-output.ts`
+- `packages/agent/src/primitives/runner-tool-loop.ts`
+
+#### Root Cause
+
+Agent selector resolution required the external executor plane before attempting
+local catalog resolution. The wait API exposed one undifferentiated event
+stream to both the UI and the parent model. Terminal results were projected
+independently into Actor output and the background message queue without a
+shared observation identity. Session restoration aligned persisted and derived
+history by visible user-round counts instead of stable tool IDs, so UI-only
+commands shifted the merge boundary. Finally, policy and tool-result message
+builders allowed missing diagnostic/timestamp fields that the persistence layer
+could only repair ambiguously.
+
+#### Proposed Solution
+
+- Resolve Native/Constructed catalog entries before consulting the external
+  executor plane; make prompt, list, and spawn share the same dispatchable IDs.
+- Add a backwards-compatible terminal-only wait mode and use it in the built-in
+  Worker prompt while retaining raw event mode for SDK progress consumers.
+- Track terminal observation by turn ID so explicit output retrieval and
+  background completion delivery form one exactly-once channel.
+- Deduplicate and enrich restored tool groups by tool-use ID, preserving
+  persisted order and repairing already polluted snapshots idempotently.
+- Require non-empty auto-mode denial reasons and stamp tool-result messages when
+  their batch completes.
+- Cover the fixes with contract tests plus repeated resume/save/restore and
+  multi-child progress/terminal integration tests.
+
+#### Resolution
+
+- Local Native/Constructed descriptors are resolved before the optional
+  external executor plane. `list_dispatchable_agents`, the specialist prompt,
+  short aliases, canonical IDs, and `spawn_agent` now share one catalog.
+- `wait_agent(return_on="terminal")` skips progress events internally, preserves
+  raw event mode for compatibility, returns bounded `terminalOutputs`, and
+  remains interruptible by scoped user input. The Worker prompt uses this mode
+  and yields text-only to the existing idle-yield path instead of polling an
+  expired wait.
+- The Actor snapshot records explicit completion acknowledgements by `turnId`.
+  Acknowledgement is selective, durable, restricted to completions already in
+  the direct parent's mailbox, and filters later mailbox drains without
+  consuming earlier evidence. Root and nested completion projections carry the
+  same task-result identity, and `wait_agent`/`agent_output` remove the matching
+  background notification after acknowledgement.
+- Resume restoration deduplicates globally by tool-use ID, aligns canonical
+  text anchors monotonically, repositions canonical tool groups while retaining
+  richer persisted tool details, and replaces legacy tool summaries only when
+  they are not canonical anchors. It remains bounded to the persisted window
+  and idempotent across repeated resume/save cycles.
+- Auto-mode block decisions synthesize a non-empty diagnostic when the
+  classifier omits its reason. The shared guardrail result now explicitly says
+  the call was blocked before execution. Tool-result messages are timestamped
+  when the result batch is built.
+
+#### Files Changed
+
+- `packages/agent/src/actors/controller.ts`, `packages/agent/src/actors/types.ts`
+- `packages/agent/src/primitives/guardrail.ts`, `packages/agent/src/primitives/runner-tool-loop.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/external-agents/local-catalog.ts`
+- `packages/coding/src/guardrails/auto-mode/parse-output.ts`
+- `packages/coding/src/prompts/capability-sections.ts`
+- `packages/coding/src/tools/agent-collaboration.ts`, `packages/coding/src/tools/list-dispatchable-agents.ts`, `packages/coding/src/tools/tool-definitions.ts`
+- `packages/repl/src/ui/utils/restore-history.ts`
+- Corresponding colocated tests, `docs/KNOWN_ISSUES.md`, and `CHANGELOG.md`
+
+#### Verification
+
+- `npx tsc --noEmit`
+- `npm run build`
+- 201 Agent/compaction tests, 1,057 coding/tool/guardrail tests, 921
+  REPL/permission tests, and 120 SDK Runtime tests passed (2,299 total; one
+  pre-existing platform skip).
+- A read-only replay of session `20260721_233332` recovered all 45 unique tool
+  calls, removed all 33 duplicate occurrences, and left no orphan tool group
+  after the first `/quit` marker.
 
 ### 193: Runtime daemon rejects interrupt input instead of injecting it into the active Run
 
@@ -5774,11 +5909,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 80 (27 Open, 53 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 81 (27 Open, 54 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-22: Issue 194 added and resolved (v0.7.74)
+- Recorded the local-specialist dispatch contract break, progress-wait model
+  amplification, duplicate terminal delivery, non-idempotent resumed tool
+  history, ambiguous guardrail denial, and missing tool-result timestamp.
+- Resolved catalog selection, terminal-only waiting, durable turn-ID
+  acknowledgement, canonical tool-ID resume repair, denial diagnostics, and
+  result timestamping; verified 2,299 tests plus the reported real session.
 
 ### 2026-07-21: Issue 193 added and resolved (v0.7.73 development)
 - Added the versioned Runtime/daemon interrupt-input contract, reused the

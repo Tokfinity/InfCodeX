@@ -5,6 +5,7 @@ import type {
   AgentCapabilities,
   AgentDataClassification,
   AgentForkTurns,
+  AgentEvent,
   AgentInterruptScope,
   AgentMetadataValue,
   AgentSpawnInput,
@@ -14,6 +15,7 @@ import { getMessageQueue } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { actorQueueId } from '../agent-runtime/actor-queue.js';
 import {
+  codingDispatchContext,
   listCodingDispatchableAgents,
   resolveCodingDispatchableAgent,
 } from '../external-agents/local-catalog.js';
@@ -31,6 +33,13 @@ type QueuedPromptWaitResult = 'queued' | 'aborted';
 type CollaborationWaitWinner =
   | { readonly source: 'queue'; readonly result: QueuedPromptWaitResult }
   | { readonly source: 'actor'; readonly event: Awaited<ReturnType<AgentActorClient['wait']>> };
+type WaitReturnOn = 'event' | 'terminal';
+
+const TERMINAL_EVENT_KINDS = new Set<AgentEvent['kind']>([
+  'turn_completed',
+  'turn_failed',
+  'turn_interrupted',
+]);
 
 function waitForQueuedPrompt(
   agentId: string | undefined,
@@ -175,7 +184,14 @@ export async function toolWaitAgent(
   const client = requireActorControl(ctx);
   try {
     const afterSequence = nonNegativeInteger(input.after_sequence, 0, 'after_sequence');
-    const timeoutMs = boundedInteger(input.timeout_ms, 30_000, 0, MAX_WAIT_MS, 'timeout_ms');
+    const returnOn = parseWaitReturnOn(input.return_on);
+    const timeoutMs = boundedInteger(
+      input.timeout_ms,
+      returnOn === 'terminal' ? MAX_WAIT_MS : 30_000,
+      0,
+      MAX_WAIT_MS,
+      'timeout_ms',
+    );
     const maxEvents = boundedInteger(
       input.max_events,
       DEFAULT_WAIT_EVENTS,
@@ -192,18 +208,34 @@ export async function toolWaitAgent(
     const forwardAbort = (): void => waiterAbort.abort(ctx.abortSignal?.reason);
     ctx.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
 
-    let winner: CollaborationWaitWinner;
+    let winner: CollaborationWaitWinner | undefined;
     try {
-      const queuedPrompt = waitForQueuedPrompt(queueAgentId, waiterAbort.signal);
-      const actorEvent = client.wait(afterSequence, timeoutMs, waiterAbort.signal);
-      winner = await Promise.race([
-        queuedPrompt.then((result) => ({ source: 'queue' as const, result })),
-        actorEvent.then((event) => ({ source: 'actor' as const, event })),
-      ]);
+      const queuedPrompt = waitForQueuedPrompt(queueAgentId, waiterAbort.signal)
+        .then((result) => ({ source: 'queue' as const, result }));
+      const deadline = Date.now() + timeoutMs;
+      let cursor = afterSequence;
+      while (!winner) {
+        const remainingMs = timeoutMs === 0 ? 0 : Math.max(0, deadline - Date.now());
+        const candidate = await Promise.race([
+          queuedPrompt,
+          client.wait(cursor, remainingMs, waiterAbort.signal)
+            .then((event) => ({ source: 'actor' as const, event })),
+        ]);
+        if (candidate.source === 'queue' || candidate.event === undefined) {
+          winner = candidate;
+          break;
+        }
+        if (returnOn === 'event' || isTerminalEvent(candidate.event)) {
+          winner = candidate;
+          break;
+        }
+        cursor = candidate.event.sequence;
+      }
     } finally {
       waiterAbort.abort('wait_agent settled');
       ctx.abortSignal?.removeEventListener('abort', forwardAbort);
     }
+    if (!winner) throw new Error('wait_agent settled without a result.');
     const interrupted = ctx.abortSignal?.aborted === true;
     const userInputPending = !interrupted && (
       (winner.source === 'queue' && winner.result === 'queued')
@@ -215,9 +247,18 @@ export async function toolWaitAgent(
     );
     const first = winner.source === 'actor' ? winner.event : undefined;
     const pending = first === undefined ? [] : client.eventSnapshot(afterSequence);
-    const events = (pending.length === 0 && first ? [first] : pending).slice(0, maxEvents);
+    const visibleEvents = returnOn === 'terminal'
+      ? pending.filter(isTerminalEvent)
+      : pending;
+    const events = (visibleEvents.length === 0 && first ? [first] : visibleEvents).slice(0, maxEvents);
     const event = events[0];
     const nextSequence = events.at(-1)?.sequence;
+    const terminalOutputs = events
+      .filter((item): item is AgentEvent & { readonly turnId: string } => (
+        isTerminalEvent(item) && typeof item.turnId === 'string'
+      ))
+      .map((item) => client.output(item.actorPath, item.turnId));
+    await consumeTerminalNotifications(ctx, client, terminalOutputs.map((output) => output.turnId));
     return render({
       ok: true,
       status: event
@@ -233,7 +274,8 @@ export async function toolWaitAgent(
         events,
         updatedActors: [...new Set(events.map((item) => item.actorPath))],
         nextSequence,
-        hasMore: pending.length > events.length,
+        hasMore: visibleEvents.length > events.length,
+        ...(terminalOutputs.length > 0 ? { terminalOutputs } : {}),
       } : {}),
     });
   } catch (error) {
@@ -323,6 +365,9 @@ export async function toolAgentOutput(
   try {
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
     const output = client.output(actorPath, optionalString(input.turn_id));
+    if (isTerminalTurnState(output.state)) {
+      await consumeTerminalNotifications(ctx, client, [output.turnId]);
+    }
     return render({ ok: true, ...output });
   } catch (error) {
     return renderActorError('agent_output', error);
@@ -363,6 +408,31 @@ function messageRecipients(client: AgentActorClient): AgentActor[] {
       || (self.parentPath !== undefined && actor.parentPath === self.parentPath)
     )
   ));
+}
+
+function isTerminalEvent(event: AgentEvent): boolean {
+  return TERMINAL_EVENT_KINDS.has(event.kind);
+}
+
+function isTerminalTurnState(state: string): boolean {
+  return state === 'completed' || state === 'failed' || state === 'interrupted';
+}
+
+async function consumeTerminalNotifications(
+  ctx: KodaXToolExecutionContext,
+  client: AgentActorClient,
+  turnIds: readonly string[],
+): Promise<void> {
+  if (turnIds.length === 0) return;
+  await client.acknowledgeCompletions(turnIds);
+  const ids = new Set(turnIds);
+  getMessageQueue().dequeue({
+    agentId: actorQueueId(ctx.sessionId, client.callerPath),
+    maxPriority: 'background',
+    mode: 'task-notification',
+    predicate: (message) => message.taskResult?.source === 'child_task'
+      && ids.has(message.taskResult.taskId),
+  });
 }
 
 function novelMessageRecipients(
@@ -431,12 +501,15 @@ async function resolveAgentSelector(
   readonly control?: AgentCapabilities['control'];
 }> {
   if (!agentId) return { kind: 'native' };
-  const binding = ctx.agentExecutorPlane;
-  if (!binding) throw new Error('agent_id requires a Runtime-bound Agent executor catalog.');
-  const local = resolveCodingDispatchableAgent(agentId, binding.context, ctx.agentScope);
+  const dispatchContext = codingDispatchContext(ctx);
+  const local = resolveCodingDispatchableAgent(agentId, dispatchContext, ctx.agentScope);
   if (local?.kind === 'native') return { kind: 'native' };
   if (local?.kind === 'constructed') {
     return { kind: 'constructed', specialistName: local.subagentType };
+  }
+  const binding = ctx.agentExecutorPlane;
+  if (!binding) {
+    throw new Error(`agent_id is not known in the local dispatchable catalog: ${agentId}`);
   }
   const described = await binding.plane.describe(agentId, {
     ...binding.context,
@@ -468,6 +541,12 @@ function parseClassification(value: unknown): AgentDataClassification {
   if (value === undefined) return 'internal';
   if (value === 'public' || value === 'internal' || value === 'sensitive') return value;
   throw new Error('classification must be public, internal, or sensitive.');
+}
+
+function parseWaitReturnOn(value: unknown): WaitReturnOn {
+  if (value === undefined || value === 'event') return 'event';
+  if (value === 'terminal') return value;
+  throw new Error('return_on must be event or terminal.');
 }
 
 function parseInterruptScope(value: unknown): AgentInterruptScope {

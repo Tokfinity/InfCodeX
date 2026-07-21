@@ -2721,6 +2721,56 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('labels rejected submitted input without mutating its run or queue', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Invalid Interrupt Input Test' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => (
+      fakeRunningSession(options, new Promise<KodaXResult>(() => undefined))
+    ));
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'first' });
+    const queueSizeBefore = getMessageQueue().size();
+
+    await expect(runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'prompt',
+      input: { type: 'text', text: 'text item' },
+    })).rejects.toThrow('runtime.runs.start accepts either prompt or text input, not both');
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: [
+        { type: 'text', text: 'one' },
+        { type: 'text', text: 'two' },
+      ],
+    })).rejects.toThrow('runtime.runs.submitInput accepts at most one text input item');
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: [],
+    })).rejects.toThrow('runtime.runs.submitInput requires prompt or text input');
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'after_turn',
+      input: [],
+    })).rejects.toThrow('runtime.runs.submitInput requires prompt or text input');
+
+    const status = await runtime.runs.get(run.runId);
+    expect(status.interruptInputs).toBeUndefined();
+    await expect(runtime.runs.list({ sessionId: session.id })).resolves.toHaveLength(1);
+    expect(getMessageQueue().size()).toBe(queueSizeBefore);
+    await runtime.runs.abort(run.runId);
+    await expectSettles(run.result, 'invalid interrupt input abort result');
+    await runtime.close();
+  });
+
   it('marks only the exact interrupt batch consumed at a safe boundary', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({

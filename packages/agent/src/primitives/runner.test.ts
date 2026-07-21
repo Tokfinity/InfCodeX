@@ -262,6 +262,7 @@ describe('Runner', () => {
       const assistantBlocks = result.messages[2]!.content as Array<{ type: string }>;
       expect(assistantBlocks.some((b) => b.type === 'tool_use')).toBe(true);
       expect(result.messages[3]!.role).toBe('user');
+      expect(result.messages[3]!.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       const toolResultBlocks = result.messages[3]!.content as Array<{ type: string }>;
       expect(toolResultBlocks[0]!.type).toBe('tool_result');
     });

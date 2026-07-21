@@ -180,4 +180,7 @@ export {
   resolveContextWindow,
   DEFAULT_CONTEXT_WINDOW,
 } from './runtime-middleware/index.js';
-export type { ShouldCompactInput } from './runtime-middleware/index.js';
+export type {
+  GracefulCompactionCapacity,
+  ShouldCompactInput,
+} from './runtime-middleware/index.js';

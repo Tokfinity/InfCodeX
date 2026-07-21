@@ -1,12 +1,14 @@
 import type {
   AgentCapabilityRequirements,
+  DispatchableAgentDescriptor,
   DispatchableAgentQuery,
 } from '@kodax-ai/agent';
 
-import { listCodingDispatchableAgents } from '../external-agents/local-catalog.js';
+import {
+  codingDispatchContext,
+  listCodingDispatchableAgents,
+} from '../external-agents/local-catalog.js';
 import type { KodaXToolExecutionContext } from '../types.js';
-
-const TOOL_NAME = 'list_dispatchable_agents';
 
 function stringArray(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -23,26 +25,50 @@ function capabilityRequirements(value: unknown): AgentCapabilityRequirements | u
   return Object.keys(result).length > 0 ? result as AgentCapabilityRequirements : undefined;
 }
 
+function localMatchesQuery(
+  descriptor: DispatchableAgentDescriptor,
+  query: DispatchableAgentQuery,
+): boolean {
+  for (const skill of query.requiredSkills ?? []) {
+    if (!descriptor.skills.includes(skill)) return false;
+  }
+  const required = query.requiredCapabilities;
+  if (required) {
+    for (const key of ['streaming', 'durableTasks', 'inputRequired', 'cancellation', 'artifacts'] as const) {
+      if (required[key] === true && descriptor.capabilities[key] !== 'supported') return false;
+    }
+  }
+  return query.readOnly !== true
+    || (descriptor.effects.remote !== 'write' && descriptor.effects.remote !== 'unknown');
+}
+
 export async function toolListDispatchableAgents(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const binding = ctx.agentExecutorPlane;
-  if (!binding) {
-    return `[Tool Error] ${TOOL_NAME}: No external agent executor plane is bound to this run.`;
-  }
   const requiredSkills = stringArray(input.required_skills ?? input.requiredSkills);
   const requiredCapabilities = capabilityRequirements(
     input.required_capabilities ?? input.requiredCapabilities,
   );
+  const dispatchContext = codingDispatchContext(ctx);
   const query: DispatchableAgentQuery = {
-    ...binding.context,
+    ...dispatchContext,
     ...(requiredSkills ? { requiredSkills } : {}),
     ...(requiredCapabilities ? { requiredCapabilities } : {}),
     ...((input.read_only ?? input.readOnly) === true ? { readOnly: true } : {}),
   };
-  const local = listCodingDispatchableAgents(binding.context, ctx.agentScope);
-  const listings = await binding.plane.listDispatchable(query, local);
+  const local = listCodingDispatchableAgents(dispatchContext, ctx.agentScope);
+  const listings = binding
+    ? await binding.plane.listDispatchable(query, local)
+    : local.filter((descriptor) => localMatchesQuery(descriptor, query)).map((descriptor) => ({
+        descriptor,
+        dispatchability: {
+          status: 'dispatchable' as const,
+          checkedAt: new Date().toISOString(),
+          reasons: [],
+        },
+      }));
   return JSON.stringify({
     agents: listings.map(({ descriptor, dispatchability }) => ({
       agent_id: descriptor.agentId,

@@ -1139,6 +1139,43 @@ describe('AutoModeToolGuardrail — compact permission review', () => {
     expect(Buffer.byteLength(userContent, 'utf8')).toBeLessThan(20 * 1024);
   });
 
+  it('retains middle evidence when more than six risky operations are summarized', async () => {
+    let userContent = '';
+    const provider = new StubProvider(okResult('<block>no</block><reason>batch authorized</reason>'));
+    const original = provider.stream.bind(provider);
+    provider.stream = async (messages, tools, system, reasoning, options, signal) => {
+      userContent = messages[0]?.content as string;
+      return original(messages, tools, system, reasoning, options, signal);
+    };
+    const operations = Array.from({ length: 9 }, (_, index) => ({
+      kind: 'delete' as const,
+      target: {
+        path: `D:/outside/risky-${String(index).padStart(2, '0')}-${'long-name-'.repeat(120)}.txt`,
+        boundary: 'outside-workspace' as const,
+      },
+    }));
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+        operations,
+        risks: ['outside_workspace_mutation', 'source_removed'],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'batch-delete', name: 'write', input: { path: 'D:/outside' } },
+      ctx([{ role: 'user', content: 'Remove the generated fixtures.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(userContent).toContain('"status":"targeted"');
+    expect(userContent).toContain('D:/outside/risky-04-');
+    expect(Buffer.byteLength(userContent, 'utf8')).toBeLessThan(20 * 1024);
+  });
+
   it('does not downgrade to rules when compact evidence is locally blocked by its byte budget', async () => {
     const provider = new StubProvider(okResult('<block>no</block><reason>unused</reason>'));
     const stream = vi.spyOn(provider, 'stream');

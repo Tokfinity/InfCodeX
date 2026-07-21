@@ -73,6 +73,48 @@ describe('F270 actor tree and scheduler', () => {
     ]));
   });
 
+  it('durably acknowledges one observed child completion without consuming earlier evidence', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) { saved = snapshot; },
+      },
+    });
+    await controller.spawn('/root', { taskName: 'parent', objective: 'Coordinate.' });
+    const child = await controller.spawn('/root/parent', {
+      taskName: 'child',
+      objective: 'Inspect.',
+    });
+    await controller.send('/root/parent/child', '/root/parent', 'Important evidence.');
+    executor.pending[1]?.resolve({ output: 'Child complete.' });
+    await settle();
+
+    const parent = controller.bind('/root/parent');
+    await expect(parent.acknowledgeCompletions([child.turnId])).resolves.toBe(1);
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([
+      expect.objectContaining({ kind: 'message', content: 'Important evidence.' }),
+    ]);
+    expect(saved?.acknowledgedCompletionTurnIds).toContain(child.turnId);
+
+    executor.pending[0]?.resolve({ output: 'Parent complete.' });
+    await settle();
+    const restoredExecutor = new DeferredExecutor();
+    const restored = new AgentActorController({
+      executor: restoredExecutor,
+      store: {
+        async load() { return saved; },
+        async save() {},
+      },
+    });
+    await restored.initialize();
+    await restored.followup('/root', '/root/parent', 'Continue after restart.');
+
+    await expect(restoredExecutor.pending[0]?.input.drainMailbox()).resolves.toEqual([]);
+  });
+
   it('does not persist an empty mailbox drain', async () => {
     const save = vi.fn(async () => undefined);
     const executor = new DeferredExecutor();

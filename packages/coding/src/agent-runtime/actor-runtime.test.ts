@@ -152,6 +152,50 @@ describe('F270 coding Actor runtime adapter', () => {
     ]));
   });
 
+  it('projects nested child completion with task-result identity into the parent queue', async () => {
+    let nestedTurnId: string | undefined;
+    executeChildAgentsMock
+      .mockImplementationOnce(async (_bundles, _ctx, childOptions) => {
+        const actorControl = childOptions.actorControl;
+        if (!actorControl) throw new Error('Expected Actor control for native child execution.');
+        const nested = await actorControl.spawn({
+          taskName: 'nested',
+          objective: 'Inspect the nested path.',
+        });
+        nestedTurnId = nested.turnId;
+        await vi.waitFor(() => {
+          expect(actorControl.output(nested.actorPath, nested.turnId).state).toBe('completed');
+        });
+        await vi.waitFor(() => {
+          expect(getMessageQueue().peek({
+            agentId: actorQueueId('session-1', actorControl.callerPath),
+            maxPriority: 'background',
+            mode: 'task-notification',
+          })).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              content: expect.stringContaining(`turn_id="${nested.turnId}"`),
+              taskResult: expect.objectContaining({
+                source: 'child_task',
+                taskId: nested.turnId,
+                status: 'completed',
+                summary: 'nested complete',
+              }),
+            }),
+          ]));
+        });
+        return completedChild('parent complete');
+      })
+      .mockResolvedValueOnce(completedChild('nested complete'));
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+
+    const parent = await root.spawn({ taskName: 'parent', objective: 'Inspect.' });
+    await vi.waitFor(() => expect(root.output(parent.actorPath, parent.turnId).state).toBe('completed'));
+
+    expect(nestedTurnId).toBeTypeOf('string');
+  });
+
   it('projects prior turns and dormant mailbox messages into the next native turn', async () => {
     executeChildAgentsMock
       .mockResolvedValueOnce(completedChild('first result'))

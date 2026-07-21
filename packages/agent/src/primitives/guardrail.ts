@@ -395,11 +395,13 @@ export async function runToolBeforeGuardrails(
       continue;
     }
     if (verdict.action === 'block') {
+      const reason = verdict.reason.trim()
+        || 'Guardrail denied this tool call without a reason.';
       return {
         kind: 'block',
         call: currentCall,
         result: {
-          content: `[Guardrail ${guardrail.name}] ${verdict.reason}`,
+          content: `[Tool Error] Blocked by guardrail "${guardrail.name}" before execution: ${reason}`,
           isError: true,
         },
       };

@@ -54,7 +54,10 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('<agent-completed path="..." turn_id="..." state="completed">');
     expect(output).toContain('its body is the authoritative terminal result');
     expect(output).toContain('Do not call `agent_output` speculatively');
-    expect(output).toContain('terminal `wait_agent` event or a preceding `<agent-completed>`');
+    expect(output).toContain('`return_on:"terminal"`');
+    expect(output).toContain('Do not loop on `wait_expired`');
+    expect(output).toContain('includes `terminalOutputs`');
+    expect(output).toContain('or when either already supplied the result');
     expect(output).toContain('supplies the exact Actor/Turn target');
     expect(output).toContain('After `AgentLimitReached`');
     expect(output).toContain('do not retry `spawn_agent` while the reported capacity is still full');

@@ -769,8 +769,13 @@ function selectPermissionOperationSamples(
   ));
   if (risky.length === 0) return [...operations.slice(0, 4), ...operations.slice(-4)];
 
+  const middleStart = Math.max(0, Math.floor(risky.length / 2) - 1);
   const candidates = [
-    ...risky.slice(0, 3), ...risky.slice(-3), operations[0]!, operations.at(-1)!,
+    ...risky.slice(0, 2),
+    ...risky.slice(middleStart, middleStart + 2),
+    ...risky.slice(-2),
+    operations[0]!,
+    operations.at(-1)!,
   ];
   return [...new Set(candidates)].slice(0, 8);
 }

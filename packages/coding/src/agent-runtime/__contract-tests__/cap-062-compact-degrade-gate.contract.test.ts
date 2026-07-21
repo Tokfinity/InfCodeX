@@ -83,6 +83,12 @@ describe('CAP-062 explicit legacy degradation gate', () => {
       events: {},
     });
     expect(degradeMock).toHaveBeenCalledOnce();
+    expect(degradeMock).toHaveBeenCalledWith(
+      messages,
+      100_000,
+      expect.objectContaining({ pruningThresholdTokens: 500 }),
+      { fixedOverheadTokens: 89_000, reservedResponseTokens: 10_000 },
+    );
     expect(out).toEqual({ compacted: messages, didCompactMessages: false });
   });
 
