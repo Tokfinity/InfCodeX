@@ -30,6 +30,7 @@ import {
   findPreviousUserEntryId,
   forkSessionLineage,
   generateSessionId,
+  getSessionLineagePath,
   getSessionMessagesFromLineage,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
@@ -80,6 +81,12 @@ interface PersistedMetaUpdateLine {
   activeMessageCount?: number;
   uiHistory?: unknown[];
   scope?: string;
+}
+
+interface PersistedArchivedEntryLine {
+  _type: 'archived_entry';
+  archiveBatchId: string;
+  entry: KodaXSessionEntry;
 }
 
 const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const;
@@ -265,6 +272,70 @@ function isPersistedLineageEntryLine(
   return isRecord(value)
     && value._type === 'lineage_entry'
     && isKodaXSessionEntry(value.entry);
+}
+
+function isPersistedArchivedEntryLine(value: unknown): value is PersistedArchivedEntryLine {
+  return isRecord(value)
+    && value._type === 'archived_entry'
+    && typeof value.archiveBatchId === 'string'
+    && isKodaXSessionEntry(value.entry);
+}
+
+function isCompactedPlaceholder(entry: KodaXSessionEntry): boolean {
+  if (entry.type !== 'message') return false;
+  if (entry.message.content === '[compacted]') return true;
+  return Array.isArray(entry.message.content)
+    && entry.message.content.length === 1
+    && entry.message.content[0]?.type === 'text'
+    && entry.message.content[0].text === '[compacted]';
+}
+
+function mergeFullLineageEntries(
+  archivedEntries: readonly KodaXSessionEntry[],
+  mainEntries: readonly KodaXSessionEntry[],
+): KodaXSessionEntry[] {
+  const merged = new Map<string, KodaXSessionEntry>();
+  for (const entry of archivedEntries) merged.set(entry.id, entry);
+  for (const entry of mainEntries) {
+    const archived = merged.get(entry.id);
+    if (!archived || isCompactedPlaceholder(archived)) merged.set(entry.id, entry);
+  }
+  return [...merged.values()];
+}
+
+function reconcileCompactionLineage(
+  incoming: KodaXSessionLineage,
+  persistedMain: KodaXSessionLineage | undefined,
+  archivedEntries: readonly KodaXSessionEntry[],
+): KodaXSessionLineage {
+  const activeIds = new Set(getSessionLineagePath(incoming).map((entry) => entry.id));
+  const archivedById = new Map(archivedEntries.map((entry) => [entry.id, entry]));
+  const exactById = new Map<string, KodaXSessionEntry>();
+  for (const entry of archivedEntries) {
+    if (!isCompactedPlaceholder(entry)) exactById.set(entry.id, entry);
+  }
+  for (const entry of persistedMain?.entries ?? []) {
+    if (!isCompactedPlaceholder(entry)) exactById.set(entry.id, entry);
+  }
+
+  const entries: KodaXSessionEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of incoming.entries) {
+    if (archivedById.has(entry.id) && !activeIds.has(entry.id)) continue;
+    const exact = isCompactedPlaceholder(entry) ? exactById.get(entry.id) : undefined;
+    const reconciled = exact?.type === 'message' && entry.type === 'message'
+      ? { ...entry, message: exact.message }
+      : entry;
+    entries.push(reconciled);
+    seen.add(entry.id);
+  }
+
+  // Archive markers are storage-owned topology hints. The live host keeps the
+  // unslimmed lineage in memory, so its next snapshot legitimately omits them.
+  for (const entry of persistedMain?.entries ?? []) {
+    if (entry.type === 'archive_marker' && !seen.has(entry.id)) entries.push(entry);
+  }
+  return { ...incoming, entries };
 }
 
 function isKodaXSessionArtifactLedgerEntry(
@@ -869,6 +940,89 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return buildSessionData(snapshot);
   }
 
+  private async readArchivedEntries(id: string, sessionPath?: string): Promise<KodaXSessionEntry[]> {
+    const located = sessionPath ?? await this.resolveSessionLocation(id);
+    if (!located) return [];
+    const dir = path.dirname(located);
+    const paths = [
+      path.join(dir, `${id}.islands.jsonl`),
+      path.join(dir, `${id}.archive.jsonl`),
+    ];
+    const entries: KodaXSessionEntry[] = [];
+    const seen = new Set<string>();
+    for (const sidecarPath of paths) {
+      let content: string;
+      try {
+        content = await fs.readFile(sidecarPath, 'utf-8');
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const lines = content.split(/\r?\n/);
+      let lastRecordIndex = -1;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        if ((lines[index] ?? '').trim().length > 0) {
+          lastRecordIndex = index;
+          break;
+        }
+      }
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] ?? '';
+        if (!line.trim()) continue;
+        try {
+          const parsed: unknown = JSON.parse(line);
+          if (isPersistedArchivedEntryLine(parsed) && !seen.has(parsed.entry.id)) {
+            seen.add(parsed.entry.id);
+            entries.push(parsed.entry);
+          }
+        } catch (error: unknown) {
+          // A crash can leave one partial tail record. Earlier flushed records
+          // and the main session remain authoritative and readable.
+          if (index !== lastRecordIndex) {
+            reportStorageDiagnostic(
+              'warn',
+              `Skipped malformed island sidecar record ${path.basename(sidecarPath)}:${index + 1}.`,
+              error,
+            );
+          }
+        }
+      }
+    }
+    return entries;
+  }
+
+  private async appendIslandArchive(
+    id: string,
+    data: SessionData,
+    entries: readonly KodaXSessionEntry[],
+    archiveBatchId: string,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const archiveDir = this.resolveWriteDir(id, data);
+    await fs.mkdir(archiveDir, { recursive: true });
+    const archivePath = path.join(archiveDir, `${id}.islands.jsonl`);
+    const handle = await fs.open(archivePath, 'a');
+    try {
+      await handle.write(JSON.stringify({
+        _type: 'archive_batch',
+        archiveBatchId,
+        sessionId: id,
+        archivedAt: new Date().toISOString(),
+        entryCount: entries.length,
+      }) + '\n');
+      for (const entry of entries) {
+        await handle.write(JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId,
+          entry,
+        }) + '\n');
+      }
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
   /** Write `<dir>/project.json` once per process per directory (best-effort). */
   private async ensureProjectJson(dir: string, identity: ProjectIdentity): Promise<void> {
     if (identity.canonicalRoot === null || this.projectJsonWritten.has(dir)) {
@@ -917,6 +1071,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         for (const record of (data.extensionRecords ?? [])) {
           await handle.write(JSON.stringify(toExtensionRecordLine(record)) + '\n');
         }
+        await handle.sync();
       } finally {
         await handle.close();
       }
@@ -964,8 +1119,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // instead of regressing `activeEntryId` (the dual-writer corruption).
       lineage: resolveSnapshotLineage(data, existing?.data.lineage),
     };
-    await this.writeSessionInternal(id, merged, existing?.createdAt);
-    this.syncAppendState(id, merged);
+    const archivedEntries = await this.readArchivedEntries(id);
+    const reconciledLineage = reconcileCompactionLineage(
+      merged.lineage!,
+      existing?.data.lineage,
+      archivedEntries,
+    );
+    const archiveResult = archiveOldIslands(reconciledLineage);
+    await this.appendIslandArchive(
+      id,
+      merged,
+      archiveResult.archivedEntries,
+      archiveResult.archiveBatchId,
+    );
+    const persisted: SessionData = { ...merged, lineage: archiveResult.slimmedLineage };
+    await this.writeSessionInternal(id, persisted, existing?.createdAt);
+    // The caller continues with the unslimmed lineage. Keep its count as the
+    // append watermark even though storage moved old entries to the sidecar.
+    this.syncAppendState(id, { ...merged, lineage: reconciledLineage });
   }
 
   // ── Phase 1: Append-only hot path ──
@@ -1025,6 +1196,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
         data.extensionRecords !== undefined
         && data.extensionRecords.length <= cached.extensionCount
       ) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
+      // A compaction is a durable transaction, not an ordinary append. The
+      // cold path flushes exact old-island entries before slimming the main
+      // file, so the host may safely evict its in-memory copy after await.
+      if (data.lineage!.entries
+        .slice(cached.lineageCount)
+        .some((entry) => entry.type === 'compaction')) {
         await this.mergeAndWriteInternal(id, data);
         return;
       }
@@ -1097,33 +1278,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // Write island sidecar (streaming append — no join) into the same project
       // dir. FEATURE_219 — `.islands.jsonl` (renamed from the old `.archive.jsonl`,
       // whose "archive" word now means whole-session archival; ADR-038 §4).
-      const archiveDir = this.resolveWriteDir(id, resolved.data);
-      await fs.mkdir(archiveDir, { recursive: true });
-      const archivePath = path.join(archiveDir, `${id}.islands.jsonl`);
-      const archiveHandle = await fs.open(archivePath, 'a');
-      try {
-        await archiveHandle.write(JSON.stringify({
-          _type: 'archive_batch',
-          archiveBatchId,
-          sessionId: id,
-          archivedAt: new Date().toISOString(),
-          entryCount: archivedEntries.length,
-        }) + '\n');
-        for (const entry of archivedEntries) {
-          await archiveHandle.write(JSON.stringify({
-            _type: 'archived_entry',
-            archiveBatchId,
-            entry,
-          }) + '\n');
-        }
-      } finally {
-        await archiveHandle.close();
-      }
+      await this.appendIslandArchive(id, resolved.data, archivedEntries, archiveBatchId);
 
       // Full streamed rewrite of main session with slimmed lineage
       const cleanedData: SessionData = { ...resolved.data, lineage: slimmedLineage };
       await this.writeSessionInternal(id, cleanedData, resolved.createdAt);
-      this.syncAppendState(id, cleanedData, 0);
+      // Preserve the live caller's unslimmed count. Reset only maintenance
+      // cadence so the next append does not repeat already persisted entries.
+      this.syncAppendState(id, resolved.data, 0);
     });
   }
 
@@ -1245,6 +1407,20 @@ export class FileSessionStorage implements KodaXSessionStorage {
   async getLineage(id: string): Promise<KodaXSessionLineage | null> {
     const resolved = await this.readSession(id);
     return resolved?.data.lineage ?? null;
+  }
+
+  async loadFullLineage(id: string): Promise<KodaXSessionLineage | null> {
+    await this.ensureMigrated();
+    const sessionPath = await this.resolveSessionLocation(id);
+    if (!sessionPath) return null;
+    const resolved = await this.readSession(id);
+    if (!resolved?.data.lineage) return null;
+    const archivedEntries = await this.readArchivedEntries(id, sessionPath);
+    if (archivedEntries.length === 0) return resolved.data.lineage;
+    return {
+      ...resolved.data.lineage,
+      entries: mergeFullLineageEntries(archivedEntries, resolved.data.lineage.entries),
+    };
   }
 
   async setActiveEntry(

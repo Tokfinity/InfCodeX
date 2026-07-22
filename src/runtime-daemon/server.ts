@@ -35,6 +35,7 @@ import type {
   RuntimeSessionObservationSnapshot,
   RuntimeTranscriptEntryChunkInput,
   RuntimeTranscriptPageInput,
+  RuntimeTranscriptSearchInput,
   RuntimeStartRunInput,
   RuntimeSubmitInput,
   RuntimeSubscription,
@@ -143,6 +144,7 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'daemon.status', 'daemon.logs', 'operation.get',
     'session.load', 'session.list', 'session.transcript', 'session.transcript.page',
     'session.transcript.entryChunk', 'session.observe', 'session.settings.get',
+    'session.transcript.search',
     'session.settings.getVersioned', 'session.autoMode.getStats',
     'run.get', 'run.list', 'run.await', 'event.subscribe', 'event.unsubscribe',
     'event.replay', 'permission.list', 'permission.listPending', 'permission.grants.list',
@@ -913,6 +915,10 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.sessions.transcriptEntryChunk(
         requireRecord(request.params) as unknown as RuntimeTranscriptEntryChunkInput,
       );
+    case 'session.transcript.search':
+      return runtime.sessions.transcriptSearch(
+        requireRecord(request.params) as unknown as RuntimeTranscriptSearchInput,
+      );
     case 'session.observe': {
       const subscriptionId = createSubscriptionId();
       const observation = await runtime.sessions.observe(
@@ -1548,13 +1554,20 @@ function runtimeDaemonCapabilities(
     afterTurnInput: { version: 1 },
     interruptInput: { version: 1, availability: 'per_run' },
     contextCompaction: {
-      version: 2,
+      version: 3,
       alwaysOn: true,
       absoluteThreshold: true,
       contextIdentity: true,
       canonicalFinishedEvent: true,
+      durableBeforeEvict: true,
+      exactHistoryRecovery: true,
     },
     transcriptPaging: { version: 1, maxPageBytes: 512 * 1024 },
+    transcriptSearch: {
+      version: 1,
+      defaultScope: 'compacted',
+      citedEntries: true,
+    },
     learningCenter: { version: 1 },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },

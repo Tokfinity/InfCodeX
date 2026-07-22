@@ -9,6 +9,7 @@ import {
   buildSessionTree,
   countActiveLineageMessages,
   createSessionLineage,
+  evictOldIslandMessageContent,
   findPreviousUserEntryId,
   forkSessionLineage,
   getSessionLineagePath,
@@ -990,7 +991,8 @@ describe('FEATURE_072: postCompactAttachments and slicer-layer emission', () => 
       [att('system', '[Post-compact: island1 att]')],
     );
 
-    // Build island 2 on top — this evicts island 1
+    // Build island 2 on top. Compaction itself must keep exact payload until a
+    // durable host acknowledgement explicitly authorizes in-memory eviction.
     const island2 = applySessionCompaction(
       island1,
       [att('system', '[对话历史摘要]\n\nIsland2'), keptAsst],
@@ -998,8 +1000,18 @@ describe('FEATURE_072: postCompactAttachments and slicer-layer emission', () => 
       [att('system', '[Post-compact: island2 att]')],
     );
 
+    const durableIsland1 = island2.entries.find(
+      (e) => e.type === 'compaction' && e.summary === 'Island1',
+    );
+    expect(durableIsland1?.type).toBe('compaction');
+    if (durableIsland1?.type === 'compaction') {
+      expect(durableIsland1.postCompactAttachments?.length).toBe(1);
+    }
+
+    const evictedIsland2 = evictOldIslandMessageContent(island2);
+
     // Find all compaction entries
-    const compactionEntries = island2.entries.filter((e) => e.type === 'compaction');
+    const compactionEntries = evictedIsland2.entries.filter((e) => e.type === 'compaction');
     expect(compactionEntries.length).toBeGreaterThanOrEqual(2);
 
     // Island 1's compaction entry (the older one) must have:

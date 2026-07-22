@@ -355,6 +355,9 @@ function makeRuntime(
       async transcriptEntryChunk() {
         return null;
       },
+      async transcriptSearch() {
+        return null;
+      },
       async observe(sessionId) {
         return createTestObservation(sessionId);
       },

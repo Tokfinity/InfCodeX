@@ -226,6 +226,8 @@ describe('compaction', () => {
       role: 'user',
       _source: 'compaction-checkpoint',
     }));
+    expect(result.messages[0]?.content).toEqual(expect.stringContaining('session_history_search'));
+    expect(result.messages[0]?.content).toEqual(expect.stringContaining('session_history_read'));
     expect(provider.callCount).toBe(1);
   });
 

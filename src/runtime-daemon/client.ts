@@ -59,6 +59,7 @@ import type {
   RuntimeToolExposurePlan,
   RuntimeTranscript,
   RuntimeTranscriptEntryChunk,
+  RuntimeTranscriptSearchResult,
   RuntimeTranscriptSlice,
   RuntimeUserInputRequest,
   RuntimeUserInputResolution,
@@ -285,6 +286,9 @@ export function createRuntimeDaemonClient(
       },
       transcriptEntryChunk(input) {
         return request('session.transcript.entryChunk', input) as Promise<RuntimeTranscriptEntryChunk | null>;
+      },
+      transcriptSearch(input) {
+        return request('session.transcript.search', input) as Promise<RuntimeTranscriptSearchResult | null>;
       },
       observe(sessionId, listener) {
         return observeDaemonSession(options.transport, request, sessionId, listener);

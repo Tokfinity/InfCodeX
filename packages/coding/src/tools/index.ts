@@ -65,6 +65,14 @@ export { toolRunSkillScript } from './skill-script.js';
 export { toolGlob } from './glob.js';
 export { toolGrep } from './grep.js';
 export { toolUndo } from './undo.js';
+export {
+  activateSessionHistoryTools,
+  SESSION_HISTORY_READ_TOOL_NAME,
+  SESSION_HISTORY_SEARCH_TOOL_NAME,
+  SESSION_HISTORY_TOOL_NAMES,
+  toolSessionHistoryRead,
+  toolSessionHistorySearch,
+} from './session-history.js';
 export { toolAskUserQuestion } from './ask-user-question.js';
 export { toolExitPlanMode } from './exit-plan-mode.js';
 export { toolRepoOverview } from './repo-overview.js';

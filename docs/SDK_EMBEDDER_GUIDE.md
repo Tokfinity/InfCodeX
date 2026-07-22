@@ -4410,6 +4410,27 @@ and synthetic prompts are excluded. The normal summary request preserves the
 main request's system, message, tool, model, and reasoning prefix and appends a
 text-only ephemeral instruction so providers can reuse prompt/KV cache.
 
+The exact pre-compaction transcript has a separate durability guarantee. The
+root host persists all pre-compaction messages (including messages created in
+the active Run) before old payload is evicted from memory. Island records are
+flushed before a slim main JSONL is published. If the main replacement fails,
+main and sidecar may temporarily overlap, but stable entry IDs project the
+logical entry once. A persistence failure keeps the exact live copy; child
+compaction never writes root Session lineage.
+
+The in-process `onCompactedMessages` callback may return a `Promise`. KodaX
+awaits it before the next provider request and before
+`context.compaction.finished`. Embedded and daemon Runtime execution always
+uses Runtime-owned Session storage, regardless of a client-side
+`persistedByHost` value; a daemon client cannot be the durability owner because
+its callback is not present in the daemon process. Runtime-backed Ink and
+classic REPL hosts therefore update only their live projection after the
+Runtime acknowledgement; they do not perform a second Session write. If a
+headless Runtime Run compacts before its first routine snapshot, Runtime seeds
+the new Session from explicit Run metadata before applying the exact compact
+transaction. A rejected durability callback also rolls back the tentative
+`contextRevision`, so a later successful compact does not expose a phantom gap.
+
 ### Context-owned events
 
 `context.compaction.finished` is the canonical post-commit Runtime fact. It
@@ -4468,8 +4489,44 @@ explicit resync error, so restart from a fresh observation. The shared daemon's
 legacy `session.transcript` method rejects payloads above 512 KiB and names the
 page/chunk methods rather than attempting a frame near the 8 MiB ceiling.
 
+### Search compacted history before fetching exact content
+
+Use `transcriptSearch()` when the host or user knows a historical detail but
+not its page/index. It searches the authoritative main-plus-sidecar lineage and
+returns bounded revision-bound hits with stable `entryId`/`logicalId`, entry
+index, role/source, timestamp, active/compacted status, and a citation:
+
+```ts
+const found = await runtime.sessions.transcriptSearch({
+  sessionId: session.id,
+  query: 'permission test output capture',
+  role: 'assistant',
+  limit: 5,
+});
+
+for (const hit of found.hits) {
+  renderSearchHit(hit.citation, hit.snippet);
+  // For an oversized exact entry, pass found.revision + hit.entryIndex to
+  // transcriptEntryChunk(); ordinary entries can be obtained from the page.
+}
+```
+
+Search is deterministic Unicode lexical/metadata ranking, not an embedding or
+background-model index. The Action LLM gets the corresponding root-only
+`session_history_search` and `session_history_read` tools when the Session
+storage supports full-lineage recovery. Their results are low-authority
+historical evidence; current instructions and freshly verified workspace state
+take precedence. System/control entries, hidden-only content, synthetic current
+or legacy `[对话历史摘要]` checkpoints, and `[compacted]` placeholders are neither
+searchable nor directly readable. Short ordinary terms do not gain a metadata
+match merely because they occur inside a random entry ID; direct identifier
+lookup is reserved for a sufficiently specific ID query. Sessions compacted by
+older builds without an exact main/sidecar copy cannot reconstruct bytes that
+were already discarded.
+
 Clients that depend on these guarantees should require
-`contextCompaction: 2` and `transcriptPaging: 1` during connection.
+`contextCompaction: 3`, `transcriptPaging: 1`, and `transcriptSearch: 1` during
+connection.
 
 ---
 

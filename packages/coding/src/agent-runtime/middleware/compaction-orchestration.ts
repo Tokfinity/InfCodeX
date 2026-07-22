@@ -311,6 +311,7 @@ export async function tryIntelligentCompact(
       }
 
       compactionUpdate = {
+        preCompactionMessages: input.messages,
         anchor: result.anchor
           ? { ...result.anchor, tokensAfter: postCompactTokens }
           : undefined,
@@ -471,9 +472,9 @@ export interface CommitCompactedHistoryOutput {
  * tool_uses removed via CAP-002), commits via the returned `messages`,
  * and emits `onCompactedMessages` only when compaction fired.
  */
-export function commitCompactedHistory(
+export async function commitCompactedHistory(
   input: CommitCompactedHistoryInput,
-): CommitCompactedHistoryOutput {
+): Promise<CommitCompactedHistoryOutput> {
   // Always validate before sending to API — prevents "tool_call_id
   // is not found" errors caused by corrupted history.
   const validated = validateAndFixToolHistory(input.compacted);
@@ -494,7 +495,7 @@ export function commitCompactedHistory(
     baselineEstimatedTokens: validatedEstimate,
     source: 'estimate',
   };
-  input.events.onCompactedMessages?.(validated, input.compactionUpdate);
+  await input.events.onCompactedMessages?.(validated, input.compactionUpdate);
   const report = input.compactionUpdate?.report;
   if (input.tokensBefore !== undefined && input.elapsedMs !== undefined) {
     input.events.onContextCompactionFinished?.({
@@ -612,10 +613,16 @@ export async function runCompactionLifecycle(
       reservedResponseTokens: input.reservedResponseTokens,
     }, 'History compaction');
   }
-  const commitPhase = commitCompactedHistory({
+  const compactionUpdate = didCompactMessages
+    ? {
+        ...(llmPhase.compactionUpdate ?? {}),
+        preCompactionMessages: input.messages,
+      }
+    : undefined;
+  const commitPhase = await commitCompactedHistory({
     compacted: degradationPhase.compacted,
     didCompactMessages,
-    compactionUpdate: llmPhase.compactionUpdate,
+    compactionUpdate,
     events: input.events,
     physicalTokensAfter,
     tokensBefore: input.currentTokens,
@@ -630,7 +637,7 @@ export async function runCompactionLifecycle(
   });
   return {
     messages: commitPhase.messages,
-    compactionUpdate: llmPhase.compactionUpdate,
+    compactionUpdate,
     didCompactMessages,
     nextCompactConsecutiveFailures: llmPhase.nextCompactConsecutiveFailures,
     nextCompactionAntiThrash: llmPhase.nextCompactionAntiThrash,

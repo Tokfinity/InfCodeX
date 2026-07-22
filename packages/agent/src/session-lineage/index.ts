@@ -47,6 +47,7 @@ export {
   buildSessionTree,
   countActiveLineageMessages,
   createSessionLineage,
+  evictOldIslandMessageContent,
   forkSessionLineage,
   getSessionLineagePath,
   getSessionMessagesFromLineage,
@@ -55,6 +56,22 @@ export {
   rewindSessionLineage,
   setSessionLineageActiveEntry,
 } from './kodax-session-lineage.js';
+
+export {
+  readSessionHistoryEntry,
+  searchSessionHistory,
+} from './history-retrieval.js';
+export { persistCompactedSessionHistory } from './compaction-persistence.js';
+export type { PersistCompactedSessionHistoryInput } from './compaction-persistence.js';
+export type {
+  KodaXSessionHistoryHit,
+  KodaXSessionHistoryReadOptions,
+  KodaXSessionHistoryReadResult,
+  KodaXSessionHistoryScope,
+  KodaXSessionHistorySearchOptions,
+  KodaXSessionHistorySearchResult,
+  KodaXSessionHistorySource,
+} from './history-retrieval.js';
 
 // FEATURE_192 v0.7.44 — goal-entry helpers
 export {
@@ -122,6 +139,7 @@ export type {
 } from './compaction/summary-generator.js';
 
 export {
+  COMPACTED_HISTORY_RECOVERY_GUIDANCE,
   COMPACTION_SUMMARY_PREFIX,
   needsCompaction,
   compact,

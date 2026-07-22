@@ -695,6 +695,7 @@ describe('runtime daemon client proxy', () => {
     await client.sessions.load('session-1');
     await client.sessions.list({ limit: 5 });
     await client.sessions.transcript('session-1');
+    await client.sessions.transcriptSearch({ sessionId: 'session-1', query: 'old detail' });
     const observation = await client.sessions.observe('session-1', () => undefined);
     observation.close();
     await client.sessions.fork({ sessionId: 'session-1' });
@@ -752,6 +753,7 @@ describe('runtime daemon client proxy', () => {
       'session.load',
       'session.list',
       'session.transcript',
+      'session.transcript.search',
       'session.observe',
       'event.unsubscribe',
       'session.fork',

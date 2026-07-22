@@ -537,6 +537,8 @@ export interface KodaXSessionStorage {
   save(id: string, data: KodaXSessionData): Promise<void>;
   load(id: string): Promise<KodaXSessionData | null>;
   getLineage?(id: string): Promise<KodaXSessionLineage | null>;
+  /** Exact lineage merged from the active session file and island sidecars. */
+  loadFullLineage?(id: string): Promise<KodaXSessionLineage | null>;
   setActiveEntry?(
     id: string,
     selector: string,

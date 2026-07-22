@@ -418,7 +418,7 @@ export interface KodaXEvents {
     messages: KodaXMessage[],
     update?: CompactionUpdate,
     meta?: KodaXActivityEventMeta,
-  ) => void;
+  ) => void | Promise<void>;
   /** Canonical, post-commit compaction fact. Legacy callbacks are projections. */
   onContextCompactionFinished?: (
     event: KodaXContextCompactionFinishedEvent,
@@ -2046,6 +2046,8 @@ export interface KodaXToolExecutionContext {
     readonly content: string;
     readonly evidenceRefs: readonly string[];
   } | undefined>;
+  /** Root-only exact persisted history loader; absent for children and ephemeral sessions. */
+  loadSessionHistory?: () => Promise<KodaXSessionLineage | null>;
   /** Git root directory - Git 鏍圭洰褰?*/
   gitRoot?: string;
   /**

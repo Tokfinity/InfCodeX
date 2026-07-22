@@ -250,9 +250,20 @@ export function withLiveTurnAttribution(
     onCompactStats: (info) => {
       baseEvents.onCompactStats?.(withLiveMeta(scope, info));
     },
-    onCompactedMessages: (messages, update, meta) => {
-      resolveLiveTurnScope(scope).advanceContextRevision();
-      baseEvents.onCompactedMessages?.(messages, update, withActivityMeta(scope, meta));
+    onCompactedMessages: async (messages, update, meta) => {
+      const liveScope = resolveLiveTurnScope(scope);
+      const committedRevision = liveScope.advanceContextRevision();
+      try {
+        await baseEvents.onCompactedMessages?.(messages, update, withActivityMeta(scope, meta));
+      } catch (error) {
+        // Durability is part of the commit acknowledgement. If it rejects,
+        // preserve the prior context identity so later events cannot claim a
+        // revision that never became canonical.
+        if (liveContextRevision.get(liveScope.contextId) === committedRevision) {
+          liveContextRevision.set(liveScope.contextId, committedRevision - 1);
+        }
+        throw error;
+      }
     },
     onContextCompactionFinished: (event) => {
       baseEvents.onContextCompactionFinished?.(withLiveMeta(scope, event));

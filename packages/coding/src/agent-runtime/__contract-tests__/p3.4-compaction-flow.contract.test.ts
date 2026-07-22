@@ -103,6 +103,9 @@ describe('P3.4 physical-capacity compaction lifecycle', () => {
       estimateTokens(output.messages),
     );
     expect(onCompactedMessages).toHaveBeenCalledOnce();
+    expect(onCompactedMessages.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      preCompactionMessages: messages,
+    }));
   });
 
   it('preserves canonical history and fails explicitly after hard-pressure summary failure', async () => {

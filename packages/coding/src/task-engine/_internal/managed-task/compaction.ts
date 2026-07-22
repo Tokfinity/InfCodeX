@@ -121,9 +121,11 @@ async function attachManagedCompactionContext(
 function buildCompactionUpdate(
   result: CompactionResult,
   tokensAfter: number,
+  preCompactionMessages: readonly KodaXMessage[],
   postCompactAttachments?: readonly KodaXMessage[],
 ): CompactionUpdate {
   return {
+    preCompactionMessages,
     anchor: result.anchor
       ? { ...result.anchor, tokensAfter }
       : undefined,
@@ -329,11 +331,12 @@ export async function buildManagedTaskCompactionHook(
       const update = buildCompactionUpdate(
         result,
         finalTokens,
+        messages,
         attached.postCompactAttachments,
       );
       events?.onCompactStats?.({ tokensBefore: currentTokens, tokensAfter: finalTokens });
       events?.onCompact?.(finalTokens);
-      events?.onCompactedMessages?.(finalMessages, update);
+      await events?.onCompactedMessages?.(finalMessages, update);
       notifyPostCompact(hookOptions.onPostCompact);
       updateSnapshot(snapshotRef, finalMessages, finalTokens);
       events?.onContextCompactionFinished?.({

@@ -10,6 +10,8 @@ import {
   _resetActiveRootQueueRoutesForTests,
   _resetMessageQueueForTests,
   actorQueueId,
+  applySessionCompaction,
+  createSessionLineage,
   createAgent,
   enqueueWithArtifacts,
   getMessageQueue,
@@ -2009,6 +2011,26 @@ describe('createKodaXRuntime', () => {
     });
     codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
       queueMicrotask(() => {
+        options.events?.onCompactedMessages?.(
+          [{ role: 'user', content: 'checkpoint' }],
+          {
+            preCompactionMessages: [{
+              role: 'user',
+              content: `HOST_ONLY_HISTORY_${'x'.repeat(256_000)}`,
+            }],
+            anchor: {
+              summary: `PRIVATE_SUMMARY_${'y'.repeat(256_000)}`,
+              tokensBefore: 1_000,
+              tokensAfter: 400,
+              entriesRemoved: 3,
+              reason: 'automatic_compaction',
+            },
+            postCompactAttachments: [{
+              role: 'system',
+              content: `PRIVATE_ATTACHMENT_${'z'.repeat(256_000)}`,
+            }],
+          },
+        );
         options.events?.onCompactStats?.({
           tokensBefore: 1_000,
           tokensAfter: 400,
@@ -2043,6 +2065,7 @@ describe('createKodaXRuntime', () => {
     const handle = await runtime.runs.start({
       sessionId: session.id,
       prompt: 'compact',
+      options: { session: { persistedByHost: true } },
     });
     await handle.result;
     await flushMicrotasks();
@@ -2062,6 +2085,29 @@ describe('createKodaXRuntime', () => {
       tokensAfter: 400,
       committed: true,
     });
+    const messageEvents = await runtime.events.replay({
+      runId: handle.runId,
+      type: 'context.compaction.messages',
+    });
+    expect(messageEvents).toHaveLength(1);
+    expect(messageEvents[0]?.payload).toMatchObject({
+      messageCount: 1,
+      update: {
+        hasAnchor: true,
+        tokensBefore: 1_000,
+        tokensAfter: 400,
+        entriesRemoved: 3,
+        artifactLedgerEntryCount: 0,
+        postCompactAttachmentCount: 1,
+        exactSnapshotAvailable: true,
+      },
+    });
+    const eventJson = JSON.stringify(messageEvents[0]);
+    expect(eventJson).not.toContain('HOST_ONLY_HISTORY');
+    expect(eventJson).not.toContain('PRIVATE_SUMMARY');
+    expect(eventJson).not.toContain('PRIVATE_ATTACHMENT');
+    expect(Buffer.byteLength(eventJson, 'utf8')).toBeLessThan(4_096);
+    expect(codingMock.startKodaX.mock.calls[0]?.[0].session?.persistedByHost).toBe(false);
     await runtime.close();
   });
 
@@ -2223,6 +2269,50 @@ describe('createKodaXRuntime', () => {
 
     observation.close();
     await runtime.close();
+  });
+
+  it('searches exact compacted history through the Runtime session service', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const { createSessionManager } = await import('@kodax-ai/repl');
+    const sessionsDir = path.join(tempRoot, 'search-sessions');
+    const runtime = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+    try {
+      const session = await runtime.sessions.create({ title: 'Searchable transcript' });
+      const manager = createSessionManager({ sessionsDir });
+      const lineage = applySessionCompaction(
+        createSessionLineage([
+          { role: 'user', content: 'The exact historical code is ZX-4401.' },
+          { role: 'assistant', content: 'ZX-4401 was verified before compaction.' },
+        ]),
+        [{ role: 'user', content: 'active follow-up' }],
+        { summary: 'A historical code was verified.' },
+      );
+      await manager.storage.save(session.id, {
+        messages: [{ role: 'user', content: 'active follow-up' }],
+        title: 'Searchable transcript',
+        gitRoot: tempRoot,
+        lineage,
+      });
+
+      const result = await runtime.sessions.transcriptSearch({
+        sessionId: session.id,
+        query: 'ZX-4401',
+      });
+      expect(result?.revision).toMatch(/^sha256:/);
+      expect(result?.hits[0]).toMatchObject({
+        active: false,
+        entryIndex: expect.any(Number),
+        citation: expect.stringMatching(/^session-history:entry_/),
+      });
+      const exact = await runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: result!.revision,
+        entryIndex: result!.hits[0]!.entryIndex,
+      });
+      expect(Buffer.from(exact!.data, 'base64').toString('utf8')).toContain('ZX-4401');
+    } finally {
+      await runtime.close();
+    }
   });
 
   it('keeps parallel active tools when another tool finishes', async () => {

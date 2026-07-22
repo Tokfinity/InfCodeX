@@ -16,6 +16,16 @@ import {
   MEMORY_RECALL_TOOL_SCHEMA,
   toolMemoryRecall,
 } from './memory-recall.js';
+import {
+  SESSION_HISTORY_READ_DESCRIPTION,
+  SESSION_HISTORY_READ_SCHEMA,
+  SESSION_HISTORY_READ_TOOL_NAME,
+  SESSION_HISTORY_SEARCH_DESCRIPTION,
+  SESSION_HISTORY_SEARCH_SCHEMA,
+  SESSION_HISTORY_SEARCH_TOOL_NAME,
+  toolSessionHistoryRead,
+  toolSessionHistorySearch,
+} from './session-history.js';
 import { toolKodaxManual } from './manual.js';
 import { buildManualToolDescription } from '../self-knowledge/tool-description.js';
 import { EXPLICIT_WORKFLOW_POLICY } from '../agents/worker-role-prompt.js';
@@ -218,6 +228,22 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     description: MEMORY_RECALL_TOOL_DESCRIPTION,
     input_schema: MEMORY_RECALL_TOOL_SCHEMA,
     handler: toolMemoryRecall,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: SESSION_HISTORY_SEARCH_TOOL_NAME,
+    description: SESSION_HISTORY_SEARCH_DESCRIPTION,
+    input_schema: SESSION_HISTORY_SEARCH_SCHEMA,
+    handler: toolSessionHistorySearch,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: SESSION_HISTORY_READ_TOOL_NAME,
+    description: SESSION_HISTORY_READ_DESCRIPTION,
+    input_schema: SESSION_HISTORY_READ_SCHEMA,
+    handler: toolSessionHistoryRead,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },

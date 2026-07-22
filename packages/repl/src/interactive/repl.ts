@@ -39,6 +39,7 @@ import {
   buildSessionTree,
   countActiveLineageMessages,
   createSessionLineage,
+  evictOldIslandMessageContent,
   estimateTokens,
   emitKodaXDiagnostic,
   forkSessionLineage,
@@ -57,6 +58,7 @@ import type {
   KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
 import type { AgentsFile, KodaXWorkflowAgentDigestEvent } from '@kodax-ai/coding';
+import type { CompactionUpdate, KodaXActivityEventMeta } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
   resolveReplRuntimePermissionDecision,
@@ -124,6 +126,7 @@ import { getCurrentTheme, setTheme, type Theme } from './themes.js';
 import { getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
+import { prepareRootCompactionLineage } from '../ui/utils/compaction-commit.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
 import { prepareInvocationExecution } from './invocation-runtime.js';
 import {
@@ -207,6 +210,10 @@ class MemorySessionStorage implements SessionStorage {
 
   async getLineage(id: string) {
     return structuredClone(this.sessions.get(id)?.data.lineage ?? null);
+  }
+
+  async loadFullLineage(id: string) {
+    return this.getLineage(id);
   }
 
   async setActiveEntry(
@@ -785,6 +792,7 @@ Keyboard Shortcuts:
     session: {
       ...options.session,
       id: context.sessionId,
+      storage,
       // FEATURE_173 dual-writer fix: the REPL owns session persistence
       // (full lineage + uiHistory + artifactLedger via persistContextState).
       // Suppress the runner's redundant flat snapshot so it can't clobber.
@@ -2022,6 +2030,62 @@ async function runAgentRound(
       const locale = inferWorkflowLocaleFromParts(summary, name);
       const digest = formatWorkflowAgentDigest(event, locale, runId);
       if (digest) console.log(`\n${digest}\n`);
+    },
+    onCompactedMessages: async (
+      messages: KodaXMessage[],
+      update?: CompactionUpdate,
+      meta?: KodaXActivityEventMeta,
+    ) => {
+      const durableLineage = prepareRootCompactionLineage(
+        context.lineage,
+        messages,
+        update,
+        meta,
+      );
+      if (!durableLineage) {
+        await options.events?.onCompactedMessages?.(messages, update, meta);
+        return;
+      }
+      context.messages = messages;
+      context.lineage = durableLineage;
+      if (update?.artifactLedger?.length) {
+        context.artifactLedger = mergeArtifactLedger(
+          context.artifactLedger ?? [],
+          update.artifactLedger,
+        );
+      }
+      if (runtimeRunner) {
+        // Runtime-owned runs commit exact lineage before invoking this local
+        // projection. Do not re-enter Session storage through a second writer.
+        context.lineage = evictOldIslandMessageContent(durableLineage);
+      } else {
+        const storage = options.session?.storage;
+        if (!storage) {
+          throw new Error('Classic REPL compaction requires Session storage.');
+        }
+        try {
+          await storage.save(context.sessionId, {
+            messages,
+            title: extractTitle(messages),
+            gitRoot: context.gitRoot ?? '',
+            runtimeInfo: context.runtimeInfo,
+            lineage: durableLineage,
+            artifactLedger: context.artifactLedger,
+            ...contextExtensionSessionData(context),
+            ...(options.session?.tag !== undefined ? { tag: options.session.tag } : {}),
+          });
+          context.lineage = evictOldIslandMessageContent(durableLineage);
+        } catch (error: unknown) {
+          emitKodaXDiagnostic({
+            source: 'repl:compaction',
+            level: 'error',
+            message: 'Failed to durably persist compacted session history.',
+            detail: error,
+          });
+          throw error;
+        }
+      }
+      await options.events?.onCompactedMessages?.(messages, update, meta);
     },
   };
 

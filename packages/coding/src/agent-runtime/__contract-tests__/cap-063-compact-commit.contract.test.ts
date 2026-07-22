@@ -40,7 +40,7 @@ const cleanMessages: KodaXMessage[] = [
 ];
 
 describe('CAP-063: commitCompactedHistory — no compaction this turn', () => {
-  it('CAP-COMPACT-COMMIT-NOOP: didCompactMessages=false → snapshot is undefined, onCompactedMessages NOT fired, validated messages still returned', () => {
+  it('CAP-COMPACT-COMMIT-NOOP: didCompactMessages=false → snapshot is undefined, onCompactedMessages NOT fired, validated messages still returned', async () => {
     const onCompactedMessages = vi.fn();
     const onContextCompactionFinished = vi.fn();
     const events: KodaXEvents = {
@@ -48,7 +48,7 @@ describe('CAP-063: commitCompactedHistory — no compaction this turn', () => {
       onContextCompactionFinished,
     };
 
-    const out = commitCompactedHistory({
+    const out = await commitCompactedHistory({
       compacted: cleanMessages,
       didCompactMessages: false,
       compactionUpdate: undefined,
@@ -64,7 +64,7 @@ describe('CAP-063: commitCompactedHistory — no compaction this turn', () => {
 });
 
 describe('CAP-063: commitCompactedHistory — compaction fired this turn', () => {
-  it('CAP-COMPACT-COMMIT-001: didCompactMessages=true → onCompactedMessages fired with (messages, compactionUpdate); fresh snapshot returned', () => {
+  it('CAP-COMPACT-COMMIT-001: didCompactMessages=true → onCompactedMessages fired with (messages, compactionUpdate); fresh snapshot returned', async () => {
     const onCompactedMessages = vi.fn();
     const onContextCompactionFinished = vi.fn();
     const events: KodaXEvents = {
@@ -89,7 +89,7 @@ describe('CAP-063: commitCompactedHistory — compaction fired this turn', () =>
       },
     } as unknown as CompactionUpdate;
 
-    const out = commitCompactedHistory({
+    const out = await commitCompactedHistory({
       compacted: cleanMessages,
       didCompactMessages: true,
       compactionUpdate,
@@ -116,7 +116,7 @@ describe('CAP-063: commitCompactedHistory — compaction fired this turn', () =>
     );
   });
 
-  it('CAP-COMPACT-COMMIT-002: validation runs unconditionally — orphan tool_use blocks are stripped via validateAndFixToolHistory (CAP-002 wiring)', () => {
+  it('CAP-COMPACT-COMMIT-002: validation runs unconditionally — orphan tool_use blocks are stripped via validateAndFixToolHistory (CAP-002 wiring)', async () => {
     // Inject an orphaned tool_use (no matching tool_result) — the
     // validation pass MUST drop the orphan so the provider doesn't
     // see a dangling tool_call_id.
@@ -133,7 +133,7 @@ describe('CAP-063: commitCompactedHistory — compaction fired this turn', () =>
       { role: 'user', content: 'next turn' },
     ];
 
-    const out = commitCompactedHistory({
+    const out = await commitCompactedHistory({
       compacted: orphan,
       didCompactMessages: false,
       compactionUpdate: undefined,
@@ -159,5 +159,30 @@ describe('CAP-063: commitCompactedHistory — compaction fired this turn', () =>
       }
     }
     expect(remainingToolUseIds).not.toContain('orphan-1');
+  });
+
+  it('waits for durable host acknowledgement before publishing the canonical finish event', async () => {
+    let acknowledge: (() => void) | undefined;
+    const durable = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const onContextCompactionFinished = vi.fn();
+    const pending = commitCompactedHistory({
+      compacted: cleanMessages,
+      didCompactMessages: true,
+      compactionUpdate: { preCompactionMessages: cleanMessages },
+      events: {
+        onCompactedMessages: () => durable,
+        onContextCompactionFinished,
+      },
+      tokensBefore: 100,
+      elapsedMs: 1,
+    });
+
+    await Promise.resolve();
+    expect(onContextCompactionFinished).not.toHaveBeenCalled();
+    acknowledge?.();
+    await pending;
+    expect(onContextCompactionFinished).toHaveBeenCalledOnce();
   });
 });

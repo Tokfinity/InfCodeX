@@ -4,7 +4,11 @@ import { existsSync } from 'fs';
 import fsPromises from 'fs/promises';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applySessionCompaction, createSessionLineage } from '@kodax-ai/agent';
+import {
+  applySessionCompaction,
+  createSessionLineage,
+  evictOldIslandMessageContent,
+} from '@kodax-ai/agent';
 
 // 'C:/...' is absolute on win32 but RELATIVE on POSIX, so path.resolve() would
 // prepend the cwd on Linux CI and break the per-project session-key derivation
@@ -950,6 +954,235 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.title).toBe('Updated Title');
     // extensionState is in the meta line (first save), meta_update doesn't overwrite it
     expect(loaded2?.extensionState).toEqual({ 'ext:sample': { phase: 'active', visits: 5 } });
+  });
+
+  it('archives exact pre-compaction messages before accepting an evicted snapshot', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const originalMessages = [
+      { role: 'user' as const, content: '旧需求精确值是 ALPHA-9274，不得猜测。' },
+      { role: 'assistant' as const, content: '已记录 ALPHA-9274，并完成第一阶段。' },
+    ];
+    const initialLineage = createSessionLineage(originalMessages);
+
+    await storage.save('durable-before-evict', {
+      messages: originalMessages,
+      title: 'Durable compaction',
+      gitRoot,
+      lineage: initialLineage,
+    });
+
+    const compacted = applySessionCompaction(
+      initialLineage,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\n已完成第一阶段。' },
+        { role: 'user', content: '继续第二阶段' },
+      ],
+      { summary: '已完成第一阶段。', reason: 'automatic_compaction' },
+    );
+    const evicted = evictOldIslandMessageContent(compacted);
+    await storage.save('durable-before-evict', {
+      messages: [{ role: 'user', content: '继续第二阶段' }],
+      title: 'Durable compaction',
+      gitRoot,
+      lineage: evicted,
+    });
+
+    const restarted = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const fullLineage = await restarted.loadFullLineage('durable-before-evict');
+    const exactBodies = fullLineage?.entries
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => entry.message.content);
+    expect(exactBodies).toContain('旧需求精确值是 ALPHA-9274，不得猜测。');
+    expect(exactBodies).toContain('已记录 ALPHA-9274，并完成第一阶段。');
+  });
+
+  it('round-trips full lineage by merging the main file and island sidecar', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const originalMessages = [
+      { role: 'user' as const, content: 'sidecar evidence USER-441' },
+      { role: 'assistant' as const, content: 'sidecar evidence ASSISTANT-442' },
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage(originalMessages),
+      [{ role: 'user', content: 'active tail' }],
+      { summary: 'old work', reason: 'manual_compaction' },
+    );
+
+    await storage.save('full-lineage-merge', {
+      messages: [{ role: 'user', content: 'active tail' }],
+      title: 'Full lineage merge',
+      gitRoot,
+      lineage,
+    });
+
+    const fullLineage = await storage.loadFullLineage('full-lineage-merge');
+    expect(fullLineage?.entries.filter((entry) => entry.type === 'message')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.objectContaining({ content: 'sidecar evidence USER-441' }) }),
+        expect.objectContaining({ message: expect.objectContaining({ content: 'sidecar evidence ASSISTANT-442' }) }),
+      ]),
+    );
+  });
+
+  it('does not replace the exact main file when the island sidecar flush fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const initialMessages = [{ role: 'user' as const, content: 'sidecar failure exact FOXTROT-661' }];
+    const initialLineage = createSessionLineage(initialMessages);
+    await storage.save('sidecar-flush-failure', {
+      messages: initialMessages,
+      title: 'Sidecar failure ordering',
+      gitRoot,
+      lineage: initialLineage,
+    });
+
+    const compacted = applySessionCompaction(
+      initialLineage,
+      [{ role: 'user', content: 'active after rejected compact' }],
+      { summary: 'old exact value exists' },
+    );
+    const originalOpen = fsPromises.open.bind(fsPromises);
+    const open = vi.spyOn(fsPromises, 'open');
+    open.mockImplementation(async (filePath, flags, mode) => {
+      if (String(filePath).endsWith('.islands.jsonl')) {
+        throw Object.assign(new Error('simulated sidecar flush failure'), { code: 'EIO' });
+      }
+      return originalOpen(filePath, flags, mode);
+    });
+    try {
+      await expect(storage.save('sidecar-flush-failure', {
+        messages: [{ role: 'user', content: 'active after rejected compact' }],
+        title: 'Sidecar failure ordering',
+        gitRoot,
+        lineage: compacted,
+      })).rejects.toThrow('simulated sidecar flush failure');
+    } finally {
+      open.mockRestore();
+    }
+
+    const restarted = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    expect((await restarted.load('sidecar-flush-failure'))?.messages).toEqual(initialMessages);
+    expect((await restarted.loadFullLineage('sidecar-flush-failure'))?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'message',
+          message: expect.objectContaining({ content: 'sidecar failure exact FOXTROT-661' }),
+        }),
+      ]),
+    );
+  });
+
+  it('keeps the prior main file authoritative when the post-archive replace fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const initialMessages = [{ role: 'user' as const, content: 'failure-safe exact ECHO-551' }];
+    const initialLineage = createSessionLineage(initialMessages);
+    await storage.save('archive-before-replace', {
+      messages: initialMessages,
+      title: 'Failure ordering',
+      gitRoot,
+      lineage: initialLineage,
+    });
+
+    const compacted = applySessionCompaction(
+      initialLineage,
+      [{ role: 'user', content: 'active after failed compact' }],
+      { summary: 'old exact value exists' },
+    );
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    const rename = vi.spyOn(fsPromises, 'rename');
+    rename.mockImplementation(async (oldPath, newPath) => {
+      if (String(newPath).endsWith('archive-before-replace.jsonl')) {
+        throw Object.assign(new Error('simulated durable replace failure'), { code: 'EIO' });
+      }
+      await originalRename(oldPath, newPath);
+    });
+    try {
+      await expect(storage.save('archive-before-replace', {
+        messages: [{ role: 'user', content: 'active after failed compact' }],
+        title: 'Failure ordering',
+        gitRoot,
+        lineage: compacted,
+      })).rejects.toThrow('simulated durable replace failure');
+    } finally {
+      rename.mockRestore();
+    }
+
+    const restarted = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    expect((await restarted.load('archive-before-replace'))?.messages).toEqual(initialMessages);
+    const full = await restarted.loadFullLineage('archive-before-replace');
+    expect(full?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'message',
+        message: expect.objectContaining({ content: 'failure-safe exact ECHO-551' }),
+      }),
+    ]));
+  });
+
+  it('preserves the unslimmed append watermark across archive maintenance', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const oldMessages = Array.from({ length: 501 }, (_, index) => ({
+      role: 'user' as const,
+      content: `old branch ${index}`,
+    }));
+    const oldLineage = createSessionLineage(oldMessages);
+    await storage.save('maintenance-watermark', {
+      messages: oldMessages,
+      title: 'Maintenance watermark',
+      gitRoot,
+      lineage: oldLineage,
+    });
+
+    const switched = createSessionLineage([{ role: 'user', content: 'new root' }], oldLineage);
+    await storage.appendSessionDelta('maintenance-watermark', {
+      messages: [{ role: 'user', content: 'new root' }],
+      title: 'Maintenance watermark',
+      gitRoot,
+      lineage: switched,
+    });
+    const extended = createSessionLineage([
+      { role: 'user', content: 'new root' },
+      { role: 'assistant', content: 'new root reply' },
+    ], switched);
+    await storage.appendSessionDelta('maintenance-watermark', {
+      messages: [
+        { role: 'user', content: 'new root' },
+        { role: 'assistant', content: 'new root reply' },
+      ],
+      title: 'Maintenance watermark',
+      gitRoot,
+      lineage: extended,
+    });
+    // archive/unarchive are serialized behind both queued maintenance runs.
+    await storage.archive('maintenance-watermark');
+    await storage.unarchive('maintenance-watermark');
+
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sidecarPath = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+      'maintenance-watermark.islands.jsonl',
+    );
+    const archivedIds = (await readFile(sidecarPath, 'utf8'))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { _type?: string; entry?: { id?: string } })
+      .filter((line) => line._type === 'archived_entry')
+      .map((line) => line.entry?.id)
+      .filter((id): id is string => typeof id === 'string');
+    expect(new Set(archivedIds).size).toBe(archivedIds.length);
+    expect((await storage.load('maintenance-watermark'))?.messages).toEqual([
+      { role: 'user', content: 'new root' },
+      { role: 'assistant', content: 'new root reply' },
+    ]);
   });
 
   it('appendSessionDelta full-merges when caller provides updated extensionState', async () => {

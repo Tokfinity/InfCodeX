@@ -305,6 +305,32 @@ success callbacks/events fire. Canonical events are keyed by root/child
 slices; revision-bound pages and lossless chunks recover data that cannot fit
 inside one daemon frame.
 
+Exact transcript persistence has a stricter boundary than semantic context
+replacement. The compaction transaction supplies the root host with the exact
+pre-compaction messages, including messages created in the active Run. The host
+commits those entries to main JSONL or the island sidecar before it may reclaim
+old payload from memory. Sidecar flush precedes slim-main publication; stable
+entry IDs deduplicate the safe main/sidecar overlap after an interrupted write.
+The commit callback is awaitable, so no next provider request or canonical
+finished event can overtake durability. Runtime owns this boundary after a
+client crosses into embedded or daemon execution. Child compaction cannot
+mutate root Session lineage. Runtime-backed REPL projections are not additional
+Session writers. A compact that occurs before the first routine snapshot creates
+the Session from explicit Run metadata, while a failed durability callback
+restores the tentative context revision and retains the exact payload.
+
+Persisted transcript recovery is a read plane, not long-term semantic memory.
+Root Runs backed by full-lineage storage receive bounded
+`session_history_search` and `session_history_read` tools. Search uses
+deterministic Unicode lexical/metadata ranking and returns revision-bound entry
+citations; read returns exact fixed-size chunks. Runtime and daemon hosts use
+the same evidence identity through transcript search plus existing page/chunk
+transport. No vector store, background extractor, or automatic old-instruction
+reinjection is added. The evidence plane excludes system/control content,
+hidden-only bodies, synthetic current/legacy compaction checkpoints, and raw
+payload placeholders from search and direct read. History discarded by a legacy
+build before exact sidecar persistence is not reconstructable.
+
 ## 9. Skills, MCP, And A2A
 
 Skills are Markdown-based capabilities discovered from configured paths and

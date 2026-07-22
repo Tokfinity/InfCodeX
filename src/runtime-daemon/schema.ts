@@ -134,6 +134,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'session.transcript': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: nullOrObjectSchema },
   'session.transcript.page': { params: objectAnySchema, result: nullOrObjectSchema },
   'session.transcript.entryChunk': { params: objectAnySchema, result: nullOrObjectSchema },
+  'session.transcript.search': {
+    params: transcriptSearchParamsSchema(),
+    result: nullableSchema(transcriptSearchResultSchema()),
+  },
   'session.observe': {
     params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
     result: objectAnySchema,
@@ -700,6 +704,46 @@ function arraySchema(items: RuntimeDaemonJsonSchema): RuntimeDaemonJsonSchema {
 
 function nullableSchema(schema: RuntimeDaemonJsonSchema): RuntimeDaemonJsonSchema {
   return { oneOf: [{ type: 'null' }, schema] };
+}
+
+function transcriptSearchParamsSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    sessionId: stringSchema,
+    query: stringSchema,
+    limit: integerSchema,
+    role: { type: 'string', enum: ['user', 'assistant'] },
+    scope: { type: 'string', enum: ['compacted', 'all'] },
+  }, ['sessionId', 'query']);
+}
+
+function transcriptSearchResultSchema(): RuntimeDaemonJsonSchema {
+  const hit = objectSchema({
+    entryId: stringSchema,
+    logicalId: stringSchema,
+    sourceEntryId: stringSchema,
+    timestamp: stringSchema,
+    role: { type: 'string', enum: ['user', 'assistant'] },
+    source: { type: 'string', enum: ['user', 'assistant', 'tool', 'child_task'] },
+    active: booleanSchema,
+    score: { type: 'number' },
+    snippet: stringSchema,
+    citation: stringSchema,
+    entryIndex: integerSchema,
+  }, [
+    'entryId',
+    'timestamp',
+    'role',
+    'source',
+    'active',
+    'score',
+    'snippet',
+    'citation',
+    'entryIndex',
+  ]);
+  return objectSchema({
+    revision: stringSchema,
+    hits: arraySchema(hit),
+  }, ['revision', 'hits']);
 }
 
 function createSessionParamsSchema(): RuntimeDaemonJsonSchema {

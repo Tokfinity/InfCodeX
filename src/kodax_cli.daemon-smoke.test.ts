@@ -1,10 +1,12 @@
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { killChildProcessTree, killPidTree } from '@kodax-ai/agent';
 
 import {
   acquireKodaXInlineOwner,
@@ -23,6 +25,7 @@ import {
 import { isRuntimeDaemonPidAlive } from './runtime-daemon/lifecycle.js';
 
 const tempRoots: string[] = [];
+const DEFAULT_NODE_PROCESS_TIMEOUT_MS = 90_000;
 
 afterEach(async () => {
   for (const dir of tempRoots.splice(0)) {
@@ -32,6 +35,34 @@ afterEach(async () => {
 });
 
 describe('daemon CLI smoke', () => {
+  it('kills a timed-out node process tree', async () => {
+    const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-node-timeout-'));
+    const markerFile = path.join(markerDir, 'nested-pid.txt');
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const fs = require("node:fs");',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],',
+      '{ stdio: "ignore", windowsHide: true });',
+      `fs.writeFileSync(${JSON.stringify(markerFile)}, String(child.pid));`,
+      'setInterval(() => {}, 1000);',
+    ].join(' ');
+    let nestedPid: number | undefined;
+
+    try {
+      await expect(runNodeProcess(['-e', script], {}, 250))
+        .rejects.toThrow('timed out after 250ms');
+      await waitForFile(markerFile);
+      nestedPid = Number(fs.readFileSync(markerFile, 'utf8'));
+      expect(Number.isInteger(nestedPid) && nestedPid > 0).toBe(true);
+      await waitForDaemonPidExit(nestedPid, 10_000);
+    } finally {
+      if (nestedPid !== undefined && isRuntimeDaemonPidAlive(nestedPid)) {
+        await killPidTree(nestedPid);
+      }
+      fs.rmSync(markerDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('uses an arbitrary KODAX_HOME for default daemon ownership and A2A mutation', async () => {
     const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-config-home-'));
     const profile = `custom-config-${process.pid}-${Date.now()}`;
@@ -863,6 +894,7 @@ describe('daemon CLI smoke', () => {
 async function runDaemonCommand(
   args: readonly string[],
   env: Readonly<Record<string, string>> = {},
+  timeoutMs = DEFAULT_NODE_PROCESS_TIMEOUT_MS,
 ): Promise<Record<string, unknown>> {
   const stdout = await runNodeProcess([
     '--import',
@@ -870,7 +902,7 @@ async function runDaemonCommand(
     path.join(process.cwd(), 'src', 'kodax_cli.ts'),
     'daemon',
     ...args,
-  ], env);
+  ], env, timeoutMs);
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
@@ -908,19 +940,56 @@ async function runSdkProbe(
 function runNodeProcess(
   args: readonly string[],
   env: Readonly<Record<string, string>> = {},
+  timeoutMs = DEFAULT_NODE_PROCESS_TIMEOUT_MS,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [...args], {
+    const child = spawn(process.execPath, [...args], {
       cwd: process.cwd(),
-      encoding: 'utf8',
-      timeout: 90_000,
+      detached: process.platform !== 'win32',
       env: { ...process.env, KODAX_TRACING: '0', ...env },
-    }, (error, stdout) => {
-      if (error) {
-        reject(error);
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error !== undefined) reject(error);
+      else resolve(stdout);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      const timeoutError = new Error(
+        `Node process timed out after ${timeoutMs}ms${stderr.trim() ? `: ${stderr.trim()}` : ''}`,
+      );
+      void killChildProcessTree(child, { forceMs: 2_000, taskkillMs: 5_000 }).then(
+        () => finish(timeoutError),
+        (cleanupError: unknown) => finish(new Error(
+          `${timeoutError.message}; process-tree cleanup failed: ${String(cleanupError)}`,
+          { cause: cleanupError },
+        )),
+      );
+    }, timeoutMs);
+
+    child.once('error', finish);
+    child.once('close', (code, signal) => {
+      if (timedOut) return;
+      if (code === 0) {
+        finish();
         return;
       }
-      resolve(stdout);
+      const detail = stderr.trim() || `signal ${signal ?? 'unknown'}`;
+      finish(new Error(`Node process exited with code ${code ?? 'null'}: ${detail}`));
     });
   });
 }
@@ -1004,7 +1073,7 @@ async function stopDaemonBestEffort(homeDir: string): Promise<void> {
         '--timeout-ms',
         '3000',
         '--json',
-      ]);
+      ], {}, 10_000);
     } catch {
       const stateFile = path.join(daemonRoot, profile, 'daemon.json');
       try {

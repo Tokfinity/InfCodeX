@@ -159,6 +159,10 @@ import {
   createMemoryRecallBinding,
   MEMORY_RECALL_TOOL_NAME,
 } from '../tools/memory-recall.js';
+import {
+  activateSessionHistoryTools,
+  canActivateSessionHistoryTools,
+} from '../tools/session-history.js';
 import { assertProviderConfigured } from './provider-config-check.js';
 import { buildToolExecutionContext } from './tool-execution-context.js';
 import { resolvePerTurnReasoning } from './per-turn-reasoning.js';
@@ -167,6 +171,7 @@ import { applyProviderPolicyGate } from './provider-policy-gate.js';
 import { validateInputArtifactsForModel } from '../media/index.js';
 import { buildStreamHandlers } from './stream-handler-wiring.js';
 import { BoundaryTrackerSession } from './boundary-tracker-session.js';
+import { withDurableCompactionPersistence } from './durable-compaction.js';
 import {
   buildResilienceSession,
   translateAbortError,
@@ -576,6 +581,19 @@ export async function runSubstrate(
         }
       : {}),
   });
+  events = withDurableCompactionPersistence({
+    events,
+    storage: options.session?.storage,
+    sessionId,
+    persistedByHost: options.session?.persistedByHost,
+    currentAgentId,
+    initialSessionData: {
+      title: prompt.slice(0, 80),
+      gitRoot: options.context?.gitRoot ?? '',
+      ...(options.session?.scope !== undefined ? { scope: options.session.scope } : {}),
+      ...(options.session?.tag !== undefined ? { tag: options.session.tag } : {}),
+    },
+  });
   events = withLiveTurnAttribution(events, liveTurnScope);
   const memoryIdentity = options.context?.memoryIdentity
     ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
@@ -687,12 +705,25 @@ export async function runSubstrate(
     options.context?.toolVisibilityPolicy,
   );
   const memoryRecallToolAllowed = configuredActiveTools.includes(MEMORY_RECALL_TOOL_NAME);
+  const sessionHistoryStorage = options.session?.storage;
+  const loadFullSessionLineage = sessionHistoryStorage?.loadFullLineage;
+  const sessionHistoryToolsAllowed = canActivateSessionHistoryTools({
+    activeTools: configuredActiveTools,
+    currentAgentId,
+    storage: sessionHistoryStorage,
+  });
+  if (sessionHistoryToolsAllowed && loadFullSessionLineage) {
+    ctx.loadSessionHistory = () => loadFullSessionLineage.call(sessionHistoryStorage, sessionId);
+  }
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState,
     loadedExtensionRecords,
     // FEATURE_247 (R2): apply the profile tool-visibility policy after the
     // static excludeTools filter, before the model-visible list is built.
-    activeTools: activateMemoryRecallTool(configuredActiveTools, false),
+    activeTools: activateSessionHistoryTools(
+      activateMemoryRecallTool(configuredActiveTools, false),
+      sessionHistoryToolsAllowed,
+    ),
     modelSelection: {
       provider: turnState.currentProviderName,
       model: turnState.currentModelOverride,

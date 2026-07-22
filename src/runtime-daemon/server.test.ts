@@ -944,9 +944,15 @@ describe('runtime daemon dispatcher', () => {
       'session.transcript.entryChunk',
       { sessionId: 'session-1', revision: 'rev-1', entryIndex: 0 },
     ));
+    const search = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-transcript-search',
+      'session.transcript.search',
+      { sessionId: 'session-1', query: 'old detail' },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(page)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(chunk)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(search)).toBe(true);
     dispatcher.close();
   });
 
@@ -997,6 +1003,16 @@ describe('runtime daemon dispatcher', () => {
           },
           afterTurnInput: { version: 1 },
           interruptInput: { version: 1, availability: 'per_run' },
+          contextCompaction: {
+            version: 3,
+            durableBeforeEvict: true,
+            exactHistoryRecovery: true,
+          },
+          transcriptSearch: {
+            version: 1,
+            defaultScope: 'compacted',
+            citedEntries: true,
+          },
           askUserTransport: { version: 1 },
           permissionCas: { version: 1 },
           providerCredentialBroker: { version: 1 },
@@ -1701,6 +1717,7 @@ const METHOD_SMOKE_PARAMS = {
     revision: 'sha256:smoke',
     entryIndex: 0,
   },
+  'session.transcript.search': { sessionId: 'session-1', query: 'historical detail' },
   'session.observe': { sessionId: 'session-1' },
   'session.fork': { sessionId: 'session-1' },
   'session.notice.append': { sessionId: 'session-1', content: 'smoke' },
@@ -1941,6 +1958,9 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
         return null;
       },
       async transcriptEntryChunk() {
+        return null;
+      },
+      async transcriptSearch() {
         return null;
       },
       async observe(sessionId) {

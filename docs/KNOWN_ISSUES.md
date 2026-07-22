@@ -14,6 +14,7 @@ _Last Updated: 2026-07-22_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 198 | High | In Progress | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | - | 2026-07-22 | - |
 | 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 195 | High | Resolved | Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review | v0.7.33; exposed by v0.7.74 review | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
@@ -107,6 +108,87 @@ _Last Updated: 2026-07-22_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 198: Compaction could evict exact history before durable persistence and offered no model-facing recovery
+
+- **Priority**: High
+- **Status**: **Resolved** (Unreleased v0.7.74)
+- **Introduced**: v0.7.46 archival lifecycle; exposed by v0.7.74 review
+- **Fixed**: Unreleased v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+After a successful major compaction, `applySessionCompaction()` immediately
+replaced old-island message bodies with `[compacted]`. Full-save and fallback
+paths could then publish that slim in-memory lineage before the exact old
+messages reached the island sidecar. A structural inspection of Session
+`20260721_233332` found 125 persisted placeholders (64 user and 61 assistant),
+only five remaining raw user entries, and no island sidecar. The UI summary and
+query ledger survived, but they are not an exact substitute for assistant/tool
+details.
+
+The callback also carried only the replacement messages. Messages created in
+the active Run but removed by the same compaction were not guaranteed to exist
+in the host's prior lineage, so changing only the file-write order could not
+close the gap. Finally, a compacted Agent had no native Session-transcript
+search/read tool: it could use the summary and exact query ledger, but could not
+intelligently retrieve an omitted persisted detail.
+
+#### Root Cause
+
+- In-memory reclamation and durable archival were coupled inside
+  `applySessionCompaction`, before the asynchronous host persistence boundary.
+- `CompactionUpdate` omitted the exact pre-compaction message snapshot needed
+  to reconcile messages created during the current Run.
+- Storage maintenance wrote sidecar before main, but ordinary full-save paths
+  did not enforce the same archive-before-slim invariant.
+- Maintenance reset append watermarks to the slim persisted count even though
+  the live caller retained old entry skeletons, allowing later delta slicing to
+  start at the wrong position.
+- Root and child compaction callbacks shared the same host callback; event
+  identity existed, but the root lineage mutation did not reject child scope.
+- Transcript page/chunk APIs served hosts, while the Action LLM had no bounded,
+  cited current-Session recovery surface.
+
+#### Resolution
+
+The FEATURE_272 durable-recovery closure now:
+
+- carry `preCompactionMessages` as host-only transaction data;
+- reconcile and durably commit exact entries before in-memory eviction;
+- flush sidecar batches before atomically replacing the slim main JSONL and
+  deduplicate main/sidecar overlap by stable entry ID;
+- preserve live append watermarks across storage-only maintenance;
+- reject child compaction as a root Session mutation;
+- add deterministic revision-bound transcript search and exact chunk reads to
+  root Agent, Session SDK, Runtime, and daemon surfaces without embeddings,
+  background extraction, or a new persistence owner.
+- atomically seeds a new headless Session when first-run compaction precedes
+  its routine snapshot, while still rejecting an unseeded missing Session;
+- keeps Runtime as the only persistence writer after that boundary and rolls
+  back a tentative context revision when durability rejects;
+- excludes system/hidden evidence, current and legacy checkpoints, and
+  unrecoverable `[compacted]` placeholders from both search and direct reads,
+  without scoring short query terms against random entry IDs.
+
+#### Verification
+
+- automatic and imperative compaction, first-save and append-hot paths;
+- failure after sidecar append and before main replacement;
+- repeated compactions, maintenance, restart, and duplicate cleanup;
+- old user/assistant/tool detail search plus stale-revision exact reads;
+- child compaction isolation and bounded tool/daemon responses;
+- structural replay of an incident-shaped Session with more than 100 old
+  entries and an island sidecar.
+
+Automated verification completed with 361 Agent/Coding compaction tests, 162
+REPL/Session/UI tests, and 210 Runtime/daemon tests. A read-only replay of
+Session `20260721_233332` loaded 145 lineage entries and 16 active messages;
+legacy checkpoints/system/placeholders produced zero directly readable model
+entries, while surviving exact tool evidence remained searchable. Source and
+isolated-copy SHA-256 values matched before the temporary copy was removed.
 
 ### 197: User-shaped compaction checkpoints caused round-exit query and final duplication
 

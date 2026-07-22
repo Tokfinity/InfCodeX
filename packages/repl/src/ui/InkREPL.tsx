@@ -94,6 +94,10 @@ import {
 } from "./types.js";
 import { getActivePasteStore, type PastedContent } from "./utils/paste-store.js";
 import { hashPastedText, storePastedText, retrievePastedText, cleanupOldPastes } from "./utils/paste-cache.js";
+import {
+  prepareRootCompactionLineage,
+  withSessionHistoryReadBarrier,
+} from "./utils/compaction-commit.js";
 import { stripAnsi } from "./utils/strip-ansi.js";
 import { createConfirmationDialogQueue } from "./utils/confirmation-dialog-queue.js";
 import {
@@ -102,7 +106,6 @@ import {
   appendMemoryReviewReceipt,
 } from "@kodax-ai/agent";
 import {
-  applySessionCompaction,
   buildSessionTree,
   createSessionLineage,
   extractArtifactLedger,
@@ -155,6 +158,7 @@ import type {
 } from "@kodax-ai/coding";
 import {
   emitKodaXDiagnostic,
+  evictOldIslandMessageContent,
   estimateTokens,
   bootstrapTeamMode,
   setActiveUserInteraction,
@@ -693,7 +697,11 @@ interface BannerProps {
 }
 
 type StreamingEvents = import("@kodax-ai/coding").KodaXEvents & {
-  onCompactedMessages?: (messages: KodaXMessage[], update?: CompactionUpdate) => void;
+  onCompactedMessages?: (
+    messages: KodaXMessage[],
+    update?: CompactionUpdate,
+    meta?: KodaXActivityEventMeta,
+  ) => void | Promise<void>;
 };
 
 const CHILD_ACTIVITY_MAX_RECORDS = 12;
@@ -5035,6 +5043,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Refs for callbacks
   // Note: permissionMode and alwaysAllowTools are stored separately for permission checks
+  const modelSessionStorage = useMemo(
+    () => withSessionHistoryReadBarrier(
+      storage,
+      () => persistContextStateQueueRef.current,
+    ),
+    [storage],
+  );
   const currentOptionsRef = useRef<InkREPLOptions>({
     ...options,
     thinking: currentConfig.thinking,
@@ -5066,6 +5081,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     session: {
       ...options.session,
       id: context.sessionId,
+      storage: modelSessionStorage,
       // FEATURE_173 dual-writer fix: the Ink REPL owns session persistence
       // (full lineage + uiHistory + artifactLedger via persistContextState).
       // Suppress the runner's redundant flat snapshot so it can't clobber
@@ -7329,7 +7345,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       lastCompactionTokensBeforeRef.current = info.tokensBefore;
       setLiveTokenCount(info.tokensAfter);
     },
-    onCompactedMessages: (messages: KodaXMessage[], update?: CompactionUpdate) => {
+    onCompactedMessages: async (
+      messages: KodaXMessage[],
+      update?: CompactionUpdate,
+      meta?: KodaXActivityEventMeta,
+    ) => {
+      const durableLineage = prepareRootCompactionLineage(
+        context.lineage,
+        messages,
+        update,
+        meta,
+      );
+      if (!durableLineage) return;
       context.messages = messages;
       if (update?.artifactLedger && update.artifactLedger.length > 0) {
         context.artifactLedger = mergeArtifactLedger(
@@ -7343,14 +7370,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // entries from agent.ts's `injectPostCompactAttachments` call
       // (P4 belt-and-suspenders); `applySessionCompaction` defensively strips
       // them before building lineage entries.
-      context.lineage = update?.anchor
-        ? applySessionCompaction(
-            context.lineage,
-            messages,
-            update.anchor,
-            update.postCompactAttachments ?? [],
-          )
-        : createSessionLineage(messages, context.lineage);
+      context.lineage = durableLineage;
       const currentTokens = estimateTokens(messages);
       context.contextTokenSnapshot = {
         currentTokens,
@@ -7359,7 +7379,33 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       };
       touchContext(context);
       setLiveTokenCount(currentTokens);
-      void persistContextStateRef.current?.().catch(() => {});
+      if (options.runtimeRunner) {
+        // The embedded/daemon Runtime has already acknowledged its canonical
+        // durable commit before invoking this in-process projection. Avoid a
+        // second writer while still releasing the UI's exact in-memory copy.
+        if (context.lineage === durableLineage) {
+          context.lineage = evictOldIslandMessageContent(durableLineage);
+        }
+        return;
+      }
+      const persist = persistContextStateRef.current;
+      if (!persist) {
+        throw new Error('Ink REPL compaction persistence is not initialized.');
+      }
+      try {
+        await persist();
+        if (context.lineage === durableLineage) {
+          context.lineage = evictOldIslandMessageContent(durableLineage);
+        }
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'repl:compaction',
+          level: 'error',
+          message: 'Failed to durably persist compacted session history.',
+          detail: error,
+        });
+        throw error;
+      }
     },
     // Compaction event - notification only, do NOT clear UI history here
 

@@ -114,6 +114,7 @@ import type {
 import {
   createMcpManager,
   createAgentExecutorPlane,
+  createSessionLineage,
   emitKodaXDiagnostic,
   getAgentConfigHome,
   isPathInsideDirectory,
@@ -126,6 +127,7 @@ import {
   getMessageQueue,
   registerActiveRootQueueRoute,
   resolveLearningProposalStore,
+  searchSessionHistory,
 } from '@kodax-ai/agent';
 import type {
   AgentArtifactPolicy,
@@ -163,6 +165,7 @@ import type {
   SkillMetadata,
   WorkflowProcessEvent,
   WorkflowProcessSnapshot,
+  KodaXSessionHistoryHit,
 } from '@kodax-ai/agent';
 import { createRuntimeAgentExecutorPlaneStore } from './runtime-agent-store.js';
 import { createRuntimeAgentBindingService } from './runtime-agent-binding.js';
@@ -643,9 +646,11 @@ export interface RuntimeCapabilityRequirements {
   readonly sessionAdmission?: 1;
   readonly completeObservationSnapshot?: 1;
   /** Require always-on thresholds, stable context identity, and canonical compact events. */
-  readonly contextCompaction?: 2;
+  readonly contextCompaction?: 1 | 2 | 3;
   /** Require bounded transcript slices plus page/chunk recovery. */
   readonly transcriptPaging?: 1;
+  /** Require deterministic exact-history search over merged persisted lineage. */
+  readonly transcriptSearch?: 1;
   readonly connectionLifecycle?: 1;
   readonly typedRuntimeEvents?: 1;
   readonly daemonSafeRunInput?: 1;
@@ -1062,6 +1067,24 @@ export interface RuntimeTranscriptEntryChunk {
   readonly nextCursor?: string;
 }
 
+export interface RuntimeTranscriptSearchInput {
+  readonly sessionId: string;
+  readonly query: string;
+  readonly limit?: number;
+  readonly role?: 'user' | 'assistant';
+  readonly scope?: 'compacted' | 'all';
+}
+
+export interface RuntimeTranscriptSearchHit extends KodaXSessionHistoryHit {
+  /** Index accepted by transcriptEntryChunk for this exact transcript revision. */
+  readonly entryIndex: number;
+}
+
+export interface RuntimeTranscriptSearchResult {
+  readonly revision: string;
+  readonly hits: readonly RuntimeTranscriptSearchHit[];
+}
+
 export interface RuntimeSessionFilter {
   readonly projectRoot?: string;
   readonly scope?: 'user' | 'managed-task-worker' | 'all';
@@ -1217,6 +1240,9 @@ export interface RuntimeSessionService {
   transcriptEntryChunk(
     input: RuntimeTranscriptEntryChunkInput,
   ): Promise<RuntimeTranscriptEntryChunk | null>;
+  transcriptSearch(
+    input: RuntimeTranscriptSearchInput,
+  ): Promise<RuntimeTranscriptSearchResult | null>;
   observe(
     sessionId: string,
     listener: RuntimeEventListener,
@@ -1757,6 +1783,21 @@ export type RuntimeContextCompactionFinishedEventPayload = KodaXContextCompactio
     readonly reason?: string;
   };
 
+export interface RuntimeContextCompactionMessagesEventPayload {
+  readonly messageCount: number;
+  readonly update?: {
+    readonly hasAnchor: boolean;
+    readonly tokensBefore?: number;
+    readonly tokensAfter?: number;
+    readonly entriesRemoved?: number;
+    readonly reason?: string;
+    readonly artifactLedgerEntryCount: number;
+    readonly postCompactAttachmentCount: number;
+    readonly exactSnapshotAvailable: boolean;
+  };
+  readonly meta?: KodaXActivityEventMeta;
+}
+
 export interface RuntimeSessionSettingsUpdatedEventPayload {
   readonly sessionId: string;
   readonly revision: number;
@@ -1811,6 +1852,7 @@ export type RuntimeEventPayloadMap = Omit<
   | 'workflow.finished'
   | 'context.budget.snapshot'
   | 'tool.exposure.planned'
+  | 'context.compaction.messages'
   | 'context.compaction.finished'
   | 'runtime.warning'
 > & {
@@ -1847,6 +1889,7 @@ export type RuntimeEventPayloadMap = Omit<
   readonly 'workflow.finished': WorkflowProcessEvent;
   readonly 'context.budget.snapshot': RuntimeContextBudgetSnapshot;
   readonly 'tool.exposure.planned': RuntimeToolExposurePlan;
+  readonly 'context.compaction.messages': RuntimeContextCompactionMessagesEventPayload;
   readonly 'context.compaction.finished': RuntimeContextCompactionFinishedEventPayload;
   readonly 'runtime.warning': RuntimeWarningEventPayload;
 };
@@ -2508,15 +2551,22 @@ export async function createKodaXRuntime(
     afterTurnInput: { version: 1 },
     interruptInput: { version: 1, availability: 'per_run' },
     contextCompaction: {
-      version: 2,
+      version: 3,
       alwaysOn: true,
       absoluteThreshold: true,
       contextIdentity: true,
       canonicalFinishedEvent: true,
+      durableBeforeEvict: true,
+      exactHistoryRecovery: true,
     },
     transcriptPaging: {
       version: 1,
       maxPageBytes: MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES,
+    },
+    transcriptSearch: {
+      version: 1,
+      defaultScope: 'compacted',
+      citedEntries: true,
     },
     learningCenter: { version: 1 },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
@@ -2930,6 +2980,7 @@ function assertRuntimeCapabilities(
     requirements?.completeObservationSnapshot === undefined &&
     requirements?.contextCompaction === undefined &&
     requirements?.transcriptPaging === undefined &&
+    requirements?.transcriptSearch === undefined &&
     requirements?.connectionLifecycle === undefined &&
     requirements?.typedRuntimeEvents === undefined &&
     requirements?.daemonSafeRunInput === undefined &&
@@ -2976,6 +3027,7 @@ function assertRuntimeCapabilities(
     ['completeObservationSnapshot', requirements.completeObservationSnapshot],
     ['contextCompaction', requirements.contextCompaction],
     ['transcriptPaging', requirements.transcriptPaging],
+    ['transcriptSearch', requirements.transcriptSearch],
     ['connectionLifecycle', requirements.connectionLifecycle],
     ['typedRuntimeEvents', requirements.typedRuntimeEvents],
     ['daemonSafeRunInput', requirements.daemonSafeRunInput],
@@ -3756,6 +3808,31 @@ function createRuntimeSessionService(
         encoded,
       };
       return createRuntimeTranscriptEntryChunkFromEncoded(input, revision, transcriptChunkCache.entryId, encoded);
+    },
+
+    async transcriptSearch(input) {
+      ensureOpen();
+      await admission.loadRequired(input.sessionId);
+      const transcript = await manager.loadFullTranscript(input.sessionId);
+      if (transcript === null) return null;
+      const lineage = transcript.lineage ?? createSessionLineage(transcript.messages);
+      const search = searchSessionHistory(lineage, {
+        query: input.query,
+        limit: input.limit,
+        role: input.role,
+        scope: input.scope,
+      });
+      const entryIndexById = new Map(
+        transcript.transcriptEntries.map((entry, entryIndex) => [entry.entryId, entryIndex]),
+      );
+      const hits = search.hits.flatMap((hit): RuntimeTranscriptSearchHit[] => {
+        const entryIndex = entryIndexById.get(hit.entryId);
+        return entryIndex === undefined ? [] : [{ ...hit, entryIndex }];
+      });
+      return {
+        revision: createRuntimeTranscriptRevision(transcript),
+        hits,
+      };
     },
 
     async observe(sessionId, listener) {
@@ -5394,6 +5471,9 @@ function buildRunOptions(input: {
       ...(options.session ?? {}),
       id: record.sessionId,
       storage: sessionManager.storage,
+      // The Runtime is the canonical Session owner even when a REPL client
+      // supplied host-owned options before crossing the Runtime boundary.
+      persistedByHost: false,
     },
     events,
     ...(requiresContextOverride
@@ -8136,17 +8216,35 @@ function wrapKodaXEvents(input: {
       emit('context.compaction.stats', info, info);
       original?.onCompactStats?.(info);
     },
-    onCompactedMessages(messages, update, meta) {
+    async onCompactedMessages(messages, update, meta) {
+      const boundedUpdate = update === undefined
+        ? undefined
+        : {
+            hasAnchor: update.anchor !== undefined,
+            ...(update.anchor?.tokensBefore !== undefined
+              ? { tokensBefore: update.anchor.tokensBefore }
+              : {}),
+            ...(update.anchor?.tokensAfter !== undefined
+              ? { tokensAfter: update.anchor.tokensAfter }
+              : {}),
+            ...(update.anchor?.entriesRemoved !== undefined
+              ? { entriesRemoved: update.anchor.entriesRemoved }
+              : {}),
+            ...(update.anchor?.reason !== undefined ? { reason: update.anchor.reason } : {}),
+            artifactLedgerEntryCount: update.artifactLedger?.length ?? 0,
+            postCompactAttachmentCount: update.postCompactAttachments?.length ?? 0,
+            exactSnapshotAvailable: update.preCompactionMessages !== undefined,
+          };
       emit(
         'context.compaction.messages',
         {
           messageCount: messages.length,
-          update,
+          update: boundedUpdate,
           meta,
         },
         meta,
       );
-      original?.onCompactedMessages?.(messages, update, meta);
+      await original?.onCompactedMessages?.(messages, update, meta);
     },
     onContextCompactionFinished(event) {
       const afterRevision = event.contextRevision ?? 0;

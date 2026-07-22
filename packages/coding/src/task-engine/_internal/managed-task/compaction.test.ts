@@ -347,6 +347,7 @@ describe('managed history compaction', () => {
     expect(onCompact).toHaveBeenCalledWith(finalTokens);
     expect(onCompactedMessages.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
       anchor: expect.objectContaining({ tokensAfter: finalTokens }),
+      preCompactionMessages: messages,
       report: compactedResult(messages).report,
     }));
     expect(onContextCompactionFinished).toHaveBeenCalledWith(expect.objectContaining({

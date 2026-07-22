@@ -122,6 +122,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('complete eligible prefix');
     expect(content).toContain('user-query ledger');
     expect(content).toContain('post-commit');
+    expect(content).toContain('persists their exact lineage');
+    expect(content).toContain('sidecar is flushed');
+    expect(content).toContain('commit callback is awaited');
+    expect(content).toContain('Runtime becomes the persistence owner');
+    expect(content).toContain('session_history_search');
+    expect(content).toContain('session_history_read');
+    expect(content).toContain('transcriptSearch()');
+    expect(content).toContain('hidden reasoning');
+    expect(content).toContain('cannot reconstruct bytes');
   });
 
   it('keeps the SDK topic aligned with current published subpaths', () => {

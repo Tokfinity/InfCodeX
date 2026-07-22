@@ -795,11 +795,11 @@ export function applySessionCompaction(
       : entry),
   };
 
-  // Release heavy message content from old islands to prevent in-memory
-  // accumulation across compaction cycles.  Entry structure (id, parentId,
-  // timestamp) is preserved so tree navigation and archive still work;
-  // only the message body is replaced with a lightweight placeholder.
-  return evictOldIslandMessageContent(result);
+  // The host must durably persist this exact pre-compaction lineage before it
+  // may release old-island bodies from memory. Keeping eviction explicit is
+  // the transaction boundary that prevents a failed save from destroying the
+  // only exact copy of compacted history.
+  return result;
 }
 
 /**
@@ -837,8 +837,7 @@ export function applyLineageTruncation(
  * with a lightweight placeholder.  This releases large tool_result payloads
  * from memory while preserving the entry skeleton for tree structure.
  *
- * Called automatically after compaction so that `context.lineage` does not
- * accumulate unbounded message clones across compaction cycles.
+ * Hosts call this only after the exact lineage has been durably committed.
  */
 export function evictOldIslandMessageContent(lineage: KodaXSessionLineage): KodaXSessionLineage {
   if (!lineage.activeEntryId || lineage.entries.length === 0) {

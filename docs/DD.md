@@ -404,6 +404,17 @@ forked copies; `sourceEntryId` points at the root physical source when an entry
 is a clone. Hosts may fold display history by `logicalId`, while
 `loadFullTranscript()` continues to return raw append-order scrollback.
 
+`FileSessionStorage.loadFullLineage()` is the storage-owned merge of the main
+JSONL and island sidecar. Sidecar entries win for the same stable physical ID
+because they carry the exact pre-eviction payload. Public transcript projection,
+Runtime search, and model-facing history recovery all consume this one merged
+lineage rather than independently guessing from `[compacted]` placeholders.
+One shared evidence predicate excludes system/control entries, hidden-only
+content, current and legacy synthetic history checkpoints, and compacted-body
+placeholders from both search and direct read. Metadata ID ranking activates
+only for a sufficiently specific direct identifier query, avoiding accidental
+matches from short terms embedded in random IDs.
+
 Rewind audit markers are stored as `rewind_marker` lineage entries. They are
 visible through `loadFullTranscript().transcriptEntries` for host UI/audit, but
 they are context-silent: `loadSession()` and `loadFullTranscript().messages`
@@ -681,6 +692,42 @@ opaque revision-bound cursors; a single oversized entry uses bounded
 `base64-json` chunks. The legacy daemon full-transcript method is capped at 512
 KiB and points callers to page/chunk recovery before the transport's 8 MiB
 frame can be approached.
+
+The compaction update carries `preCompactionMessages` only to the in-process
+host callback. It never enters the replacement provider input or a serialized
+live event. The root host first reconciles those messages into lineage, then
+adds the compaction island. `applySessionCompaction()` no longer performs
+payload eviction itself. After `appendSessionDelta()`/`save()` acknowledges the
+exact snapshot, the host may call `evictOldIslandMessageContent()` on the live
+lineage. `onCompactedMessages` is awaitable: the next provider request and
+`context.compaction.finished` both wait for that acknowledgement. Failure keeps
+the exact live payload, emits a diagnostic, and rejects the compact commit.
+Headless core Runs write through their injected storage; Runtime overrides a
+client-carried `persistedByHost` flag because the Runtime is the canonical
+Session owner on both embedded and daemon paths. Runtime-backed Ink/classic
+hosts update only their live projection after acknowledgement and never become
+a second writer. A first-run compact seeds a missing Session from explicit Run
+metadata before persistence; a rejected async compact callback restores the
+tentative context revision as well as leaving the exact payload intact.
+
+Full rewrites run the same archive-first transaction as maintenance: reconcile
+legacy placeholders against exact persisted entries, append and `sync()` new
+sidecar records, atomically replace the slim main file, then update storage
+state. A main-write failure after sidecar success is safe duplication. Storage
+maintenance resets only its rewrite counter; it retains the live caller's
+lineage append watermark until restart so delta slicing cannot reappend an old
+placeholder range.
+
+The agent-layer transcript retrieval primitive computes a content revision over
+the merged lineage. `searchSessionHistory()` excludes system/control entries by
+default, searches compacted entries with exact phrase, logical-ID, Unicode term
+coverage, and inverse-document-frequency signals, and returns bounded snippets.
+`readSessionHistoryEntry()` requires a stable entry ID, optionally fences the
+revision, and returns a fixed character chunk plus `nextOffset`. Coding exposes
+these as root-only `session_history_search` / `session_history_read` tools when
+storage supports full-lineage reads. The embedded Runtime/daemon projects the
+same search hits; bulk and oversized exact reads continue through transcript
+page/chunk APIs.
 
 ## 21. Related Documents
 

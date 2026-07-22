@@ -69,6 +69,12 @@ export interface CompactionAnchor {
 }
 
 export interface CompactionUpdate {
+  /**
+   * Exact host-only snapshot used to reconcile lineage before durable commit.
+   * It is intentionally not part of the persisted CompactionEntry or provider
+   * context. Hosts may evict old message bodies only after saving this state.
+   */
+  preCompactionMessages?: readonly KodaXMessage[];
   anchor?: CompactionAnchor;
   artifactLedger?: KodaXSessionArtifactLedgerEntry[];
   memorySeed?: KodaXCompactMemorySeed;

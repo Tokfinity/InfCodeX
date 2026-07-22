@@ -13,7 +13,8 @@
 自动大型压缩始终开启；百分比阈值限制在 15%-90%，可增加绝对 token
 阈值且两者取较小值。一次压缩覆盖保护尾部之外的全部历史，保留真实用户
 query，并以 contextId 区分主/子 Agent。Runtime/Space 使用有界 transcript
-分页与 chunk，避免 8 MiB daemon 帧。
+分页与 chunk，避免 8 MiB daemon 帧。根宿主在驱逐压缩原文前先持久化精确
+lineage，并提供确定性、revision-bound 的历史检索与按条目回读。
 
 ---
 
@@ -220,6 +221,86 @@ query，并以 contextId 区分主/子 Agent。Runtime/Space 使用有界 transc
 - [ ] manual 明确保护量为有效阈值的 20%、覆盖完整 eligible prefix、保留用户 query。
 - [ ] manual 与 SDK 均说明只有物理有效且已提交的实际 token 减少才是成功。
 
+### TC-011: 压缩原文持久化、退出与恢复
+
+**优先级**: 高
+
+**类型**: 数据耐久性回归测试
+
+1. 在待压缩前缀中分别写入唯一的用户请求、助手结论、工具调用和工具结果标记。
+2. 触发一次根上下文压缩，等待 `context.compaction.finished`，随后正常 `/quit`。
+3. 使用 `kodax -c` 恢复同一 Session，并检查主 JSONL 与 island sidecar。
+4. 询问只存在于被压缩原文、摘要中没有直接答案的标记。
+
+**预期效果**:
+
+- [ ] 压缩提交后，精确原始条目至少存在于主文件、sidecar 或仍未驱逐的 live lineage 之一。
+- [ ] 重启后完整 transcript 合并主文件和 sidecar；同一稳定 entry ID 只出现一次。
+- [ ] active model context 仍是 checkpoint + 保护尾部，不会把全部历史重新塞回 provider 请求。
+- [ ] 根 Agent 先搜索再按 citation 回读，并使用原始证据回答，而不是从摘要猜测。
+- [ ] `kodax -c` 不会在尾部额外渲染重复 tool call/tool result。
+
+### TC-012: sidecar/main 写失败不丢失最后精确副本
+
+**优先级**: 高
+
+**类型**: 故障注入测试
+
+1. 分别在 sidecar append/flush 与 slim main rename 阶段注入一次可识别的 I/O 失败。
+2. 在每次失败后立即检查 live lineage、旧主文件、sidecar 和诊断事件。
+3. 移除故障并重试保存，再调用完整 transcript 与历史检索。
+4. 用一个尚未产生常规快照的新 Session 在首轮直接触发压缩。
+
+**预期效果**:
+
+- [ ] sidecar 未成功刷盘时不驱逐 live 原文，也不替换主文件。
+- [ ] sidecar 已刷盘但 main 替换失败时，旧主文件仍权威，sidecar 保留精确原文。
+- [ ] 错误不会被静默吞掉；可看到明确的持久化诊断。
+- [ ] 重试后合并结果无重复，且 maintenance 不会再次归档同一 entry ID。
+- [ ] 首轮 Session 由显式运行元数据和 exact pre-snapshot 原子建立，不因首次 `load()` 为空而失败。
+- [ ] 持久化失败时 `contextRevision` 回到原值；Runtime 模式下 UI 不执行第二次 Session 写入。
+
+### TC-013: 智能历史检索、revision 与信息边界
+
+**优先级**: 高
+
+**类型**: 恢复质量/隐私测试
+
+1. 在已压缩历史中放入中文短语、代码标识符、工具结果，以及内容相近但时间不同的条目。
+2. 让根 Agent 使用 `session_history_search`，再用 citation 调用 `session_history_read`。
+3. SDK 调用 `sessions.transcriptSearch()`，将返回的 `revision` 与 `entryIndex` 传给 `transcriptEntryChunk()`。
+4. 搜索仅存在于 hidden thinking、system 指令和旧合成 checkpoint 中的唯一标记。
+5. 在 search 与 read/chunk 之间追加 Session 条目，再使用旧 revision。
+6. 用普通短查询（例如 `0.7.74`）确认它不会因随机 entry ID 的短片段而命中无关条目，并直接用已知 ID 尝试读取被排除条目。
+
+**预期效果**:
+
+- [ ] 精确短语优先，Unicode/标识符/工具证据可命中；默认只搜已离开 active path 的条目。
+- [ ] read/chunk 有界返回，可通过 next offset/cursor 继续，citation 稳定指向 entry ID。
+- [ ] hidden thinking、system 指令与合成 checkpoint 不可通过模型工具搜索或读取。
+- [ ] 普通短查询不按随机 ID 片段加分；只有长直接标识符查询使用 metadata boost。
+- [ ] 旧 revision 明确返回 stale/resync，不拼接两个版本的证据。
+- [ ] 子 Agent、临时 run 以及不支持 full-lineage 的自定义 storage 看不到这对模型工具。
+- [ ] embedded 与 daemon 都声明 `contextCompaction:3`、`transcriptPaging:1`、`transcriptSearch:1`。
+
+### TC-014: 旧版本 `[compacted]` 会话的诚实兼容
+
+**优先级**: 中
+
+**类型**: 升级兼容测试
+
+1. 复制一份由旧版本生成、只剩 `[compacted]` 占位符且没有 exact sidecar 的 Session。
+2. 用 v0.7.74 加载、继续对话并执行一次新的压缩。
+3. 搜索旧占位符之前的细节，以及升级后新压缩掉的细节。
+
+**预期效果**:
+
+- [ ] 旧 Session 可正常加载，不崩溃、不伪造缺失原文。
+- [ ] 从未持久化的旧字节明确视为不可恢复；检索返回无命中，而不是幻觉内容。
+- [ ] 旧 checkpoint 前缀与 `[compacted]` 即使 ID 已知也返回 `not_found`。
+- [ ] 升级后的新压缩遵守 durable-before-evict，新产生的精确历史可恢复。
+- [ ] 产品文档和诊断不承诺反向恢复旧版本已经永久删除的数据。
+
 ---
 
 ## 自动化预检
@@ -227,7 +308,7 @@ query，并以 contextId 区分主/子 Agent。Runtime/Space 使用有界 transc
 ```powershell
 # KodaX
 npm run build
-npx vitest run packages/agent/src/session-lineage/compaction packages/coding/src/agent-runtime/__contract-tests__/cap-059-compact-trigger.contract.test.ts src/runtime-event.test.ts src/runtime-daemon/server.test.ts
+npx vitest run packages/agent/src/session-lineage packages/coding/src/tools/session-history.test.ts packages/coding/src/agent-runtime/__contract-tests__/p3.4-compaction-flow.contract.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/repl/src/interactive/storage.test.ts packages/repl/src/session/public-api.test.ts packages/repl/src/ui/utils/compaction-commit.test.ts src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts src/runtime-daemon/server.test.ts
 
 # KodaX Space
 npm run link:kodax
@@ -241,7 +322,7 @@ node --test --import tsx apps/desktop/electron/test/runtime-context-telemetry.te
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 10 | - | - | - |
+| 14 | - | - | - |
 
 **测试结论**: [待填写]
 
@@ -251,4 +332,4 @@ node --test --import tsx apps/desktop/electron/test/runtime-context-telemetry.te
 
 *测试指导生成时间: 2026-07-21*
 
-*Feature/Issue ID: FEATURE_272 / ISSUE_192*
+*Feature/Issue ID: FEATURE_272 / ISSUE_192 / ISSUE_198*

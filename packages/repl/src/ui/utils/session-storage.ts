@@ -38,6 +38,7 @@ export interface SessionStorage {
   save(id: string, data: SessionData): Promise<void>;
   load(id: string): Promise<SessionData | null>;
   getLineage?(id: string): Promise<KodaXSessionLineage | null>;
+  loadFullLineage?(id: string): Promise<KodaXSessionLineage | null>;
   setActiveEntry?(
     id: string,
     selector: string,
@@ -91,6 +92,10 @@ export class MemorySessionStorage implements SessionStorage {
 
   async getLineage(id: string): Promise<KodaXSessionLineage | null> {
     return structuredClone(this.sessions.get(id)?.lineage ?? null);
+  }
+
+  async loadFullLineage(id: string): Promise<KodaXSessionLineage | null> {
+    return this.getLineage(id);
   }
 
   async setActiveEntry(

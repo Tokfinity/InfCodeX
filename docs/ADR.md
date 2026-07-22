@@ -4416,6 +4416,19 @@ large compaction is always present and defaults to an earlier bounded trigger.
    restores physical request validity, and commits. Reference-only rewrites,
    unchanged/oversized candidates, failures, and stale revisions emit no
    successful compatibility callback and leave canonical history replayable.
+10. Exact pre-compaction messages are transaction data. The root host reconciles
+    them into lineage and durably commits them before old-island payload may be
+    evicted from memory. Sidecar data is flushed before a slim main snapshot is
+    published; failure preserves the last exact copy even when that temporarily
+    costs more memory or duplicates main/sidecar entries.
+11. Child compaction callbacks are observations, not authority to mutate root
+    Session messages or lineage. Root mutation is fenced by `contextKind`, not
+    inferred from a shared Session ID.
+12. Exact detail recovery is one read plane over persisted lineage: deterministic
+    revision-bound search returns stable entry citations, followed by bounded
+    exact reads. It is separate from cross-task governed memory and adds no
+    embeddings, vector database, background extractor, or automatic instruction
+    reinjection.
 
 **Consequences**:
 
@@ -4428,12 +4441,21 @@ large compaction is always present and defaults to an earlier bounded trigger.
   without it retain identical correctness.
 - SDK/UI clients can distinguish root active provider input, child contexts,
   full transcript recovery, and the last compact transition.
+- A persistence failure can leave a larger live lineage, and a crash between
+  sidecar flush and main replacement can leave duplicate physical copies. Both
+  are preferred to deleting the only exact copy; stable entry IDs deduplicate
+  the logical transcript.
+- Root Agent and SDK hosts share the same persisted evidence and revision. Old
+  transcript text is returned as low-authority historical evidence, while
+  current instructions and verified current workspace state remain dominant.
 - Older v0.7.x `enabled: false` inputs remain source-compatible but are ignored.
 
 **Rejected alternatives**: protecting a fraction of the model maximum,
 summarizing one arbitrary oldest chunk per trigger, repeated compact-until-low
 loops, summary-of-summary query preservation, partial-progress commits,
-session-only event ownership, and silent transcript truncation.
+session-only event ownership, silent transcript truncation, eviction before
+durable acknowledgement, scanning raw JSONL with ordinary shell tools, and a
+second semantic-memory/indexing subsystem.
 
 **Reconsideration gates**: changing the 20% protection ratio, internal
 checkpoint cadence, or all-query ledger guarantee requires a versioned eval and

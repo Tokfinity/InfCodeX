@@ -168,6 +168,13 @@ export const PROTECTED_TOOL_NAMES: ReadonlySet<string> = PRUNE_PROTECTED_TOOLS;
  * drift from the producer side.
  */
 export const COMPACTION_SUMMARY_PREFIX = '[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\n';
+export const COMPACTED_HISTORY_RECOVERY_GUIDANCE = `
+
+## Exact history recovery
+This checkpoint is a semantic summary, not an exact transcript. If a later
+request depends on an omitted historical detail, do not guess. When available,
+use session_history_search to find cited entries, then session_history_read to
+read only the required exact evidence.`;
 
 /** User messages below this token threshold are never truncated */
 const USER_MESSAGE_PROTECTION_TOKENS = 800;
@@ -304,7 +311,10 @@ export async function compact(
       && msg.content.startsWith(COMPACTION_SUMMARY_PREFIX)
       && (msg.role === 'system' || msg._source === 'compaction-checkpoint')
     ) {
-      previousSummary = msg.content.slice(COMPACTION_SUMMARY_PREFIX.length);
+      const checkpointBody = msg.content.slice(COMPACTION_SUMMARY_PREFIX.length);
+      previousSummary = checkpointBody.endsWith(COMPACTED_HISTORY_RECOVERY_GUIDANCE)
+        ? checkpointBody.slice(0, -COMPACTED_HISTORY_RECOVERY_GUIDANCE.length)
+        : checkpointBody;
       previousQueryLedger = parseUserQueryLedger(previousSummary);
       remainingMessages = [...messages.slice(0, i), ...messages.slice(i + 1)];
       break;
@@ -694,7 +704,7 @@ function buildCompactedMessages(
 function createSummaryMessage(summary: string): KodaXMessage {
   return {
     role: 'user',
-    content: `${COMPACTION_SUMMARY_PREFIX}${summary}`,
+    content: `${COMPACTION_SUMMARY_PREFIX}${summary}${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
     _synthetic: true,
     _source: 'compaction-checkpoint',
   };

@@ -76,6 +76,30 @@ describe('CAP-099: live turn attribution', () => {
     );
   });
 
+  it('rolls back the context revision when the compaction commit is rejected', async () => {
+    const observedRevisions: number[] = [];
+    const scope = createLiveTurnScope({ sessionId: 'session-rejected-compaction' });
+    const rejected = withLiveTurnAttribution({
+      onCompactedMessages: async (_messages, _update, meta) => {
+        observedRevisions.push(meta?.contextRevision ?? -1);
+        throw new Error('durability failed');
+      },
+    }, scope);
+
+    await expect(rejected.onCompactedMessages?.([
+      { role: 'user', content: 'checkpoint' },
+    ])).rejects.toThrow('durability failed');
+
+    const onIterationStart = vi.fn();
+    withLiveTurnAttribution({ onIterationStart }, scope).onIterationStart?.(1, 1);
+    expect(observedRevisions).toEqual([1]);
+    expect(onIterationStart).toHaveBeenCalledWith(
+      1,
+      1,
+      expect.objectContaining({ contextRevision: 0 }),
+    );
+  });
+
   it('stamps live callbacks and turn boundaries with one session sequence', () => {
     const seenText: KodaXActivityEventMeta[] = [];
     const onTurnStarted = vi.fn();

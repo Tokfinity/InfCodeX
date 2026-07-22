@@ -35,7 +35,6 @@ export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
-import { isKodaXJsonValue } from '../interactive/json-guards.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
 
@@ -631,165 +630,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isMessage(value: unknown): value is KodaXMessage {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    value.role === 'user'
-    || value.role === 'assistant'
-    || value.role === 'system'
-  ) && (
-    typeof value.content === 'string'
-    || Array.isArray(value.content)
-  );
-}
-
-function hasEntryBase(value: unknown): value is {
-  id: string;
-  parentId: string | null;
-  timestamp: string;
-  type: string;
-  logicalId?: string;
-  sourceEntryId?: string;
-} {
-  return isRecord(value)
-    && typeof value.id === 'string'
-    && (value.parentId === null || typeof value.parentId === 'string')
-    && typeof value.timestamp === 'string'
-    && typeof value.type === 'string'
-    && (value.logicalId === undefined || typeof value.logicalId === 'string')
-    && (value.sourceEntryId === undefined || typeof value.sourceEntryId === 'string');
-}
-
-function isTranscriptSidecarEntry(value: unknown): value is KodaXSessionEntry {
-  if (!hasEntryBase(value)) {
-    return false;
-  }
-  const entry = value as Record<string, unknown> & {
-    id: string;
-    parentId: string | null;
-    timestamp: string;
-    type: string;
-  };
-  switch (entry.type) {
-    case 'message':
-      return isMessage(entry.message);
-    case 'compaction':
-      return typeof entry.summary === 'string';
-    case 'branch_summary':
-      return typeof entry.summary === 'string';
-    case 'archive_marker':
-      return typeof entry.archiveBatchId === 'string'
-        && typeof entry.archivedEntryCount === 'number'
-        && typeof entry.summary === 'string';
-    case 'rewind_marker':
-      return typeof entry.targetId === 'string'
-        && (entry.fromId === undefined || typeof entry.fromId === 'string')
-        && typeof entry.truncatedCount === 'number'
-        && typeof entry.summary === 'string';
-    case 'label':
-      return typeof entry.targetId === 'string'
-        && (entry.label === undefined || typeof entry.label === 'string');
-    case 'client_notice':
-      return typeof entry.source === 'string'
-        && typeof entry.content === 'string'
-        && (entry.turnId === undefined || typeof entry.turnId === 'string')
-        && (entry.payload === undefined || isKodaXJsonValue(entry.payload));
-    case 'goal':
-      return typeof entry.event === 'string';
-    default:
-      return false;
-  }
-}
-
-function isArchivedEntryLine(value: unknown): value is {
-  _type: 'archived_entry';
-  archiveBatchId: string;
-  entry: KodaXSessionEntry;
-} {
-  return isRecord(value)
-    && value._type === 'archived_entry'
-    && typeof value.archiveBatchId === 'string'
-    && isTranscriptSidecarEntry(value.entry);
-}
-
-async function readArchivedTranscriptEntries(
-  id: string,
-  sessionsDir: string,
-): Promise<KodaXSessionEntry[]> {
-  let sessionFile: string | undefined;
-  const candidateNames = new Set([`${id}.jsonl`, `archived-${id}.jsonl`]);
-  for (const filePath of await collectSessionFilePaths(sessionsDir, true)) {
-    if (candidateNames.has(path.basename(filePath))) {
-      sessionFile = filePath;
-      break;
-    }
-  }
-  if (!sessionFile) {
-    return [];
-  }
-
-  const dir = path.dirname(sessionFile);
-  const stem = path.basename(sessionFile, '.jsonl');
-  const stems = Array.from(new Set([id, stem]));
-  const sidecarPaths = stems.flatMap((candidate) => [
-    path.join(dir, `${candidate}.islands.jsonl`),
-    path.join(dir, `${candidate}.archive.jsonl`),
-  ]);
-
-  const entries: KodaXSessionEntry[] = [];
-  const seenEntryIds = new Set<string>();
-  for (const sidecarPath of sidecarPaths) {
-    let text = '';
-    try {
-      text = await fsPromises.readFile(sidecarPath, 'utf-8');
-    } catch {
-      continue;
-    }
-    for (const line of text.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (isArchivedEntryLine(parsed)) {
-          if (!seenEntryIds.has(parsed.entry.id)) {
-            seenEntryIds.add(parsed.entry.id);
-            entries.push(parsed.entry);
-          }
-        }
-      } catch {
-        // Ignore malformed sidecar records; the main session is still useful.
-      }
-    }
-  }
-  return entries;
-}
-
-function mergeTranscriptLineageEntries(
-  archivedEntries: readonly KodaXSessionEntry[],
-  lineageEntries: readonly KodaXSessionEntry[],
-): KodaXSessionEntry[] {
-  const seenEntryIds = new Set<string>();
-  const merged: KodaXSessionEntry[] = [];
-
-  for (const entry of archivedEntries) {
-    if (!seenEntryIds.has(entry.id)) {
-      seenEntryIds.add(entry.id);
-      merged.push(entry);
-    }
-  }
-  for (const entry of lineageEntries) {
-    if (!seenEntryIds.has(entry.id)) {
-      seenEntryIds.add(entry.id);
-      merged.push(entry);
-    }
-  }
-
-  return merged;
-}
-
 // ── loadSession ───────────────────────────────────────────────────────────────
 
 // Full transcript helpers preserve append order without changing active
@@ -1160,7 +1000,7 @@ async function loadFullTranscriptImpl(
     if (!activeData) {
       return null;
     }
-    const lineage = await storage.getLineage(id);
+    const lineage = await storage.loadFullLineage(id);
     if (!lineage) {
       return {
         ...activeData,
@@ -1168,11 +1008,7 @@ async function loadFullTranscriptImpl(
         transcriptEntries: [],
       };
     }
-    const archivedEntries = await readArchivedTranscriptEntries(id, sessionsDir);
-    const fullLineage = archivedEntries.length > 0
-      ? { ...lineage, entries: mergeTranscriptLineageEntries(archivedEntries, lineage.entries) }
-      : lineage;
-    const transcriptEntries = buildTranscriptEntries(fullLineage);
+    const transcriptEntries = buildTranscriptEntries(lineage);
     return {
       ...activeData,
       messages: transcriptEntries
@@ -1180,7 +1016,7 @@ async function loadFullTranscriptImpl(
         .map((entry) => entry.message),
       activeMessages: activeData.messages,
       transcriptEntries,
-      lineage: fullLineage,
+      lineage,
     };
   } catch {
     return null;

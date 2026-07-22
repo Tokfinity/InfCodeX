@@ -52,6 +52,12 @@ All notable changes to this project will be documented in this file.
   now consistently describe the v0.7.74 policy and supersede the old
   capacity-only major-trigger wording without changing FEATURE_251's tool-result
   and micro-compaction guarantees.
+- **Exact-history durability closure.** Runtime-backed REPL paths now have one
+  canonical Session writer, first-run headless compaction seeds missing Session
+  metadata, and persistence failure rolls back the tentative context revision.
+  Search and direct read consistently exclude system/hidden entries, current and
+  legacy synthetic checkpoints, and `[compacted]` placeholders; short ordinary
+  queries no longer match random metadata IDs.
 - **Runtime interrupt input delivery.** Embedded Runtime and the shared daemon
   now advertise `interruptInput:1` and route interrupt submissions into the
   current active Actor Run. Inputs queued before one safe Runner boundary are
@@ -78,7 +84,14 @@ All notable changes to this project will be documented in this file.
   `context.compaction.finished` event reports committed before/after and
   component metrics. Runtime observations use bounded transcript slices,
   revision-bound pages, and lossless chunks for oversized entries; clients can
-  require `contextCompaction:2` and `transcriptPaging:1`.
+  require `contextCompaction:3`, `transcriptPaging:1`, and
+  `transcriptSearch:1`.
+- **Durable exact-history recovery.** The root host now persists and flushes
+  exact pre-compaction lineage before evicting raw bodies. Island sidecars are
+  committed before the slim main Session, stable entry IDs deduplicate overlap,
+  and failures preserve the last exact live or persisted copy. Root Agents gain
+  bounded `session_history_search` / `session_history_read`; SDK and daemon
+  clients gain revision-bound `sessions.transcriptSearch()`.
 
 ### Fixed
 
@@ -103,6 +116,11 @@ All notable changes to this project will be documented in this file.
   complete visible history, and reads transcripts directly through bounded
   page/chunk calls. The legacy full-transcript daemon method rejects responses
   above 512 KiB instead of risking the 8 MiB frame.
+- **Compacted-history loss and maintenance replay.** Full-lineage loads now
+  merge exact sidecar entries over slim placeholders, compaction writes use a
+  durable-before-evict boundary, child compaction cannot overwrite root
+  lineage, and maintenance preserves its append watermark instead of archiving
+  the same island entries again.
 
 ## [0.7.73] - 2026-07-20
 
