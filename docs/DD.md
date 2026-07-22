@@ -189,9 +189,12 @@ continuation Run. Run status exposes queued/delivered/terminal input state;
 terminal cleanup removes undelivered queue entries. Runs without a same-Run
 safe Actor boundary return `unsupported_capability`, while queued or terminal
 targets return `stale_run`. After the Runner publishes its final completion or
-error signal, the still-settling outer Run closes interrupt admission and
-returns `interrupt_window_closed`; clients must restore the unsent input for
-retry rather than silently converting it to `after_turn`. AskUser and permission
+terminal error signal, or the Run's external abort signal fires, the
+still-settling outer Run closes interrupt admission and returns
+`interrupt_window_closed`; clients must restore the unsent input for retry
+rather than silently converting it to `after_turn`. Non-terminal observer
+diagnostics do not use the terminal error signal and therefore do not close a
+still-consumable window. AskUser and permission
 registries expose pending lists and first-winner responses over transport;
 persistent permission grants have one daemon-owned revisioned store. A concrete
 permission request may expose opaque

@@ -158,7 +158,11 @@ that never had another consumption point.
 
 - Track one internal interrupt-admission flag on each active Runtime Run.
 - Close it on the final managed-task status, and on the ordinary coding
-  completion callback before the result promise settles.
+  completion/error callback or external abort before the result promise settles.
+- Keep non-terminal observer diagnostics off the terminal `onError` channel so
+  they cannot close a still-consumable window.
+- Terminalize synchronous coding and managed-task launch failures instead of
+  leaving a started Run active without a result handle.
 - Reject submissions after closure with `interrupt_window_closed` before
   normalizing or enqueueing the input.
 - Preserve current terminal cleanup for cancellation, failure, restart, and
@@ -169,8 +173,9 @@ that never had another consumption point.
 
 | File | Change | Expected Outcome | Risks and Guardrails | Tests |
 |------|--------|------------------|----------------------|-------|
-| `src/sdk-runtime.ts` | Add the internal admission flag, close it from terminal execution callbacks, and add the typed rejection reason | Late input is rejected before queue mutation; accepted input lifecycle remains unchanged | Do not close on intermediate managed worker turns; do not alter `after_turn` | Managed and ordinary coding completion-window tests |
-| `src/sdk-runtime.test.ts` | Reproduce completion/error windows and assert rejection, zero queue growth, and no queued event | Regression is deterministic and independent of timing | Settle/abort every fake Run so tests do not leak | Focused Vitest suite |
+| `src/sdk-runtime.ts` | Add the internal admission flag, close it from terminal execution callbacks and external abort, release abort listeners on every Runtime-owned termination path, terminalize synchronous launch failures, and add the typed rejection reason | Late input is rejected before queue mutation; accepted input lifecycle remains unchanged; failed launches cannot remain active | Do not close on intermediate managed worker turns; do not alter `after_turn`; do not retain host signals | Managed and ordinary coding completion/abort/launch-failure tests |
+| `src/sdk-runtime.test.ts` | Reproduce completion/error/external-abort and synchronous-launch windows; assert rejection, zero queue growth, accepted-before-close delivery, listener cleanup, and failed terminal status | Regression is deterministic and independent of timing | Settle/abort every fake Run so tests do not leak | Focused and complete Runtime Vitest suite |
+| `packages/coding/src/agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.ts` and adjacent test | Report a Sidecar message sink failure through diagnostics instead of terminal `onError` | An observer failure remains visible without terminating interrupt admission | Preserve verifier behavior and never swallow the diagnostic | Full bridge Vitest suite |
 | `docs/SDK_EMBEDDER_GUIDE.md`, `docs/DD.md` | Document the new factual rejection and client retry behavior | Embedders do not silently downgrade delivery intent | Keep capability semantics and existing reasons intact | Documentation review |
 | `docs/KNOWN_ISSUES.md` | Track Issue 199 through resolution | Runtime ownership and verification remain auditable | Preserve the original report | Index/detail/summary consistency |
 
@@ -179,8 +184,22 @@ that never had another consumption point.
 Added an internal `interruptInputOpen` fence to every Runtime Run record. The
 fence opens only when a Run with an Actor Session starts, and closes before the
 outer result settles when ordinary coding emits `onComplete` or `onError`, or
-when a managed task reports its final `phase: completed`. `markRunTerminal()`
-also closes it defensively for cancellation, failure, recovery, and shutdown.
+when a managed task reports its final `phase: completed`. A supplied external
+abort signal now closes the fence synchronously for both coding and managed-task
+Runs; the Runtime-owned listener is released by normal completion, Runtime
+abort, and shutdown even if the underlying operation never settles.
+`markRunTerminal()` also closes the fence defensively for cancellation, failure,
+recovery, and shutdown.
+
+The Sidecar verifier no longer forwards a host `onSidecarMessage` sink exception
+to terminal `onError`. It emits the existing `coding:sidecar-verifier` diagnostic
+instead, so a non-terminal observer failure remains visible without prematurely
+closing interrupt admission.
+
+Synchronous exceptions from coding or managed-task launch now use the same
+failure classification and terminal cleanup as asynchronous rejection. The
+original `runs.start()` rejection remains unchanged, while the observable Run
+is persisted as `failed`, releases its active ownership, and cannot accept input.
 
 `runtime.runs.submitInput({ delivery: 'interrupt' })` now checks this fence
 before input normalization, cloning, or MessageQueue mutation. A late request
@@ -191,10 +210,13 @@ outcome for clients to reconcile by `inputId`.
 
 Validation:
 
-- Three deterministic completion/error-window regressions passed and proved
-  zero queue growth; the managed case also proved no `run.input.queued` event.
-- Eleven related after-turn/interrupt delivery, batching, rejection, durability,
-  capability, clone-failure, and terminal-cleanup lifecycle tests passed.
+- The complete Runtime SDK suite passed (130/130), including deterministic
+  completion/error/external-abort regressions for coding and managed-task Runs,
+  zero queue growth after closure, listener cleanup on Runtime cancellation, and
+  accepted-before-close delivery, plus synchronous launch-failure cleanup.
+- The complete Sidecar verifier bridge suite passed (17/17), including proof
+  that an observer sink exception emits a diagnostic without calling terminal
+  `onError`.
 - The complete KodaX package build, TypeScript project build, SDK bundle, and
   declaration bundle passed.
 
@@ -6297,8 +6319,13 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ### 2026-07-22: Issue 199 resolved (Unreleased after v0.7.74)
 - Closed interrupt admission at managed completion and ordinary completion/error
-  callbacks, and added deterministic Runtime regression coverage for all three
-  finalization windows.
+  callbacks as well as external abort, while releasing abort listeners on every
+  Runtime-owned terminal path.
+- Terminalized synchronous coding and managed-task launch failures without
+  changing the caller-visible `runs.start()` rejection.
+- Kept Sidecar observer failures on the diagnostic channel so they cannot close
+  a still-consumable interrupt window, with deterministic Runtime and bridge
+  regression coverage.
 
 ### 2026-07-22: Issues 195-197 added and resolved (Unreleased after v0.7.74)
 - Bypassed the LLM for exact safe reads while moving sensitive paths and

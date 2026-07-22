@@ -3927,10 +3927,12 @@ The accepted result's `runId` is the existing owning Run (equal to
 `afterRunId`), not a newly created continuation.
 
 Interrupt admission closes when the Runner publishes its final completion or
-error signal, even if the outer Run is still settling. A submission in that
-window returns `accepted:false` with `reason:'interrupt_window_closed'` and is
-not queued. Keep the original input available for retry after the Run ends; do
-not silently change its delivery to `after_turn`. As a final race/recovery
+terminal error signal, or when the Run's supplied `abortSignal` aborts, even if
+the outer Run is still settling. Non-terminal observer diagnostics do not close
+the window. A submission after closure returns `accepted:false` with
+`reason:'interrupt_window_closed'` and is not queued. Keep the original input
+available for retry after the Run ends; do not silently change its delivery to
+`after_turn`. As a final race/recovery
 guard, inspect terminal Run status: any `interruptInputs` entry whose state is
 `terminal` was not delivered. Reconcile it by `inputId` and present a visible
 non-delivery outcome rather than leaving a pending queue indicator.

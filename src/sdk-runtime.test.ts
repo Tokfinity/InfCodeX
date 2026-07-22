@@ -2905,6 +2905,94 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it.each([
+    ['coding', undefined],
+    ['managed task', 'managed_task'],
+  ] as const)(
+    'rejects interrupt input immediately after an external abort closes a %s run',
+    async (_label, mode) => {
+      const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+      const runtime = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, 'sessions'),
+        defaultProvider: 'mock-provider',
+      });
+      const session = await runtime.sessions.create({ title: 'External Abort Interrupt Window' });
+      const abortController = new AbortController();
+      const neverSettles = new Promise<KodaXResult>(() => undefined);
+      codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+        fakeRunningSession(options, neverSettles)
+      ));
+      codingMock.runManagedTask.mockImplementation(() => neverSettles);
+
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'wait for external abort',
+        ...(mode !== undefined ? { mode } : {}),
+        options: { abortSignal: abortController.signal },
+      });
+
+      try {
+        abortController.abort(new Error('host cancelled'));
+        await expect(runtime.runs.submitInput({
+          sessionId: session.id,
+          afterRunId: run.runId,
+          delivery: 'interrupt',
+          input: { type: 'text', text: 'arrived after external abort' },
+        })).resolves.toMatchObject({
+          accepted: false,
+          reason: 'interrupt_window_closed',
+        });
+        expect(getMessageQueue().size()).toBe(0);
+      } finally {
+        await runtime.runs.abort(run.runId);
+        await expectSettles(run.result, 'external abort run result');
+        await runtime.close();
+      }
+    },
+  );
+
+  it.each([
+    ['coding', undefined],
+    ['managed task', 'managed_task'],
+  ] as const)(
+    'releases the external abort listener when Runtime aborts a %s run',
+    async (_label, mode) => {
+      const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+      const runtime = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, 'sessions'),
+        defaultProvider: 'mock-provider',
+      });
+      const session = await runtime.sessions.create({ title: 'Abort Listener Cleanup' });
+      const abortController = new AbortController();
+      const removeAbortListener = vi.spyOn(
+        abortController.signal,
+        'removeEventListener',
+      );
+      const neverSettles = new Promise<KodaXResult>(() => undefined);
+      codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+        fakeRunningSession(options, neverSettles)
+      ));
+      codingMock.runManagedTask.mockImplementation(() => neverSettles);
+
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'wait for Runtime abort',
+        ...(mode !== undefined ? { mode } : {}),
+        options: { abortSignal: abortController.signal },
+      });
+
+      await runtime.runs.abort(run.runId);
+      await expect(run.result).resolves.toMatchObject({ phase: 'cancelled' });
+      expect(removeAbortListener).toHaveBeenCalledWith(
+        'abort',
+        expect.any(Function),
+      );
+      await runtime.close();
+    },
+  );
+
   it('queues active-run interrupts and reports their FIFO delivery as one batch', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -3776,25 +3864,46 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
-  it('does not leak the active Actor route when SDK launch throws synchronously', async () => {
-    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
-    const runtime = await createKodaXRuntime({
-      sessionsDir: tempRoot,
-      defaultProvider: 'mock-provider',
-    });
-    const session = await runtime.sessions.create({ title: 'Queue Route Launch Failure' });
-    codingMock.startKodaX.mockImplementation(() => {
-      throw new Error('synchronous launch failure');
-    });
+  it.each([
+    ['coding', undefined],
+    ['managed task', 'managed_task'],
+  ] as const)(
+    'terminalizes a %s run when SDK launch throws synchronously',
+    async (_label, mode) => {
+      const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+      const runtime = await createKodaXRuntime({
+        sessionsDir: tempRoot,
+        defaultProvider: 'mock-provider',
+      });
+      const session = await runtime.sessions.create({ title: 'Queue Route Launch Failure' });
+      const throwLaunchError = (): never => {
+        throw new Error('synchronous launch failure');
+      };
+      codingMock.startKodaX.mockImplementation(throwLaunchError);
+      codingMock.runManagedTask.mockImplementation(throwLaunchError);
 
-    await expect(runtime.runs.start({
-      sessionId: session.id,
-      prompt: 'fail before launch',
-    })).rejects.toThrow('synchronous launch failure');
-    expect(resolveActiveRootQueueRoute()).toBeUndefined();
+      await expect(runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'fail before launch',
+        ...(mode !== undefined ? { mode } : {}),
+      })).rejects.toThrow('synchronous launch failure');
 
-    await runtime.close();
-  });
+      const [failedRun] = await runtime.runs.list({ sessionId: session.id });
+      expect(failedRun).toMatchObject({
+        phase: 'failed',
+        error: 'synchronous launch failure',
+      });
+      await expect(runtime.runs.submitInput({
+        sessionId: session.id,
+        afterRunId: failedRun!.runId,
+        delivery: 'interrupt',
+        input: { type: 'text', text: 'must not enter failed run' },
+      })).resolves.toMatchObject({ accepted: false, reason: 'stale_run' });
+      expect(resolveActiveRootQueueRoute()).toBeUndefined();
+
+      await runtime.close();
+    },
+  );
 
   it('rejects pending permissions when aborting a run', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');

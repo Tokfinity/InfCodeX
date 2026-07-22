@@ -191,14 +191,6 @@ export function emitSidecarMessageEvent(
     const normalizedError = error instanceof Error
       ? error
       : new Error(`Sidecar message event sink failed: ${String(error)}`);
-    if (events?.onError) {
-      try {
-        events.onError(normalizedError);
-        return;
-      } catch {
-        // Fall through to stderr; diagnostics should not change verifier behavior.
-      }
-    }
     writeSidecarMessageEventError(normalizedError);
   }
 }

@@ -2311,6 +2311,7 @@ interface RuntimeRunRecord {
   readonly agentContext?: AgentDispatchContext;
   readonly actorSession?: CodingActorSession;
   interruptInputOpen: boolean;
+  releaseAbortSignalSubscription?: () => void;
   start?: PendingRunStart;
   terminalEmitted: boolean;
 }
@@ -4201,6 +4202,11 @@ function createRuntimeRunService(deps: {
     activeQueueRouteReleaseByRun.delete(record.runId);
   };
 
+  const releaseAbortSignalSubscription = (record: RuntimeRunRecord): void => {
+    record.releaseAbortSignalSubscription?.();
+    record.releaseAbortSignalSubscription = undefined;
+  };
+
   const registerActiveQueueRoute = (record: RuntimeRunRecord): void => {
     if (
       record.actorSession === undefined ||
@@ -4226,6 +4232,7 @@ function createRuntimeRunService(deps: {
     record: RuntimeRunRecord,
     result: RuntimeRunResult,
   ): RuntimeRunResult => {
+    releaseAbortSignalSubscription(record);
     deps.permissions.rejectForRun(record.runId, 'runtime run ended');
     deps.userInputs.rejectForRun(record.runId, 'runtime run ended');
     record.start?.options.guardrails
@@ -4239,6 +4246,31 @@ function createRuntimeRunService(deps: {
     return result;
   };
 
+  const failedRunResult = (
+    record: RuntimeRunRecord,
+    error: unknown,
+  ): RuntimeRunResult => {
+    const normalized = normalizeRuntimeRunError(error, record);
+    const failure = classifyRuntimeRunFailure(error);
+    const phase = record.terminalEmitted ? record.phase : failure.phase;
+    if (!record.terminalEmitted) {
+      record.error = normalized.message;
+    }
+    markRunTerminal(
+      deps.bus,
+      deps.persistence,
+      record,
+      phase,
+      failure.terminal,
+    );
+    return {
+      runId: record.runId,
+      sessionId: record.sessionId,
+      phase: record.phase,
+      error: normalized,
+    };
+  };
+
   const cancelRun = (
     record: RuntimeRunRecord,
     reason: string,
@@ -4248,6 +4280,7 @@ function createRuntimeRunService(deps: {
     if (record.phase === 'queued') {
       removeQueuedRun(queueBySession, record);
     }
+    releaseAbortSignalSubscription(record);
     record.running?.abort(new Error(reason));
     record.abortController?.abort(new Error(reason));
     deps.permissions.rejectForRun(record.runId, reason);
@@ -4274,7 +4307,7 @@ function createRuntimeRunService(deps: {
     return result;
   };
 
-  const startRecord = (record: RuntimeRunRecord): void => {
+  const launchRecord = (record: RuntimeRunRecord): void => {
     if (!record.start || deps.isClosed()) {
       cancelRun(record, 'runtime closed', false);
       return;
@@ -4372,16 +4405,13 @@ function createRuntimeRunService(deps: {
       const abortController = new AbortController();
       record.abortController = abortController;
       const upstreamSignal = runOptions.abortSignal;
+      const handleUpstreamAbort = (): void => {
+        record.releaseAbortSignalSubscription = undefined;
+        record.interruptInputOpen = false;
+        abortController.abort(upstreamSignal?.reason);
+      };
       if (upstreamSignal?.aborted) {
-        abortController.abort(upstreamSignal.reason);
-      } else {
-        upstreamSignal?.addEventListener(
-          'abort',
-          () => {
-            abortController.abort(upstreamSignal.reason);
-          },
-          { once: true },
-        );
+        handleUpstreamAbort();
       }
       const managedOperation = () =>
         runManagedTask(
@@ -4399,6 +4429,18 @@ function createRuntimeRunService(deps: {
               managedOperation,
             )
           : managedOperation();
+      if (upstreamSignal !== undefined && !upstreamSignal.aborted) {
+        upstreamSignal.addEventListener(
+          'abort',
+          handleUpstreamAbort,
+          { once: true },
+        );
+        record.releaseAbortSignalSubscription = () => {
+          upstreamSignal.removeEventListener('abort', handleUpstreamAbort);
+        };
+      } else if (upstreamSignal?.aborted && !abortController.signal.aborted) {
+        handleUpstreamAbort();
+      }
       registerActiveQueueRoute(record);
       void managedResult
         .then((value): RuntimeRunResult => {
@@ -4417,27 +4459,7 @@ function createRuntimeRunService(deps: {
             result: value,
           };
         })
-        .catch((error: unknown): RuntimeRunResult => {
-          const normalized = normalizeRuntimeRunError(error, record);
-          const failure = classifyRuntimeRunFailure(error);
-          const phase = record.terminalEmitted ? record.phase : failure.phase;
-          if (!record.terminalEmitted) {
-            record.error = normalized.message;
-          }
-          markRunTerminal(
-            deps.bus,
-            deps.persistence,
-            record,
-            phase,
-            failure.terminal,
-          );
-          return {
-            runId: record.runId,
-            sessionId: record.sessionId,
-            phase: record.phase,
-            error: normalized,
-          };
-        })
+        .catch((error: unknown) => failedRunResult(record, error))
         .then((result) => finishRun(record, result));
       return;
     }
@@ -4452,6 +4474,19 @@ function createRuntimeRunService(deps: {
           )
         : codingOperation();
     record.running = running;
+    const upstreamSignal = runOptions.abortSignal;
+    const handleUpstreamAbort = (): void => {
+      record.releaseAbortSignalSubscription = undefined;
+      record.interruptInputOpen = false;
+    };
+    if (upstreamSignal?.aborted) {
+      handleUpstreamAbort();
+    } else if (upstreamSignal !== undefined) {
+      upstreamSignal.addEventListener('abort', handleUpstreamAbort, { once: true });
+      record.releaseAbortSignalSubscription = () => {
+        upstreamSignal.removeEventListener('abort', handleUpstreamAbort);
+      };
+    }
     registerActiveQueueRoute(record);
     void running.result
       .then((value): RuntimeRunResult => {
@@ -4470,28 +4505,20 @@ function createRuntimeRunService(deps: {
           result: value,
         };
       })
-      .catch((error: unknown): RuntimeRunResult => {
-        const normalized = normalizeRuntimeRunError(error, record);
-        const failure = classifyRuntimeRunFailure(error);
-        const phase = record.terminalEmitted ? record.phase : failure.phase;
-        if (!record.terminalEmitted) {
-          record.error = normalized.message;
-        }
-        markRunTerminal(
-          deps.bus,
-          deps.persistence,
-          record,
-          phase,
-          failure.terminal,
-        );
-        return {
-          runId: record.runId,
-          sessionId: record.sessionId,
-          phase: record.phase,
-          error: normalized,
-        };
-      })
+      .catch((error: unknown) => failedRunResult(record, error))
       .then((result) => finishRun(record, result));
+  };
+
+  const startRecord = (
+    record: RuntimeRunRecord,
+  ): { readonly error: unknown } | undefined => {
+    try {
+      launchRecord(record);
+      return undefined;
+    } catch (error) {
+      finishRun(record, failedRunResult(record, error));
+      return { error };
+    }
   };
 
   const drainNext = (sessionId: string): void => {
@@ -4826,7 +4853,8 @@ function createRuntimeRunService(deps: {
     if (isQueued) {
       enqueue(record);
     } else {
-      startRecord(record);
+      const launchFailure = startRecord(record);
+      if (launchFailure !== undefined) throw launchFailure.error;
     }
 
     return {

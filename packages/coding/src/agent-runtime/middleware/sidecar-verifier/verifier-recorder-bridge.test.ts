@@ -173,24 +173,35 @@ describe('buildSidecarMessageEvent', () => {
 
   it('does not let event sink failures change verifier behavior', () => {
     const onError = vi.fn();
-    expect(() =>
-      emitSidecarMessageEvent(
-        {
-          onSidecarMessage: () => {
-            throw new Error('sink failed');
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+    try {
+      expect(() =>
+        emitSidecarMessageEvent(
+          {
+            onSidecarMessage: () => {
+              throw new Error('sink failed');
+            },
+            onError,
           },
-          onError,
-        },
-        {
-          verdict: 'revise',
-          reason: 'Add the missing assertion.',
-          trace: 'verifier_ok',
-        },
-      ),
-    ).not.toThrow();
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
-      message: 'sink failed',
-    }));
+          {
+            verdict: 'revise',
+            reason: 'Add the missing assertion.',
+            trace: 'verifier_ok',
+          },
+        ),
+      ).not.toThrow();
+      expect(onError).not.toHaveBeenCalled();
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'coding:sidecar-verifier',
+        level: 'error',
+        message: 'Sidecar message event sink failed: sink failed',
+      }));
+    } finally {
+      restoreDiagnostics();
+    }
   });
 });
 
