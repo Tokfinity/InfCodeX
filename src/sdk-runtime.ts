@@ -6287,7 +6287,7 @@ function isChildOwnedPrimaryLiveEvent(
   if (!PRIMARY_LIVE_ACTIVITY_EVENT_TYPES.has(type)) return false;
   const meta = isRecord(payload?.meta) ? payload.meta : undefined;
   if (!meta) return false;
-  if (meta.contextKind === 'child' || meta.liveOnly === true) return true;
+  if (meta.contextKind === 'child') return true;
   if (typeof meta.childAgentId === 'string' && meta.childAgentId.length > 0) return true;
   const correlation = isRecord(meta.workflowCorrelation) ? meta.workflowCorrelation : undefined;
   return (

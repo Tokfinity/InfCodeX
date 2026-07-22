@@ -2225,6 +2225,7 @@ describe('createKodaXRuntime', () => {
         contextRevision: 0,
       } as const;
       options.events?.onTextDelta?.('root answer', rootMeta);
+      options.events?.onTextDelta?.(' root live-only update', { liveOnly: true });
       options.events?.onTextDelta?.('child answer', {
         sessionId: session.id,
         turnId: 'turn-child',
@@ -2239,7 +2240,7 @@ describe('createKodaXRuntime', () => {
       options.events?.onToolUseStart?.({ id: 'root-tool', name: 'bash' }, rootMeta);
       options.events?.onToolUseStart?.(
         { id: 'child-tool', name: 'read' },
-        { liveOnly: true },
+        { childAgentId: 'child-tool-agent', liveOnly: true },
       );
       options.events?.onTodoUpdate?.([], rootMeta);
       options.events?.onTodoUpdate?.([], {
@@ -2252,7 +2253,7 @@ describe('createKodaXRuntime', () => {
     const observation = await runtime.sessions.observe(session.id, () => undefined);
 
     expect(observation.snapshot.live.assistantTextByRun).toEqual({
-      [run.runId]: 'root answer',
+      [run.runId]: 'root answer root live-only update',
     });
     expect(observation.snapshot.live.thinkingTextByRun).toEqual({
       [run.runId]: 'root reasoning',
