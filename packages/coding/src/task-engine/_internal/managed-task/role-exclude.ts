@@ -29,6 +29,7 @@
  */
 
 import { filterMcpToolNames, listToolDefinitions } from '../../../tools/registry.js';
+import { isSessionHistoryTool } from '../../../tools/session-history.js';
 import type { AmaRole } from './types.js';
 
 /** Tools every AMA role excludes — specialized paths (SA-root, construction). */
@@ -86,10 +87,12 @@ export function getAmaRoleEffectiveExclude(role: AmaRole): ReadonlySet<string> {
 export function getAmaRoleExpectedToolNames(
   role: AmaRole,
   hasCapabilityRuntime = true,
+  hasSessionHistory = false,
 ): readonly string[] {
   const exclude = getAmaRoleEffectiveExclude(role);
   const names = listToolDefinitions()
     .map((def) => def.name)
-    .filter((name) => !exclude.has(name));
+    .filter((name) => !exclude.has(name))
+    .filter((name) => hasSessionHistory || !isSessionHistoryTool(name));
   return (hasCapabilityRuntime ? names : filterMcpToolNames(names)).sort();
 }

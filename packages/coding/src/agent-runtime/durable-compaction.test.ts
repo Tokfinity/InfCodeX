@@ -57,6 +57,32 @@ describe('withDurableCompactionPersistence', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('persists child compaction only when the child owns an isolated worker session', async () => {
+    const initial: KodaXSessionData = {
+      title: 'child',
+      gitRoot: 'C:/repo',
+      scope: 'managed-task-worker',
+      messages: [{ role: 'user', content: 'old child detail' }],
+      lineage: createSessionLineage([{ role: 'user', content: 'old child detail' }]),
+    };
+    const save = vi.fn(async () => undefined);
+    const events = withDurableCompactionPersistence({
+      events: {},
+      storage: { load: async () => initial, save },
+      sessionId: 'worker-session',
+      sessionScope: 'managed-task-worker',
+      currentAgentId: 'child-1',
+    });
+
+    await events.onCompactedMessages?.(
+      [{ role: 'user', content: 'child checkpoint' }],
+      { preCompactionMessages: [{ role: 'user', content: 'old child detail' }] },
+      { contextKind: 'child' },
+    );
+
+    expect(save).toHaveBeenCalledOnce();
+  });
+
   it('does not persist an explicitly child-attributed compaction through the root session', async () => {
     const save = vi.fn();
     const original = vi.fn();

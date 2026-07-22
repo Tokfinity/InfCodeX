@@ -6189,6 +6189,7 @@ function applyRuntimeSessionEvent(
   event: RuntimeEvent,
 ): void {
   const payload = isRecord(event.payload) ? event.payload : undefined;
+  if (isChildOwnedPrimaryLiveEvent(event.type, payload)) return;
   if (event.type === 'assistant.delta' && typeof payload?.text === 'string') {
     live.assistantTextByRun[event.runId] =
       `${live.assistantTextByRun[event.runId] ?? ''}${payload.text}`;
@@ -6267,6 +6268,32 @@ function applyRuntimeSessionEvent(
     }
     live.managedTasks.delete(event.runId);
   }
+}
+
+const PRIMARY_LIVE_ACTIVITY_EVENT_TYPES = new Set<RuntimeEventType>([
+  'assistant.delta',
+  'thinking.delta',
+  'thinking.finished',
+  'tool.started',
+  'tool.progress',
+  'tool.finished',
+  'todo.updated',
+]);
+
+function isChildOwnedPrimaryLiveEvent(
+  type: RuntimeEventType,
+  payload: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  if (!PRIMARY_LIVE_ACTIVITY_EVENT_TYPES.has(type)) return false;
+  const meta = isRecord(payload?.meta) ? payload.meta : undefined;
+  if (!meta) return false;
+  if (meta.contextKind === 'child' || meta.liveOnly === true) return true;
+  if (typeof meta.childAgentId === 'string' && meta.childAgentId.length > 0) return true;
+  const correlation = isRecord(meta.workflowCorrelation) ? meta.workflowCorrelation : undefined;
+  return (
+    (typeof correlation?.workflowRunId === 'string' && correlation.workflowRunId.length > 0) ||
+    (typeof correlation?.childAgentId === 'string' && correlation.childAgentId.length > 0)
+  );
 }
 
 function snapshotRuntimeSessionLiveProjection(

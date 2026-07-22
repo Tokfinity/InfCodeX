@@ -3,7 +3,7 @@
  *
  * SKIPPED by default (CI has no keys). Run against real provider HTTP with:
  *
- *   KODAX_INTEGRATION_TEST=1 npx vitest run \
+ *   KODAX_INTEGRATION_TEST=1 npm run test:integration -- \
  *     packages/llm/src/providers/empty-content-wire-compat.integration.test.ts
  *
  * Purpose (NOT a prompt-behavior eval — see benchmark/EVAL_GUIDELINES.md):

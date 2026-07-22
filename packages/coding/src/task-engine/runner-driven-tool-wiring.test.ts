@@ -61,6 +61,13 @@ function makeCtx(hasCapabilityRuntime = true, hasWorkflowHost = true): KodaXTool
   };
 }
 
+function makeHistoryCtx(): KodaXToolExecutionContext {
+  return {
+    ...makeCtx(),
+    loadSessionHistory: async () => null,
+  };
+}
+
 function makeRecorder() {
   return {} as Parameters<typeof buildRunnerAgentChain>[1];
 }
@@ -69,8 +76,12 @@ function getAgentToolNames(
   role: AmaRole,
   hasCapabilityRuntime = true,
   hasWorkflowHost = true,
+  hasSessionHistory = false,
 ): readonly string[] {
-  const chain = buildRunnerAgentChain(makeCtx(hasCapabilityRuntime, hasWorkflowHost), makeRecorder());
+  const ctx = hasSessionHistory
+    ? { ...makeCtx(hasCapabilityRuntime, hasWorkflowHost), loadSessionHistory: async () => null }
+    : makeCtx(hasCapabilityRuntime, hasWorkflowHost);
+  const chain = buildRunnerAgentChain(ctx, makeRecorder());
   if (role !== 'worker') {
     throw new Error(`FEATURE_193: role '${role}' retired with V1 chain`);
   }
@@ -85,6 +96,31 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     const actual = getAgentToolNames('worker');
     const expected = getAmaRoleExpectedToolNames('worker');
     expect(actual).toEqual(expected);
+  });
+
+  it('exposes exact-history tools only when the runtime bound a supported lineage loader', () => {
+    const unsupported = getAgentToolNames('worker');
+    expect(unsupported).not.toContain('session_history_search');
+    expect(unsupported).not.toContain('session_history_read');
+
+    const chain = buildRunnerAgentChain(makeHistoryCtx(), makeRecorder());
+    const supported = (chain.worker.tools ?? []).map((tool) => tool.name);
+    expect(supported).toContain('session_history_search');
+    expect(supported).toContain('session_history_read');
+  });
+
+  it('applies caller tool exclusions and visibility policy to the Worker schema', () => {
+    const ctx: KodaXToolExecutionContext = {
+      ...makeCtx(),
+      excludeTools: ['read'],
+      toolVisibilityPolicy: (tool) => tool.sideEffect === 'readonly',
+    };
+    const chain = buildRunnerAgentChain(ctx, makeRecorder());
+    const names = (chain.worker.tools ?? []).map((tool) => tool.name);
+
+    expect(names).not.toContain('read');
+    expect(names).not.toContain('bash');
+    expect(names).toContain('glob');
   });
 
   it('worker hides MCP tools when no extension runtime is bound', () => {
@@ -320,7 +356,7 @@ describe('FEATURE_168 — registry orphan check (no registered tool falls off Wo
     const specializedPaths = getAmaRoleEffectiveExclude('worker'); // worker has only BASELINE
     const nonSpecialized = allRegistered.filter((name) => !specializedPaths.has(name));
 
-    const workerTools = new Set<string>(getAgentToolNames('worker'));
+    const workerTools = new Set<string>(getAgentToolNames('worker', true, true, true));
 
     const orphans = nonSpecialized.filter((name) => !workerTools.has(name));
     expect(orphans, 'tools registered but exposed to no AMA role').toEqual([]);

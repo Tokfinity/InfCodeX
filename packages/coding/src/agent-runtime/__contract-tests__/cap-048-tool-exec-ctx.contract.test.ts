@@ -105,6 +105,7 @@ describe('CAP-048: tool execution context construction contract', () => {
         modelOverride: 'claude-opus-4-8',
         effort: 'high',
         reasoningMode: 'deep',
+        compaction: { triggerPercent: 60, triggerTokens: 120_000 },
         context: {
           repoIntelligenceMode: 'off',
           repoIntelligenceTrace: true,
@@ -120,7 +121,73 @@ describe('CAP-048: tool execution context construction contract', () => {
       reasoningMode: 'deep',
       repoIntelligenceMode: 'off',
       repoIntelligenceTrace: true,
+      compaction: { triggerPercent: 60, triggerTokens: 120_000 },
     });
+  });
+
+  it('CAP-TOOL-CTX-003b: binds exact-history loading to a root or isolated persistent child context', async () => {
+    const loadFullLineage = vi.fn(async (_sessionId: string) => null);
+    const storage = {
+      load: async () => null,
+      save: async () => undefined,
+      loadFullLineage,
+    };
+    const root = buildToolExecutionContext({
+      options: { session: { id: 'root-session', storage } } as KodaXOptions,
+      sessionId: 'root-session',
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(root.loadSessionHistory).toBeTypeOf('function');
+    await expect(root.loadSessionHistory?.()).resolves.toBeNull();
+
+    const child = buildToolExecutionContext({
+      options: {
+        session: { id: 'root-session', storage },
+        context: { currentAgentId: 'child-1' },
+      } as KodaXOptions,
+      sessionId: 'root-session',
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(child.loadSessionHistory).toBeUndefined();
+
+    const isolatedChild = buildToolExecutionContext({
+      options: {
+        session: { id: 'worker-session', scope: 'managed-task-worker', storage },
+        context: { currentAgentId: 'child-1' },
+      } as KodaXOptions,
+      sessionId: 'worker-session',
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+    expect(isolatedChild.loadSessionHistory).toBeTypeOf('function');
+    await expect(isolatedChild.loadSessionHistory?.()).resolves.toBeNull();
+    expect(loadFullLineage).toHaveBeenLastCalledWith('worker-session');
+  });
+
+  it('CAP-TOOL-CTX-003c: history loading respects explicit tool exclusions and visibility policy', () => {
+    const storage = {
+      load: async () => null,
+      save: async () => undefined,
+      loadFullLineage: async () => null,
+    };
+    const build = (context: NonNullable<KodaXOptions['context']>) => buildToolExecutionContext({
+      options: {
+        session: { id: 'root-session', storage },
+        context,
+      } as KodaXOptions,
+      sessionId: 'root-session',
+      runtime: undefined,
+      managedProtocolPayloadRef: makeRef(),
+    });
+
+    const excluded = build({ excludeTools: ['session_history_read'] });
+    expect(excluded.excludeTools).toEqual(['session_history_read']);
+    expect(excluded.loadSessionHistory).toBeUndefined();
+    expect(build({
+      toolVisibilityPolicy: (tool) => tool.name !== 'session_history_search',
+    }).loadSessionHistory).toBeUndefined();
   });
 
   it('CAP-TOOL-CTX-004a: emitManagedProtocol mutates the shared payload ref so multiple emissions accumulate (when managedProtocolEmission is enabled)', () => {

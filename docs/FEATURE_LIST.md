@@ -382,9 +382,13 @@ post-transcript-commit boundary, made acknowledged direct-child events
 non-replayable, aligned repeated visible text to the latest canonical suffix,
 and suppressed fallback success for unchanged or still-oversized candidates.
 The final durable-recovery closure is implemented: exact pre-compaction
-messages commit before memory eviction, child compaction cannot mutate root
-lineage, and root Agents/SDK hosts share bounded revision-bound transcript
-search and exact-read recovery. The closing adversarial pass also covered a
+messages commit before memory eviction in both SA and AMA paths, child
+compaction cannot mutate root lineage, and root Agents/SDK hosts share bounded
+revision-bound transcript search and exact-read recovery. Persistent children
+inherit the resolved compaction policy, keep exact history in a separately
+minted hidden worker Session, and can search only that child lineage. Child
+compaction telemetry remains context-scoped and cannot overwrite root
+accounting. The closing adversarial pass also covered a
 first-run Session compact before its routine snapshot, tentative revision
 rollback, Runtime/REPL single-writer ownership, legacy checkpoint/placeholder
 exclusion, short-ID false positives, sidecar flush failure, and daemon

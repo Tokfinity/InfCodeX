@@ -20,6 +20,18 @@ export const FEATURE_259_LAYER_2_CASES = [
   'requirements-not-verifiable',
 ] as const;
 
+// Frozen at the last executable FEATURE_259 revision. These hashes remain
+// auditable evidence even though FEATURE_270 retired the production prompt and
+// dispatch primitive that generated the original Layer-2 variants.
+export const FEATURE_259_LAYER_2_BASELINE_VARIANT_HASHES = [
+  '70648230afc0955f995e1c8a18043c05b43c9ffade2e4658f39bc5ee0f4e25c3',
+  '05672311509067d291c841bfeb83614c44334d0a4f58bbbf1db113eed536a856',
+  'f6f67322cff442efdb0d8be2e36ba09bd4007349b2c7ecc196553d470cd4bd02',
+  '67004382d89b94002a7af56a2d234956eb0058ff801c9d592512b2aab8f911e2',
+  '3a6da5a5e3b37d4b179f7ead99fddbfcb94393cc2b5ce66a3c849a9d7cb94480',
+  '332503788509e122d6521d4bda964b0a51a461a093ec9421f62d22863ee1eb73',
+] as const;
+
 export const FEATURE_259_LAYER_3_FIXTURES = [
   { id: 'edge-condition', severity: 'medium', disposition: 'confirmed', layout: 'one', risk: false, standardReview: true },
   { id: 'trust-boundary', severity: 'critical', disposition: 'confirmed', layout: 'one', risk: true, standardReview: false },
@@ -89,6 +101,7 @@ export function buildFeature259ExperimentManifest(input: Feature259ExperimentInp
     },
     generationSafety: 'resume-only by default; external calls require explicit allowGeneration=true',
     layer2Cases: FEATURE_259_LAYER_2_CASES,
+    layer2BaselineVariantHashes: FEATURE_259_LAYER_2_BASELINE_VARIANT_HASHES,
     layer3Fixtures: FEATURE_259_LAYER_3_FIXTURES,
     callGraphs: {
       baselineReview: ['four-primary-lenses', 'final-synthesis'],

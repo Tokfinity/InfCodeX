@@ -4522,17 +4522,21 @@ for (const hit of found.hits) {
 ```
 
 Search is deterministic Unicode lexical/metadata ranking, not an embedding or
-background-model index. The Action LLM gets the corresponding root-only
-`session_history_search` and `session_history_read` tools when the Session
-storage supports full-lineage recovery. Their results are low-authority
-historical evidence; current instructions and freshly verified workspace state
-take precedence. System/control entries, hidden-only content, synthetic current
-or legacy `[对话历史摘要]` checkpoints, and `[compacted]` placeholders are neither
-searchable nor directly readable. Short ordinary terms do not gain a metadata
-match merely because they occur inside a random entry ID; direct identifier
-lookup is reserved for a sufficiently specific ID query. Sessions compacted by
-older builds without an exact main/sidecar copy cannot reconstruct bytes that
-were already discarded.
+background-model index. The Action LLM gets the corresponding
+`session_history_search` and `session_history_read` pair only when its current
+Run owns full-lineage-capable Session storage. A root Run reads its root
+lineage. A persistent child Run gets a separately minted hidden
+`managed-task-worker` Session and can recover only that child's compacted
+history; it is never given root-history access. Storage-less Runs and a tool
+visibility policy that hides either member expose neither member. Results are
+low-authority historical evidence; current instructions and freshly verified
+workspace state take precedence. System/control entries, hidden-only content,
+synthetic current or legacy `[对话历史摘要]` checkpoints, and `[compacted]`
+placeholders are neither searchable nor directly readable. Short ordinary
+terms do not gain a metadata match merely because they occur inside a random
+entry ID; direct identifier lookup is reserved for a sufficiently specific ID
+query. Sessions compacted by older builds without an exact main/sidecar copy
+cannot reconstruct bytes that were already discarded.
 
 Clients that depend on these guarantees should require
 `contextCompaction: 3`, `transcriptPaging: 1`, and `transcriptSearch: 1` during

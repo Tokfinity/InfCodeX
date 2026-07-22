@@ -9,6 +9,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import fsPromises from 'fs/promises';
 import os from 'os';
 import type {
@@ -21,6 +22,7 @@ import type {
   KodaXChildRouteSource,
   KodaXActivityEventMeta,
   KodaXEvents,
+  KodaXMessage,
   KodaXContextOptions,
   KodaXOptions,
   KodaXResult,
@@ -65,7 +67,12 @@ import {
   applyToolResultBatchGuardrail,
   ToolResultBatchCapacityError,
 } from './tools/tool-result-policy.js';
-import type { Agent, AgentCapabilities, WorkflowEventCorrelation } from '@kodax-ai/agent';
+import type {
+  Agent,
+  AgentCapabilities,
+  KodaXSessionStorage,
+  WorkflowEventCorrelation,
+} from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → child-executor.ts → agent.ts`. The runtime import defers agent resolution
@@ -182,8 +189,10 @@ export interface ChildExecutorOptions {
   readonly maxParallel: number;
   readonly maxIterationsPerChild: number;
   readonly abortSignal?: AbortSignal;
+  /** Parent-provided persistence capability for an isolated child-owned lineage. */
+  readonly historyStorage?: KodaXSessionStorage;
   readonly parentOptions: Readonly<Partial<
-    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events'>
+    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction'>
     & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace'>
   >>;
   readonly parentRole: string;
@@ -234,6 +243,25 @@ export interface ChildExecutorOptions {
   readonly initialMessages?: readonly import('./types.js').KodaXMessage[];
   /** Runtime-minted ceiling applied after specialist/default tool resolution. */
   readonly actorCapabilities?: AgentCapabilities;
+}
+
+function buildChildRunSession(
+  options: ChildExecutorOptions,
+  initialMessages?: readonly KodaXMessage[],
+): KodaXOptions['session'] | undefined {
+  if (!options.historyStorage) {
+    return initialMessages && initialMessages.length > 0
+      ? { initialMessages: [...initialMessages] }
+      : undefined;
+  }
+  return {
+    id: `worker-${randomUUID()}`,
+    scope: 'managed-task-worker',
+    storage: options.historyStorage,
+    ...(initialMessages && initialMessages.length > 0
+      ? { initialMessages: [...initialMessages] }
+      : {}),
+  };
 }
 
 function inheritRepoIntelligenceContext(
@@ -747,6 +775,9 @@ async function createWorkflowChildDigest(
         maxIter: 1,
         abortSignal: controller.signal,
         extensionRuntime: input.options.parentOptions.extensionRuntime,
+        ...(input.options.parentOptions.compaction !== undefined
+          ? { compaction: input.options.parentOptions.compaction }
+          : {}),
         guardrails: input.options.guardrails,
         session: { initialMessages: input.result.messages },
         context: {
@@ -881,6 +912,9 @@ async function resolveChildStructuredOutput(input: {
         maxIter: 1,
         abortSignal: controller.signal,
         extensionRuntime: input.options.parentOptions.extensionRuntime,
+        ...(input.options.parentOptions.compaction !== undefined
+          ? { compaction: input.options.parentOptions.compaction }
+          : {}),
         guardrails: input.options.guardrails,
         session: { initialMessages: input.result.messages },
         context: {
@@ -1151,6 +1185,7 @@ async function runReadChildBody(
   try {
     const childStartedAt = Date.now();
     const runFn = await getRunKodaX();
+    const childSession = buildChildRunSession(options, options.initialMessages);
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     let actualProvider = provider;
     let fallbackReason: string | undefined;
@@ -1164,13 +1199,14 @@ async function runReadChildBody(
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
+        ...(options.parentOptions.compaction !== undefined
+          ? { compaction: options.parentOptions.compaction }
+          : {}),
         // FEATURE_092 phase 2b.7b slice D: forward parent-Runner guardrails so
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
-        ...(options.initialMessages && options.initialMessages.length > 0
-          ? { session: { initialMessages: [...options.initialMessages] } }
-          : {}),
+        ...(childSession !== undefined ? { session: childSession } : {}),
         // FEATURE_221: a child of a white-labeled product inherits the parent's
         // selfManual so its own kodax_manual tool description is re-branded too
         // (children carry kodax_manual — it is not in CHILD_EXCLUDE_TOOLS).
@@ -1390,6 +1426,7 @@ async function runWriteChildBody(
   try {
     const childStartedAt = Date.now();
     const runFn = await getRunKodaX();
+    const childSession = buildChildRunSession(options, options.initialMessages);
     const childEffort = resolveChildEffort(bundle, effortOverride, options.parentOptions.effort);
     let actualProvider = provider;
     let fallbackReason: string | undefined;
@@ -1403,13 +1440,14 @@ async function runWriteChildBody(
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
+        ...(options.parentOptions.compaction !== undefined
+          ? { compaction: options.parentOptions.compaction }
+          : {}),
         // FEATURE_092 phase 2b.7b slice D: forward parent-Runner guardrails so
         // child tool calls go through the SAME auto-mode classifier instance
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
-        ...(options.initialMessages && options.initialMessages.length > 0
-          ? { session: { initialMessages: [...options.initialMessages] } }
-          : {}),
+        ...(childSession !== undefined ? { session: childSession } : {}),
         // FEATURE_221: write children inherit the parent's white-label product
         // so their own kodax_manual description is re-branded too.
         selfManual: childCtx.selfManual,
@@ -1968,6 +2006,7 @@ export function buildChildEvents(
   ): KodaXActivityEventMeta | undefined => {
     const correlatedWorkflow = workflowCorrelation ?? meta?.workflowCorrelation;
     const next: KodaXActivityEventMeta = {
+      ...(meta ?? {}),
       ...(correlatedWorkflow !== undefined ? { workflowCorrelation: correlatedWorkflow } : {}),
       ...(meta?.childAgentId !== undefined ? { childAgentId: meta.childAgentId } : { childAgentId: childId }),
       ...(meta?.childAgentName !== undefined ? { childAgentName: meta.childAgentName } : { childAgentName: childName ?? childId }),
@@ -2043,6 +2082,28 @@ export function buildChildEvents(
         event,
         activityEventMeta(meta, { liveOnly: true }),
       );
+    },
+    // Child compaction is observable but remains context-owned. The child
+    // runtime supplies its stable context identity through live attribution;
+    // deliberately do not forward onCompactedMessages, which is a persistence
+    // mutation callback owned by the child's own runtime rather than the root.
+    onCompactStart: (meta) => {
+      parentEvents?.onCompactStart?.(activityEventMeta(meta, { liveOnly: true }));
+    },
+    onCompactStats: (info) => {
+      parentEvents?.onCompactStats?.(info);
+    },
+    onCompact: (estimatedTokens, meta) => {
+      parentEvents?.onCompact?.(
+        estimatedTokens,
+        activityEventMeta(meta, { liveOnly: true }),
+      );
+    },
+    onContextCompactionFinished: (event) => {
+      parentEvents?.onContextCompactionFinished?.(event);
+    },
+    onCompactEnd: (meta) => {
+      parentEvents?.onCompactEnd?.(activityEventMeta(meta, { liveOnly: true }));
     },
     // Block AMA-specific and recursive tools, then enforce live plan mode.
     // planModeBlockCheck reads parent state at call time, so mid-run mode toggles

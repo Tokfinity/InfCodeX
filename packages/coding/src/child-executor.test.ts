@@ -149,6 +149,47 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.context?.managedWorkBudget).toBe(managedWorkBudget);
   });
 
+  it('inherits the parent percentage and absolute compaction thresholds', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const compaction = { triggerPercent: 62, triggerTokens: 140_000 };
+
+    await executeChildAgents(
+      [createBundle()],
+      createCtx(),
+      createOptions({
+        parentOptions: { provider: 'anthropic', compaction },
+      }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      compaction?: { triggerPercent?: number; triggerTokens?: number };
+    };
+    expect(childOptions.compaction).toEqual(compaction);
+  });
+
+  it('gives a persistent child its own hidden lineage instead of the root session', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const storage = { load: vi.fn(async () => null), save: vi.fn(async () => undefined) };
+
+    await executeChildAgents(
+      [createBundle({ id: '/root/reviewer' })],
+      { ...createCtx(), sessionId: 'root-session' },
+      createOptions({ historyStorage: storage }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      session?: { id?: string; scope?: string; storage?: unknown; tag?: string };
+      context?: { currentAgentId?: string };
+    };
+    expect(childOptions.session).toMatchObject({
+      scope: 'managed-task-worker',
+      storage,
+    });
+    expect(childOptions.session?.id).not.toBe('root-session');
+    expect(childOptions.session?.tag).toBeUndefined();
+    expect(childOptions.context?.currentAgentId).toBe('/root/reviewer');
+  });
+
   it('applies Actor history and tool/network/user-interaction ceilings to the child runtime', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
     const initialMessages = [{ role: 'user' as const, content: 'Prior Actor fact.' }];
@@ -1506,6 +1547,10 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     const parentRetry = vi.fn();
     const parentProviderRecovery = vi.fn();
     const parentCompactStart = vi.fn();
+    const parentCompactStats = vi.fn();
+    const parentCompact = vi.fn();
+    const parentCompactionFinished = vi.fn();
+    const parentCompactEnd = vi.fn();
     const parentAskUser = vi.fn(async () => 'approve');
     const parentAskUserMulti = vi.fn(async () => ({ choice: 'yes' }));
     const parentAskUserInput = vi.fn(async () => 'typed answer');
@@ -1531,6 +1576,10 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
         onRetry: parentRetry,
         onProviderRecovery: parentProviderRecovery,
         onCompactStart: parentCompactStart,
+        onCompactStats: parentCompactStats,
+        onCompact: parentCompact,
+        onContextCompactionFinished: parentCompactionFinished,
+        onCompactEnd: parentCompactEnd,
         askUser: parentAskUser,
         askUserMulti: parentAskUserMulti,
         askUserInput: parentAskUserInput,
@@ -1577,7 +1626,26 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       fallbackUsed: false,
     };
     events!.onProviderRecovery?.(recoveryEvent);
-    events!.onCompactStart?.();
+    const childContextMeta = {
+      sessionId: 'root-session',
+      contextId: 'root-session/agent/cb-test',
+      contextKind: 'child' as const,
+      parentContextId: 'root-session',
+      agentId: 'cb-test',
+      contextRevision: 3,
+    };
+    events!.onCompactStart?.(childContextMeta);
+    events!.onCompactStats?.({ tokensBefore: 80_000, tokensAfter: 20_000, ...childContextMeta });
+    events!.onCompact?.(20_000, childContextMeta);
+    events!.onContextCompactionFinished?.({
+      source: 'automatic_threshold',
+      tokensBefore: 80_000,
+      tokensAfter: 20_000,
+      committed: true,
+      elapsedMs: 25,
+      ...childContextMeta,
+    });
+    events!.onCompactEnd?.(childContextMeta);
     await expect(events!.askUser!({
       question: 'Proceed?',
       kind: 'select',
@@ -1704,7 +1772,24 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       childAgentName: 'cb-test',
       liveOnly: true,
     });
-    expect(parentCompactStart).not.toHaveBeenCalled();
+    expect(parentCompactStart).toHaveBeenCalledWith(expect.objectContaining({
+      ...childContextMeta,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    }));
+    expect(parentCompactStats).toHaveBeenCalledWith(expect.objectContaining({
+      tokensBefore: 80_000,
+      tokensAfter: 20_000,
+      ...childContextMeta,
+    }));
+    expect(parentCompact).toHaveBeenCalledWith(20_000, expect.objectContaining(childContextMeta));
+    expect(parentCompactionFinished).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'automatic_threshold',
+      committed: true,
+      ...childContextMeta,
+    }));
+    expect(parentCompactEnd).toHaveBeenCalledWith(expect.objectContaining(childContextMeta));
     expect(parentAskUser).toHaveBeenCalledWith(
       {
         question: 'Proceed?',

@@ -218,13 +218,15 @@ failure may retain more live memory but must not leave a summary or
 `[compacted]` placeholder as the only copy. Child-context compaction must not
 mutate root Session history.
 
-When a later query depends on a detail omitted from the active checkpoint, a
-root Agent backed by durable Session storage must be able to search compacted
-history and read a cited exact entry in bounded revision-bound chunks. SDK and
-daemon hosts require the same search identity alongside existing transcript
-pagination. Historical results are evidence, not current instructions. This
-feature must not introduce a vector database, background extraction loop, or a
-second long-term memory owner.
+When a later query depends on a detail omitted from the active checkpoint, an
+Agent backed by durable Session storage must be able to search its own
+compacted history and read a cited exact entry in bounded revision-bound
+chunks. Root Agents bind the root Session; persistent child Agents bind a
+separately minted hidden worker Session and must never gain root-history
+access. SDK and daemon hosts require the same search identity alongside
+existing transcript pagination. Historical results are evidence, not current
+instructions. This feature must not introduce a vector database, background
+extraction loop, or a second long-term memory owner.
 
 Bare `kodax -r` must show the searchable picker without loading the full CLI
 until a selection is made. Esc restores terminal ownership immediately; a
@@ -351,8 +353,8 @@ explicit user confirmation for trusted-local workflow scripts.
   trigger, protected tail, preserved-query behavior, and success telemetry
   without reverse-engineering a host UI.
 - A resumed Session can recover exact old user/assistant/tool details after
-  compaction, and a root Agent can search/read those details without loading the
-  whole transcript into active context.
+  compaction; root and persistent child Agents can search/read only their own
+  lineage without loading the whole transcript into active context.
 - An experimental-memory consumer can predict scope, read/write authority,
   recall behavior, and promotion boundaries without reading implementation code.
 - Product changes preserve workspace package independence:

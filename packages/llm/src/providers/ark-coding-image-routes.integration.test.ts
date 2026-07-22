@@ -3,7 +3,7 @@
  *
  * Skipped by default. Run sequentially with a configured ARK_CODING_API_KEY:
  *
- *   KODAX_INTEGRATION_TEST=1 npx vitest run \
+ *   KODAX_INTEGRATION_TEST=1 npm run test:integration -- \
  *     packages/llm/src/providers/ark-coding-image-routes.integration.test.ts
  *
  * Budget: five provider calls, one per route, at most 16 output tokens each.

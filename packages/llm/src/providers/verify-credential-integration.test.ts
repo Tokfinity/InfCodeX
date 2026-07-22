@@ -2,7 +2,7 @@
  * FEATURE_216 v0.7.45 — Integration tests against real provider HTTP
  * endpoints. SKIPPED by default (CI env doesn't have keys). Run via:
  *
- *   KODAX_INTEGRATION_TEST=1 npx vitest run packages/llm/src/providers/verify-credential-integration.test.ts
+ *   KODAX_INTEGRATION_TEST=1 npm run test:integration -- packages/llm/src/providers/verify-credential-integration.test.ts
  *
  * Each provider tests both branches with the same env-var entry:
  *   - real-key path → ok:true, error undefined, durationMs > 0

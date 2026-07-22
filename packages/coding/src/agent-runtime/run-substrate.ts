@@ -587,6 +587,7 @@ export async function runSubstrate(
     sessionId,
     persistedByHost: options.session?.persistedByHost,
     currentAgentId,
+    sessionScope: options.session?.scope,
     initialSessionData: {
       title: prompt.slice(0, 80),
       gitRoot: options.context?.gitRoot ?? '',
@@ -706,15 +707,13 @@ export async function runSubstrate(
   );
   const memoryRecallToolAllowed = configuredActiveTools.includes(MEMORY_RECALL_TOOL_NAME);
   const sessionHistoryStorage = options.session?.storage;
-  const loadFullSessionLineage = sessionHistoryStorage?.loadFullLineage;
   const sessionHistoryToolsAllowed = canActivateSessionHistoryTools({
     activeTools: configuredActiveTools,
+    sessionId,
     currentAgentId,
+    sessionScope: options.session?.scope,
     storage: sessionHistoryStorage,
   });
-  if (sessionHistoryToolsAllowed && loadFullSessionLineage) {
-    ctx.loadSessionHistory = () => loadFullSessionLineage.call(sessionHistoryStorage, sessionId);
-  }
   const runtimeSessionState = buildRuntimeSessionState({
     loadedExtensionState,
     loadedExtensionRecords,

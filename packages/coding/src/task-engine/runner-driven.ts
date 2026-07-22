@@ -207,6 +207,7 @@ import {
   isVisibleToolName,
   withLiveTurnAttribution,
 } from '../agent-runtime/event-emitter.js';
+import { withDurableCompactionPersistence } from '../agent-runtime/durable-compaction.js';
 // CAP-008: shared initial-messages resolver. Three-tier fallback
 // (inline → storage.load → empty) for AMA frame entry; SA already
 // uses this from `run-substrate.ts`.
@@ -223,6 +224,7 @@ import {
 import { getToolExecutionOverride } from '../agent-runtime/permission-gate.js';
 import { applyToolVisibilityPolicy, filterExcludedTools } from '../agent-runtime/tool-resolution.js';
 import { listToolDefinitions } from '../tools/index.js';
+import { activateSessionHistoryTools } from '../tools/session-history.js';
 import {
   CANCELLED_TOOL_RESULT_MESSAGE,
   MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
@@ -651,7 +653,25 @@ export async function runManagedTaskViaRunner(
   });
   const liveTurnScopeRef = { current: liveTurnScope };
   const terminalTurnIds = new Set<string>();
-  const liveEvents = withLiveTurnAttribution(baseOptionsWithSessionId.events ?? {}, liveTurnScopeRef);
+  const durableEvents = withDurableCompactionPersistence({
+    events: baseOptionsWithSessionId.events ?? {},
+    storage: baseOptionsWithSessionId.session?.storage,
+    sessionId: initialSessionId,
+    persistedByHost: baseOptionsWithSessionId.session?.persistedByHost,
+    currentAgentId,
+    sessionScope: baseOptionsWithSessionId.session?.scope,
+    initialSessionData: {
+      title: prompt.slice(0, 80),
+      gitRoot: baseOptionsWithSessionId.context?.gitRoot ?? '',
+      ...(baseOptionsWithSessionId.session?.scope !== undefined
+        ? { scope: baseOptionsWithSessionId.session.scope }
+        : {}),
+      ...(baseOptionsWithSessionId.session?.tag !== undefined
+        ? { tag: baseOptionsWithSessionId.session.tag }
+        : {}),
+    },
+  });
+  const liveEvents = withLiveTurnAttribution(durableEvents, liveTurnScopeRef);
   const optionsWithSessionId: KodaXOptions = {
     ...baseOptionsWithSessionId,
     events: liveEvents,
@@ -1485,12 +1505,15 @@ async function runManagedTaskViaRunnerInner(
     loadedExtensionState: resolvedInitial.loadedExtensionState,
     loadedExtensionRecords: resolvedInitial.loadedExtensionRecords,
     // FEATURE_247 (R2): profile tool-visibility policy after excludeTools.
-    activeTools: applyToolVisibilityPolicy(
-      filterExcludedTools(
-        listToolDefinitions().map((tool) => tool.name),
-        options.context?.excludeTools,
+    activeTools: activateSessionHistoryTools(
+      applyToolVisibilityPolicy(
+        filterExcludedTools(
+          listToolDefinitions().map((tool) => tool.name),
+          options.context?.excludeTools,
+        ),
+        options.context?.toolVisibilityPolicy,
       ),
-      options.context?.toolVisibilityPolicy,
+      baseCtx.loadSessionHistory !== undefined,
     ),
     modelSelection: {
       provider: options.provider,

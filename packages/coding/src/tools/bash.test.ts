@@ -400,6 +400,7 @@ describe('toolBash', () => {
     const controller = new AbortController();
     const delayedCloseMs = process.platform === 'win32' ? 2_800 : 1_800;
     const lateChunkMs = process.platform === 'win32' ? 2_200 : 1_200;
+    const abortWatchdog = setTimeout(() => controller.abort(), 1_000);
     const originalEmit = ChildProcess.prototype.emit;
     const delayedPids = new Set<number>();
     const recoveryPaths: string[] = [];
@@ -445,6 +446,8 @@ describe('toolBash', () => {
       expect(recovered).toContain(marker);
       expect(recovered).toContain('late-after-deadline');
     } finally {
+      clearTimeout(abortWatchdog);
+      controller.abort();
       emitSpy.mockRestore();
       await Promise.all(recoveryPaths.map((filePath) => fs.rm(filePath, { force: true })));
     }

@@ -280,6 +280,9 @@ async function executeCodingActorTurn(
       maxParallel: 1,
       maxIterationsPerChild: DEFAULT_MAX_CHILD_ITERATIONS,
       abortSignal: input.signal,
+      ...(options.session?.storage !== undefined
+        ? { historyStorage: options.session.storage }
+        : {}),
       parentOptions: {
         provider: parentConfig?.provider ?? options.provider,
         model: parentConfig?.model ?? options.modelOverride ?? options.model,
@@ -287,6 +290,7 @@ async function executeCodingActorTurn(
         reasoningMode: parentConfig?.reasoningMode ?? options.reasoningMode,
         repoIntelligenceMode: parentConfig?.repoIntelligenceMode,
         repoIntelligenceTrace: parentConfig?.repoIntelligenceTrace,
+        compaction: parentConfig?.compaction ?? options.compaction,
         extensionRuntime: parentCtx.extensionRuntime,
         events: parentCtx.parentEvents,
       },

@@ -3,7 +3,7 @@
  *
  * Skipped by default because they spend API quota. Run explicitly with:
  *
- *   KODAX_INTEGRATION_TEST=1 KIMI_API_KEY=... npx vitest run \
+ *   KODAX_INTEGRATION_TEST=1 KIMI_API_KEY=... npm run test:integration -- \
  *     packages/llm/src/providers/kimi-wire.integration.test.ts
  *
  * Set KIMI_CODE_API_KEY as well to exercise the subscription endpoint.

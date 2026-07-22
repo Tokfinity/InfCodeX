@@ -34,19 +34,30 @@ describe('session history tools', () => {
     };
     expect(canActivateSessionHistoryTools({
       activeTools: ['session_history_search', 'session_history_read'],
+      sessionId: 'root',
       storage,
     })).toBe(true);
     expect(canActivateSessionHistoryTools({
       activeTools: ['session_history_search', 'session_history_read'],
+      sessionId: 'root',
       currentAgentId: 'child-1',
       storage,
     })).toBe(false);
     expect(canActivateSessionHistoryTools({
+      activeTools: ['session_history_search', 'session_history_read'],
+      sessionId: 'worker-1',
+      currentAgentId: 'child-1',
+      sessionScope: 'managed-task-worker',
+      storage,
+    })).toBe(true);
+    expect(canActivateSessionHistoryTools({
       activeTools: ['session_history_search'],
+      sessionId: 'root',
       storage,
     })).toBe(false);
     expect(canActivateSessionHistoryTools({
       activeTools: ['session_history_search', 'session_history_read'],
+      sessionId: 'root',
       storage: { save: vi.fn(), load: vi.fn() },
     })).toBe(false);
   });

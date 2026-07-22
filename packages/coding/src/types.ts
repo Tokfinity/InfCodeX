@@ -2046,7 +2046,7 @@ export interface KodaXToolExecutionContext {
     readonly content: string;
     readonly evidenceRefs: readonly string[];
   } | undefined>;
-  /** Root-only exact persisted history loader; absent for children and ephemeral sessions. */
+  /** Exact persisted history loader for the current root or isolated worker Session. */
   loadSessionHistory?: () => Promise<KodaXSessionLineage | null>;
   /** Git root directory - Git 鏍圭洰褰?*/
   gitRoot?: string;
@@ -2094,6 +2094,8 @@ export interface KodaXToolExecutionContext {
   assertReadablePath?: (candidate: string) => void;
   /** Host tool visibility ceiling inherited by child agents. */
   toolVisibilityPolicy?: KodaXToolVisibilityPolicy;
+  /** Static caller exclusions applied before constructing a model-visible tool schema. */
+  excludeTools?: readonly string[];
   /** Maximum physical input capacity of the active model request. */
   maximumInputTokens?: number;
   /** Remaining capacity for the complete tool-result batch in this request. */
@@ -2163,6 +2165,7 @@ export interface KodaXToolExecutionContext {
     readonly effort?: KodaXWireReasoningEffort;
     readonly repoIntelligenceMode?: KodaXRepoIntelligenceMode;
     readonly repoIntelligenceTrace?: boolean;
+    readonly compaction?: Readonly<KodaXCompactionOverride>;
   };
   /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */
   parentEvents?: KodaXEvents;

@@ -123,8 +123,9 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 **测试步骤**:
 
 1. 启动会产生子 Agent 的任务。
-2. 让主上下文压缩到例如 222k，再让子上下文产生较小的 8k 压缩结果。
-3. 查看 canonical events 和 Space 上下文指示器。
+2. 为根 Session 设置非默认百分比与绝对阈值，并让子上下文超过较小的有效阈值；在子历史中写入一个不出现在摘要内的唯一标记。
+3. 让主上下文压缩到例如 222k，再让子上下文产生较小的 8k 压缩结果。
+4. 查看 canonical events 和 Space 上下文指示器；让子 Agent 搜索并读取自己的唯一标记。
 
 **预期效果**:
 
@@ -132,6 +133,8 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 - [ ] 子事件具有独立 `contextId`、`parentContextId` 和 `agentId`。
 - [ ] 子事件仍可观察，但不会把主 UI 的 222k 覆盖成 8k。
 - [ ] contextRevision 只随所属上下文提交递增。
+- [ ] 子 Run 继承根 Run 已解析的 `triggerPercent`/`triggerTokens`，而不是退回默认值。
+- [ ] 持久化子 Run 使用独立隐藏的 `managed-task-worker` Session；可检索自己的压缩原文，但不能检索或修改根 lineage。
 
 ### TC-006: 手动 compact 使用有效阈值保护预算
 
@@ -272,6 +275,7 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 4. 搜索仅存在于 hidden thinking、system 指令和旧合成 checkpoint 中的唯一标记。
 5. 在 search 与 read/chunk 之间追加 Session 条目，再使用旧 revision。
 6. 用普通短查询（例如 `0.7.74`）确认它不会因随机 entry ID 的短片段而命中无关条目，并直接用已知 ID 尝试读取被排除条目。
+7. 在持久化子 Run 中触发压缩并检索该子 Run 的唯一旧标记；同时确认根标记不可见。再用 storage-less Run 和显式隐藏任一历史工具的 visibility policy 验证工具暴露。
 
 **预期效果**:
 
@@ -280,7 +284,7 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 - [ ] hidden thinking、system 指令与合成 checkpoint 不可通过模型工具搜索或读取。
 - [ ] 普通短查询不按随机 ID 片段加分；只有长直接标识符查询使用 metadata boost。
 - [ ] 旧 revision 明确返回 stale/resync，不拼接两个版本的证据。
-- [ ] 子 Agent、临时 run 以及不支持 full-lineage 的自定义 storage 看不到这对模型工具。
+- [ ] 持久化子 Run 原子获得工具对并只读自己的隐藏 lineage；绑定根 Session 的子上下文、临时/storage-less Run、不支持 full-lineage 的自定义 storage，以及隐藏任一工具的策略都看不到工具对。
 - [ ] embedded 与 daemon 都声明 `contextCompaction:3`、`transcriptPaging:1`、`transcriptSearch:1`。
 
 ### TC-014: 旧版本 `[compacted]` 会话的诚实兼容
@@ -308,7 +312,7 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 ```powershell
 # KodaX
 npm run build
-npx vitest run packages/agent/src/session-lineage packages/coding/src/tools/session-history.test.ts packages/coding/src/agent-runtime/__contract-tests__/p3.4-compaction-flow.contract.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/repl/src/interactive/storage.test.ts packages/repl/src/session/public-api.test.ts packages/repl/src/ui/utils/compaction-commit.test.ts src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts src/runtime-daemon/server.test.ts
+npx vitest run packages/agent/src/session-lineage packages/coding/src/tools/session-history.test.ts packages/coding/src/child-executor.test.ts packages/coding/src/agent-runtime/durable-compaction.test.ts packages/coding/src/agent-runtime/__contract-tests__/cap-048-tool-exec-ctx.contract.test.ts packages/coding/src/agent-runtime/__contract-tests__/p3.4-compaction-flow.contract.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts packages/repl/src/interactive/storage.test.ts packages/repl/src/session/public-api.test.ts packages/repl/src/ui/utils/compaction-commit.test.ts src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts src/runtime-daemon/server.test.ts
 
 # KodaX Space
 npm run link:kodax

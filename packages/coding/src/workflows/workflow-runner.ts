@@ -480,6 +480,9 @@ export async function runWorkflowFromOptions(
   });
   const childOptions: WorkflowChildOptions = {
     maxIterationsPerChild: DEFAULT_MAX_ITERATIONS_PER_CHILD,
+    ...(workflowOptions.session?.storage !== undefined
+      ? { historyStorage: workflowOptions.session.storage }
+      : {}),
     parentRole: 'worker',
     // 'tool-dispatch' (not 'workflow') so write-capable children are NOT
     // silently dropped by `validateWriteBundles` — workflows dispatch
@@ -493,6 +496,7 @@ export async function runWorkflowFromOptions(
       reasoningMode: workflowOptions.reasoningMode,
       repoIntelligenceMode: workflowOptions.context?.repoIntelligenceMode,
       repoIntelligenceTrace: workflowOptions.context?.repoIntelligenceTrace,
+      compaction: workflowOptions.compaction,
       extensionRuntime: workflowOptions.extensionRuntime,
       events: workflowOptions.events,
     },

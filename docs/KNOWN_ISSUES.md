@@ -15,7 +15,7 @@ _Last Updated: 2026-07-22_
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
-| 198 | High | In Progress | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | - | 2026-07-22 | - |
+| 198 | High | Resolved | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | Unreleased v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 195 | High | Resolved | Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review | v0.7.33; exposed by v0.7.74 review | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
@@ -154,7 +154,7 @@ still open. `terminalizeQueuedInterruptInputs()` correctly prevents cross-Run
 leakage, but exposes the missing admission state by terminalizing accepted work
 that never had another consumption point.
 
-#### Proposed Solution
+#### Solution Implemented
 
 - Track one internal interrupt-admission flag on each active Runtime Run.
 - Close it on the final managed-task status, and on the ordinary coding
@@ -165,7 +165,7 @@ that never had another consumption point.
   the residual event-loop race; clients reconcile those terminal input records
   by public `inputId`.
 
-#### Detailed Fix Plan
+#### Implementation and Verification
 
 | File | Change | Expected Outcome | Risks and Guardrails | Tests |
 |------|--------|------------------|----------------------|-------|
@@ -240,6 +240,12 @@ intelligently retrieve an omitted persisted detail.
   identity existed, but the root lineage mutation did not reject child scope.
 - Transcript page/chunk APIs served hosts, while the Action LLM had no bounded,
   cited current-Session recovery surface.
+- The original history-tool binding and durable-compaction wrapper were wired
+  only through the SA substrate. Default AMA could advertise the tools without
+  a loader and could compact without the same archive-before-evict owner.
+- Child Runs did not inherit the parent's compaction overrides, suppressed
+  child compaction telemetry, and had no isolated durable lineage from which
+  omitted child detail could be recovered safely.
 
 #### Resolution
 
@@ -252,8 +258,15 @@ The FEATURE_272 durable-recovery closure now:
 - preserve live append watermarks across storage-only maintenance;
 - reject child compaction as a root Session mutation;
 - add deterministic revision-bound transcript search and exact chunk reads to
-  root Agent, Session SDK, Runtime, and daemon surfaces without embeddings,
-  background extraction, or a new persistence owner.
+  root Agent, isolated persistent-child, Session SDK, Runtime, and daemon
+  surfaces without embeddings or background extraction;
+- bind the same history loader and durable-compaction owner through SA and AMA,
+  and hide the history-tool pair atomically when the loader or either tool is
+  unavailable;
+- forward the resolved parent compaction policy into child Runs, preserve
+  child identity on compaction telemetry, and persist each durable child's
+  recoverable history in a separately minted hidden `managed-task-worker`
+  Session that never grants root-lineage access;
 - atomically seeds a new headless Session when first-run compaction precedes
   its routine snapshot, while still rejecting an unseeded missing Session;
 - keeps Runtime as the only persistence writer after that boundary and rolls
@@ -268,7 +281,9 @@ The FEATURE_272 durable-recovery closure now:
 - failure after sidecar append and before main replacement;
 - repeated compactions, maintenance, restart, and duplicate cleanup;
 - old user/assistant/tool detail search plus stale-revision exact reads;
-- child compaction isolation and bounded tool/daemon responses;
+- SA/AMA tool binding and durable-before-evict parity;
+- child compaction-policy inheritance, context-scoped telemetry, isolated
+  history recovery, root-lineage denial, and bounded tool/daemon responses;
 - structural replay of an incident-shaped Session with more than 100 old
   entries and an island sidecar.
 
@@ -278,6 +293,10 @@ Session `20260721_233332` loaded 145 lineage entries and 16 active messages;
 legacy checkpoints/system/placeholders produced zero directly readable model
 entries, while surviving exact tool evidence remained searchable. Source and
 isolated-copy SHA-256 values matched before the temporary copy was removed.
+The final SA/AMA/child closure then passed another 323 focused tests across 15
+files (plus 2 declared existing todos), root TypeScript no-emit, canonical
+config-template validation, package compilation, all SDK/CLI bundles, and DTS
+bundling.
 
 ### 197: User-shaped compaction checkpoints caused round-exit query and final duplication
 
@@ -6264,11 +6283,22 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 82 (27 Open, 55 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 86 (26 Open, 60 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-22: Issue 198 resolved (Unreleased v0.7.74)
+- Unified SA/AMA durable-compaction and history-tool binding, made the tool pair
+  visibility atomic, and closed default AMA's advertised-but-unavailable path.
+- Made persistent child compaction inherit policy, retain context-scoped
+  telemetry, and archive/search only a separately minted hidden child lineage.
+
+### 2026-07-22: Issue 199 resolved (Unreleased after v0.7.74)
+- Closed interrupt admission at managed completion and ordinary completion/error
+  callbacks, and added deterministic Runtime regression coverage for all three
+  finalization windows.
 
 ### 2026-07-22: Issues 195-197 added and resolved (Unreleased after v0.7.74)
 - Bypassed the LLM for exact safe reads while moving sensitive paths and

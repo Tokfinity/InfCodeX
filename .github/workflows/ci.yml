@@ -3,9 +3,10 @@ name: CI
 # Verifies the declared runtime floor actually holds. `engines.node` is
 # ">=20.0.0" across the root and every workspace package, but nothing was
 # proving the suite runs on anything other than the release build's Node 22.
-# This matrix runs the full build + test suite on the engines floor (20) and
-# the build version (22) so a Node-version regression is caught on push/PR
-# instead of at a user's install. Node 18 was dropped from the floor: the
+# This matrix runs the build + fast suite on the engines floor (20) and the
+# build version (22), then runs the expensive contract/system tiers once on
+# the supported runtime floor (20). That catches Node-version regressions
+# without duplicating every subprocess and daemon test. Node 18 was dropped from the floor: the
 # codebase relies on Node 20+ features (e.g. the RegExp `v` flag), so 18 is no
 # longer supported.
 
@@ -48,8 +49,20 @@ jobs:
       - name: Build type declarations (SDK .d.ts — catches missing exports)
         run: npm run build:dts
 
-      - name: Test
-        run: npm test
+      - name: Fast tests
+        run: npm run test:fast
+
+      - name: Unit tests
+        if: matrix.node == '20'
+        run: npm run test:unit
+
+      - name: Contract tests
+        if: matrix.node == '20'
+        run: npm run test:contract
+
+      - name: System tests
+        if: matrix.node == '20'
+        run: npm run test:system
 
       - name: Runtime daemon Unix socket gate
         if: matrix.node == '22'

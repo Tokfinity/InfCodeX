@@ -46,7 +46,15 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { getSessionScratchDir } from '../session-scratch.js';
 import { getDefaultLspService } from '../lsp/service.js';
+import {
+  createSessionHistoryLoader,
+  SESSION_HISTORY_TOOL_NAMES,
+} from '../tools/session-history.js';
 import { CodingActorSession } from './actor-runtime.js';
+import {
+  applyToolVisibilityPolicy,
+  filterExcludedTools,
+} from './tool-resolution.js';
 
 /**
  * Resolve the on-disk run directory for a `resumeFromRunId`, or undefined when
@@ -99,6 +107,23 @@ export function buildToolExecutionContext(
   const events = options.events ?? {};
   const executionCwd = resolveExecutionCwd(options.context);
   const sessionScratchDir = getSessionScratchDir(options);
+  const visibleSessionHistoryTools = applyToolVisibilityPolicy(
+    filterExcludedTools(
+      [...SESSION_HISTORY_TOOL_NAMES],
+      options.context?.excludeTools,
+    ),
+    options.context?.toolVisibilityPolicy,
+  );
+  const loadSessionHistory = SESSION_HISTORY_TOOL_NAMES.every((name) => (
+    visibleSessionHistoryTools.includes(name)
+  ))
+    ? createSessionHistoryLoader({
+        sessionId,
+        currentAgentId: options.context?.currentAgentId,
+        sessionScope: options.session?.scope,
+        storage: options.session?.storage,
+      })
+    : undefined;
 
   const context: KodaXToolExecutionContext = {
     backups: new Map(),
@@ -110,6 +135,7 @@ export function buildToolExecutionContext(
     // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't
     // cross. All optional passthrough; absent ⇒ same as before.
     sessionId,
+    ...(loadSessionHistory !== undefined ? { loadSessionHistory } : {}),
     taskSurface: options.context?.taskSurface,
     agentProfile: options.context?.agentProfile,
     agentScope: options.context?.agentScope,
@@ -123,6 +149,7 @@ export function buildToolExecutionContext(
     skillScriptRunner: options.context?.skillScriptRunner,
     assertReadablePath: options.context?.assertReadablePath,
     toolVisibilityPolicy: options.context?.toolVisibilityPolicy,
+    excludeTools: options.context?.excludeTools,
     // FEATURE_132 v0.7.47 — LSP service for edit-time diagnostics reflux.
     // Host-injected when present, else the process-wide default (which is
     // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
@@ -161,6 +188,7 @@ export function buildToolExecutionContext(
       effort: options.effort,
       repoIntelligenceMode: options.context?.repoIntelligenceMode,
       repoIntelligenceTrace: options.context?.repoIntelligenceTrace,
+      ...(options.compaction !== undefined ? { compaction: { ...options.compaction } } : {}),
     },
     parentEvents: events,
     // FEATURE_067: onChildProgress removed — progress flows through

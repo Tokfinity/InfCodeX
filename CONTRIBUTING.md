@@ -40,7 +40,14 @@ npm link
 | `npm run dev` | Run development mode with tsx |
 | `npm run dev:cli` | Run CLI in development mode with tsx |
 | `npm start` | Run the compiled CLI |
-| `npm test` | Run test suite with Vitest |
+| `npm test` | Run the complete local deterministic suite with Vitest |
+| `npm run test:changed` | Run tests related to uncommitted changes |
+| `npm run test:fast` | Run focused unit tests for the edit loop |
+| `npm run test:unit` | Run the remaining deterministic unit tests |
+| `npm run test:contract` | Run deterministic Agent contract tests |
+| `npm run test:system` | Run subprocess, daemon, storage, and repository tests |
+| `npm run test:integration` | Run opt-in real-provider integration tests |
+| `npm run test:full` | Run fast, unit, contract, and system tiers in sequence |
 | `npm run test:watch` | Run tests in watch mode |
 | `npm run clean` | Remove dist/ directory |
 | `npm run clean:packages` | Clean all workspace packages |
@@ -53,8 +60,12 @@ KodaX / InfCodeX uses **Vitest** for testing.
 ### Running Tests
 
 ```bash
-# Run all tests
-npm test
+# Fast feedback while editing
+npm run test:changed
+npm run test:fast
+
+# Run every local deterministic tier before release
+npm run test:full
 
 # Run tests in watch mode
 npm run test:watch

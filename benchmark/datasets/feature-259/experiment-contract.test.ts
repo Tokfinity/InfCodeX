@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   buildFeature259ExperimentManifest,
   FEATURE_259_DECISION_ALIASES,
+  FEATURE_259_LAYER_2_BASELINE_VARIANT_HASHES,
   FEATURE_259_LAYER_2_CASES,
   FEATURE_259_LAYER_3_FIXTURES,
   writeFeature259ExperimentManifest,
@@ -30,6 +31,9 @@ describe('FEATURE_259 frozen experiment contract', () => {
     const manifest = buildFeature259ExperimentManifest(input) as Record<string, unknown>;
     expect(manifest.aliases).toEqual(FEATURE_259_DECISION_ALIASES);
     expect(manifest.layer2Cases).toEqual(FEATURE_259_LAYER_2_CASES);
+    expect(manifest.layer2BaselineVariantHashes).toEqual(
+      FEATURE_259_LAYER_2_BASELINE_VARIANT_HASHES,
+    );
     expect(manifest.layer3Fixtures).toEqual(FEATURE_259_LAYER_3_FIXTURES);
     expect(manifest.hardExternalSpendCapUsd).toBe(75);
     expect(manifest.concurrencyPolicy).toMatch(/ark-coding up to three models/);

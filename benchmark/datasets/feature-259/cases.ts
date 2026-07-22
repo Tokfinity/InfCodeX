@@ -3,10 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
-import {
-  buildWorkerInstructions,
-  orchestrationDefault,
-} from '../../../packages/coding/src/agents/worker-role-prompt.js';
+import { buildWorkerInstructions } from '../../../packages/coding/src/agents/worker-role-prompt.js';
 import type { KodaXTaskRoutingDecision } from '../../../packages/coding/src/types.js';
 import { DEFERRED_TOOL_HINTS } from '../../../packages/coding/src/tools/deferred-tools.js';
 import { getToolDefinition } from '../../../packages/coding/src/tools/registry.js';
@@ -29,6 +26,18 @@ const ROUTING_DECISION: KodaXTaskRoutingDecision = {
   reason: 'frozen feature-259 eval route',
   requiresBrainstorm: false,
 };
+
+// FEATURE_270 removed this production export. Keep the last FEATURE_259 bytes
+// beside the retired dataset so importing historical Layer-3 fixtures never
+// depends on a deleted production symbol.
+const FEATURE_259_HISTORICAL_ORCHESTRATION_DEFAULT = [
+  'ORCHESTRATION DEFAULT: for substantive work — a multi-file investigation, a design or architecture decision, a change that benefits from a second opinion, or anything where a wrong conclusion is costly to unwind — default to orchestrating multiple agents that cross-check each other rather than working it alone end to end.',
+  "`run_workflow` is the first thing to reach for when the task is already partitioned into bounded areas and requires final synthesis or verification: it gives you structured per-child output and same-session resume that ad-hoc fan-out does not. Do not replace that fitting workflow with ad-hoc dispatch. For exploratory work or simple parallel lookup without a workflow-shaped barrier, a `dispatch_child_task` fan-out is an equally valid way to satisfy this default — there, what matters is cross-checking, not which tool you dispatched it through.",
+  'Once a workflow-shaped plan is already recorded and current, start it with `run_workflow`; do not recreate/update its plan items or expand the same stages into ad-hoc dispatch calls.',
+  'Solo, single-threaded work stays the right call for conversational turns, single-line or typo-scale edits, and tasks you have already verified are correct.',
+  'PLAN-TIME COMMITMENT: make the orchestrate-vs-solo call at the very start — as the first thing you decide, before your opening `todo_create` batch — not after you have already begun working the task alone.',
+  'When you orchestrate, let your plan items BE the agents or workflow stages you will dispatch, so the plan you commit to is the orchestration itself, not a solo checklist you execute alone.',
+].join('\n');
 
 const BASELINE_WORKER_REPLACEMENTS = [
   [
@@ -69,7 +78,7 @@ function replaceAllRequired(source: string, current: string, baseline: string): 
 }
 
 export function buildProposedWorkerPrompt(): string {
-  return `${orchestrationDefault}\n\n${buildWorkerInstructions(ROUTING_DECISION, undefined, false)}`;
+  return `${FEATURE_259_HISTORICAL_ORCHESTRATION_DEFAULT}\n\n${buildWorkerInstructions(ROUTING_DECISION, undefined, false)}`;
 }
 
 export function buildBaselineWorkerPrompt(): string {
@@ -300,6 +309,10 @@ export interface Feature259Layer2Case {
 }
 
 export function buildFeature259Layer2Cases(): readonly Feature259Layer2Case[] {
+  throw new Error(
+    'FEATURE_259 Layer-2 generation was retired by FEATURE_270; use the preserved raw evidence and frozen manifest hashes instead.',
+  );
+
   const selectionJudge: PromptJudge = {
     name: 'selects-run-workflow',
     category: 'correctness',

@@ -28,6 +28,7 @@ import {
 } from '../../../tools/registry.js';
 import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../../../tools/deferred-tools.js';
 import { TOOL_CALL_NAME, TOOL_DESCRIBE_NAME } from '../../../tools/tool-bridge.js';
+import { isSessionHistoryTool } from '../../../tools/session-history.js';
 import { withManualToolBranding } from '../../../self-knowledge/tool-description.js';
 import type {
   KodaXEvents,
@@ -114,8 +115,20 @@ function isManagedToolVisibleForContext(
   ctx: KodaXToolExecutionContext,
 ): boolean {
   if (exclude.has(name)) return false;
+  if (ctx.excludeTools?.includes(name)) return false;
   if (!ctx.extensionRuntime && isMcpToolName(name)) return false;
   if (name === 'run_workflow' && !ctx.workflowHost) return false;
+  if (isSessionHistoryTool(name) && !ctx.loadSessionHistory) return false;
+  if (ctx.toolVisibilityPolicy) {
+    const definition = getRegisteredToolDefinition(name);
+    if (!definition || !ctx.toolVisibilityPolicy({
+      name: definition.name,
+      sideEffect: definition.sideEffect,
+      planModeAllowed: definition.planModeAllowed === true,
+    })) {
+      return false;
+    }
+  }
   return true;
 }
 

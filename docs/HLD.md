@@ -320,16 +320,18 @@ the Session from explicit Run metadata, while a failed durability callback
 restores the tentative context revision and retains the exact payload.
 
 Persisted transcript recovery is a read plane, not long-term semantic memory.
-Root Runs backed by full-lineage storage receive bounded
-`session_history_search` and `session_history_read` tools. Search uses
-deterministic Unicode lexical/metadata ranking and returns revision-bound entry
-citations; read returns exact fixed-size chunks. Runtime and daemon hosts use
-the same evidence identity through transcript search plus existing page/chunk
-transport. No vector store, background extractor, or automatic old-instruction
-reinjection is added. The evidence plane excludes system/control content,
-hidden-only bodies, synthetic current/legacy compaction checkpoints, and raw
-payload placeholders from search and direct read. History discarded by a legacy
-build before exact sidecar persistence is not reconstructable.
+Runs backed by full-lineage storage receive the bounded
+`session_history_search` and `session_history_read` pair. Root Runs bind their
+root Session; persistent child Runs bind separately minted hidden worker
+Sessions and cannot read root lineage. Search uses deterministic Unicode
+lexical/metadata ranking and returns revision-bound entry citations; read
+returns exact fixed-size chunks. Runtime and daemon hosts use the same evidence
+identity through transcript search plus existing page/chunk transport. No
+vector store, background extractor, or automatic old-instruction reinjection
+is added. The evidence plane excludes system/control content, hidden-only
+bodies, synthetic current/legacy compaction checkpoints, and raw payload
+placeholders from search and direct read. History discarded by a legacy build
+before exact sidecar persistence is not reconstructable.
 
 ## 9. Skills, MCP, And A2A
 

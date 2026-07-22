@@ -728,10 +728,13 @@ default, searches compacted entries with exact phrase, logical-ID, Unicode term
 coverage, and inverse-document-frequency signals, and returns bounded snippets.
 `readSessionHistoryEntry()` requires a stable entry ID, optionally fences the
 revision, and returns a fixed character chunk plus `nextOffset`. Coding exposes
-these as root-only `session_history_search` / `session_history_read` tools when
-storage supports full-lineage reads. The embedded Runtime/daemon projects the
-same search hits; bulk and oversized exact reads continue through transcript
-page/chunk APIs.
+the `session_history_search` / `session_history_read` pair when the current Run
+owns full-lineage-capable storage. Root Runs bind the root Session. Persistent
+child Runs bind a separately minted hidden `managed-task-worker` Session, so a
+child can recover its own compacted detail without reading or mutating root
+lineage. Storage-less Runs and partial visibility of the pair expose neither
+tool. The embedded Runtime/daemon projects the same search hits; bulk and
+oversized exact reads continue through transcript page/chunk APIs.
 
 ## 21. Related Documents
 

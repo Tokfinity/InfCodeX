@@ -2208,6 +2208,73 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('keeps child activity out of the primary live observation projection', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Child Activity Projection' });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      const rootMeta = {
+        sessionId: session.id,
+        turnId: 'turn-root',
+        contextId: session.id,
+        contextKind: 'root',
+        contextRevision: 0,
+      } as const;
+      options.events?.onTextDelta?.('root answer', rootMeta);
+      options.events?.onTextDelta?.('child answer', {
+        sessionId: session.id,
+        turnId: 'turn-child',
+        contextId: 'child-context',
+        contextKind: 'child',
+        contextRevision: 0,
+      });
+      options.events?.onThinkingDelta?.('root reasoning', rootMeta);
+      options.events?.onThinkingDelta?.('child reasoning', {
+        childAgentId: 'child-agent',
+      });
+      options.events?.onToolUseStart?.({ id: 'root-tool', name: 'bash' }, rootMeta);
+      options.events?.onToolUseStart?.(
+        { id: 'child-tool', name: 'read' },
+        { liveOnly: true },
+      );
+      options.events?.onTodoUpdate?.([], rootMeta);
+      options.events?.onTodoUpdate?.([], {
+        workflowCorrelation: { workflowRunId: 'workflow-child' },
+      });
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'project root only' });
+    const observation = await runtime.sessions.observe(session.id, () => undefined);
+
+    expect(observation.snapshot.live.assistantTextByRun).toEqual({
+      [run.runId]: 'root answer',
+    });
+    expect(observation.snapshot.live.thinkingTextByRun).toEqual({
+      [run.runId]: 'root reasoning',
+    });
+    expect(observation.snapshot.live.activeTools).toEqual([
+      expect.objectContaining({
+        runId: run.runId,
+        started: expect.objectContaining({
+          tool: expect.objectContaining({ id: 'root-tool' }),
+        }),
+      }),
+    ]);
+    expect(observation.snapshot.live.todo).toEqual(
+      expect.objectContaining({
+        items: [],
+        meta: expect.objectContaining({ contextKind: 'root' }),
+      }),
+    );
+    observation.close();
+    await runtime.close();
+  });
+
   it('bounds observation transcripts and pages oversized entries explicitly', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({

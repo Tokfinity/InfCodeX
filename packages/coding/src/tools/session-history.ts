@@ -3,7 +3,7 @@ import {
   searchSessionHistory,
   type KodaXSessionLineage,
 } from '@kodax-ai/agent';
-import type { KodaXSessionStorage } from '@kodax-ai/agent';
+import type { KodaXSessionScope, KodaXSessionStorage } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 export const SESSION_HISTORY_SEARCH_TOOL_NAME = 'session_history_search';
@@ -12,6 +12,26 @@ export const SESSION_HISTORY_TOOL_NAMES = [
   SESSION_HISTORY_SEARCH_TOOL_NAME,
   SESSION_HISTORY_READ_TOOL_NAME,
 ] as const;
+
+export function isSessionHistoryTool(name: string): boolean {
+  return SESSION_HISTORY_TOOL_NAMES.includes(name as typeof SESSION_HISTORY_TOOL_NAMES[number]);
+}
+
+export function createSessionHistoryLoader(input: {
+  readonly sessionId?: string;
+  readonly currentAgentId?: string;
+  readonly sessionScope?: KodaXSessionScope;
+  readonly storage?: KodaXSessionStorage;
+}): KodaXToolExecutionContext['loadSessionHistory'] {
+  const loadFullLineage = input.storage?.loadFullLineage;
+  const isolatedChild = input.currentAgentId !== undefined
+    && input.sessionScope === 'managed-task-worker';
+  if (!input.sessionId || (input.currentAgentId !== undefined && !isolatedChild) || !loadFullLineage) {
+    return undefined;
+  }
+  const { sessionId, storage } = input;
+  return () => loadFullLineage.call(storage, sessionId);
+}
 
 export const SESSION_HISTORY_SEARCH_DESCRIPTION = [
   'Search exact persisted entries that are no longer present in the compacted model context.',
@@ -63,11 +83,12 @@ export function activateSessionHistoryTools(activeTools: readonly string[], enab
 
 export function canActivateSessionHistoryTools(input: {
   readonly activeTools: readonly string[];
+  readonly sessionId?: string;
   readonly currentAgentId?: string;
+  readonly sessionScope?: KodaXSessionScope;
   readonly storage?: KodaXSessionStorage;
 }): boolean {
-  return input.currentAgentId === undefined
-    && typeof input.storage?.loadFullLineage === 'function'
+  return createSessionHistoryLoader(input) !== undefined
     && SESSION_HISTORY_TOOL_NAMES.every((name) => input.activeTools.includes(name));
 }
 
