@@ -14,6 +14,7 @@ _Last Updated: 2026-07-22_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 198 | High | In Progress | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | - | 2026-07-22 | - |
 | 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
@@ -108,6 +109,94 @@ _Last Updated: 2026-07-22_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 199: Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74
+- **Fixed**: Unreleased after v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+`runtime.runs.submitInput({ delivery: 'interrupt' })` can return `accepted: true`
+after a managed task has published its terminal managed-task status but before
+the outer Runtime Run settles. No Runner/LLM safe boundary remains in that
+interval. The accepted input emits `run.input.queued`, then normal Run cleanup
+removes its queue entry and changes the status to `terminal` without ever
+emitting `run.input.delivered`.
+
+The reproduced Run accepted an interrupt at `03:54:10.073Z`, 2.739 seconds
+after `managed_task_status.phase: completed`, then completed 1.44 seconds later.
+Its durable log contains the queued event and terminal input status but no
+delivery event, proving the input never entered an LLM request.
+
+Expected behavior:
+
+- Runtime closes interrupt admission as soon as the active execution has no
+  future safe boundary.
+- A late submission receives a factual retryable rejection and is never added
+  to the Actor queue.
+- Inputs accepted immediately before closure still reach an explicit terminal
+  outcome through the owning Run status, so clients can distinguish delivery
+  from non-delivery without guessing from transcript text.
+- Runtime never silently changes `interrupt` into `after_turn`.
+
+#### Root Cause
+
+Interrupt admission checks only the outer Run phase, active-Run ownership, and
+presence of an Actor Session. During managed-task finalization those facts still
+look active after the managed task has emitted its final `completed` status.
+The Runtime record does not represent whether the Runner's interrupt window is
+still open. `terminalizeQueuedInterruptInputs()` correctly prevents cross-Run
+leakage, but exposes the missing admission state by terminalizing accepted work
+that never had another consumption point.
+
+#### Proposed Solution
+
+- Track one internal interrupt-admission flag on each active Runtime Run.
+- Close it on the final managed-task status, and on the ordinary coding
+  completion callback before the result promise settles.
+- Reject submissions after closure with `interrupt_window_closed` before
+  normalizing or enqueueing the input.
+- Preserve current terminal cleanup for cancellation, failure, restart, and
+  the residual event-loop race; clients reconcile those terminal input records
+  by public `inputId`.
+
+#### Detailed Fix Plan
+
+| File | Change | Expected Outcome | Risks and Guardrails | Tests |
+|------|--------|------------------|----------------------|-------|
+| `src/sdk-runtime.ts` | Add the internal admission flag, close it from terminal execution callbacks, and add the typed rejection reason | Late input is rejected before queue mutation; accepted input lifecycle remains unchanged | Do not close on intermediate managed worker turns; do not alter `after_turn` | Managed and ordinary coding completion-window tests |
+| `src/sdk-runtime.test.ts` | Reproduce completion/error windows and assert rejection, zero queue growth, and no queued event | Regression is deterministic and independent of timing | Settle/abort every fake Run so tests do not leak | Focused Vitest suite |
+| `docs/SDK_EMBEDDER_GUIDE.md`, `docs/DD.md` | Document the new factual rejection and client retry behavior | Embedders do not silently downgrade delivery intent | Keep capability semantics and existing reasons intact | Documentation review |
+| `docs/KNOWN_ISSUES.md` | Track Issue 199 through resolution | Runtime ownership and verification remain auditable | Preserve the original report | Index/detail/summary consistency |
+
+#### Resolution
+
+Added an internal `interruptInputOpen` fence to every Runtime Run record. The
+fence opens only when a Run with an Actor Session starts, and closes before the
+outer result settles when ordinary coding emits `onComplete` or `onError`, or
+when a managed task reports its final `phase: completed`. `markRunTerminal()`
+also closes it defensively for cancellation, failure, recovery, and shutdown.
+
+`runtime.runs.submitInput({ delivery: 'interrupt' })` now checks this fence
+before input normalization, cloning, or MessageQueue mutation. A late request
+returns the typed factual result `accepted:false` with
+`reason:'interrupt_window_closed'`; it is never converted to `after_turn`.
+Existing terminal input records remain the authoritative residual-race/recovery
+outcome for clients to reconcile by `inputId`.
+
+Validation:
+
+- Three deterministic completion/error-window regressions passed and proved
+  zero queue growth; the managed case also proved no `run.input.queued` event.
+- Eleven related after-turn/interrupt delivery, batching, rejection, durability,
+  capability, clone-failure, and terminal-cleanup lifecycle tests passed.
+- The complete KodaX package build, TypeScript project build, SDK bundle, and
+  declaration bundle passed.
 
 ### 198: Compaction could evict exact history before durable persistence and offered no model-facing recovery
 
@@ -6175,7 +6264,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 81 (27 Open, 54 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 82 (27 Open, 55 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

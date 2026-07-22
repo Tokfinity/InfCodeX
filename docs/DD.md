@@ -188,9 +188,13 @@ ordered `run.input.delivered` batch before the next LLM request. It creates no
 continuation Run. Run status exposes queued/delivered/terminal input state;
 terminal cleanup removes undelivered queue entries. Runs without a same-Run
 safe Actor boundary return `unsupported_capability`, while queued or terminal
-targets return `stale_run`. AskUser and permission registries expose pending
-lists and first-winner responses over transport; persistent permission grants have one
-daemon-owned revisioned store. A concrete permission request may expose opaque
+targets return `stale_run`. After the Runner publishes its final completion or
+error signal, the still-settling outer Run closes interrupt admission and
+returns `interrupt_window_closed`; clients must restore the unsent input for
+retry rather than silently converting it to `after_turn`. AskUser and permission
+registries expose pending lists and first-winner responses over transport;
+persistent permission grants have one daemon-owned revisioned store. A concrete
+permission request may expose opaque
 Runtime-issued Session and persistent grant suggestions. Clients can select a
 suggestion id but cannot submit or widen its hidden matcher. Command matchers
 bind the normalized shell command fingerprint, effective cwd, shell family,

@@ -3912,7 +3912,8 @@ const queued = await runtime.runs.submitInput({
 });
 
 if (!queued.accepted) {
-  // stale_run or unsupported_capability: show the factual result.
+  // stale_run, unsupported_capability, or interrupt_window_closed:
+  // show the factual result and preserve the user's unsent input.
 }
 ```
 
@@ -3924,6 +3925,15 @@ request, and produce one `run.input.delivered` event whose `inputs` array is the
 complete ordered batch. Exact operation retries return the same `inputId`.
 The accepted result's `runId` is the existing owning Run (equal to
 `afterRunId`), not a newly created continuation.
+
+Interrupt admission closes when the Runner publishes its final completion or
+error signal, even if the outer Run is still settling. A submission in that
+window returns `accepted:false` with `reason:'interrupt_window_closed'` and is
+not queued. Keep the original input available for retry after the Run ends; do
+not silently change its delivery to `after_turn`. As a final race/recovery
+guard, inspect terminal Run status: any `interruptInputs` entry whose state is
+`terminal` was not delivered. Reconcile it by `inputId` and present a visible
+non-delivery outcome rather than leaving a pending queue indicator.
 
 ```ts
 const interrupted = await runtime.runs.submitInput({

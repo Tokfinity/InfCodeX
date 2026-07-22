@@ -1405,7 +1405,7 @@ export type RuntimeSubmitInputResult =
       readonly delivery: 'after_turn' | 'interrupt';
       readonly sessionId: string;
       readonly afterRunId: string;
-      readonly reason: 'stale_run' | 'unsupported_capability';
+      readonly reason: 'stale_run' | 'unsupported_capability' | 'interrupt_window_closed';
     };
 
 export interface RuntimeOperationOptions {
@@ -2310,6 +2310,7 @@ interface RuntimeRunRecord {
   readonly hadProviderCredential: boolean;
   readonly agentContext?: AgentDispatchContext;
   readonly actorSession?: CodingActorSession;
+  interruptInputOpen: boolean;
   start?: PendingRunStart;
   terminalEmitted: boolean;
 }
@@ -4279,6 +4280,7 @@ function createRuntimeRunService(deps: {
       return;
     }
     record.phase = 'running';
+    record.interruptInputOpen = record.actorSession !== undefined;
     record.queuedAt = undefined;
     record.runningAt = new Date().toISOString();
     activeRunBySession.set(record.sessionId, record.runId);
@@ -4810,6 +4812,7 @@ function createRuntimeRunService(deps: {
         ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
         : {}),
       ...(actorSession ? { actorSession } : {}),
+      interruptInputOpen: false,
       result,
       start: {
         prompt: normalizedInput.prompt,
@@ -4897,6 +4900,15 @@ function createRuntimeRunService(deps: {
             sessionId: input.sessionId,
             afterRunId: input.afterRunId,
             reason: 'unsupported_capability',
+          };
+        }
+        if (!afterRun.interruptInputOpen) {
+          return {
+            accepted: false,
+            delivery: input.delivery,
+            sessionId: input.sessionId,
+            afterRunId: input.afterRunId,
+            reason: 'interrupt_window_closed',
           };
         }
         if (input.credential !== undefined || input.hostTools !== undefined) {
@@ -7084,6 +7096,7 @@ function recordFromPersistedStatus(status: RuntimeRunStatus): RuntimeRunRecord {
         }
       : {}),
     interruptInputs: (status.interruptInputs ?? []).map((input) => ({ ...input })),
+    interruptInputOpen: false,
     mode: status.mode ?? 'coding',
     hadProviderCredential: false,
     result: Promise.resolve(resultFromStatus(status)),
@@ -8351,10 +8364,14 @@ function wrapKodaXEvents(input: {
       original?.onWorkflowProcessEvent?.(event);
     },
     onComplete(meta) {
+      if (record.mode !== 'managed_task') {
+        record.interruptInputOpen = false;
+      }
       emit('run.progress', { kind: 'complete', meta }, meta);
       original?.onComplete?.(meta);
     },
     onError(error, meta) {
+      record.interruptInputOpen = false;
       emit(
         'runtime.warning',
         {
@@ -8367,6 +8384,9 @@ function wrapKodaXEvents(input: {
       original?.onError?.(error, meta);
     },
     onManagedTaskStatus(status) {
+      if (record.mode === 'managed_task' && status.phase === 'completed') {
+        record.interruptInputOpen = false;
+      }
       emit('run.progress', { kind: 'managed_task_status', status }, status);
       original?.onManagedTaskStatus?.(status);
     },
@@ -10084,6 +10104,7 @@ function markRunTerminal(
   terminal?: Omit<RuntimeTerminalFact, 'revision' | 'kind'>,
 ): void {
   if (run.terminalEmitted) return;
+  run.interruptInputOpen = false;
   terminalizeQueuedInterruptInputs(run);
   run.phase = phase;
   run.endedAt = new Date().toISOString();

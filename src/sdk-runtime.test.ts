@@ -2699,6 +2699,144 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('rejects interrupt input after a managed task closes its final safe-boundary window', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Managed Interrupt Window Test' });
+    let activeEvents: KodaXOptions['events'];
+    let finishManaged: ((value: KodaXResult) => void) | undefined;
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+      activeEvents = options.events;
+      return new Promise<KodaXResult>((resolve) => {
+        finishManaged = resolve;
+      });
+    });
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'managed',
+      mode: 'managed_task',
+    });
+    activeEvents?.onManagedTaskStatus?.({
+      agentMode: 'ama',
+      harnessProfile: 'H0_DIRECT',
+      currentRound: 1,
+      maxRounds: 1,
+      upgradeCeiling: 'H0_DIRECT',
+      phase: 'completed',
+      note: 'Task completed',
+      persistToHistory: true,
+    });
+
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'arrived during finalization' },
+    })).resolves.toEqual({
+      accepted: false,
+      delivery: 'interrupt',
+      sessionId: session.id,
+      afterRunId: run.runId,
+      reason: 'interrupt_window_closed',
+    });
+    expect(getMessageQueue().size()).toBe(0);
+    await expect(runtime.events.replay({
+      runId: run.runId,
+      type: 'run.input.queued',
+    })).resolves.toEqual([]);
+
+    finishManaged?.({
+      success: true,
+      lastText: 'done',
+      messages: [],
+      sessionId: session.id,
+    });
+    await expect(run.result).resolves.toMatchObject({ phase: 'completed' });
+    await runtime.close();
+  });
+
+  it('rejects interrupt input after an ordinary coding run reports completion', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Coding Interrupt Window Test' });
+    let activeEvents: KodaXOptions['events'];
+    let finishCoding: ((value: KodaXResult) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>((resolve) => {
+        finishCoding = resolve;
+      }));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'coding' });
+    activeEvents?.onComplete?.();
+
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'arrived after completion callback' },
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: 'interrupt_window_closed',
+    });
+    expect(getMessageQueue().size()).toBe(0);
+
+    finishCoding?.({
+      success: true,
+      lastText: 'done',
+      messages: [],
+      sessionId: session.id,
+    });
+    await expect(run.result).resolves.toMatchObject({ phase: 'completed' });
+    await runtime.close();
+  });
+
+  it('rejects interrupt input after a coding run reports its terminal error', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Failed Interrupt Window Test' });
+    let activeEvents: KodaXOptions['events'];
+    let failCoding: ((error: Error) => void) | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      activeEvents = options.events;
+      return fakeRunningSession(options, new Promise<KodaXResult>((_resolve, reject) => {
+        failCoding = reject;
+      }));
+    });
+
+    const run = await runtime.runs.start({ sessionId: session.id, prompt: 'coding' });
+    activeEvents?.onError?.(new Error('provider failed'));
+
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'arrived after terminal error' },
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: 'interrupt_window_closed',
+    });
+    expect(getMessageQueue().size()).toBe(0);
+
+    failCoding?.(new Error('provider failed'));
+    await expect(run.result).resolves.toMatchObject({ phase: 'failed' });
+    await runtime.close();
+  });
+
   it('queues active-run interrupts and reports their FIFO delivery as one batch', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
