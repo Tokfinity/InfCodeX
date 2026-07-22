@@ -8,6 +8,7 @@ import {
   planToolExposure,
   selectRuntimeContextOptimizationProfile,
 } from './tool-exposure-planner.js';
+import { getToolDefinition } from '../tools/index.js';
 
 const readTool: KodaXToolDefinition = {
   name: 'read',
@@ -122,6 +123,25 @@ describe('tool exposure planner', () => {
       expect(plan.modelVisibleToolNames).toContain(name);
     }
     expect(plan.decisions.find((entry) => entry.toolName === 'module_context')?.mode).toBe('bridge');
+  });
+
+  it('keeps goal lifecycle tools resident under aggressive pressure', () => {
+    const goalTools = ['get_goal', 'create_goal', 'update_goal']
+      .map((name) => getToolDefinition(name))
+      .filter((tool): tool is KodaXToolDefinition => tool !== undefined);
+    const plan = planToolExposure({
+      tools: goalTools,
+      budget: pressureBudget(),
+      bridgeAvailable: true,
+      profile: 'aggressive',
+    });
+
+    expect(goalTools).toHaveLength(3);
+    expect(plan.modelVisibleToolNames).toEqual(['get_goal', 'create_goal', 'update_goal']);
+    for (const decision of plan.decisions) {
+      expect(decision.mode).toBe('resident');
+      expect(decision.recommendedMode).toBe('resident');
+    }
   });
 
   it('falls back to native deferred or hints when the portable bridge is unavailable', () => {

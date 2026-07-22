@@ -102,7 +102,7 @@ function buildTodoToolBundle(
  * The managed path defers the SAME tools the SA path defers, EXCEPT mcp_*.
  * mcp_call can mutate remote state and the mcp_* family was not covered by the
  * two-hop reachability eval, so they stay resident with full descriptions here.
- * Everything else in the deferred set (repo-intel + web/code/goal) is
+ * Everything else in the deferred set (repo-intel + web/code/workflow) is
  * hint-swapped — eval-verified DEFER_SAFE across the coding-plan panel.
  */
 function shouldDeferOnManagedPath(name: string): boolean {

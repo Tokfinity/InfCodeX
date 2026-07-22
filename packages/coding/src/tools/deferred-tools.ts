@@ -11,8 +11,8 @@
  * the unlock Set for the next turn.
  *
  * Why centralized vs per-tool annotation: keeps deferred-tool policy in one
- * file rather than scattering `shouldDefer: true` across 15 LocalToolDefinition
- * entries; easier to audit which tools are deferred and to evolve the list.
+ * file rather than scattering `shouldDefer: true` across tool definitions;
+ * easier to audit which tools are deferred and to evolve the list.
  *
  * Mirrors claudecode's `isDeferredTool` (`c:/Works/claudecode/src/tools/index.ts`)
  * and `ToolSearch` bootstrap pattern (`c:/Works/claudecode/src/tools/ToolSearchTool/`).
@@ -22,7 +22,8 @@
  *     todo_create, todo_update, todo_get, todo_list, ask_user_question,
  *     spawn_agent, send_message, followup_task, wait_agent, list_agents,
  *     interrupt_agent, agent_output, exit_plan_mode, insert_after_anchor,
- *     changed_diff, changed_diff_bundle, undo, worktree_*
+ *     changed_diff, changed_diff_bundle, undo, worktree_*, get_goal,
+ *     create_goal, update_goal
  *   - `tool_search` itself (must always be available to unlock the rest)
  */
 
@@ -51,12 +52,6 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
   // the full orchestration guide remains available through tool_search.
   run_workflow: 'Explicitly requested Workflow execution: runs manifest + source with structured output/resume and returns a canonical Workflow actor path. `tool_search("run_workflow")` for contract.',
 
-  // FEATURE_192 v0.7.44 — /goal Persistent Goal tools.
-  // Hint-only on turn-1 to keep no-goal sessions context-clean; full
-  // schema unlocks via `tool_search("goal")` once the model needs them.
-  get_goal:    'Read the current /goal status (objective / tokens / budget / elapsed) — call `tool_search("get_goal")` for full schema. Available when a goal is set.',
-  create_goal: 'Create a persistent /goal — only when explicitly requested by the user or system instructions. Call `tool_search("create_goal")` for full schema and discipline rules.',
-  update_goal: 'Mark the current /goal complete or blocked — runtime-verified (sidecar + 3-turn rule). Call `tool_search("update_goal")` for full schema.',
 });
 
 /**

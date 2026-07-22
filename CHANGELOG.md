@@ -6,6 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Resident Goal lifecycle contracts.** `get_goal`, `create_goal`, and
+  `update_goal` now keep their complete descriptions on both SA and managed AMA
+  tool paths. Their former hints saved only about 109 estimated schema tokens
+  combined and made `get_goal` itself 12 tokens larger, so residency removes an
+  avoidable `tool_search` round trip while preserving the explicit-create and
+  three-turn blocked-state rules in the model-visible contract. The remaining
+  deferred set is unchanged at exactly 11 tools; schemas, handlers,
+  permissions, Goal state, and compaction-protected receipts are unchanged.
+
 ### Fixed
 
 - **Deterministic reads, bounded tool attention, and compaction round exits.**

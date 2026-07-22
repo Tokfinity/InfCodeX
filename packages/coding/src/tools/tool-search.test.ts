@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { getActiveToolDefinitions } from '../agent-runtime/tool-resolution.js';
+import { getToolDefinition } from './index.js';
 import {
   DEFERRED_TOOL_HINTS,
   isDeferredTool,
@@ -40,16 +41,14 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
     }
   });
 
-  it('classifies the intended rich-schema tool set as deferred', () => {
+  it('keeps exactly the intended rich-schema tool set deferred', () => {
     const expected = [
       'web_search', 'web_fetch', 'code_search', 'semantic_lookup',
       'repo_overview', 'changed_scope',
       'module_context', 'symbol_context', 'process_context', 'impact_estimate',
       'run_workflow',
     ];
-    for (const name of expected) {
-      expect(isDeferredTool(name)).toBe(true);
-    }
+    expect(Object.keys(DEFERRED_TOOL_HINTS)).toEqual(expected);
   });
 
   it('does NOT classify core tools as deferred', () => {
@@ -57,6 +56,7 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
       'read', 'write', 'edit', 'bash', 'grep', 'glob', 'todo_create', 'todo_update',
       'spawn_agent', 'send_message', 'followup_task', 'wait_agent', 'list_agents',
       'interrupt_agent', 'agent_output', 'tool_search',
+      'get_goal', 'create_goal', 'update_goal',
       'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_read_resource', 'mcp_get_prompt',
     ]) {
       expect(isDeferredTool(name)).toBe(false);
@@ -115,6 +115,17 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(out).toContain('"name":"web_fetch"');
     // Full description should include the load-bearing teaching:
     expect(out).toContain('prefer `bash` with the `gh` CLI');
+  });
+
+  it('keeps exact lookup compatible for the newly resident goal tools', async () => {
+    const out = await toolSearchHandler(
+      { query: 'select:get_goal,create_goal,update_goal' },
+      ctx,
+    );
+
+    expect(out.match(/<function>/g)).toHaveLength(3);
+    expect(out).toContain('only when explicitly requested');
+    expect(out).toContain('3 consecutive turns');
   });
 
   it('unlocks the requested tool for the context as a side effect', async () => {
@@ -196,7 +207,8 @@ describe('FEATURE_189 B.2 — tool_search handler', () => {
     expect(TOOL_SEARCH_DEFINITION.name).toBe('tool_search');
     expect(TOOL_SEARCH_DEFINITION.sideEffect).toBe('readonly');
     expect(TOOL_SEARCH_DEFINITION.planModeAllowed).toBe(true);
-    expect(TOOL_SEARCH_DEFINITION.description).toContain('get_goal / create_goal / update_goal');
+    expect(TOOL_SEARCH_DEFINITION.description).not.toContain('get_goal / create_goal / update_goal');
+    expect(TOOL_SEARCH_DEFINITION.description).not.toContain('mcp_*');
     expect(TOOL_SEARCH_DEFINITION.description).toContain('AMA managed path');
     expect(TOOL_SEARCH_DEFINITION.description).not.toContain('AMAW');
   });
@@ -247,6 +259,20 @@ describe('FEATURE_189 B.2 — getActiveToolDefinitions deferred description swap
     expect(read).toBeDefined();
     // read's real description should be substantial, not a tiny hint
     expect(read!.description.length).toBeGreaterThan(200);
+  });
+
+  it('keeps all goal tools resident with their complete lifecycle contracts', () => {
+    const goalNames = ['get_goal', 'create_goal', 'update_goal'];
+    const defs = getActiveToolDefinitions(goalNames);
+
+    for (const name of goalNames) {
+      expect(defs.find((definition) => definition.name === name)?.description)
+        .toBe(getToolDefinition(name)?.description);
+    }
+    expect(defs.find((definition) => definition.name === 'create_goal')?.description)
+      .toContain('only when explicitly requested');
+    expect(defs.find((definition) => definition.name === 'update_goal')?.description)
+      .toContain('3 consecutive turns');
   });
 
   it('keeps MCP facades directly callable without a tool_search unlock round-trip', () => {

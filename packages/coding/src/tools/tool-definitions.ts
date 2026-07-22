@@ -2210,8 +2210,8 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
   },
   // FEATURE_189 Batch 3 B.2 — progressive disclosure bootstrap. Always
-  // loaded so the LLM can fetch full schemas for deferred tools (mcp_*,
-  // web_*, repo-intel) on demand. See `tool-search.ts` + `deferred-tools.ts`.
+  // loaded so the LLM can fetch full schemas for deferred web, repo-intel,
+  // and workflow tools on demand. See `tool-search.ts` + `deferred-tools.ts`.
   TOOL_DESCRIBE_DEFINITION,
   TOOL_CALL_DEFINITION,
   TOOL_SEARCH_DEFINITION,

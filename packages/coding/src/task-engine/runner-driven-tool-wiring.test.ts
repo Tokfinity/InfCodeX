@@ -342,6 +342,13 @@ describe('FEATURE_250 — managed-path progressive disclosure (deferred hint-swa
     expect(workerTool('bash')?.description).toBe(getToolDefinition('bash')?.description);
   });
 
+  it('keeps goal lifecycle tools resident with full descriptions', () => {
+    for (const name of ['get_goal', 'create_goal', 'update_goal']) {
+      expect(workerTool(name)?.description).toBe(getToolDefinition(name)?.description);
+      expect(DEFERRED_TOOL_HINTS[name]).toBeUndefined();
+    }
+  });
+
   it('input_schema is UNCHANGED by the hint-swap (tool stays directly callable off the hint)', () => {
     for (const name of ['module_context', 'web_fetch']) {
       const tool = workerTool(name) as { input_schema?: unknown } | undefined;

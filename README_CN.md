@@ -725,7 +725,7 @@ REPL 显示、唤醒或消费。
 
 **历史工作流激活分层（FEATURE_248 + FEATURE_249，v0.7.59；F270 于 v0.7.72 取代）**：v0.7.59 引入 AMAW 和 AMA 的显式请求行为。F270 退役 AMAW 及其复杂度驱动指令；SA 保持单独作业，AMA 成为唯一自适应多 Agent 模式，并且只在明确 Workflow 意图下激活 Workflow。详见 [docs/features/v0.7.59.md](docs/features/v0.7.59.md) 与 [docs/features/v0.7.72.md](docs/features/v0.7.72.md)。
 
-**managed 工具路径的渐进披露（FEATURE_250，v0.7.60；F270 模式更新于 v0.7.72）**：deferred-tool 渐进披露机制应用于 AMA 的 managed path。缓存冷启轮次以一行 search hint 替代 13 个 non-mcp 延迟工具的完整描述；F270 退役原 AMAW 模式，但不改变这项披露行为。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
+**managed 工具路径的渐进披露（FEATURE_250，v0.7.60；当前策略于 v0.7.74 纠偏）**：deferred-tool 机制同时应用于 AMA managed path 与 SA。当前延迟集合精确包含 11 个工具：6 个 repo-intelligence、4 个 web/code discovery，以及 `run_workflow`；其 `input_schema` 仍可直接调用，完整描述按需由 `tool_search` 返回。5 个固定 `mcp_*` facade 与 `get_goal` / `create_goal` / `update_goal` 生命周期工具常驻完整契约。v0.7.74 的 Goal 纠偏相对旧 hint 仅增加约 109 个估算 schema token（其中常驻的 `get_goal` 反而少 12 token），消除一次发现往返，并且不改变工具 schema、handler、权限、Goal 状态或压缩保护。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md) 与 [docs/features/v0.7.74.md](docs/features/v0.7.74.md#feature_250-v0774-correction-resident-goal-lifecycle-tools)。
 
 **上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史仍遵守相同的物理容量安全规则：容量内不做默认有损 microcompaction，压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删除。FEATURE_272 仅取代 FEATURE_251 的大型压缩默认触发策略；FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
 
