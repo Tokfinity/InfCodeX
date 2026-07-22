@@ -353,10 +353,34 @@ the tool layer or an existing capability API.
 Child Agents are controlled through one Runtime-owned Actor/Turn tree:
 
 - `spawn_agent`, `send_message`, and `followup_task` start or steer work;
-- `wait_agent`, `list_agents`, and `agent_output` observe durable state;
+- `wait_agent` yields for scoped mailbox activity; `list_agents` observes the
+  current tree; `agent_output` reads a known Actor/Turn result;
 - `interrupt_agent` requests active-turn cancellation;
 - one scheduler, mailbox, event stream, and root-owned work budget cover native,
   constructed, Workflow-owned, and external turns.
+
+The model-visible `wait_agent` schema contains only `timeout_ms` (10 seconds to
+1 hour, default 2 minutes). The handler subscribes to the caller's MessageQueue
+with read-register-recheck, does not consume the wake message, and returns one
+of `mailbox`, `user_input_pending`, `wait_expired`, or `interrupted`. The
+Runner's next-turn hook drains background priority only when the previous tool
+set included `wait_agent`. Ordinary tools drain user-priority traffic: real
+user prompts remain real turns, while urgent Actor follow-ups remain synthetic.
+
+Message mode determines transcript authorship. `prompt` becomes a real user
+turn. `agent-message`, `task-notification`, and `system-reminder` become
+synthetic Runtime context; completion metadata is preserved for deterministic
+Todo/receipt handling. Actor event snapshots and long-poll remain separate SDK
+and daemon APIs, so removing raw-event selectors from the model tool does not
+remove SDK telemetry capability or require a control-plane version bump.
+
+Completion delivery is crash-recoverable. Actor snapshots persist completion
+messages, acknowledgement IDs, and an explicit pending-root-delivery set;
+initialization republishes only completions in that set. Legacy snapshots lack
+the set and do not infer replayability from historical mail. The Coding
+projection deduplicates by scoped child-task
+`turnId`, so a hard restart restores a missing process queue while a same-process
+Runtime rebuild does not duplicate an entry that is already pending.
 
 Actor identity outlives an individual Turn. Capability ceilings are inherited,
 concurrency and budget admission are atomic, and stale mutations conflict on

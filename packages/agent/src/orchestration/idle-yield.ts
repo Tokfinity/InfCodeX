@@ -416,7 +416,7 @@ export type EnvelopeAggregateEnforcer = (
  * Post-FEATURE_159: fragments are partitioned by `msg.mode`. Two
  * separate messages may be emitted:
  *   1. Synthetic banner (`_synthetic: true`) — concatenates
- *      `task-notification` + `system-reminder` content. Hidden from
+ *      `agent-message` + `task-notification` + `system-reminder` content. Hidden from
  *      REPL display; the agent sees it as context. Spliced FIRST so it
  *      reads as the "tail of the prior turn" before the new prompt.
  *   2. Real user message (no `_synthetic`) — concatenates `prompt`
@@ -468,7 +468,8 @@ export async function composeIdleYieldUserMessage(
         inputArtifacts: msg.inputArtifacts,
       });
     } else {
-      // 'task-notification' / 'system-reminder' / future synthetic modes.
+      // 'agent-message' / 'task-notification' / 'system-reminder' /
+      // future synthetic modes.
       if (msg.mode === 'task-notification') {
         hadTaskNotification = true;
         if (msg.taskResult) taskResults.push(msg.taskResult);

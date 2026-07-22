@@ -68,6 +68,7 @@ interface BaseCtxLike {
 interface BeforeNextTurnCtx {
   readonly transcript: readonly KodaXMessage[];
   readonly iteration: number;
+  readonly lastTurnToolNames?: readonly string[];
 }
 
 type BeforeNextTurnFn = (ctx: BeforeNextTurnCtx) => Promise<readonly KodaXMessage[]>;

@@ -263,6 +263,17 @@ send it follow-up messages, stop it, and inspect output. Idle-yield is the
 canonical waiting behavior when useful main work is exhausted and child tasks
 remain in flight.
 
+Coordination separates the model control plane from runtime telemetry:
+
+- `wait_agent` suspends on the caller-scoped mailbox, root user input,
+  interruption, or timeout and returns only a wake acknowledgement;
+- authenticated Agent messages and completion envelopes are injected at the
+  next safe model boundary as synthetic context;
+- Actor progress remains on the event stream for UI, tracing, and SDK
+  replay/long-poll consumers and never wakes the model;
+- `agent_output` is a targeted structured/artifact read for a known Actor/Turn,
+  not a completion polling loop.
+
 Children are a coordination primitive, not a replacement for the main Worker.
 The main Worker owns final synthesis and user communication.
 

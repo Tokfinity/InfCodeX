@@ -1,5 +1,10 @@
 # FEATURE_270 统一 Actor/Turn 控制面 — 人工测试指南
 
+> **v0.7.74 更新：** 本文保留 FEATURE_270 发布时的历史事件等待用例。
+> 当前模型侧 `wait_agent` 不再接收事件游标或 `max_events`；请以
+> [FEATURE_273 测试指南](FEATURE_273_v0.7.74_TEST_GUIDE.md)验证 mailbox 等待，
+> Runtime/SDK 原始事件回放仍按本文对应的 host/API 用例验证。
+
 ## 功能概览
 
 **功能名称**：Ultra-Aligned Adaptive Multi-Agent Actor Control Plane

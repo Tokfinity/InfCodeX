@@ -125,4 +125,26 @@ describe('Actor-aware idle yield', () => {
     expect(messages).toMatchObject([{ role: 'user', content: 'change direction' }]);
     expect(onUserPrompts).toHaveBeenCalledWith(['change direction'], ['msg-1']);
   });
+
+  it('keeps explicit Actor mailbox messages synthetic instead of user-authored', async () => {
+    const onUserPrompts = vi.fn();
+    const messages = await composeIdleYieldUserMessage({
+      kind: 'messages-arrived',
+      messages: [{
+        id: 'msg-1',
+        priority: 'background',
+        mode: 'agent-message',
+        content: '<agent-message>critical evidence</agent-message>',
+        agentId: '/root',
+        enqueuedAt: 1,
+      }],
+    }, () => [], undefined, onUserPrompts);
+
+    expect(messages).toMatchObject([{
+      role: 'user',
+      _synthetic: true,
+      content: '<agent-message>critical evidence</agent-message>',
+    }]);
+    expect(onUserPrompts).not.toHaveBeenCalled();
+  });
 });

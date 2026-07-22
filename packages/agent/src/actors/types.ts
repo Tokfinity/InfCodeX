@@ -246,6 +246,8 @@ export interface AgentActorSnapshot {
   readonly mailboxes: Readonly<Record<string, readonly AgentMailboxMessage[]>>;
   /** Terminal child turns explicitly observed by their direct parent. */
   readonly acknowledgedCompletionTurnIds?: readonly string[];
+  /** Root completion notifications that must survive process-local queue loss. */
+  readonly pendingRootCompletionTurnIds?: readonly string[];
   readonly events: readonly AgentEvent[];
 }
 

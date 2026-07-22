@@ -85,6 +85,14 @@ process-global "main thread" bucket. A waiting Actor can therefore yield at a
 safe boundary for its own follow-up without consuming or displaying prompts
 from another session.
 
+The model-facing `wait_agent` contract is mailbox-driven. It accepts only a
+bounded timeout and returns a small wake acknowledgement; the next safe model
+boundary receives the actual scoped Agent message or completion envelope.
+Ordinary Actor progress is telemetry for UI and SDK event consumers and must
+not wake or resample the parent model. Long waits therefore consume elapsed
+time, not model tokens. Raw Actor event replay and long-poll remain available
+through the SDK and daemon control-plane APIs.
+
 ## 6. Required Capabilities
 
 ### Runtime Host API

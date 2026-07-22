@@ -205,23 +205,32 @@ function publishRootMailboxMessage(
   if (message.kind !== 'completion' || !message.turnId) {
     getMessageQueue().enqueue({
       priority: message.kind === 'followup' ? 'user' : 'background',
-      mode: 'prompt',
+      mode: 'agent-message',
       agentId: actorQueueId(sessionId, '/root'),
       content: renderMailboxMessage(message),
     });
     return;
   }
   const output = controller.output('/root', message.senderPath, message.turnId);
+  const queue = getMessageQueue();
+  const queueAgentId = actorQueueId(sessionId, '/root');
+  if (queue.has({
+    agentId: queueAgentId,
+    maxPriority: 'background',
+    mode: 'task-notification',
+    predicate: (queued) => queued.taskResult?.source === 'child_task'
+      && queued.taskResult.taskId === message.turnId,
+  })) return;
   const status = output.state === 'completed'
     ? 'completed'
     : output.state === 'failed'
       ? 'failed'
       : 'cancelled';
   const summary = output.output ?? output.error ?? status;
-  getMessageQueue().enqueue({
+  queue.enqueue({
     priority: 'background',
     mode: 'task-notification',
-    agentId: actorQueueId(sessionId, '/root'),
+    agentId: queueAgentId,
     content: `<agent-completed id="${escapeXml(message.messageId)}" path="${escapeXml(message.senderPath)}" turn_id="${escapeXml(message.turnId)}" state="${status}">\n${escapeXml(summary)}\n</agent-completed>`,
     taskResult: {
       type: 'task_result',
@@ -490,7 +499,7 @@ async function pumpMailbox(
       const taskResult = completionTaskResult(actorControl, message);
       getMessageQueue().enqueue({
         priority: message.kind === 'followup' ? 'user' : 'background',
-        mode: message.kind === 'completion' ? 'task-notification' : 'prompt',
+        mode: message.kind === 'completion' ? 'task-notification' : 'agent-message',
         agentId: actorQueueId(sessionId, input.actor.path),
         content: renderMailboxMessage(message, taskResult),
         ...(taskResult ? { taskResult } : {}),

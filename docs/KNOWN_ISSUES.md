@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-22_
+_Last Updated: 2026-07-23_
 
 ---
 
@@ -14,6 +14,8 @@ _Last Updated: 2026-07-22_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 201 | Medium | Resolved | Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting | v0.7.74 development | Unreleased v0.7.74 | 2026-07-23 | 2026-07-23 |
+| 200 | High | Resolved | Restored unacknowledged Agent completions did not repopulate the model mailbox | v0.7.74 development | Unreleased v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 198 | High | Resolved | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | Unreleased v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
@@ -109,6 +111,117 @@ _Last Updated: 2026-07-22_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 201: Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.74 development
+- **Fixed**: Unreleased v0.7.74
+- **Created**: 2026-07-23
+- **Resolved**: 2026-07-23
+
+#### Original Problem
+
+The first mailbox subscription matched every scoped `MessageQueue` mode. A
+queued `system-reminder` could therefore end `wait_agent` even though the fixed
+wake matrix permits only Agent mailbox evidence, root user input, interruption,
+or timeout. Separately, the `run_workflow` result still told the model to use
+`wait_agent` to observe progress after progress events had moved out of the
+model wait channel.
+
+#### Root Cause
+
+Priority and routing filters were applied, but the activity probe had no
+delivery-mode allowlist. Workflow guidance was outside the main Worker prompt
+and tool-description update set, so its historical wording survived.
+
+#### Solution Implemented
+
+- Restrict wait activity to `prompt`, `agent-message`, and
+  `task-notification`; a system reminder can be delivered at the next safe
+  boundary but cannot independently wake the model.
+- Tell Workflow callers to inspect progress with `list_agents`, use
+  `wait_agent` only for critical mailbox evidence, and use `agent_output` for
+  the known Workflow result.
+
+#### Files Changed
+
+- `packages/coding/src/tools/agent-collaboration.ts`
+- `packages/coding/src/tools/agent-collaboration.test.ts`
+- `packages/coding/src/tools/run-workflow.ts`
+- `packages/coding/src/tools/run-workflow.test.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+
+#### Tests Added
+
+- A progress storm and a scoped system reminder both leave one wait pending;
+  a subsequent Agent completion notification settles it once.
+- Workflow start output distinguishes progress inspection from mailbox waiting.
+
+### 200: Restored unacknowledged Agent completions did not repopulate the model mailbox
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 development
+- **Fixed**: Unreleased v0.7.74
+- **Created**: 2026-07-23
+- **Resolved**: 2026-07-23
+
+#### Original Problem
+
+FEATURE_273 makes the model-facing `wait_agent` depend exclusively on the
+caller-scoped `MessageQueue`. Actor snapshots durably preserve completion
+messages and their post-transcript acknowledgement receipts, but the queue is
+intentionally process-local. If a process stopped after a child completion was
+persisted and before the parent transcript committed that notification, session
+restore loaded the durable completion without publishing it into the new queue.
+The parent could then wait until timeout even though the child was terminal.
+
+A same-process Runtime Registry rebuild exposed a related idempotency edge: a
+naive restore replay could enqueue a second copy while the original process
+queue entry was still present.
+
+#### Root Cause
+
+`AgentActorController.initialize()` restored mailboxes and acknowledgement IDs,
+then recovered unfinished turns, but `onMessageCommitted` only ran for new
+mutations. The Coding Runtime projection also had no queue-level `turnId`
+deduplication because normal durable commits publish only once. Inferring
+pending delivery from every unacknowledged mailbox completion would also have
+made pre-receipt snapshots replay historical results after upgrade.
+
+#### Solution Implemented
+
+- Persist an explicit set of root completion `turnId`s awaiting transcript
+  acknowledgement and republish only that set before unmatched-turn recovery.
+- Treat an absent set as a legacy snapshot with no inferred replay work, so an
+  upgrade cannot resurrect historical completion mail.
+- Keep ordinary historical Actor messages out of replay; their generic delivery
+  contract is unchanged and they have no completion receipt.
+- Deduplicate projected root completion notifications by session/Actor route and
+  structured child-task `taskId`, preserving exactly one pending queue entry for
+  both hard restart and same-process registry rebuild.
+- Keep acknowledgement post-transcript-commit; once persisted, later restores
+  no longer replay the completion.
+
+#### Files Changed
+
+- `packages/agent/src/actors/controller.ts`
+- `packages/agent/src/actors/controller.test.ts`
+- `packages/agent/src/actors/types.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.test.ts`
+- `docs/test-guides/FEATURE_273_v0.7.74_TEST_GUIDE.md`
+
+#### Tests Added
+
+- Controller restart test: unacknowledged root completion is republished once;
+  acknowledged completion is not replayed on a later restart.
+- Legacy snapshot test: missing delivery state never infers stale replay work
+  from historical completion messages.
+- Coding Runtime integration test: a soft rebuild does not duplicate a queued
+  `turnId`, while a fresh process queue is repopulated from the same snapshot.
 
 ### 199: Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery
 
@@ -594,6 +707,12 @@ could only repair ambiguously.
   classifier omits its reason. The shared guardrail result now explicitly says
   the call was blocked before execution. Tool-result messages are timestamped
   when the result batch is built.
+
+FEATURE_273 subsequently supersedes the model-facing terminal/event selector
+described above. `wait_agent` is now a mailbox yield with only `timeout_ms`;
+raw progress replay and long-poll remain on the existing SDK/daemon Actor event
+APIs. This removes model resampling on progress without removing the capability
+that SDK telemetry consumers previously obtained from `return_on="event"`.
 
 The post-implementation review found that the first closure still acknowledged
 terminal results inside the tool handler, before Runner/session persistence,
@@ -6305,11 +6424,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 86 (26 Open, 60 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 88 (26 Open, 62 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-23: Issues 200-201 resolved (Unreleased v0.7.74)
+- Made root completion delivery explicitly recoverable and legacy-safe through
+  persisted pending-delivery IDs, post-commit acknowledgements, and scoped
+  queue deduplication across hard restart and soft Runtime rebuild.
+- Restricted model waits to mailbox/user activity, kept system reminders from
+  ending waits, and corrected Workflow progress guidance.
 
 ### 2026-07-22: Issue 198 resolved (Unreleased v0.7.74)
 - Unified SA/AMA durable-compaction and history-tool binding, made the tool pair

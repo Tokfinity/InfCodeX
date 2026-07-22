@@ -59,6 +59,8 @@ describe('toolRunWorkflow', () => {
     );
 
     expect(result).toContain('workflow_path:/root/workflow:run-1');
+    expect(result).toContain('Use list_agents to inspect progress');
+    expect(result).toContain('wait_agent when its mailbox result is on the critical path');
     expect(result).toContain('agent_output("/root/workflow:run-1")');
     expect(result).toContain('interrupt_agent("/root/workflow:run-1")');
     expect(result).not.toContain('task_output');

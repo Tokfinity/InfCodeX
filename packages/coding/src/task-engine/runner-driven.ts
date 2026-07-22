@@ -27,11 +27,16 @@
  *   - Sanitize pipeline — `_internal/managed-task/sanitize.ts` strips leaked fences / control markers
  */
 
-import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
+import type {
+  KodaXMessage,
+  KodaXTaskResultMetadata,
+  KodaXToolResultContentItem,
+} from '@kodax-ai/llm';
 import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import type {
   Agent,
   QueuedInputArtifact,
+  QueuedMessage,
   RunnerToolObserver,
   StopHookFn,
 } from '@kodax-ai/agent';
@@ -39,6 +44,7 @@ import {
   Runner,
   buildSystemPrompt,
   getMessageQueue,
+  maybeDrainMidTurn,
   readRunnerRecoveryTranscript,
   registerActiveRootQueueRoute,
 } from '@kodax-ai/agent';
@@ -1214,6 +1220,26 @@ async function runManagedTaskViaRunnerInner(
     current: options.context?.contextTokenSnapshot,
   };
   const messageQueueAgentId = actorMessageQueueId(baseCtx);
+  const enforceMailboxEnvelope = createEnvelopeAggregateBudgetEnforcer(
+    baseCtx,
+    (capacityContext) => capacityContext
+      ? resolveRunnerToolResultBudget(
+          [
+            ...capacityContext.transcript,
+            ...capacityContext.pendingMessages,
+          ],
+          {
+            ctx: baseCtx,
+            contextWindow: resolvedContextCapacity.contextWindow,
+            reservedResponseTokens:
+              resolvedContextCapacity.provider.getEffectiveMaxOutputTokens(
+                resolvedContextCapacity.activeModel,
+              ),
+            contextTokenSnapshotRef,
+          },
+        )
+      : undefined,
+  );
   // Build the full role-prompt context so every role's
   // system prompt carries the full surface (decision summary + contract
   // + metadata + verification + tool policy + evidence strategies +
@@ -1762,43 +1788,87 @@ async function runManagedTaskViaRunnerInner(
   // Pre-extraction this block was ~80 LoC inline; the adapter module
   // owns the goal-accounting + sendMessage-counter-reset + base-drain
   // composition so runner-driven stays at the dispatch-loop layer.
-  const baseBeforeNextTurn: (ctx: {
-    readonly transcript: readonly KodaXMessage[];
-    readonly iteration: number;
-  }) => Promise<readonly KodaXMessage[]> = async () => {
-    // FEATURE_164 mid-turn user-prompt drain.
-    const drained = getMessageQueue().dequeue({
-      agentId: messageQueueAgentId,
-      maxPriority: 'user',
-      mode: 'prompt',
-    });
-    if (drained.length === 0) return [];
-    const validatedMessagesWithoutTurn = drained.map((m) => {
-      const inputArtifacts = toKodaXInputArtifacts(m.inputArtifacts);
+  const composeMidTurnPromptMessages = (
+    prompts: readonly QueuedMessage[],
+    timestamp: string,
+  ): KodaXMessage[] => {
+    const queuedTurnId = prompts.length > 0
+      ? liveTurnController.startTurn({
+          deliveryKind: 'queued',
+          promptId: prompts[0]?.id,
+        })
+      : undefined;
+    const messages = prompts.map((message): KodaXMessage => {
+      const inputArtifacts = toKodaXInputArtifacts(message.inputArtifacts);
       validateInputArtifactsForModel(inputArtifacts ?? [], {
         provider: options.provider,
         model: options.modelOverride ?? options.model,
       });
       return {
-        role: 'user' as const,
-        content: buildPromptMessageContent(m.content, inputArtifacts),
+        role: 'user',
+        content: buildPromptMessageContent(message.content, inputArtifacts),
+        ...(queuedTurnId ? { turnId: queuedTurnId } : {}),
+        timestamp,
       };
     });
-    const queuedTurnId = liveTurnController.startTurn({
-      deliveryKind: 'queued',
-      promptId: drained[0]?.id,
-    });
-    const timestamp = new Date().toISOString();
-    const validatedMessages = validatedMessagesWithoutTurn.map((message) => ({
-      ...message,
-      turnId: queuedTurnId,
-      timestamp,
-    }));
-    options.events?.onMidTurnUserMessages?.(
-      drained.map((message) => message.content),
-      { queuedMessageIds: drained.map((message) => message.id) },
+    if (prompts.length > 0) {
+      options.events?.onMidTurnUserMessages?.(
+        prompts.map((message) => message.content),
+        { queuedMessageIds: prompts.map((message) => message.id) },
+      );
+    }
+    return messages;
+  };
+
+  const composeMidTurnMailboxMessage = async (
+    mailbox: readonly QueuedMessage[],
+    transcript: readonly KodaXMessage[],
+    pendingMessages: readonly KodaXMessage[],
+    timestamp: string,
+  ): Promise<KodaXMessage | undefined> => {
+    if (mailbox.length === 0) return undefined;
+    const enforced = await enforceMailboxEnvelope(
+      mailbox.map((message) => message.content),
+      { transcript, pendingMessages },
     );
-    return validatedMessages;
+    if (enforced.length === 0) return undefined;
+    const taskResults = mailbox.flatMap((message): KodaXTaskResultMetadata[] => (
+      message.taskResult ? [message.taskResult] : []
+    ));
+    return {
+      role: 'user',
+      content: enforced.join('\n\n'),
+      _synthetic: true,
+      ...(mailbox.some((message) => message.mode === 'task-notification')
+        ? { _source: 'agent-completed' as const }
+        : {}),
+      ...(taskResults.length === 1 ? { _taskResult: taskResults[0] } : {}),
+      ...(taskResults.length > 1 ? { _taskResults: taskResults } : {}),
+      timestamp,
+    };
+  };
+
+  const baseBeforeNextTurn: (ctx: {
+    readonly transcript: readonly KodaXMessage[];
+    readonly iteration: number;
+    readonly lastTurnToolNames?: readonly string[];
+  }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
+    const drained = maybeDrainMidTurn({
+      agentId: messageQueueAgentId,
+      lastTurnToolNames: turnCtx.lastTurnToolNames ?? [],
+    });
+    if (drained.length === 0) return [];
+    const prompts = drained.filter((message) => message.mode === 'prompt');
+    const mailbox = drained.filter((message) => message.mode !== 'prompt');
+    const timestamp = new Date().toISOString();
+    const promptMessages = composeMidTurnPromptMessages(prompts, timestamp);
+    const syntheticMessage = await composeMidTurnMailboxMessage(
+      mailbox,
+      turnCtx.transcript,
+      promptMessages,
+      timestamp,
+    );
+    return syntheticMessage ? [syntheticMessage, ...promptMessages] : promptMessages;
   };
   // Transcript snapshot ref — populated by the adapter's beforeNextTurn
   // each turn boundary; read by the goal verifyComplete closure when
@@ -2025,26 +2095,7 @@ async function runManagedTaskViaRunnerInner(
     // Child results stay raw at enqueue time. Immediately before resume, use
     // the same physical next-request budget as ordinary tool-result batches,
     // including any user prompt that shares this wake-up request.
-    envelopeAggregateEnforcer: createEnvelopeAggregateBudgetEnforcer(
-      baseCtx,
-      (capacityContext) => capacityContext
-        ? resolveRunnerToolResultBudget(
-            [
-              ...capacityContext.transcript,
-              ...capacityContext.pendingMessages,
-            ],
-            {
-              ctx: baseCtx,
-              contextWindow: resolvedContextCapacity.contextWindow,
-              reservedResponseTokens:
-                resolvedContextCapacity.provider.getEffectiveMaxOutputTokens(
-                  resolvedContextCapacity.activeModel,
-                ),
-              contextTokenSnapshotRef,
-            },
-          )
-        : undefined,
-    ),
+    envelopeAggregateEnforcer: enforceMailboxEnvelope,
     onIdleWaiting: (currentAgent) => {
       // FEATURE_156 — surface "alive but suspended" to the REPL.
       // Agent-agnostic identity lookup: today only the Worker can

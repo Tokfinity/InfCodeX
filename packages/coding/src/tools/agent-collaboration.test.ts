@@ -7,10 +7,11 @@ import {
   type AgentExecutionResult,
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { actorQueueId } from '../agent-runtime/actor-queue.js';
 import {
   _resetAgentResolverForTesting,
   registerConstructedAgent,
@@ -64,6 +65,7 @@ async function context(
 
 describe('F270 canonical collaboration tools', () => {
   afterEach(() => {
+    vi.useRealTimers();
     _resetMessageQueueForTests();
     _resetAgentResolverForTesting();
   });
@@ -139,6 +141,58 @@ describe('F270 canonical collaboration tools', () => {
       },
     });
     expect(listed.actors.some((actor) => actor.path === '/root/d')).toBe(false);
+  });
+
+  it('exposes mailbox-driven wait without raw Actor event controls', () => {
+    const definition = getToolDefinition('wait_agent');
+
+    expect(definition?.input_schema.properties).toEqual({
+      timeout_ms: expect.objectContaining({ type: 'number' }),
+    });
+    expect(definition?.description).toContain('mailbox');
+    expect(definition?.description).not.toContain('return_on');
+  });
+
+  it('does not wake the parent model for progress and wakes once mailbox input arrives', async () => {
+    const sessionId = 'session-mailbox-wait';
+    const { ctx, executor } = await context(new DeferredExecutor(), sessionId);
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Inspect.' }, ctx);
+
+    let settled = false;
+    const waiting = executeTool('wait_agent', {
+      timeout_ms: 10_000,
+      return_on: 'event',
+      after_sequence: 0,
+    }, ctx).then((value) => {
+      settled = true;
+      return JSON.parse(value) as Record<string, unknown>;
+    });
+    for (let index = 0; index < 100; index += 1) {
+      await executor.pending[0]?.input.reportProgress({
+        kind: 'tool',
+        summary: `Progress ${index}`,
+      });
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    getMessageQueue().enqueue({
+      agentId: actorQueueId(sessionId, '/root'),
+      priority: 'background',
+      mode: 'system-reminder',
+      content: '<system-reminder>Reconcile the plan.</system-reminder>',
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    getMessageQueue().enqueue({
+      agentId: actorQueueId(sessionId, '/root'),
+      priority: 'background',
+      mode: 'task-notification',
+      content: '<agent-completed turn_id="turn-1">done</agent-completed>',
+    });
+
+    await expect(waiting).resolves.toEqual({ ok: true, status: 'mailbox' });
   });
 
   it('lists and spawns a local constructed specialist without an external executor plane', async () => {
@@ -234,19 +288,17 @@ describe('F270 canonical collaboration tools', () => {
     expect(listed).toMatchObject({ ok: true, matchedActorCount: 0, actors: [] });
   });
 
-  it('rejects observation requests above the Runtime-owned bounds', async () => {
+  it('rejects model wait windows outside the Runtime-owned bounds', async () => {
     const { ctx } = await context();
 
     const listResult = JSON.parse(
       await executeTool('list_agents', { limit: 51 }, ctx),
     ) as Record<string, unknown>;
     const waitResult = JSON.parse(await executeTool('wait_agent', {
-      timeout_ms: 0,
-      max_events: 21,
+      timeout_ms: 9_999,
     }, ctx)) as Record<string, unknown>;
-    const returnOnResult = JSON.parse(await executeTool('wait_agent', {
-      timeout_ms: 0,
-      return_on: 'progress',
+    const longWaitResult = JSON.parse(await executeTool('wait_agent', {
+      timeout_ms: 3_600_001,
     }, ctx)) as Record<string, unknown>;
 
     expect(listResult).toMatchObject({
@@ -255,11 +307,11 @@ describe('F270 canonical collaboration tools', () => {
     });
     expect(waitResult).toMatchObject({
       ok: false,
-      error: { message: 'max_events must be an integer between 1 and 20.' },
+      error: { message: 'timeout_ms must be an integer between 10000 and 3600000.' },
     });
-    expect(returnOnResult).toMatchObject({
+    expect(longWaitResult).toMatchObject({
       ok: false,
-      error: { message: 'return_on must be event or terminal.' },
+      error: { message: 'timeout_ms must be an integer between 10000 and 3600000.' },
     });
   });
 
@@ -425,11 +477,8 @@ describe('F270 canonical collaboration tools', () => {
     const abort = new AbortController();
     ctx.abortSignal = abort.signal;
     abort.abort('new user input');
-    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
-
     const result = JSON.parse(await executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 1,
+      timeout_ms: 10_000,
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({ ok: true, status: 'interrupted' });
@@ -446,7 +495,7 @@ describe('F270 canonical collaboration tools', () => {
     });
 
     const result = JSON.parse(await executeTool('wait_agent', {
-      timeout_ms: 1_000,
+      timeout_ms: 10_000,
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({ ok: true, status: 'user_input_pending' });
@@ -459,7 +508,7 @@ describe('F270 canonical collaboration tools', () => {
 
   it('wakes when scoped user input arrives after the Actor waiter is registered', async () => {
     const { ctx } = await context(new DeferredExecutor(), 'session-1');
-    const waiting = executeTool('wait_agent', { timeout_ms: 1_000 }, ctx);
+    const waiting = executeTool('wait_agent', { timeout_ms: 10_000 }, ctx);
     await Promise.resolve();
 
     getMessageQueue().enqueue({
@@ -475,7 +524,7 @@ describe('F270 canonical collaboration tools', () => {
     });
   });
 
-  it('terminal wait keeps its banner replayable until the tool result is committed', async () => {
+  it('mailbox wait returns only an acknowledgement and completion commits once', async () => {
     const executor = new DeferredExecutor();
     const sessionId = 'session-terminal';
     const queueAgentId = `actor:${sessionId}:/root`;
@@ -504,19 +553,12 @@ describe('F270 canonical collaboration tools', () => {
       sessionId,
     };
     await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
-    const cursor = ctx.actorControl.eventSnapshot().at(-1)?.sequence ?? 0;
     let settled = false;
     const waiting = executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 1_000,
-      return_on: 'terminal',
+      timeout_ms: 10_000,
     }, ctx).then((value) => {
       settled = true;
-      return JSON.parse(value) as {
-        readonly status?: string;
-        readonly events?: readonly { readonly kind: string }[];
-        readonly terminalOutputs?: readonly { readonly output?: string }[];
-      };
+      return JSON.parse(value) as Record<string, unknown>;
     });
 
     await executor.pending[0]?.input.reportProgress({ kind: 'tool', summary: 'First read.' });
@@ -526,11 +568,9 @@ describe('F270 canonical collaboration tools', () => {
     executor.pending[0]?.resolve({ output: 'terminal evidence' });
 
     const result = await waiting;
-    expect(result.status).toBe('event');
-    expect(result.events?.map((event) => event.kind)).toEqual(['turn_completed']);
-    expect(result.terminalOutputs).toEqual([
-      expect.objectContaining({ state: 'completed', output: 'terminal evidence' }),
-    ]);
+    expect(result).toEqual({ ok: true, status: 'mailbox' });
+    expect(result).not.toHaveProperty('events');
+    expect(result).not.toHaveProperty('terminalOutputs');
     expect(getMessageQueue().count({
       agentId: queueAgentId,
       maxPriority: 'background',
@@ -544,17 +584,29 @@ describe('F270 canonical collaboration tools', () => {
       agentId: queueAgentId,
       maxPriority: 'background',
       mode: 'task-notification',
-    })).toBe(0);
+    })).toBe(1);
 
-    const repeated = JSON.parse(await executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 0,
-      return_on: 'terminal',
-    }, ctx)) as Record<string, unknown>;
-    expect(repeated).toMatchObject({ ok: true, status: 'wait_expired' });
+    const notification = getMessageQueue().peek({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })[0];
+    expect(notification?.taskResult).toBeDefined();
+    await commitActorNotificationReceipts(ctx, [{
+      role: 'user',
+      content: notification?.content ?? '',
+      _synthetic: true,
+      _source: 'agent-completed',
+      _taskResult: notification?.taskResult,
+    }]);
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toBe(0);
   });
 
-  it('terminal wait acknowledges the Actor mailbox completion without consuming prior evidence', async () => {
+  it('an explicit Actor message wakes the parent while the child remains active', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
     await controller.spawn('/root', { taskName: 'parent', objective: 'Coordinate.' });
@@ -564,26 +616,20 @@ describe('F270 canonical collaboration tools', () => {
       sessionId: 'session-nested-terminal',
     };
     await executeTool('spawn_agent', { task_name: 'child', objective: 'Inspect.' }, ctx);
-    const cursor = ctx.actorControl.eventSnapshot().at(-1)?.sequence ?? 0;
-    await controller.send('/root/parent/child', '/root/parent', 'Important evidence.');
-    executor.pending[1]?.resolve({ output: 'nested terminal evidence' });
+    const waiting = executeTool('wait_agent', { timeout_ms: 10_000 }, ctx);
+    await Promise.resolve();
+    getMessageQueue().enqueue({
+      agentId: actorQueueId('session-nested-terminal', '/root/parent'),
+      priority: 'background',
+      mode: 'agent-message',
+      content: '<agent-message>Important evidence.</agent-message>',
+    });
 
-    const resultText = await executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 1_000,
-      return_on: 'terminal',
-    }, ctx);
-    const result = JSON.parse(resultText) as {
-      readonly terminalOutputs?: readonly { readonly output?: string }[];
-    };
-
-    expect(result.terminalOutputs).toEqual([
-      expect.objectContaining({ output: 'nested terminal evidence' }),
-    ]);
-    await commitActorNotificationReceipts(ctx, [committedToolResultMessage(resultText)]);
-    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([
-      expect.objectContaining({ kind: 'message', content: 'Important evidence.' }),
-    ]);
+    await expect(waiting.then((value) => JSON.parse(value))).resolves.toEqual({
+      ok: true,
+      status: 'mailbox',
+    });
+    expect(controller.output('/root', '/root/parent/child').state).toBe('running');
   });
 
   it('agent_output consumes the matching terminal banner only after commit', async () => {
@@ -669,39 +715,16 @@ describe('F270 canonical collaboration tools', () => {
     ))).toBe(false);
   });
 
-  it('returns a bounded event batch without skipping the remaining committed events', async () => {
+  it('retains raw event replay and long-poll semantics on the Runtime client', async () => {
     const { ctx } = await context();
     await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
     const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
     await ctx.actorControl?.send('/root/worker', 'First update.');
     await ctx.actorControl?.send('/root/worker', 'Second update.');
 
-    const first = JSON.parse(await executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 0,
-      max_events: 1,
-    }, ctx)) as {
-      readonly events?: readonly { readonly sequence: number; readonly actorPath: string }[];
-      readonly nextSequence?: number;
-      readonly hasMore?: boolean;
-      readonly updatedActors?: readonly string[];
-    };
-    const second = JSON.parse(await executeTool('wait_agent', {
-      after_sequence: first.nextSequence,
-      timeout_ms: 0,
-      max_events: 8,
-    }, ctx)) as {
-      readonly events?: readonly { readonly sequence: number }[];
-      readonly hasMore?: boolean;
-    };
-
-    expect(first).toMatchObject({
-      events: [expect.objectContaining({ actorPath: '/root/worker' })],
-      updatedActors: ['/root/worker'],
-      hasMore: true,
-    });
-    expect(second.events).toHaveLength(1);
-    expect(second.hasMore).toBe(false);
+    const events = ctx.actorControl?.eventSnapshot(cursor) ?? [];
+    expect(events).toHaveLength(2);
+    await expect(ctx.actorControl?.wait(cursor, 0)).resolves.toEqual(events[0]);
   });
 
   it('interrupts an invalidated actor branch without permanently closing its identities', async () => {
@@ -721,29 +744,17 @@ describe('F270 canonical collaboration tools', () => {
     expect(controller.get('/root', '/root/parent').actor.state).toBe('idle');
   });
 
-  it('distinguishes a committed actor event from an expired wait', async () => {
+  it('reports a mailbox wait timeout without consulting Actor events', async () => {
+    vi.useFakeTimers();
     const { ctx } = await context();
     await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
-    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
+    const waiting = executeTool('wait_agent', { timeout_ms: 10_000 }, ctx);
 
-    const expired = JSON.parse(await executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 0,
-    }, ctx)) as Record<string, unknown>;
-    const waiting = executeTool('wait_agent', {
-      after_sequence: cursor,
-      timeout_ms: 1_000,
-    }, ctx);
-    await Promise.resolve();
-    await ctx.actorControl?.send('/root/worker', 'Wake the waiter.');
-    const event = JSON.parse(await waiting) as Record<string, unknown>;
+    await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(expired).toMatchObject({ ok: true, status: 'wait_expired' });
-    expect(event).toMatchObject({
+    await expect(waiting.then((value) => JSON.parse(value))).resolves.toEqual({
       ok: true,
-      status: 'event',
-      nextSequence: expect.any(Number),
-      event: expect.objectContaining({ kind: 'message_delivered' }),
+      status: 'wait_expired',
     });
   });
 });

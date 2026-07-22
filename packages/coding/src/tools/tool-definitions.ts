@@ -188,7 +188,7 @@ function objectKeysPreview(value: unknown): string {
 
 const RUN_WORKFLOW_DESCRIPTION = [
   EXPLICIT_WORKFLOW_POLICY,
-  'Author and start a bounded deterministic JavaScript protocol over the Runtime-owned Actor tree. The call returns a run_id and Workflow actor path immediately; observe it with wait_agent/list_agents, read its structured WorkflowOutcome with agent_output, and stop it with interrupt_agent.',
+  'Author and start a bounded deterministic JavaScript protocol over the Runtime-owned Actor tree. The call returns a run_id and Workflow actor path immediately; inspect progress with list_agents, wait for critical mailbox evidence with wait_agent, read its structured WorkflowOutcome with agent_output, and stop it with interrupt_agent.',
   'Make the Workflow acquire and inspect the real scope before analysis, then give child Agents concrete paths, constraints, evidence, and outputSchema values. Write child prompts in the same natural language as the user\'s request. Declared fields live on result.structured: read your declared fields off result.structured, never off the top-level result, where they are undefined and can produce an empty report.',
   'The run(wf, args) body may use wf.runAgent, wf.parallel, wf.pipeline, wf.synthesize, wf.workflow, and wf.artifact. Use wf.pipeline for streaming stages and wf.parallel as a barrier only when a stage needs every prior result.',
   'Do not call this tool for an ordinary review or merely because a task is parallel, partitionable, or needs synthesis. Unless the user explicitly requested a Workflow, use adaptive spawn_agent waves instead.',
@@ -603,7 +603,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'spawn_agent',
-    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. Continue useful work after launch; use wait_agent for terminal events.',
+    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. Continue useful work after launch; use wait_agent only when mailbox evidence becomes critical.',
     input_schema: {
       type: 'object',
       properties: {
@@ -790,18 +790,11 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'wait_agent',
-    description: 'Yield for caller-visible actor-tree events. Use return_on="terminal" when coordinating child results so UI progress does not wake the parent model; raw event mode remains available for event-stream consumers. Waiting does not release the current Agent turn slot, and root user input interrupts promptly. After a terminal result, integrate its evidence and reconcile the affected semantic plan milestone before waiting again or moving to another milestone.',
+    description: 'Yield until the caller mailbox receives an Agent message or completion, root user input arrives, the wait is interrupted, or the timeout expires. Actor progress remains visible to UI and SDK event consumers but never wakes the parent model. Use this sparingly when required Agent evidence is on the critical path; continue useful non-overlapping work first. After mailbox evidence arrives, integrate it and reconcile the affected semantic plan milestone before waiting again.',
     input_schema: {
       type: 'object',
       properties: {
-        after_sequence: { type: 'number', description: 'Last event sequence already observed. Defaults to 0.' },
-        timeout_ms: { type: 'number', description: 'Bounded wait window, 0-120000 ms. Defaults to 30000 in event mode and 120000 in terminal mode.' },
-        max_events: { type: 'number', description: 'Maximum committed events returned together, 1-20. Defaults to 8.' },
-        return_on: {
-          type: 'string',
-          enum: ['event', 'terminal'],
-          description: 'event (default) returns the next visible event; terminal skips progress internally and returns completed, failed, or interrupted turns with terminalOutputs.',
-        },
+        timeout_ms: { type: 'number', minimum: 10000, maximum: 3600000, description: 'Wait window in milliseconds. Defaults to 120000. Longer waits do not invoke the model and root user input still wakes promptly.' },
       },
     },
     handler: toolWaitAgent,
@@ -867,7 +860,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   {
     name: 'agent_output',
     description:
-      'Retrieve the current or terminal bounded output preview, recent activity, legacy artifact references, and structured artifact metadata for a controlled actor turn. Use list_agents for tree state and wait_agent for event waiting.',
+      'Retrieve the current or terminal bounded output preview, recent activity, legacy artifact references, and structured artifact metadata for a known controlled actor turn. Use list_agents for tree state and wait_agent for mailbox waiting; do not poll completion with agent_output.',
     input_schema: {
       type: 'object',
       properties: {

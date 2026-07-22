@@ -1,6 +1,7 @@
 import {
   _resetMessageQueueForTests,
   getMessageQueue,
+  type AgentActorSnapshot,
   type AgentExecutionInput,
   type AgentExecutionResult,
   type AgentExecutorPlaneBinding,
@@ -152,6 +153,49 @@ describe('F270 coding Actor runtime adapter', () => {
     ]));
   });
 
+  it('restores an unacknowledged root completion into a fresh process queue', async () => {
+    let snapshot: AgentActorSnapshot | undefined;
+    const store = {
+      async load() { return snapshot; },
+      async save(next: AgentActorSnapshot) { snapshot = next; },
+    };
+    executeChildAgentsMock.mockResolvedValue(completedChild('restored result'));
+    const first = new CodingActorSession({ sessionId: 'session-1', store });
+    await first.initialize();
+    const { ctx, options } = environment();
+    const root = first.attach(ctx, options);
+    const turn = await root.spawn({ taskName: 'restore', objective: 'Survive restart.' });
+    await settle();
+
+    const rebuiltInProcess = new CodingActorSession({ sessionId: 'session-1', store });
+    await rebuiltInProcess.initialize();
+    expect(getMessageQueue().count({
+      agentId: actorQueueId('session-1', '/root'),
+      maxPriority: 'background',
+      mode: 'task-notification',
+      predicate: (message) => message.taskResult?.taskId === turn.turnId,
+    })).toBe(1);
+
+    _resetMessageQueueForTests();
+
+    const restored = new CodingActorSession({ sessionId: 'session-1', store });
+    await restored.initialize();
+
+    expect(getMessageQueue().peek({
+      agentId: actorQueueId('session-1', '/root'),
+      maxPriority: 'background',
+      mode: 'task-notification',
+    })).toEqual([
+      expect.objectContaining({
+        taskResult: expect.objectContaining({
+          taskId: turn.turnId,
+          status: 'completed',
+          summary: 'restored result',
+        }),
+      }),
+    ]);
+  });
+
   it('projects nested child completion with task-result identity into the parent queue', async () => {
     let nestedTurnId: string | undefined;
     executeChildAgentsMock
@@ -233,7 +277,7 @@ describe('F270 coding Actor runtime adapter', () => {
     expect(getMessageQueue().peek({
       agentId: actorQueueId('session-1', '/root/worker'),
       maxPriority: 'background',
-      mode: 'prompt',
+      mode: 'agent-message',
     })).toEqual(expect.arrayContaining([
       expect.objectContaining({
         content: expect.stringMatching(/<agent-message id="msg_[^"]+"[^>]*>\nLive evidence\./u),

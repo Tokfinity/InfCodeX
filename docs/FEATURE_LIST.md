@@ -14,12 +14,12 @@
 | Current released version | `v0.7.73` |
 | Current package version | `@kodax-ai/kodax@0.7.74` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `59` |
-| InProgress | `2` |
+| Total tracked features | `60` |
+| InProgress | `3` |
 | Planned | `11` |
 | Completed | `39` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 39 | `271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.73 remains the current released baseline. |
-| InProgress | 2 | `272, 225` | `272` is closing durable exact-history recovery in v0.7.74; `225` remains the bounded v0.7.100 cleanup. |
+| InProgress | 3 | `273, 272, 225` | `273` is implemented and verified pending the v0.7.74 release; `272` is closing durable exact-history recovery; `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -57,7 +57,7 @@
 | `v0.7.71` | `0` |
 | `v0.7.72` | `2` |
 | `v0.7.73` | `1` |
-| `v0.7.74` | `1` |
+| `v0.7.74` | `2` |
 | `v0.7.75` | `1` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
@@ -356,12 +356,23 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `273` | Mailbox-Driven Agent Wait + Telemetry/Control Separation | Enhancement / Agent Control Plane | High | `v0.7.74` | [v0.7.74](features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation) |
 | `272` | Reliable Full-Coverage Context Compaction + Durable Exact-History Recovery | Core / Context Management + SDK Protocol | Critical | `v0.7.74` | [v0.7.74](features/v0.7.74.md#feature_272-reliable-full-coverage-context-compaction-and-sdk-observability) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 ---
 
 ## v0.7.74 Implementation Record
+
+`273` separates the model coordination wait from the durable Actor telemetry
+stream. The model tool now has one bounded timeout, wakes only for scoped
+mailbox/user/interruption/timeout activity, and returns an acknowledgement;
+Runner and idle-yield boundaries inject authenticated Agent evidence with the
+correct synthetic/user authorship and post-transcript completion receipt. Raw
+event replay and long-poll remain unchanged for Runtime/SDK/daemon consumers.
+The closure review added crash recovery for unacknowledged root completions,
+same-process queue deduplication by child `turnId`, and explicit Goal-wrapper
+propagation of the Runner yield marker.
 
 `272` replaces the model-window/rolling-chunk large-compaction behavior with a
 shared always-on policy, percentage/absolute minimum threshold, effective-tail

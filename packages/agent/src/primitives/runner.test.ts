@@ -924,6 +924,29 @@ describe('Runner', () => {
       expect(result.output).toBe('done');
     });
 
+    it('reports the latest tool names to the beforeNextTurn yield boundary', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'yield-boundary-agent',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        return turn === 1
+          ? { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] }
+          : { text: 'done', toolCalls: [] };
+      });
+      const beforeNextTurn = vi.fn(async () => []);
+
+      await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+
+      expect(beforeNextTurn).toHaveBeenCalledWith(expect.objectContaining({
+        lastTurnToolNames: ['echo'],
+      }));
+    });
+
     it('injects a FIFO batch as separate user messages in one next LLM call', async () => {
       const echoTool = makeEchoTool();
       const agent = createAgent({

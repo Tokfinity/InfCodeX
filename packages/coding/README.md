@@ -16,6 +16,12 @@ KodaX Coding Agent 的核心实现，包含 coding preset、tool registry、role
 - Repo intelligence / LSP：`repo_overview`, `changed_scope`, `module_context`, `lsp_definition`, `symbol_context`, `impact_estimate`, ...
 - Construction and self-extension: tool/agent scaffold, validate, stage, test, activate, self-modify helpers
 
+`wait_agent` is a model-facing mailbox yield, not an Actor event reader. It
+wakes for scoped Agent messages/completions, root user input, interruption, or
+timeout; progress events remain available to UI and SDK event consumers without
+resampling the parent model. SDK callers that need raw event replay/long-poll
+continue to use the Actor event APIs directly.
+
 Auto Mode is enforced by the active Runtime guardrail before the generic
 permission bridge. A host only receives a permission request for an explicit
 guardrail escalation; Runtime sessions retain the selected/fallback LLM or

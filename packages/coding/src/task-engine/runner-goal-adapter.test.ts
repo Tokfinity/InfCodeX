@@ -137,6 +137,27 @@ describe('buildRunnerGoalAdapter — goal runtime wrap', () => {
     };
   }
 
+  it('preserves the latest tool names through the goal lifecycle wrapper', async () => {
+    const base = vi.fn(async () => []);
+    const { beforeNextTurn } = buildRunnerGoalAdapter({
+      goalRuntime: makeGoalRuntime({ getGoal: () => activeGoal() }),
+      tokenStateRef: makeTokenStateRef(),
+      baseCtx: makeBaseCtx(),
+      baseBeforeNextTurn: base,
+      composedStopHook: NOOP_STOP_HOOK,
+    });
+
+    await beforeNextTurn({
+      transcript: [],
+      iteration: 0,
+      lastTurnToolNames: ['wait_agent'],
+    });
+
+    expect(base).toHaveBeenCalledWith(expect.objectContaining({
+      lastTurnToolNames: ['wait_agent'],
+    }));
+  });
+
   it('advances turnStartMsRef after every beforeNextTurn fire so next-turn wall-time delta starts fresh', async () => {
     const recordedTurnStarts: number[] = [];
     const goalRuntime = makeGoalRuntime({

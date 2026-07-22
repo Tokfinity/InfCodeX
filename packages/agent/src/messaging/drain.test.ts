@@ -24,7 +24,21 @@ describe('mid-turn message drain', () => {
     expect(queue.size()).toBe(1);
   });
 
-  it('uses user priority for every current tool', () => {
-    expect(midTurnDrainPriority(['spawn_agent', 'wait_agent'])).toBe('user');
+  it('drains urgent Actor follow-ups without changing their synthetic mode', () => {
+    const queue = getMessageQueue();
+    queue.enqueue({
+      priority: 'user',
+      mode: 'agent-message',
+      content: '<agent-message>updated objective</agent-message>',
+    });
+
+    expect(maybeDrainMidTurn({ lastTurnToolNames: [] })).toEqual([
+      expect.objectContaining({ priority: 'user', mode: 'agent-message' }),
+    ]);
+  });
+
+  it('opens background mailbox delivery only after explicit wait_agent yield', () => {
+    expect(midTurnDrainPriority(['spawn_agent'])).toBe('user');
+    expect(midTurnDrainPriority(['spawn_agent', 'wait_agent'])).toBe('background');
   });
 });

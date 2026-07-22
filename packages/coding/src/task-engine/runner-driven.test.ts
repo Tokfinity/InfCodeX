@@ -19,6 +19,7 @@ import {
   buildAssistantMessageFromLlmResult,
   ContextCapacityError,
   createAgentActorController,
+  getMessageQueue,
   resolveActiveRootQueueRoute,
 } from '@kodax-ai/agent';
 import {
@@ -1416,6 +1417,70 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(systemPrompt).toContain('0 non-root turns are active');
     expect(systemPrompt).toContain('3 child start slots are available');
     expect(systemPrompt).toMatch(/^ACTOR CAPACITY \(authoritative runtime fact\):/);
+  });
+
+  it('delivers mailbox evidence as synthetic context after wait_agent', async () => {
+    const sessionId = 'runner-mailbox-wait';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const controller = await createAgentActorController();
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: sessionId },
+      context: {
+        ...makeOptions().context,
+        actorControl: controller.bind('/root'),
+      },
+    };
+    const transcripts: readonly KodaXMessage[][] = [];
+    let callCount = 0;
+    getMessageQueue().enqueue({
+      agentId: queueAgentId,
+      priority: 'background',
+      mode: 'agent-message',
+      content: '<agent-message id="msg-1" from="/root/reviewer">ready</agent-message>',
+    });
+
+    try {
+      await runManagedTaskViaRunner(options, 'Coordinate review.', async (transcript) => {
+        transcripts.push([...transcript]);
+        callCount += 1;
+        return callCount === 1
+          ? {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'wait-mailbox-1',
+                name: 'wait_agent',
+                input: { timeout_ms: 10_000 },
+              }],
+            }
+          : { textBlocks: [{ text: 'Integrated.' }], toolBlocks: [] };
+      });
+
+      const mailboxMessage = transcripts[1]?.find((message) => (
+        message._synthetic === true
+        && typeof message.content === 'string'
+        && message.content.includes('<agent-message')
+      ));
+      expect(mailboxMessage).toEqual(expect.objectContaining({
+        role: 'user',
+        _synthetic: true,
+      }));
+      expect(mailboxMessage?._source).toBeUndefined();
+      const toolResultText = (transcripts[1] ?? []).flatMap((message) => (
+        typeof message.content === 'string'
+          ? []
+          : (message.content as readonly { readonly type: string; readonly content?: unknown }[])
+              .filter((block) => block.type === 'tool_result')
+              .flatMap((block) => typeof block.content === 'string' ? [block.content] : [])
+      ));
+      expect(toolResultText.some((text) => text.includes('"status": "mailbox"'))).toBe(true);
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'background',
+      });
+    }
   });
 
   it('records todo drift telemetry and injects the next-turn reminder through runner wiring', async () => {

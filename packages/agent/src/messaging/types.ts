@@ -18,7 +18,18 @@ import type { KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 export type MessagePriority = 'user' | 'background';
 
-export type MessageMode = 'prompt' | 'task-notification' | 'system-reminder';
+/**
+ * Delivery semantics, independent of priority:
+ * - `prompt`: user-authored input; delivered as a real user turn.
+ * - `agent-message`: Runtime-authenticated Agent communication.
+ * - `task-notification`: structured Agent completion evidence.
+ * - `system-reminder`: Runtime-authored synthetic guidance.
+ */
+export type MessageMode =
+  | 'prompt'
+  | 'agent-message'
+  | 'task-notification'
+  | 'system-reminder';
 
 export type QueuedInputArtifact = KodaXInputArtifact;
 

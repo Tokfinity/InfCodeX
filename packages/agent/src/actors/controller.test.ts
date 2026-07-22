@@ -115,6 +115,71 @@ describe('F270 actor tree and scheduler', () => {
     await expect(restoredExecutor.pending[0]?.input.drainMailbox()).resolves.toEqual([]);
   });
 
+  it('republishes an unacknowledged root completion once after restart', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    const store: AgentActorStore = {
+      async load() { return saved; },
+      async save(snapshot) { saved = snapshot; },
+    };
+    const executor = new DeferredExecutor();
+    const first = await createAgentActorController({ executor, store });
+    const child = await first.spawn('/root', { taskName: 'worker', objective: 'Inspect.' });
+    executor.pending[0]?.resolve({ output: 'Durable result.' });
+    await settle();
+    expect(saved?.pendingRootCompletionTurnIds).toContain(child.turnId);
+
+    const restoredMessages: string[] = [];
+    const restored = await createAgentActorController({
+      store,
+      onMessageCommitted(message) {
+        restoredMessages.push(message.turnId ?? 'missing');
+      },
+    });
+
+    expect(restoredMessages).toEqual([child.turnId]);
+    await expect(restored.bind('/root').acknowledgeCompletions([child.turnId])).resolves.toBe(1);
+
+    const replayedAfterAcknowledgement: string[] = [];
+    await createAgentActorController({
+      store,
+      onMessageCommitted(message) {
+        replayedAfterAcknowledgement.push(message.turnId ?? 'missing');
+      },
+    });
+    expect(replayedAfterAcknowledgement).toEqual([]);
+  });
+
+  it('does not infer replayable completions from a legacy snapshot without delivery state', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    const executor = new DeferredExecutor();
+    const first = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) { saved = snapshot; },
+      },
+    });
+    await first.spawn('/root', { taskName: 'legacy', objective: 'Finish.' });
+    executor.pending[0]?.resolve({ output: 'Historical result.' });
+    await settle();
+    if (!saved) throw new Error('Expected a persisted Actor snapshot.');
+    const legacy = { ...saved };
+    delete legacy.pendingRootCompletionTurnIds;
+    const replayed: string[] = [];
+
+    await createAgentActorController({
+      store: {
+        async load() { return legacy; },
+        async save() {},
+      },
+      onMessageCommitted(message) {
+        replayed.push(message.turnId ?? 'missing');
+      },
+    });
+
+    expect(replayed).toEqual([]);
+  });
+
   it('does not replay an acknowledged direct-child terminal event', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });
@@ -813,6 +878,34 @@ describe('F270 actor tree and scheduler', () => {
 
     await expect(recovered.initialize()).rejects.toThrow('Unsupported actor snapshot schema');
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it('rejects pending completion delivery state without a terminal turn', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    const executor = new DeferredExecutor();
+    const first = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save(snapshot) { saved = snapshot; },
+      },
+    });
+    await first.spawn('/root', { taskName: 'worker', objective: 'Persist.' });
+    executor.pending[0]?.resolve({ output: 'done' });
+    await settle();
+    if (!saved) throw new Error('Expected an Actor snapshot to be persisted.');
+    const invalid = { ...saved, turns: [] };
+
+    const restored = new AgentActorController({
+      store: {
+        async load() { return invalid; },
+        async save() {},
+      },
+    });
+
+    await expect(restored.initialize()).rejects.toThrow(
+      'root completion turn is missing or non-terminal',
+    );
   });
 
   it('restores abort handles when a durable mutation is rolled back', async () => {

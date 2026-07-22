@@ -1,8 +1,8 @@
 /**
- * F270 Todo / Actor progress checkpoint — Layer 2 pilot v2 — 2026-07-20.
+ * F270 Todo / Actor progress checkpoint — Layer 2 pilot v3 — 2026-07-22.
  *
- * Why Layer 1 is insufficient: unit tests prove that terminal wait events and
- * structured task-result metadata inject the production reminder exactly once,
+ * Why Layer 1 is insufficient: unit tests prove that mailbox-delivered
+ * structured task-result metadata injects the production reminder exactly once,
  * but only a model probe can show whether the combined prompt changes the next
  * plan decision without encouraging premature completion.
  *
@@ -37,6 +37,12 @@
  * the scorer now accepts either that visible reconciliation or an actual wait.
  * The safety gates (no completion, no Actor-shaped Todo) are unchanged.
  *
+ * v3 rebases the production substrate onto FEATURE_273's mailbox-driven
+ * `wait_agent`. Historical v2 raw output remains preserved under its OS-temp
+ * dump root and is not reused for a future prompt decision because the
+ * Worker/tool bytes changed. The comparison still isolates F270's Todo
+ * checkpoint rules; mailbox semantics are common to both arms.
+ *
  * Run:
  *   KODAX_EVAL_TODO_ACTOR_PROGRESS=1 npm run test:eval -- todo-actor-progress-checkpoint
  */
@@ -66,7 +72,7 @@ const TIMEOUT_MS = 90_000;
 const MAX_OUTPUT_TOKENS = 2_048;
 const PANEL: readonly ModelAlias[] = ['zhipu/glm52', 'mmx/m3'];
 const RUN_ID = new Date().toISOString().replace(/[:.]/g, '-');
-const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'todo-actor-progress-checkpoint-v2', RUN_ID);
+const DUMP_DIR = join(tmpdir(), 'kodax-eval-dumps', 'todo-actor-progress-checkpoint-v3', RUN_ID);
 const RAW_PATH = join(DUMP_DIR, 'raw.jsonl');
 
 const DECISION: KodaXTaskRoutingDecision = {
@@ -92,20 +98,16 @@ const BASELINE_TERMINATION = '- Before writing that final summary, mark every fi
 const CURRENT_PLAN_GRANULARITY = '- Todo items are user-visible semantic milestones, not Actor instances. Several Agents may support one milestone; create separate items only for genuinely separate deliverables.';
 const CURRENT_MILESTONE_CADENCE = '- After a milestone is actually finished, update it before starting the next item, calling `wait_agent` again, or writing the final response. Do not defer multiple status changes to final cleanup.';
 const CURRENT_AGENT_CHECKPOINT = '- After a terminal Agent result arrives, integrate its evidence and reconcile the affected semantic plan milestone before calling `wait_agent` again or starting a different plan milestone. Do not mark a milestone completed merely because one supporting Agent finished; keep it `in_progress` when other work or synthesis remains.';
-const CURRENT_AGENT_OUTPUT_RULE = '- A host-delivered `<agent-completed path="..." turn_id="..." state="completed">` block already contains the completed turn summary; its body is the authoritative terminal result, so use the inline result directly to revise follow-up objectives or topology. Do not call `agent_output` speculatively: use it only after a terminal `wait_agent` event or a preceding `<agent-completed>` supplies the exact Actor/Turn target and the inline delivery omits structured output or artifact refs you need.';
-const BASELINE_AGENT_OUTPUT_RULE = '- A host-delivered `<agent-completed path="..." turn_id="..." state="completed">` block already contains the completed turn summary; its body is the authoritative terminal result, so use the inline result directly to revise follow-up objectives or topology. Do not call `agent_output` speculatively: use it only after a preceding `<agent-completed>` supplies the target and its inline body omits exact structured output or artifact refs you need.';
 
 function releasedWorkerPrompt(): string {
   const baseline = CURRENT_WORKER_PROMPT
     .replace(`${CURRENT_PLAN_GRANULARITY}\n`, '')
     .replace(`${CURRENT_MILESTONE_CADENCE}\n`, '')
     .replace(`${CURRENT_AGENT_CHECKPOINT}\n`, '')
-    .replace(CURRENT_AGENT_OUTPUT_RULE, BASELINE_AGENT_OUTPUT_RULE)
     .replace(CURRENT_TERMINATION, BASELINE_TERMINATION);
   if (
     baseline === CURRENT_WORKER_PROMPT
     || baseline.includes(CURRENT_PLAN_GRANULARITY)
-    || baseline.includes(CURRENT_AGENT_OUTPUT_RULE)
   ) {
     throw new Error('Baseline Worker prompt revert is stale');
   }
@@ -122,7 +124,7 @@ function productionTool(name: string): KodaXToolDefinition {
   };
 }
 
-const CURRENT_WAIT_SUFFIX = ' After a terminal result, integrate its evidence and reconcile the affected semantic plan milestone before waiting again or moving to another milestone.';
+const CURRENT_WAIT_SUFFIX = ' After mailbox evidence arrives, integrate it and reconcile the affected semantic plan milestone before waiting again.';
 const CURRENT_CREATE_RULE = '- BEFORE spawning several child Agents via `spawn_agent` — capture the user-visible semantic milestones, not one item per child Agent. Several Agents may support one milestone; split rows only when they produce genuinely separate deliverables.';
 const BASELINE_CREATE_RULE = '- BEFORE spawning several child Agents via `spawn_agent` — the plan list is the natural anchor for the work each child will execute.';
 

@@ -261,6 +261,8 @@ export interface RunOptions {
     readonly agent: Agent;
     readonly transcript: readonly AgentMessage[];
     readonly iteration: number;
+    /** Executed tool names from the iteration that reached this boundary. */
+    readonly lastTurnToolNames: readonly string[];
   }) => Promise<readonly AgentMessage[]>;
   /**
    * FEATURE_166 (v0.7.41 follow-up) — agent-switch hook.
@@ -1310,6 +1312,7 @@ async function genericRun<TData>(
         agent: currentAgent,
         transcript,
         iteration,
+        lastTurnToolNames: finalCalls.map((call) => call.name),
       });
       if (extraMessages.length > 0) {
         for (const message of extraMessages) {

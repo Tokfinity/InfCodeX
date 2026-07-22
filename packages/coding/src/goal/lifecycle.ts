@@ -88,6 +88,7 @@ export interface GoalLifecycleContext {
 interface BeforeNextTurnFnCtx {
   readonly transcript: readonly AgentMessage[];
   readonly iteration: number;
+  readonly lastTurnToolNames?: readonly string[];
 }
 
 type BeforeNextTurnFn = (ctx: BeforeNextTurnFnCtx) => Promise<readonly AgentMessage[]>;

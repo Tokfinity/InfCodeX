@@ -57,7 +57,7 @@ export async function toolRunWorkflow(
       `run_id:${started.runId}`,
       `workflow_path:${workflowPath}`,
       `Workflow "${readManifestName(manifest)}" started.`,
-      `Use wait_agent or list_agents to observe progress, agent_output("${workflowPath}") to read the structured WorkflowOutcome, and interrupt_agent("${workflowPath}") to stop it.`,
+      `Use list_agents to inspect progress, wait_agent when its mailbox result is on the critical path, agent_output("${workflowPath}") to read the structured WorkflowOutcome, and interrupt_agent("${workflowPath}") to stop it.`,
     ].join('\n');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

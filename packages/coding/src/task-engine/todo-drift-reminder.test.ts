@@ -253,7 +253,7 @@ function agentCompletionMessage(
 }
 
 describe('Agent completion todo checkpoint', () => {
-  it('arms from terminal wait_agent events and coalesces them into one reminder', () => {
+  it('ignores wait acknowledgements and coalesces structured mailbox completions', () => {
     const store = seededPendingStore();
     store.updateStatus('todo_1', 'in_progress');
     const state = createTodoDriftReminderState();
@@ -264,16 +264,15 @@ describe('Agent completion todo checkpoint', () => {
       call: call('wait_agent'),
       result: okResult(JSON.stringify({
         ok: true,
-        status: 'event',
-        events: [
-          { kind: 'turn_completed', turnId: 'turn-1' },
-          { kind: 'turn_failed', turnId: 'turn-2' },
-          { kind: 'turn_progress', turnId: 'turn-3' },
-        ],
+        status: 'mailbox',
       })),
     });
 
-    const reminder = consumeAgentCompletionTodoReminderText(state, store, []);
+    expect(consumeAgentCompletionTodoReminderText(state, store, [])).toBeUndefined();
+    const reminder = consumeAgentCompletionTodoReminderText(state, store, [
+      agentCompletionMessage('turn-1'),
+      agentCompletionMessage('turn-2', 'failed'),
+    ]);
     expect(reminder).toContain('2 terminal child Agent results');
     expect(reminder).toContain('before calling wait_agent again');
     expect(reminder).toContain('semantic milestones, not Actor instances');
@@ -324,20 +323,12 @@ describe('Agent completion todo checkpoint', () => {
     )).toBeDefined();
   });
 
-  it('deduplicates wait and transcript delivery of the same terminal turn', () => {
+  it('deduplicates repeated transcript delivery of the same terminal turn', () => {
     const store = seededPendingStore();
     store.updateStatus('todo_1', 'in_progress');
     const state = createTodoDriftReminderState();
 
-    observeTodoDriftAfterToolResult({
-      state,
-      todoStore: store,
-      call: call('wait_agent'),
-      result: okResult(JSON.stringify({
-        ok: true,
-        events: [{ kind: 'turn_completed', turnId: 'same-turn' }],
-      })),
-    });
+    expect(consumeAgentCompletionTodoReminderText(state, store, [])).toBeUndefined();
     expect(consumeAgentCompletionTodoReminderText(
       state,
       store,

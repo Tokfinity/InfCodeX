@@ -271,15 +271,17 @@ describe('MessageQueue', () => {
   });
 
   describe('mode tagging', () => {
-    it('preserves prompt / task-notification / system-reminder modes', () => {
+    it('preserves prompt / agent-message / task-notification / system-reminder modes', () => {
       const q = new MessageQueue();
       q.enqueue({ priority: 'user', mode: 'prompt', content: 'p' });
+      q.enqueue({ priority: 'background', mode: 'agent-message', content: 'am' });
       q.enqueue({ priority: 'background', mode: 'task-notification', content: 'tn' });
       q.enqueue({ priority: 'background', mode: 'system-reminder', content: 'sr' });
 
       const drained = q.dequeue({ maxPriority: 'background' });
       expect(drained.map((m) => m.mode)).toEqual([
         'prompt',
+        'agent-message',
         'task-notification',
         'system-reminder',
       ]);

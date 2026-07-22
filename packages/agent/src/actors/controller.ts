@@ -88,6 +88,7 @@ export class AgentActorController {
   private readonly turns = new Map<string, AgentTurn>();
   private readonly mailboxes = new Map<string, AgentMailboxMessage[]>();
   private readonly acknowledgedCompletionTurnIds = new Set<string>();
+  private readonly pendingRootCompletionTurnIds = new Set<string>();
   private readonly eventsLog: AgentEvent[] = [];
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly waiters = new Set<EventWaiter>();
@@ -114,6 +115,7 @@ export class AgentActorController {
     validateSnapshot(snapshot, this.scheduler.maxConcurrentThreads);
     this.restore(snapshot);
     this.committedSnapshot = this.snapshot();
+    this.republishUnacknowledgedRootCompletions();
     await this.recoverUnmatchedTurns();
   }
 
@@ -309,7 +311,10 @@ export class AgentActorController {
       ));
       for (const message of observed) {
         const turnId = message.turnId;
-        if (turnId) this.acknowledgedCompletionTurnIds.add(turnId);
+        if (turnId) {
+          this.acknowledgedCompletionTurnIds.add(turnId);
+          this.pendingRootCompletionTurnIds.delete(turnId);
+        }
       }
       return observed.length;
     }, (count) => count > 0);
@@ -713,7 +718,9 @@ export class AgentActorController {
     const summary = rawSummary.length > MAX_MESSAGE_LENGTH
       ? `${rawSummary.slice(0, MAX_MESSAGE_LENGTH - 3).trimEnd()}...`
       : rawSummary;
-    this.appendMessage(actor.path, actor.parentPath ?? ROOT_PATH, summary, 'completion', 'internal', turnId);
+    const recipientPath = actor.parentPath ?? ROOT_PATH;
+    this.appendMessage(actor.path, recipientPath, summary, 'completion', 'internal', turnId);
+    if (recipientPath === ROOT_PATH) this.pendingRootCompletionTurnIds.add(turnId);
   }
 
   private async drainMailbox(actorPath: string): Promise<readonly AgentMailboxMessage[]> {
@@ -1061,6 +1068,9 @@ export class AgentActorController {
       ...(this.acknowledgedCompletionTurnIds.size > 0
         ? { acknowledgedCompletionTurnIds: [...this.acknowledgedCompletionTurnIds] }
         : {}),
+      ...(this.pendingRootCompletionTurnIds.size > 0
+        ? { pendingRootCompletionTurnIds: [...this.pendingRootCompletionTurnIds] }
+        : {}),
       events: [...this.eventsLog],
     };
   }
@@ -1074,11 +1084,28 @@ export class AgentActorController {
     for (const turnId of snapshot.acknowledgedCompletionTurnIds ?? []) {
       this.acknowledgedCompletionTurnIds.add(turnId);
     }
+    this.pendingRootCompletionTurnIds.clear();
+    for (const turnId of snapshot.pendingRootCompletionTurnIds ?? []) {
+      this.pendingRootCompletionTurnIds.add(turnId);
+    }
     this.eventsLog.splice(0, this.eventsLog.length, ...snapshot.events);
     const kindByPath = new Map(snapshot.actors.map((actor) => [actor.path, actor.kind]));
     this.scheduler.restore(snapshot.turns
       .filter((turn) => !isTerminal(turn.state) && kindByPath.get(turn.actorPath) !== 'workflow')
       .map((turn) => turn.turnId));
+  }
+
+  private republishUnacknowledgedRootCompletions(): void {
+    for (const message of this.mailboxes.get(ROOT_PATH) ?? []) {
+      if (
+        message.kind === 'completion'
+        && message.turnId !== undefined
+        && this.pendingRootCompletionTurnIds.has(message.turnId)
+        && !this.acknowledgedCompletionTurnIds.has(message.turnId)
+      ) {
+        this.publishCommittedMessage(message);
+      }
+    }
   }
 
   private async recoverUnmatchedTurns(): Promise<void> {
@@ -1328,9 +1355,28 @@ function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): 
       message.kind === 'completion' && message.turnId !== undefined
     ))
     .map((message) => message.turnId));
+  const rootCompletionTurnIds = new Set((snapshot.mailboxes[ROOT_PATH] ?? [])
+    .filter((message): message is AgentMailboxMessage & { readonly turnId: string } => (
+      message.kind === 'completion' && message.turnId !== undefined
+    ))
+    .map((message) => message.turnId));
+  const terminalTurnIds = new Set(snapshot.turns
+    .filter((turn) => isTerminal(turn.state))
+    .map((turn) => turn.turnId));
   for (const turnId of snapshot.acknowledgedCompletionTurnIds ?? []) {
     if (!completionTurnIds.has(turnId)) {
       throw new Error(`Actor snapshot acknowledges an unknown completion turn: ${turnId}`);
+    }
+  }
+  for (const turnId of snapshot.pendingRootCompletionTurnIds ?? []) {
+    if (!rootCompletionTurnIds.has(turnId)) {
+      throw new Error(`Actor snapshot tracks an unknown root completion turn: ${turnId}`);
+    }
+    if (!terminalTurnIds.has(turnId)) {
+      throw new Error(`Actor snapshot root completion turn is missing or non-terminal: ${turnId}`);
+    }
+    if (snapshot.acknowledgedCompletionTurnIds?.includes(turnId)) {
+      throw new Error(`Actor snapshot tracks an acknowledged root completion turn: ${turnId}`);
     }
   }
 }

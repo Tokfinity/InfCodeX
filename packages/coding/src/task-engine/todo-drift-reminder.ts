@@ -58,7 +58,7 @@ export interface TodoDriftReminderState {
   readonly workStartedWithoutClaimedTodoCount: { current: number };
   readonly lastUnclaimedWorkTool: { current: string | undefined };
   readonly lastUnclaimedWorkSequence: { current: number | undefined };
-  /** Terminal child turns already observed through wait_agent or transcript metadata. */
+  /** Terminal child turns already observed through structured transcript metadata. */
   readonly seenAgentCompletionTaskIds: Set<string>;
   /** New terminal child turns waiting for one coalesced plan checkpoint. */
   readonly pendingAgentCompletions: Map<string, AgentTerminalCheckpoint>;
@@ -145,39 +145,6 @@ function isSuccessfulTodoUpdate(call: RunnerToolCall, result: RunnerToolResult):
   }
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function terminalStatusFromEventKind(
-  kind: unknown,
-): KodaXTaskResultMetadata['status'] | undefined {
-  if (kind === 'turn_completed') return 'completed';
-  if (kind === 'turn_failed') return 'failed';
-  if (kind === 'turn_interrupted') return 'cancelled';
-  return undefined;
-}
-
-function terminalCheckpointsFromWaitResult(
-  call: RunnerToolCall,
-  result: RunnerToolResult,
-): readonly AgentTerminalCheckpoint[] {
-  if (call.name !== 'wait_agent' || typeof result.content !== 'string') return [];
-  try {
-    const parsed: unknown = JSON.parse(result.content);
-    if (!isRecord(parsed) || parsed.ok !== true || !Array.isArray(parsed.events)) return [];
-    const checkpoints: AgentTerminalCheckpoint[] = [];
-    for (const event of parsed.events) {
-      if (!isRecord(event) || typeof event.turnId !== 'string') continue;
-      const status = terminalStatusFromEventKind(event.kind);
-      if (status) checkpoints.push({ taskId: event.turnId, status });
-    }
-    return checkpoints;
-  } catch {
-    return [];
-  }
-}
-
 function queueAgentCompletion(
   state: TodoDriftReminderState,
   checkpoint: AgentTerminalCheckpoint,
@@ -252,7 +219,7 @@ function buildAgentCompletionTodoReminderText(
 
 /**
  * Consume one coalesced checkpoint after terminal child results arrive.
- * Uses structured wait events / task metadata only; presentation XML is
+ * Uses structured task metadata only; presentation XML is
  * deliberately ignored. The checkpoint never mutates TodoStore or guesses
  * which item a child belongs to.
  */
@@ -306,12 +273,6 @@ export function observeTodoDriftAfterToolResult(params: {
   readonly result: RunnerToolResult;
 }): KodaXTodoDriftWarningEvent | undefined {
   const { state, todoStore, call, result } = params;
-
-  if (isSuccessfulToolResult(result)) {
-    for (const checkpoint of terminalCheckpointsFromWaitResult(call, result)) {
-      queueAgentCompletion(state, checkpoint);
-    }
-  }
 
   if (isSuccessfulTodoUpdate(call, result)) {
     clearTodoDriftReminderState(state);
