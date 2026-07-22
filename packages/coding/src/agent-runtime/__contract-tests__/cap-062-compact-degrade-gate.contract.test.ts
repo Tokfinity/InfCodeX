@@ -92,9 +92,8 @@ describe('CAP-062 explicit legacy degradation gate', () => {
     expect(out).toEqual({ compacted: messages, didCompactMessages: false });
   });
 
-  it('emits physical before/after stats when an explicit fallback rewrites', () => {
-    const pruned = [{ role: 'user' as const, content: 'legacy pruned output' }];
-    degradeMock.mockReturnValue(pruned);
+  it('reports no rewrite for a new array with no token reduction', () => {
+    degradeMock.mockReturnValue([...messages]);
     const events: KodaXEvents = { onCompactStats: vi.fn(), onCompact: vi.fn() };
     const out = applyGracefulDegradationGate({
       compacted: messages,
@@ -107,6 +106,54 @@ describe('CAP-062 explicit legacy degradation gate', () => {
       },
       currentTokens: 90_000,
       fixedOverheadTokens: 89_000,
+      reservedResponseTokens: 10_000,
+      events,
+    });
+
+    expect(out).toEqual({ compacted: messages, didCompactMessages: false });
+    expect(events.onCompactStats).not.toHaveBeenCalled();
+    expect(events.onCompact).not.toHaveBeenCalled();
+  });
+
+  it('does not emit success when fallback still exceeds physical capacity', () => {
+    const slightlySmaller = [{ role: 'user' as const, content: 'smaller' }];
+    degradeMock.mockReturnValue(slightlySmaller);
+    const events: KodaXEvents = { onCompactStats: vi.fn(), onCompact: vi.fn() };
+    const out = applyGracefulDegradationGate({
+      compacted: messages,
+      needsCompact: true,
+      contextWindow: 100_000,
+      compactionConfig: {
+        enabled: true,
+        triggerPercent: 100,
+        pruningThresholdTokens: 500,
+      },
+      currentTokens: 95_000,
+      fixedOverheadTokens: 91_000,
+      reservedResponseTokens: 10_000,
+      events,
+    });
+
+    expect(out).toEqual({ compacted: messages, didCompactMessages: false });
+    expect(events.onCompactStats).not.toHaveBeenCalled();
+    expect(events.onCompact).not.toHaveBeenCalled();
+  });
+
+  it('emits physical before/after stats when an explicit fallback rewrites', () => {
+    const pruned: KodaXMessage[] = [];
+    degradeMock.mockReturnValue(pruned);
+    const events: KodaXEvents = { onCompactStats: vi.fn(), onCompact: vi.fn() };
+    const out = applyGracefulDegradationGate({
+      compacted: messages,
+      needsCompact: true,
+      contextWindow: 100_000,
+      compactionConfig: {
+        enabled: true,
+        triggerPercent: 100,
+        pruningThresholdTokens: 500,
+      },
+      currentTokens: 90_000,
+      fixedOverheadTokens: 87_370,
       reservedResponseTokens: 10_000,
       events,
     });

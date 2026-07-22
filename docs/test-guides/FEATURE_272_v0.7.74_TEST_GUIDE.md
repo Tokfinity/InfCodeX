@@ -190,6 +190,36 @@ query，并以 contextId 区分主/子 Agent。Runtime/Space 使用有界 transc
 - [ ] 错误通过诊断/调用错误明确暴露。
 - [ ] 若显式启用了 legacy emergency pruning，其恢复 checkpoint 仍包含全部真实用户 query。
 
+### TC-009: fallback 不误报成功
+
+**优先级**: 高
+
+1. 构造“不可裁剪的 mandatory system/checkpoint 已超过物理容量”的上下文。
+2. 触发显式 legacy emergency pruning。
+3. 记录 canonical messages、`onCompactStats`、`onCompact` 与 Runtime event。
+
+**预期效果**:
+
+- [ ] 返回的 canonical history 与触发前相同。
+- [ ] 新数组引用但 token 未减少不算成功。
+- [ ] token 有减少但完整请求仍超过物理容量也不算成功。
+- [ ] 两种失败候选都不发出成功 compact stats，不增加 context revision。
+
+### TC-010: 配置模板与 kodax_manual 一致性
+
+**优先级**: 中
+
+1. 查看仓库根 `config.example.jsonc` 与首次启动生成的配置模板。
+2. 调用 `kodax_manual({topic:"compaction"})`。
+3. 对照 SDK 指南第 25 节与 Space 设置界面。
+
+**预期效果**:
+
+- [ ] 两份模板均包含 `triggerPercent:75` 与 `triggerTokens:0` 示例。
+- [ ] manual 明确自动压缩不可关闭、百分比限制 15-90、0 只关闭绝对阈值。
+- [ ] manual 明确保护量为有效阈值的 20%、覆盖完整 eligible prefix、保留用户 query。
+- [ ] manual 与 SDK 均说明只有物理有效且已提交的实际 token 减少才是成功。
+
 ---
 
 ## 自动化预检
@@ -211,7 +241,7 @@ node --test --import tsx apps/desktop/electron/test/runtime-context-telemetry.te
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 8 | - | - | - |
+| 10 | - | - | - |
 
 **测试结论**: [待填写]
 

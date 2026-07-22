@@ -188,6 +188,170 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(decision.action).toBe('allow');
   });
 
+  it.each(['read', 'grep', 'glob'] as const)(
+    'models a safe %s call as an exact read operation',
+    (toolName) => {
+      const projectRoot = createRoot('kodax-auto-rules-project-');
+      const assessment = assessAutoModeCall(
+        call(toolName, { path: path.join(projectRoot, 'src') }),
+        context(projectRoot),
+      );
+
+      expect(assessment.decision.action).toBe('allow');
+      expect(assessment.review).toMatchObject({
+        analysis: { status: 'complete', binding: 'exact' },
+        operations: [{ kind: 'read', target: { boundary: 'workspace' } }],
+        risks: [],
+      });
+    },
+  );
+
+  it.each([
+    ['read', '.ssh/id_ed25519'],
+    ['grep', '.aws/credentials'],
+    ['glob', '.config/gh/hosts.yml'],
+    ['read', '/proc/self/environ'],
+  ] as const)('escalates %s access to sensitive path %s', (toolName, target) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call(toolName, { path: target }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review).toMatchObject({
+      operations: [{ kind: 'read', target: { boundary: 'protected' } }],
+    });
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('escalates a grep filter that expands into a sensitive directory', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('grep', { path: projectRoot, glob: '**/.aws/**', pattern: 'token' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('keeps documented environment templates readable without confirmation', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('read', { path: '.env.example' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
+  });
+
+  it('does not let an environment-template filename exempt a sensitive directory', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('read', { path: '.ssh/.env.example' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('models git show as deterministic read-only shell execution', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'git show 1bbae03c --stat --format=fuller' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review).toMatchObject({
+      analysis: { status: 'complete', binding: 'exact' },
+      operations: [{ kind: 'execute', options: { readOnly: true } }],
+      risks: [],
+    });
+  });
+
+  it('requires confirmation before a read-only shell command accesses a secret path', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'cat ~/.ssh/id_ed25519' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+      kind: 'read', target: expect.objectContaining({ boundary: 'protected' }),
+    }));
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it.each([
+    'cat .env',
+    'Get-Content .env',
+    'git diff HEAD -- .env',
+    'git show HEAD:.env',
+    'git show HEAD:.ssh/id_ed25519',
+    'cat .env > reports/copy.txt',
+    'cat .env | tee reports/copy.txt',
+    'Get-Content .env | Set-Content reports/copy.txt',
+    'grep secret .env > reports/matches.txt',
+    'sed -n p .env > reports/copy.txt',
+    "awk '{print}' .env > reports/copy.txt",
+    'Select-String -Pattern secret -Path .env | Set-Content reports/matches.txt',
+  ])('requires confirmation for a sensitive bare or git-object read: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+    expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+      kind: 'read', target: expect.objectContaining({ boundary: 'protected' }),
+    }));
+  });
+
+  it.each([
+    'cat .env.example',
+    'git show HEAD:.env.example',
+    'git show --format .env HEAD',
+    'git diff -G .env -- README.md',
+    'grep ".env" README.md',
+    'grep ".env" README.md > reports/matches.txt',
+    'Get-Content -Delimiter .env README.md',
+  ])('does not treat a non-path read operand as sensitive: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).not.toContain('sensitive_read');
+  });
+
+  it('requires confirmation before a shell command reveals a sensitive environment variable', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'echo $OPENAI_API_KEY' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_environment_read');
+  });
+
+  it('requires confirmation before PowerShell enumerates the environment', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'Get-ChildItem Env:' }),
+      context(projectRoot),
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_environment_read');
+  });
+
   it.each([
     'git tag -a v1.0 -m release',
     'git branch new-branch',

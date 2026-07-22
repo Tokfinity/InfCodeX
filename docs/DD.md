@@ -667,6 +667,9 @@ raw tail. It summarizes the full eligible prefix once, using map/reduce only
 when that request cannot physically fit. Temporary summaries never mutate
 canonical history. The committed synthetic user checkpoint combines the
 structured semantic summary with an exact JSONL ledger of genuine user queries.
+Emergency fallback returns the original array when mandatory content cannot be
+reduced. Its gate accepts a candidate only when token count strictly decreases
+and the full request fits physical capacity; only then may success stats fire.
 
 Coding owns per-context anti-thrash and stable root/child attribution. The
 canonical post-commit callback increments `contextRevision`; Runtime projects it

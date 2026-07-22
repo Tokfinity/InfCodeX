@@ -217,6 +217,53 @@ describe("restore-history / tool identity", () => {
       : [])).toEqual(["tool-1", "tool-2"]);
   });
 
+  it("anchors a persisted suffix to the latest repeated canonical round", () => {
+    const messages = [
+      { role: "user" as const, content: "continue" },
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "tool_use" as const, id: "old-tool", name: "read", input: {} },
+          { type: "text" as const, text: "same answer" },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [{ type: "tool_result" as const, tool_use_id: "old-tool", content: "old" }],
+      },
+      { role: "user" as const, content: "continue" },
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "tool_use" as const, id: "new-tool", name: "grep", input: {} },
+          { type: "text" as const, text: "same answer" },
+        ],
+      },
+      {
+        role: "user" as const,
+        content: [{ type: "tool_result" as const, tool_use_id: "new-tool", content: "new" }],
+      },
+    ];
+    const uiHistory: KodaXSessionUiHistoryItem[] = [
+      { type: "user", text: "continue" },
+      {
+        type: "tool_group",
+        tools: [{ id: "new-tool", name: "grep", status: "success", output: "new" }],
+      },
+      { type: "assistant", text: "same answer" },
+    ];
+
+    const restored = restoreHistoryItemsFromSession({ messages, uiHistory });
+
+    expect(restored.map((item) => item.type === "tool_group"
+      ? item.tools.map((tool) => tool.id).join(",")
+      : `${item.type}:${item.text}`)).toEqual([
+      "user:continue",
+      "new-tool",
+      "assistant:same answer",
+    ]);
+  });
+
   it("moves a uniquely persisted canonical tool group out of a polluted quit suffix", () => {
     const restored = restoreHistoryItemsFromSession({
       messages: canonicalMessages,

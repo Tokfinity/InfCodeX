@@ -4412,6 +4412,10 @@ large compaction is always present and defaults to an earlier bounded trigger.
 8. Runtime observation carries a bounded transcript tail and revision-bound
    cursor. Full transcript recovery uses explicit pagination; no daemon message
    depends on a frame near the fixed 8 MiB transport limit.
+9. A fallback rewrite is successful only when it strictly reduces tokens,
+   restores physical request validity, and commits. Reference-only rewrites,
+   unchanged/oversized candidates, failures, and stale revisions emit no
+   successful compatibility callback and leave canonical history replayable.
 
 **Consequences**:
 

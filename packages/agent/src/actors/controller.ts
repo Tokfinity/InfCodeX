@@ -494,8 +494,22 @@ export class AgentActorController {
   eventSnapshot(callerPath: string, afterSequence = 0): readonly AgentEvent[] {
     this.requireCommittedActor(callerPath);
     return this.committedSnapshot.events.filter((event) => (
-      event.sequence > afterSequence && this.isVisible(callerPath, event.actorPath)
+      event.sequence > afterSequence
+      && this.isVisible(callerPath, event.actorPath)
+      && !this.isAcknowledgedDirectChildTerminal(callerPath, event)
     ));
+  }
+
+  private isAcknowledgedDirectChildTerminal(
+    callerPath: string,
+    event: AgentEvent,
+  ): boolean {
+    if (!event.turnId || !isTerminalEvent(event)) return false;
+    if (!this.acknowledgedCompletionTurnIds.has(event.turnId)) return false;
+    const actor = this.committedSnapshot.actors.find((candidate) => (
+      candidate.path === event.actorPath
+    ));
+    return actor?.parentPath === callerPath;
   }
 
   async wait(
@@ -1282,6 +1296,12 @@ function eventKindForTerminal(state: 'completed' | 'failed' | 'interrupted'): Ag
 function replaceMap<K, V>(target: Map<K, V>, entries: readonly (readonly [K, V])[]): void {
   target.clear();
   for (const [key, value] of entries) target.set(key, value);
+}
+
+function isTerminalEvent(event: AgentEvent): boolean {
+  return event.kind === 'turn_completed'
+    || event.kind === 'turn_failed'
+    || event.kind === 'turn_interrupted';
 }
 
 function appendedMessages(

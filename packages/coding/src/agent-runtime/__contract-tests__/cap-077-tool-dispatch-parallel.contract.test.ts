@@ -326,7 +326,9 @@ describe('CAP-077: concrete ToolGuardrail dispatch', () => {
     });
 
     expect(beforeToolExecute).not.toHaveBeenCalled();
-    expect(resultMap.get('blocked-1')).toMatch(/^\[Blocked\].*policy denied/);
+    expect(resultMap.get('blocked-1')).toMatch(
+      /^\[Tool Error\] Blocked by guardrail .*policy denied/,
+    );
   });
 
   it('serializes non-bash calls that guardrails rewrite into bash', async () => {
@@ -389,7 +391,7 @@ describe('CAP-079: single aggregate capacity owner', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('keeps one large result complete when the final batch token budget can hold it', async () => {
+  it('spills one pathological result at the attention boundary even when physical capacity can hold it', async () => {
     const content = Array.from({ length: 8_000 }, (_, index) => `complete-evidence-${index}`).join('\n');
     expect(Buffer.byteLength(content, 'utf8')).toBeGreaterThan(64 * 1024);
     const toolBlocks = [tool('large', 'read')];
@@ -414,8 +416,15 @@ describe('CAP-079: single aggregate capacity owner', () => {
       toolResultBudget,
     });
 
-    expect(processed.toolResults[0]!.content).toBe(content);
-    expect(await fs.readdir(tempDir)).toEqual([]);
+    expect(processed.toolResults[0]!.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(processed.toolResults[0]!.metadata).toMatchObject({
+      truncated: true,
+      capacityFallback: true,
+      outputPath: expect.any(String),
+    });
+    const [artifact] = await fs.readdir(tempDir);
+    expect(artifact).toBeDefined();
+    expect(await fs.readFile(path.join(tempDir, artifact!), 'utf8')).toBe(content);
   });
 
   it('spills only after the complete result batch exceeds its aggregate token budget', async () => {

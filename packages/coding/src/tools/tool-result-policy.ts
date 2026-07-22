@@ -126,6 +126,14 @@ const TOOL_RESULT_POLICIES: Record<string, ToolResultPolicy> = {
   },
 };
 
+// Capacity answers "will the next request fit?"; attention bounds answer
+// "can the model use this result without one payload dominating the turn?".
+// Both are enforced here so Issue 158 keeps one request-level admission owner.
+const TOOL_RESULT_PER_ENTRY_ATTENTION_TOKENS = 16_000;
+const TOOL_RESULT_BATCH_ATTENTION_TOKENS = 48_000;
+const TOOL_RESULT_ENTRY_STRUCTURAL_TOKENS = 4;
+const TOOL_RESULT_BATCH_STRUCTURAL_TOKENS = 4;
+
 export function getToolResultPolicy(toolName: string): ToolResultPolicy {
   return TOOL_RESULT_POLICIES[toolName] ?? DEFAULT_POLICY;
 }
@@ -343,12 +351,13 @@ export async function applyToolResultGuardrail(
 /**
  * The sole capacity owner for a dispatched tool-result batch.
  *
- * Results remain complete while the complete batch fits. If the final batch
- * exceeds the available token capacity, the largest raw results are spilled
- * one at a time. The actual replacement (including its artifact marker and
- * tool-result envelope overhead) is recounted before deciding whether another
- * result must spill. `additionalMessageTokens` reserves other messages that
- * the caller will append to the same next request (currently edit recovery).
+ * Results remain complete while each result and the batch fit both the physical
+ * next-request capacity and the independent attention bounds. The largest raw
+ * results are spilled one at a time, with the full output preserved as an
+ * artifact. The actual replacement (including its marker and envelope overhead)
+ * is recounted before deciding whether another result must spill. Physical
+ * capacity is the only hard failure: if artifact persistence fails, attention
+ * admission degrades visibly rather than discarding otherwise admissible data.
  */
 export async function applyToolResultBatchGuardrail(
   entries: readonly ToolResultBatchEntry[],
@@ -363,10 +372,13 @@ export async function applyToolResultBatchGuardrail(
   const result = entries.map((entry) => ({ ...entry }));
   const entryTokens = result.map((entry) => countToolResultTokens(entry.content));
   const fixedMessageTokens = Math.max(0, Math.floor(additionalMessageTokens));
-  let totalTokens = fixedMessageTokens
-    + 4
+  const physicalCapacityTokens = Math.max(0, Math.floor(budget.aggregateInlineTokens));
+  let inlineResultTokens = TOOL_RESULT_BATCH_STRUCTURAL_TOKENS
     + entryTokens.reduce((total, tokens) => total + tokens, 0);
-  if (totalTokens <= budget.aggregateInlineTokens) {
+  let physicalTotalTokens = fixedMessageTokens + inlineResultTokens;
+  if (physicalTotalTokens <= physicalCapacityTokens
+    && inlineResultTokens <= TOOL_RESULT_BATCH_ATTENTION_TOKENS
+    && entryTokens.every((tokens) => tokens <= TOOL_RESULT_PER_ENTRY_ATTENTION_TOKENS)) {
     return result;
   }
 
@@ -375,12 +387,28 @@ export async function applyToolResultBatchGuardrail(
     .sort((left, right) => right.tokens - left.tokens);
 
   for (const candidate of candidates) {
-    if (totalTokens <= budget.aggregateInlineTokens) break;
+    const exceedsEntryAttention = entryTokens[candidate.index]!
+      > TOOL_RESULT_PER_ENTRY_ATTENTION_TOKENS;
+    const exceedsBatchAttention = inlineResultTokens > TOOL_RESULT_BATCH_ATTENTION_TOKENS;
+    const exceedsPhysicalCapacity = physicalTotalTokens > physicalCapacityTokens;
+    if (!exceedsEntryAttention && !exceedsBatchAttention && !exceedsPhysicalCapacity) break;
     const entry = result[candidate.index]!;
-    const otherTokens = totalTokens - entryTokens[candidate.index]!;
-    const maxInlineTokens = Math.max(
-      0,
-      budget.aggregateInlineTokens - otherTokens - 4,
+    const otherInlineTokens = inlineResultTokens - entryTokens[candidate.index]!;
+    const maxInlineTokens = Math.min(
+      TOOL_RESULT_PER_ENTRY_ATTENTION_TOKENS - TOOL_RESULT_ENTRY_STRUCTURAL_TOKENS,
+      Math.max(
+        0,
+        TOOL_RESULT_BATCH_ATTENTION_TOKENS
+          - otherInlineTokens
+          - TOOL_RESULT_ENTRY_STRUCTURAL_TOKENS,
+      ),
+      Math.max(
+        0,
+        physicalCapacityTokens
+          - fixedMessageTokens
+          - otherInlineTokens
+          - TOOL_RESULT_ENTRY_STRUCTURAL_TOKENS,
+      ),
     );
     const guarded = await applyToolResultGuardrail(entry.toolName, entry.content, ctx, {
       forceSpill: true,
@@ -393,21 +421,34 @@ export async function applyToolResultBatchGuardrail(
       ...(guarded.outputPath ? { outputPath: guarded.outputPath } : {}),
     };
     entryTokens[candidate.index] = countToolResultTokens(guarded.content);
-    totalTokens = otherTokens + entryTokens[candidate.index]!;
+    inlineResultTokens = otherInlineTokens + entryTokens[candidate.index]!;
+    physicalTotalTokens = fixedMessageTokens + inlineResultTokens;
   }
 
-  if (totalTokens > budget.aggregateInlineTokens) {
+  if (physicalTotalTokens > physicalCapacityTokens) {
     emitKodaXDiagnostic({
       source: 'coding:tool-result-policy',
       level: 'error',
       message:
-        `Tool result artifact markers require ${totalTokens} tokens, exceeding the `
-        + `${budget.aggregateInlineTokens}-token batch capacity; preserving recoverability.`,
+        `Tool result artifact markers require ${physicalTotalTokens} tokens, exceeding the `
+        + `${physicalCapacityTokens}-token physical admission capacity; preserving recoverability.`,
     });
     throw new ToolResultBatchCapacityError(
-      totalTokens,
-      budget.aggregateInlineTokens,
+      physicalTotalTokens,
+      physicalCapacityTokens,
     );
+  }
+
+  const attentionAdmissionIncomplete = inlineResultTokens > TOOL_RESULT_BATCH_ATTENTION_TOKENS
+    || entryTokens.some((tokens) => tokens > TOOL_RESULT_PER_ENTRY_ATTENTION_TOKENS);
+  if (attentionAdmissionIncomplete) {
+    emitKodaXDiagnostic({
+      source: 'coding:tool-result-policy',
+      level: 'warn',
+      message:
+        `Tool result attention admission could not be satisfied without losing recoverability; `
+        + `${inlineResultTokens} physically admissible tokens remain inline.`,
+    });
   }
 
   return result;
@@ -415,7 +456,7 @@ export async function applyToolResultBatchGuardrail(
 
 function countToolResultTokens(content: string): number {
   // Mirrors the current tokenizer's structural overhead for a tool_result block.
-  return countTokens(content) + 4;
+  return countTokens(content) + TOOL_RESULT_ENTRY_STRUCTURAL_TOKENS;
 }
 
 interface ExistingGuardedContent {

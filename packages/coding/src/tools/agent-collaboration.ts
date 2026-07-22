@@ -11,6 +11,7 @@ import type {
   AgentSpawnInput,
 } from '@kodax-ai/agent';
 import { getMessageQueue } from '@kodax-ai/agent';
+import type { KodaXMessage, KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { actorQueueId } from '../agent-runtime/actor-queue.js';
@@ -258,7 +259,6 @@ export async function toolWaitAgent(
         isTerminalEvent(item) && typeof item.turnId === 'string'
       ))
       .map((item) => client.output(item.actorPath, item.turnId));
-    await consumeTerminalNotifications(ctx, client, terminalOutputs.map((output) => output.turnId));
     return render({
       ok: true,
       status: event
@@ -365,9 +365,6 @@ export async function toolAgentOutput(
   try {
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
     const output = client.output(actorPath, optionalString(input.turn_id));
-    if (isTerminalTurnState(output.state)) {
-      await consumeTerminalNotifications(ctx, client, [output.turnId]);
-    }
     return render({ ok: true, ...output });
   } catch (error) {
     return renderActorError('agent_output', error);
@@ -418,11 +415,13 @@ function isTerminalTurnState(state: string): boolean {
   return state === 'completed' || state === 'failed' || state === 'interrupted';
 }
 
-async function consumeTerminalNotifications(
+export async function commitActorNotificationReceipts(
   ctx: KodaXToolExecutionContext,
-  client: AgentActorClient,
-  turnIds: readonly string[],
+  messages: readonly KodaXMessage[],
 ): Promise<void> {
+  const client = ctx.actorControl;
+  if (!client) return;
+  const turnIds = committedTerminalTurnIds(messages);
   if (turnIds.length === 0) return;
   await client.acknowledgeCompletions(turnIds);
   const ids = new Set(turnIds);
@@ -433,6 +432,53 @@ async function consumeTerminalNotifications(
     predicate: (message) => message.taskResult?.source === 'child_task'
       && ids.has(message.taskResult.taskId),
   });
+}
+
+function committedTerminalTurnIds(messages: readonly KodaXMessage[]): string[] {
+  const turnIds = new Set<string>();
+  for (const message of messages) {
+    collectTaskResultTurnIds(message._taskResult, turnIds);
+    for (const result of message._taskResults ?? []) collectTaskResultTurnIds(result, turnIds);
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block.type !== 'tool_result' || typeof block.content !== 'string') continue;
+      collectToolResultTurnIds(block.content, turnIds);
+    }
+  }
+  return [...turnIds];
+}
+
+function collectTaskResultTurnIds(
+  result: KodaXTaskResultMetadata | undefined,
+  target: Set<string>,
+): void {
+  if (result?.source === 'child_task' && result.taskId.length > 0) target.add(result.taskId);
+}
+
+function collectToolResultTurnIds(content: string, target: Set<string>): void {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{')) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return;
+  }
+  if (!isRecord(parsed) || parsed.ok !== true) return;
+  if (Array.isArray(parsed.terminalOutputs)) {
+    for (const output of parsed.terminalOutputs) collectTerminalOutputTurnId(output, target);
+  }
+  collectTerminalOutputTurnId(parsed, target);
+}
+
+function collectTerminalOutputTurnId(value: unknown, target: Set<string>): void {
+  if (!isRecord(value) || typeof value.turnId !== 'string') return;
+  if (typeof value.state !== 'string' || !isTerminalTurnState(value.state)) return;
+  target.add(value.turnId);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function novelMessageRecipients(

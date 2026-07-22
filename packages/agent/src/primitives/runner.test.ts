@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createAgent, type Agent, type Guardrail } from './agent.js';
+import { createAgent, type Agent, type AgentMessage, type Guardrail } from './agent.js';
 import type { InputGuardrail, ToolGuardrail } from './guardrail.js';
 import { createInMemorySession } from './session.js';
 import {
@@ -91,6 +91,66 @@ describe('Runner', () => {
         { role: 'user', content: 'q' },
         { role: 'assistant', content: 'done' },
       ]);
+    });
+
+    it('fires onMessageCommitted only after the message is durable', async () => {
+      const session = createInMemorySession();
+      const observed: Array<{ role: string; persisted: boolean }> = [];
+      const llm = vi.fn()
+        .mockResolvedValueOnce({
+          text: '',
+          toolCalls: [{ id: 'call-1', name: 'echo', input: {} }],
+        })
+        .mockResolvedValueOnce('done');
+      const agent = createAgent({
+        name: 'commit-order',
+        instructions: 'test',
+        tools: [{
+          name: 'echo',
+          description: 'echo',
+          input_schema: { type: 'object', properties: {} },
+          execute: async () => ({ content: 'tool output' }),
+        }],
+      });
+
+      await Runner.run(agent, 'q', {
+        llm,
+        session,
+        onMessageCommitted: async (message) => {
+          const persisted = [];
+          for await (const entry of session.entries()) persisted.push(entry);
+          observed.push({
+            role: message.role,
+            persisted: persisted.some((entry) => (
+              entry.type === 'message'
+              && (entry.payload as { content?: unknown }).content === message.content
+            )),
+          });
+        },
+      });
+
+      expect(observed).toHaveLength(4);
+      expect(observed.every((entry) => entry.persisted)).toBe(true);
+    });
+
+    it('does not fire onMessageCommitted when persistence fails', async () => {
+      const base = createInMemorySession();
+      const committed: AgentMessage[] = [];
+      const session = {
+        ...base,
+        append: vi.fn(async () => {
+          throw new Error('storage unavailable');
+        }),
+      };
+
+      await expect(Runner.run(helloAgent, 'q', {
+        llm: vi.fn(async () => 'done'),
+        session,
+        onMessageCommitted: (message) => {
+          committed.push(message);
+        },
+      })).rejects.toThrow('storage unavailable');
+      expect(committed).toEqual([]);
     });
 
     it('throws a clear error when neither llm nor preset is available', async () => {

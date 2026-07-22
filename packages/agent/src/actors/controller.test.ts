@@ -115,6 +115,23 @@ describe('F270 actor tree and scheduler', () => {
     await expect(restoredExecutor.pending[0]?.input.drainMailbox()).resolves.toEqual([]);
   });
 
+  it('does not replay an acknowledged direct-child terminal event', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const parent = controller.bind('/root');
+    const child = await parent.spawn({ taskName: 'worker', objective: 'Work.' });
+    const cursor = parent.eventSnapshot().at(-1)?.sequence ?? 0;
+
+    executor.pending[0]?.resolve({ output: 'done' });
+    await settle();
+    const terminal = parent.eventSnapshot(cursor).find((event) => event.turnId === child.turnId);
+    expect(terminal?.kind).toBe('turn_completed');
+
+    await expect(parent.acknowledgeCompletions([child.turnId])).resolves.toBe(1);
+    expect(parent.eventSnapshot(cursor).some((event) => event.turnId === child.turnId)).toBe(false);
+    await expect(parent.wait(cursor, 0)).resolves.toBeUndefined();
+  });
+
   it('does not persist an empty mailbox drain', async () => {
     const save = vi.fn(async () => undefined);
     const executor = new DeferredExecutor();

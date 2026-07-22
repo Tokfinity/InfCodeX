@@ -8,23 +8,50 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Deterministic reads, bounded tool attention, and compaction round exits.**
+  Auto-mode now bypasses the LLM for complete, exact, risk-free static reads
+  such as `git show`, while sensitive files, credential stores, process
+  environments, and secret environment variables require user confirmation
+  before any classifier decision. Bare sensitive operands and Git `REV:path`
+  reads are covered without treating regex/format arguments as paths, and SDK
+  direct reads fail closed when no deterministic analyzer is supplied. Grep
+  clips pathological lines, bounds each source page with an explicit offset
+  continuation, and every Runner/tool/background entry now reaches the existing
+  sole batch admission owner. Physical capacity and tool-attention ledgers stay
+  separate; attention spill failure preserves physically admissible evidence
+  instead of becoming a hard error. Moderate Issue 158 outputs remain verbatim.
+  Round-exit reshaping recognizes current
+  user-shaped compaction checkpoints as well as legacy system summaries, so it
+  no longer re-appends the compacted query and final answer.
 - **Agent coordination and resumed transcript reliability.** Local constructed
   specialists can now be listed and spawned without an external executor
   plane. Worker coordination uses a terminal-only wait mode that skips progress
   events inside one tool call, while queued user input still interrupts the
   wait. Explicit terminal observation durably acknowledges the matching Actor
-  completion by turn ID, preventing later duplicate `<agent-completed>`
-  delivery. Session restore now deduplicates and canonically repositions tool
-  groups by tool-use ID, including snapshots already polluted after `/quit`.
+  completion by turn ID only after its authoritative transcript/session message
+  commits, preventing both loss on persistence failure and later duplicate
+  `<agent-completed>` delivery. Acknowledged direct-child terminal events are
+  no longer replayed. Session restore now deduplicates and canonically
+  repositions tool groups by tool-use ID, and binds repeated text to the latest
+  persisted suffix, including snapshots already polluted after `/quit`.
   Pre-execution guardrail denials always carry an explicit reason and tool-result
   messages retain their execution-time timestamp.
 - **Release-review boundary fixes.** Emergency compaction fallback now subtracts
   the actual system/tool overhead and reserved response budget from physical
-  input capacity before pruning. Compact Auto[LLM] permission evidence samples
+  input capacity before pruning. An unchanged rewrite or a candidate that
+  remains physically oversized is now a no-op and emits no successful compact
+  stats. Compact Auto[LLM] permission evidence samples
   the middle of long risky-operation lists as well as both ends, and Auto[rules]
   no longer mistakes single-segment POSIX paths such as `/tmp` for generic
   Windows switches. Invalid continuation input errors now identify
   `runtime.runs.submitInput` rather than incorrectly naming `runs.start`.
+- **Compaction documentation and configuration discoverability.** The root and
+  embedded JSONC templates now include the always-on percentage/absolute
+  compaction block; `kodax_manual` has a dedicated compaction topic. README,
+  HLD, ADR/DD, SDK guidance, feature/issue records, and the release test guide
+  now consistently describe the v0.7.74 policy and supersede the old
+  capacity-only major-trigger wording without changing FEATURE_251's tool-result
+  and micro-compaction guarantees.
 - **Runtime interrupt input delivery.** Embedded Runtime and the shared daemon
   now advertise `interruptInput:1` and route interrupt submissions into the
   current active Actor Run. Inputs queued before one safe Runner boundary are

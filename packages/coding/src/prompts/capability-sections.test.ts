@@ -456,7 +456,8 @@ describe('FEATURE_191 — specialist-agents section (A.3)', () => {
     expect(sp?.content).toContain('=== Available specialist agents ===');
     expect(sp?.content).toContain('- db-reviewer: Reviews DB migrations for safety');
     expect(sp?.content).toContain('- e2e-runner: End-to-end testing specialist using Playwright');
-    expect(sp?.content).toContain('Start one with spawn_agent(agent_id="<name>").');
+    expect(sp?.content).toContain('Start one with spawn_agent(agent_id="<name>")');
+    expect(sp?.content).toContain('list_dispatchable_agents returns the equivalent canonical id');
   });
 
   it('uses scoped markdown agents for prompt rendering without leaking into another project scope', async () => {

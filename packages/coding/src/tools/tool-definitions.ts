@@ -533,7 +533,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         '-C': { type: 'number', description: 'Alias for context' },
         context: { type: 'number', description: 'Number of lines to show before and after each match. Requires output_mode "content".' },
         multiline: { type: 'boolean', description: 'Enable multiline mode where . matches newlines and patterns can span lines. Default: false.' },
-        head_limit: { type: 'number', description: 'Limit output to first N entries. Defaults to 250. Pass 0 for unlimited.' },
+        head_limit: { type: 'number', description: 'Limit output to first N entries. Defaults to 250. Pass 0 to remove the entry-count cap; the source byte budget still applies.' },
         offset: { type: 'number', description: 'Skip first N entries before applying head_limit. Defaults to 0.' },
         scan_offset: { type: 'number', description: 'Skip candidate files already scanned by a prior SOURCE_INCOMPLETE continuation.' },
       },

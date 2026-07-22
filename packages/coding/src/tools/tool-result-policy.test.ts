@@ -10,6 +10,7 @@ import {
 } from './tool-result-policy.js';
 import { buildToolResultBudgetFromUsage } from './tool-result-budget.js';
 import { TOOL_OUTPUT_DIR_ENV } from './truncate.js';
+import { countTokens } from '../tokenizer.js';
 
 describe('tool result guardrail', () => {
   let tempDir = '';
@@ -135,6 +136,88 @@ describe('tool result guardrail', () => {
     })).rejects.toThrow(/cannot preserve recoverable tool\/result pairs within capacity/i);
   });
 
+  it('keeps the Issue 158 moderate-output reproduction verbatim', async () => {
+    const content = Array.from(
+      { length: 220 },
+      (_, index) => `commit-${index.toString().padStart(3, '0')} ${'summary '.repeat(5)}`,
+    ).join('\n').slice(0, 12_577);
+
+    const result = await applyToolResultBatchGuardrail([{
+      id: 'moderate-git-log',
+      toolName: 'bash',
+      content,
+    }], {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    }, {
+      aggregateInlineTokens: 200_000,
+    });
+
+    expect(result[0]?.content).toBe(content);
+    expect(result[0]?.outputPath).toBeUndefined();
+  });
+
+  it('spills one pathological result at the per-result attention boundary', async () => {
+    const content = 'evidence '.repeat(20_000);
+    expect(countTokens(content)).toBeGreaterThan(16_000);
+
+    const result = await applyToolResultBatchGuardrail([{
+      id: 'pathological-grep',
+      toolName: 'grep',
+      content,
+    }], {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    }, {
+      aggregateInlineTokens: 200_000,
+    });
+
+    expect(result[0]?.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(result[0]?.content).toContain('Full output saved to:');
+    expect(await fs.readFile(result[0]!.outputPath!, 'utf8')).toBe(content);
+  });
+
+  it('spills the largest result when a batch crosses the attention boundary', async () => {
+    const content = 'token '.repeat(12_000);
+    expect(countTokens(content)).toBeLessThan(16_000);
+    const entries = Array.from({ length: 4 }, (_, index) => ({
+      id: `batch-${index}`,
+      toolName: 'bash',
+      content: `${index}:${content}`,
+    }));
+
+    const result = await applyToolResultBatchGuardrail(entries, {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    }, {
+      aggregateInlineTokens: 200_000,
+    });
+
+    expect(result.some((entry) => entry.content.includes('KODAX_RESULT_INCOMPLETE'))).toBe(true);
+    expect(result.filter((entry) => entry.outputPath !== undefined)).toHaveLength(1);
+  });
+
+  it('keeps fixed recovery messages outside the tool-result attention ledger', async () => {
+    const content = 'small result';
+    const result = await applyToolResultBatchGuardrail([{
+      id: 'small-after-recovery',
+      toolName: 'edit',
+      content,
+    }], {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    }, {
+      aggregateInlineTokens: 200_000,
+    }, 50_000);
+
+    expect(result).toEqual([{
+      id: 'small-after-recovery',
+      toolName: 'edit',
+      content,
+    }]);
+    expect(await fs.readdir(tempDir)).toEqual([]);
+  });
+
   it('exposes tool-specific policy', () => {
     expect(getToolResultPolicy('bash').direction).toBe('tail');
     expect(getToolResultPolicy('read').direction).toBe('head');
@@ -250,5 +333,27 @@ describe('tool result guardrail', () => {
       source: 'coding:tool-result-policy',
       level: 'error',
     }));
+  });
+
+  it('preserves a physically admissible batch when attention spill persistence fails', async () => {
+    const blocker = path.join(tempDir, 'batch-blocker');
+    await fs.writeFile(blocker, 'not-a-dir');
+    process.env[TOOL_OUTPUT_DIR_ENV] = blocker;
+    const content = 'evidence '.repeat(60_000);
+    expect(countTokens(content)).toBeGreaterThan(48_000);
+
+    const result = await applyToolResultBatchGuardrail([{
+      id: 'spill-failed',
+      toolName: 'grep',
+      content,
+    }], {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    }, {
+      aggregateInlineTokens: 200_000,
+    });
+
+    expect(result[0]?.content).toBe(content);
+    expect(result[0]?.outputPath).toBeUndefined();
   });
 });

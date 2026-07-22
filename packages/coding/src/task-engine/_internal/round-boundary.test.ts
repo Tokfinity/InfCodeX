@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { COMPACTION_SUMMARY_PREFIX } from '@kodax-ai/agent';
 import type {
   KodaXManagedTask,
   KodaXMessage,
@@ -551,6 +552,49 @@ describe('round-boundary/reshapeToUserConversation', () => {
     expect((lastMsg.content as string) === 'Reviewed.' || (lastMsg.content as string) === 'Reviewed.').toBe(true);
     // CompactionSummary preserved at head.
     expect((out.messages![0].content as string).startsWith(compactionPrefix)).toBe(true);
+  });
+
+  it('recognizes the runtime user-shaped compaction checkpoint after repo context', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'Repository intelligence for the active worker.' },
+      {
+        role: 'user',
+        content: `${COMPACTION_SUMMARY_PREFIX}User asked: inspect the reliability fix. Work completed.`,
+        _synthetic: true,
+        _source: 'compaction-checkpoint',
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu_after_compact', name: 'read', input: { path: 'CHANGELOG.md' } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_after_compact', content: 'release notes' }],
+      },
+      { role: 'assistant', content: 'The fix is verified.' },
+    ];
+    const result = makeResult({
+      messages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'The fix is verified.',
+    });
+
+    const out = reshapeToUserConversation(
+      result,
+      makeOptions(),
+      'inspect the reliability fix',
+    );
+
+    expect(out.messages?.[0]).toMatchObject({
+      role: 'user',
+      _source: 'compaction-checkpoint',
+    });
+    expect(out.messages?.filter((message) => (
+      message.role === 'user' && message.content === 'inspect the reliability fix'
+    ))).toHaveLength(0);
+    expect(out.messages?.filter((message) => (
+      message.role === 'assistant' && message.content === 'The fix is verified.'
+    ))).toHaveLength(1);
   });
 
   it('replaces last assistant containing only thinking blocks with synthetic final-text', () => {

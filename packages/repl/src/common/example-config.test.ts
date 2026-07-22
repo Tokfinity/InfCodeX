@@ -32,6 +32,9 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
     // thinking/reasoning config that motivated F1.
     expect(String(content)).toMatch(/^\/\//);
     expect(String(content)).toContain('customProviders');
+    expect(String(content)).toContain('"compaction"');
+    expect(String(content)).toContain('"triggerPercent": 75');
+    expect(String(content)).toContain('"triggerTokens": 0');
     expect(String(content)).not.toContain('mcpServers');
     expect(write.mock.calls.map(([written]) => written)).toEqual([
       KODAX_EXAMPLE_CONFIG_FILE,

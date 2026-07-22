@@ -54,7 +54,7 @@ describe('Runner tool-result batch capacity', () => {
     });
   }
 
-  it('keeps a result larger than 64KB complete when the model window can hold the batch', async () => {
+  it('spills a pathological result at the attention boundary even when the model window can hold it', async () => {
     const raw = Array.from({ length: 8_000 }, (_, index) => `complete-${index}`).join('\n');
     expect(Buffer.byteLength(raw, 'utf8')).toBeGreaterThan(64 * 1024);
     const results: RunnerToolResult[] = [{ content: raw, metadata: { handoffTarget: 'worker' } }];
@@ -64,8 +64,16 @@ describe('Runner tool-result batch capacity', () => {
       transcript,
     });
 
-    expect(transformed[0]).toBe(results[0]);
-    expect(await fs.readdir(tempDir)).toEqual([]);
+    expect(transformed[0]!.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(transformed[0]!.metadata).toMatchObject({
+      handoffTarget: 'worker',
+      truncated: true,
+      capacityFallback: true,
+      outputPath: expect.any(String),
+    });
+    const [artifact] = await fs.readdir(tempDir);
+    expect(artifact).toBeDefined();
+    expect(await fs.readFile(path.join(tempDir, artifact!), 'utf8')).toBe(raw);
   });
 
   it('spills only after parallel results exceed the final aggregate token capacity', async () => {

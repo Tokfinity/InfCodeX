@@ -418,9 +418,21 @@ export function applyGracefulDegradationGate(
   if (degraded === input.compacted) {
     return { compacted: input.compacted, didCompactMessages: false };
   }
-  // Pruning happened — emit and surface didCompactMessages so commit
+  // A fresh array is only a candidate. Validate real reduction and physical
+  // sendability before surfacing success or committing replacement history.
+  const tokensBeforeFallback = estimateTokens(input.compacted);
+  const degradedTokens = estimateTokens(degraded);
+  const tokensAfter = fixedOverheadTokens + degradedTokens;
+  const fitsPhysicalCapacity = !exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: tokensAfter,
+    reservedResponseTokens: input.reservedResponseTokens,
+  });
+  if (degradedTokens >= tokensBeforeFallback || !fitsPhysicalCapacity) {
+    return { compacted: input.compacted, didCompactMessages: false };
+  }
+  // Valid pruning happened — emit and surface didCompactMessages so commit
   // step (CAP-063) fires `onCompactedMessages`.
-  const tokensAfter = fixedOverheadTokens + estimateTokens(degraded);
   input.events.onCompactStats?.({
     tokensBefore: input.currentTokens,
     tokensAfter,

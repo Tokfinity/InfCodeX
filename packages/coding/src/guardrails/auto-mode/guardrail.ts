@@ -219,7 +219,10 @@ export interface AutoModeGuardrailConfig {
    */
   readonly evaluateRulesCall?: AutoModeRulesEvaluator;
 
-  /** Runtime-owned compact facts used by the LLM permission reviewer. */
+  /**
+   * Runtime-owned compact facts used by deterministic read admission and the
+   * LLM permission reviewer. Direct read tools fail closed when this is absent.
+   */
   readonly analyzeCall?: AutoModeCallAnalyzer;
 
   /**
@@ -405,6 +408,27 @@ export interface AutoModeToolGuardrail extends ToolGuardrail {
   setProviderForTest(provider: KodaXBaseProvider): void;
 }
 
+const DETERMINISTIC_READ_TOOLS = new Set(['read', 'grep', 'glob']);
+
+function hasSensitiveReadRisk(permissionReview: AutoModePermissionReview): boolean {
+  return permissionReview.risks.some((risk) => (
+    risk === 'sensitive_read' || risk === 'sensitive_environment_read'
+  )) || permissionReview.operations.some((operation) => (
+    operation.kind === 'read' && operation.target.boundary === 'protected'
+  ));
+}
+
+function isExactSafeRead(permissionReview: AutoModePermissionReview): boolean {
+  return permissionReview.analysis.status === 'complete'
+    && permissionReview.analysis.binding === 'exact'
+    && permissionReview.risks.length === 0
+    && permissionReview.operations.length > 0
+    && permissionReview.operations.every((operation) => (
+      operation.kind === 'read'
+      || (operation.kind === 'execute' && operation.options?.readOnly === true)
+    ));
+}
+
 export function createAutoModeToolGuardrail(
   config: AutoModeGuardrailConfig,
 ): AutoModeToolGuardrail {
@@ -481,9 +505,10 @@ export function createAutoModeToolGuardrail(
       return { action: 'block', reason: tier0.reason };
     }
 
-    // Tier 1: registered read-only or explicitly exempt tools may opt out
-    // through an empty projection. Unknown tools use a metadata-only fallback
-    // so missing extension metadata cannot silently bypass Auto[LLM].
+    // Tier 1: explicitly exempt tools may opt out through an empty projection.
+    // Direct read tools additionally require deterministic target analysis.
+    // Unknown tools use a metadata-only fallback so missing extension metadata
+    // cannot silently bypass Auto[LLM].
     let action: string;
     try {
       const projector = config.getToolProjection(guardedCall.name);
@@ -497,7 +522,37 @@ export function createAutoModeToolGuardrail(
       config.log?.('warn', `[auto-mode] ${reason}`);
       return escalateOrAsk(reason);
     }
-    if (action === '') return { action: 'allow' };
+    let permissionReview: AutoModePermissionReview | undefined;
+    const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
+    if (requiresReadAnalysis && !config.analyzeCall) {
+      return escalateOrAsk('read safety analyzer is unavailable');
+    }
+    if (config.analyzeCall && (action !== '' || requiresReadAnalysis)) {
+      try {
+        permissionReview = await config.analyzeCall(guardedCall, {
+          projectRoot,
+          executionCwd,
+          signals,
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        config.log?.('warn', `[auto-mode] permission analyzer failed: ${detail}`);
+        if (action === '' && requiresReadAnalysis) {
+          return escalateOrAsk(`read safety analysis failed: ${detail}`);
+        }
+        permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
+      }
+    }
+    if (permissionReview && hasSensitiveReadRisk(permissionReview)) {
+      return escalateOrAsk('sensitive read requires user confirmation');
+    }
+    if (permissionReview && isExactSafeRead(permissionReview)) return { action: 'allow' };
+    if (action === '') {
+      if (requiresReadAnalysis && permissionReview) {
+        return escalateOrAsk('read target could not be verified as safe');
+      }
+      return { action: 'allow' };
+    }
 
     // Rules engine: Tier 1 already returned above. Runtime supplies the
     // deterministic Tier-2 evaluator and this guardrail remains the sole
@@ -561,19 +616,7 @@ export function createAutoModeToolGuardrail(
 
     let permissionAction = action;
     let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
-    if (config.analyzeCall) {
-      let permissionReview: AutoModePermissionReview;
-      try {
-        permissionReview = await config.analyzeCall(guardedCall, {
-          projectRoot,
-          executionCwd,
-          signals,
-        });
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        config.log?.('warn', `[auto-mode] permission analyzer failed: ${detail}`);
-        permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
-      }
+    if (permissionReview) {
       permissionAction = serializePermissionReview(permissionReview, action);
       intentEvidence = buildPermissionIntentEvidence(ctx.messages ?? [], permissionAction);
     }

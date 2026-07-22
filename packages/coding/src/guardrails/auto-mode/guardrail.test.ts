@@ -87,7 +87,9 @@ const callBash = (command: string): RunnerToolCall => ({
 });
 
 describe('AutoModeToolGuardrail — Tier 1', () => {
-  it('allows tools with empty projection without calling the classifier', async () => {
+  it.each(['read', 'grep', 'glob'])(
+    'fails closed for deterministic %s without a permission analyzer',
+    async (toolName) => {
     let classifierCalled = false;
     const provider = new StubProvider(async () => {
       classifierCalled = true;
@@ -98,11 +100,56 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       resolveProvider: () => provider,
     });
     const verdict = await g.beforeTool!(
-      { id: 'c1', name: 'read', input: { path: '/tmp/x' } },
+      { id: 'c1', name: toolName, input: { path: '/tmp/x' } },
       ctx(),
     );
-    expect(verdict.action).toBe('allow');
+    expect(verdict.action).toBe('escalate');
     expect(classifierCalled).toBe(false);
+    },
+  );
+
+  it('allows an exact deterministic git show review without calling the classifier', async () => {
+    const provider = new StubProvider(okResult('<block>yes</block><reason>should not happen</reason>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const analyzeCall = vi.fn(() => ({
+      schemaVersion: 1 as const,
+      analysis: { status: 'complete' as const, shell: 'shell' as const, binding: 'exact' as const },
+      operations: [{ kind: 'execute' as const, summary: 'read-only shell command', options: { readOnly: true } }],
+      risks: [],
+    }));
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''), resolveProvider: () => provider, analyzeCall,
+    });
+
+    const verdict = await guardrail.beforeTool!(callBash('git show HEAD --stat'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(analyzeCall).toHaveBeenCalledOnce();
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it('asks the user about a sensitive direct read without calling the classifier', async () => {
+    const provider = new StubProvider(okResult('<block>no</block><reason>should not decide secrets</reason>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''), resolveProvider: () => provider, askUser,
+      analyzeCall: () => ({
+        schemaVersion: 1,
+        analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+        operations: [{ kind: 'read', target: { path: '~/.ssh/id_ed25519', boundary: 'protected' } }],
+        risks: ['sensitive_read'],
+      }),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'secret-read', name: 'read', input: { path: '~/.ssh/id_ed25519' } },
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('block');
+    expect(askUser).toHaveBeenCalledOnce();
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it('classifies an unknown tool through the safe fallback instead of treating it as readonly', async () => {

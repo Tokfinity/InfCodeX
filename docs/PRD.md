@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-20
+> Last updated: 2026-07-22
 >
-> Current release baseline: `v0.7.73`
-> (`@kodax-ai/kodax@0.7.73` workspace package)
+> Current implementation baseline: `v0.7.74`
+> (`@kodax-ai/kodax@0.7.74` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -198,6 +198,19 @@ should preserve durable terminal tool-card replay where sanitized `uiHistory`
 is available, while canonical `messages` / `lineage` remain the source of
 truth.
 
+Large context compaction is always enabled and is shared by the CLI, REPL,
+Runtime SDK, and embedded products such as KodaX Space. Its percentage trigger
+defaults to 75 and is clamped to 15..90. A missing or zero absolute-token
+trigger is inactive; otherwise the effective trigger is the smallest of the
+percentage threshold, absolute threshold, and physical request capacity. Each
+large compaction protects the newest 20% of that effective trigger, preserves
+user queries through an exactly-once ledger, and summarizes the complete
+eligible prefix in one cache-stable wave. A compaction is reported as
+successful only after the replacement transcript is committed, strictly
+smaller, and physically sendable. Manual `/compact` and the Runtime imperative
+API force the same large-compaction path; microcompaction and tool-result
+shaping remain separate mechanisms.
+
 Bare `kodax -r` must show the searchable picker without loading the full CLI
 until a selection is made. Esc restores terminal ownership immediately; a
 selection transfers input ownership to the resumed REPL. Replayed history keeps
@@ -319,6 +332,9 @@ explicit user confirmation for trusted-local workflow scripts.
   the public guide.
 - A CLI/REPL user can understand providers, sessions, permissions, skills, MCP,
   and child tasks without learning retired V1 terminology.
+- A CLI, SDK, or embedded-product user can predict the effective compaction
+  trigger, protected tail, preserved-query behavior, and success telemetry
+  without reverse-engineering a host UI.
 - An experimental-memory consumer can predict scope, read/write authority,
   recall behavior, and promotion boundaries without reading implementation code.
 - Product changes preserve workspace package independence:

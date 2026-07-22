@@ -49,6 +49,10 @@ function userMsg(content: string): KodaXMessage {
   return { role: 'user', content };
 }
 
+function assistantMsg(content: string): KodaXMessage {
+  return { role: 'assistant', content };
+}
+
 function systemMsg(content: string): KodaXMessage {
   return { role: 'system', content };
 }
@@ -132,8 +136,8 @@ describe('CAP-028: gracefulCompactDegradation — tool-pairing invariant', () =>
     const messages: KodaXMessage[] = [
       toolUseMsg('t1'),
       toolResultMsg('t1'),
-      userMsg(long),
-      userMsg(long),
+      assistantMsg(long),
+      assistantMsg(long),
     ];
     const result = gracefulCompactDegradation(messages, 100, config(80));
 
@@ -160,8 +164,8 @@ describe('CAP-028: gracefulCompactDegradation — tool-pairing invariant', () =>
       userMsg('lead'),               // dropped first (non-tool, individual)
       toolUseMsg('t1'),              // becomes dropIdx-1 after lead drop
       toolResultMsg('t1'),           // backward-pair drop with the tool_use above
-      userMsg(long),
-      userMsg(long),
+      assistantMsg(long),
+      assistantMsg(long),
     ];
     const result = gracefulCompactDegradation(messages, 100, config(80));
 

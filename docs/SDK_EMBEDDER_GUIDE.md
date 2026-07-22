@@ -4434,7 +4434,9 @@ Legacy `onCompactStats`/`onCompact` callbacks remain compatibility projections.
 The old `onCompact` callback now receives the post-compact count; it no longer
 echoes the pre-compact `currentTokens` value. Hosts that need ownership or
 component metrics should use `onContextCompactionFinished` or the Runtime
-event.
+event. Compatibility success callbacks fire only after a strict token
+reduction has restored physical request validity and committed. An unchanged,
+failed, stale, or still-oversized candidate is not a successful compaction.
 
 ### Transcript observation below the daemon frame limit
 

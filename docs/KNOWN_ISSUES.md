@@ -14,6 +14,9 @@ _Last Updated: 2026-07-22_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 195 | High | Resolved | Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review | v0.7.33; exposed by v0.7.74 review | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 194 | High | Resolved | Agent coordination could reject local specialists, amplify progress polling, duplicate terminal output, and corrupt resumed tool history | v0.7.72-v0.7.74 | v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 193 | Medium | Resolved | Runtime daemon rejects interrupt input instead of injecting it into the active Run | v0.7.69 | v0.7.73 development | 2026-07-21 | 2026-07-21 |
 | 192 | High | Resolved | Large compaction used the model window for protection, covered only one rolling chunk, and exposed ambiguous/unbounded SDK state | v0.7.73 and earlier | v0.7.74 | 2026-07-21 | 2026-07-21 |
@@ -104,6 +107,167 @@ _Last Updated: 2026-07-22_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 197: User-shaped compaction checkpoints caused round-exit query and final duplication
+
+- **Priority**: Medium
+- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Introduced**: v0.7.74
+- **Fixed**: Unreleased after v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+After automatic compaction, the runtime emits the checkpoint as a synthetic
+`role: user` message with `_source: 'compaction-checkpoint'`, and repository
+intelligence can precede it with a system message. Round-exit reshaping only
+recognized a prefixed system message at index zero. It therefore appended the
+original query after an already completed assistant answer and then appended
+the same final answer again.
+
+#### Root Cause and Resolution
+
+The round boundary inferred compaction identity from role and position instead
+of the checkpoint's structured provenance. A shared predicate now recognizes
+the current `_source` marker and the legacy system-prefix form. A user-shaped
+checkpoint itself supplies the user boundary; a legacy system summary retains
+the prior requirement that some user boundary survives. Normal non-compacted
+rounds and system-summary-only sessions keep their existing append behavior.
+
+#### Verification
+
+- `packages/coding/src/task-engine/_internal/round-boundary.test.ts`
+- Runtime-shaped regression: repo system -> user checkpoint -> tool chain ->
+  existing final; the original query occurs zero times and final occurs once.
+
+### 196: Physical-only tool-result admission let pathological grep output dominate large contexts
+
+- **Priority**: High
+- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Introduced**: v0.7.69
+- **Fixed**: Unreleased after v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+Session `20260721_233332` captured a grep result of roughly 1.1 MB / 339k
+estimated tokens. On a one-million-token model the request still fit physical
+capacity, so the result was admitted as one atomic history group. The next few
+tool calls appeared to jump directly to the compaction threshold (about 526k
+tokens before compaction), even though the visible interaction was short.
+
+#### Root Cause and Resolution
+
+Issue 158 correctly removed universal post-hoc truncation and made one batch
+owner enforce physical next-request capacity with recoverable artifacts. That
+closure did not provide a separate model-attention bound, so very large context
+windows could admit a result that fit physically but was not useful as one
+model input. The fix preserves the Issue 158 architecture and adds:
+
+- grep source shaping: at most 500 characters per rendered content entry,
+  about 50 KiB per page, and explicit `offset` plus `read`/`line_offset`
+  continuation hints;
+- independent admission limits at the existing sole batch owner: 16k tokens
+  per result and 48k tokens per batch, capped again by the physical remainder;
+- full artifact persistence and explicit preview/full byte markers whenever
+  attention admission spills a result.
+
+The prior approximately 12,577-byte Issue 158 git-log reproduction remains
+verbatim, and command-aware lossy filters plus default microcompaction remain
+disabled. This is an additive attention boundary, not a rollback of Issue 158.
+
+#### Post-resolution Review Closure
+
+The first implementation left two physical-capacity fast paths in managed
+Runner results and background completion envelopes, so those paths never
+reached the attention policy when a large model window could hold the raw
+payload. It also charged edit-recovery messages against the 48k tool-attention
+ledger and converted artifact persistence failure into a fatal attention error.
+The closure:
+
+- routes standard dispatch, managed Runner, child evidence, and background
+  envelopes through the same batch owner even when physical capacity is ample;
+- keeps physical next-request capacity (including edit recovery and non-string
+  siblings) separate from the 16k/48k tool-result attention ledger;
+- treats physical overflow as the only hard admission failure, while a failed
+  attention spill remains fully inline with a visible diagnostic when it still
+  fits physically;
+- preserves one artifact/marker when re-admitting an already guarded result.
+
+#### Verification
+
+- `packages/coding/src/tools/grep.test.ts`
+- `packages/coding/src/tools/tool-result-policy.test.ts`
+- `packages/coding/src/tools/envelope-budget.test.ts`
+- `packages/coding/src/task-engine/runner-tool-result-batch.test.ts`
+- `packages/coding/src/agent-runtime/__contract-tests__/cap-077-tool-dispatch-parallel.contract.test.ts`
+- `packages/coding/src/agent-runtime/__contract-tests__/cap-079-final-tool-result-capacity.contract.test.ts`
+- Regressions cover long lines, 50 KiB paging, per-result and batch attention
+  spill across every production entry, recovery-message dual accounting,
+  persistence failure, full artifact recovery, and the unchanged moderate case.
+
+### 195: Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review
+
+- **Priority**: High
+- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Introduced**: v0.7.33; exposed by v0.7.74 review
+- **Fixed**: Unreleased after v0.7.74
+- **Created**: 2026-07-22
+- **Resolved**: 2026-07-22
+
+#### Original Problem
+
+In session `20260721_233332`, deterministic analysis identified `git show` as
+complete, exact, read-only, and risk-free, but Auto[LLM] still invoked the
+classifier. The classifier rejected the command with no useful reason, wasting
+tokens and blocking a safe inspection. Conversely, direct `read`/`grep`/`glob`
+calls used an empty projection and bypassed analysis entirely, while
+`isBashReadCommand` allowed reads such as `cat ~/.ssh/id_ed25519` and secret
+environment-variable expansion without a separate sensitive-data gate.
+
+#### Root Cause and Resolution
+
+The deterministic review was only serialized as classifier evidence after the
+empty-projection fast path; it was not itself an allow decision. Read-only
+syntax and sensitive-data access were also treated as the same concern. The
+fix keeps mutation classification separate and applies one deterministic read
+review before the LLM:
+
+- complete, exact, risk-free `read` operations and read-only shell execution
+  (`options.readOnly`) are allowed with zero classifier calls;
+- direct read tools and shell paths share sensitive-path classification for
+  SSH/GPG, cloud and Kubernetes credentials, Docker/CLI credential stores,
+  `.env` and package credentials, private-key names, and `/proc/*/environ`;
+- `.env.example`, `.env.sample`, and `.env.template` remain readable unless
+  they are located inside another protected directory;
+- sensitive environment references, enumeration, and credential-bearing
+  `git config --get` keys require explicit user confirmation before the LLM.
+
+#### Post-resolution Review Closure
+
+The first implementation still missed sensitive shell operands that did not
+look path-shaped to the shared extractor, including `cat .env`,
+`Get-Content .env`, `git diff -- .env`, and Git object reads such as
+`git show HEAD:.env`. Public SDK consumers could also omit `analyzeCall` and
+retain the old empty-projection allow. The closure adds command-aware sensitive
+operand binding for positional and regex readers (including mixed read/write
+pipelines) and Git `REV:path`/`-- path` forms, while excluding regex patterns,
+format, delimiter, and pickaxe arguments. Direct
+`read`/`grep`/`glob` calls now require deterministic analysis or explicit user
+confirmation; the Runtime continues to inject the analyzer, so exact safe reads
+remain zero-LLM-cost.
+
+#### Verification
+
+- `packages/repl/src/permission/auto-rules.test.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.test.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.test.ts`
+- Regressions prove `git show` makes no classifier request, bare/Git-object and
+  piped/redirected secrets reach user confirmation without classifier use,
+  non-path operands do not false-positive, and analyzer-less SDK reads fail
+  closed.
 
 ### 194: Agent coordination could reject local specialists, amplify progress polling, duplicate terminal output, and corrupt resumed tool history
 
@@ -203,17 +367,27 @@ could only repair ambiguously.
   Acknowledgement is selective, durable, restricted to completions already in
   the direct parent's mailbox, and filters later mailbox drains without
   consuming earlier evidence. Root and nested completion projections carry the
-  same task-result identity, and `wait_agent`/`agent_output` remove the matching
-  background notification after acknowledgement.
+  same task-result identity. `wait_agent`, `agent_output`, and host-delivered
+  synthetic results acknowledge and remove the matching notification only
+  after the authoritative transcript/session message commits; persistence
+  failure therefore leaves the result replayable. Event snapshots suppress an
+  acknowledged direct-child terminal event without deleting audit history.
 - Resume restoration deduplicates globally by tool-use ID, aligns canonical
-  text anchors monotonically, repositions canonical tool groups while retaining
-  richer persisted tool details, and replaces legacy tool summaries only when
-  they are not canonical anchors. It remains bounded to the persisted window
-  and idempotent across repeated resume/save cycles.
+  text anchors backwards from the latest persisted suffix, repositions
+  canonical tool groups while retaining richer persisted tool details, and
+  replaces legacy tool summaries only when they are not canonical anchors. It
+  remains bounded to the persisted window and idempotent across repeated
+  resume/save cycles.
 - Auto-mode block decisions synthesize a non-empty diagnostic when the
   classifier omits its reason. The shared guardrail result now explicitly says
   the call was blocked before execution. Tool-result messages are timestamped
   when the result batch is built.
+
+The post-implementation review found that the first closure still acknowledged
+terminal results inside the tool handler, before Runner/session persistence,
+and that forward-greedy text alignment could bind a trimmed repeated suffix to
+an older canonical round. The post-commit receipt hook, direct-child event
+filtering, and tail-biased canonical alignment close both gaps.
 
 #### Files Changed
 
@@ -434,6 +608,10 @@ found that imperative Runtime compaction emitted only `finished`; it now emits
 one ordered `started -> finished -> ended` lifecycle even for unchanged or
 failed attempts. Space now consumes the SDK-resolved effective threshold,
 including physical capacity, and clamps every percentage entry point to 15-90.
+The post-implementation fallback review also removed a false-success path: a
+new array reference is not evidence of pruning. Success now requires a strict
+token reduction and a physically valid complete request; otherwise the original
+history is returned and no successful compatibility stats are emitted.
 
 #### Verification
 
@@ -3184,6 +3362,12 @@ direction, but review found unresolved correctness and resource regressions:
   is an explicit opt-in policy, and manual `/compact` remains an explicit force
   operation; neither is presented as guaranteed token optimization.
 
+The two history-compaction bullets above record the `v0.7.69` closure state.
+FEATURE_272 (`v0.7.74`) supersedes only that large-compaction trigger policy:
+automatic large compaction is now always enabled with the percentage/absolute/
+physical minimum described by Issue 192. The tool-result, microcompaction, and
+artifact-recovery conclusions of this issue remain current.
+
 #### Files Changed
 
 - `packages/coding/src/tools/bash.ts`, `bash-output-collector.ts`,
@@ -5914,6 +6098,26 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-22: Issues 195-197 added and resolved (Unreleased after v0.7.74)
+- Bypassed the LLM for exact safe reads while moving sensitive paths and
+  environment disclosure ahead of classifier decisions; the post-resolution
+  closure covers bare/Git-object operands and analyzer-less SDK callers.
+- Added grep source paging and independent attention admission without
+  restoring the Issue 158 universal truncation behavior; all production entry
+  paths now use the owner, physical and attention ledgers are separate, and
+  persistence failure preserves physically admissible evidence.
+- Recognized current user-shaped compaction checkpoints at round exit and
+  removed duplicate query/final appends.
+
+### 2026-07-22: Issues 192/194 post-implementation review closure
+- Moved terminal Actor receipts behind transcript/session commit, filtered
+  acknowledged direct-child event replay, and aligned repeated persisted text
+  to the latest canonical suffix.
+- Required emergency compaction fallback to reduce tokens and restore physical
+  validity before emitting successful compatibility events.
+- Synchronized canonical config templates, `kodax_manual`, and current-state
+  compaction documentation.
 
 ### 2026-07-22: Issue 194 added and resolved (v0.7.74)
 - Recorded the local-specialist dispatch contract break, progress-wait model

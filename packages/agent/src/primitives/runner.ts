@@ -94,6 +94,13 @@ export interface RunOptions {
    */
   readonly session?: Session;
   /**
+   * Fires after a message has entered the authoritative transcript and, when
+   * a Session is configured, only after its atomic append succeeds. Hosts use
+   * this boundary for delivery receipts that must remain replayable on a
+   * persistence failure.
+   */
+  readonly onMessageCommitted?: (message: AgentMessage) => void | Promise<void>;
+  /**
    * Abort signal forwarded to preset dispatchers that honor it.
    */
   readonly abortSignal?: AbortSignal;
@@ -574,6 +581,11 @@ async function appendMessageEntry(session: Session, message: AgentMessage): Prom
   });
 }
 
+async function commitMessage(opts: RunOptions, message: AgentMessage): Promise<void> {
+  if (opts.session) await appendMessageEntry(opts.session, message);
+  await opts.onMessageCommitted?.(message);
+}
+
 /**
  * Normalize the stop-hook reanimate surface into `{ content, source }`.
  * Accepts a bare `string` (source-less reanimate, back-compat) or the
@@ -709,12 +721,8 @@ async function genericRun<TData>(
   // guardrail rewrote the transcript, the rewrite is what subsequent
   // iterations operate on; --resume / Scout replay / audit consumers
   // must see the same shape on both ends.
-  if (opts.session) {
-    for (const message of transcript) {
-      if (message.role === 'user') {
-        await appendMessageEntry(opts.session, message);
-      }
-    }
+  for (const message of transcript) {
+    if (message.role === 'user') await commitMessage(opts, message);
   }
 
   // FEATURE_101 v0.7.31.2: when the entry agent is admitted and its
@@ -830,9 +838,7 @@ async function genericRun<TData>(
         timestamp: assistantMessage.timestamp ?? new Date().toISOString(),
       };
       transcript.push(assistantMessage);
-      if (opts.session) {
-        await appendMessageEntry(opts.session, assistantMessage);
-      }
+      await commitMessage(opts, assistantMessage);
       const finalText =
         typeof assistantMessage.content === 'string'
           ? assistantMessage.content
@@ -910,9 +916,7 @@ async function genericRun<TData>(
             timestamp: new Date().toISOString(),
           };
           transcript.push(syntheticUserMessage);
-          if (opts.session) {
-            await appendMessageEntry(opts.session, syntheticUserMessage);
-          }
+          await commitMessage(opts, syntheticUserMessage);
           agentSpan?.addChild('stop-hook', {
             kind: 'stop-hook',
             outcome: 'reanimate',
@@ -1046,9 +1050,7 @@ async function genericRun<TData>(
       timestamp: assistantMessage.timestamp,
     };
     transcript.push(assistantMessage);
-    if (opts.session) {
-      await appendMessageEntry(opts.session, assistantMessage);
-    }
+    await commitMessage(opts, assistantMessage);
 
     // v0.7.26 parity (C2): execute tool calls with the legacy concurrency
     // model — non-bash tools run in parallel (Promise.all), bash tools
@@ -1200,9 +1202,7 @@ async function genericRun<TData>(
     }
     const toolResultMessage = buildToolResultMessage(finalCalls, results);
     transcript.push(toolResultMessage);
-    if (opts.session) {
-      await appendMessageEntry(opts.session, toolResultMessage);
-    }
+    await commitMessage(opts, toolResultMessage);
 
     // FEATURE_179: compaction hook moved to TOP of the for-loop (above).
     // See compactionHook doc-comment for motivation. This site previously
@@ -1314,9 +1314,7 @@ async function genericRun<TData>(
       if (extraMessages.length > 0) {
         for (const message of extraMessages) {
           transcript.push(message);
-          if (opts.session) {
-            await appendMessageEntry(opts.session, message);
-          }
+          await commitMessage(opts, message);
         }
       }
     }

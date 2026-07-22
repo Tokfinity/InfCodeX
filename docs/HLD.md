@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-20
+> Last updated: 2026-07-22
 >
-> Current release baseline: `v0.7.73`
-> (`@kodax-ai/kodax@0.7.73` workspace package)
+> Current implementation baseline: `v0.7.74`
+> (`@kodax-ai/kodax@0.7.74` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -289,6 +289,21 @@ requirements span both product and SDK:
 - compatibility with old session records where practical.
 
 Session management is a product feature, not merely a debug log.
+
+Major context compaction is an always-on, request-bound Session transaction.
+One normalized policy takes the minimum of a 15-90% trigger (75% default), an
+optional positive absolute token threshold, and physical provider capacity.
+The protected recent tail is 20% of that effective trigger. Everything older
+is one complete eligible prefix: it is summarized once, or map/reduced only
+when one summary request cannot physically fit. A synthetic user checkpoint
+combines the semantic summary with an exact genuine-user-query ledger.
+
+Compaction never partially replaces canonical history. A successful result
+must reduce tokens, fit the complete provider request, and commit before
+success callbacks/events fire. Canonical events are keyed by root/child
+`contextId` and revision. Runtime observation carries bounded transcript
+slices; revision-bound pages and lossless chunks recover data that cannot fit
+inside one daemon frame.
 
 ## 9. Skills, MCP, And A2A
 

@@ -150,6 +150,7 @@ import {
   runWithIdleYield,
 } from '@kodax-ai/agent';
 import { actorQueueId } from '../agent-runtime/actor-queue.js';
+import { commitActorNotificationReceipts } from '../tools/agent-collaboration.js';
 
 function activeDescendantTurnCount(ctx: KodaXToolExecutionContext): number {
   const control = ctx.actorControl;
@@ -1818,6 +1819,7 @@ async function runManagedTaskViaRunnerInner(
       compactionHook,
       toolResultBatchTransform,
       toolObserver: runnerToolObserver,
+      onMessageCommitted: (message) => commitActorNotificationReceipts(baseCtx, [message]),
       // FEATURE_164 (v0.7.41) — mid-turn user-prompt injection.
       // FEATURE_192 v0.7.44 Phase F — wrapped with `withGoalBeforeNextTurn`
       // when an active `/goal` binding is present (no-op otherwise).

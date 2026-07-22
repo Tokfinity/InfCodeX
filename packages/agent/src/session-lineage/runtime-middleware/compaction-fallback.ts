@@ -111,6 +111,8 @@ export function gracefulCompactDegradation(
   config: CompactionConfig,
   capacity?: GracefulCompactionCapacity,
 ): KodaXMessage[] {
+  const originalMessages = messages;
+  const originalTokens = estimateTokens(messages);
   const physicalCapacityTokens = capacity === undefined
     ? contextWindow
     : calculateMaxContextInputTokens(
@@ -127,7 +129,7 @@ export function gracefulCompactDegradation(
     Math.floor(capacity?.fixedOverheadTokens ?? 0),
   );
   const targetTokens = Math.max(0, totalTargetTokens - fixedOverheadTokens);
-  if (messages.length === 0 || estimateTokens(messages) <= targetTokens) return messages;
+  if (messages.length === 0 || originalTokens <= targetTokens) return messages;
 
   const firstMessage = messages[0];
   const firstContent = typeof firstMessage?.content === 'string'
@@ -211,5 +213,5 @@ export function gracefulCompactDegradation(
     messages = [...messages.slice(0, dropIdx), ...messages.slice(dropIdx + 1)];
   }
 
-  return messages;
+  return estimateTokens(messages) < originalTokens ? messages : originalMessages;
 }

@@ -24,6 +24,7 @@ export type KodaXManualTopicId =
   | 'a2a'
   | 'repo-intelligence'
   | 'sessions'
+  | 'compaction'
   | 'memory'
   | 'doctor'
   | 'sdk'

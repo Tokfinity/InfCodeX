@@ -30,9 +30,6 @@ export function createEnvelopeAggregateBudgetEnforcer(
   return async (fragments, capacityContext) => {
     const budget = resolveBudget?.(capacityContext);
     if (!budget || fragments.length === 0) return fragments;
-    if (countEnvelopeTokens(fragments) <= budget.aggregateInlineTokens) {
-      return fragments;
-    }
 
     const guarded = await applyToolResultBatchGuardrail(
       fragments.map((content, index) => ({

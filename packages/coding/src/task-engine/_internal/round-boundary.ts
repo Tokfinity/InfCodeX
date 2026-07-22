@@ -73,6 +73,14 @@ export function extractFinalAssistantText(
   return isPlaceholderOnlyAssistantText(text) ? '' : text;
 }
 
+function isCompactionCheckpointMessage(message: KodaXMessage | undefined): boolean {
+  if (!message) return false;
+  if (message._source === 'compaction-checkpoint') return true;
+  return message.role === 'system'
+    && typeof message.content === 'string'
+    && message.content.startsWith(COMPACTION_SUMMARY_PREFIX);
+}
+
 /**
  * Build the clean user-facing dialog for a round exit: preserved history +
  * this round's {user, assistant}.
@@ -236,8 +244,7 @@ export function preserveTranscriptForRoundExit(
   const first = messages[0];
   if (
     first?.role === 'system'
-    && typeof first.content === 'string'
-    && !first.content.startsWith(COMPACTION_SUMMARY_PREFIX)
+    && !isCompactionCheckpointMessage(first)
   ) {
     messages = messages.slice(1);
   }
@@ -255,14 +262,10 @@ export function preserveTranscriptForRoundExit(
   //   `runnerInput` appends it before Runner.run executes, so this is
   //   the normal hit-path.
   //
-  //   Skip (b): a CompactionSummary system message sits at the head
-  //   AND at least one user message survives further down. In
-  //   long-running sessions the user prompt may have been summarised
-  //   out (it sits at the start of the transcript; compaction's
-  //   protection window is anchored at the tail, so the prompt gets
-  //   folded into the summary). The summary itself already carries
-  //   the task intent and the protected user message preserves
-  //   user/assistant alternation, so re-appending the prompt at the
+  //   Skip (b): a compaction checkpoint survives. Current checkpoints
+  //   are synthetic user messages (`_source: 'compaction-checkpoint'`),
+  //   while older sessions use a system message with the summary prefix.
+  //   Both already carry the task intent, so re-appending the prompt at the
   //   tail would only add a `[…work…, user_prompt, asst]` shape that
   //   reads as if the user spoke mid-task.
   //
@@ -275,16 +278,12 @@ export function preserveTranscriptForRoundExit(
 
   let shouldAppendPrompt = !hasPromptAlready;
   if (shouldAppendPrompt) {
-    const hasCompactionSummaryHead =
-      messages[0]?.role === 'system'
-      && typeof messages[0].content === 'string'
-      && messages[0].content.startsWith(COMPACTION_SUMMARY_PREFIX);
-    if (hasCompactionSummaryHead) {
-      const hasAnyUser = messages.some((m) => m.role === 'user');
-      if (hasAnyUser) {
-        shouldAppendPrompt = false;
-      }
-    }
+    const hasUserBoundary = messages.some((message) => message.role === 'user');
+    const checkpointCarriesRoundIntent = messages.some((message) => (
+      isCompactionCheckpointMessage(message)
+      && (message.role === 'user' || hasUserBoundary)
+    ));
+    if (checkpointCarriesRoundIntent) shouldAppendPrompt = false;
   }
 
   if (shouldAppendPrompt) {

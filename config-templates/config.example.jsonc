@@ -21,6 +21,13 @@
   //   }
   // ],
   // "repoIntelligenceMode": "auto",
+  // Automatic large compaction is always enabled. Percentage defaults to 75
+  // and is clamped to 15..90. A missing/zero absolute threshold is inactive;
+  // otherwise the smaller percentage, absolute, and physical limit wins.
+  // "compaction": {
+  //   "triggerPercent": 75,
+  //   "triggerTokens": 0
+  // },
   // "sessionRetentionDays": 0,
   // "workflow": { "maxConcurrency": 8 }
 }

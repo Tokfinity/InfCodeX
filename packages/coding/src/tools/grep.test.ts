@@ -313,7 +313,7 @@ describe('toolGrep', () => {
     expect(result).not.toContain(':3: c');
   });
 
-  it('head_limit 0 remains unlimited beyond the former 2000-entry cap', async () => {
+  it('head_limit 0 bypasses the entry cap but keeps the source byte budget', async () => {
     const content = Array.from({ length: 2_100 }, (_, index) => `match-${index + 1}`).join('\n');
     const dir = setup({ 'large.txt': content });
     const result = await toolGrep(
@@ -321,8 +321,9 @@ describe('toolGrep', () => {
       ctx(dir),
     );
     expect(result).toContain(':1: match-1');
-    expect(result).toContain(':2100: match-2100');
-    expect(result).not.toContain('Grep output truncated');
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThan(54 * 1024);
+    expect(result).toContain('More matches available');
+    expect(result).toContain('Continue with offset=');
   });
 
   it('searches beyond the former 100-file scan cap', async () => {
@@ -362,7 +363,7 @@ describe('toolGrep', () => {
     expect(second).not.toContain('SOURCE_INCOMPLETE');
   });
 
-  it('leaves large exact result pages to the outer aggregate capacity owner', async () => {
+  it('keeps a large result page inside the grep source byte budget', async () => {
     const content = Array.from(
       { length: 350 },
       (_, index) => `needle-${index}-${'x'.repeat(100)}`,
@@ -372,12 +373,13 @@ describe('toolGrep', () => {
       { pattern: 'needle-', path: join(dir, 'large.txt'), head_limit: 0 },
       ctx(dir),
     );
-    expect(Buffer.byteLength(result, 'utf8')).toBeGreaterThan(24 * 1024);
-    expect(result).toContain(':350: needle-349-');
-    expect(result).not.toContain('Grep output truncated');
+    expect(Buffer.byteLength(result, 'utf8')).toBeLessThan(54 * 1024);
+    expect(result).toContain(':1: needle-0-');
+    expect(result).toContain('More matches available');
+    expect(result).toContain('Continue with offset=');
   });
 
-  it('preserves complete long lines in match, context, and multiline output', async () => {
+  it('clips long match, context, and multiline entries with a read continuation hint', async () => {
     const contextLine = `context-${'c'.repeat(700)}`;
     const matchLine = `needle-${'m'.repeat(700)}`;
     const dir = setup({ 'long-lines.txt': `${contextLine}\n${matchLine}\n` });
@@ -396,11 +398,14 @@ describe('toolGrep', () => {
       ctx(dir),
     );
 
-    expect(direct).toContain(matchLine);
-    expect(withContext).toContain(contextLine);
-    expect(withContext).toContain(matchLine);
-    expect(multiline).toContain(matchLine);
-    expect(`${direct}\n${withContext}\n${multiline}`).not.toContain('[truncated]');
+    expect(direct).not.toContain(matchLine);
+    expect(withContext).not.toContain(contextLine);
+    expect(multiline).not.toContain(matchLine);
+    expect(`${direct}\n${withContext}\n${multiline}`).toContain('line clipped');
+    expect(`${direct}\n${withContext}\n${multiline}`).toContain('line_offset');
+    for (const line of `${direct}\n${withContext}\n${multiline}`.split('\n')) {
+      expect(Array.from(line).length).toBeLessThanOrEqual(500);
+    }
   });
 
   it('offset beyond total matches returns no-matches message', async () => {

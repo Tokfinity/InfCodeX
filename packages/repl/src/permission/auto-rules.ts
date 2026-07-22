@@ -12,6 +12,7 @@ import type {
 } from '@kodax-ai/coding';
 import {
   collectDeterministicBashWriteTargets,
+  extractPathsFromCommand,
   isBashReadCommand,
   isBashWriteCommand,
 } from './permission.js';
@@ -20,8 +21,30 @@ import type { BashCommandTree, BashPipelineStage } from './bash-ast.js';
 import { analyzePowerShellMutation, isPowerShellMutationCommand } from './powershell-mutation.js';
 
 const FILE_TOOLS = new Set(['write', 'edit', 'multi_edit', 'insert_after_anchor']);
-const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
-const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+const READ_FILE_TOOLS = new Set(['read', 'grep', 'glob']);
+const SENSITIVE_PATH_PARTS = new Set([
+  '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.kodax', '.agents',
+]);
+const SENSITIVE_FILES = new Set([
+  '.env', '.npmrc', '.pypirc', '.netrc', '.git-credentials', 'credentials',
+  'credentials.json', 'application_default_credentials.json', 'id_rsa', 'id_ed25519',
+]);
+const ENV_TEMPLATE_FILES = new Set(['.env.example', '.env.sample', '.env.template']);
+const SENSITIVE_ENV_NAME = /(?:^|_)(?:api_?key|access_?key|secret|token|password|passwd|credential|private_?key|auth|cookie)(?:_|$)/i;
+const POSITIONAL_READ_COMMANDS = new Set([
+  'cat', 'type', 'get-content', 'head', 'tail', 'less', 'more', 'wc', 'fc',
+]);
+const REGEX_READ_COMMANDS = new Set([
+  'rg', 'ripgrep', 'grep', 'egrep', 'fgrep', 'findstr', 'select-string', 'sed', 'awk',
+]);
+const GET_CONTENT_NON_PATH_VALUE_OPTIONS = new Set([
+  '-delimiter', '-encoding', '-readcount', '-totalcount', '-tail',
+]);
+const GET_CONTENT_PATH_OPTIONS = new Set(['-path', '-literalpath', '-filter', '-include', '-exclude']);
+const GIT_NON_PATH_VALUE_OPTIONS = new Set([
+  '-g', '-s', '--format', '--pretty', '--date', '--encoding', '--diff-algorithm',
+  '--word-diff-regex', '--diff-filter', '--find-object', '--line-prefix',
+]);
 const TARGETED_WRITE_COMMANDS = new Set([
   'rm', 'rmdir', 'mkdir', 'touch', 'mv', 'move', 'ren', 'del', 'erase', 'rd',
   'cp', 'copy', 'chmod', 'chown', 'dd', 'tee',
@@ -126,8 +149,23 @@ function canonicalTempDirectories(): string[] {
 
 function isSensitivePath(targetPath: string): boolean {
   const parts = targetPath.split(/[\\/]+/).map((part) => part.toLowerCase());
-  return parts.some((part) => SENSITIVE_PATH_PARTS.has(part))
-    || parts.some((part) => SENSITIVE_FILES.has(part) || part.startsWith('.env.'));
+  const basename = parts.at(-1) ?? '';
+  const sensitiveEnvironmentFile = !ENV_TEMPLATE_FILES.has(basename)
+    && (basename === '.env' || basename.startsWith('.env.'));
+  const processEnvironmentFile = parts[1] === 'proc'
+    && (parts[0] === '' || /^[a-z]:$/i.test(parts[0] ?? ''))
+    && /^(?:self|\d+)$/.test(parts[2] ?? '')
+    && parts[3] === 'environ';
+  return processEnvironmentFile
+    || parts.some((part) => SENSITIVE_PATH_PARTS.has(part))
+    || parts.some((part) => SENSITIVE_FILES.has(part))
+    || sensitiveEnvironmentFile
+    || parts.some((part) => /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/.test(part))
+    || parts.some((part, index) => (
+      part === '.config'
+      && (parts[index + 1] === 'gcloud'
+        || parts[index + 1] === 'gh')
+    ));
 }
 
 function isProtectedAgentHome(targetPath: string): boolean {
@@ -143,8 +181,10 @@ function classifyTarget(
   targetPath: string,
   context: AutoModeRulesContext,
 ): AutoModePermissionTarget {
+  if (isSensitivePath(targetPath)) return { path: targetPath, boundary: 'protected' };
   const normalized = normalizeShellTarget(targetPath);
   if (!normalized) return { path: targetPath, boundary: 'unresolved' };
+  if (isSensitivePath(normalized)) return { path: targetPath, boundary: 'protected' };
   const executionCwd = canonicalizeExistingDirectory(context.executionCwd);
   const projectRoot = canonicalizeExistingDirectory(context.projectRoot);
   const target = executionCwd ? canonicalizePath(normalized, executionCwd) : undefined;
@@ -250,6 +290,142 @@ function assessFileCall(
   ));
 }
 
+function readToolTarget(
+  toolName: string,
+  input: Readonly<Record<string, unknown>>,
+  context: AutoModeRulesContext,
+): string {
+  const searchFilter = toolName === 'glob' ? input.pattern : input.glob;
+  if (typeof searchFilter === 'string' && isSensitivePath(searchFilter)) {
+    return searchFilter;
+  }
+  if (typeof input.path === 'string' && input.path.trim()) return input.path;
+  return toolName === 'read' ? '' : context.executionCwd;
+}
+
+function assessReadFileCall(
+  toolName: string,
+  input: Readonly<Record<string, unknown>>,
+  context: AutoModeRulesContext,
+): AutoModeCallAssessment {
+  const targetPath = readToolTarget(toolName, input, context);
+  if (!targetPath) {
+    return assessment(
+      escalate('auto-mode could not resolve the read target'),
+      review('incomplete', 'tool', [], ['target_unresolved'], 'read target is missing'),
+    );
+  }
+  const operation: AutoModePermissionOperation = {
+    kind: 'read', target: classifyTarget(targetPath, context),
+  };
+  const complete = operation.target.boundary !== 'unresolved';
+  const allowed = complete && operation.target.boundary !== 'protected';
+  return assessment(
+    allowed
+      ? { action: 'allow' }
+      : escalate('auto-mode requires confirmation before reading a sensitive or unresolved target'),
+    review(
+      complete ? 'complete' : 'incomplete',
+      'tool',
+      [operation],
+      collectRisks([operation]),
+      complete ? undefined : 'read target could not be resolved safely',
+    ),
+  );
+}
+
+function sensitiveEnvironmentRead(command: string, tree: BashCommandTree): boolean {
+  const references = [
+    ...command.matchAll(/\$(?:env:)?\{?([a-z_][a-z0-9_]*)\}?/gi),
+    ...command.matchAll(/%([a-z_][a-z0-9_]*)%/gi),
+    ...command.matchAll(/\benv:([a-z_][a-z0-9_]*)/gi),
+  ];
+  if (references.some((match) => SENSITIVE_ENV_NAME.test(match[1] ?? ''))) return true;
+  if (/\b(?:get-childitem|gci|dir)\b[^\r\n|;&]*\benv:\s*(?:$|[|;&])/i.test(command)) {
+    return true;
+  }
+  if (/\bgit\s+config\s+--get\s+\S*(?:credential|token|password|secret|extraheader|oauth)\S*/i.test(command)) {
+    return true;
+  }
+  return tree.statements.some((statement) => statement.stages.some((stage) => {
+    const executable = shellExecutable(stage);
+    if (executable !== 'env' && executable !== 'printenv') return false;
+    const names = stage.argv.slice(1).filter((token) => !token.startsWith('-'));
+    return names.length === 0 || names.some((name) => SENSITIVE_ENV_NAME.test(name));
+  }));
+}
+
+function sensitivePathCandidate(value: string): string | undefined {
+  if (isSensitivePath(value)) return value;
+  const gitMagic = value.match(/^:\([^)]*\)(.+)$/)?.[1];
+  if (gitMagic && isSensitivePath(gitMagic)) return gitMagic;
+  for (let index = value.indexOf(':'); index >= 0; index = value.indexOf(':', index + 1)) {
+    const suffix = value.slice(index + 1);
+    if (suffix && isSensitivePath(suffix)) return suffix;
+  }
+  return undefined;
+}
+
+function collectSensitiveReadTargets(tree: BashCommandTree): string[] {
+  const targets = new Set<string>();
+  const addCandidate = (value: string | undefined): void => {
+    if (!value) return;
+    const candidate = sensitivePathCandidate(value);
+    if (candidate) targets.add(candidate);
+  };
+
+  for (const statement of tree.statements) {
+    for (const stage of statement.stages) {
+      const executable = shellExecutable(stage);
+      if (executable === 'git') {
+        const subcommand = stage.argv[1]?.toLowerCase();
+        let pathsOnly = false;
+        for (let index = 2; index < stage.argv.length; index += 1) {
+          const token = stage.argv[index] ?? '';
+          if (token === '--') {
+            pathsOnly = true;
+            continue;
+          }
+          if (!pathsOnly && GIT_NON_PATH_VALUE_OPTIONS.has(token.toLowerCase())) {
+            index += 1;
+            continue;
+          }
+          if (!pathsOnly && token.startsWith('-')) continue;
+          if (pathsOnly || subcommand === 'diff' || token.includes(':')) {
+            addCandidate(token);
+          }
+        }
+        continue;
+      }
+      if (REGEX_READ_COMMANDS.has(executable)) {
+        const stageCommand = stage.argv.map((token) => JSON.stringify(token)).join(' ');
+        for (const target of extractPathsFromCommand(stageCommand)) addCandidate(target);
+        continue;
+      }
+      if (!POSITIONAL_READ_COMMANDS.has(executable)) continue;
+
+      for (let index = 1; index < stage.argv.length; index += 1) {
+        const token = stage.argv[index] ?? '';
+        const lower = token.toLowerCase();
+        if (executable === 'get-content') {
+          if (GET_CONTENT_NON_PATH_VALUE_OPTIONS.has(lower)) {
+            index += 1;
+            continue;
+          }
+          if (GET_CONTENT_PATH_OPTIONS.has(lower)) {
+            addCandidate(stage.argv[index + 1]);
+            index += 1;
+            continue;
+          }
+        }
+        if (token.startsWith('-')) continue;
+        addCandidate(token);
+      }
+    }
+  }
+  return [...targets];
+}
+
 function assessBashCall(
   input: Readonly<Record<string, unknown>>,
   context: AutoModeRulesContext,
@@ -281,6 +457,7 @@ function assessBashCall(
     ));
   const risks = collectRisks(operationResult.operations);
   if (highRisk) risks.push('high_risk_pattern');
+  if (sensitiveEnvironmentRead(command, tree)) risks.push('sensitive_environment_read');
   const permissionReview = review(
     complete ? 'complete' : 'incomplete',
     shell,
@@ -298,6 +475,12 @@ function assessBashCall(
   if (highRisk) {
     return assessment(
       escalate('auto-mode rules require confirmation for a high-risk shell command'),
+      permissionReview,
+    );
+  }
+  if (risks.includes('sensitive_environment_read')) {
+    return assessment(
+      escalate('auto-mode requires confirmation before reading sensitive environment data'),
       permissionReview,
     );
   }
@@ -353,8 +536,22 @@ function collectShellOperations(
     if (modeledTargets.has(target)) continue;
     operations.push({ kind: 'write', target: classifyTarget(target, context) });
   }
+  const sensitiveReadTargets = collectSensitiveReadTargets(tree);
+  if (isBashReadCommand(command) || sensitiveReadTargets.length > 0) {
+    const readTargets = new Set(sensitiveReadTargets);
+    if (isBashReadCommand(command)) {
+      for (const target of extractPathsFromCommand(command)) readTargets.add(target);
+    }
+    for (const target of readTargets) {
+      if (modeledTargets.has(target)) continue;
+      operations.push({ kind: 'read', target: classifyTarget(target, context) });
+      modeledTargets.add(target);
+    }
+  }
   if (operations.length === 0 && isBashReadCommand(command)) {
-    operations.push({ kind: 'execute', summary: 'read-only shell command' });
+    operations.push({
+      kind: 'execute', summary: 'read-only shell command', options: { readOnly: true },
+    });
   }
   return reason === undefined ? { complete, operations } : { complete, operations, reason };
 }
@@ -493,8 +690,12 @@ function operationPaths(operation: AutoModePermissionOperation): readonly AutoMo
 
 function isOperationAllowed(operation: AutoModePermissionOperation): boolean {
   if (operation.options?.whatIf === true) return true;
-  if (operation.kind === 'execute') return true;
+  if (operation.kind === 'execute') return operation.options?.readOnly === true;
   if (operation.kind === 'unknown') return false;
+  if (operation.kind === 'read') {
+    return operation.target.boundary !== 'protected'
+      && operation.target.boundary !== 'unresolved';
+  }
   if ('target' in operation) return isAllowedMutationTarget(operation.target);
   if (!('source' in operation)) return false;
   if (operation.kind === 'copy') {
@@ -514,6 +715,8 @@ function collectRisks(operations: readonly AutoModePermissionOperation[]): strin
     if (mutationTargets(operation).some((target) => target.boundary === 'outside-workspace')) {
       risks.add('outside_workspace_mutation');
     }
+    if (operation.kind === 'read'
+      && targets.some((target) => target.boundary === 'protected')) risks.add('sensitive_read');
     if (targets.some((target) => target.boundary === 'protected')) risks.add('protected_path');
     if (targets.some((target) => target.boundary === 'unresolved')) risks.add('target_unresolved');
     if (operation.kind === 'move' || operation.kind === 'rename') {
@@ -536,7 +739,7 @@ function collectRisks(operations: readonly AutoModePermissionOperation[]): strin
 function mutationTargets(
   operation: AutoModePermissionOperation,
 ): readonly AutoModePermissionTarget[] {
-  if ('target' in operation) return [operation.target];
+  if ('target' in operation) return operation.kind === 'read' ? [] : [operation.target];
   if (!('source' in operation)) return [];
   return operation.kind === 'copy'
     ? [operation.destination]
@@ -575,6 +778,7 @@ export function assessAutoModeCall(
   context: AutoModeRulesContext,
 ): AutoModeCallAssessment {
   if (FILE_TOOLS.has(call.name)) return assessFileCall(call.input, context);
+  if (READ_FILE_TOOLS.has(call.name)) return assessReadFileCall(call.name, call.input, context);
   if (call.name === 'bash') return assessBashCall(call.input, context);
   return assessment(
     escalate(`auto-mode rules require confirmation for tool "${call.name}"`),

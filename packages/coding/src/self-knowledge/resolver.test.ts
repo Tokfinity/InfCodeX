@@ -19,6 +19,7 @@ describe('FEATURE_218 resolveKodaXManual', () => {
 
   it('resolves an English alias', () => {
     expect(resolveKodaXManual({ topic: 'settings' }).matchedTopic).toBe('config');
+    expect(resolveKodaXManual({ topic: 'automatic compaction' }).matchedTopic).toBe('compaction');
   });
 
   it('resolves a Chinese alias', () => {

@@ -193,16 +193,19 @@ function alignCanonicalTextItems(
   derivedItems: readonly CreatableHistoryItem[],
 ): ReadonlyMap<number, number> {
   const anchors = new Map<number, number>();
-  let persistedCursor = 0;
-  for (let derivedIndex = 0; derivedIndex < derivedItems.length; derivedIndex += 1) {
+  let persistedCursor = persistedItems.length - 1;
+  // uiHistory can be a bounded suffix of the canonical transcript. Match
+  // backwards so repeated queries/answers bind to their latest canonical
+  // occurrence instead of resurrecting tool groups from an older round.
+  for (let derivedIndex = derivedItems.length - 1; derivedIndex >= 0; derivedIndex -= 1) {
     const derived = derivedItems[derivedIndex];
     if (!derived || derived.type === "tool_group") continue;
-    for (let index = persistedCursor; index < persistedItems.length; index += 1) {
+    for (let index = persistedCursor; index >= 0; index -= 1) {
       const persisted = persistedItems[index];
       if (!persisted || persisted.type === "tool_group") continue;
       if (!matchesTimestampSource(persisted, derived)) continue;
       anchors.set(derivedIndex, index);
-      persistedCursor = index + 1;
+      persistedCursor = index - 1;
       break;
     }
   }

@@ -40,11 +40,12 @@ async function transformRunnerToolResultBatch(
 ): Promise<readonly RunnerToolResult[]> {
   const budget = resolveRunnerToolResultBudget(batch.transcript, options);
   const rawTokens = estimateRunnerToolResultBatchTokens(batch.calls, batch.results);
-  if (rawTokens <= budget.aggregateInlineTokens) return batch.results;
-
   const stringEntries = collectStringEntries(batch);
   if (stringEntries.length === 0) {
-    throw new ToolResultBatchCapacityError(rawTokens, budget.aggregateInlineTokens);
+    if (rawTokens > budget.aggregateInlineTokens) {
+      throw new ToolResultBatchCapacityError(rawTokens, budget.aggregateInlineTokens);
+    }
+    return batch.results;
   }
   const nonStringTokens = estimateNonStringResultTokens(batch.calls, batch.results);
   const stringBudgetTokens = Math.max(0, budget.aggregateInlineTokens - nonStringTokens);

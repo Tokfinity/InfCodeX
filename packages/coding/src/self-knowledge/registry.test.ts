@@ -110,6 +110,20 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('proposal/preview/fingerprint/apply');
   });
 
+  it('documents the v0.7.74 always-on compaction contract', () => {
+    const content = resolveKodaXManual({ topic: 'compaction' }).content;
+
+    expect(content).toContain('always enabled');
+    expect(content).toContain('defaults to 75');
+    expect(content).toContain('15..90');
+    expect(content).toContain('triggerTokens');
+    expect(content).toContain('smaller');
+    expect(content).toContain('20%');
+    expect(content).toContain('complete eligible prefix');
+    expect(content).toContain('user-query ledger');
+    expect(content).toContain('post-commit');
+  });
+
   it('keeps the SDK topic aligned with current published subpaths', () => {
     const content = resolveKodaXManual({ topic: 'sdk' }).content;
 

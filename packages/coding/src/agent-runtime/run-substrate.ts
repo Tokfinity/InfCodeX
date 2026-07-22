@@ -42,6 +42,7 @@ import path from 'path';
 // `./client.js` instead — see line ~592.
 import { resolveProvider } from '../providers/index.js';
 import { listToolDefinitions } from '../tools/index.js';
+import { commitActorNotificationReceipts } from '../tools/agent-collaboration.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 // CAP-075 (`getManagedBlockNameForRole`, `hasManagedProtocolForRole`,
 // `textContainsManagedBlock`, `MANAGED_PROTOCOL_TOOL_NAME`) is wired
@@ -659,6 +660,10 @@ export async function runSubstrate(
     runtime: runtime ?? undefined,
     managedProtocolPayloadRef,
   });
+  // A resumed transcript is already durable. Finish any child-result receipt
+  // that was left replayable by a crash between transcript commit and Actor
+  // acknowledgement.
+  await commitActorNotificationReceipts(ctx, messages);
   const messageQueueAgentId = ctx.actorControl
     ? actorQueueId(sessionId, ctx.actorControl.callerPath)
     : undefined;
@@ -1642,6 +1647,7 @@ export async function runSubstrate(
           success: true,
         });
         if (appendQueuedRuntimeMessages(messages, runtimeSessionState)) {
+          await commitActorNotificationReceipts(ctx, messages);
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
             sessionId,
@@ -1991,6 +1997,7 @@ export async function runSubstrate(
         lastText: turnState.lastText,
         iter,
       });
+      await commitActorNotificationReceipts(ctx, messages);
       contextTokenSnapshot = settleOutcome.contextTokenSnapshot;
       if (settleOutcome.drainedQueuedMessages) {
         continue;

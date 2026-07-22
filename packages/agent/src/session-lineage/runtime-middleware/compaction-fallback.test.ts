@@ -40,4 +40,20 @@ describe('gracefulCompactDegradation', () => {
       reservedResponseTokens,
     })).toBe(false);
   });
+
+  it('returns the original history when mandatory content cannot be reduced', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `immutable ${'policy '.repeat(2_000)}` },
+    ];
+
+    const degraded = gracefulCompactDegradation(
+      messages,
+      1_000,
+      { enabled: true, triggerPercent: 90, pruningThresholdTokens: 100 },
+      { reservedResponseTokens: 100 },
+    );
+
+    expect(degraded).toBe(messages);
+    expect(estimateTokens(degraded)).toBe(estimateTokens(messages));
+  });
 });

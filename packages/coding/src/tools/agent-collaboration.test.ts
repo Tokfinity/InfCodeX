@@ -8,6 +8,7 @@ import {
   type AgentTurnExecutor,
 } from '@kodax-ai/agent';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
@@ -15,6 +16,18 @@ import {
   registerConstructedAgent,
 } from '../construction/agent-resolver.js';
 import { executeTool, getToolDefinition } from './registry.js';
+import { commitActorNotificationReceipts } from './agent-collaboration.js';
+
+function committedToolResultMessage(content: string): KodaXMessage {
+  return {
+    role: 'user',
+    content: [{
+      type: 'tool_result',
+      tool_use_id: 'test-call',
+      content,
+    }],
+  };
+}
 
 interface PendingExecution {
   readonly input: AgentExecutionInput;
@@ -462,7 +475,7 @@ describe('F270 canonical collaboration tools', () => {
     });
   });
 
-  it('terminal wait ignores progress events, returns the terminal output, and consumes its queued banner', async () => {
+  it('terminal wait keeps its banner replayable until the tool result is committed', async () => {
     const executor = new DeferredExecutor();
     const sessionId = 'session-terminal';
     const queueAgentId = `actor:${sessionId}:/root`;
@@ -522,7 +535,23 @@ describe('F270 canonical collaboration tools', () => {
       agentId: queueAgentId,
       maxPriority: 'background',
       mode: 'task-notification',
+    })).toBe(1);
+
+    await commitActorNotificationReceipts(ctx, [
+      committedToolResultMessage(JSON.stringify(result)),
+    ]);
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
     })).toBe(0);
+
+    const repeated = JSON.parse(await executeTool('wait_agent', {
+      after_sequence: cursor,
+      timeout_ms: 0,
+      return_on: 'terminal',
+    }, ctx)) as Record<string, unknown>;
+    expect(repeated).toMatchObject({ ok: true, status: 'wait_expired' });
   });
 
   it('terminal wait acknowledges the Actor mailbox completion without consuming prior evidence', async () => {
@@ -539,21 +568,25 @@ describe('F270 canonical collaboration tools', () => {
     await controller.send('/root/parent/child', '/root/parent', 'Important evidence.');
     executor.pending[1]?.resolve({ output: 'nested terminal evidence' });
 
-    const result = JSON.parse(await executeTool('wait_agent', {
+    const resultText = await executeTool('wait_agent', {
       after_sequence: cursor,
       timeout_ms: 1_000,
       return_on: 'terminal',
-    }, ctx)) as { readonly terminalOutputs?: readonly { readonly output?: string }[] };
+    }, ctx);
+    const result = JSON.parse(resultText) as {
+      readonly terminalOutputs?: readonly { readonly output?: string }[];
+    };
 
     expect(result.terminalOutputs).toEqual([
       expect.objectContaining({ output: 'nested terminal evidence' }),
     ]);
+    await commitActorNotificationReceipts(ctx, [committedToolResultMessage(resultText)]);
     await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([
       expect.objectContaining({ kind: 'message', content: 'Important evidence.' }),
     ]);
   });
 
-  it('agent_output consumes the matching queued terminal banner exactly once', async () => {
+  it('agent_output consumes the matching terminal banner only after commit', async () => {
     const executor = new DeferredExecutor();
     const sessionId = 'session-output';
     const queueAgentId = `actor:${sessionId}:/root`;
@@ -590,7 +623,8 @@ describe('F270 canonical collaboration tools', () => {
       mode: 'task-notification',
     })).toBe(1);
 
-    const output = JSON.parse(await executeTool('agent_output', { target: 'worker' }, ctx)) as {
+    const outputText = await executeTool('agent_output', { target: 'worker' }, ctx);
+    const output = JSON.parse(outputText) as {
       readonly output?: string;
     };
     expect(output.output).toBe('terminal evidence');
@@ -598,7 +632,41 @@ describe('F270 canonical collaboration tools', () => {
       agentId: queueAgentId,
       maxPriority: 'background',
       mode: 'task-notification',
+    })).toBe(1);
+
+    await commitActorNotificationReceipts(ctx, [committedToolResultMessage(outputText)]);
+    expect(getMessageQueue().count({
+      agentId: queueAgentId,
+      maxPriority: 'background',
+      mode: 'task-notification',
     })).toBe(0);
+  });
+
+  it('acknowledges a host-delivered child result after its synthetic message commits', async () => {
+    const { ctx, executor } = await context();
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    const cursor = ctx.actorControl?.eventSnapshot().at(-1)?.sequence ?? 0;
+    const turnId = ctx.actorControl?.get('/root/worker').actor.currentTurnId;
+    executor.pending[0]?.resolve({ output: 'terminal evidence' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    await commitActorNotificationReceipts(ctx, [{
+      role: 'user',
+      content: '<agent-completed>terminal evidence</agent-completed>',
+      _synthetic: true,
+      _source: 'agent-completed',
+      _taskResult: {
+        type: 'task_result',
+        source: 'child_task',
+        taskId: turnId ?? '',
+        status: 'completed',
+        summary: 'terminal evidence',
+      },
+    }]);
+
+    expect(ctx.actorControl?.eventSnapshot(cursor).some((event) => (
+      event.turnId === turnId
+    ))).toBe(false);
   });
 
   it('returns a bounded event batch without skipping the remaining committed events', async () => {

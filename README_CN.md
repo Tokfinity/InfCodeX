@@ -592,7 +592,7 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
 | `@kodax-ai/llm` | LLM 抽象层（16 个内置 provider alias + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
-| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / AgentActorController / AgentTurnScheduler + media/input artifacts + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / AgentActorController / AgentTurnScheduler + media/input artifacts + 会话管理 + tokenization + 面向自定义 loop 的可插拔 compaction primitive（不关闭 KodaX coding runtime 的始终开启策略）+ **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/media`、`/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `jimp`, `yaml` |
 | `@kodax-ai/coding` | Coding Agent:50+ 工具（含 canonical Actor 协作工具）、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
@@ -727,7 +727,9 @@ REPL 显示、唤醒或消费。
 
 **managed 工具路径的渐进披露（FEATURE_250，v0.7.60；F270 模式更新于 v0.7.72）**：deferred-tool 渐进披露机制应用于 AMA 的 managed path。缓存冷启轮次以一行 search hint 替代 13 个 non-mcp 延迟工具的完整描述；F270 退役原 AMAW 模式，但不改变这项披露行为。详见 [docs/features/v0.7.60.md](docs/features/v0.7.60.md)。
 
-**上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史压缩使用同一物理容量规则：容量内不做默认有损 microcompaction，真实压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删消息；静态提前百分比仅为显式 opt-in。FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
+**上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史仍遵守相同的物理容量安全规则：容量内不做默认有损 microcompaction，压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删除。FEATURE_272 仅取代 FEATURE_251 的大型压缩默认触发策略；FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
+
+**可靠且始终开启的上下文压缩（FEATURE_272，v0.7.74）**：自动大型压缩不允许关闭。百分比阈值默认 75%，并限制在 15-90%；可选 `triggerTokens` 未设置或为 0 时不生效，否则百分比、绝对值和物理容量三者取最小。最近原始尾部保护量为有效阈值的 20%。一次事务压缩保护尾部之外的完整 eligible prefix，并用精确 query ledger 保留所有真实用户请求；只有实际减少 token、恢复物理可用且提交成功后才发出成功事件。SDK/Runtime 使用稳定的主/子 context 身份，超大 transcript 通过 revision-bound 分页和无损 chunk 恢复。详见 [功能设计](docs/features/v0.7.74.md)、[SDK 指南第 25 节](docs/SDK_EMBEDDER_GUIDE.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774) 与 [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction)。
 
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)

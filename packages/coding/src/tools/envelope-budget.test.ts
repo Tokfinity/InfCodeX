@@ -47,6 +47,19 @@ describe('createEnvelopeAggregateBudgetEnforcer', () => {
     expect(await fs.readdir(tempDir)).toEqual([]);
   });
 
+  it('spills a pathological fragment at the attention boundary despite spare physical capacity', async () => {
+    const fragment = 'attention evidence '.repeat(20_000);
+    expect(countTokens(fragment)).toBeGreaterThan(16_000);
+    const enforce = createEnvelopeAggregateBudgetEnforcer(ctx(), () => budget(200_000));
+
+    const result = await enforce([fragment]);
+
+    expect(result[0]).toContain('KODAX_RESULT_INCOMPLETE');
+    const [artifact] = await fs.readdir(tempDir);
+    expect(artifact).toBeDefined();
+    expect(await fs.readFile(path.join(tempDir, artifact!), 'utf8')).toBe(fragment);
+  });
+
   it('spills only after aggregate physical capacity is exceeded', async () => {
     const fragments = ['small', 'X\n'.repeat(4_000), 'tail'];
     const enforce = createEnvelopeAggregateBudgetEnforcer(ctx(), () => budget(500));

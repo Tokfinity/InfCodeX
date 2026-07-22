@@ -9,6 +9,8 @@ import { resolveExecutionPathOrCwd } from '../runtime-paths.js';
 const MAX_GREP_PATTERN_LENGTH = 256;
 const VALID_OUTPUT_MODES = new Set(['content', 'files_with_matches', 'count']);
 const DEFAULT_HEAD_LIMIT = 250;
+const MAX_RENDERED_ENTRY_CHARS = 500;
+const MAX_RESULT_PAGE_BYTES = 50 * 1024;
 
 const FILE_TYPE_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   js: ['.js', '.mjs', '.cjs', '.jsx'],
@@ -125,6 +127,20 @@ interface MatchResult {
   readonly matchCount: number;
 }
 
+function formatContentEntry(
+  filePath: string,
+  lineNumber: number,
+  separator: ':' | '-',
+  text: string,
+): string {
+  const entry = `${filePath}${separator}${lineNumber}${separator} ${text}`;
+  const characters = Array.from(entry);
+  if (characters.length <= MAX_RENDERED_ENTRY_CHARS) return entry;
+  const hint = `… [line clipped; use read offset=${lineNumber}, then its line_offset cursor]`;
+  const prefixLength = Math.max(0, MAX_RENDERED_ENTRY_CHARS - Array.from(hint).length);
+  return `${characters.slice(0, prefixLength).join('')}${hint}`;
+}
+
 function matchFileLines(
   lines: string[],
   regex: RegExp,
@@ -157,7 +173,7 @@ function matchFileLines(
     for (const idx of matchIndices) {
       if (entries.length >= remaining) break;
       const text = lines[idx]!.trim();
-      entries.push(`${filePath}:${idx + 1}: ${text}`);
+      entries.push(formatContentEntry(filePath, idx + 1, ':', text));
     }
     return { entries, matchCount: matchIndices.length };
   }
@@ -179,7 +195,7 @@ function matchFileLines(
       if (i <= lastOutput) continue;
       const sep = matchSet.has(i) ? ':' : '-';
       const text = lines[i]!.trim();
-      entries.push(`${filePath}${sep}${i + 1}${sep} ${text}`);
+      entries.push(formatContentEntry(filePath, i + 1, sep, text));
     }
     lastOutput = end;
   }
@@ -246,7 +262,7 @@ function matchFileMultiline(
       if (i <= lastOutput) continue;
       const sep = matchLineSet.has(i) ? ':' : '-';
       const text = lines[i]!.trim();
-      entries.push(`${filePath}${sep}${i + 1}${sep} ${text}`);
+      entries.push(formatContentEntry(filePath, i + 1, sep, text));
     }
     lastOutput = end;
   }
@@ -264,6 +280,23 @@ function buildReadWarning(errors: readonly string[]): string {
 function buildPageMarker(offset: number, resultCount: number, hasMore: boolean): string {
   if (!hasMore) return '';
   return `\n\n[More matches available. Continue with offset=${offset + resultCount}.]`;
+}
+
+function fitResultPage(entries: readonly string[]): {
+  readonly entries: string[];
+  readonly truncated: boolean;
+} {
+  const result: string[] = [];
+  let bytes = 0;
+  for (const entry of entries) {
+    const entryBytes = Buffer.byteLength(`${result.length > 0 ? '\n' : ''}${entry}`, 'utf8');
+    if (result.length > 0 && bytes + entryBytes > MAX_RESULT_PAGE_BYTES) {
+      return { entries: result, truncated: true };
+    }
+    result.push(entry);
+    bytes += entryBytes;
+  }
+  return { entries: result, truncated: false };
 }
 
 const MAX_SCAN_FILES_PER_CALL = 512;
@@ -444,6 +477,7 @@ export async function toolGrep(
     return `No matches for "${pattern}" in the requested range (offset=${offset})${sourceWarning}`;
   }
 
-  const hasMore = headLimit > 0 && allEntries.length > offset + headLimit;
-  return `${sliced.join('\n')}${buildPageMarker(offset, sliced.length, hasMore)}${sourceWarning}`;
+  const page = fitResultPage(sliced);
+  const hasMore = page.truncated || allEntries.length > offset + page.entries.length;
+  return `${page.entries.join('\n')}${buildPageMarker(offset, page.entries.length, hasMore)}${sourceWarning}`;
 }
