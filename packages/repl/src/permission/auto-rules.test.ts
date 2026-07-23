@@ -449,6 +449,31 @@ describe('Auto[rules] deterministic Tier 2', () => {
       .toBe('allow');
   });
 
+  it('escalates PowerShell bracket wildcards without blocking LiteralPath brackets', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const wildcard = assessAutoModeCall(
+      call('bash', { command: 'Set-Content -Path "[.]kodax/config.json" -Value data' }),
+      context(projectRoot),
+    );
+    const literal = assessAutoModeCall(
+      call('bash', { command: 'Set-Content -LiteralPath "build/file[12].txt" -Value data' }),
+      context(projectRoot),
+    );
+
+    expect(wildcard.decision.action).toBe('escalate');
+    expect(wildcard.review.analysis).toMatchObject({
+      status: 'incomplete',
+      shell: 'powershell',
+      binding: 'partial',
+    });
+    expect(literal.decision.action).toBe('allow');
+    expect(literal.review.analysis).toMatchObject({
+      status: 'complete',
+      shell: 'powershell',
+      binding: 'exact',
+    });
+  });
+
   it('allows a fully modeled outside-workspace PowerShell WhatIf with no mutation risk', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(

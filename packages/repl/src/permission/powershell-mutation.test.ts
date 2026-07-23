@@ -48,6 +48,18 @@ describe('analyzePowerShellMutation', () => {
     ])).toMatchObject({ status: 'incomplete' });
   });
 
+  it('rejects bracket wildcards for Path while preserving exact LiteralPath targets', () => {
+    expect(analyzePowerShellMutation([
+      'Set-Content', '-Path', '[.]kodax/config.json', '-Value', 'data',
+    ])).toMatchObject({ status: 'incomplete' });
+    expect(analyzePowerShellMutation([
+      'Set-Content', '-LiteralPath', 'build/file[12].txt', '-Value', 'data',
+    ])).toMatchObject({
+      status: 'complete',
+      operations: [{ kind: 'write', target: 'build/file[12].txt' }],
+    });
+  });
+
   it('composes New-Item -Path and -Name into the created target', () => {
     expect(analyzePowerShellMutation([
       'New-Item', '-ItemType', 'File', '-Path', 'build', '-Name', 'report.txt',

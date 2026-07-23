@@ -1,4 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import {
+  COMPACTED_HISTORY_RECOVERY_GUIDANCE,
+  COMPACTION_SUMMARY_PREFIX,
+} from './compaction/compaction.js';
 import type { CompactionDetails } from './compaction/types.js';
 import { isPostCompactAttachment } from './compaction/post-compact.js';
 import type {
@@ -35,8 +39,6 @@ type NavigableSessionEntry = Exclude<
 const ENTRY_ID_LENGTH = 12;
 const MAX_BRANCH_SUMMARY_LENGTH = 600;
 const messageFingerprintCache = new WeakMap<KodaXMessage, string>();
-const COMPACTION_SUMMARY_PREFIX = '[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\n';
-const COMPACTION_SUMMARY_SUFFIX = '';
 const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch that this conversation came back from:
 
 <summary>
@@ -220,7 +222,8 @@ function createSummaryContextMessage(
   prefix: string,
   suffix: string,
 ): KodaXMessage {
-  const isCompactionCheckpoint = prefix === COMPACTION_SUMMARY_PREFIX && suffix === '';
+  const isCompactionCheckpoint = prefix === COMPACTION_SUMMARY_PREFIX
+    && suffix === COMPACTED_HISTORY_RECOVERY_GUIDANCE;
   return {
     role: 'user',
     content: `${prefix}${summary}${suffix}`,
@@ -242,7 +245,7 @@ function getContextMessagesForEntry(entry: NavigableSessionEntry): KodaXMessage[
         createSummaryContextMessage(
           entry.summary,
           COMPACTION_SUMMARY_PREFIX,
-          COMPACTION_SUMMARY_SUFFIX,
+          COMPACTED_HISTORY_RECOVERY_GUIDANCE,
         ),
       ];
     case 'branch_summary':
@@ -305,7 +308,10 @@ function entryMatchesContextMessage(
     entry.type === 'compaction'
     && entry.reason !== 'rewind'
     && typeof message.content === 'string'
-    && message.content === `${COMPACTION_SUMMARY_PREFIX}${entry.summary}`
+    && (
+      message.content === `${COMPACTION_SUMMARY_PREFIX}${entry.summary}${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`
+      || message.content === `${COMPACTION_SUMMARY_PREFIX}${entry.summary}`
+    )
     && (
       message.role === 'system'
       || (

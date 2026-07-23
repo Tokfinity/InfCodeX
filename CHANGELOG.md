@@ -105,6 +105,13 @@ All notable changes to this project will be documented in this file.
   permission analysis samples the middle of long operation lists, POSIX paths
   are not mistaken for Windows switches, and continuation errors identify
   `runtime.runs.submitInput` accurately.
+- **Release-candidate checkpoint and PowerShell boundary closure.** Session
+  lineage now consumes and re-renders the exact compaction checkpoint bytes,
+  including recovery guidance, so the compaction entry, first-kept pointer, and
+  post-compact attachments remain on the active path; legacy suffix-free
+  checkpoints still resume. Auto Mode treats bracket wildcards on PowerShell
+  path parameters as incomplete and escalates them, while exact `LiteralPath`
+  filenames containing brackets remain supported.
 
 ### Documentation
 

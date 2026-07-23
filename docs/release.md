@@ -115,6 +115,11 @@ npx vitest run packages/agent/src/actors/controller.test.ts \
 npx vitest run src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts \
   src/runtime-daemon/server.test.ts src/runtime-event.test.ts
 
+# Release-candidate checkpoint topology and PowerShell bracket-wildcard guard
+npx vitest run packages/agent/src/session-lineage/kodax-session-lineage.test.ts \
+  packages/repl/src/permission/powershell-mutation.test.ts \
+  packages/repl/src/permission/auto-rules.test.ts
+
 # README/kodax_manual/config drift guards
 npx vitest run packages/coding/src/self-knowledge/registry.test.ts \
   packages/coding/src/self-knowledge/resolver.test.ts \

@@ -305,6 +305,25 @@ lineage，并提供确定性、revision-bound 的历史检索与按条目回读�
 - [ ] 升级后的新压缩遵守 durable-before-evict，新产生的精确历史可恢复。
 - [ ] 产品文档和诊断不承诺反向恢复旧版本已经永久删除的数据。
 
+### TC-015: checkpoint 谱系与附件保持同一路径
+
+**优先级**: 高
+
+**类型**: 数据完整性/升级兼容测试
+
+1. 触发一次会生成 artifact ledger 或文件内容附件的自动压缩，并保存压缩后的 Session。
+2. 检查活动谱系的 compaction entry、`firstKeptEntryId` 与后续保留消息。
+3. 通过 `kodax -c` 恢复 Session，确认下一轮 provider context 的 checkpoint、附件与保留尾部。
+4. 再复制一份仅含旧式无 recovery guidance checkpoint 的 Session 并恢复。
+
+**预期效果**:
+
+- [ ] 活动路径以 compaction entry 开始，`firstKeptEntryId` 指向第一条保留消息。
+- [ ] checkpoint 不会同时形成一个同级 synthetic message entry。
+- [ ] artifact/file 附件紧跟 checkpoint，各出现一次，恢复后仍可见。
+- [ ] 当前 checkpoint 保留 `Exact history recovery` 指引。
+- [ ] 旧式无指引 checkpoint 可正常加载，并在派生上下文中升级为当前规范格式。
+
 ---
 
 ## 自动化预检
@@ -326,7 +345,7 @@ node --test --import tsx apps/desktop/electron/test/runtime-context-telemetry.te
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 14 | - | - | - |
+| 15 | - | - | - |
 
 **测试结论**: [待填写]
 
@@ -336,4 +355,4 @@ node --test --import tsx apps/desktop/electron/test/runtime-context-telemetry.te
 
 *测试指导生成时间: 2026-07-21*
 
-*Feature/Issue ID: FEATURE_272 / ISSUE_192 / ISSUE_198*
+*Feature/Issue ID: FEATURE_272 / ISSUE_192 / ISSUE_198 / ISSUE_203*

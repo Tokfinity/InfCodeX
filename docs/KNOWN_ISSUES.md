@@ -14,6 +14,8 @@ _Last Updated: 2026-07-23_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
+| 202 | High | Resolved | PowerShell bracket wildcards could bypass protected-path auto-mode review | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 201 | Medium | Resolved | Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 200 | High | Resolved | Restored unacknowledged Agent completions did not repopulate the model mailbox | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 development | v0.7.74 | 2026-07-22 | 2026-07-22 |
@@ -81,7 +83,7 @@ _Last Updated: 2026-07-23_
 | 099 | Low | Open | 测试辅助代码重复，局部验证资产需要收敛 | v0.6.13 | - | 2026-03-22 | - |
 
 
-| 105 | Medium | Open | kodax -c 历史记录未注入 LLM 上下文 - resume 路径可能存在 gitRoot 过滤不一致 | v0.7.14 | - | 2026-04-03 | - |
+| 105 | Medium | Resolved | kodax -c 可选择空 ACP 占位 session，classic REPL 还会忽略 resume | v0.7.14 | v0.7.74 | 2026-04-03 | 2026-07-23 |
 | 106 | High | Open | Managed-task structured worker blocks remain text-coupled and can fail closed on protocol drift | v0.7.14 | - | 2026-04-08 | - |
 | 107 | Medium | Open | harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition | v0.7.16 | - | 2026-04-11 | - |
 
@@ -111,6 +113,96 @@ _Last Updated: 2026-07-23_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 203: Compaction recovery guidance detached the compaction entry from the active lineage
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 development
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-23
+- **Resolved**: 2026-07-23
+
+#### Original Problem
+
+The compaction producer appended exact-history recovery guidance to its
+synthetic checkpoint message, but Session lineage matched only the summary
+prefix and summary text. `applySessionCompaction()` therefore persisted the
+real checkpoint as a sibling message instead of reusing the new compaction
+entry. The active path bypassed that entry, left `firstKeptEntryId` undefined,
+and omitted its post-compact attachments from derived context.
+
+#### Root Cause
+
+The producer and lineage each owned a different checkpoint wire format. The
+lineage copy had an empty suffix and used strict byte equality, so adding
+recovery guidance to the producer silently broke structural matching.
+
+#### Solution Implemented
+
+- Reuse the producer's exported prefix and recovery-guidance constants when
+  lineage renders or recognizes a compaction checkpoint.
+- Render current checkpoints with the canonical recovery guidance while still
+  accepting legacy suffix-free checkpoints during Session resume.
+- Lock the topology contract to the exact producer bytes: the compaction entry
+  remains on the active path, owns a first-kept pointer, and emits attachments
+  immediately after the checkpoint without a duplicate message entry.
+
+#### Files Changed
+
+- `packages/agent/src/session-lineage/kodax-session-lineage.ts`
+- `packages/agent/src/session-lineage/kodax-session-lineage.test.ts`
+
+#### Tests Added
+
+- Exact producer checkpoint plus attachment reconstructs as
+  `compaction -> kept message`, with no synthetic checkpoint message sibling.
+- Existing suffix-free checkpoint fixtures continue to match and are rendered
+  in the current canonical form.
+
+### 202: PowerShell bracket wildcards could bypass protected-path auto-mode review
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 development
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-23
+- **Resolved**: 2026-07-23
+
+#### Original Problem
+
+PowerShell `-Path` supports bracket wildcard expressions. A target such as
+`[.]kodax/config.json` can resolve to `.kodax/config.json`, but the mutation
+analyzer treated the lexical bracket-bearing path as an exact in-workspace
+target. Rules-mode Auto could therefore allow a write that should have reached
+protected-path confirmation.
+
+#### Root Cause
+
+The ambiguity guard covered `*`, `?`, variables, arrays, and provider paths but
+omitted PowerShell's `[...]` wildcard syntax. The analyzer no longer has shell
+quote provenance after argument parsing, so it cannot safely reinterpret a
+wildcard-bearing `Path` as a literal filename.
+
+#### Solution Implemented
+
+- Mark bracket syntax on bound path-bearing parameters as incomplete before
+  filesystem boundary classification, forcing deterministic escalation.
+- Preserve exact `LiteralPath`/`PSPath` semantics so legitimate filenames such
+  as `file[12].txt` remain fully modeled and auto-allowable in the workspace.
+
+#### Files Changed
+
+- `packages/repl/src/permission/powershell-mutation.ts`
+- `packages/repl/src/permission/powershell-mutation.test.ts`
+- `packages/repl/src/permission/auto-rules.test.ts`
+
+#### Tests Added
+
+- Low-level mutation analysis rejects `[.]kodax/config.json` through `-Path`
+  but accepts `build/file[12].txt` through `-LiteralPath`.
+- End-to-end Auto rules escalate the wildcard form and continue to allow the
+  exact literal-path control case.
 
 ### 201: Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting
 
@@ -6424,11 +6516,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 88 (26 Open, 62 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 90 (25 Open, 65 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-23: Issues 202-203 resolved (v0.7.74)
+- Kept canonical compaction checkpoints, first-kept pointers, and post-compact
+  attachments on one active lineage path while retaining legacy checkpoint
+  compatibility.
+- Escalated PowerShell bracket wildcards on path parameters without treating
+  bracket-bearing `LiteralPath` filenames as dynamic.
 
 ### 2026-07-23: Issues 200-201 resolved (v0.7.74)
 - Made root completion delivery explicitly recoverable and legacy-safe through

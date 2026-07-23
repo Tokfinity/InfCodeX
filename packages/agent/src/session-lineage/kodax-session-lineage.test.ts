@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXSessionLineage, KodaXSessionMessageEntry } from '../index.js';
 import {
+  COMPACTED_HISTORY_RECOVERY_GUIDANCE,
+  COMPACTION_SUMMARY_PREFIX,
+} from './compaction/compaction.js';
+import {
   appendSessionLineageLabel,
   applyLineageTruncation,
   applySessionCompaction,
@@ -346,13 +350,51 @@ describe('session lineage helpers', () => {
     expect(getSessionMessagesFromLineage(compacted)).toEqual([
       {
         role: 'user',
-        content: '[对话历史摘要]\n\nCompacted summary',
+        content: `${COMPACTION_SUMMARY_PREFIX}Compacted summary${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
         _synthetic: true,
         _source: 'compaction-checkpoint',
       },
       createTextMessage('assistant', 'latest pass'),
     ]);
     expect(compacted.activeEntryId).toBe(compacted.entries[compacted.entries.length - 1]?.id ?? null);
+  });
+
+  it('recognizes the producer checkpoint bytes and keeps attachments on the active path', () => {
+    const summary = 'Verified compacted summary';
+    const checkpoint: KodaXMessage = {
+      role: 'user',
+      content: `${COMPACTION_SUMMARY_PREFIX}${summary}${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
+      _synthetic: true,
+      _source: 'compaction-checkpoint',
+    };
+    const attachment = createTextMessage('system', '[Post-compact: verified ledger]');
+    const compacted = applySessionCompaction(
+      createSessionLineage([
+        createTextMessage('user', 'root task'),
+        createTextMessage('assistant', 'old response'),
+      ]),
+      [checkpoint, createTextMessage('assistant', 'kept tail')],
+      { summary },
+      [attachment],
+    );
+
+    const compactionEntry = compacted.entries.find((entry) => entry.type === 'compaction');
+    expect(compactionEntry?.type).toBe('compaction');
+    if (!compactionEntry || compactionEntry.type !== 'compaction') return;
+
+    expect(getSessionLineagePath(compacted).map((entry) => entry.type)).toEqual([
+      'compaction',
+      'message',
+    ]);
+    expect(compactionEntry.firstKeptEntryId).toBe(compacted.activeEntryId);
+    expect(messageEntries(compacted).filter(
+      (entry) => entry.message._source === 'compaction-checkpoint',
+    )).toHaveLength(0);
+    expect(getSessionMessagesFromLineage(compacted)).toEqual([
+      checkpoint,
+      attachment,
+      createTextMessage('assistant', 'kept tail'),
+    ]);
   });
 
   it('rewinds to a target entry and truncates all entries after it', () => {
@@ -1119,7 +1161,7 @@ describe('FEATURE_072 Phase B: attachments routing + strip invariant + benchmark
     // derivations produce, reintroducing dual-source-of-truth.
     const summary: KodaXMessage = {
       role: 'user',
-      content: '[对话历史摘要]\n\nAcceptance5-summary',
+      content: `${COMPACTION_SUMMARY_PREFIX}Acceptance5-summary${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
       _synthetic: true,
       _source: 'compaction-checkpoint',
     };

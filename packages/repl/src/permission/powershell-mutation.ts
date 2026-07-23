@@ -122,6 +122,9 @@ export function analyzePowerShellMutation(
     && /^(?:symboliclink|junction|hardlink)$/i.test(bound.values.get('itemtype') ?? '')) {
     return incomplete('PowerShell link creation has an unmodelled target relationship');
   }
+  if (hasUnmodelledBracketWildcard(bound)) {
+    return incomplete('PowerShell path contains bracket wildcard syntax');
+  }
 
   const operation = buildOperation(command, bound);
   if (!operation) return incomplete('PowerShell mutation target is missing or ambiguous');
@@ -273,6 +276,12 @@ function operationPaths(operation: PowerShellMutationOperation): readonly string
 
 function isAmbiguousPathExpression(value: string): boolean {
   return /[,*?`$]|@\(|[{}]/.test(value) || isPowerShellProviderPath(value);
+}
+
+function hasUnmodelledBracketWildcard(bound: BoundArguments): boolean {
+  return ['path', 'filepath', 'destination', 'newname', 'name'].some((name) =>
+    /[\[\]]/.test(bound.values.get(name) ?? ''),
+  );
 }
 
 function isPowerShellProviderPath(value: string): boolean {
