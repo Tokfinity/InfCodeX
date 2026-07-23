@@ -2,8 +2,8 @@
 
 > Last updated: 2026-07-23
 >
-> Current workspace baseline: `v0.7.74` release candidate
-> (`@kodax-ai/kodax@0.7.74`; latest tagged release is `v0.7.73`)
+> Current release baseline: `v0.7.74`
+> (`@kodax-ai/kodax@0.7.74`; latest tagged release is `v0.7.74`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature

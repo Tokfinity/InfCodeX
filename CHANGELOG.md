@@ -6,10 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.74] - Release candidate (2026-07-23)
+## [0.7.74] - 2026-07-23
 
-> Code and documentation are prepared on the release branch. The `v0.7.74`
-> tag, GitHub Release, and npm publication are intentionally not created yet.
+> Git tag and GitHub Release are published by the release workflow. npm
+> publication remains a separate manual operator step.
 
 ### Added
 

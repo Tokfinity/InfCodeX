@@ -78,10 +78,9 @@ dist/binary/linux-x64/kodax --version
 
 ## v0.7.74 release verification
 
-Current state: the release branch contains package version `0.7.74`, code,
-tests, and documentation, but the `v0.7.74` tag and GitHub Release must remain
-absent until the operator explicitly authorizes tagging. npm publication is a
-separate manual operator step.
+Release state: package version `0.7.74`, code, tests, and documentation are
+committed together. The `v0.7.74` tag triggers the five-platform GitHub Release
+workflow; npm publication remains a separate manual operator step.
 
 Run the template drift check and full deterministic gate, then refresh the
 normal build artifact used by a globally linked `kodax` command.
