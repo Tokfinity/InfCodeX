@@ -31,6 +31,9 @@ are NOT obvious from inspecting the type definitions alone:
 21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260-v0768)
 22. [Bidirectional A2A 1.0 — `/a2a`](#22-bidirectional-a2a-10--a2a-feature_267-v0769)
 23. [Shared Coder daemon for Space and IDE hosts](#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)
+24. [Runtime-owned Auto Mode and plan-approval bridges](#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773)
+25. [Always-on context compaction and bounded transcript recovery](#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774)
+26. [Agent mailbox control versus SDK event telemetry](#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -4546,9 +4549,60 @@ connection.
 
 ---
 
+## 26. Agent mailbox control versus SDK event telemetry (v0.7.74)
+
+The model-visible `wait_agent` tool and the public Runtime Actor event APIs have
+different jobs. Do not expose `runtime.agents.wait()` to the model as though it
+were the same operation.
+
+| Need | API | Wake/data contract |
+|---|---|---|
+| Let the action model yield until useful coordination evidence exists | `wait_agent({ timeout_ms })` | Caller-scoped Agent mailbox, root user input, interruption, or timeout; returns only a small acknowledgement. |
+| Render or diagnose Actor activity | `runtime.agents.events(sessionId, afterSequence?)` | Bounded event snapshot/replay, including progress and terminal events. |
+| Long-poll Actor telemetry from a host | `runtime.agents.wait(sessionId, afterSequence?, timeoutMs?)` | Returns the next sequenced Actor event, including progress. |
+| Read one known result | `runtime.agents.output(sessionId, actorPath, turnId?)` | Bounded current/terminal output and structured artifact metadata. |
+| Deliver a real user follow-up to the active root Run | `runtime.runs.submitInput(...)` | Ordered active-run input delivered at the next safe Runner boundary; requires `interruptInput:1`. |
+
+For example, a host activity view can replay the current tail and then wait
+from its last sequence without causing another action-model request:
+
+```ts
+const snapshot = await runtime.agents.events(session.id);
+for (const event of snapshot) renderActorEvent(event);
+
+const afterSequence = snapshot.at(-1)?.sequence;
+const next = await runtime.agents.wait(session.id, afterSequence, 30_000);
+if (next) renderActorEvent(next);
+```
+
+Model `wait_agent` has only `timeout_ms` in its schema (10,000 to 3,600,000 ms,
+default 120,000). Actor progress and Runtime `system-reminder` messages do not
+end that wait. A scoped Agent message/completion produces `mailbox`; queued root
+input produces `user_input_pending`; cancellation and expiry produce
+`interrupted` and `wait_expired`. Authenticated Agent evidence is drained at the
+next safe Runner boundary as synthetic context, while root input remains a real
+user turn. The acknowledgement itself never carries raw event batches.
+
+Completion delivery is post-transcript and crash-recoverable. The Actor snapshot
+persists the explicit root completion turn IDs that still await transcript
+acknowledgement. A hard restart republishes only those IDs; a same-process
+Runtime rebuild deduplicates the projected queue by child turn ID. Once the
+parent transcript commits and acknowledges the completion, later restores do
+not replay it. Legacy snapshots without the explicit pending set do not infer
+replay work from historical mailbox content.
+
+This separation changes no Actor event capability or daemon version: existing
+SDK snapshot, replay, and long-poll clients keep their telemetry surface. It
+only prevents high-frequency progress from becoming a model control signal.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start
 - [docs/ADR.md ADR-024](ADR.md#adr-024-npm-发布物正名-kodax-aikodax--sdk-subpath-exports-形式化-v0739) — SDK subpath architecture rationale
 - [docs/ADR.md ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742) — FEATURE_186 design record (all 8 phases)
+- [docs/ADR.md ADR-057](ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction) — v0.7.74 compaction and exact-history ownership
+- [docs/ADR.md ADR-058](ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry) — mailbox control versus Actor telemetry
 - [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
+- [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release design and verification record

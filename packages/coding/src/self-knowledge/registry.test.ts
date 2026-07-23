@@ -133,6 +133,24 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('cannot reconstruct bytes');
   });
 
+  it('documents the v0.7.74 mailbox-driven Agent coordination contract', () => {
+    const agents = resolveKodaXManual({ topic: 'agents' }).content;
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(agents).toContain('Runtime-owned Actor/Turn tree');
+    expect(agents).toContain('model-facing mailbox yield');
+    expect(agents).toContain('10,000..3,600,000');
+    expect(agents).toContain('user_input_pending');
+    expect(agents).toContain('Actor progress and system reminders do not wake the model');
+    expect(agents).toContain('Do not poll `agent_output`');
+    expect(agents).toContain('synthetic evidence');
+    expect(agents).toContain('pending-delivery');
+    expect(sdk).toContain('runtime.agents.events()');
+    expect(sdk).toContain('runtime.agents.wait(sessionId, afterSequence, timeoutMs)');
+    expect(sdk).toContain('interruptInput:1');
+    expect(sdk).toContain('runtime.runs.submitInput()');
+  });
+
   it('keeps the SDK topic aligned with current published subpaths', () => {
     const content = resolveKodaXManual({ topic: 'sdk' }).content;
 

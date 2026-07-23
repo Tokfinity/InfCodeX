@@ -1,6 +1,13 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-20
+> Last updated: 2026-07-23
+>
+> **v0.7.74 context/coordination addendum:** FEATURE_272 makes large compaction
+> an always-on, full-eligible-prefix transaction with durable exact-history
+> recovery. FEATURE_273 separates model mailbox waiting from Actor event
+> telemetry, restores only explicitly pending root completions after restart,
+> and keeps progress observable without making it a model wake signal. Active
+> Runtime Runs also accept ordered user input at safe Runner boundaries.
 >
 > **v0.7.73 onboarding/Auto reliability addendum:** FEATURE_271 keeps first-run
 > provider setup metadata-only and pre-Runtime, while the Runtime-owned Auto LLM
@@ -4374,7 +4381,7 @@ security review and cross-host compatibility tests.
 
 ## ADR-057: Large Compaction Is an Always-On, Context-Scoped, Full-Coverage Transaction
 
-**Status**: Accepted for v0.7.74 implementation
+**Status**: Accepted (2026-07-23)
 
 **Context**: The SDK compact path could force a 100% threshold while the core
 derived protected and rolling budgets from the full model context window. On a
@@ -4460,3 +4467,74 @@ second semantic-memory/indexing subsystem.
 **Reconsideration gates**: changing the 20% protection ratio, internal
 checkpoint cadence, or all-query ledger guarantee requires a versioned eval and
 a new ADR. Public knobs require three concrete independently useful host cases.
+
+---
+
+## ADR-058: Model Agent Wait Is Mailbox Control, Not Event Telemetry
+
+**Status**: Accepted (2026-07-23)
+
+**Driver**: `FEATURE_273`, post-FEATURE_270 coordination cost and reliability
+review
+
+**Context**: The unified Actor/Turn control plane exposed progress, terminal,
+and mailbox activity through one model-visible wait shape. A parent could wake
+and resample on every progress event even though progress was useful only to
+UI/SDK telemetry. Terminal-only filtering reduced some churn but still coupled
+the model tool to event cursors and made it easy to poll a second state channel.
+At the same time, the process-local MessageQueue meant a completion committed to
+the durable Actor snapshot could be absent after a crash before the parent
+transcript acknowledged it. Replaying every unacknowledged historical mailbox
+entry would have duplicated old completions after upgrade.
+
+**Decision**:
+
+1. Model `wait_agent` is a caller-scoped mailbox yield. Its only input is a
+   bounded timeout. It ends for deliverable Agent mailbox evidence, root user
+   input, interruption, or expiry and returns only a wake acknowledgement.
+2. Actor progress stays on the Runtime event stream. SDK snapshot, replay, and
+   sequence-based long-poll remain unchanged and may wake on progress; they are
+   not exposed as model control selectors.
+3. Safe-boundary delivery owns transcript authorship. Root prompts remain real
+   user turns. Agent messages, completion envelopes, and system reminders are
+   synthetic Runtime context. A system reminder may be delivered at a later
+   boundary but cannot independently end a model wait.
+4. `list_agents` owns tree-state inspection. `agent_output` owns a bounded read
+   for a known Actor/Turn and must not be polled as a completion substitute.
+5. Completion acknowledgement occurs only after the authoritative parent
+   transcript/session message commits. Actor snapshots persist an explicit set
+   of root completion turn IDs still awaiting that acknowledgement.
+6. Initialization republishes only the explicit pending-delivery set. A legacy
+   snapshot without the set infers no replay work from historical mail.
+   Process-local queue projection deduplicates the same child turn ID, covering
+   both a hard restart and a same-process Runtime registry rebuild.
+7. Runner yield provenance crosses wrappers such as Goal lifecycle adapters so
+   the next safe-boundary drain uses the correct priority without creating a
+   second orchestration state machine.
+
+**Consequences**:
+
+- Long child waits consume elapsed time but no extra parent-model calls or
+  tokens merely because progress is emitted.
+- UI, tracing, SDK, and daemon consumers retain complete Actor progress and
+  event replay without a capability-version change.
+- The model receives authenticated completion content and structured task
+  metadata once, after a wake acknowledgement, rather than receiving raw event
+  batches inside tool output.
+- Crash recovery may republish one explicitly pending root completion, while
+  acknowledged and legacy historical completions remain quiet.
+- Coordination guidance must distinguish inspection (`list_agents`), mailbox
+  waiting (`wait_agent`), telemetry (`runtime.agents.events/wait`), and targeted
+  output (`agent_output` / `runtime.agents.output`).
+
+**Rejected alternatives**: progress-triggered model wake, terminal-event
+selectors in the model schema, polling `agent_output`, consuming mailbox content
+inside the wait handler, acknowledging completion before transcript persistence,
+replaying all unacknowledged historical mail, or adding a second durable task
+registry beside the Actor tree.
+
+**Reconsideration gates**: adding a new model wake source requires concrete
+evidence that it carries action-critical information unavailable through the
+mailbox and a cost/behavior eval showing it does not recreate progress-driven
+resampling. Broader replay requires a versioned durable delivery marker written
+by the older producer; absence of that marker remains non-replayable.

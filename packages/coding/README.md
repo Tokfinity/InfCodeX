@@ -19,8 +19,11 @@ KodaX Coding Agent 的核心实现，包含 coding preset、tool registry、role
 `wait_agent` is a model-facing mailbox yield, not an Actor event reader. It
 wakes for scoped Agent messages/completions, root user input, interruption, or
 timeout; progress events remain available to UI and SDK event consumers without
-resampling the parent model. SDK callers that need raw event replay/long-poll
-continue to use the Actor event APIs directly.
+resampling the parent model. The tool returns only a wake acknowledgement;
+authenticated Agent evidence and structured completion metadata are injected
+once at the next safe Runner boundary. Use `list_agents` for tree state and
+`agent_output` for a targeted known result. SDK callers that need raw event
+replay/long-poll continue to use the Actor event APIs directly.
 
 Auto Mode is enforced by the active Runtime guardrail before the generic
 permission bridge. A host only receives a permission request for an explicit

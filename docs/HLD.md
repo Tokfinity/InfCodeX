@@ -1,6 +1,6 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-22
+> Last updated: 2026-07-23
 >
 > Current implementation baseline: `v0.7.74`
 > (`@kodax-ai/kodax@0.7.74` workspace package)
@@ -280,6 +280,11 @@ The main Worker owns final synthesis and user communication.
 User follow-ups are routed with the session-root Actor queue id. Queue display,
 idle-yield wakeups, and prompt consumption use the same scope, preventing one
 session or child actor from draining another session's pending input.
+SDK/daemon hosts with `interruptInput:1` may also route ordered user input into
+the current active root Run. One safe Runner boundary drains the accepted FIFO
+batch as separate user messages; this is distinct from `after_turn`, which
+creates a continuation Run. Terminal cleanup closes the admission window and
+prevents undelivered input from reaching later Runs.
 
 ## 8. Sessions
 

@@ -100,7 +100,7 @@ KodaX / InfCodeX uses a **monorepo architecture** with npm workspaces:
 KodaX/
 ├── packages/
 │   ├── llm/                 # @kodax-ai/llm - Independent LLM abstraction layer
-│   │   └── providers/       # 14 built-in provider aliases + custom registry
+│   │   └── providers/       # 16 built-in provider aliases + custom registry
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
 │   │   ├── capabilities/    # Inline MCP + Skills systems

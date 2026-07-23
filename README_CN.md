@@ -566,7 +566,7 @@ KodaX 有 50+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 | `spawn_agent` | 创建命名子 Actor，并在继承权限、会话并发和根工作预算约束下启动首个 Turn。 |
 | `send_message` | 向 Actor 的持久 mailbox 提交有界信息，不启动新 Turn。 |
 | `followup_task` | 在安全边界加入运行中的 Actor，或为 idle Actor 原子启动新 Turn。 |
-| `wait_agent` | 等待一个或多个 Actor 状态变化，不轮询第二套任务注册表。 |
+| `wait_agent` | 等待当前作用域的 mailbox / 用户输入 / 中断 / 超时，只返回唤醒确认，Actor progress 不会唤醒模型。 |
 | `interrupt_agent` | 请求中断 active Turn，同时保留 Actor 身份。 |
 | `list_agents` | 查看调用方有权访问的 Actor 子树与 Turn 状态。 |
 | `agent_output` | 读取有权限的 Actor/Turn 有界持久输出。 |
@@ -731,6 +731,10 @@ REPL 显示、唤醒或消费。
 
 **可靠且始终开启的上下文压缩（FEATURE_272，v0.7.74）**：自动大型压缩不允许关闭。百分比阈值默认 75%，并限制在 15-90%；可选 `triggerTokens` 未设置或为 0 时不生效，否则百分比、绝对值和物理容量三者取最小。最近原始尾部保护量为有效阈值的 20%。一次事务压缩保护尾部之外的完整 eligible prefix，并用精确 query ledger 保留所有真实用户请求；只有实际减少 token、恢复物理可用且等待持久化提交成功后才发出成功事件。原始正文从内存驱逐前，Session owner 会先持久化并刷盘精确 lineage；sidecar 与精简 Session 通过稳定 entry ID 合并去重。根 Agent 与持久化子 Agent 都可用有界的 `session_history_search` → `session_history_read` 回溯自己的被省略细节；子 Agent 只绑定独立隐藏的 worker Session，永远不能读取根历史。SDK/Runtime 则使用 revision-bound `transcriptSearch`、分页和无损 chunk；隐藏思考、system 指令与合成 checkpoint 不进入模型检索。详见 [功能设计](docs/features/v0.7.74.md)、[SDK 指南第 25 节](docs/SDK_EMBEDDER_GUIDE.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774) 与 [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction)。
 
+**邮箱驱动的 Agent 协作（FEATURE_273，v0.7.74）**：`wait_agent` 现在是真正的模型侧 mailbox yield，只接受一个有界 `timeout_ms`，不再读取 Actor progress/event。它只因当前作用域的 Agent 消息或完成通知、根用户输入、中断或超时而唤醒；progress 仍通过 UI/SDK snapshot、replay 和 long-poll 提供，但不会触发父模型重采样。工具只返回 wake acknowledgement，可信 Agent evidence 与结构化 task metadata 在下一安全边界只注入一次。未确认的根 completion 可在硬重启后恢复，同进程 Runtime 重建按子 `turnId` 去重，已确认或旧版历史 completion 不重放。树状态用 `list_agents`，已知结果用 `agent_output`。详见 [功能设计](docs/features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation)、[SDK 指南第 26 节](docs/SDK_EMBEDDER_GUIDE.md#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774) 与 [ADR-058](docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry)。
+
+**活跃 Run 中断输入（v0.7.74）**：embedded Runtime 与 shared daemon 声明 `interruptInput:1`。`runtime.runs.submitInput()` 把不可变、有序的输入排入当前 active Actor Run；同一安全 Runner 边界前接纳的输入按 FIFO 作为独立 user message 一次性交给下一次 LLM 请求，不创建 continuation Run。Run snapshot/event 暴露 queued/delivered 状态，确认只匹配实际消费的 ID，终态清理保证未交付输入不会泄漏到后续 Run。
+
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/
@@ -842,7 +846,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime、v0.7.73 Auto Mode 与精确授权契约
+- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime、v0.7.74 压缩/历史恢复、Agent 遥测与活跃 Run 输入契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策

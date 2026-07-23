@@ -6,81 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-- **Resident Goal lifecycle contracts.** `get_goal`, `create_goal`, and
-  `update_goal` now keep their complete descriptions on both SA and managed AMA
-  tool paths. Their former hints saved only about 109 estimated schema tokens
-  combined and made `get_goal` itself 12 tokens larger, so residency removes an
-  avoidable `tool_search` round trip while preserving the explicit-create and
-  three-turn blocked-state rules in the model-visible contract. The remaining
-  deferred set is unchanged at exactly 11 tools; schemas, handlers,
-  permissions, Goal state, and compaction-protected receipts are unchanged.
-
-### Fixed
-
-- **Deterministic reads, bounded tool attention, and compaction round exits.**
-  Auto-mode now bypasses the LLM for complete, exact, risk-free static reads
-  such as `git show`, while sensitive files, credential stores, process
-  environments, and secret environment variables require user confirmation
-  before any classifier decision. Bare sensitive operands and Git `REV:path`
-  reads are covered without treating regex/format arguments as paths, and SDK
-  direct reads fail closed when no deterministic analyzer is supplied. Grep
-  clips pathological lines, bounds each source page with an explicit offset
-  continuation, and every Runner/tool/background entry now reaches the existing
-  sole batch admission owner. Physical capacity and tool-attention ledgers stay
-  separate; attention spill failure preserves physically admissible evidence
-  instead of becoming a hard error. Moderate Issue 158 outputs remain verbatim.
-  Round-exit reshaping recognizes current
-  user-shaped compaction checkpoints as well as legacy system summaries, so it
-  no longer re-appends the compacted query and final answer.
-- **Agent coordination and resumed transcript reliability.** Local constructed
-  specialists can now be listed and spawned without an external executor
-  plane. Worker coordination uses a terminal-only wait mode that skips progress
-  events inside one tool call, while queued user input still interrupts the
-  wait. Explicit terminal observation durably acknowledges the matching Actor
-  completion by turn ID only after its authoritative transcript/session message
-  commits, preventing both loss on persistence failure and later duplicate
-  `<agent-completed>` delivery. Acknowledged direct-child terminal events are
-  no longer replayed. Session restore now deduplicates and canonically
-  repositions tool groups by tool-use ID, and binds repeated text to the latest
-  persisted suffix, including snapshots already polluted after `/quit`.
-  Pre-execution guardrail denials always carry an explicit reason and tool-result
-  messages retain their execution-time timestamp.
-- **Release-review boundary fixes.** Emergency compaction fallback now subtracts
-  the actual system/tool overhead and reserved response budget from physical
-  input capacity before pruning. An unchanged rewrite or a candidate that
-  remains physically oversized is now a no-op and emits no successful compact
-  stats. Compact Auto[LLM] permission evidence samples
-  the middle of long risky-operation lists as well as both ends, and Auto[rules]
-  no longer mistakes single-segment POSIX paths such as `/tmp` for generic
-  Windows switches. Invalid continuation input errors now identify
-  `runtime.runs.submitInput` rather than incorrectly naming `runs.start`.
-- **Compaction documentation and configuration discoverability.** The root and
-  embedded JSONC templates now include the always-on percentage/absolute
-  compaction block; `kodax_manual` has a dedicated compaction topic. README,
-  HLD, ADR/DD, SDK guidance, feature/issue records, and the release test guide
-  now consistently describe the v0.7.74 policy and supersede the old
-  capacity-only major-trigger wording without changing FEATURE_251's tool-result
-  and micro-compaction guarantees.
-- **Exact-history durability closure.** Runtime-backed REPL paths now have one
-  canonical Session writer, first-run headless compaction seeds missing Session
-  metadata, and persistence failure rolls back the tentative context revision.
-  Search and direct read consistently exclude system/hidden entries, current and
-  legacy synthetic checkpoints, and `[compacted]` placeholders; short ordinary
-  queries no longer match random metadata IDs.
-- **Runtime interrupt input delivery.** Embedded Runtime and the shared daemon
-  now advertise `interruptInput:1` and route interrupt submissions into the
-  current active Actor Run. Inputs queued before one safe Runner boundary are
-  delivered FIFO as separate user messages in one next LLM request, without
-  creating continuation Runs. Run snapshots and typed queued/delivered events
-  expose lifecycle state and the complete ordered delivery batch; terminal
-  cleanup prevents undelivered inputs from leaking into later Runs. Delivery
-  acknowledgement is fenced to the exact consumed queue IDs across ordinary and
-  idle-yield boundaries, input is cloned before enqueue, and the complete batch
-  event is durably committed before the delivered projection.
-
-## [0.7.74] - 2026-07-21
+## [0.7.74] - 2026-07-23
 
 ### Added
 
@@ -103,6 +29,29 @@ All notable changes to this project will be documented in this file.
   and failures preserve the last exact live or persisted copy. Root Agents gain
   bounded `session_history_search` / `session_history_read`; SDK and daemon
   clients gain revision-bound `sessions.transcriptSearch()`.
+- **Runtime active-run interrupt input.** Embedded Runtime and the shared daemon
+  now advertise `interruptInput:1`. `runtime.runs.submitInput()` queues cloned,
+  ordered input for the current active Actor Run, delivers one FIFO batch as
+  separate user messages at the next safe Runner boundary, and exposes durable
+  queued/delivered lifecycle facts without creating a continuation Run or
+  leaking terminalized input into a later Run.
+
+### Changed
+
+- **Mailbox-driven Agent coordination (FEATURE_273).** Model-visible
+  `wait_agent` now accepts only a bounded timeout and yields on the caller's
+  mailbox, root user input, interruption, or expiry. Progress remains available
+  through Actor snapshots, event replay, and SDK long-poll without waking and
+  resampling the parent model. The tool returns only a wake acknowledgement;
+  authenticated Agent messages and structured completion metadata enter the
+  transcript once at the next safe boundary. `list_agents` owns tree-state
+  inspection and `agent_output` owns targeted result reads.
+- **Resident Goal lifecycle contracts.** `get_goal`, `create_goal`, and
+  `update_goal` keep their complete descriptions on both SA and managed AMA
+  paths. This removes an avoidable discovery round trip while preserving the
+  explicit-create and three-turn blocked-state rules. The remaining deferred
+  set stays at exactly 11 tools; schemas, handlers, permissions, Goal state, and
+  compaction-protected receipts are unchanged.
 
 ### Fixed
 
@@ -132,6 +81,37 @@ All notable changes to this project will be documented in this file.
   durable-before-evict boundary, child compaction cannot overwrite root
   lineage, and maintenance preserves its append watermark instead of archiving
   the same island entries again.
+- **Agent completion delivery and resumed transcripts.** Unacknowledged root
+  completions persist an explicit pending-delivery set and are republished after
+  a hard restart; same-process Runtime reconstruction deduplicates the projected
+  queue by child turn ID, while acknowledged and legacy historical completions
+  are not replayed. Completion acknowledgement remains after authoritative
+  transcript persistence. Session restore also deduplicates and canonically
+  repositions tool groups by tool-use ID and binds repeated text to the latest
+  persisted suffix.
+- **Deterministic reads, bounded tool attention, and compaction round exits.**
+  Auto Mode now handles complete risk-free static reads deterministically while
+  sensitive paths, credential stores, process environments, and named secret
+  variables require confirmation. Grep clips pathological lines and exposes
+  bounded offset continuation; one batch-admission owner separates physical
+  capacity from tool-attention spill. Current user-shaped and legacy compaction
+  checkpoints no longer cause a compacted query/final pair to be appended twice.
+- **Release-review boundary fixes.** Emergency compaction fallback accounts for
+  system/tool overhead and response reserve before pruning and reports no
+  success for unchanged or still-oversized candidates. Runtime-backed REPL paths
+  use one Session writer, first-run headless compaction seeds Session metadata,
+  persistence failure rolls back tentative context revision, and history search
+  consistently excludes system/hidden/checkpoint/placeholder content. Auto
+  permission analysis samples the middle of long operation lists, POSIX paths
+  are not mistaken for Windows switches, and continuation errors identify
+  `runtime.runs.submitInput` accurately.
+
+### Documentation
+
+- Root and generated JSONC templates, both READMEs, architecture/design docs,
+  the SDK embedder guide, feature/issue trackers, release verification guide,
+  package READMEs, and `kodax_manual` now describe the complete v0.7.74
+  compaction, mailbox-wait, active-run input, Goal-tool, and recovery contracts.
 
 ## [0.7.73] - 2026-07-20
 

@@ -4,7 +4,7 @@
 
 **功能名称**: Mailbox-Driven Agent Wait 与遥测/控制面分离
 **版本**: v0.7.74
-**测试日期**: 2026-07-23
+**测试日期**: [待填写]
 **测试人员**: [待填写]
 
 `wait_agent` 现在只等待调用者邮箱、根用户输入、中断或超时。Actor
@@ -175,6 +175,22 @@ mailbox evidence 注入。
 - [ ] 缺少新 pending-delivery 字段的旧快照不会把历史 completion 误判为待交付。
 - [ ] 其他 Session 的通知数量与内容不受影响。
 
+### TC-010: `kodax_manual` 与 SDK 指南保持同一控制/遥测边界
+
+**优先级**: 中
+**类型**: 文档/自解释能力测试
+
+1. 调用 `kodax_manual({topic:"agents"})` 与 `kodax_manual({topic:"sdk"})`。
+2. 对照根 README、SDK 指南第 26 节和当前 `wait_agent` tool schema。
+
+**预期结果**:
+
+- [ ] Agent 主题明确 `wait_agent` 只接受 `timeout_ms`，并列出四种 wake status。
+- [ ] Agent 主题明确 progress 与 `system-reminder` 不唤醒模型，且禁止轮询 `agent_output`。
+- [ ] SDK 主题区分 model mailbox yield 与 `runtime.agents.events()` / `runtime.agents.wait()` telemetry。
+- [ ] SDK 主题说明真实用户 follow-up 使用 `interruptInput:1` + `runtime.runs.submitInput()`。
+- [ ] README、manual、SDK 指南与实际 schema 不存在冲突字段或过期 event selector。
+
 ---
 
 ## 自动化预检
@@ -184,7 +200,7 @@ npm run build
 npm run test:unit
 npm run test:contract
 npm run test:system
-npx vitest run packages/agent/src/actors/controller.test.ts packages/agent/src/messaging/drain.test.ts packages/agent/src/orchestration/idle-yield.test.ts packages/agent/src/primitives/runner.test.ts packages/coding/src/agent-runtime/actor-runtime.test.ts packages/coding/src/tools/agent-collaboration.test.ts packages/coding/src/task-engine/runner-driven.test.ts packages/coding/src/task-engine/todo-drift-reminder.test.ts
+npx vitest run packages/agent/src/actors/controller.test.ts packages/agent/src/messaging/drain.test.ts packages/agent/src/orchestration/idle-yield.test.ts packages/agent/src/primitives/runner.test.ts packages/coding/src/agent-runtime/actor-runtime.test.ts packages/coding/src/tools/agent-collaboration.test.ts packages/coding/src/tools/run-workflow.test.ts packages/coding/src/task-engine/runner-driven.test.ts packages/coding/src/task-engine/runner-goal-adapter.test.ts packages/coding/src/task-engine/todo-drift-reminder.test.ts packages/coding/src/self-knowledge/registry.test.ts
 ```
 
 ---
@@ -193,7 +209,7 @@ npx vitest run packages/agent/src/actors/controller.test.ts packages/agent/src/m
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 9 | - | - | - |
+| 10 | - | - | - |
 
 **测试结论**: [待填写]
 **发现的问题**: [待填写]

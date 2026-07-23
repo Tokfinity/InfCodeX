@@ -18,6 +18,11 @@ Bare `-r` starts with the searchable session picker rather than importing the
 full CLI. Selecting a session transfers stdin to the resumed REPL; Esc releases
 the picker stdin and returns to the invoking terminal. Auto Mode configuration
 is passed to the Runtime guardrail, which decides before the permission UI.
+Automatic large-context compaction is always enabled: `triggerPercent` defaults
+to 75 (15-90), optional `triggerTokens` adds an absolute ceiling, and the smaller
+effective threshold wins. Runtime-backed REPL paths let the Runtime own the
+durable compact transaction and update only the local live projection after its
+acknowledgement.
 
 ## 安装 / 导入
 

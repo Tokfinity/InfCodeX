@@ -14,13 +14,13 @@ _Last Updated: 2026-07-23_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 201 | Medium | Resolved | Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting | v0.7.74 development | Unreleased v0.7.74 | 2026-07-23 | 2026-07-23 |
-| 200 | High | Resolved | Restored unacknowledged Agent completions did not repopulate the model mailbox | v0.7.74 development | Unreleased v0.7.74 | 2026-07-23 | 2026-07-23 |
-| 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
-| 198 | High | Resolved | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | Unreleased v0.7.74 | 2026-07-22 | 2026-07-22 |
-| 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
-| 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
-| 195 | High | Resolved | Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review | v0.7.33; exposed by v0.7.74 review | Unreleased after v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 201 | Medium | Resolved | Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
+| 200 | High | Resolved | Restored unacknowledged Agent completions did not repopulate the model mailbox | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
+| 199 | High | Resolved | Runtime accepts interrupt input after the final safe boundary and terminalizes it without delivery | v0.7.74 development | v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 198 | High | Resolved | Compaction could evict exact history before durable persistence and offered no model-facing recovery | v0.7.46; exposed by v0.7.74 review | v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 197 | Medium | Resolved | User-shaped compaction checkpoints caused round-exit query and final duplication | v0.7.74 development | v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 196 | High | Resolved | Physical-only tool-result admission let pathological grep output dominate large contexts | v0.7.69 | v0.7.74 | 2026-07-22 | 2026-07-22 |
+| 195 | High | Resolved | Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review | v0.7.33; exposed by v0.7.74 review | v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 194 | High | Resolved | Agent coordination could reject local specialists, amplify progress polling, duplicate terminal output, and corrupt resumed tool history | v0.7.72-v0.7.74 | v0.7.74 | 2026-07-22 | 2026-07-22 |
 | 193 | Medium | Resolved | Runtime daemon rejects interrupt input instead of injecting it into the active Run | v0.7.69 | v0.7.73 development | 2026-07-21 | 2026-07-21 |
 | 192 | High | Resolved | Large compaction used the model window for protection, covered only one rolling chunk, and exposed ambiguous/unbounded SDK state | v0.7.73 and earlier | v0.7.74 | 2026-07-21 | 2026-07-21 |
@@ -117,7 +117,7 @@ _Last Updated: 2026-07-23_
 - **Priority**: Medium
 - **Status**: Resolved
 - **Introduced**: v0.7.74 development
-- **Fixed**: Unreleased v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-23
 - **Resolved**: 2026-07-23
 
@@ -164,7 +164,7 @@ and tool-description update set, so its historical wording survived.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.74 development
-- **Fixed**: Unreleased v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-23
 - **Resolved**: 2026-07-23
 
@@ -228,7 +228,7 @@ made pre-receipt snapshots replay historical results after upgrade.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.74
-- **Fixed**: Unreleased after v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-22
 - **Resolved**: 2026-07-22
 
@@ -336,9 +336,9 @@ Validation:
 ### 198: Compaction could evict exact history before durable persistence and offered no model-facing recovery
 
 - **Priority**: High
-- **Status**: **Resolved** (Unreleased v0.7.74)
+- **Status**: **Resolved** (v0.7.74)
 - **Introduced**: v0.7.46 archival lifecycle; exposed by v0.7.74 review
-- **Fixed**: Unreleased v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-22
 - **Resolved**: 2026-07-22
 
@@ -436,9 +436,9 @@ bundling.
 ### 197: User-shaped compaction checkpoints caused round-exit query and final duplication
 
 - **Priority**: Medium
-- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Status**: **Resolved** (v0.7.74)
 - **Introduced**: v0.7.74
-- **Fixed**: Unreleased after v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-22
 - **Resolved**: 2026-07-22
 
@@ -469,9 +469,9 @@ rounds and system-summary-only sessions keep their existing append behavior.
 ### 196: Physical-only tool-result admission let pathological grep output dominate large contexts
 
 - **Priority**: High
-- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Status**: **Resolved** (v0.7.74)
 - **Introduced**: v0.7.69
-- **Fixed**: Unreleased after v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-22
 - **Resolved**: 2026-07-22
 
@@ -536,9 +536,9 @@ The closure:
 ### 195: Auto-mode sent safe static reads to the LLM while sensitive reads bypassed deterministic review
 
 - **Priority**: High
-- **Status**: **Resolved** (Unreleased after v0.7.74)
+- **Status**: **Resolved** (v0.7.74)
 - **Introduced**: v0.7.33; exposed by v0.7.74 review
-- **Fixed**: Unreleased after v0.7.74
+- **Fixed**: v0.7.74
 - **Created**: 2026-07-22
 - **Resolved**: 2026-07-22
 
@@ -6430,20 +6430,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-07-23: Issues 200-201 resolved (Unreleased v0.7.74)
+### 2026-07-23: Issues 200-201 resolved (v0.7.74)
 - Made root completion delivery explicitly recoverable and legacy-safe through
   persisted pending-delivery IDs, post-commit acknowledgements, and scoped
   queue deduplication across hard restart and soft Runtime rebuild.
 - Restricted model waits to mailbox/user activity, kept system reminders from
   ending waits, and corrected Workflow progress guidance.
 
-### 2026-07-22: Issue 198 resolved (Unreleased v0.7.74)
+### 2026-07-22: Issue 198 resolved (v0.7.74)
 - Unified SA/AMA durable-compaction and history-tool binding, made the tool pair
   visibility atomic, and closed default AMA's advertised-but-unavailable path.
 - Made persistent child compaction inherit policy, retain context-scoped
   telemetry, and archive/search only a separately minted hidden child lineage.
 
-### 2026-07-22: Issue 199 resolved (Unreleased after v0.7.74)
+### 2026-07-22: Issue 199 resolved (v0.7.74)
 - Closed interrupt admission at managed completion and ordinary completion/error
   callbacks as well as external abort, while releasing abort listeners on every
   Runtime-owned terminal path.
@@ -6453,7 +6453,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   a still-consumable interrupt window, with deterministic Runtime and bridge
   regression coverage.
 
-### 2026-07-22: Issues 195-197 added and resolved (Unreleased after v0.7.74)
+### 2026-07-22: Issues 195-197 added and resolved (v0.7.74)
 - Bypassed the LLM for exact safe reads while moving sensitive paths and
   environment disclosure ahead of classifier decisions; the post-resolution
   closure covers bare/Git-object operands and analyzer-less SDK callers.

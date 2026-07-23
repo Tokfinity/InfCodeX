@@ -76,49 +76,64 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.73 release verification
+## v0.7.74 release verification
 
-Run the normal build first; this refreshes `dist/kodax_bootstrap.js`, which is
-also the artifact used by a globally linked `kodax` command.
+Run the template drift check and full deterministic gate, then refresh the
+normal build artifact used by a globally linked `kodax` command.
 
 ```bash
+npm run config:templates:check
+npm run test:full
 npm run build
-
-# First-run provider setup and CLI eligibility
-npx vitest run packages/repl/src/common/provider-setup.test.ts \
-  packages/repl/src/interactive/provider-setup.test.ts \
-  src/provider-setup-cli.test.ts
-
-# Bounded Auto LLM classification, projection, and guardrail behavior
-npx vitest run packages/coding/src/guardrails/auto-mode/transcript-strip.test.ts \
-  packages/coding/src/guardrails/auto-mode/classify.test.ts \
-  packages/coding/src/guardrails/auto-mode/guardrail.test.ts \
-  packages/coding/src/tools/classifier-projection.test.ts \
-  packages/coding/src/tools/registry.test.ts \
-  packages/agent/src/primitives/guardrail.test.ts \
-  packages/llm/src/side-query.test.ts
-
-# Typed SDK settings, Session persistence, and daemon capability-v3 upgrade
-npx vitest run packages/repl/src/common/permission-config.test.ts \
-  src/sdk-runtime.test.ts src/sdk-runtime-daemon-upgrade.test.ts \
-  src/runtime-daemon/server.test.ts
-
-# Qwen Token Plan registry, capability, media, and cost metadata
-npx vitest run packages/llm/src/providers/registry.test.ts \
-  packages/llm/src/providers/provider-capabilities.test.ts \
-  packages/agent/src/media/capabilities.test.ts \
-  packages/llm/src/cost-rates.test.ts
+npm pack --dry-run
 ```
 
-For the manual TTY boundary, use an isolated `KODAX_HOME`: a bare launch with no
-provider credential must show the metadata-only setup before Runtime creation,
-and cancel must leave `config.json` untouched and immediately return terminal
-control. A completed built-in selection must write only `provider` and `model`,
-name the required environment variable, request a terminal restart, and exit
-without an LLM call. The full checklist is
-[`FEATURE_271_v0.7.73_TEST_GUIDE.md`](test-guides/FEATURE_271_v0.7.73_TEST_GUIDE.md).
-The documented four-call GLM-5.2 latency probe is diagnostic evidence, not a
-release gate, and must not be repeated for this release.
+The full deterministic gate is authoritative. If a v0.7.74 area fails and needs
+a focused rerun, use the matching group below:
+
+```bash
+# Always-on compaction, exact-history durability, and bounded recovery
+npx vitest run packages/agent/src/session-lineage \
+  packages/coding/src/tools/session-history.test.ts \
+  packages/coding/src/agent-runtime/durable-compaction.test.ts \
+  packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts \
+  packages/repl/src/interactive/storage.test.ts \
+  packages/repl/src/session/public-api.test.ts \
+  src/sdk-runtime.test.ts
+
+# Mailbox-driven Agent wait, delivery recovery, and Goal-wrapper propagation
+npx vitest run packages/agent/src/actors/controller.test.ts \
+  packages/agent/src/messaging/drain.test.ts \
+  packages/agent/src/orchestration/idle-yield.test.ts \
+  packages/agent/src/primitives/runner.test.ts \
+  packages/coding/src/agent-runtime/actor-runtime.test.ts \
+  packages/coding/src/tools/agent-collaboration.test.ts \
+  packages/coding/src/task-engine/runner-driven.test.ts \
+  packages/coding/src/task-engine/runner-goal-adapter.test.ts
+
+# Active-run interrupt input across embedded Runtime and daemon boundaries
+npx vitest run src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts \
+  src/runtime-daemon/server.test.ts src/runtime-event.test.ts
+
+# README/kodax_manual/config drift guards
+npx vitest run packages/coding/src/self-knowledge/registry.test.ts \
+  packages/coding/src/self-knowledge/resolver.test.ts \
+  packages/repl/src/interactive/commands-manual-drift.test.ts \
+  packages/repl/src/common/example-config.test.ts
+```
+
+Before tagging, complete the two human release guides against an isolated
+`KODAX_HOME` and a disposable project/Session:
+
+- [`FEATURE_272_v0.7.74_TEST_GUIDE.md`](test-guides/FEATURE_272_v0.7.74_TEST_GUIDE.md)
+  covers threshold policy, full-prefix/query retention, root/child attribution,
+  daemon frame bounds, exact-history durability, and revision-bound recovery.
+- [`FEATURE_273_v0.7.74_TEST_GUIDE.md`](test-guides/FEATURE_273_v0.7.74_TEST_GUIDE.md)
+  covers progress storms, token-free long waits, synthetic/user authorship,
+  restart delivery, timeout/interruption, and unchanged SDK event telemetry.
+
+The guides intentionally leave tester/date/result fields for release evidence;
+do not mark their checkboxes from automated test output alone.
 
 ## Automated release (CI)
 

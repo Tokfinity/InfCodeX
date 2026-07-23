@@ -1,6 +1,6 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-22
+> Last updated: 2026-07-23
 >
 > Current implementation baseline: `v0.7.74`
 > (`@kodax-ai/kodax@0.7.74` workspace package)
@@ -92,6 +92,13 @@ Ordinary Actor progress is telemetry for UI and SDK event consumers and must
 not wake or resample the parent model. Long waits therefore consume elapsed
 time, not model tokens. Raw Actor event replay and long-poll remain available
 through the SDK and daemon control-plane APIs.
+
+Runtime hosts may submit real user input to the current active root Run only
+through the advertised `interruptInput:1` contract. Input accepted before a
+safe Runner boundary must remain FIFO, retain separate user-message authorship,
+and enter one next model request without creating a continuation Run. Closed or
+terminal Runs must reject or terminalize undelivered input rather than leak it
+into later work. `after_turn` remains the explicit continuation mechanism.
 
 ## 6. Required Capabilities
 

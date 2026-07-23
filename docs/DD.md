@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-20
+> Last updated: 2026-07-23
 >
-> Current release baseline: `v0.7.73`
-> (`@kodax-ai/kodax@0.7.73` workspace package)
+> Current release baseline: `v0.7.74`
+> (`@kodax-ai/kodax@0.7.74` workspace package)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,8 +20,10 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.73`; FEATURE_271 and the
-Qwen Token Plan provider are released in the `v0.7.73` baseline.
+The root workspace package is `@kodax-ai/kodax@0.7.74`. The current baseline
+adds reliable always-on compaction and exact-history recovery (FEATURE_272),
+mailbox-driven Agent waiting (FEATURE_273), active-run interrupt input, and
+resident Goal lifecycle contracts on top of the v0.7.73 provider/Auto surface.
 
 `package.json` exposes:
 

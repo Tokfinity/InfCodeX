@@ -65,7 +65,7 @@ When writing or modifying any LLM-facing prompt (role prompts in `packages/codin
 | Package Manager | npm workspaces | — |
 | CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
 | Test | Vitest | ^3.2.4 |
-| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, Zai, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, … | 15 built-in aliases |
+| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, Zai, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, … | 16 built-in aliases |
 
 ## Monorepo Structure
 

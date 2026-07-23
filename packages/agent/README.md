@@ -67,6 +67,14 @@ The generic `Runner` path can be used with a caller-provided `llm` callback. The
 - Tracing: trace / span primitives and stores
 - Workflow: `createWorkflowRuntime`, `runWorkflow`, `WorkflowAbortError`, `WorkflowLimitError`, `WorkflowProcessEvent`, `WorkflowProcessSnapshot`, `isFinalWorkflowProcessStatus`
 
+Actor mailbox control and event telemetry are separate contracts. Model-facing
+coordination yields on scoped mailbox activity, user input, interruption, or
+timeout; progress remains on the Actor event stream for snapshot, replay, and
+long-poll consumers. Completion notifications are acknowledged only after the
+parent transcript commits. An explicit pending-delivery set restores an
+unacknowledged root completion after restart without replaying acknowledged or
+legacy historical mail.
+
 `DefaultSummaryCompaction` 是给自定义 Agent loop 使用的独立 primitive；它不替代、也不能关闭 KodaX coding runtime 在 FEATURE_272 中定义的始终开启大型压缩策略。
 
 ## Subpath 说明
