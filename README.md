@@ -887,7 +887,7 @@ kodax --session todo-app "Write tests"
 kodax                    Start the interactive REPL
 -h, --help [topic]   Show help or topic help
 -p, --print <text>   Run a single task and exit
--c, --continue       Continue the most recent conversation in this directory
+-c, --continue       Continue the most recent non-empty conversation in this directory
 -r, --resume [value] Resume by ID/exact title, or open the searchable picker
 -m, --provider       Provider to use
 --model <name>       Override the model
@@ -928,12 +928,22 @@ KodaX provides 3 permission modes for fine-grained control:
 - Auto Mode runs guardrail classification before the permission UI; a safe
   allow verdict does not create a pending approval request. The session records
   an automatic LLM-to-rules fallback for later turns.
+- Shift-Tab cycles `Plan -> Edits -> Auto`; Shift+Enter inserts a newline. Auto
+  immediately displays `Auto[LLM]` or `Auto[RULES]`, and rapid mode changes are
+  persisted in input order. `Auto[RULES]` is a valid sticky fallback/manual
+  state; use `/auto-engine llm` to opt back into LLM classification.
 - Runtime-backed prompts can offer exact `allow once`, `allow this session`,
   and `always allow` choices. Return the Runtime-issued opaque suggestion;
   never derive or widen a permission rule from the displayed command or path.
   Persistent grants are daemon-owned, revisioned, and can be listed/revoked
   through `runtime.permissions` by an authorized SDK host. Dynamic shell
   commands deliberately receive no persistent-grant suggestion.
+
+`kodax -c` skips zero-message ACP/bootstrap placeholders even when they are
+newer than the last real conversation. The same newest non-empty rule applies
+to Ink, classic, one-shot CLI, and coding-runtime auto-resume; an explicit
+session ID always wins. Interactive resume also restores the saved workspace
+runtime before relative shell commands or the next model turn.
 
 ### CLI Help Topics
 

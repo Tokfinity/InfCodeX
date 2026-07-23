@@ -56,6 +56,16 @@ export interface BuildSurfaceStatusBarPropsOptions {
   autoModeEngine?: StatusBarProps["autoModeEngine"];
 }
 
+export function resolveSurfaceAutoModeEngine(
+  permissionMode: StatusBarProps["permissionMode"],
+  observedEngine: StatusBarProps["autoModeEngine"],
+  configuredEngine: NonNullable<StatusBarProps["autoModeEngine"]>,
+): StatusBarProps["autoModeEngine"] {
+  return permissionMode === "auto" || permissionMode === "auto-in-project"
+    ? observedEngine ?? configuredEngine
+    : undefined;
+}
+
 export function buildSurfaceStatusBarProps(
   options: BuildSurfaceStatusBarPropsOptions,
 ): StatusBarProps {

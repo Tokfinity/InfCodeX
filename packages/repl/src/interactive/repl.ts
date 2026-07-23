@@ -54,6 +54,7 @@ import {
 import type {
   KodaXMessage,
   KodaXSessionData,
+  KodaXSessionRuntimeInfo,
   KodaXSessionStorage,
   KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
@@ -152,16 +153,59 @@ import {
   SESSION_RECOVERY_HINT_MESSAGE,
   shouldOfferSessionRecovery,
 } from '../session/recovery.js';
+import { findMostRecentResumableSession } from '../session/resumable-session.js';
 
 // Extended session storage interface (adds list method) - 扩展的会话存储接口（增加 list 方法）
 interface SessionStorage extends KodaXSessionStorage {
-  list(gitRoot?: string): Promise<Array<{
+  list(
+    gitRoot?: string,
+    options?: { limit?: number; includeArchived?: boolean },
+  ): Promise<Array<{
     id: string;
     title: string;
     msgCount: number;
     tag?: string;
     runtimeInfo?: KodaXSessionData['runtimeInfo'];
   }>>;
+}
+
+export async function loadClassicStartupSession(
+  session: KodaXOptions['session'],
+  storage: SessionStorage,
+  gitRoot?: string,
+): Promise<{
+  id: string;
+  data: KodaXSessionData;
+  kind: 'load' | 'continue';
+  runtimeInfo?: KodaXSessionRuntimeInfo;
+} | null> {
+  if (session?.id) {
+    const data = await storage.load(session.id);
+    if (!data) return null;
+    const runtimeInfo = resolveSessionRuntimeInfo(data);
+    return {
+      id: session.id,
+      data,
+      kind: 'load',
+      ...(runtimeInfo ? { runtimeInfo } : {}),
+    };
+  }
+
+  if (session?.resume || session?.autoResume) {
+    const recent = await findMostRecentResumableSession(storage, gitRoot);
+    if (!recent) return null;
+    const data = await storage.load(recent.id);
+    if (!data) return null;
+    const runtimeInfo = resolveSessionRuntimeInfo(data);
+    return {
+      id: recent.id,
+      data,
+      kind: 'continue',
+      ...(runtimeInfo ? { runtimeInfo } : {}),
+    };
+  }
+
+  return null;
 }
 
 export async function buildClassicCliSkillsPrompt(gitRoot?: string): Promise<string> {
@@ -448,8 +492,27 @@ const costReportRef: { current: (() => string) | null } = { current: null };
 // Run interactive mode - 运行交互式模式
 export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const startupRuntime = await inspectWorkspaceRuntime({ cwd: process.cwd() });
-  const gitRoot = startupRuntime.workspaceRoot ?? await getGitRoot() ?? undefined;
+  const startupGitRoot = startupRuntime.workspaceRoot ?? await getGitRoot() ?? undefined;
   const storage = options.storage ?? new MemorySessionStorage();
+  const startupSession = await loadClassicStartupSession(
+    options.session,
+    storage,
+    startupGitRoot,
+  );
+  const activeRuntime = startupSession
+    ? startupSession.runtimeInfo ?? startupRuntime
+    : startupRuntime;
+  const gitRoot = activeRuntime.workspaceRoot ?? startupGitRoot;
+  if (startupSession) {
+    options = {
+      ...options,
+      session: {
+        ...(options.session ?? {}),
+        id: startupSession.id,
+        tag: startupSession.data.tag,
+      },
+    };
+  }
 
   // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
   // coordination). Returns null when KODAX_DISABLE_MULTI_INSTANCE=1
@@ -556,10 +619,21 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const ESC_DOUBLE_PRESS_MS = 500;
 
   const context = await createInteractiveContext({
-    sessionId: options.session?.id,
+    sessionId: startupSession?.id ?? options.session?.id,
     gitRoot,
-    runtimeInfo: startupRuntime,
+    runtimeInfo: activeRuntime,
+    existingMessages: startupSession?.data.messages,
+    existingUiHistory: startupSession?.data.uiHistory,
+    existingLineage: startupSession?.data.lineage,
+    existingArtifactLedger: startupSession?.data.artifactLedger,
+    existingExtensionState: startupSession?.data.extensionState,
+    existingExtensionRecords: startupSession?.data.extensionRecords,
   });
+  context.title = startupSession?.data.title ?? '';
+  if (startupSession) {
+    const label = startupSession.kind === 'continue' ? 'Continuing session' : 'Session loaded';
+    process.stdout.write(`${chalk.green(`[${label}: ${startupSession.id}]`)}\n`);
+  }
   // FEATURE_222 (R4): forward the host skill dynamic-context policy so the
   // user-typed `/skill` slash path is gated the same as the model-triggered tool.
   context.skillDynamicContext = options.skillDynamicContext;
@@ -605,7 +679,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     triggerTokens: compactionConfig.triggerTokens,
     enabled: compactionConfig.enabled,
   }, agentsFiles);
-  printWorkspaceEntryNotice(startupRuntime);
+  printWorkspaceEntryNotice(activeRuntime);
   if (options.learning) {
     try {
       const recovery = formatLearningRecoverySummary(await options.learning.getSnapshot());
@@ -690,7 +764,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       return result.confirmed ? 'allow' : 'block';
     },
     projectRoot: gitRoot ?? process.cwd(),
-    executionCwd: startupRuntime.executionCwd ?? gitRoot ?? process.cwd(),
+    executionCwd: activeRuntime.executionCwd ?? gitRoot ?? process.cwd(),
     getCurrentProviderName: () => currentConfig.provider,
     getCurrentModel: () => currentConfig.model,
     getCurrentPermissionMode: () => currentPermissionMode,
@@ -779,12 +853,12 @@ Keyboard Shortcuts:
     // this via its `...currentOptions` spread.
     workflowRunsBaseDir: getAgentConfigPath(
       'workflow-runs',
-      deriveProjectKeyFromRoot(process.cwd()).key,
+      deriveProjectKeyFromRoot(gitRoot ?? activeRuntime.executionCwd ?? process.cwd()).key,
     ),
     context: {
       ...options.context,
       gitRoot,
-      executionCwd: startupRuntime.executionCwd,
+      executionCwd: activeRuntime.executionCwd,
       repoIntelligenceMode: repoIntelligenceRuntime.mode,
       repoIntelligenceTrace: repoIntelligenceRuntime.trace,
       skillsPrompt: classicCliSkillsPrompt,
@@ -1689,7 +1763,10 @@ Keyboard Shortcuts:
         }
 
         // Process special syntax and update lastUserMessage - 处理特殊语法并更新 lastUserMessage
-        const processed = await processSpecialSyntax(trimmed);
+        const processed = await processSpecialSyntax(
+          trimmed,
+          currentOptions.context?.executionCwd,
+        );
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
           continue;
         }
@@ -1858,7 +1935,10 @@ Keyboard Shortcuts:
     }
 
     // Process special syntax - 处理特殊语法
-    const processed = await processSpecialSyntax(trimmed);
+    const processed = await processSpecialSyntax(
+      trimmed,
+      currentOptions.context?.executionCwd,
+    );
 
     // Shell command handling: Warp style - Shell 命令处理：Warp 风格
     // - Success → skip (result shown) - 成功执行 → 跳过（结果已显示）
@@ -1957,7 +2037,10 @@ Keyboard Shortcuts:
 }
 
 // Get prompt (responsive, using theme colors) - 获取提示符 (响应式，使用主题颜色)
-export async function processSpecialSyntax(input: string): Promise<string> {
+export async function processSpecialSyntax(
+  input: string,
+  executionCwd: string = process.cwd(),
+): Promise<string> {
   // @path syntax: attach image artifacts to context - @path 语法：将图片工件附加到上下文
   const fileRefs = input.match(/@[\w./-]+/g);
   if (fileRefs) {
@@ -1971,7 +2054,7 @@ export async function processSpecialSyntax(input: string): Promise<string> {
   // !command syntax: execute shell command - !command 语法：执行 shell 命令
   if (input.startsWith('!')) {
     const command = input.slice(1).trim();
-    return executeShellCommand(command, { cwd: process.cwd() });
+    return executeShellCommand(command, { cwd: executionCwd });
   }
 
   return input;

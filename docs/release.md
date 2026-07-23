@@ -78,6 +78,11 @@ dist/binary/linux-x64/kodax --version
 
 ## v0.7.74 release verification
 
+Current state: the release branch contains package version `0.7.74`, code,
+tests, and documentation, but the `v0.7.74` tag and GitHub Release must remain
+absent until the operator explicitly authorizes tagging. npm publication is a
+separate manual operator step.
+
 Run the template drift check and full deterministic gate, then refresh the
 normal build artifact used by a globally linked `kodax` command.
 
@@ -120,6 +125,17 @@ npx vitest run packages/agent/src/session-lineage/kodax-session-lineage.test.ts 
   packages/repl/src/permission/powershell-mutation.test.ts \
   packages/repl/src/permission/auto-rules.test.ts
 
+# Continue-most-recent and Auto mode-switch ordering
+npx vitest run packages/repl/src/session/resumable-session.test.ts \
+  packages/repl/src/interactive/repl-startup-session.test.ts \
+  packages/coding/src/agent-runtime/__contract-tests__/cap-043-auto-resume.contract.test.ts \
+  packages/repl/src/ui/view-models/surface-status.test.ts \
+  src/kodax_cli.runtime-runner.test.ts
+
+# External-review low-impact debt closures
+npx vitest run packages/repl/src/session/compact-session.test.ts \
+  src/sdk-runtime.test.ts
+
 # README/kodax_manual/config drift guards
 npx vitest run packages/coding/src/self-knowledge/registry.test.ts \
   packages/coding/src/self-knowledge/resolver.test.ts \
@@ -136,6 +152,12 @@ Before tagging, complete the two human release guides against an isolated
 - [`FEATURE_273_v0.7.74_TEST_GUIDE.md`](test-guides/FEATURE_273_v0.7.74_TEST_GUIDE.md)
   covers progress storms, token-free long waits, synthetic/user authorship,
   restart delivery, timeout/interruption, and unchanged SDK event telemetry.
+- [`ISSUE_105_v0.7.74_REGRESSION_GUIDE.md`](test-guides/ISSUE_105_v0.7.74_REGRESSION_GUIDE.md)
+  covers empty-placeholder skipping, explicit-ID priority, Classic/Ink parity,
+  and saved-workspace restoration.
+- [`ISSUE_204_v0.7.74_REGRESSION_GUIDE.md`](test-guides/ISSUE_204_v0.7.74_REGRESSION_GUIDE.md)
+  covers Shift-Tab cycling, immediate engine labels, rapid last-action-wins
+  ordering, newline input, and sticky rules fallback.
 
 The guides intentionally leave tester/date/result fields for release evidence;
 do not mark their checkboxes from automated test output alone.

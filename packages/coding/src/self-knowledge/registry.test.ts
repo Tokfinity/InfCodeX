@@ -151,6 +151,21 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('runtime.runs.submitInput()');
   });
 
+  it('documents the v0.7.74 resume and Auto mode-switch reliability closures', () => {
+    const sessions = resolveKodaXManual({ topic: 'sessions' }).content;
+    const permissions = resolveKodaXManual({ topic: 'permissions' }).content;
+
+    expect(sessions).toContain('non-empty');
+    expect(sessions).toContain('zero-message');
+    expect(sessions).toContain('classic and Ink');
+    expect(sessions).toContain('saved workspace');
+    expect(permissions).toContain('Shift-Tab');
+    expect(permissions).toContain('Shift+Enter');
+    expect(permissions).toContain('Auto[LLM]');
+    expect(permissions).toContain('Auto[RULES]');
+    expect(permissions).toContain('/auto-engine llm');
+  });
+
   it('keeps the SDK topic aligned with current published subpaths', () => {
     const content = resolveKodaXManual({ topic: 'sdk' }).content;
 

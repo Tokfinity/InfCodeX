@@ -551,7 +551,10 @@ export interface KodaXSessionStorage {
     selector?: string,
     options?: { sessionId?: string; title?: string },
   ): Promise<{ sessionId: string; data: KodaXSessionData } | null>;
-  list?(gitRoot?: string): Promise<Array<{
+  list?(
+    gitRoot?: string,
+    options?: { limit?: number; includeArchived?: boolean },
+  ): Promise<Array<{
     id: string;
     title: string;
     msgCount: number;

@@ -14,6 +14,7 @@ _Last Updated: 2026-07-23_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 202 | High | Resolved | PowerShell bracket wildcards could bypass protected-path auto-mode review | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 201 | Medium | Resolved | Model wait treated Runtime system reminders as mailbox activity and Workflow guidance still implied progress waiting | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -114,6 +115,64 @@ _Last Updated: 2026-07-23_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 204: Auto mode could render without an engine and rapid permission-mode writes could settle out of order
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.72 Runtime REPL bridge
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-23
+- **Resolved**: 2026-07-23
+
+#### Original Problem
+
+A user could enter Auto and briefly see bare `Auto` rather than `Auto[LLM]` or
+`Auto[RULES]`. Cycling the three permission modes could later make the expected
+engine label appear, which made Auto look like it had an unexplained fourth
+state. Rapid mode changes also launched overlapping Runtime settings updates,
+so a slower earlier write could finish after the user's final selection.
+
+The default mode-cycle binding is Shift-Tab. Shift+Enter remains the newline
+binding; terminal remapping can make the physical key report confusing, but it
+does not change the underlying mode-state defect.
+
+#### Root Cause
+
+- Ink updated `permissionMode` synchronously, but the Runtime-backed engine
+  state started as `undefined` until asynchronous stats arrived.
+- `syncSettings()` and `/auto-engine` writes had no per-Session ordering, so
+  concurrent calls relied on transport completion order rather than input order.
+
+#### Solution Implemented
+
+- Resolve the status-bar engine from observed Runtime state or the configured
+  engine while statistics are pending; Auto now always renders a known engine.
+- Serialize settings and explicit engine writes per Session so the last user
+  action is also the last persisted action.
+- Preserve the existing semantic distinction: `Auto[RULES]` is a valid sticky
+  automatic/manual fallback, and `/auto-engine llm` explicitly restores LLM
+  classification.
+
+#### Files Changed
+
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/view-models/surface-status.ts`
+- `packages/repl/src/ui/view-models/surface-status.test.ts`
+- `src/kodax_cli.ts`
+- `src/kodax_cli.runtime-runner.test.ts`
+- `docs/test-guides/ISSUE_204_v0.7.74_REGRESSION_GUIDE.md`
+
+#### Verification
+
+- The view-model regression pins configured-engine fallback, observed-engine
+  precedence, and non-Auto clearing.
+- The Runtime bridge regression blocks an earlier write and proves the later
+  mode cannot overtake it.
+- Human checks cover Shift-Tab, Shift+Enter, normal/rapid cycling, and sticky
+  rules fallback.
+
+---
+
 ### 203: Compaction recovery guidance detached the compaction entry from the active lineage
 
 - **Priority**: High
@@ -147,11 +206,16 @@ recovery guidance to the producer silently broke structural matching.
 - Lock the topology contract to the exact producer bytes: the compaction entry
   remains on the active path, owns a first-kept pointer, and emits attachments
   immediately after the checkpoint without a duplicate message entry.
+- Reconcile imperative manual compaction against the exact flat message
+  snapshot before applying the compaction entry, so a legacy/stale lineage
+  cannot omit history from later exact transcript search.
 
 #### Files Changed
 
 - `packages/agent/src/session-lineage/kodax-session-lineage.ts`
 - `packages/agent/src/session-lineage/kodax-session-lineage.test.ts`
+- `packages/repl/src/session/compact-session.ts`
+- `packages/repl/src/session/compact-session.test.ts`
 
 #### Tests Added
 
@@ -400,6 +464,12 @@ The Sidecar verifier no longer forwards a host `onSidecarMessage` sink exception
 to terminal `onError`. It emits the existing `coding:sidecar-verifier` diagnostic
 instead, so a non-terminal observer failure remains visible without prematurely
 closing interrupt admission.
+
+If persistence of the exact `run.input.delivered` batch fails after the Actor
+queue has been consumed, Runtime now emits a bounded `runtime.warning` carrying
+only the input IDs and persistence error. It leaves the public input state
+`queued` and rethrows the original error; it never falsely publishes delivery
+or copies the input body into diagnostics.
 
 Synchronous exceptions from coding or managed-task launch now use the same
 failure classification and terminal cleanup as asynchronous rejection. The
@@ -6447,11 +6517,13 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 
-### 105: kodax -c 历史记录未注入 LLM 上下文 - resume 路径可能存在 gitRoot 过滤不一致 (OPEN)
+### 105: kodax -c 可选择空 ACP 占位 session，classic REPL 还会忽略 resume (RESOLVED)
 - **Priority**: Medium
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.14
+- **Fixed**: v0.7.74
 - **Created**: 2026-04-03
+- **Resolved**: 2026-07-23
 
 - **Original Problem**:
   用户报告使用 `kodax -c`（继续最近会话）后，之前的历史记录没有正常注入 LLM 上下文。
@@ -6462,65 +6534,77 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - 历史消息应该作为 `initialMessages` 注入 LLM 上下文
   - UI 应显示 `[Continuing session: xxx]` 横幅
 
-- **Code Path Analysis**:
+- **Confirmed Root Cause**:
+  1. `FileSessionStorage.list()` returns sessions newest-first and includes
+     zero-message user-scoped records. Ink startup and the single-task
+     `resolveCliTaskSessionId()` path selected element zero directly, unlike
+     `kodax -s list` / bare `-r`, which already filter `msgCount > 0`.
+  2. A cluster of newer empty ACP placeholder sessions could fill the default
+     ten-result list, so `kodax -c` loaded an empty ACP session instead of the
+     latest real conversation.
+  3. The terminal-compatibility classic REPL path did not process
+     `session.resume` or `session.autoResume` at startup at all.
+  4. The lower-level coding-runtime CAP-043 auto-resume middleware still chose
+     element zero, and classic startup did not guarantee that an explicit ID
+     won when a resume flag was also present.
 
-  代码链完整，但存在多个潜在故障点：
+- **Resolution**:
+  - Added one resumable-session selector shared by Ink, classic, and
+    `kodax -c "prompt"`; it requests up to 1000 summaries and chooses the
+    first session with `msgCount > 0`.
+  - Classic startup now loads the selected session's messages, UI history,
+    lineage, artifact ledger, extension state, runtime identity, title, tag,
+    and session ID before creating its interactive context.
+  - Ink startup now records the resolved session ID in live options as well as
+    the context, keeping subsequent saves and runtime handoff explicit.
+  - The coding-runtime middleware mirrors the non-empty broad-scan rule without
+    depending on REPL, and explicit IDs short-circuit discovery everywhere.
+  - Classic shell execution and workflow project-key derivation use the resumed
+    Session's normalized execution workspace rather than the launch directory.
 
-  **1. CLI → buildSessionOptions** (`src/cli_option_helpers.ts:295-297`)
-  - 设置 `resume: true`，未传 `autoResume`。✅ 正确
+- **Files Changed**:
+  - `packages/repl/src/session/resumable-session.ts`
+  - `packages/repl/src/session/resumable-session.test.ts`
+  - `packages/repl/src/interactive/repl.ts`
+  - `packages/repl/src/interactive/repl-startup-session.test.ts`
+  - `packages/repl/src/ui/InkREPL.tsx`
+  - `packages/repl/src/index.ts`
+  - `packages/agent/src/types.ts`
+  - `packages/coding/src/agent-runtime/middleware/auto-resume.ts`
+  - `packages/coding/src/agent-runtime/__contract-tests__/cap-043-auto-resume.contract.test.ts`
+  - `src/kodax_cli.ts`
+  - `docs/test-guides/ISSUE_105_v0.7.74_REGRESSION_GUIDE.md`
 
-  **2. InkREPL 交互模式** (`packages/repl/src/ui/InkREPL.tsx:3527-3543`)
-  - 使用 `storage.list(gitRoot)` 过滤当前目录会话。✅ 正确
-
-  **3. agent.ts runKodaX** (`packages/coding/src/agent.ts:959-962`)
-  - ⚠️ **潜在问题 1**: `storage.list()` 不传 `gitRoot`，虽然内部会调用 `getGitRoot()` 获取默认值，
-    但在 managed task worker 路径中 cwd 可能不是用户的项目目录，导致找不到匹配会话。
-
-  **4. initialMessages 优先级** (`packages/coding/src/agent.ts:979-982`)
-  - ✅ 逻辑正确：`initialMessages` 优先，否则从 storage 加载
-
-  **5. managed task worker 路径** (`packages/coding/src/task-engine.ts:4091-4096`)
-  - ⚠️ **潜在问题 2**: compact 策略下 `initialMessages` 设为 `undefined`，不传递原始历史。
-    虽然这是设计意图（compact 应该用 compactInitialMessages），但可能导致历史丢失。
-
-  **6. storage.list gitRoot 过滤** (`packages/repl/src/interactive/storage.ts:501-504`)
-  - ⚠️ **潜在问题 3**: 如果会话保存时没有记录 gitRoot（旧版本），
-    `sessionGitRoot` 为空字符串，会被过滤掉，导致找不到任何会话。
-
-- **Ambiguities**:
-  1. 用户描述可能指 LLM 没有接收历史（代码路径完整但可能有运行时故障）
-  2. 也可能指 UI 没有显示历史（不同的显示问题）
-  3. 需确认 `[Continuing session: xxx]` 横幅是否出现，以判断是加载阶段还是注入阶段的问题
-  4. 可能与特定 memory strategy 有关（compact vs continuous）
-
-- **Reproduction Steps** (待确认):
-  1. 在项目目录中启动 `kodax` 并进行多轮对话
-  2. 退出后执行 `kodax -c`
-  3. 检查是否出现 `[Continuing session: xxx]` 横幅
-  4. 询问 LLM 之前讨论的内容，确认是否记得
-
-- **Proposed Investigation**:
-  1. 添加调试日志确认 `storage.list()` 在 `agent.ts` 中是否返回有效会话
-  2. 确认 `initialMessages` 是否正确传递到 `runKodaX`
-  3. 检查旧版本保存的会话是否缺少 `gitRoot` 字段
-  4. 对比 `InkREPL` 和 `agent.ts` 中 `storage.list()` 的参数差异
-
-- **Context**:
-  - `src/cli_option_helpers.ts` - buildSessionOptions
-  - `src/kodax_cli.ts` - CLI -c 选项处理
-  - `packages/repl/src/ui/InkREPL.tsx` - 交互模式 session resume
-  - `packages/coding/src/agent.ts` - runKodaX session loading
-  - `packages/coding/src/task-engine.ts` - createWorkerSession
-  - `packages/repl/src/interactive/storage.ts` - FileSessionStorage.list
+- **Tests Added**:
+  - Resumable selection skips newer zero-message ACP placeholders and requests
+    the broad 1000-session scan.
+  - Classic `-c` startup loads the first non-empty conversation with its
+    messages, tag, and saved workspace runtime; an explicit ID wins even when a
+    resume flag is present.
+  - CAP-043 direct/SDK auto-resume skips empty placeholders and requests the
+    same broad scan.
+  - A built-artifact probe against the affected local session store selected
+    `20260722_071230` (43 messages) instead of the newest empty ACP record.
 
 ---
 
 ## Summary
-- Total: 90 (25 Open, 65 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 91 (25 Open, 66 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-23: Issue 204 resolved (v0.7.74)
+- Auto renders the configured/observed LLM or rules engine without a transient
+  bare state.
+- Per-Session Runtime setting writes are serialized so rapid mode cycling is
+  last-action-wins while sticky rules fallback remains explicit.
+
+### 2026-07-23: Issue 105 resolved (v0.7.74)
+- Made all `-c` entry paths skip empty placeholder sessions and scan beyond the
+  legacy ten-session list cap.
+- Restored resume loading in the classic REPL startup path.
 
 ### 2026-07-23: Issues 202-203 resolved (v0.7.74)
 - Kept canonical compaction checkpoints, first-kept pointers, and post-compact

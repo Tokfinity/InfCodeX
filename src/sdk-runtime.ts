@@ -4595,17 +4595,27 @@ function createRuntimeRunService(deps: {
         ...(input.origin !== undefined ? { origin: input.origin } : {}),
       };
     });
-    deps.bus.emitDurable('run.input.delivered', { inputs: batch }, {
+    const scope = {
       sessionId: record.sessionId,
       runId: record.runId,
       ...(record.turnId !== undefined ? { turnId: record.turnId } : {}),
-    }, () => {
-      for (const input of delivered) {
-        input.state = 'delivered';
-        input.deliveredAt = deliveredAt;
-        delete input.queueMessageId;
-      }
-    });
+    };
+    try {
+      deps.bus.emitDurable('run.input.delivered', { inputs: batch }, scope, () => {
+        for (const input of delivered) {
+          input.state = 'delivered';
+          input.deliveredAt = deliveredAt;
+          delete input.queueMessageId;
+        }
+      });
+    } catch (error: unknown) {
+      deps.bus.emit('runtime.warning', {
+        source: 'run.input.delivered',
+        message: `Failed to persist interrupt input delivery: ${normalizeError(error).message}`,
+        inputIds: delivered.map((input) => input.inputId),
+      }, scope);
+      throw error;
+    }
     publishRunUpdate(record);
   };
 

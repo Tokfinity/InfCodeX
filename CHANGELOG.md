@@ -6,7 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.74] - 2026-07-23
+## [0.7.74] - Release candidate (2026-07-23)
+
+> Code and documentation are prepared on the release branch. The `v0.7.74`
+> tag, GitHub Release, and npm publication are intentionally not created yet.
 
 ### Added
 
@@ -112,13 +115,30 @@ All notable changes to this project will be documented in this file.
   checkpoints still resume. Auto Mode treats bracket wildcards on PowerShell
   path parameters as incomplete and escalates them, while exact `LiteralPath`
   filenames containing brackets remain supported.
+- **Reliable continue-most-recent selection.** `kodax -c`, classic/Ink startup,
+  one-shot CLI execution, and coding-runtime auto-resume now scan beyond the
+  legacy ten-session window, skip zero-message ACP/bootstrap placeholders, and
+  preserve an explicit session ID. Interactive resume restores the saved
+  workspace runtime together with messages, UI history, lineage, artifacts,
+  extensions, title, tag, and session identity before the next turn.
+- **Deterministic Auto mode switching.** Entering Auto now displays the resolved
+  configured engine immediately instead of a transient bare `Auto`, and Runtime
+  setting writes are serialized per Session so rapid shortcut cycling is
+  last-action-wins. Persisted or automatic `Auto[RULES]` fallback remains sticky
+  by design and can be changed explicitly with `/auto-engine llm`.
+- **Release-review debt closure.** Imperative manual compaction now reconciles
+  the exact flat Session history into lineage before creating the compaction
+  island. A failed durable interrupt-delivery event leaves the input queued,
+  rethrows the persistence error, and emits a bounded `runtime.warning` without
+  copying user input content into diagnostics.
 
 ### Documentation
 
 - Root and generated JSONC templates, both READMEs, architecture/design docs,
   the SDK embedder guide, feature/issue trackers, release verification guide,
   package READMEs, and `kodax_manual` now describe the complete v0.7.74
-  compaction, mailbox-wait, active-run input, Goal-tool, and recovery contracts.
+  compaction, mailbox-wait, active-run input, Goal-tool, resume, Auto-switch,
+  and recovery contracts.
 
 ## [0.7.73] - 2026-07-20
 

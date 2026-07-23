@@ -102,6 +102,12 @@ session。Session 也可设置 classifier model 和有界 timeout；`auto` 默�
 不会向模型暴露 `exit_plan_mode`。完整 SDK 接入见
 [Runtime Auto Mode 指引](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072)。
 
+**v0.7.74 Auto 切换可靠性：**默认用 `Shift+Tab` 在 `Plan -> Edits -> Auto`
+之间循环，`Shift+Enter` 仍用于换行。进入 Auto 时状态栏会立即显示已解析的
+`Auto[LLM]` 或 `Auto[RULES]`，同一 Session 的 Runtime 设置按键入顺序串行提交，
+快速循环不会让较早的异步结果覆盖最后一次选择。`Auto[RULES]` 可能是自动降级或
+手动选择后的合法粘性状态；使用 `/auto-engine llm` 可显式恢复 LLM 分类。
+
 ## 为什么用 KodaX
 
 <table>
@@ -628,6 +634,12 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 **宿主读持久化历史（FEATURE_230 + FEATURE_234，v0.7.51；v0.7.63 hardening）**：面向「宿主读持久化状态」的 additive 闭环。**持久化工具记录回放**——resume 的会话现在会回放助手用过的工具卡片，而不是退化成纯文本。`messages` / `lineage` 仍是 canonical；`SessionData.uiHistory` 成为有界、脱敏、仅 terminal 状态的回放缓存。SDK transcript 契约明确化：`loadSession()` = 活动 model context，`loadFullTranscript()` = 带结构化条目的追加序 host scrollback（`message` / `compaction` / `branch_summary` / `rewind_marker` / `client_notice` / `task_result`）并带 clone provenance（`logicalId` / `sourceEntryId`），`uiHistory` = 可选回放缓存，工具卡片始终可从 canonical messages 重建。宿主可用 `appendClientNotice()` 持久化本地 slash 输出且不进入模型上下文；workflow/child 完成结果通过结构化 `taskResults[]` 暴露，不再要求解析 `<task-completed>` 文本。`rewind_marker` 只用于 host scrollback 审计，不进入 model-context messages。**Workflow run 宿主归属**——`WorkflowProcessTrackerOptions` / `WorkflowProcessSnapshot` 新增 host-owned 不透明 `hostMetadata?: Record<string, string>`，SDK 存储、持久化进 `run.json`、回读回显（含进程重启后）但不解释其含义，让宿主零侧表把 run 归回发起它的 session/surface。未 stamp 的旧 run 诚实回显 `hostMetadata === undefined`。详见 [docs/features/v0.7.51.md](docs/features/v0.7.51.md)。
 
 **会话恢复与 ACP 污染修复（FEATURE_261，v0.7.67）**：直接运行 `kodax -r` 会进入可搜索、上下选择、Tab 补全和翻页的交互式会话选择器，并显示当前选中项的完整 session ID；`kodax -r <值>` 优先按完整 ID 恢复，ID 不存在时再按忽略大小写的完整标题匹配。标题唯一则直接恢复，同名标题则进入只包含候选项的选择器，绝不静默选第一条。`listSessions()` / Runtime / daemon 会话列表新增 `surface` 精确过滤和不透明 `cursor` 分页。ACP session 改为收到首个有效 prompt 后才持久化，ACP 测试强制使用临时 runtime home，避免测试记录写入真实 `~/.kodax/sessions`。`kodax -s cleanup-acp` 只预览严格匹配的空 ACP 污染记录；仅显式追加 `--apply-session-cleanup` 时才归档，不做永久删除。
+
+**v0.7.74 最近会话恢复闭环：**`kodax -c`、Ink/Classic 启动、单次 CLI 与 coding
+runtime auto-resume 都会扫描最多 1000 条最新摘要并跳过 `msgCount=0` 的 ACP/bootstrap
+占位会话；显式 session ID 始终优先。交互式恢复会在下一轮前恢复保存的 workspace
+runtime、消息、UI 历史、lineage、artifact、extension 状态、标题、tag 与 session ID，
+因此相对 shell 命令不会错误地落回启动目录。
 
 **实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 

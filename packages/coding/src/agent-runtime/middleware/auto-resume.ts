@@ -176,14 +176,14 @@ export function appendPromptIfNotDuplicate(
  *   - autoResume / resume flag is not set
  *   - storage is not configured
  *   - storage has no `list` method
- *   - storage.list() returns an empty array
+ *   - storage.list() returns no non-empty session
  *   - explicit `options.session.id` was already supplied (caller wins)
  *
  * The caller is expected to fall back to `generateSessionId()` when
  * this returns undefined.
  *
- * Behaviour preserved verbatim from `agent.ts:391-401` baseline.
- * Extracted during FEATURE_100 P3.6n.
+ * Empty placeholder sessions are intentionally ignored so ACP/bootstrap
+ * records cannot shadow the latest real conversation.
  */
 export async function discoverAutoResumeSessionId(
   options: KodaXOptions,
@@ -209,6 +209,9 @@ export async function discoverAutoResumeSessionId(
   // 173 anyway, so undefined gitRoot (= "list all projects") here is
   // safe — first-most-recent is still a reasonable choice when no
   // project intent exists.
-  const sessions = await storage.list(options.context?.gitRoot ?? undefined);
-  return sessions.length > 0 ? sessions[0]!.id : undefined;
+  const sessions = await storage.list(
+    options.context?.gitRoot ?? undefined,
+    { limit: 1000 },
+  );
+  return sessions.find((session) => session.msgCount > 0)?.id;
 }

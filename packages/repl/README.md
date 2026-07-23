@@ -24,6 +24,13 @@ effective threshold wins. Runtime-backed REPL paths let the Runtime own the
 durable compact transaction and update only the local live projection after its
 acknowledgement.
 
+`session.resume` / `session.autoResume` selects the newest non-empty
+conversation from a broad scan and skips zero-message ACP/bootstrap records.
+The rule is shared by Ink and classic startup, and explicit IDs win. Both
+interactive surfaces restore persisted workspace/runtime identity before the
+next turn. Shift-Tab cycles Plan -> Edits -> Auto while Shift+Enter inserts a
+newline; Auto displays its configured/persisted LLM or rules engine immediately.
+
 ## 安装 / 导入
 
 ```bash
@@ -148,7 +155,7 @@ Session-only consumers can import the same session APIs from `@kodax-ai/kodax/se
 - Entrypoints: `runInkInteractiveMode`, `runInteractiveMode`, `processSpecialSyntax`
 - Commands: `InteractiveContext`, `parseCommand`, `executeCommand`, `BUILTIN_COMMANDS`
 - Config: `loadConfig`, `prepareRuntimeConfig`, `saveConfig`, custom-provider CRUD, MCP-server CRUD
-- Sessions: `FileSessionStorage`, `listSessions`, `loadSession`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
+- Sessions: `FileSessionStorage`, `findMostRecentResumableSession`, `listSessions`, `loadSession`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
 - Permissions: `computeConfirmTools`, `isPermissionMode`, `isToolCallAllowed`, `getPlanModeBlockReason`
 - Headless events: JSON/CLI event output includes `sidecar.message` for Sidecar Verifier `revise` / `blocked` messages
 - UI exports: `App`, `SimpleApp`, hooks, contexts, components, terminal-host utilities

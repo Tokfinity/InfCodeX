@@ -138,6 +138,12 @@ engine for later turns. Classifier model/timeout, project boundary, execution
 directory, and provider/model are part of the guardrail reuse key, so a setting
 change gets a fresh guardrail rather than stale classification state.
 
+REPL-to-Runtime Auto settings are serialized per Session. The UI may project the
+configured engine immediately while the owner acknowledgement is pending, then
+reconcile to the persisted engine; this prevents both a transient bare `Auto`
+label and out-of-order completion of rapid mode changes. Persisted rules fallback
+is not reset merely by leaving and re-entering Auto.
+
 The classifier input boundary is owned by `classify`, not by individual
 guardrail callers. It projects the current action independently and sanitizes
 the accumulated Runner transcript into a UTF-8-byte-bounded factual subset.
@@ -299,6 +305,11 @@ requirements span both product and SDK:
 - searchable bare-resume selection that defers the full CLI load until a
   selection, returns Esc directly to the invoking terminal, and hands stdin to
   the resumed REPL only after selection;
+- one shared continue-most-recent rule that scans a broad newest-first page,
+  skips zero-message placeholders, preserves explicit IDs, and is used by Ink,
+  classic, one-shot CLI, and coding-runtime auto-resume;
+- interactive resume restores persisted workspace/runtime identity before
+  shell execution, workflow project-key derivation, or the next model turn;
 - original per-event history timestamps retained through replay rather than a
   render-time timestamp applied to every message;
 - tags, filters, archive state, and project-aware storage evolution;

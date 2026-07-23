@@ -3276,6 +3276,13 @@ describe('createKodaXRuntime', () => {
       runId: run.runId,
       type: 'run.input.delivered',
     })).resolves.toEqual([]);
+    const warnings = await runtime.events.replay({
+      runId: run.runId,
+      type: 'runtime.warning',
+    });
+    expect(warnings.some((event) => (
+      (event.payload as Record<string, unknown>).source === 'run.input.delivered'
+    ))).toBe(true);
 
     await runtime.runs.abort(run.runId);
     await expectSettles(run.result, 'interrupt persistence failure abort result');

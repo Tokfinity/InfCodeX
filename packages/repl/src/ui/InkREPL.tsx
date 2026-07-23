@@ -317,6 +317,7 @@ import {
   restoreHistoryItemsFromSession,
   trimPersistedUiHistorySnapshot,
 } from "./utils/restore-history.js";
+import { findMostRecentResumableSession } from "../session/resumable-session.js";
 export { restoreHistoryItemsFromSession, trimPersistedUiHistorySnapshot };
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
 import { createRecoveryHistoryItem, createRetryHistoryItem } from "./utils/retry-history.js";
@@ -460,7 +461,10 @@ import {
   shouldRenderPromptActivityInFooter,
 } from "./view-models/surface-liveness.js";
 import { resolveEffectiveCompactionInfo } from "./view-models/compaction-info.js";
-import { buildSurfaceStatusBarProps } from "./view-models/surface-status.js";
+import {
+  buildSurfaceStatusBarProps,
+  resolveSurfaceAutoModeEngine,
+} from "./view-models/surface-status.js";
 import { buildTranscriptSearchChrome } from "./view-models/transcript-search.js";
 
 import {
@@ -3901,11 +3905,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // further down so manual + automatic engine flips both refresh the bar.
   const [autoModeEngine, setAutoModeEngineState] = useState<'llm' | 'rules' | undefined>(
     () =>
-      isAutoMode(currentConfig.permissionMode)
-        ? options.runtimeAutoModeControl
+      resolveSurfaceAutoModeEngine(
+        currentConfig.permissionMode,
+        options.runtimeAutoModeControl
           ? undefined
-          : autoModeBootstrap.getGuardrail().getEngine()
-        : undefined,
+          : autoModeBootstrap.getGuardrail().getEngine(),
+        autoModeSettings.engine,
+      ),
   );
   useEffect(() => {
     if (!options.runtimeAutoModeControl) {
@@ -3921,6 +3927,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       );
       return;
     }
+    setAutoModeEngineState((engine) =>
+      resolveSurfaceAutoModeEngine(
+        currentConfig.permissionMode,
+        engine,
+        autoModeSettings.engine,
+      ));
     let active = true;
     const refresh = async (): Promise<void> => {
       const stats = await options.runtimeAutoModeControl?.syncSettings?.(
@@ -3928,13 +3940,25 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         currentConfig.permissionMode,
         autoModeSettings,
       ) ?? await options.runtimeAutoModeControl?.getStats(context.sessionId);
-      if (active) setAutoModeEngineState(stats?.engine);
+      if (active) {
+        setAutoModeEngineState(resolveSurfaceAutoModeEngine(
+          currentConfig.permissionMode,
+          stats?.engine,
+          autoModeSettings.engine,
+        ));
+      }
     };
     void refresh();
     const subscription = options.runtimeAutoModeControl.subscribe?.(
       context.sessionId,
       (stats) => {
-        if (active) setAutoModeEngineState(stats?.engine);
+        if (active) {
+          setAutoModeEngineState(resolveSurfaceAutoModeEngine(
+            currentConfig.permissionMode,
+            stats?.engine,
+            autoModeSettings.engine,
+          ));
+        }
       },
     );
     return () => {
@@ -5111,6 +5135,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [context]);
   // Permission-related refs (not part of KodaXOptions anymore)
   const permissionModeRef = useRef<PermissionMode>(currentConfig.permissionMode);
+  const permissionModeUpdateRef = useRef(0);
   useEffect(() => {
     permissionModeRef.current = currentConfig.permissionMode;
   }, [currentConfig.permissionMode]);
@@ -5153,13 +5178,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, []);
 
   const setSessionPermissionMode = useCallback(async (mode: PermissionMode): Promise<void> => {
+    const updateId = ++permissionModeUpdateRef.current;
+    setCurrentConfig((prev) => ({ ...prev, permissionMode: mode }));
+    permissionModeRef.current = mode;
+    setAutoModeEngineState(resolveSurfaceAutoModeEngine(
+      mode,
+      undefined,
+      autoModeSettings.engine,
+    ));
     const runtimeStats = await options.runtimeAutoModeControl?.syncSettings?.(
       context.sessionId,
       mode,
       autoModeSettings,
     );
-    setCurrentConfig((prev) => ({ ...prev, permissionMode: mode }));
-    permissionModeRef.current = mode;
+    if (updateId !== permissionModeUpdateRef.current) return;
     const modeEffortResolution = resolveProviderReasoningRuntimeEffort({
       provider: currentConfigRef.current.provider,
       model: currentConfigRef.current.model,
@@ -5187,7 +5219,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       setAutoModeEngineState(undefined);
     } else if (options.runtimeAutoModeControl) {
       const stats = runtimeStats ?? await options.runtimeAutoModeControl.getStats(context.sessionId);
-      setAutoModeEngineState(stats?.engine);
+      setAutoModeEngineState(resolveSurfaceAutoModeEngine(
+        mode,
+        stats?.engine,
+        autoModeSettings.engine,
+      ));
     } else {
       setAutoModeEngineState(autoModeBootstrap.getGuardrail().getEngine());
     }
@@ -10438,31 +10474,28 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       console.log(chalk.green(`[Session loaded: ${sessionId}]`));
     }
   }
-  // -c or autoResume: Load most recent session
+  // -c or autoResume: Load most recent non-empty session
   else if (options.session?.resume || options.session?.autoResume) {
-    const sessions = await storage.list(gitRoot);
-    if (sessions.length > 0) {
-      const recentSession = sessions[0];
-      if (recentSession) {
-        const loaded = await storage.load(recentSession.id);
-        if (loaded) {
-          existingMessages = loaded.messages;
-          existingUiHistory = normalizePersistedUiHistory(loaded.uiHistory);
-          existingLineage = loaded.lineage;
-          existingArtifactLedger = loaded.artifactLedger;
-          existingExtensionState = loaded.extensionState;
-          existingExtensionRecords = loaded.extensionRecords;
-          sessionTitle = loaded.title;
-          sessionId = recentSession.id;
-          activeRuntimeInfo = resolveSessionRuntimeInfo(loaded) ?? startupRuntime;
-          activeGitRoot = activeRuntimeInfo.workspaceRoot ?? undefined;
-          // FEATURE_226: carry the resumed session's tag into options.
-          options = {
-            ...options,
-            session: { ...(options.session ?? {}), tag: loaded.tag },
-          };
-          console.log(chalk.green(`[Continuing session: ${recentSession.id}]`));
-        }
+    const recentSession = await findMostRecentResumableSession(storage, gitRoot);
+    if (recentSession) {
+      const loaded = await storage.load(recentSession.id);
+      if (loaded) {
+        existingMessages = loaded.messages;
+        existingUiHistory = normalizePersistedUiHistory(loaded.uiHistory);
+        existingLineage = loaded.lineage;
+        existingArtifactLedger = loaded.artifactLedger;
+        existingExtensionState = loaded.extensionState;
+        existingExtensionRecords = loaded.extensionRecords;
+        sessionTitle = loaded.title;
+        sessionId = recentSession.id;
+        activeRuntimeInfo = resolveSessionRuntimeInfo(loaded) ?? startupRuntime;
+        activeGitRoot = activeRuntimeInfo.workspaceRoot ?? undefined;
+        // FEATURE_226: carry the resumed session's tag into options.
+        options = {
+          ...options,
+          session: { ...(options.session ?? {}), id: sessionId, tag: loaded.tag },
+        };
+        console.log(chalk.green(`[Continuing session: ${recentSession.id}]`));
       }
     }
   }

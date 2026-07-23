@@ -8,6 +8,11 @@
 > telemetry, restores only explicitly pending root completions after restart,
 > and keeps progress observable without making it a model wake signal. Active
 > Runtime Runs also accept ordered user input at safe Runner boundaries.
+> Release-candidate closure makes continue-most-recent a shared non-empty
+> Session selection invariant across CLI/REPL/coding entry points and restores
+> saved workspace identity before resumed execution. It also serializes
+> per-Session Auto setting writes and gives the UI a configured engine projection
+> while awaiting owner acknowledgement; sticky `Auto[RULES]` remains deliberate.
 >
 > **v0.7.73 onboarding/Auto reliability addendum:** FEATURE_271 keeps first-run
 > provider setup metadata-only and pre-Runtime, while the Runtime-owned Auto LLM

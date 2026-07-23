@@ -159,6 +159,7 @@ import {
   runInteractiveMode,
   runInkInteractiveMode,
   runSessionPicker,
+  findMostRecentResumableSession,
   inspectProviderSetupReadiness,
   providerSetupRestartInstructions,
   runProviderSetupWizard,
@@ -461,6 +462,19 @@ interface InteractiveRuntimeRunnerInput {
 
 export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAutoModeControl {
   const initializedSessions = new Set<string>();
+  const pendingSettingsUpdates = new Map<string, Promise<unknown>>();
+  const enqueueSettingsUpdate = <T>(sessionId: string, update: () => Promise<T>): Promise<T> => {
+    const previous = pendingSettingsUpdates.get(sessionId) ?? Promise.resolve();
+    const next = previous.then(update, update);
+    let tracked: Promise<T>;
+    tracked = next.finally(() => {
+      if (pendingSettingsUpdates.get(sessionId) === tracked) {
+        pendingSettingsUpdates.delete(sessionId);
+      }
+    });
+    pendingSettingsUpdates.set(sessionId, tracked);
+    return tracked;
+  };
   const readStats = async (sessionId: string) => {
     try {
       return await runtime.sessions.getAutoModeStats(sessionId);
@@ -479,24 +493,28 @@ export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRun
       return readStats(sessionId);
     },
     async setEngine(sessionId, engine) {
-      await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
-      await runtime.sessions.updateSettings(sessionId, { autoModeEngine: engine });
-      initializedSessions.add(sessionId);
-      return runtime.sessions.getAutoModeStats(sessionId);
+      return enqueueSettingsUpdate(sessionId, async () => {
+        await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
+        await runtime.sessions.updateSettings(sessionId, { autoModeEngine: engine });
+        initializedSessions.add(sessionId);
+        return runtime.sessions.getAutoModeStats(sessionId);
+      });
     },
     async syncSettings(sessionId, permissionMode, settings) {
-      await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
-      const initializeEngine = !initializedSessions.has(sessionId)
-        && (await runtime.sessions.getSettings(sessionId)).autoModeEngine === undefined;
-      await runtime.sessions.updateSettings(sessionId, {
-        permissionMode,
-        ...(initializeEngine ? { autoModeEngine: settings.engine } : {}),
-        autoModeClassifierModel: settings.classifierModel ?? null,
-        autoModeTimeoutMs: settings.timeoutMs ?? null,
-        autoModeSpeculativeWindowMs: settings.speculativeWindowMs ?? null,
+      return enqueueSettingsUpdate(sessionId, async () => {
+        await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
+        const initializeEngine = !initializedSessions.has(sessionId)
+          && (await runtime.sessions.getSettings(sessionId)).autoModeEngine === undefined;
+        await runtime.sessions.updateSettings(sessionId, {
+          permissionMode,
+          ...(initializeEngine ? { autoModeEngine: settings.engine } : {}),
+          autoModeClassifierModel: settings.classifierModel ?? null,
+          autoModeTimeoutMs: settings.timeoutMs ?? null,
+          autoModeSpeculativeWindowMs: settings.speculativeWindowMs ?? null,
+        });
+        initializedSessions.add(sessionId);
+        return readStats(sessionId);
       });
-      initializedSessions.add(sessionId);
-      return readStats(sessionId);
     },
     subscribe(sessionId, listener) {
       let active = true;
@@ -665,8 +683,11 @@ async function runCliTaskWithRuntime(
 async function resolveCliTaskSessionId(options: KodaXOptions): Promise<string> {
   if (options.session?.id) return options.session.id;
   if ((options.session?.resume || options.session?.autoResume) && options.session.storage?.list) {
-    const sessions = await options.session.storage.list(options.context?.gitRoot ?? undefined);
-    if (sessions[0]?.id) return sessions[0].id;
+    const recent = await findMostRecentResumableSession(
+      options.session.storage,
+      options.context?.gitRoot ?? undefined,
+    );
+    if (recent) return recent.id;
   }
   return generateSessionId();
 }
@@ -1787,7 +1808,7 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  KodaX automatically saves conversation sessions, allowing you to'));
     console.log(chalk.dim('  resume work later or switch between different conversations.\n'));
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  -c, --continue       ') + 'Continue most recent conversation');
+    console.log(chalk.dim('  -c, --continue       ') + 'Continue most recent non-empty conversation');
     console.log(chalk.dim('  -r, --resume [value] ') + 'Resume by ID or exact title (no value = searchable picker)');
     console.log(chalk.dim('  -n, --new            ') + 'Legacy no-op; current CLI already starts a fresh session by default');
     console.log(chalk.dim('  -s, --session <op>   ') + 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
@@ -1929,7 +1950,7 @@ export function configureKodaXRootCommand(program: Command): Command {
     .option('-p, --print <text>', 'Print mode: run single task and exit')
     .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
     .option('--runtime-mode <mode>', 'Interactive runtime mode: embedded, daemon', parseRuntimeModeOption)
-    .option('-c, --continue', 'Continue most recent conversation in current directory')
+    .option('-c, --continue', 'Continue most recent non-empty conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
     .option('-r, --resume [id-or-title]', 'Resume session by ID or exact title (no value = open searchable session picker)')
     .option('-m, --provider <name>', 'LLM provider')
@@ -2153,7 +2174,7 @@ function showBasicHelp(): void {
   console.log('  -h, --help [TOPIC]      Show help, or detailed help for a topic');
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
   console.log('  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI');
-  console.log('  -c, --continue          Continue most recent conversation');
+  console.log('  -c, --continue          Continue most recent non-empty conversation');
   console.log('  -r, --resume [value]    Resume by ID or exact title (no value = searchable picker)');
   console.log('  -n, --new               Legacy no-op; current CLI already starts a fresh session by default');
   console.log(`  -m, --provider NAME     LLM provider (${providerNames})`);
@@ -2380,8 +2401,8 @@ _kodax() {
     '--print+[Print mode]:text:' \\
     '--mode+[Output mode]:mode:(json)' \\
     '--runtime-mode+[Interactive runtime mode]:mode:(embedded daemon)' \\
-    '-c[Continue most recent conversation]' \\
-    '--continue[Continue most recent conversation]' \\
+    '-c[Continue most recent non-empty conversation]' \\
+    '--continue[Continue most recent non-empty conversation]' \\
     '-n[Start fresh session]' \\
     '--new[Start fresh session]' \\
     '-r[Resume session by ID or exact title]::id-or-title:' \\

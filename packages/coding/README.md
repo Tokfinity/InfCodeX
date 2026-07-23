@@ -30,6 +30,11 @@ permission bridge. A host only receives a permission request for an explicit
 guardrail escalation; Runtime sessions retain the selected/fallback LLM or
 rules engine across turns.
 
+When `session.autoResume` or `session.resume` is set without an explicit ID,
+the coding-runtime middleware requests a broad newest-first list and selects the
+first record with `msgCount > 0`; empty ACP/bootstrap placeholders cannot shadow
+the latest real conversation. A caller-provided ID always wins.
+
 ## 安装 / 导入
 
 ```bash

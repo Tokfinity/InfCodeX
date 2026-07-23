@@ -84,6 +84,44 @@ describe('interactive daemon runtime bridge', () => {
     });
   });
 
+  it('serializes rapid permission-mode changes so the last shortcut wins', async () => {
+    let persistedMode = 'accept-edits';
+    let releaseFirstUpdate: (() => void) | undefined;
+    const firstUpdateBlocked = new Promise<void>((resolve) => {
+      releaseFirstUpdate = resolve;
+    });
+    let updateCount = 0;
+    const updateSettings = vi.fn(async (_sessionId: string, patch: { permissionMode?: string }) => {
+      updateCount += 1;
+      if (updateCount === 1) await firstUpdateBlocked;
+      if (patch.permissionMode !== undefined) persistedMode = patch.permissionMode;
+      return { permissionMode: persistedMode };
+    });
+    const runtime = {
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        getSettings: vi.fn(async () => ({ permissionMode: persistedMode })),
+        updateSettings,
+        getAutoModeStats: vi.fn(async () => ({
+          engine: 'llm' as const,
+          denials: {},
+          breaker: {},
+        })),
+      },
+    } as unknown as KodaXRuntime;
+    const control = createReplRuntimeAutoModeControl(runtime);
+
+    const first = control.syncSettings?.('session-1', 'plan', { engine: 'llm' });
+    const second = control.syncSettings?.('session-1', 'auto', { engine: 'llm' });
+    await vi.waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    releaseFirstUpdate?.();
+    await Promise.all([first, second]);
+
+    expect(persistedMode).toBe('auto');
+  });
+
   it('builds an explicit JSON-safe run-options DTO for bridged callbacks', () => {
     const controller = new AbortController();
     const options = {

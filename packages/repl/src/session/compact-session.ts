@@ -16,6 +16,7 @@ import {
   applySessionCompaction,
   buildPostCompactAttachments,
   compact,
+  createSessionLineage,
   estimateTokens,
   getSessionMessagesFromLineage,
   normalizeCompactionConfig,
@@ -156,8 +157,9 @@ export async function compactSession(
     const freedTokens = Math.max(0, (result.tokensBefore ?? 0) - (result.tokensAfter ?? 0));
     const { ledgerMessage } = buildPostCompactAttachments(ledger, freedTokens);
     const postCompactAttachments = ledgerMessage ? [ledgerMessage] : [];
+    const exactBase = createSessionLineage(messages, data.lineage);
     const preliminaryLineage = applySessionCompaction(
-      data.lineage,
+      exactBase,
       result.messages,
       anchor,
       postCompactAttachments,

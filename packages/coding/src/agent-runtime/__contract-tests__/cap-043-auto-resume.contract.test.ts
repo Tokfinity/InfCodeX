@@ -5,7 +5,8 @@
  *
  * Test obligations:
  * - CAP-AUTO-RESUME-001: when autoResume is set and no explicit
- *   session.id is provided, picks sessions[0].id from storage.list()
+ *   session.id is provided, skips empty placeholders and picks the newest
+ *   resumable session from storage.list()
  * - CAP-AUTO-RESUME-002: explicit session.id wins over autoResume
  * - CAP-AUTO-RESUME-003: returns undefined when neither autoResume
  *   nor resume flag is set
@@ -33,7 +34,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { discoverAutoResumeSessionId } from '../middleware/auto-resume.js';
 import type { KodaXOptions } from '../../types.js';
 
-function makeStorage(sessions: { id: string }[]) {
+function makeStorage(sessions: { id: string; msgCount: number }[]) {
   return {
     list: vi.fn().mockResolvedValue(sessions),
     save: vi.fn(),
@@ -43,17 +44,21 @@ function makeStorage(sessions: { id: string }[]) {
 }
 
 describe('CAP-043: autoResume session discovery contract', () => {
-  it('CAP-AUTO-RESUME-001: when autoResume is set and no explicit id, returns sessions[0].id from storage.list()', async () => {
-    const storage = makeStorage([{ id: 'sess-newest' }, { id: 'sess-older' }]);
+  it('CAP-AUTO-RESUME-001: skips newer empty placeholders and returns the newest resumable session', async () => {
+    const storage = makeStorage([
+      { id: 'empty-placeholder', msgCount: 0 },
+      { id: 'sess-newest', msgCount: 4 },
+      { id: 'sess-older', msgCount: 8 },
+    ]);
     const id = await discoverAutoResumeSessionId({
       session: { autoResume: true, storage },
     } as unknown as KodaXOptions);
     expect(id).toBe('sess-newest');
-    expect(storage.list).toHaveBeenCalledOnce();
+    expect(storage.list).toHaveBeenCalledWith(undefined, { limit: 1000 });
   });
 
   it('CAP-AUTO-RESUME-001b: `resume: true` is treated identically to `autoResume: true`', async () => {
-    const storage = makeStorage([{ id: 'first' }]);
+    const storage = makeStorage([{ id: 'first', msgCount: 1 }]);
     const id = await discoverAutoResumeSessionId({
       session: { resume: true, storage },
     } as unknown as KodaXOptions);
@@ -61,7 +66,7 @@ describe('CAP-043: autoResume session discovery contract', () => {
   });
 
   it('CAP-AUTO-RESUME-002: explicit session.id wins — list() is NOT called', async () => {
-    const storage = makeStorage([{ id: 'should-not-be-used' }]);
+    const storage = makeStorage([{ id: 'should-not-be-used', msgCount: 1 }]);
     const id = await discoverAutoResumeSessionId({
       session: { id: 'explicit-id', autoResume: true, storage },
     } as unknown as KodaXOptions);
@@ -70,7 +75,7 @@ describe('CAP-043: autoResume session discovery contract', () => {
   });
 
   it('CAP-AUTO-RESUME-003: returns undefined when neither autoResume nor resume is set', async () => {
-    const storage = makeStorage([{ id: 'sess-1' }]);
+    const storage = makeStorage([{ id: 'sess-1', msgCount: 1 }]);
     const id = await discoverAutoResumeSessionId({
       session: { storage },
     } as unknown as KodaXOptions);

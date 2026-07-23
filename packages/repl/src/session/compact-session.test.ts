@@ -18,7 +18,10 @@ vi.mock('@kodax-ai/agent', async (importOriginal) => {
 });
 
 import {
+  COMPACTED_HISTORY_RECOVERY_GUIDANCE,
+  COMPACTION_SUMMARY_PREFIX,
   compact as mockedCompact,
+  createSessionLineage,
   estimateTokens,
   getSessionMessagesFromLineage,
   type CompactionResult,
@@ -76,6 +79,49 @@ describe('FEATURE_247 R6: compactSession', () => {
   it('createSessionManager exposes a compactSession method', () => {
     const mgr = createSessionManager({ sessionsDir: tmpDir('mgr') });
     expect(typeof mgr.compactSession).toBe('function');
+  });
+
+  it('captures the exact flat history before compacting a stale lineage', async () => {
+    const storage = new FileSessionStorage({ sessionsDir: tmpDir('exact-base') });
+    const exactMessages = [
+      { role: 'user' as const, content: 'exact request' },
+      { role: 'assistant' as const, content: 'EXACT_RESPONSE_MISSING_FROM_LINEAGE' },
+    ];
+    const load = vi.spyOn(storage, 'load').mockResolvedValue({
+      messages: exactMessages,
+      title: 'Exact base',
+      gitRoot: '/tmp/x',
+      lineage: createSessionLineage([exactMessages[0]!]),
+    });
+    const save = vi.spyOn(storage, 'save').mockResolvedValue(undefined);
+    const summary = 'Exact-base summary.';
+    compactMock.mockResolvedValue({
+      compacted: true,
+      messages: [{
+        role: 'user',
+        content: `${COMPACTION_SUMMARY_PREFIX}${summary}${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
+        _source: 'compaction-checkpoint',
+        _synthetic: true,
+      }],
+      summary,
+      tokensBefore: 1_000,
+      tokensAfter: 20,
+      entriesRemoved: 2,
+      anchor: { summary, reason: 'manual' },
+    } satisfies CompactionResult);
+
+    await compactSession('exact-base', { storage, provider: 'anthropic' });
+
+    expect(load).toHaveBeenCalledWith('exact-base');
+    const saved = save.mock.calls[0]?.[1];
+    expect(saved?.lineage?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'message',
+        message: expect.objectContaining({
+          content: 'EXACT_RESPONSE_MISSING_FROM_LINEAGE',
+        }),
+      }),
+    ]));
   });
 
   it('includes post-compact attachments in returned and persisted token counts', async () => {

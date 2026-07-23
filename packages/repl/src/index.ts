@@ -196,6 +196,7 @@ export type {
 
 // === 会话存储 ===
 export { FileSessionStorage } from "./interactive/storage.js";
+export { findMostRecentResumableSession } from "./session/resumable-session.js";
 export {
   dedupeSessions,
   type SessionDedupeMatch,

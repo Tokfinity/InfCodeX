@@ -2,8 +2,8 @@
 
 > Last updated: 2026-07-23
 >
-> Current release baseline: `v0.7.74`
-> (`@kodax-ai/kodax@0.7.74` workspace package)
+> Current workspace baseline: `v0.7.74` release candidate
+> (`@kodax-ai/kodax@0.7.74`; latest tagged release is `v0.7.73`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -111,6 +111,11 @@ persists these settings, advertises them through daemon capability negotiation,
 and uses them to build a session-owned auto guardrail. Changing classifier
 model or timeout invalidates the cached guardrail; an automatic LLM-to-rules
 fallback updates `autoModeEngine` for the next run.
+
+`createReplRuntimeAutoModeControl()` serializes `syncSettings()` and
+`setEngine()` writes per Session. Ink renders the configured engine immediately
+when Auto is selected and reconciles with `getAutoModeStats()` or settings
+events; a missing observation never produces a transient fourth/bare Auto state.
 
 For Auto permission mode, an omitted engine is normalized to `llm` for both
 preflight and guardrail ownership. Missing/blank/malformed classifier identity
@@ -346,6 +351,12 @@ path. Permission `inputPreview` is a bounded, credential-redacted JSON object
 that remains parseable even for a large write input and records the effective
 execution directory. Tool exposure removes `exit_plan_mode` unless an
 `events.exitPlanMode` approval bridge exists for the active run.
+
+The default terminal bindings keep Shift-Tab for the three permission modes and
+Shift+Enter for newline input. Rapid Shift-Tab changes enter the per-Session
+Runtime settings queue in input order, so the final visible mode is also the
+final persisted mode. `Auto[RULES]` remains a valid sticky fallback state;
+`/auto-engine llm` changes it explicitly.
 
 Do not add a new permission bypass path for convenience. Route effects through
 the tool layer or an existing capability API.
@@ -644,6 +655,13 @@ starts the picker without importing the complete CLI, pauses/references stdin
 only for a selected-session handoff, and pauses/unreferences it on Esc. Session
 replay uses the persisted event timestamp for each message/tool record instead
 of one `Date.now()` value at render time.
+
+`findMostRecentResumableSession()` is the shared REPL/CLI selector. It requests
+up to 1000 newest summaries and returns the first `msgCount > 0` record. The
+coding-layer CAP-043 middleware mirrors that rule without depending on REPL.
+Classic startup now restores the same messages, UI history, lineage, artifact
+ledger, extension state, title, tag, Session ID, and normalized runtime/workspace
+identity as Ink. Explicit IDs short-circuit discovery in both layers.
 
 ## 17. Construction And Self-Modification
 

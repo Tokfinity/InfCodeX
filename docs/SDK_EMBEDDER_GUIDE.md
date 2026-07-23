@@ -723,6 +723,21 @@ await appendClientNotice('s_my_chat', {
 });
 ```
 
+### Auto-resume selection in v0.7.74
+
+With `session.autoResume: true` (or `resume: true`) and no explicit ID, KodaX
+calls `storage.list(context.gitRoot, { limit: 1000 })` and chooses the first
+newest-first summary whose `msgCount > 0`. This prevents newer zero-message
+ACP/bootstrap placeholders from shadowing a real conversation. An explicit
+`session.id` always wins. Custom `KodaXSessionStorage` implementations should
+therefore honor the optional `limit` argument and return `msgCount` accurately;
+they may return fewer than 1000 records.
+
+The standalone interactive CLI additionally restores the persisted
+workspace/runtime identity before the next turn. SDK embedders still own
+`context.gitRoot`, `context.executionCwd`, and storage construction; do not rely
+on process cwd as a substitute for host-owned runtime context.
+
 ### What `createSessionManager()` returns (v0.7.43+)
 
 ```ts
@@ -4605,4 +4620,4 @@ only prevents high-frequency progress from becoming a model control signal.
 - [docs/ADR.md ADR-057](ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction) — v0.7.74 compaction and exact-history ownership
 - [docs/ADR.md ADR-058](ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry) — mailbox control versus Actor telemetry
 - [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
-- [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release design and verification record
+- [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release-candidate design and verification record

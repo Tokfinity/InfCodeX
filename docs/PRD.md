@@ -137,6 +137,12 @@ configuration error before provider/permission work; infrastructure timeout or
 an oversized unsafe-to-truncate action may escalate, but must never be
 reinterpreted as an automatic allow.
 
+Interactive permission-mode changes must be deterministic: Shift-Tab cycles
+Plan -> Edits -> Auto, entering Auto immediately exposes the configured
+`Auto[LLM]` or `Auto[RULES]` state, and rapid changes are applied in user order.
+An automatic LLM-to-rules fallback remains Session-scoped and sticky until the
+user explicitly selects the LLM engine again. Shift+Enter remains newline input.
+
 SDK hosts must consume this behavior through one typed Auto settings resolver,
 and Runtime Session settings must represent the full public Auto configuration,
 including a zero-valued speculative window. Shared daemons advertise a unique
@@ -212,6 +218,12 @@ context from append-order transcript history. Resumed interactive sessions
 should preserve durable terminal tool-card replay where sanitized `uiHistory`
 is available, while canonical `messages` / `lineage` remain the source of
 truth.
+
+Continue-most-recent must select the newest non-empty Session in the requested
+project rather than a newer zero-message ACP/bootstrap placeholder. The rule is
+shared by Ink, classic, one-shot CLI, and coding-runtime auto-resume; an explicit
+Session ID always wins. Interactive resume restores saved workspace/runtime
+identity before resolving relative shell operations or starting the next turn.
 
 Large context compaction is always enabled and is shared by the CLI, REPL,
 Runtime SDK, and embedded products such as KodaX Space. Its percentage trigger
