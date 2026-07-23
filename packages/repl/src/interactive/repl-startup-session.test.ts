@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { loadClassicStartupSession, MemorySessionStorage } from './repl.js';
@@ -31,21 +33,24 @@ describe('loadClassicStartupSession', () => {
 
   it('skips newer empty sessions for -c/--continue', async () => {
     const storage = new MemorySessionStorage();
+    const canonicalRepoRoot = path.resolve('repo');
+    const workspaceRoot = path.resolve('repo-worktree');
+    const executionCwd = path.join(workspaceRoot, 'packages', 'app');
     await storage.save('empty-acp-session', {
       messages: [],
       title: 'ACP placeholder',
-      gitRoot: 'C:\\repo',
+      gitRoot: canonicalRepoRoot,
       runtimeInfo: { surface: 'acp' },
     });
     await storage.save('recent-session', {
       messages: [{ role: 'user', content: 'remember this' }],
       title: 'Recent session',
-      gitRoot: 'C:\\repo',
+      gitRoot: canonicalRepoRoot,
       tag: 'partner',
       runtimeInfo: {
-        canonicalRepoRoot: 'C:\\repo',
-        workspaceRoot: 'C:\\repo-worktree',
-        executionCwd: 'C:\\repo-worktree\\packages\\app',
+        canonicalRepoRoot,
+        workspaceRoot,
+        executionCwd,
         workspaceKind: 'worktree',
       },
     });
@@ -53,16 +58,16 @@ describe('loadClassicStartupSession', () => {
     const loaded = await loadClassicStartupSession(
       { resume: true },
       storage,
-      'C:\\repo',
+      canonicalRepoRoot,
     );
 
     expect(loaded).toMatchObject({
       id: 'recent-session',
       kind: 'continue',
       runtimeInfo: {
-        canonicalRepoRoot: 'C:/repo',
-        workspaceRoot: 'C:/repo-worktree',
-        executionCwd: 'C:/repo-worktree/packages/app',
+        canonicalRepoRoot: canonicalRepoRoot.replaceAll('\\', '/'),
+        workspaceRoot: workspaceRoot.replaceAll('\\', '/'),
+        executionCwd: executionCwd.replaceAll('\\', '/'),
         workspaceKind: 'worktree',
       },
       data: {
