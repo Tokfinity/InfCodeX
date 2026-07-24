@@ -62,6 +62,7 @@ import type {
 } from '../../../task-engine/_internal/managed-task/types.js';
 import type { TodoStore } from '../../../task-engine/todo-store.js';
 import {
+  canRequestAdditionalWorkBudget,
   maybeRequestAdditionalWorkBudget,
   type ManagedTaskBudgetController,
 } from '../../../task-engine/_internal/managed-task/budget.js';
@@ -276,7 +277,12 @@ export async function applySidecarVerdictToRecorder(
   // call; this inner guard additionally ensures budget side-effects
   // (budgetApprovalRef, maxRoundsRef, degradedContinueRef) are safely
   // skipped on error rather than left in a half-committed state.
-  if (budget && budgetExtension) {
+  if (
+    verdict.verdict === 'revise'
+    && budget
+    && budgetExtension
+    && canRequestAdditionalWorkBudget(budgetExtension.events, budget)
+  ) {
     observer.notifyBudgetApprovalRequest();
     const summary = verdict.reason
       ? `Sidecar verifier requested another pass: ${verdict.reason}`

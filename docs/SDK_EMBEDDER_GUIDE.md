@@ -3969,9 +3969,11 @@ Run status exposes acceptance/start/queue times, authenticated origin,
 `sessionOrder`, and a single terminal fact. Important terminal codes include
 `runtime_restarted`, `daemon_crashed`, `credential_unavailable`,
 `host_not_dispatched`, `host_outcome_unknown`, and
-`control_history_untrusted`. Respect `effectOutcome`; `unknown` must never be
-presented as success or automatically retried. After a lost response, query
-`runtime.operations.get({ operationId, journalEpoch })`; applied receipts
+`control_history_untrusted`. Managed tasks that require user input use
+`terminal.code = 'blocked'`; surface `terminal.message` when present instead of
+replacing it with a generic run failure. Respect `effectOutcome`; `unknown` must
+never be presented as success or automatically retried. After a lost response,
+query `runtime.operations.get({ operationId, journalEpoch })`; applied receipts
 include the canonical result. Permission grants remain daemon-owned and
 revisioned.
 

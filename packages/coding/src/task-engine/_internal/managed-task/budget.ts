@@ -121,6 +121,23 @@ export function extendManagedWorkBudget(
   controller.totalBudget += additionalUnits;
 }
 
+export function canRequestAdditionalWorkBudget(
+  events: KodaXEvents | undefined,
+  controller: ManagedTaskBudgetController,
+  force = false,
+): boolean {
+  if (!events?.askUser) {
+    return false;
+  }
+  if (!force) {
+    const threshold = Math.ceil(controller.totalBudget * GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD);
+    if (controller.spentBudget < threshold) {
+      return false;
+    }
+  }
+  return controller.lastApprovalBudgetTotal !== controller.totalBudget;
+}
+
 export async function maybeRequestAdditionalWorkBudget(
   events: KodaXEvents | undefined,
   controller: ManagedTaskBudgetController,
@@ -146,24 +163,18 @@ export async function maybeRequestAdditionalWorkBudget(
     force?: boolean;
   },
 ): Promise<'approved' | 'denied' | 'skipped'> {
-  if (!events?.askUser) {
-    return 'skipped';
-  }
-
-  if (!context.force) {
-    const threshold = Math.ceil(controller.totalBudget * GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD);
-    if (controller.spentBudget < threshold) {
-      return 'skipped';
-    }
-  }
-  if (controller.lastApprovalBudgetTotal === controller.totalBudget) {
+  const askUser = events?.askUser;
+  if (
+    !askUser
+    || !canRequestAdditionalWorkBudget(events, controller, context.force)
+  ) {
     return 'skipped';
   }
 
   const increment = context.additionalUnits ?? GLOBAL_WORK_BUDGET_INCREMENT;
   const usedPercent = Math.min(100, Math.round((controller.spentBudget / Math.max(1, controller.totalBudget)) * 100));
   const useChinese = /[\u4e00-\u9fff]/.test(context.originalTask ?? context.summary);
-  const choice = asSingleSelection(await events.askUser({
+  const choice = asSingleSelection(await askUser({
     question: useChinese
       ? `当前 AMA 运行已使用 ${controller.spentBudget}/${controller.totalBudget} 工作单元（${usedPercent}%），需要更多工作量。是否追加 ${increment} 单元？`
       : `This AMA run has used ${controller.spentBudget}/${controller.totalBudget} work units (${usedPercent}%) and needs more work. Add ${increment} more work units?`,

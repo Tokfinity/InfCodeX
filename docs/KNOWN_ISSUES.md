@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-23_
+_Last Updated: 2026-07-24_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-23_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 206 | High | Resolved | Sidecar optional follow-up was misclassified as blocked, announced ineligible budget approval, and lost its reason at the Runtime boundary | v0.7.74 or earlier; reported in v0.7.74 | v0.7.74 | 2026-07-24 | 2026-07-24 |
 | 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 202 | High | Resolved | PowerShell bracket wildcards could bypass protected-path auto-mode review | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -114,6 +115,95 @@ _Last Updated: 2026-07-23_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 206: Sidecar optional follow-up was misclassified as blocked, announced ineligible budget approval, and lost its reason at the Runtime boundary
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 or earlier; reported in v0.7.74
+- **Fixed**: v0.7.74
+- **Created**: 2026-07-24
+- **Resolved**: 2026-07-24
+
+#### Original Problem
+
+KodaX SDK 0.7.74 存在一次 Sidecar Verifier 误判。当前用户请求只是分析
+Fabric 的 MCP/A2A 边界、部署方式和 Artifact ROI，主 Agent 已完整回答，
+末尾仅询问是否继续执行可选的文档修改。Worker 于 10:30:02 正常结束；
+Sidecar 于 10:30:13 返回 `trace=verifier_ok`，但把这个可选后续问题判成
+`verdict=blocked` / `delivery=terminal-block`；随后 SDK 将其转换为
+`signal=BLOCKED` → `success=false` → `turn.failed` / `run.failed`，错误为
+`KodaX managed task failed`。
+
+Verifier 需要区分“当前请求尚缺少必要澄清”和“当前请求已经完成，只是在询问
+是否进行额外工作”，后者应判定为 `accept`，并为中英文场景增加回归 eval。
+另外，本次 `budgetUsage=0` 且 verdict 为 `blocked`，SDK 仍短暂发出了
+`Awaiting budget extension approval`；预算审批状态应只在 `revise` 且真正
+达到扩展阈值时发布。Runtime 还应保留结构化的 blocked 终态或 blocked
+reason，避免客户端只能收到泛化的 `run.failed`。
+
+#### Root Cause
+
+- Verifier prompt 把“以问题结尾”当成 blocked 的强信号，却没有把“完成当前
+  请求后提供可选追加工作”和“缺少完成当前请求所必需的信息”明确分开。
+- Sidecar bridge 在调用预算扩展函数之前就发布审批等待状态；真正的 callback、
+  90% 阈值和当前预算层级去重检查发生得更晚，因此即使最终返回 `skipped`
+  也会产生短暂误通知。
+- Managed-task 已返回 `signal=BLOCKED` 和 `signalReason`，但 Runtime 只按
+  `success=false` 投影为通用 failed terminal，重启恢复时也不识别 blocked
+  terminal code；live turn 错误同时忽略了 `signalReason`。
+
+#### Resolution
+
+- 在生产 Verifier prompt 中明确：当前请求已经满足而末尾仅提供可选后续工作
+  时应判为 `accept`；只有用户必须回答后当前请求才能完成的澄清才是
+  `blocked`。
+- 提取统一的预算扩展资格判断，并让 Sidecar 和兼容 recorder 路径都只在
+  `revise`、存在用户回调、达到阈值（或显式强制请求）且当前预算层级尚未询问
+  时，紧邻真实 prompt 发布审批等待状态。
+- Runtime 保持现有 `phase=failed` 兼容性，同时持久化
+  `terminal.code=blocked` 和 `signalReason`；live turn 失败也优先使用该原因，
+  客户端不再只能解析泛化错误。
+- 复审后收紧 Runtime 投影：只有 `success=false` 的真实 blocked 结果才能产生
+  blocked terminal，避免不一致或陈旧的 signal 形成
+  `kind=completed` / `code=blocked` 矛盾状态；daemon client 回归同时固定该
+  结构化终态和原因不被协议往返丢失。
+- KodaX Space 的 Runtime 适配器在未收到 `sidecar.message` 时回退使用
+  `terminal.message`，从而保留 blocked reason；既有 sidecar notice + 正常收口
+  路径保持不变。
+- 增加中英文正反例：已完成三点分析后的 ADR 可选追问必须 accept；缺少生产
+  区域、无法完成当前部署的澄清仍必须 blocked。
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/middleware/sidecar-verifier/verifier-prompts.ts`
+- `packages/coding/src/agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/budget.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/verdict-recorder.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/client.test.ts`
+- `src/runtime-daemon/server.test.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `benchmark/datasets/feature-184-sidecar-verifier/cases.ts`
+- `tests/issue-206-sidecar-optional-followup.eval.ts`
+
+#### Verification
+
+- Sidecar prompt、bridge 和 adapter 的 49 项单测全部通过；预算回归覆盖 blocked、
+  低于阈值、当前层级重复请求和符合资格的 revise。
+- `runner-driven.test.ts` 77 项通过、2 项既有 todo；Coding package 严格类型
+  检查通过。
+- Runtime 全文件系统套件 132 项全部通过；新增回归验证 active result、
+  持久化 status、`run.failed` payload 及重启恢复后均保留
+  `terminal.code=blocked` 和原因，并拒绝把成功结果中的陈旧 BLOCKED signal
+  投影成矛盾终态。
+- Daemon client 回归验证 `runs.await()` 保留 blocked terminal 和 message；
+  KodaX Space adapter 回归验证缺失 sidecar notice 时仍向客户端传递该 message。
+- Layer 2 双语 pilot 使用生产 prompt/tool schema。修订后的 E/F 正例在两个
+  provider 上 candidate 4/4 为 accept；未改动的 G/H 必需澄清反例 candidate
+  4/4 为 blocked。基线同样达到天花板，故该 pilot 证明正确性和未观察到回退，
+  不宣称量化 lift。
 
 ### 204: Auto mode could render without an engine and rapid permission-mode writes could settle out of order
 
@@ -6589,11 +6679,21 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 91 (25 Open, 66 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 92 (25 Open, 67 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-24: Issue 206 resolved (v0.7.74)
+- Distinguished optional post-completion offers from clarification required to
+  satisfy the current request, with paired English and Chinese eval cases.
+- Published budget-approval waiting state only for an eligible revise prompt.
+- Preserved managed-task blocked code and reason through live events, Runtime
+  persistence, and restart recovery.
+- Post-review hardening rejects stale blocked signals on successful results,
+  preserves blocked facts across daemon await, and lets Space consume the
+  terminal reason when the sidecar notice is unavailable.
 
 ### 2026-07-23: Issue 204 resolved (v0.7.74)
 - Auto renders the configured/observed LLM or rules engine without a transient

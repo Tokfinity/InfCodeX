@@ -1240,6 +1240,58 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('round-trips structured blocked terminal facts through daemon await', async () => {
+    const runResults = createRuntimeDaemonRunResultStore();
+    runResults.remember('run-blocked', Promise.resolve({
+      runId: 'run-blocked',
+      sessionId: 'session-1',
+      phase: 'failed',
+      terminal: {
+        revision: 1,
+        kind: 'failed',
+        code: 'blocked',
+        effectOutcome: 'known',
+        message: 'Choose the target API version.',
+      },
+    }));
+    const runtime = makeRuntime();
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime, runResults });
+    await initializeDispatcher(dispatcher);
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method, params, operation) {
+        const response = await dispatcher.handle(createRuntimeDaemonRequest(
+          `req-loopback-${randomRequestSuffix()}`,
+          method,
+          params,
+          operation,
+        ));
+        if (isRuntimeDaemonSuccessResponse(response)) return response.result;
+        throw Object.assign(new Error(response.error.message), {
+          code: response.error.code,
+        });
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+    const client = createRuntimeDaemonClient({
+      identity: runtime.identity,
+      transport,
+      capabilities: {},
+    });
+
+    await expect(client.runs.await('run-blocked')).resolves.toMatchObject({
+      phase: 'failed',
+      terminal: {
+        kind: 'failed',
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+    });
+    await client.close();
+    dispatcher.close();
+  });
+
   it('forwards runtime event subscriptions as daemon notifications', async () => {
     const runtime = makeRuntime();
     const notifications: RuntimeDaemonNotification[] = [];

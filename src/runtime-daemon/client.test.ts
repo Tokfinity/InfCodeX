@@ -539,6 +539,43 @@ describe('runtime daemon client proxy', () => {
     });
   });
 
+  it('preserves structured blocked terminal facts across daemon run await', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls, {
+      runAwaitResult: {
+        runId: 'run-blocked',
+        sessionId: 'session-1',
+        phase: 'failed',
+        terminal: {
+          revision: 1,
+          kind: 'failed',
+          code: 'blocked',
+          effectOutcome: 'known',
+          message: 'Choose the target API version.',
+        },
+      },
+    });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-24T00:00:00.000Z',
+        version: '0.7.74',
+      },
+      transport,
+    });
+
+    await expect(client.runs.await('run-blocked')).resolves.toMatchObject({
+      phase: 'failed',
+      terminal: {
+        kind: 'failed',
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+    });
+  });
+
   it('unsubscribes remote event subscriptions when closed before subscribe resolves', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     let resolveSubscribe!: (value: unknown) => void;

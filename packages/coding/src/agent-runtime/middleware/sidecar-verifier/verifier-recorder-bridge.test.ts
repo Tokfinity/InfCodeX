@@ -23,6 +23,8 @@ import type {
   ObserverBridge,
   VerdictRecorder,
 } from '../../../task-engine/_internal/managed-task/types.js';
+import type { ManagedTaskBudgetController } from '../../../task-engine/_internal/managed-task/budget.js';
+import type { BudgetExtensionContext } from '../../../task-engine/_internal/managed-task/verdict-recorder.js';
 import type { TodoStore } from '../../../task-engine/todo-store.js';
 
 function makeRecorder(): VerdictRecorder {
@@ -52,6 +54,21 @@ function makeTodoStore(): TodoStore {
     resetFailed: vi.fn(),
     snapshot: vi.fn().mockReturnValue([]),
   } as unknown as TodoStore;
+}
+
+function makeBudgetExtension(
+  askUser: NonNullable<BudgetExtensionContext['events']>['askUser'],
+): BudgetExtensionContext {
+  return {
+    events: { askUser },
+    originalTask: 'Finish the requested analysis.',
+    roundRef: { current: 2 },
+    maxRoundsRef: { current: 4 },
+    budgetApprovalRef: { current: false },
+    planRef: { current: undefined },
+    degradedContinueRef: { current: false },
+    harnessRef: { current: 'H0_DIRECT' },
+  };
 }
 
 describe('buildSidecarVerdictPayload — shape parity with Evaluator emit_verdict', () => {
@@ -325,5 +342,109 @@ describe('applySidecarVerdictToRecorder — side effects', () => {
       verdict: { verdict: 'accept', reason: '', trace: 'verifier_ok' },
     });
     expect(recorder.verdict?.payload.verdict?.status).toBe('accept');
+  });
+
+  it.each([0, 95])(
+    'does not announce budget approval for a blocked verdict at spentBudget=%i',
+    async (spentBudget) => {
+      const observer = makeObserver();
+      const askUser = vi.fn().mockResolvedValue('continue');
+      const budget: ManagedTaskBudgetController = {
+        totalBudget: 100,
+        spentBudget,
+        currentHarness: 'H0_DIRECT',
+      };
+
+      await applySidecarVerdictToRecorder({
+        recorder: makeRecorder(),
+        observer,
+        verdict: {
+          verdict: 'blocked',
+          reason: 'Need the target API version.',
+          trace: 'verifier_ok',
+        },
+        budget,
+        budgetExtension: makeBudgetExtension(askUser),
+      });
+
+      expect(observer.notifyBudgetApprovalRequest).not.toHaveBeenCalled();
+      expect(askUser).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not announce budget approval for revise below threshold', async () => {
+    const observer = makeObserver();
+    const askUser = vi.fn().mockResolvedValue('continue');
+    const budget: ManagedTaskBudgetController = {
+      totalBudget: 100,
+      spentBudget: 0,
+      currentHarness: 'H0_DIRECT',
+    };
+
+    await applySidecarVerdictToRecorder({
+      recorder: makeRecorder(),
+      observer,
+      verdict: {
+        verdict: 'revise',
+        reason: 'Add the requested deployment comparison.',
+        trace: 'verifier_ok',
+      },
+      budget,
+      budgetExtension: makeBudgetExtension(askUser),
+    });
+
+    expect(observer.notifyBudgetApprovalRequest).not.toHaveBeenCalled();
+    expect(askUser).not.toHaveBeenCalled();
+  });
+
+  it('does not announce a duplicate approval request at the current budget tier', async () => {
+    const observer = makeObserver();
+    const askUser = vi.fn().mockResolvedValue('continue');
+    const budget: ManagedTaskBudgetController = {
+      totalBudget: 100,
+      spentBudget: 95,
+      currentHarness: 'H0_DIRECT',
+      lastApprovalBudgetTotal: 100,
+    };
+
+    await applySidecarVerdictToRecorder({
+      recorder: makeRecorder(),
+      observer,
+      verdict: {
+        verdict: 'revise',
+        reason: 'Add the requested deployment comparison.',
+        trace: 'verifier_ok',
+      },
+      budget,
+      budgetExtension: makeBudgetExtension(askUser),
+    });
+
+    expect(observer.notifyBudgetApprovalRequest).not.toHaveBeenCalled();
+    expect(askUser).not.toHaveBeenCalled();
+  });
+
+  it('announces budget approval immediately before an eligible revise prompt', async () => {
+    const observer = makeObserver();
+    const askUser = vi.fn().mockResolvedValue('continue');
+    const budget: ManagedTaskBudgetController = {
+      totalBudget: 100,
+      spentBudget: 90,
+      currentHarness: 'H0_DIRECT',
+    };
+
+    await applySidecarVerdictToRecorder({
+      recorder: makeRecorder(),
+      observer,
+      verdict: {
+        verdict: 'revise',
+        reason: 'Add the requested deployment comparison.',
+        trace: 'verifier_ok',
+      },
+      budget,
+      budgetExtension: makeBudgetExtension(askUser),
+    });
+
+    expect(observer.notifyBudgetApprovalRequest).toHaveBeenCalledOnce();
+    expect(askUser).toHaveBeenCalledOnce();
   });
 });

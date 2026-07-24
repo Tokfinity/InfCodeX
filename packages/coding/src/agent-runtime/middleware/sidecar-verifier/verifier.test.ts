@@ -28,6 +28,7 @@ import {
   createSidecarVerifierStopHook,
   type SidecarVerifierContextInputs,
 } from './verifier.js';
+import { VERIFIER_SYSTEM_PROMPT } from './verifier-prompts.js';
 
 function fakeProvider(streamImpl: (
   messages: KodaXMessage[],
@@ -50,6 +51,17 @@ const minimalInputs: SidecarVerifierContextInputs = {
   fileEditSummary: [],
   lastAssistantText: 'done',
 };
+
+describe('VERIFIER_SYSTEM_PROMPT optional follow-up boundary', () => {
+  it('accepts optional next work after the current request is already complete', () => {
+    expect(VERIFIER_SYSTEM_PROMPT).toContain(
+      'If the current request is already satisfied and the final text merely offers optional follow-up or additional work, choose `accept`',
+    );
+    expect(VERIFIER_SYSTEM_PROMPT).toContain(
+      'A clarifying question is `blocked` only when the user must answer it before the current request can be satisfied',
+    );
+  });
+});
 
 describe('invokeSidecarVerifier — three-state verdict parsing', () => {
   it('parses verdict=accept with empty reason', async () => {

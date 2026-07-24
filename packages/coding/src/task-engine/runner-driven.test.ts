@@ -2914,8 +2914,8 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
       },
     } as KodaXEvents;
     const base = makeFakeVerdictEmitter({
-      status: 'accept',
-      reason: 'done',
+      status: 'revise',
+      reason: 'need another e2e pass',
       budgetRequest: 'need another e2e pass',
     });
     const recorder = makeRecorder();
@@ -2955,6 +2955,51 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
 
     expect(askUserCalls.length).toBe(0);
   });
+
+  it.each(['accept', 'blocked'] as const)(
+    'Risk-3: %s verdict never requests more budget even with an explicit budgetRequest',
+    async (status) => {
+      const { wrapEmitterWithRecorder } = await harnessTestables();
+      const askUserCalls: Array<unknown> = [];
+      const approvalNotifications: Array<unknown> = [];
+      const events: KodaXEvents = {
+        askUser: async () => {
+          askUserCalls.push({});
+          return 'continue';
+        },
+      } as KodaXEvents;
+      const base = makeFakeVerdictEmitter({
+        status,
+        reason: status === 'accept' ? 'done' : 'needs user input',
+        budgetRequest: 'stale evaluator budget request',
+      });
+      const recorder = makeRecorder();
+      const budget = makeBudgetController({ total: 200, spent: 200 });
+      const budgetExtension = makeBudgetExtensionFixture({
+        harness: 'H1_EXECUTE_EVAL',
+        events,
+      });
+      const observer = {
+        ...noopObserver,
+        notifyBudgetApprovalRequest: (...args: unknown[]) => {
+          approvalNotifications.push(args);
+        },
+      };
+
+      const wrapped = wrapEmitterWithRecorder(
+        base,
+        'verdict',
+        recorder,
+        observer,
+        budget,
+        budgetExtension,
+      );
+      await wrapped.execute({}, toolCtx);
+
+      expect(approvalNotifications).toHaveLength(0);
+      expect(askUserCalls).toHaveLength(0);
+    },
+  );
 
   it('Risk-5: a revise verdict passes through unchanged (no same-harness revise cap)', async () => {
     // The per-harness revise cap (reviseCountByHarnessRef) was never wired —

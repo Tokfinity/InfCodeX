@@ -1564,6 +1564,7 @@ export interface RuntimeInterruptInputStatus {
 export type RuntimeTerminalCode =
   | 'completed'
   | 'run_failed'
+  | 'blocked'
   | 'cancelled'
   | 'interrupted'
   | 'runtime_restarted'
@@ -1587,6 +1588,7 @@ export interface RuntimeRunResult {
   readonly phase: RuntimeRunPhase;
   readonly result?: KodaXResult;
   readonly error?: Error;
+  readonly terminal?: RuntimeTerminalFact;
 }
 
 export interface RuntimeRunHandle {
@@ -4451,12 +4453,32 @@ function createRuntimeRunService(deps: {
               : value.success
                 ? 'completed'
                 : 'failed';
-          markRunTerminal(deps.bus, deps.persistence, record, phase);
+          const blockedTerminal = !value.success
+            && !value.interrupted
+            && value.signal === 'BLOCKED'
+            ? {
+                code: 'blocked' as const,
+                effectOutcome: 'known' as const,
+                ...(value.signalReason !== undefined
+                  ? { message: value.signalReason }
+                  : {}),
+              }
+            : undefined;
+          markRunTerminal(
+            deps.bus,
+            deps.persistence,
+            record,
+            phase,
+            blockedTerminal,
+          );
           return {
             runId: record.runId,
             sessionId: record.sessionId,
             phase: record.phase,
             result: value,
+            ...(record.terminal !== undefined
+              ? { terminal: record.terminal }
+              : {}),
           };
         })
         .catch((error: unknown) => failedRunResult(record, error))
@@ -7122,6 +7144,7 @@ function isRuntimeTerminalCode(value: unknown): value is RuntimeTerminalCode {
   return (
     value === 'completed' ||
     value === 'run_failed' ||
+    value === 'blocked' ||
     value === 'cancelled' ||
     value === 'interrupted' ||
     value === 'runtime_restarted' ||
@@ -10112,6 +10135,7 @@ function resultFromStatus(status: RuntimeRunStatus): RuntimeRunResult {
     sessionId: status.sessionId,
     phase: status.phase,
     ...(status.error !== undefined ? { error: new Error(status.error) } : {}),
+    ...(status.terminal !== undefined ? { terminal: status.terminal } : {}),
   };
 }
 

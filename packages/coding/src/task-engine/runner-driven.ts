@@ -727,7 +727,13 @@ export async function runManagedTaskViaRunner(
     if (result.success) {
       emitLiveTurnCompleted(result.interrupted ? 'interrupted' : 'completed');
     } else {
-      emitLiveTurnFailed(new Error(result.errorMetadata?.lastError ?? 'KodaX managed task failed'));
+      emitLiveTurnFailed(
+        new Error(
+          result.errorMetadata?.lastError
+          ?? result.signalReason
+          ?? 'KodaX managed task failed',
+        ),
+      );
     }
     return result;
   } catch (err) {

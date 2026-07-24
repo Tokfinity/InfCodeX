@@ -4059,6 +4059,115 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('preserves a managed-task blocked reason as a structured terminal fact', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Blocked Task Test' });
+    codingMock.runManagedTask.mockResolvedValue({
+      success: false,
+      lastText: 'I need the target API version before continuing.',
+      signal: 'BLOCKED',
+      signalReason: 'Choose the target API version.',
+      messages: [],
+      sessionId: session.id,
+    } satisfies KodaXResult);
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'Update the API integration.',
+      mode: 'managed_task',
+    });
+    const result = await handle.result;
+    const status = await runtime.runs.get(handle.runId);
+    const failedEvents = await runtime.events.replay({
+      runId: handle.runId,
+      type: 'run.failed',
+    });
+
+    expect(result).toMatchObject({
+      phase: 'failed',
+      terminal: {
+        kind: 'failed',
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+      result: {
+        signal: 'BLOCKED',
+        signalReason: 'Choose the target API version.',
+      },
+    });
+    expect(status).toMatchObject({
+      phase: 'failed',
+      terminal: {
+        kind: 'failed',
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+    });
+    expect(failedEvents.at(-1)?.payload).toMatchObject({
+      terminal: {
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+    });
+
+    const runId = handle.runId;
+    await runtime.close();
+    const restoredRuntime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    await expect(restoredRuntime.runs.await(runId)).resolves.toMatchObject({
+      phase: 'failed',
+      terminal: {
+        code: 'blocked',
+        message: 'Choose the target API version.',
+      },
+    });
+    await restoredRuntime.close();
+  }, 60_000);
+
+  it('does not emit a blocked terminal for a successful managed task with a stale signal', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Successful Task Test' });
+    codingMock.runManagedTask.mockResolvedValue({
+      success: true,
+      lastText: 'The requested analysis is complete.',
+      signal: 'BLOCKED',
+      signalReason: 'Stale verifier metadata.',
+      messages: [],
+      sessionId: session.id,
+    } satisfies KodaXResult);
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'Analyze the integration boundary.',
+      mode: 'managed_task',
+    });
+    const result = await handle.result;
+    const failedEvents = await runtime.events.replay({
+      runId: handle.runId,
+      type: 'run.failed',
+    });
+
+    expect(result).toMatchObject({
+      phase: 'completed',
+      terminal: {
+        kind: 'completed',
+        code: 'completed',
+      },
+    });
+    expect(failedEvents).toHaveLength(0);
+    await runtime.close();
+  }, 60_000);
+
   it('applies permissionMode policy and skips bridge meta-tool prompts', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({

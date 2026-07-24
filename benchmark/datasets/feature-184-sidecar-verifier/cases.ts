@@ -423,6 +423,115 @@ const CASE_D: SidecarVerifierCase = {
   fileEditSummary: [{ path: 'src/api.ts', diffHint: '1 mutation' }],
 };
 
+const CASE_E: SidecarVerifierCase = {
+  id: 'E_accept_optional_followup_en',
+  description:
+    'The requested three-point architecture analysis is complete. The closing question '
+    + 'offers optional ADR work and must not turn the completed request into blocked.',
+  expectedVerdict: 'accept',
+  userQuery:
+    "In exactly three concise bullets, analyze Fabric's (1) MCP/A2A boundary, "
+    + '(2) deployment choice, and (3) Artifact ROI. Do not modify files.',
+  transcript: [
+    {
+      role: 'user',
+      content:
+        "In exactly three concise bullets, analyze Fabric's (1) MCP/A2A boundary, "
+        + '(2) deployment choice, and (3) Artifact ROI. Do not modify files.',
+    },
+  ],
+  lastAssistantText:
+    '- Boundary: keep MCP as the tool/resource boundary inside one trusted host; '
+    + 'use A2A for task delegation and artifact exchange across independently deployed agents.\n'
+    + '- Deployment: begin with one control plane and isolated workers; split the A2A '
+    + 'gateway only when a trust or scaling boundary requires independent deployment.\n'
+    + '- Artifact ROI: prioritize durable outputs with high reuse frequency and '
+    + 'regeneration cost; transient logs usually have low return.\n\n'
+    + 'Would you like me to turn these three conclusions into an ADR?',
+  fileEditSummary: [],
+};
+
+const CASE_F: SidecarVerifierCase = {
+  id: 'F_accept_optional_followup_zh',
+  description:
+    '中文场景中要求的三点分析已经完成，末尾仅询问是否继续编写可选 ADR，应判为 accept。',
+  expectedVerdict: 'accept',
+  userQuery:
+    '请严格用三条简明要点分析 Fabric 的 MCP/A2A 边界、部署方式和 Artifact ROI，'
+    + '不要修改文件。',
+  transcript: [
+    {
+      role: 'user',
+      content:
+        '请严格用三条简明要点分析 Fabric 的 MCP/A2A 边界、部署方式和 Artifact ROI，'
+        + '不要修改文件。',
+    },
+  ],
+  lastAssistantText:
+    '- 边界：MCP 负责单一可信宿主内的工具与资源访问；A2A 负责跨独立部署 Agent '
+    + '传递任务和 Artifact。\n'
+    + '- 部署：先采用单一控制面和隔离 Worker；只有出现独立的信任域或扩缩容边界时，'
+    + '才拆分 A2A 网关。\n'
+    + '- Artifact ROI：优先沉淀复用频率高、重新生成成本高的持久产物；临时日志通常回报较低。\n\n'
+    + '需要我把这三条结论整理成 ADR 吗？',
+  fileEditSummary: [],
+};
+
+const CASE_G: SidecarVerifierCase = {
+  id: 'G_blocked_required_clarification_en',
+  description:
+    'The requested deployment cannot be completed until the user supplies the '
+    + 'required target region, so the clarification remains blocked.',
+  expectedVerdict: 'blocked',
+  userQuery: 'Deploy the service to the required production region.',
+  transcript: [
+    {
+      role: 'user',
+      content: 'Deploy the service to the required production region.',
+    },
+  ],
+  lastAssistantText:
+    'The repository defines production targets for us-east-1 and eu-west-1, but '
+    + 'the request does not identify which one is required. Which production region '
+    + 'should I deploy to? I cannot safely perform the requested deployment until '
+    + 'you choose the target.',
+  fileEditSummary: [],
+};
+
+const CASE_H: SidecarVerifierCase = {
+  id: 'H_blocked_required_clarification_zh',
+  description:
+    '中文部署请求缺少完成当前任务必需的目标区域，应继续判为 blocked。',
+  expectedVerdict: 'blocked',
+  userQuery: '把服务部署到要求的生产区域。',
+  transcript: [
+    {
+      role: 'user',
+      content: '把服务部署到要求的生产区域。',
+    },
+  ],
+  lastAssistantText:
+    '仓库同时配置了 cn-north-1 和 ap-southeast-1 两个生产目标，但请求中没有说明'
+    + '必须使用哪个区域。请确认目标生产区域；在得到这个当前部署任务所必需的信息前，'
+    + '我无法安全执行部署。',
+  fileEditSummary: [],
+};
+
+export const OPTIONAL_FOLLOWUP_REGRESSION_CASE_IDS = Object.freeze([
+  CASE_E.id,
+  CASE_F.id,
+  CASE_G.id,
+  CASE_H.id,
+]);
+
+export const OPTIONAL_FOLLOWUP_REGRESSION_CASES: readonly SidecarVerifierCase[] =
+  Object.freeze([
+    CASE_E,
+    CASE_F,
+    CASE_G,
+    CASE_H,
+  ]);
+
 export const CASES: readonly SidecarVerifierCase[] = Object.freeze([
   CASE_A,
   CASE_B,

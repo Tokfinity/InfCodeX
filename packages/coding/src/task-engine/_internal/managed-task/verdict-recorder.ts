@@ -33,6 +33,7 @@ import type {
 } from '../../../types.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
 import {
+  canRequestAdditionalWorkBudget,
   incrementManagedBudgetUsage,
   maybeRequestAdditionalWorkBudget,
   type ManagedTaskBudgetController,
@@ -175,26 +176,32 @@ export function wrapEmitterWithRecorder(
         // (V1 chain retired; Worker is now the only emitter and runs
         // at a fixed harness chosen at routing time).
         observer.onRoleEmit('evaluator', recorder);
-        // 90%-threshold budget-extension dialog on Evaluator verdict. The
-        // Runner-driven path (FEATURE_184) reaches this branch only via the
-        // Sidecar Verifier bridge after V1 chain retirement (FEATURE_193) —
-        // there are no more scout/contract/handoff emits ahead of the
-        // verdict that could exhaust the cap silently. Still cheap to fire:
-        // `maybeRequestAdditionalWorkBudget` is idempotent when already
-        // above/under threshold (returns 'skipped'). The per-harness
-        // `additionalUnits` parameter matches the user's tiered mechanism
-        // (H0 → +100 small top-up, H1/H2 → +200 legacy-parity top-up).
-        if (budget && budgetExtension) {
+        // Budget approval is user-visible, so publish it only for a revise
+        // verdict that can actually open the dialog. The shared eligibility
+        // check keeps notification and prompting aligned on callback,
+        // threshold/force, and per-tier de-duplication.
+        const verdictPayload = recorder.verdict?.payload.verdict;
+        const evaluatorBudgetRequest = verdictPayload?.budgetRequest;
+        const forceBudgetRequest = Boolean(evaluatorBudgetRequest);
+        if (
+          verdictPayload?.status === 'revise'
+          && budget
+          && budgetExtension
+          && canRequestAdditionalWorkBudget(
+            budgetExtension.events,
+            budget,
+            forceBudgetRequest,
+          )
+        ) {
           observer.notifyBudgetApprovalRequest();
           // Risk-3: when Evaluator explicitly flags a budget request via
           // its verdict payload, bypass the 90% auto-threshold so the
           // user sees the dialog immediately (with Evaluator's reason
           // as the summary) rather than waiting for cumulative usage
           // to cross the default gate.
-          const evaluatorBudgetRequest = recorder.verdict?.payload.verdict?.budgetRequest;
           const extensionSummary = evaluatorBudgetRequest
             ? `Evaluator requested more budget: ${evaluatorBudgetRequest}`
-            : (recorder.verdict?.payload.verdict?.reason ?? 'Evaluator requested another pass');
+            : (verdictPayload.reason ?? 'Evaluator requested another pass');
           const decision = await maybeRequestAdditionalWorkBudget(
             budgetExtension.events,
             budget,
@@ -204,14 +211,13 @@ export function wrapEmitterWithRecorder(
               maxRounds: budgetExtension.maxRoundsRef.current,
               originalTask: budgetExtension.originalTask,
               additionalUnits: MANAGED_WORK_BUDGET_EXTENSION,
-              force: Boolean(evaluatorBudgetRequest),
+              force: forceBudgetRequest,
             },
           );
           budgetExtension.budgetApprovalRef.current = false;
           if (decision === 'approved') {
             budgetExtension.maxRoundsRef.current += 1;
           } else if (decision === 'denied') {
-            const verdictPayload = recorder.verdict?.payload.verdict;
             if (verdictPayload?.status === 'revise') {
               // Shard 6d-U: user explicitly denied a budget extension on
               // revise — continue at current budget cap but flag
