@@ -62,6 +62,7 @@ export const SYSTEM_TEST_FILES = [
   'benchmark/datasets/*/runner.test.ts',
   'tests/acp_server.test.ts',
   'tests/feature-125-team-mode.integration.test.ts',
+  'tests/issue-206-sidecar-tarball.test.ts',
   'tests/sa-refactor-goldens/selection.test.ts',
   'packages/agent/src/capabilities/mcp/runtime.test.ts',
   'packages/agent/src/capabilities/mcp/transport.test.ts',

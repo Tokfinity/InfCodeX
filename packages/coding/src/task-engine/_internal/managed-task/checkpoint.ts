@@ -67,7 +67,10 @@ function checkpointBelongsToSession(
 export async function getGitHeadCommit(gitRoot: string | undefined | null): Promise<string | undefined> {
   const cwd = path.resolve(gitRoot?.trim() || process.cwd());
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd });
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd,
+      windowsHide: true,
+    });
     return stdout.trim() || undefined;
   } catch {
     return undefined;

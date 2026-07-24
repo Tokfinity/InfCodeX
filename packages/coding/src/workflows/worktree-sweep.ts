@@ -57,7 +57,7 @@ interface WorktreeEntry {
 }
 
 function defaultRunGit(args: readonly string[], cwd: string): Promise<string> {
-  return execFileAsync('git', [...args], { cwd }).then((r) => r.stdout);
+  return execFileAsync('git', [...args], { cwd, windowsHide: true }).then((r) => r.stdout);
 }
 
 function defaultMtimeMs(path: string): number {

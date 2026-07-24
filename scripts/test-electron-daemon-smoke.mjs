@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,11 +16,13 @@ const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-electron-daemo
 const appDir = path.join(temporaryRoot, 'app');
 const homeDir = path.join(temporaryRoot, 'home');
 const profile = `electron-smoke-${process.pid}-${Date.now()}`;
+const ordinaryQueryCount = 20;
 let electronProcess;
 let electronSpawnError;
 const electronOutput = [];
 
 try {
+  const consoleProbe = await prepareConsoleProbe();
   await preparePackagedApplication(electronPackage.version);
   const executable = path.join(appDir, 'release', 'win-unpacked', 'kodax-daemon-smoke.exe');
   assert.ok(existsSync(executable), `Packaged Electron executable is missing: ${executable}`);
@@ -33,18 +35,21 @@ try {
     detachFile,
     guiCountFile,
     environmentProofFile,
+    consoleProbe,
   });
 
   // Let the SDK's 60-second cold-start budget report its own structured failure
   // before the harness times out, including on slow CI/antivirus hosts.
-  const result = await waitForJson(resultFile, 75_000);
+  const result = await waitForJson(resultFile, 180_000);
   assert.deepEqual(result.ok, true, result.error ?? 'Packaged Electron startup failed.');
   assert.equal(result.clientCount, 1, 'The packaged facade must be the only logical client after cold start.');
+  assert.equal(result.ordinaryQueryCount, ordinaryQueryCount);
   assert.deepEqual(result.environmentProof, {
     daemon: 'absent',
     externalChild: 'absent',
     externalChildStatus: 0,
   }, 'The Electron Node bootstrap switch must not reach daemon or user child code.');
+  await verifyConsoleProbe(consoleProbe);
   const sdk = await importInstalledRuntimeSdk();
   await verifyAttachDetachAndOwnerFence(sdk, result.runtimeId, detachFile, guiCountFile);
   await waitForExit(electronProcess, 15_000);
@@ -53,6 +58,120 @@ try {
   if (electronProcess?.exitCode === null) electronProcess.kill();
   await stopDaemonBestEffort();
   await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
+async function prepareConsoleProbe() {
+  const binaryDir = path.join(temporaryRoot, 'console-probe-bin');
+  const observationDir = path.join(temporaryRoot, 'console-probe-observations');
+  const queryFile = path.join(temporaryRoot, 'console-probe-query.txt');
+  const sourceFile = path.join(temporaryRoot, 'console-probe.cs');
+  const executable = path.join(binaryDir, 'git.exe');
+  await mkdir(binaryDir, { recursive: true });
+  await mkdir(observationDir, { recursive: true });
+  await writeFile(queryFile, 'idle', 'utf8');
+  await writeFile(sourceFile, consoleProbeSource(), 'utf8');
+
+  const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+  assert.ok(systemRoot, 'SystemRoot is required for the Windows console probe.');
+  const powershell = path.join(
+    systemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  assert.ok(existsSync(powershell), `Windows PowerShell is missing: ${powershell}`);
+  const compile = [
+    'Add-Type',
+    '-Path', quotePowerShell(sourceFile),
+    '-OutputAssembly', quotePowerShell(executable),
+    '-OutputType', 'ConsoleApplication',
+  ].join(' ');
+  await run(
+    powershell,
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', compile],
+    repoRoot,
+    60_000,
+  );
+  assert.ok(existsSync(executable), `Console probe was not compiled: ${executable}`);
+  return { binaryDir, observationDir, queryFile };
+}
+
+function consoleProbeSource() {
+  return String.raw`
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public static class Program {
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr GetConsoleWindow();
+
+  [DllImport("user32.dll")]
+  private static extern bool IsWindowVisible(IntPtr window);
+
+  public static int Main(string[] args) {
+    string observationDirectory = Environment.GetEnvironmentVariable("KODAX_CONSOLE_PROBE_DIR");
+    string queryFile = Environment.GetEnvironmentVariable("KODAX_CONSOLE_PROBE_QUERY");
+    string query = File.Exists(queryFile) ? File.ReadAllText(queryFile).Trim() : "unattributed";
+    Thread.Sleep(25);
+    IntPtr window = GetConsoleWindow();
+    string state = window == IntPtr.Zero ? "none" : (IsWindowVisible(window) ? "visible" : "hidden");
+    Directory.CreateDirectory(observationDirectory);
+    string file = Path.Combine(
+      observationDirectory,
+      query + "-" + Process.GetCurrentProcess().Id + "-" + DateTime.UtcNow.Ticks + ".txt"
+    );
+    File.WriteAllText(file, state + "\t" + string.Join("\u001f", args));
+
+    string command = string.Join(" ", args);
+    if (command == "config --get remote.origin.url") {
+      Console.WriteLine("https://example.test/kodax/repo.git");
+    } else if (command == "rev-parse --is-inside-work-tree") {
+      Console.WriteLine("true");
+    } else if (command == "rev-parse --show-toplevel") {
+      Console.WriteLine(Environment.CurrentDirectory);
+    } else if (command == "branch --show-current") {
+      Console.WriteLine("main");
+    } else if (command == "rev-parse --short HEAD") {
+      Console.WriteLine("abcdef0");
+    }
+    return 0;
+  }
+}
+`;
+}
+
+async function verifyConsoleProbe(probe) {
+  const records = [];
+  for (const file of await readdir(probe.observationDir)) {
+    const match = /^(\d+)-/.exec(file);
+    if (!match) continue;
+    const [state, args = ''] = (await readFile(path.join(probe.observationDir, file), 'utf8'))
+      .split('\t', 2);
+    records.push({ query: Number(match[1]), state, args: args.split('\u001f') });
+  }
+
+  for (let query = 0; query < ordinaryQueryCount; query += 1) {
+    const queryRecords = records.filter((record) => record.query === query);
+    assert.ok(
+      queryRecords.length >= 2,
+      `Ordinary query ${query} must execute at least two observable Git probes; got ${queryRecords.length}.`,
+    );
+    for (const record of queryRecords) {
+      assert.notEqual(
+        record.state,
+        'visible',
+        `Ordinary query ${query} created a visible console for git ${record.args.join(' ')}.`,
+      );
+    }
+  }
+}
+
+function quotePowerShell(value) {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 async function preparePackagedApplication(electronVersion) {
@@ -87,7 +206,12 @@ function createBuilderConfig(electronVersion) {
 }
 
 function startElectron(executable, files) {
-  const { ELECTRON_RUN_AS_NODE: _ignored, ...parentEnvironment } = process.env;
+  const {
+    ELECTRON_RUN_AS_NODE: _ignored,
+    PATH: parentUpperPath,
+    Path: parentMixedPath,
+    ...parentEnvironment
+  } = process.env;
   const child = spawn(executable, [], {
     cwd: path.dirname(executable),
     windowsHide: true,
@@ -99,7 +223,14 @@ function startElectron(executable, files) {
       KODAX_SMOKE_DETACH: files.detachFile,
       KODAX_SMOKE_GUI_COUNT: files.guiCountFile,
       KODAX_SMOKE_ENV_PROOF: files.environmentProofFile,
+      KODAX_SMOKE_QUERY_COUNT: String(ordinaryQueryCount),
+      KODAX_CONSOLE_PROBE_DIR: files.consoleProbe.observationDir,
+      KODAX_CONSOLE_PROBE_QUERY: files.consoleProbe.queryFile,
       KODAX_TRACING: '0',
+      PATH: [
+        files.consoleProbe.binaryDir,
+        parentUpperPath ?? parentMixedPath ?? '',
+      ].filter(Boolean).join(path.delimiter),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

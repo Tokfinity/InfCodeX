@@ -91,6 +91,17 @@ daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程�
 再使用 attach-only 模式连接。SDK 的 `homeDir` 是拥有 `.kodax` 的 CLI 风格基础目录，
 不是 `.kodax` 目录本身。
 
+**v0.7.75 Windows GUI 稳定性候选版**：Runtime Worker 可达的非交互后台子进程
+在 Windows 上统一请求隐藏控制台，覆盖 memory/Git、provider CLI/ACP、LSP、
+clipboard、worktree、review、extension command、checkpoint 与 sandbox 路径；
+显式 editor、terminal 和 PTY 行为保持不变。SDK bundle 增加静态子进程审计，
+packaged Electron 回归连续执行 20 次普通查询并检查控制台可见性。KodaX Space
+产品级验证仍然有价值，但不阻塞 SDK 打包、tag 或 npm 发布。
+
+同一候选版还会区分“当前请求完成后的可选后续工作”和“完成当前请求所必需的
+澄清”，只为符合资格的 Sidecar `revise` 发布预算审批状态，并在 embedded 与
+daemon Runtime 边界保留结构化 blocked 原因。
+
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
 仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到

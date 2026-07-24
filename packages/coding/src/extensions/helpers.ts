@@ -70,6 +70,7 @@ export async function exec(
       timeout,
       cwd: options.cwd,
       env: safeEnv,
+      windowsHide: true,
     });
     return { exitCode: 0, stdout: stdout.trim(), stderr: stderr.trim() };
   } catch (err) {

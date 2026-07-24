@@ -1,9 +1,10 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-23
+> Last updated: 2026-07-24
 >
-> Current implementation baseline: `v0.7.74`
-> (`@kodax-ai/kodax@0.7.74` workspace package)
+> Current implementation baseline: `v0.7.75` release candidate
+> (`@kodax-ai/kodax@0.7.75` workspace package; latest tagged release is
+> `v0.7.74`)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -100,6 +101,19 @@ bootstrap Node host. A preloaded scrub import removes `ELECTRON_RUN_AS_NODE`
 before daemon application code loads, so ordinary children do not inherit it.
 This requires Electron's default-enabled `RunAsNode` fuse; fuse-disabled hosts
 must start an ordinary Node/CLI daemon and attach to it.
+
+The published Runtime Worker also owns the Windows visibility boundary for
+background subprocesses. Non-interactive memory/Git, provider CLI/ACP, LSP,
+clipboard, worktree, review, extension-command, checkpoint, and sandbox child
+processes request hidden consoles. Explicit editor, terminal, and PTY paths stay
+interactive. The bundle build audits this boundary from the Runtime Worker
+metafile.
+
+The same published worker preserves Sidecar terminal meaning end to end:
+optional post-completion offers remain successful, required clarification can
+produce a structured blocked terminal, and only an eligible revision can
+publish budget-approval state. Embedded and daemon clients observe the same
+blocked code and reason.
 
 Shared Coder daemon control is fact-based rather than connection-owned. One
 atomic `sessions.observe` call returns the authoritative transcript/settings/

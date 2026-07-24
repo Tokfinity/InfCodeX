@@ -103,6 +103,7 @@ export function tryGitRemote(cwd: string): string | undefined {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1000,
+      windowsHide: true,
     });
     const trimmed = stdout.trim();
     return trimmed.length > 0 ? trimmed : undefined;

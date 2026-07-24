@@ -101,7 +101,10 @@ export async function toolWorktreeCreate(
 
   // Create worktree with new branch
   try {
-    await execFileAsync('git', ['worktree', 'add', '-b', branch, worktreePath], { cwd });
+    await execFileAsync('git', ['worktree', 'add', '-b', branch, worktreePath], {
+      cwd,
+      windowsHide: true,
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to create worktree: ${msg}`);
@@ -157,6 +160,7 @@ export async function toolWorktreeRemove(
       // Check for uncommitted files
       const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], {
         cwd: worktreePath,
+        windowsHide: true,
       });
       const uncommittedFiles = statusOut
         .trim()
@@ -172,6 +176,7 @@ export async function toolWorktreeRemove(
         '--remotes',
       ], {
         cwd: worktreePath,
+        windowsHide: true,
       });
       const localCommits = parseInt(revListOut.trim(), 10) || 0;
 
@@ -195,6 +200,7 @@ export async function toolWorktreeRemove(
   try {
     const { stdout: branchOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd: worktreePath,
+      windowsHide: true,
     });
     branch = branchOut.trim();
   } catch {
@@ -203,7 +209,10 @@ export async function toolWorktreeRemove(
 
   // Remove worktree
   try {
-    await execFileAsync('git', ['worktree', 'remove', worktreePath, '--force'], { cwd });
+    await execFileAsync('git', ['worktree', 'remove', worktreePath, '--force'], {
+      cwd,
+      windowsHide: true,
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to remove worktree: ${msg}`);
@@ -212,7 +221,10 @@ export async function toolWorktreeRemove(
   // Delete the branch
   if (branch) {
     try {
-      await execFileAsync('git', ['branch', '-D', branch], { cwd });
+      await execFileAsync('git', ['branch', '-D', branch], {
+        cwd,
+        windowsHide: true,
+      });
     } catch {
       // Branch might not exist or be checked out elsewhere; ignore
     }

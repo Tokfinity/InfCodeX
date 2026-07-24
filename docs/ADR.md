@@ -1,6 +1,18 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-23
+> Last updated: 2026-07-24
+>
+> **v0.7.75 stabilization addendum:** the published Runtime Worker now treats
+> hidden Windows consoles as part of the non-interactive background-process
+> contract. Memory/Git, provider CLI/ACP, LSP, clipboard, worktree, review,
+> extension-command, checkpoint, and sandbox paths request `windowsHide`;
+> explicit editor, terminal, and PTY paths remain interactive. This is a
+> cross-cutting bug-fix invariant enforced by the bundle audit, not a new
+> runtime abstraction or feature authority.
+> The same patch keeps Sidecar verdict meaning and budget eligibility at the
+> existing coding/Runtime boundary: optional post-completion offers are
+> accepted, required clarification can remain blocked, and the blocked reason
+> is preserved without adding a second terminal state machine.
 >
 > **v0.7.74 context/coordination addendum:** FEATURE_272 makes large compaction
 > an always-on, full-eligible-prefix transaction with durable exact-history

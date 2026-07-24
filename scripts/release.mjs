@@ -25,9 +25,10 @@
 //      will accept the publish. Capture pristine bytes for restore.
 //      Name / exports / bin / publishConfig are NOT rewritten — root
 //      package.json is already in published shape (v0.7.43 SDK consumer
-//      `npm link` ergonomics: name=@kodax-ai/kodax, all 8 SDK subpath
+//      `npm link` ergonomics: name=@kodax-ai/kodax, all SDK subpath
 //      exports baked in, bin path published-clean). See ADR-024.
-//   5. Run `npm publish` (or --dry-run).
+//   5. Pack and audit the exact candidate archive, then publish that same
+//      tarball (or stop after pack / run npm's dry-run).
 //   6. Restore pristine package.json bytes — re-asserts `private: true`
 //      so the dev tree cannot be accidentally re-published bare.
 //
@@ -38,6 +39,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { auditSidecarTarball } from './audit-sidecar-tarball.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -246,21 +248,26 @@ function main() {
   log('-- toggling root package.json#private: true → false (will restore via try/finally)');
   const pristineBytes = toggleRootPackageJsonForPublish();
 
-  // Step 4: publish OR pack, then restore (try/finally guarantees restore)
+  // Step 4: pack and audit the exact publish bytes, then optionally publish
+  // that same tarball. Restore package.json in all cases.
   try {
-    if (packOnly) {
-      // npm pack — produces kodax-ai-kodax-<version>.tgz at repo root.
-      // Consumer flow: `npm install /abs/path/to/kodax-ai-kodax-<version>.tgz`
-      // This matches the actual publish-time tarball byte-for-byte (same
-      // package.json rewrite + same files allowlist), so consumer testing
-      // exercises exactly what will be published.
-      log('-- npm pack (local tarball, no publish)');
-      runCmd('npm', ['pack']);
-      log('-- ✓ npm pack succeeded');
-    } else {
+    const tarballPath = path.join(repoRoot, `kodax-ai-kodax-${version}.tgz`);
+    // Consumer flow: `npm install /abs/path/to/kodax-ai-kodax-<version>.tgz`.
+    // Real publish also uses this exact audited archive, eliminating drift
+    // between SDK validation bytes and registry bytes.
+    log('-- npm pack (exact candidate bytes)');
+    runCmd('npm', ['pack']);
+    auditSidecarTarball(tarballPath);
+    log('-- ✓ npm pack + Sidecar tarball audit succeeded');
+
+    if (!packOnly) {
       // Force official npm registry — repo .npmrc pins npmmirror for fast
       // dev installs, but publish must always go to registry.npmjs.org.
-      const args = ['publish', '--registry=https://registry.npmjs.org/'];
+      const args = [
+        'publish',
+        tarballPath,
+        '--registry=https://registry.npmjs.org/',
+      ];
       if (isDryRun) args.push('--dry-run');
       if (otp) args.push(`--otp=${otp}`);
       log(`-- npm ${args.join(' ')}`);

@@ -466,7 +466,7 @@ async function getGitContext(cwd: string): Promise<string> {
   try {
     const { stdout: check } = await execAsync(
       'git rev-parse --is-inside-work-tree',
-      { cwd },
+      { cwd, windowsHide: true },
     );
     if (!check.trim()) {
       return '';
@@ -477,6 +477,7 @@ async function getGitContext(cwd: string): Promise<string> {
     try {
       const { stdout: branch } = await execAsync('git branch --show-current', {
         cwd,
+        windowsHide: true,
       });
       if (branch.trim()) {
         lines.push(`Git Branch: ${branch.trim()}`);
@@ -486,7 +487,10 @@ async function getGitContext(cwd: string): Promise<string> {
     }
 
     try {
-      const { stdout: status } = await execAsync('git status --short', { cwd });
+      const { stdout: status } = await execAsync('git status --short', {
+        cwd,
+        windowsHide: true,
+      });
       if (status.trim()) {
         const statusLines = status.trim().split('\n').slice(0, 10);
         lines.push(

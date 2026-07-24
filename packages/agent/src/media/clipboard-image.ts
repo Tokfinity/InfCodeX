@@ -94,7 +94,7 @@ async function readNonEmptyFile(filePath: string): Promise<Buffer | null> {
 function runCommand(cmd: string, args: readonly string[]): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
-    const child = spawn(cmd, [...args], { stdio: 'ignore' });
+    const child = spawn(cmd, [...args], { stdio: 'ignore', windowsHide: true });
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -121,7 +121,10 @@ function collectStdoutBytes(cmd: string, args: readonly string[]): Promise<Buffe
   return new Promise((resolve) => {
     let settled = false;
     const chunks: Buffer[] = [];
-    const child = spawn(cmd, [...args], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(cmd, [...args], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;

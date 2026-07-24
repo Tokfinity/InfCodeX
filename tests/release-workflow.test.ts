@@ -25,6 +25,15 @@ interface ReleaseWorkflow {
 }
 
 describe('GitHub release workflow', () => {
+  it('publishes the exact Sidecar-audited npm tarball', () => {
+    const source = readFileSync(resolve('scripts/release.mjs'), 'utf8');
+
+    expect(source).toContain("import { auditSidecarTarball } from './audit-sidecar-tarball.mjs'");
+    expect(source).toContain('auditSidecarTarball(tarballPath)');
+    expect(source).toContain("'publish',");
+    expect(source).toContain('tarballPath,');
+  });
+
   it('packages every runtime sidecar with the standalone binary', () => {
     const source = readFileSync(resolve('.github/workflows/release.yml'), 'utf8');
     const workflow = parse(source) as ReleaseWorkflow;

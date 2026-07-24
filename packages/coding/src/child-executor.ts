@@ -1772,6 +1772,7 @@ export async function resolveEvidenceRef(
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 10_000,
+        windowsHide: true,
       });
       return diff.length > 0
         ? `### diff: ${filePath}\n\`\`\`diff\n${diff}\n\`\`\``

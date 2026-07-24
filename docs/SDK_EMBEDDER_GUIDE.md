@@ -34,6 +34,7 @@ are NOT obvious from inspecting the type definitions alone:
 24. [Runtime-owned Auto Mode and plan-approval bridges](#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773)
 25. [Always-on context compaction and bounded transcript recovery](#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774)
 26. [Agent mailbox control versus SDK event telemetry](#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774)
+27. [Windows GUI background subprocess visibility](#27-windows-gui-background-subprocess-visibility-v0775)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -4614,6 +4615,36 @@ only prevents high-frequency progress from becoming a model control signal.
 
 ---
 
+## 27. Windows GUI background subprocess visibility (v0.7.75)
+
+KodaX SDK hosts do not need to add process-wide console suppression around the
+Runtime. In the v0.7.75 release candidate, Runtime Worker-reachable
+non-interactive/background child processes request `windowsHide: true` at their
+own spawn boundary. The covered paths include:
+
+- memory and Git metadata probes;
+- provider CLI execution and ACP servers;
+- LSP acquisition and language servers;
+- clipboard helpers, worktrees, review commands, and extension commands;
+- managed-task checkpoints and sandbox helpers.
+
+The contract is intentionally narrow. Explicit external editors, terminal
+commands, and PTY sessions remain interactive. POSIX-only `ps`, `tmux`, and
+sandbox branches are reviewed bundle-audit exceptions rather than Windows
+visibility paths.
+
+`npm run build:bundle` audits every statically identifiable child-process call
+reachable from `dist/runtime-worker.js`. The packaged Electron daemon smoke then
+runs 20 ordinary queries with a Win32 probe and checks that the expected Git
+children never own a visible console window. These checks validate the SDK
+boundary, but they do not replace product-level validation in the packaged host.
+KodaX Space should install the exact v0.7.75 tarball and complete
+[`ISSUE_205_v0.7.75_REGRESSION_GUIDE.md`](test-guides/ISSUE_205_v0.7.75_REGRESSION_GUIDE.md)
+on Windows 10 and Windows 11 as a non-blocking product validation follow-up.
+This follow-up does not gate SDK packaging, tagging, or publication.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start
@@ -4623,3 +4654,4 @@ only prevents high-frequency progress from becoming a model control signal.
 - [docs/ADR.md ADR-058](ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry) — mailbox control versus Actor telemetry
 - [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
 - [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release-candidate design and verification record
+- [docs/features/v0.7.75.md](features/v0.7.75.md) — v0.7.75 Windows GUI and Sidecar/Runtime stabilization candidate

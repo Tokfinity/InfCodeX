@@ -20,6 +20,7 @@ describe('checkCliCommandInstalled', () => {
     spawnMock.mockReturnValue(child);
 
     const pending = checkCliCommandInstalled('codex');
+    expect(spawnMock.mock.calls[0]?.[2]?.windowsHide).toBe(true);
     child.emit('close', 0);
 
     await expect(pending).resolves.toBe(true);

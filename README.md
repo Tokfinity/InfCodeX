@@ -385,6 +385,20 @@ hosts that disable it must start the daemon through ordinary Node/KodaX CLI and
 connect in attach-only mode. For SDK calls, `homeDir` is the CLI-style base
 directory that owns `.kodax`, not the `.kodax` path itself.
 
+**v0.7.75 Windows GUI stabilization candidate:** Runtime Worker-reachable
+non-interactive subprocesses request hidden Windows consoles across memory/Git,
+provider CLI/ACP, LSP, clipboard, worktree, review, extension-command,
+checkpoint, and sandbox paths. Explicit editor, terminal, and PTY behavior is
+unchanged. The SDK bundle includes a static child-process audit and a packaged
+Electron 20-query console-visibility regression. Product-level packaged KodaX
+Space verification remains useful but does not gate SDK packaging or
+publication.
+
+The same candidate distinguishes optional post-completion offers from
+clarification required to finish the current request, emits budget-approval
+state only for eligible Sidecar revisions, and preserves structured blocked
+reasons across embedded and daemon Runtime boundaries.
+
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or

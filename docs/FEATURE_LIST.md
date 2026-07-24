@@ -12,23 +12,23 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.74` |
-| Current package version | `@kodax-ai/kodax@0.7.74` release (npm publication remains manual) |
+| Current package version | `@kodax-ai/kodax@0.7.75` release candidate (untagged; product validation is non-blocking) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `60` |
+| Total tracked features | `61` |
 | InProgress | `1` |
-| Planned | `11` |
+| Planned | `12` |
 | Completed | `41` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.74 is the current Git/GitHub release; npm publication remains the operator's final step. |
+| Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.75 is a feature-free SDK stabilization candidate; v0.7.74 remains the current Git/GitHub release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 3 | `263, 264, 265` | `v0.7.75` -> `v0.7.85` |
+| Planned, near-term | 4 | `274, 263, 264, 265` | `v0.7.76` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -58,7 +58,9 @@
 | `v0.7.72` | `2` |
 | `v0.7.73` | `1` |
 | `v0.7.74` | `2` |
-| `v0.7.75` | `1` |
+| `v0.7.75` | `0` |
+| `v0.7.76` | `1` |
+| `v0.7.77` | `1` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `0` |
@@ -349,6 +351,21 @@
 > support, proves that KodaX builds without dependency lifecycle scripts, and
 > migrates npm publication from long-lived/bypass-2FA credentials to GitHub
 > Actions OIDC before the January 2027 publishing cutoff.
+>
+> **2026-07-23 F263 schedule adjustment**: at user direction, `FEATURE_263`
+> moves from `v0.7.75` to `v0.7.77`. `v0.7.75` and `v0.7.76` are therefore
+> feature-free stabilization / bugfix slots. `FEATURE_264`, `FEATURE_265`, and
+> all later roadmap targets remain unchanged. This supersedes only the active
+> F263 target in the 2026-07-12 notes; their historical reviewed-out decisions
+> remain unchanged.
+>
+> **2026-07-24 F274 quality-strategy insertion**: at user direction,
+> `FEATURE_274` enters `v0.7.76`, superseding only the statement above that
+> `v0.7.76` is feature-free. It gives AMA a shared six-pattern adaptive
+> problem-solving playbook, Runtime-derived `PatternTrace`, and Sidecar-aligned
+> quality judgment without reintroducing complexity-driven Workflow activation,
+> a fixed Agent topology, or a second quality gate. `v0.7.75` remains the
+> feature-free SDK stabilization candidate; F263 and later targets do not move.
 
 ---
 
@@ -357,6 +374,29 @@
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+
+---
+
+## v0.7.75 Stabilization Record
+
+`v0.7.75` introduces no Feature ID. It is the SDK stabilization candidate for
+Windows GUI background-process hardening and Sidecar/Runtime completion
+correctness. Runtime
+Worker-reachable non-interactive child processes request hidden Windows
+consoles, while explicit editor, terminal, and PTY paths remain unchanged. The
+bundle build audits the published worker surface and the packaged Electron
+smoke executes 20 ordinary queries with a console-visibility probe.
+
+The same candidate accepts optional post-completion offers, reserves blocked
+for required clarification, publishes budget-approval state only for an
+eligible revision, and preserves structured blocked reasons across Runtime
+persistence and daemon boundaries. The release path audits those guards in the
+exact npm tarball.
+
+Packaged KodaX Space regression on Windows 10 and Windows 11 remains a
+non-blocking product follow-up and does not gate tag, package build, or npm
+publication. This release slot also preserves the 2026-07-12 roadmap decisions;
+FEATURE_263 is planned for `v0.7.77`.
 
 ---
 
@@ -628,7 +668,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.75` | [v0.7.75](features/v0.7.75.md#feature_263-evidence-gated-background-skill-learning-loop) |
+| `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | Core / Agent Orchestration + Quality | High | `v0.7.76` | [v0.7.76](features/v0.7.76.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) |
+| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |

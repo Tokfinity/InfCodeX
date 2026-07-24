@@ -41,6 +41,7 @@ export abstract class CLIExecutor {
             env,
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: process.platform !== 'win32',
+            windowsHide: true,
         });
 
         // Capture stderr for diagnostics without interleaving it into stdout JSONL.

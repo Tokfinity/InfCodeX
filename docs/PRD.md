@@ -1,9 +1,10 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-23
+> Last updated: 2026-07-24
 >
-> Current implementation baseline: `v0.7.74`
-> (`@kodax-ai/kodax@0.7.74` workspace package)
+> Current implementation baseline: `v0.7.75` release candidate
+> (`@kodax-ai/kodax@0.7.75` workspace package; latest tagged release is
+> `v0.7.74`)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -119,6 +120,19 @@ starters must converge on the verified owner rather than start competing
 servers. Process-local callbacks and service objects must fail closed at
 Worker/daemon DTO boundaries. `close()` must terminate private inline/Worker
 ownership but only detach a daemon client.
+
+On Windows GUI hosts, Runtime-owned non-interactive/background child processes
+must not create visible console windows. This covers memory/Git metadata,
+provider CLI and ACP, LSP, clipboard, worktree, review, extension-command,
+checkpoint, and sandbox paths reachable from the published Runtime Worker.
+Explicit editor, terminal, and PTY interactions remain interactive and are not
+hidden by this requirement.
+
+Sidecar completion must distinguish an optional offer made after the current
+request is satisfied from clarification required to satisfy the request.
+Runtime hosts must receive budget-approval state only for an eligible revision,
+and must retain structured blocked codes and reasons through embedded, daemon,
+persistence, and restart boundaries.
 
 For a session with `permissionMode: 'auto'`, the Runtime is also the owner of
 the Auto Mode tool guardrail. It creates and reuses the guardrail across turns,

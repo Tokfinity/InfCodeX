@@ -76,90 +76,57 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.74 release verification
+## v0.7.75 release-candidate verification
 
-Release state: package version `0.7.74`, code, tests, and documentation are
-committed together. The `v0.7.74` tag triggers the five-platform GitHub Release
+Release state: the root and four workspace packages are version `0.7.75`.
+The Windows GUI subprocess candidate, automated regressions, and documentation
+are prepared together. Before tagging, commit the complete candidate and verify that
+`git status` contains no untracked release files or dirty documentation
+submodules. The `v0.7.75` tag will trigger the five-platform GitHub Release
 workflow; npm publication remains a separate manual operator step.
 
-Run the template drift check and full deterministic gate, then refresh the
-normal build artifact used by a globally linked `kodax` command.
+Run the template drift check, full deterministic gate, build, and package
+inspection:
 
 ```bash
 npm run config:templates:check
 npm run test:full
-npm run build
-npm pack --dry-run
+node scripts/release.mjs --pack-only
 ```
 
-The full deterministic gate is authoritative. If a v0.7.74 area fails and needs
-a focused rerun, use the matching group below:
+`--pack-only` runs the production build, temporarily applies the publishable
+`private: false` package metadata, creates the exact candidate archive, audits
+the bundled Sidecar prompt and budget bridge, and restores the development
+manifest. Use the resulting `kodax-ai-kodax-0.7.75.tgz` for SDK/Space testing;
+real publication sends the same audited archive to npm.
+
+The full deterministic gate is authoritative. For a focused Windows GUI
+subprocess rerun:
 
 ```bash
-# Always-on compaction, exact-history durability, and bounded recovery
-npx vitest run packages/agent/src/session-lineage \
-  packages/coding/src/tools/session-history.test.ts \
-  packages/coding/src/agent-runtime/durable-compaction.test.ts \
-  packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts \
-  packages/repl/src/interactive/storage.test.ts \
-  packages/repl/src/session/public-api.test.ts \
-  src/sdk-runtime.test.ts
-
-# Mailbox-driven Agent wait, delivery recovery, and Goal-wrapper propagation
-npx vitest run packages/agent/src/actors/controller.test.ts \
-  packages/agent/src/messaging/drain.test.ts \
-  packages/agent/src/orchestration/idle-yield.test.ts \
-  packages/agent/src/primitives/runner.test.ts \
-  packages/coding/src/agent-runtime/actor-runtime.test.ts \
-  packages/coding/src/tools/agent-collaboration.test.ts \
-  packages/coding/src/task-engine/runner-driven.test.ts \
-  packages/coding/src/task-engine/runner-goal-adapter.test.ts
-
-# Active-run interrupt input across embedded Runtime and daemon boundaries
-npx vitest run src/sdk-runtime.test.ts src/runtime-daemon/client.test.ts \
-  src/runtime-daemon/server.test.ts src/runtime-event.test.ts
-
-# Release-candidate checkpoint topology and PowerShell bracket-wildcard guard
-npx vitest run packages/agent/src/session-lineage/kodax-session-lineage.test.ts \
-  packages/repl/src/permission/powershell-mutation.test.ts \
-  packages/repl/src/permission/auto-rules.test.ts
-
-# Continue-most-recent and Auto mode-switch ordering
-npx vitest run packages/repl/src/session/resumable-session.test.ts \
-  packages/repl/src/interactive/repl-startup-session.test.ts \
-  packages/coding/src/agent-runtime/__contract-tests__/cap-043-auto-resume.contract.test.ts \
-  packages/repl/src/ui/view-models/surface-status.test.ts \
-  src/kodax_cli.runtime-runner.test.ts
-
-# External-review low-impact debt closures
-npx vitest run packages/repl/src/session/compact-session.test.ts \
-  src/sdk-runtime.test.ts
-
-# README/kodax_manual/config drift guards
-npx vitest run packages/coding/src/self-knowledge/registry.test.ts \
-  packages/coding/src/self-knowledge/resolver.test.ts \
-  packages/repl/src/interactive/commands-manual-drift.test.ts \
-  packages/repl/src/common/example-config.test.ts
+npx vitest run \
+  packages/agent/src/memory/paths.test.ts \
+  packages/coding/src/lsp/spawn-options.test.ts \
+  packages/coding/src/task-engine/runner-windows-hide.test.ts \
+  packages/llm/src/cli-events/command-utils.test.ts \
+  packages/llm/src/cli-events/executor.test.ts \
+  packages/llm/src/cli-events/acp-client.spawn.test.ts \
+  tests/runtime-worker-windows-hide-audit.test.ts
 ```
 
-Before tagging, complete the two human release guides against an isolated
-`KODAX_HOME` and a disposable project/Session:
+`npm run build` executes the Runtime Worker child-process audit. On Windows,
+after a successful build, run the packaged Electron boundary regression:
 
-- [`FEATURE_272_v0.7.74_TEST_GUIDE.md`](test-guides/FEATURE_272_v0.7.74_TEST_GUIDE.md)
-  covers threshold policy, full-prefix/query retention, root/child attribution,
-  daemon frame bounds, exact-history durability, and revision-bound recovery.
-- [`FEATURE_273_v0.7.74_TEST_GUIDE.md`](test-guides/FEATURE_273_v0.7.74_TEST_GUIDE.md)
-  covers progress storms, token-free long waits, synthetic/user authorship,
-  restart delivery, timeout/interruption, and unchanged SDK event telemetry.
-- [`ISSUE_105_v0.7.74_REGRESSION_GUIDE.md`](test-guides/ISSUE_105_v0.7.74_REGRESSION_GUIDE.md)
-  covers empty-placeholder skipping, explicit-ID priority, Classic/Ink parity,
-  and saved-workspace restoration.
-- [`ISSUE_204_v0.7.74_REGRESSION_GUIDE.md`](test-guides/ISSUE_204_v0.7.74_REGRESSION_GUIDE.md)
-  covers Shift-Tab cycling, immediate engine labels, rapid last-action-wins
-  ordering, newline input, and sticky rules fallback.
+```bash
+npm run test:electron-daemon:built
+```
 
-The guides intentionally leave tester/date/result fields for release evidence;
-do not mark their checkboxes from automated test output alone.
+Packaged KodaX Space validation is a non-blocking product follow-up; it does not
+gate the tag, package build, or npm publication. To complete that validation,
+install the exact generated tarball into packaged KodaX Space and run
+[`ISSUE_205_v0.7.75_REGRESSION_GUIDE.md`](test-guides/ISSUE_205_v0.7.75_REGRESSION_GUIDE.md)
+on Windows 10 and Windows 11. Record the Space build, OS build, tarball hash,
+tester, date, and outcome. Automated output must not pre-fill the human result.
 
 ## Automated release (CI)
 

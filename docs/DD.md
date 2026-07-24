@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-23
+> Last updated: 2026-07-24
 >
-> Current release baseline: `v0.7.74`
-> (`@kodax-ai/kodax@0.7.74`; latest tagged release is `v0.7.74`)
+> Current release-candidate baseline: `v0.7.75`
+> (`@kodax-ai/kodax@0.7.75`; latest tagged release is `v0.7.74`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,10 +20,11 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.74`. The current baseline
-adds reliable always-on compaction and exact-history recovery (FEATURE_272),
-mailbox-driven Agent waiting (FEATURE_273), active-run interrupt input, and
-resident Goal lifecycle contracts on top of the v0.7.73 provider/Auto surface.
+The root workspace package is `@kodax-ai/kodax@0.7.75`. The current release
+candidate retains the v0.7.74 compaction, mailbox-wait, interrupt-input, and
+Goal lifecycle contracts while hardening Windows GUI background-process
+visibility for SDK Runtime Worker hosts and preserving Sidecar completion,
+budget-approval, and blocked-terminal semantics in the published bundle.
 
 `package.json` exposes:
 
@@ -783,7 +784,34 @@ lineage. Storage-less Runs and partial visibility of the pair expose neither
 tool. The embedded Runtime/daemon projects the same search hits; bulk and
 oversized exact reads continue through transcript page/chunk APIs.
 
-## 21. Related Documents
+## 21. v0.7.75 Stabilization Boundaries
+
+Every Runtime Worker-reachable non-interactive `child_process` call must either
+request `windowsHide: true` or be an explicit reviewed exception. The covered
+surface includes memory and Git metadata probes, provider CLI/ACP execution,
+LSP acquisition and servers, clipboard helpers, worktrees, review commands,
+extension commands, managed-task checkpoints, and sandbox helpers.
+
+Interactive external editors, explicit terminal commands, PTY sessions, and
+POSIX-only process-management branches remain exceptions because hiding or
+changing their process contract would alter user-visible behavior. The bundle
+build inspects the Runtime Worker esbuild metafile and fails when a statically
+identifiable reachable call lacks the required option or a named exception.
+The packaged Electron smoke separately executes 20 ordinary queries and checks
+Win32 console visibility at the actual SDK/daemon boundary.
+
+The release candidate also retains the Sidecar/Runtime completion boundary:
+
+- optional follow-up offered after the request is complete is an accepted
+  completion, while clarification required to finish the request is blocked;
+- the budget bridge publishes approval state only immediately before an
+  eligible `revise` request;
+- live results and persisted/daemon projections retain the blocked code and
+  reason, including after restart recovery;
+- the release script audits those prompt and budget guards in the exact
+  tarball it can publish.
+
+## 22. Related Documents
 
 - Product requirements: [PRD.md](PRD.md)
 - High-level design: [HLD.md](HLD.md)

@@ -53,7 +53,8 @@ export class AcpClient {
             this.agentProcess = spawn(cmd, this.options.args ?? [], {
                 cwd: this.options.cwd ?? process.cwd(),
                 stdio: ['pipe', 'pipe', 'inherit'],
-                detached: process.platform !== 'win32'
+                detached: process.platform !== 'win32',
+                windowsHide: true,
             });
 
             if (!this.agentProcess.stdin || !this.agentProcess.stdout) {

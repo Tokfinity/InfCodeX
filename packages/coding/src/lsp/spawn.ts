@@ -25,7 +25,7 @@ export function spawnLspProcess(
 ): ChildProcess {
   if (needsShell(command)) {
     const line = [quoteIfNeeded(command), ...args].join(' ');
-    return spawn(line, { ...options, shell: true });
+    return spawn(line, { ...options, shell: true, windowsHide: true });
   }
   if (command === process.execPath) {
     const launch = prepareInternalNodeLaunch({
@@ -33,9 +33,14 @@ export function spawnLspProcess(
       env: options.env ?? process.env,
       isElectron: process.versions.electron !== undefined,
     });
-    return spawn(command, launch.args, { ...options, env: launch.env, shell: false });
+    return spawn(command, launch.args, {
+      ...options,
+      env: launch.env,
+      shell: false,
+      windowsHide: true,
+    });
   }
-  return spawn(command, [...args], { ...options, shell: false });
+  return spawn(command, [...args], { ...options, shell: false, windowsHide: true });
 }
 
 function quoteIfNeeded(value: string): string {

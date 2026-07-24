@@ -66,7 +66,10 @@ const execAsync = promisify(exec);
  */
 async function getGitRoot(cwd?: string): Promise<string | null> {
   try {
-    const { stdout } = await execAsync('git rev-parse --show-toplevel', { cwd });
+    const { stdout } = await execAsync('git rev-parse --show-toplevel', {
+      cwd,
+      windowsHide: true,
+    });
     return stdout.trim();
   } catch {
     return null;

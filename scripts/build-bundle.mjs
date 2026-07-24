@@ -54,6 +54,7 @@ import { build } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { auditRuntimeWorkerWindowsHide } from './audit-runtime-windows-hide.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -380,9 +381,19 @@ const runtimeWorkerResult = await build({
   ...commonOptions,
   entryPoints: [path.join(repoRoot, 'src/runtime-worker/entry.ts')],
   outfile: path.join(distDir, 'runtime-worker.js'),
+  metafile: true,
 });
 const runtimeWorkerBytes = statSync(path.join(distDir, 'runtime-worker.js')).size;
 log(`  OK dist/runtime-worker.js (${(runtimeWorkerBytes / 1024).toFixed(0)} kB)`);
+const runtimeWindowsAudit = auditRuntimeWorkerWindowsHide({
+  repoRoot,
+  metafile: runtimeWorkerResult.metafile,
+  bundlePath: path.join(distDir, 'runtime-worker.js'),
+});
+log(
+  `  OK Runtime Worker child-process audit: ${runtimeWindowsAudit.calls.length} calls, `
+  + `${runtimeWindowsAudit.exceptions.length} intentional exceptions`,
+);
 
 log('Building dist/constructed-handler-worker.js (constructed tool sidecar)...');
 const constructedHandlerWorkerResult = await build({

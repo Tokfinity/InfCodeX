@@ -100,7 +100,7 @@ try {
     const childEnv = internalElectronNode
       ? { ...wrapped.env, [${ELECTRON_RUN_AS_NODE_ENV_LITERAL}]: '1' }
       : wrapped.env;
-    child = spawn(wrapped.argv[0], wrapped.argv.slice(1), { cwd: request.cwd, env: childEnv, shell: false, stdio: 'inherit' });
+    child = spawn(wrapped.argv[0], wrapped.argv.slice(1), { cwd: request.cwd, env: childEnv, shell: false, stdio: 'inherit', windowsHide: true });
   } else {
     const wrapped = await SandboxManager.wrapWithSandbox(command);
     const childEnv = internalElectronNode

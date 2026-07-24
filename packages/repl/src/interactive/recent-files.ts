@@ -37,8 +37,8 @@ function pathFromPorcelainLine(line: string): string | undefined {
 export async function getRecentWorkingSetFiles(cwd: string, limit = 10): Promise<string[]> {
   try {
     const [{ stdout: rootOut }, { stdout: statusOut }] = await Promise.all([
-      execAsync('git rev-parse --show-toplevel', { cwd }),
-      execAsync('git status --porcelain=v1 -uall', { cwd }),
+      execAsync('git rev-parse --show-toplevel', { cwd, windowsHide: true }),
+      execAsync('git status --porcelain=v1 -uall', { cwd, windowsHide: true }),
     ]);
     const root = rootOut.trim();
     const out: string[] = [];

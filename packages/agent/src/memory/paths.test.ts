@@ -4,17 +4,23 @@
  * Covers sanitize collision-safety, no-remote fallback, NFC / lowercase
  * normalization, and isAutoManagedMemoryFile prefix matching.
  *
- * Does NOT exercise the real `git config` call — `tryGitRemote` is
- * tested via the integration path in resolveMemoryRoot only when a
- * real .git/config is present. Tests inject expected sanitize inputs
- * directly via `sanitizeProjectKey` to keep coverage hermetic.
+ * The `git config` call is mocked so option propagation and no-remote
+ * fallback remain hermetic. Sanitization cases inject their inputs directly.
  */
 
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { execSyncMock } = vi.hoisted(() => ({
+  execSyncMock: vi.fn(() => ''),
+}));
+
+vi.mock('node:child_process', () => ({
+  execSync: execSyncMock,
+}));
 
 import { setAgentConfigHome } from '../runtime/agent-home.js';
 import {
@@ -98,6 +104,7 @@ describe('resolveMemoryRoot / resolveMemoryEntrypoint', () => {
   let tempHome: string;
 
   beforeEach(() => {
+    execSyncMock.mockClear();
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-memory-paths-'));
     setAgentConfigHome(tempHome);
   });
@@ -113,6 +120,20 @@ describe('resolveMemoryRoot / resolveMemoryEntrypoint', () => {
     expect(root.startsWith(tempHome)).toBe(true);
     expect(root.includes('projects')).toBe(true);
     expect(root.endsWith('memory')).toBe(true);
+  });
+
+  it('hides the background Git remote probe in Windows GUI hosts', () => {
+    resolveMemoryRoot(tempHome);
+
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git config --get remote.origin.url',
+      expect.objectContaining({
+        cwd: tempHome,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1_000,
+        windowsHide: true,
+      }),
+    );
   });
 
   it('fallback key for no-remote cwd starts with local-', () => {

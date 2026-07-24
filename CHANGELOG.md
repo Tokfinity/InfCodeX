@@ -6,6 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.75] - 2026-07-24
+
+> Package, code, tests, and documentation are prepared for SDK/Space validation.
+> The `v0.7.75` tag, GitHub Release, and npm publication are intentionally not
+> created yet.
+
+### Changed
+
+- **Exact audited npm candidate bytes.** The release script now packs first,
+  audits the generated Sidecar prompt and budget bridge, and publishes that
+  exact tarball so SDK validation and registry publication cannot drift.
+- **Windows GUI background-process hardening.** Runtime
+  Worker-reachable non-interactive child processes now request hidden Windows
+  consoles across memory/Git metadata, provider CLI and ACP, LSP, clipboard,
+  worktree, review, extension-command, checkpoint, and sandbox paths. Explicit
+  editor, terminal, and PTY interaction remains unchanged.
+- **Published Runtime Worker audit and packaged-host regression.** The bundle
+  build now audits statically identifiable child-process calls in the published
+  Runtime Worker, and the packaged Electron daemon smoke runs 20 ordinary
+  queries with a Win32 console-visibility probe. Packaged KodaX Space validation
+  on Windows 10 and Windows 11 remains a non-blocking product follow-up; it does
+  not gate the tag, package build, or npm publication.
+
+### Fixed
+
+- **Sidecar completion and Runtime terminal semantics.** Optional work offered
+  after the current request is complete is accepted rather than reported as
+  blocked; only clarification required to finish the current request remains
+  blocked. Budget-approval state is emitted only for an eligible `revise`, and
+  structured blocked codes and reasons survive live events, persistence,
+  daemon round trips, and restart recovery.
+
+### Documentation
+
+- Updated the release guide, current architecture/design baselines, SDK
+  embedder guidance, feature index, roadmap, issue tracker, English/Chinese
+  READMEs, and the v0.7.75 regression guide for the SDK validation candidate.
+- Rescheduled FEATURE_263 from v0.7.75 to v0.7.77 and retained v0.7.75 as a
+  feature-free stabilization release.
+
 ## [0.7.74] - 2026-07-23
 
 > Git tag and GitHub Release are published by the release workflow. npm
