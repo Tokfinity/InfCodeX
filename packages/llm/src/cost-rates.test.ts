@@ -86,8 +86,11 @@ describe('cost-rates', () => {
         'k3-256k',
         'kimi-for-coding-highspeed',
       ]);
-      expect(kimiCode.k3).toEqual(kimiCode['kimi-for-coding']);
-      expect(kimiCode['k3-256k']).toEqual(kimiCode.k3);
+      expect(kimiCode['k3-256k']).toEqual(kimiCode['kimi-for-coding']);
+      expect(kimiCode.k3).toEqual({
+        inputPer1M: 0.01,
+        outputPer1M: 0.03,
+      });
       expect(kimiCode['kimi-for-coding-highspeed']).toEqual({
         inputPer1M: 0.015,
         outputPer1M: 0.045,

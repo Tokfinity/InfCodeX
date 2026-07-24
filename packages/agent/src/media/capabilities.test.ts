@@ -39,6 +39,8 @@ describe('getModelInputCapabilities', () => {
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3-256k' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3' }).video.status).toBe('provider-native-unwired');
+    expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'k3-256k' }).video.status).toBe('unsupported');
+    expect(getModelInputCapabilities({ provider: 'kimi-code' }).video.status).toBe('unsupported');
     expect(getModelInputCapabilities({ provider: 'kimi-code', model: 'kimi-for-coding-highspeed' }).image.status).toBe('supported');
   });
 

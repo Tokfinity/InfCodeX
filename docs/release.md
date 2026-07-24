@@ -76,14 +76,17 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.75 release-candidate verification
+## v0.7.76 release verification
 
-Release state: the root and four workspace packages are version `0.7.75`.
-The Windows GUI subprocess candidate, automated regressions, and documentation
-are prepared together. Before tagging, commit the complete candidate and verify that
-`git status` contains no untracked release files or dirty documentation
-submodules. The `v0.7.75` tag will trigger the five-platform GitHub Release
-workflow; npm publication remains a separate manual operator step.
+Release state: the root and four workspace packages are version `0.7.76`.
+This feature-free maintenance release promotes the direct Kimi Code
+`k3-256k` route to the provider default while retaining both K2.7 Code routes
+and the 1M K3 tier. It also carries the v0.7.75 Windows GUI and Sidecar/Runtime
+stabilization changes because no v0.7.75 Git tag was created. Before tagging,
+commit the complete candidate and verify that `git status` contains no
+untracked release files or dirty documentation submodules. The `v0.7.76` tag
+triggers the five-platform GitHub Release workflow; npm publication remains a
+separate manual operator step.
 
 Run the template drift check, full deterministic gate, build, and package
 inspection:
@@ -97,11 +100,30 @@ node scripts/release.mjs --pack-only
 `--pack-only` runs the production build, temporarily applies the publishable
 `private: false` package metadata, creates the exact candidate archive, audits
 the bundled Sidecar prompt and budget bridge, and restores the development
-manifest. Use the resulting `kodax-ai-kodax-0.7.75.tgz` for SDK/Space testing;
+manifest. Use the resulting `kodax-ai-kodax-0.7.76.tgz` for SDK/Space testing;
 real publication sends the same audited archive to npm.
 
-The full deterministic gate is authoritative. For a focused Windows GUI
-subprocess rerun:
+The full deterministic gate is authoritative. For a focused Kimi Code rerun:
+
+```bash
+npx vitest run \
+  packages/llm/src/providers/provider-capabilities.test.ts \
+  packages/llm/src/providers/model-capabilities.test.ts \
+  packages/llm/src/providers/registry.test.ts \
+  packages/llm/src/providers/anthropic-reasoning-capability.test.ts \
+  packages/llm/src/cost-rates.test.ts \
+  packages/agent/src/media/capabilities.test.ts \
+  packages/coding/src/self-knowledge/registry.test.ts
+```
+
+With `KIMI_CODE_API_KEY` configured, run the four-route live-wire smoke:
+
+```powershell
+$env:KODAX_INTEGRATION_TEST = '1'
+npm run test:integration -- packages/llm/src/providers/kimi-wire.integration.test.ts
+```
+
+For a focused Windows GUI subprocess rerun:
 
 ```bash
 npx vitest run \

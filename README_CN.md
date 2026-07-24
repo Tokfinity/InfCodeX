@@ -102,6 +102,11 @@ packaged Electron 回归连续执行 20 次普通查询并检查控制台可见�
 澄清”，只为符合资格的 Sidecar `revise` 发布预算审批状态，并在 embedded 与
 daemon Runtime 边界保留结构化 blocked 原因。
 
+**v0.7.76 Kimi Code 模型目录更新**：`kimi-code` 现在默认使用官方
+`k3-256k` Model ID，并直接发送该同名 ID。`kimi-for-coding` 继续作为 K2.7 Code
+可选模型，同时保留 `kimi-for-coding-highspeed` 与 1M `k3` tier。K3 支持
+`low` / `high` / `max` 思考强度，默认 `high`；256K 路由支持图片但不支持视频输入。
+
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
 仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到
@@ -509,7 +514,7 @@ dist/binary/linux-x64/
 | anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6（可 `/model` 切换 `claude-opus-4-6` / `claude-haiku-4-5`） |
 | openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex（可 `/model` 切换 `gpt-5.4` / `gpt-5.3-codex-spark`） |
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code（262,144 token；可 `/model` 切换 `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5`） |
-| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding（可 `/model` 切换 `k3-256k`〔Moderato，256K〕/ `k3`〔Allegretto+，1M〕/ `kimi-for-coding-highspeed`；两个 K3 选项均请求上游 `k3`） |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | k3-256k（Moderato+，256K，直接请求同名上游模型；可 `/model` 切换 `k3`〔Allegretto+，1M〕/ `kimi-for-coding`〔K2.7 Code〕/ `kimi-for-coding-highspeed`） |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview（Anthropic 协议；可 `/model` 切换 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；均为 1M ctx；Qwen 3.8 / 3.7 Plus / 3.6 Flash 支持图片理解） |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |

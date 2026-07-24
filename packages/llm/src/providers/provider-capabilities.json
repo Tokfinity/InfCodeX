@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-20",
+  "updatedAt": "2026-07-25",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -257,7 +257,7 @@
     },
     "kimi-code": {
       "apiKeyEnv": "KIMI_CODE_API_KEY",
-      "model": "kimi-for-coding",
+      "model": "k3-256k",
       "models": [
         {
           "id": "k3",
@@ -268,12 +268,12 @@
             "reasoningPreset": "kimi-k3",
             "effortStrategy": "provider-toggle",
             "thinkingStrategy": "provider-toggle",
-            "defaultEffort": "max",
+            "defaultEffort": "high",
             "supportedEfforts": [
               { "value": "none", "description": "Disable thinking" },
-              { "value": "low", "description": "Accepted by the API; full support is forthcoming", "isUserVisible": false },
-              { "value": "high", "description": "Accepted by the API; full support is forthcoming", "isUserVisible": false },
-              { "value": "max", "description": "Maximum thinking effort", "isDefault": true }
+              { "value": "low", "description": "Low thinking effort" },
+              { "value": "high", "description": "High thinking effort", "isDefault": true },
+              { "value": "max", "description": "Maximum thinking effort" }
             ],
             "effortAliases": {
               "minimal": "low",
@@ -290,8 +290,36 @@
         },
         {
           "id": "k3-256k",
-          "wireModel": "k3",
           "displayName": "Kimi K3 (256K, Moderato)",
+          "contextWindow": 262144,
+          "reasoningCapability": "native-effort",
+          "reasoningProfile": {
+            "reasoningPreset": "kimi-k3",
+            "effortStrategy": "provider-toggle",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "high",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "low", "description": "Low thinking effort" },
+              { "value": "high", "description": "High thinking effort", "isDefault": true },
+              { "value": "max", "description": "Maximum thinking effort" }
+            ],
+            "effortAliases": {
+              "minimal": "low",
+              "minimum": "low",
+              "light": "low",
+              "medium": "high",
+              "xhigh": "max",
+              "ultra": "max"
+            },
+            "disabledEfforts": ["none"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
+          "id": "kimi-for-coding",
+          "displayName": "Kimi K2.7 Code",
           "contextWindow": 262144
         },
         {

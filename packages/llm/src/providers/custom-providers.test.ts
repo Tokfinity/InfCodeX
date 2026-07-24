@@ -183,6 +183,7 @@ describe('custom providers', () => {
       reasoning: { defaultEffort: 'high' },
       models: [
         { id: 'kimi-code', reasoningPreset: 'kimi-k2.7-code' },
+        { id: 'k3', reasoningPreset: 'kimi-k3' },
       ],
     });
 
@@ -196,6 +197,16 @@ describe('custom providers', () => {
       reasoningPreset: 'kimi-k2.7-code',
       effortStrategy: 'prompt-only',
       localRejectEfforts: ['none', 'minimal'],
+    });
+    expect(provider.getReasoningProfile('k3')).toMatchObject({
+      reasoningPreset: 'kimi-k3',
+      effortStrategy: 'provider-toggle',
+      defaultEffort: 'high',
+      supportedEfforts: expect.arrayContaining([
+        expect.objectContaining({ value: 'low' }),
+        expect.objectContaining({ value: 'high', isDefault: true }),
+        expect.objectContaining({ value: 'max' }),
+      ]),
     });
   });
 

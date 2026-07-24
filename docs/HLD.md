@@ -1,10 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-24
+> Last updated: 2026-07-25
 >
-> Current implementation baseline: `v0.7.75` release candidate
-> (`@kodax-ai/kodax@0.7.75` workspace package; latest tagged release is
-> `v0.7.74`)
+> Current implementation baseline: `v0.7.76`
+> (`@kodax-ai/kodax@0.7.76` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -211,12 +210,13 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 - capability metadata and provider policy gates,
 - side-query support for verifier and other out-of-band LLM calls.
 
-The 2026-07-16 Kimi snapshot makes `kimi-k2.7-code` the public default, keeps
+The 2026-07-25 Kimi snapshot makes `kimi-k2.7-code` the public default, keeps
 HighSpeed/K2.6/K2.5 as explicit routes, and treats thinking support as a
 route-specific wire contract rather than a generic compatible-provider toggle.
-The separate `kimi-code` subscription alias keeps `kimi-for-coding` stable and
-adds `k3-256k` plus a 1,048,576-token `k3` tier. Both K3 choices address the
-upstream `k3` model and use `thinking.effort` for reasoning intent.
+The separate `kimi-code` subscription alias defaults to the direct upstream
+`k3-256k` Model ID, retains `kimi-for-coding` for K2.7 Code, and offers a
+1,048,576-token `k3` tier. Both K3 routes use `thinking.effort` for reasoning
+intent, defaulting to `high`.
 
 Provider-specific logic belongs at the provider boundary: request shape,
 reasoning parameters, token caps, image support, forced tool choice support,

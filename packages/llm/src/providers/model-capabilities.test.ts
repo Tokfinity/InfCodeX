@@ -61,28 +61,32 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(k25?.contextWindow).toBe(262_144);
   });
 
-  it('exposes Kimi Code K3 at 1M without changing the stable K2.7 default', () => {
+  it('defaults Kimi Code to K3 256K while retaining K3 1M and both K2.7 routes', () => {
     const k3 = getModelCapabilities('kimi-code', 'k3');
     expect(k3?.contextWindow).toBe(1_048_576);
     expect(k3?.maxOutputTokens).toBe(32_000);
     expect(k3?.isDefault).toBe(false);
     expect(k3?.reasoningProfile).toMatchObject({
       reasoningPreset: 'kimi-k3',
-      defaultEffort: 'max',
+      defaultEffort: 'high',
       disabledEfforts: ['none'],
     });
 
     const k3Moderato = getModelCapabilities('kimi-code', 'k3-256k');
     expect(k3Moderato?.displayName).toBe('Kimi K3 (256K, Moderato)');
     expect(k3Moderato?.contextWindow).toBe(262_144);
+    expect(k3Moderato?.isDefault).toBe(true);
     expect(k3Moderato?.reasoningProfile).toMatchObject({
       reasoningPreset: 'kimi-k3',
-      defaultEffort: 'max',
+      defaultEffort: 'high',
     });
 
     const stable = getModelCapabilities('kimi-code', 'kimi-for-coding');
     expect(stable?.contextWindow).toBe(262_144);
-    expect(stable?.isDefault).toBe(true);
+    expect(stable?.isDefault).toBe(false);
+    expect(stable?.reasoningProfile).toMatchObject({
+      reasoningPreset: 'kimi-k2.7-code',
+    });
   });
 
   it('exposes Zhipu GLM-5.2 at 1M context / 128K max output', () => {

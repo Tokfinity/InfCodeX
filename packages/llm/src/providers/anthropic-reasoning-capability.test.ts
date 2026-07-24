@@ -5,7 +5,6 @@ import path from 'path';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
 import type {
   KodaXMessage,
-  KodaXModelDescriptor,
   KodaXProviderConfig,
   KodaXReasoningCapability,
   KodaXReasoningRequest,
@@ -471,7 +470,7 @@ describe('anthropic reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].thinking).toEqual({ type: 'enabled' });
   });
 
-  it('sends Kimi K3 effort inside thinking and defaults omitted reasoning to max', async () => {
+  it('sends Kimi K3 effort inside thinking and defaults omitted reasoning to high', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-effort', {
       messages: { create },
@@ -481,12 +480,12 @@ describe('anthropic reasoning capability', () => {
         reasoningPreset: 'kimi-k3',
         effortStrategy: 'anthropic-reasoning-effort',
         thinkingStrategy: 'provider-toggle',
-        defaultEffort: 'max',
+        defaultEffort: 'high',
         supportedEfforts: [
           { value: 'none' },
-          { value: 'low', isUserVisible: false },
-          { value: 'high', isUserVisible: false },
-          { value: 'max', isDefault: true },
+          { value: 'low' },
+          { value: 'high', isDefault: true },
+          { value: 'max' },
         ],
         disabledEfforts: ['none'],
         supportsReasoningEffort: true,
@@ -498,19 +497,19 @@ describe('anthropic reasoning capability', () => {
 
     expect(create.mock.calls[0]?.[0].thinking).toEqual({
       type: 'enabled',
-      effort: 'max',
+      effort: 'high',
     });
     expect(create.mock.calls[0]?.[0]).not.toHaveProperty('reasoning_effort');
   });
 
-  it('maps a local context-tier alias to the real K3 wire model', async () => {
+  it('sends the direct K3 256K model id with the K3 reasoning profile', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const k3Profile = {
       reasoningPreset: 'kimi-k3' as const,
       effortStrategy: 'provider-toggle' as const,
       thinkingStrategy: 'provider-toggle' as const,
-      defaultEffort: 'max',
-      supportedEfforts: [{ value: 'none' }, { value: 'max' }],
+      defaultEffort: 'high',
+      supportedEfforts: [{ value: 'none' }, { value: 'high' }, { value: 'max' }],
       disabledEfforts: ['none'],
       supportsReasoningEffort: true,
       supportsDisabledThinking: true,
@@ -518,7 +517,7 @@ describe('anthropic reasoning capability', () => {
     const provider = new TestAnthropicProvider('native-toggle', {
       messages: { create },
     }, {
-      model: 'kimi-for-coding',
+      model: 'k3-256k',
       models: [
         {
           id: 'k3',
@@ -527,9 +526,10 @@ describe('anthropic reasoning capability', () => {
         },
         {
           id: 'k3-256k',
-          wireModel: 'k3',
           contextWindow: 262_144,
-        } as unknown as KodaXModelDescriptor,
+          reasoningCapability: 'native-effort',
+          reasoningProfile: k3Profile,
+        },
       ],
     });
 
@@ -542,8 +542,8 @@ describe('anthropic reasoning capability', () => {
       reasoningPreset: 'kimi-k3',
     });
     expect(create.mock.calls[0]?.[0]).toMatchObject({
-      model: 'k3',
-      thinking: { type: 'enabled', effort: 'max' },
+      model: 'k3-256k',
+      thinking: { type: 'enabled', effort: 'high' },
     });
   });
 

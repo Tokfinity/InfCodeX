@@ -399,6 +399,12 @@ clarification required to finish the current request, emits budget-approval
 state only for eligible Sidecar revisions, and preserves structured blocked
 reasons across embedded and daemon Runtime boundaries.
 
+**v0.7.76 Kimi Code catalog refresh:** `kimi-code` now defaults to the official
+`k3-256k` Model ID and sends it unchanged. `kimi-for-coding` remains selectable
+for K2.7 Code, alongside `kimi-for-coding-highspeed` and the 1M `k3` tier. K3
+supports `low` / `high` / `max` reasoning with `high` as default; the 256K
+route supports image input but not video input.
+
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or
@@ -1293,7 +1299,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 (`claude-opus-4-6` / `claude-haiku-4-5` via `/model`) |
 | openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex (`gpt-5.4` / `gpt-5.3-codex-spark` via `/model`) |
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code (262,144-token context; `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5` via `/model`) |
-| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding (`k3-256k` for Moderato / `k3` 1M for Allegretto+ / `kimi-for-coding-highspeed` via `/model`; both K3 choices use upstream `k3`) |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | k3-256k (Moderato+, 256K, direct upstream ID; `k3` 1M / `kimi-for-coding` K2.7 Code / `kimi-for-coding-highspeed` via `/model`) |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview (Anthropic-compat; `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on Qwen 3.8 / 3.7 Plus / 3.6 Flash) |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |

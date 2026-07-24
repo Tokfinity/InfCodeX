@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-24
+> Last updated: 2026-07-25
 >
-> Current release-candidate baseline: `v0.7.75`
-> (`@kodax-ai/kodax@0.7.75`; latest tagged release is `v0.7.74`)
+> Current release baseline: `v0.7.76`
+> (`@kodax-ai/kodax@0.7.76`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,11 +20,10 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.75`. The current release
-candidate retains the v0.7.74 compaction, mailbox-wait, interrupt-input, and
-Goal lifecycle contracts while hardening Windows GUI background-process
-visibility for SDK Runtime Worker hosts and preserving Sidecar completion,
-budget-approval, and blocked-terminal semantics in the published bundle.
+The root workspace package is `@kodax-ai/kodax@0.7.76`. The current release
+retains the v0.7.75 Windows GUI and Sidecar/Runtime stabilization contracts and
+refreshes Kimi Code to use the independent `k3-256k` Model ID as its default
+without removing the K2.7 Code routes.
 
 `package.json` exposes:
 
@@ -288,12 +287,13 @@ Code/HighSpeed and K2.6/K2.5 contract. K2.7 rejects thinking-disable requests;
 K2.6 emits the required wire toggle. Optional live-key tests are gated and do
 not run during the default offline suite.
 
-For `kimi-code`, the stable `kimi-for-coding` default remains available beside
-`k3-256k`, the 1,048,576-token `k3` tier, and
-`kimi-for-coding-highspeed`. Both K3 aliases request upstream `k3`; the
-Anthropic- and OpenAI-compatible serializers carry reasoning through
-`thinking.effort`, default omitted effort to `max`, and preserve explicit
-disable semantics. Public Kimi and Kimi For Coding credentials remain separate.
+For `kimi-code`, the default is the direct upstream `k3-256k` Model ID.
+`kimi-for-coding` remains available for K2.7 Code beside the 1,048,576-token
+`k3` tier and `kimi-for-coding-highspeed`. The Anthropic- and OpenAI-compatible
+serializers carry K3 reasoning through `thinking.effort`, default omitted
+effort to `high`, and preserve explicit disable semantics. Media capability
+metadata keeps `k3-256k` image-capable and video-unsupported. Public Kimi and
+Kimi For Coding credentials remain separate.
 
 Custom provider design must remain data-driven: protocol, base URL, API key env
 var, default model, reasoning preset/profile, multimodal support, forced tool

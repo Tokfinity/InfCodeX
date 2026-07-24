@@ -184,11 +184,11 @@ describe('provider registry', () => {
     vi.stubEnv('KIMI_CODE_API_KEY', 'kimi-code-test-key');
     const kimiCode = getProvider('kimi-code');
 
-    expect(kimiCode.getModel()).toBe('kimi-for-coding');
+    expect(kimiCode.getModel()).toBe('k3-256k');
     expect(kimiCode.getAvailableModels()).toEqual([
-      'kimi-for-coding',
-      'k3',
       'k3-256k',
+      'k3',
+      'kimi-for-coding',
       'kimi-for-coding-highspeed',
     ]);
     expect(kimiCode.getEffectiveContextWindow('kimi-for-coding')).toBe(262_144);

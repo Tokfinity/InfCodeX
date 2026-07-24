@@ -57,6 +57,13 @@
 > cleanup no longer occupies the registration mutation lane, and daemon
 > auto-start owns and terminates abandoned startup children.
 >
+> **v0.7.76 Kimi Code catalog refresh:** after Kimi published `k3-256k` as an
+> independent Model ID, the `kimi-code` alias defaults to it and sends it
+> unchanged instead of rewriting it to `k3`. `kimi-for-coding` remains an
+> explicit K2.7 Code route. K3 follows the documented `low` / `high` / `max`
+> effort contract with `high` as default; the 256K route is image-capable and
+> video-unsupported.
+>
 > **v0.7.71 packaged-Electron patch addendum:** SDK daemon auto-start uses a
 > bootstrap-only Electron Node boundary, scrubs `ELECTRON_RUN_AS_NODE` before
 > daemon and user child code loads, requires the default-enabled `RunAsNode`

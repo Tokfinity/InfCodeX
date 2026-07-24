@@ -136,12 +136,12 @@ function createBaseReasoningProfileFromPreset(
         reasoningPreset: preset,
         effortStrategy: 'provider-toggle',
         thinkingStrategy: 'provider-toggle',
-        defaultEffort: 'max',
+        defaultEffort: 'high',
         supportedEfforts: [
-          { value: 'none' },
-          { value: 'low', isUserVisible: false },
-          { value: 'high', isUserVisible: false },
-          { value: 'max', isDefault: true },
+          { value: 'none', description: 'Disable thinking' },
+          { value: 'low', description: 'Low thinking effort' },
+          { value: 'high', description: 'High thinking effort', isDefault: true },
+          { value: 'max', description: 'Maximum thinking effort' },
         ],
         effortAliases: {
           minimal: 'low',

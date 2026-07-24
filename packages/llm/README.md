@@ -24,7 +24,7 @@ import { getProvider } from '@kodax-ai/llm';
 
 ## 内置 Provider Alias
 
-Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-07-20）。
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-07-25）。
 
 | Alias | Environment variable | Reasoning | Default model |
 |---|---|---|---|
@@ -32,7 +32,7 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `openai` | `OPENAI_API_KEY` | Yes | `gpt-5.3-codex` |
 | `deepseek` | `DEEPSEEK_API_KEY` | Yes | `deepseek-v4-flash` |
 | `kimi` | `KIMI_API_KEY` | Yes | `kimi-k2.7-code` |
-| `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `kimi-for-coding` |
+| `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `k3-256k` |
 | `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
 | `qwen-token-plan` | `QWEN_TOKEN_API_KEY` | Yes | `qwen3.8-max-preview` |
 | `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
@@ -44,12 +44,12 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 | `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
 | `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
-2026-07-20 模型快照重点：
+2026-07-25 模型快照重点：
 
 - OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
 - Qwen Token Plan 使用 Anthropic 兼容端点，默认 `qwen3.8-max-preview`，并提供 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；六个模型均为 1M context。`qwen3.8-max-preview`、`qwen3.7-plus`、`qwen3.6-flash` 支持图片理解，其余三个为纯文本；Qwen 3.8 的思考模式不可关闭。
 - Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；四者上下文均为 262,144 token。
-- Kimi Code 保持 `kimi-for-coding` 为稳定默认模型，并提供 `/model` 可选的 `k3-256k`（Moderato，262,144 token）、`k3`（Allegretto 及以上，1,048,576 token）与 `kimi-for-coding-highspeed`。两个 K3 选项实际都请求上游官方模型 `k3`，无需手工覆盖 compaction 上下文；K3 默认使用 `max` 思考强度，也支持显式关闭思考。
+- Kimi Code 默认使用官方 `k3-256k`（Moderato 及以上，262,144 token），并直接请求同名上游 Model ID；`/model` 仍可选择 `k3`（本地按 Allegretto+ 的 1,048,576 token tier 配置）、`kimi-for-coding`（K2.7 Code）与 `kimi-for-coding-highspeed`。K3 支持 `low` / `high` / `max` 三档思考强度，默认 `high`，也支持显式关闭；`k3-256k` 支持图片但不支持视频输入。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
 - Zhipu 开放平台保留上游 `glm-5` 路由；Zhipu Coding 默认 `glm-5.2`（1M context, 131072 max output），并保留 `glm-5.1` / `glm-5-turbo` 供显式兼容选择。
 - MiniMax Coding 默认 `MiniMax-M3`（Frontier Coding, native multimodal, 1M context），并保留 `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` 供显式兼容选择；旧 M2.5/M2.1/M2 路由已移除。

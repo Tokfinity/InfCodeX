@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.74` |
-| Current package version | `@kodax-ai/kodax@0.7.75` release candidate (untagged; product validation is non-blocking) |
+| Current released version | `v0.7.76` (Git tag / GitHub Release; npm publication remains manual) |
+| Current package version | `@kodax-ai/kodax@0.7.76` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `61` |
 | InProgress | `1` |
@@ -26,9 +26,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.75 is a feature-free SDK stabilization candidate; v0.7.74 remains the current Git/GitHub release. |
+| Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.76 is the feature-free Kimi Code provider catalog maintenance release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 4 | `274, 263, 264, 265` | `v0.7.76` -> `v0.7.85` |
+| Planned, near-term | 4 | `274, 263, 264, 265` | `v0.7.77` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -59,8 +59,9 @@
 | `v0.7.73` | `1` |
 | `v0.7.74` | `2` |
 | `v0.7.75` | `0` |
-| `v0.7.76` | `1` |
+| `v0.7.76` | `0` |
 | `v0.7.77` | `1` |
+| `v0.7.78` | `1` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `0` |
@@ -366,6 +367,13 @@
 > quality judgment without reintroducing complexity-driven Workflow activation,
 > a fixed Agent topology, or a second quality gate. `v0.7.75` remains the
 > feature-free SDK stabilization candidate; F263 and later targets do not move.
+>
+> **2026-07-25 F274/F263 one-version delay**: at user direction,
+> `FEATURE_274` moves from `v0.7.76` to `v0.7.77`, and `FEATURE_263` moves from
+> `v0.7.77` to `v0.7.78`. `v0.7.76` returns to a feature-free stabilization /
+> bugfix slot. `FEATURE_264`, `FEATURE_265`, and all later roadmap targets remain
+> unchanged. This supersedes only the active targets established by the two
+> schedule notes immediately above.
 
 ---
 
@@ -374,6 +382,17 @@
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+
+---
+
+## v0.7.76 Release Record
+
+`v0.7.76` introduces no Feature ID. It refreshes Kimi Code after `k3-256k`
+became an independent official Model ID: `kimi-code` defaults to the direct
+256K route, while `kimi-for-coding` remains selectable for K2.7 Code beside
+`k3` and `kimi-for-coding-highspeed`. The release also aligns K3 effort,
+media-capability, and nominal quota metadata with the official model contract
+and exercises all four subscription routes through gated live smoke tests.
 
 ---
 
@@ -396,7 +415,7 @@ exact npm tarball.
 Packaged KodaX Space regression on Windows 10 and Windows 11 remains a
 non-blocking product follow-up and does not gate tag, package build, or npm
 publication. This release slot also preserves the 2026-07-12 roadmap decisions;
-FEATURE_263 is planned for `v0.7.77`.
+FEATURE_263 is planned for `v0.7.78`.
 
 ---
 
@@ -668,8 +687,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | Core / Agent Orchestration + Quality | High | `v0.7.76` | [v0.7.76](features/v0.7.76.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) |
-| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_263-evidence-gated-background-skill-learning-loop) |
+| `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | Core / Agent Orchestration + Quality | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) |
+| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) |
 | `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |

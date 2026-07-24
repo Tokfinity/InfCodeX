@@ -6,11 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.76] - 2026-07-25
+
+> Git tag and GitHub Release are published by the release workflow. npm
+> publication remains the operator's final manual step.
+
+### Changed
+
+- **Kimi Code defaults to the official K3 256K route.** The `kimi-code`
+  provider now defaults to `k3-256k` and sends that exact upstream model ID.
+  `kimi-for-coding` remains selectable for K2.7 Code, alongside
+  `kimi-for-coding-highspeed` and the 1M `k3` tier. K3 now exposes the
+  documented `low` / `high` / `max` reasoning levels with `high` as default;
+  media metadata marks `k3-256k` as image-capable but not video-capable, and
+  nominal subscription accounting reflects the 1M `k3` route's roughly 2x
+  quota consumption.
+
+### Verification
+
+- Added direct live-wire smoke coverage for all four Kimi Code subscription
+  routes: `k3-256k`, `k3`, `kimi-for-coding`, and
+  `kimi-for-coding-highspeed`.
+
 ## [0.7.75] - 2026-07-24
 
-> Package, code, tests, and documentation are prepared for SDK/Space validation.
-> The `v0.7.75` tag, GitHub Release, and npm publication are intentionally not
-> created yet.
+> The npm package was published manually. The `v0.7.75` Git tag and GitHub
+> Release were skipped; the binary-release changes roll into `v0.7.76`.
 
 ### Changed
 
@@ -43,8 +64,9 @@ All notable changes to this project will be documented in this file.
 - Updated the release guide, current architecture/design baselines, SDK
   embedder guidance, feature index, roadmap, issue tracker, English/Chinese
   READMEs, and the v0.7.75 regression guide for the SDK validation candidate.
-- Rescheduled FEATURE_263 from v0.7.75 to v0.7.77 and retained v0.7.75 as a
-  feature-free stabilization release.
+- Rescheduled FEATURE_263 from v0.7.75 to v0.7.77 and then to v0.7.78; moved
+  FEATURE_274 from v0.7.76 to v0.7.77. v0.7.75 and v0.7.76 remain feature-free
+  stabilization releases.
 
 ## [0.7.74] - 2026-07-23
 

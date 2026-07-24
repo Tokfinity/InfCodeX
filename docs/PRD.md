@@ -1,10 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-24
+> Last updated: 2026-07-25
 >
-> Current implementation baseline: `v0.7.75` release candidate
-> (`@kodax-ai/kodax@0.7.75` workspace package; latest tagged release is
-> `v0.7.74`)
+> Current implementation baseline: `v0.7.76`
+> (`@kodax-ai/kodax@0.7.76` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -186,14 +185,14 @@ model, API key env var, effort-first reasoning profile/preset, request timeout
 normalization, and multimodal capability flags where needed. The current
 provider capability snapshot is maintained in
 `packages/llm/src/providers/provider-capabilities.json` and includes the
-2026-07-16 model refresh for GPT-5.4, Kimi K2.7 Code/HighSpeed/K2.6/K2.5,
+2026-07-25 model refresh for GPT-5.4, Kimi K3/K2.7 Code/HighSpeed/K2.6/K2.5,
 GLM-5.2, MiniMax M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 routes where
 supported. Public Kimi routes use their exact 262,144-token limits and
 route-specific thinking contract. The separate Kimi For Coding subscription
-alias keeps `kimi-for-coding` as its stable default and exposes `k3-256k` plus
-the upstream `k3` route with a 1,048,576-token local context tier;
-`thinking.effort` carries K3 reasoning intent without mixing public and
-subscription credentials.
+alias defaults to the official `k3-256k` Model ID while retaining
+`kimi-for-coding` for K2.7 Code and exposing the `k3` route with a
+1,048,576-token local context tier. `thinking.effort` carries K3 reasoning
+intent without mixing public and subscription credentials.
 
 A bare interactive first launch with no valid provider selection and no
 supported credential must offer a provider/model setup flow before Runtime or

@@ -51,7 +51,7 @@ describe('FEATURE_218 manual registry', () => {
     }
   });
 
-  it('documents the v0.7.71 public Kimi model contract', () => {
+  it('documents the v0.7.76 public and subscription Kimi model contracts', () => {
     const content = resolveKodaXManual({ topic: 'providers' }).content;
 
     expect(content).toContain('kimi-k2.7-code');
@@ -61,9 +61,11 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('KIMI_CODE_API_KEY');
     expect(content).toContain('cannot disable thinking');
     expect(content).toContain('k3-256k');
+    expect(content).toContain('`kimi-for-coding` (K2.7 Code)');
     expect(content).toContain('Kimi K3');
     expect(content).toContain('1,048,576');
     expect(content).toContain('thinking.effort');
+    expect(content).toContain('defaults to high');
   });
 
   it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {

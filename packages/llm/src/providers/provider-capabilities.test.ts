@@ -253,13 +253,15 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(d.contextWindow).toBe(1_000_000);
     });
 
-    it('kimi-code: exposes K3 plus both K2.7 Code subscription routes', () => {
+    it('kimi-code: defaults to the direct K3 256K route and retains both K2.7 Code routes', () => {
       const k = getProviderSnapshots()['kimi-code'];
+      expect(k.model).toBe('k3-256k');
       expect(k.maxOutputTokens).toBe(32000);
       expect(k.contextWindow).toBe(262_144);
       expect(k.models?.map((model) => model.id)).toEqual([
         'k3',
         'k3-256k',
+        'kimi-for-coding',
         'kimi-for-coding-highspeed',
       ]);
       expect(k.models?.find((model) => model.id === 'k3')).toEqual(
@@ -269,7 +271,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           reasoningCapability: 'native-effort',
           reasoningProfile: expect.objectContaining({
             reasoningPreset: 'kimi-k3',
-            defaultEffort: 'max',
+            defaultEffort: 'high',
             disabledEfforts: ['none'],
           }),
         }),
@@ -278,9 +280,15 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         expect.objectContaining({
           displayName: 'Kimi K3 (256K, Moderato)',
           contextWindow: 262_144,
-          wireModel: 'k3',
+          reasoningCapability: 'native-effort',
+          reasoningProfile: expect.objectContaining({
+            reasoningPreset: 'kimi-k3',
+            defaultEffort: 'high',
+            disabledEfforts: ['none'],
+          }),
         }),
       );
+      expect(k.models?.find((model) => model.id === 'k3-256k')).not.toHaveProperty('wireModel');
     });
 
     it('kimi: defaults to the complete K2.7 Code lineup at the upstream context limit', () => {

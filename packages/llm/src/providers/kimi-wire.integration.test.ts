@@ -131,14 +131,14 @@ describe.skipIf(!RUN_INTEGRATION)('Kimi public API — real provider HTTP', () =
 });
 
 describe.skipIf(!RUN_KIMI_CODE_INTEGRATION)('Kimi Code — real provider HTTP', () => {
-  it('streams the Moderato K3 tier over the upstream k3 wire model', async () => {
+  it('streams the default Moderato K3 tier over the direct k3-256k model id', async () => {
     const provider = resolveProvider('kimi-code');
 
-    expect(provider.getModel()).toBe('kimi-for-coding');
+    expect(provider.getModel()).toBe('k3-256k');
     expect(provider.getAvailableModels()).toEqual([
-      'kimi-for-coding',
-      'k3',
       'k3-256k',
+      'k3',
+      'kimi-for-coding',
       'kimi-for-coding-highspeed',
     ]);
     expect(provider.getEffectiveContextWindow('k3-256k')).toBe(262_144);
@@ -147,8 +147,8 @@ describe.skipIf(!RUN_KIMI_CODE_INTEGRATION)('Kimi Code — real provider HTTP', 
       [{ role: 'user', content: 'Reply with exactly: OK' }],
       [],
       'Follow the user request exactly and keep the answer terse.',
-      { enabled: true, effort: 'max' },
-      { modelOverride: 'k3-256k', maxOutputTokensOverride: 512 },
+      undefined,
+      { maxOutputTokensOverride: 512 },
       AbortSignal.timeout(45_000),
     );
 
@@ -177,6 +177,32 @@ describe.skipIf(!RUN_KIMI_CODE_INTEGRATION)('Kimi Code — real provider HTTP', 
 
     expect(result.textBlocks.map((block) => block.text).join('')).toMatch(/\S/);
     expect(result.thinkingBlocks).toEqual([]);
+  }, 60_000);
+
+  it('retains the standard K2.7 Code subscription route', async () => {
+    const provider = resolveProvider('kimi-code');
+
+    const result = await provider.stream(
+      [{ role: 'user', content: 'Reply with exactly: OK' }],
+      [],
+      'Follow the user request exactly and keep the answer terse.',
+      { enabled: true, effort: 'high' },
+      {
+        modelOverride: 'kimi-for-coding',
+        maxOutputTokensOverride: 512,
+      },
+      AbortSignal.timeout(45_000),
+    );
+
+    expect(result.textBlocks.map((block) => block.text).join('')).toMatch(/\S/);
+    expect(result.thinkingBlocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'thinking',
+          thinking: expect.stringMatching(/\S/),
+        }),
+      ]),
+    );
   }, 60_000);
 
   it('streams the K2.7 Code HighSpeed subscription route', async () => {

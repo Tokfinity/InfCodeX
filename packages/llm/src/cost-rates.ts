@@ -81,7 +81,8 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // shown here is a nominal placeholder for cost-tracker accounting;
     // real-world cost is the flat membership fee plus request-quota.
     'kimi-for-coding': { inputPer1M: 0.005, outputPer1M: 0.015 },
-    'k3': { inputPer1M: 0.005, outputPer1M: 0.015 },
+    // K3 1M consumes roughly 2x the membership quota of K3 256K.
+    'k3': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'k3-256k': { inputPer1M: 0.005, outputPer1M: 0.015 },
     // HighSpeed consumes roughly 3x the membership quota of Standard.
     'kimi-for-coding-highspeed': { inputPer1M: 0.015, outputPer1M: 0.045 },
