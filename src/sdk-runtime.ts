@@ -25,6 +25,7 @@ import {
   listCodingDispatchableAgents,
   parseModelSpec,
   registerCustomProviders,
+  resolveProviderModelDescriptors,
   resolveToolBridgeTarget,
   runManagedTask,
   startKodaX,
@@ -4706,7 +4707,11 @@ function createRuntimeRunService(deps: {
         `Credential lease is bound to ${trustedInput.providerCredentialProvider}, not ${provider}.`,
       );
     }
-    const model = options.modelOverride ?? options.model ?? deps.defaultModel;
+    const model =
+      options.modelOverride ??
+      options.model ??
+      deps.defaultModel ??
+      resolveProviderModelDescriptors(provider)[0]?.id;
     const runId =
       (input as RuntimeTrustedStartRunInput).trustedRunId ?? createRunId();
     if (deps.runs.has(runId))

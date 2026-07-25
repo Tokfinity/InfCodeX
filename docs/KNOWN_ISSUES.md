@@ -14,6 +14,7 @@ _Last Updated: 2026-07-25_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 development | 2026-07-25 | 2026-07-25 |
 | 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 development | 2026-07-25 | 2026-07-25 |
 | 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -115,6 +116,60 @@ _Last Updated: 2026-07-25_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 207: Provider-only model selection leaves Runtime Auto LLM without the provider default model
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.73 Runtime Auto preflight
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-25
+- **Resolved**: 2026-07-25
+
+#### Original Problem
+
+`/model zai-coding` intentionally selects the provider while leaving the model
+unset so the provider's current default remains authoritative. The REPL status
+bar and ordinary provider execution resolve that selection to `glm-5.2`, but a
+Runtime-owned `Auto[LLM]` run rejects it before launch with
+`auto_mode_classifier_model_required`.
+
+An explicit `/model zai-coding/glm-5.2` or leaving Auto mode avoids the error,
+but provider-only selection must work consistently in every permission mode.
+
+#### Root Cause
+
+Runtime run admission checked only the run's explicit model and
+`runtime.defaultModel`. Provider execution resolved the selected provider's
+default later, after the Auto LLM preflight, so the two paths disagreed about
+whether an effective model existed.
+
+#### Solution Implemented
+
+- Runtime run admission now resolves the selected provider's credential-free
+  static default as the final model fallback, after `modelOverride`, the
+  Session/run model, and `runtime.defaultModel`.
+- Keep unknown providers without a resolvable default on the existing fail-fast
+  path.
+- The resolved model is recorded and passed to both the Runtime-owned Auto
+  guardrail and coding execution, so preflight, status events, and launch agree.
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`
+- `src/sdk-runtime.test.ts`
+
+#### Verification
+
+- TDD regression reproduced the original
+  `auto_mode_classifier_model_required` failure before implementation.
+- Focused known/unknown Provider boundary: 2 tests passed.
+- Complete Runtime suite: 133 tests passed.
+- Provider capability and CLI Runtime bridge suites: 46 tests passed.
+- Full production build passed, including config-template validation, workspace
+  TypeScript builds, SDK/CLI bundles, worker audits, and declaration bundles.
+
+---
 
 ### 206: Static provider model catalogs duplicated default models in REPL completion and SDK listings
 
@@ -6639,11 +6694,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 92 (25 Open, 67 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 93 (25 Open, 68 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-25: Issue 207 resolved (v0.7.77 development)
+- Runtime run admission now resolves a provider-only selection to that
+  provider's static default model before Auto LLM preflight and launch.
+- Explicit model precedence and fail-fast behavior for providers with no
+  resolvable default remain unchanged.
 
 ### 2026-07-23: Issue 204 resolved (v0.7.74)
 - Auto renders the configured/observed LLM or rules engine without a transient

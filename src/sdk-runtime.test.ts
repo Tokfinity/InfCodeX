@@ -33,6 +33,7 @@ import type {
   KodaXResult,
   RunningSession,
 } from '@kodax-ai/coding';
+import { resolveProviderModelDescriptors } from '@kodax-ai/coding';
 import type { AutoModeBootstrapDeps } from '@kodax-ai/repl';
 import type {
   RuntimeDaemonClientTransport,
@@ -4380,6 +4381,57 @@ describe('createKodaXRuntime', () => {
 
     await runtime.close();
   });
+
+  it('resolves a selected provider default before Auto LLM model preflight', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({ title: 'Provider Default Auto Model' });
+    const fakeGuardrail = {
+      kind: 'tool',
+      name: 'auto-mode',
+      beforeTool: async () => ({ action: 'allow' as const }),
+      getEngine: () => 'llm' as const,
+      getStats: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setEngine: () => undefined,
+      getEngineForTest: () => 'llm' as const,
+      getStatsForTest: () => ({ engine: 'llm' as const, denials: {}, breaker: {} }),
+      setProviderForTest: () => undefined,
+    } as unknown as AutoModeToolGuardrail;
+    replMock.bootstrapAutoMode.mockResolvedValue({
+      getGuardrail: () => fakeGuardrail,
+      rulesLoadResult: { merged: {}, sources: [], skipped: [], errors: [] },
+    });
+    let runOptions: KodaXOptions | undefined;
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
+      runOptions = options;
+      return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
+    });
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: 'auto',
+      autoModeEngine: 'llm',
+      executionCwd: tempRoot,
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'inspect the workspace',
+      options: { provider: 'zai-coding' },
+    });
+    await flushMicrotasks();
+    if (!runOptions) throw new Error('expected Runtime run options');
+    const providerDefault = resolveProviderModelDescriptors('zai-coding')[0]?.id;
+    expect(providerDefault).toBe('glm-5.2');
+    expect(runOptions.provider).toBe('zai-coding');
+    expect(runOptions.modelOverride).toBe(providerDefault);
+
+    await runtime.runs.abort(handle.runId);
+    await runtime.close();
+  }, 60_000);
 
   it('treats an omitted Auto engine as the default LLM engine during model preflight', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
