@@ -53,6 +53,7 @@ import type {
 import { countTokens, estimateTokens } from '../tokenizer.js';
 import { resolveContextTokenCount } from '../token-accounting.js';
 import { estimateToolSchemaTokens } from '../agent-runtime/context-budget.js';
+import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
 // Shard 6d-h artifact writes (contract.json / managed-task.json /
@@ -116,6 +117,196 @@ describe('managed runner queue routing', () => {
 
     expect(observedRoutes).toEqual(['actor:queue-route-session:/root']);
     expect(resolveActiveRootQueueRoute()).toBeUndefined();
+  });
+
+  it('delivers an interrupt accepted during the final no-tool request before completing the run', async () => {
+    const sessionId = 'terminal-interrupt-session';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    let inputWindowOpen = true;
+    let turn = 0;
+    const delivered: Array<{ contents: readonly string[]; ids: readonly string[] }> = [];
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: sessionId },
+      context: {
+        ...makeOptions().context,
+        interruptInput: {
+          closeInputWindow() {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow() {
+            inputWindowOpen = true;
+          },
+        },
+      },
+      events: {
+        onMidTurnUserMessages(contents, meta) {
+          delivered.push({
+            contents,
+            ids: meta?.queuedMessageIds ?? [],
+          });
+        },
+      },
+    };
+
+    try {
+      const result = await runManagedTaskViaRunner(
+        options,
+        'first prompt',
+        async (transcript) => {
+          turn += 1;
+          expect(inputWindowOpen).toBe(true);
+          if (turn === 1) {
+            getMessageQueue().enqueue({
+              agentId: queueAgentId,
+              priority: 'user',
+              mode: 'prompt',
+              content: 'interrupt accepted during the final request',
+            });
+            return {
+              textBlocks: [{ text: 'first answer' }],
+              toolBlocks: [],
+            };
+          }
+          expect(transcript.at(-1)).toMatchObject({
+            role: 'user',
+          });
+          expect(JSON.stringify(transcript.at(-1)?.content)).toContain(
+            'interrupt accepted during the final request',
+          );
+          return {
+            textBlocks: [{ text: 'follow-up answer' }],
+            toolBlocks: [],
+          };
+        },
+      );
+
+      expect(turn).toBe(2);
+      expect(result.lastText).toBe('follow-up answer');
+      expect(delivered).toEqual([{
+        contents: ['interrupt accepted during the final request'],
+        ids: [expect.any(String)],
+      }]);
+      expect(inputWindowOpen).toBe(false);
+      expect(getMessageQueue().has({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      })).toBe(false);
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
+  it('closes interrupt admission before a managed Runner failure propagates', async () => {
+    let inputWindowOpen = true;
+    const failure = new Error('managed-provider-failure');
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: 'managed-failure-window' },
+      context: {
+        ...makeOptions().context,
+        interruptInput: {
+          closeInputWindow() {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow() {
+            inputWindowOpen = true;
+          },
+        },
+      },
+    };
+
+    await expect(runManagedTaskViaRunner(
+      options,
+      'fail this run',
+      async () => {
+        throw failure;
+      },
+    )).rejects.toBe(failure);
+
+    expect(inputWindowOpen).toBe(false);
+  });
+
+  it('reopens interrupt admission while a managed run is idle-yielding', async () => {
+    const sessionId = 'managed-idle-yield-window';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    let inputWindowOpen = true;
+    let turn = 0;
+    let resumedWithInterrupt = false;
+    const actorSession = new CodingActorSession({
+      sessionId,
+      executor: {
+        execute: async () => {
+          await vi.waitFor(() => expect(inputWindowOpen).toBe(true));
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'interrupt while idle-yielding',
+          });
+          return { output: 'child completed' };
+        },
+      },
+    });
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: sessionId },
+      context: {
+        ...makeOptions().context,
+        actorSession,
+        interruptInput: {
+          closeInputWindow() {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow() {
+            inputWindowOpen = true;
+          },
+        },
+      },
+    };
+
+    try {
+      const result = await runManagedTaskViaRunner(
+        options,
+        'wait for a child',
+        async (transcript) => {
+          turn += 1;
+          if (turn === 1) {
+            await actorSession.rootControl().spawn({
+              taskName: 'idle-child',
+              objective: 'Complete after the parent starts waiting.',
+              kind: 'external',
+            });
+            return {
+              textBlocks: [{ text: 'waiting' }],
+              toolBlocks: [],
+            };
+          }
+          expect(JSON.stringify(transcript)).toContain('interrupt while idle-yielding');
+          resumedWithInterrupt = true;
+          return {
+            textBlocks: [{ text: 'resumed answer' }],
+            toolBlocks: [],
+          };
+        },
+      );
+
+      expect(turn).toBeGreaterThanOrEqual(2);
+      expect(resumedWithInterrupt).toBe(true);
+      expect(result.lastText).toBe('resumed answer');
+      expect(inputWindowOpen).toBe(false);
+    } finally {
+      await actorSession.close('test complete');
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+      });
+    }
   });
 });
 

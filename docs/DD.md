@@ -189,19 +189,28 @@ Electron Main and never receive the profile token.
 Same-session run creation allocates a monotonic `sessionOrder`. `after_turn`
 input is a real queued continuation run and accepts the same operation
 contract. `interruptInput:1` routes input into the current active Actor Run's
-process-local queue. One safe Runner boundary drains all accumulated interrupt
-inputs FIFO, preserves their separate user-message boundaries, and emits one
-ordered `run.input.delivered` batch before the next LLM request. It creates no
-continuation Run. Run status exposes queued/delivered/terminal input state;
-terminal cleanup removes undelivered queue entries. Runs without a same-Run
-safe Actor boundary return `unsupported_capability`, while queued or terminal
-targets return `stale_run`. After the Runner publishes its final completion or
-terminal error signal, or the Run's external abort signal fires, the
-still-settling outer Run closes interrupt admission and returns
+process-local queue. A tool boundary drains accumulated interrupt inputs FIFO,
+preserves their separate user-message boundaries, and emits one ordered
+`run.input.delivered` batch before the next LLM request. When a managed Runner
+or ordinary coding loop recognizes a terminal candidate, it synchronously
+closes admission before any asynchronous finalization, drains every input
+accepted before that line, and continues the same Run when the batch is
+non-empty. If that batch arrives at the configured iteration ceiling, the loop
+reserves exactly one additional generation turn so delivery cannot be recorded
+without model consumption. Admission reopens only after the batch is committed,
+or while idle-yield is waiting on a wake path that guarantees another model
+turn. Failure, cancellation, and terminal cleanup close admission before
+asynchronous teardown. Ordinary coding rotates live-turn attribution for the
+queued prompt and commits the preceding assistant response before continuing a
+COMPLETE signal. The mechanism creates no continuation Run.
+Run status exposes queued/delivered/terminal input state; terminal cleanup
+removes undelivered queue entries. Runs without a same-Run safe Actor boundary
+return `unsupported_capability`, while queued or terminal targets return
+`stale_run`. Submissions after the atomic terminal boundary return
 `interrupt_window_closed`; clients must restore the unsent input for retry
-rather than silently converting it to `after_turn`. Non-terminal observer
-diagnostics do not use the terminal error signal and therefore do not close a
-still-consumable window. AskUser and permission
+rather than silently converting it to `after_turn`. External aborts and
+terminal errors also close the window. Non-terminal observer diagnostics do not
+close a still-consumable window. AskUser and permission
 registries expose pending lists and first-winner responses over transport;
 persistent permission grants have one daemon-owned revisioned store. A concrete
 permission request may expose opaque

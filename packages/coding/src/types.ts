@@ -1391,6 +1391,17 @@ export interface KodaXContextOptions {
   actorHost?: KodaXActorHost;
   /** Runtime-owned session Actor tree; attached when a root run builds its tool context. */
   actorSession?: import('./agent-runtime/actor-runtime.js').CodingActorSession;
+  /**
+   * Runtime-owned admission window for interrupt input targeted at the active
+   * run. Its presence opts the managed Runner into consuming already-accepted
+   * input before a terminal candidate is allowed to complete.
+   *
+   * @internal
+   */
+  interruptInput?: {
+    closeInputWindow(): void;
+    reopenInputWindow(): void;
+  };
   /** Host attribution for an explicit Workflow command, SDK request, or natural-language product word. */
   workflowIntent?: 'explicit';
   /** Project root used for project-scoped prompts, permissions, and path policy. */

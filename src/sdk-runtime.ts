@@ -5571,7 +5571,23 @@ function buildRunOptions(input: {
                 }
               : {}),
             ...(record.actorSession
-              ? { actorSession: record.actorSession }
+              ? {
+                  actorSession: record.actorSession,
+                  interruptInput: {
+                    closeInputWindow() {
+                      record.interruptInputOpen = false;
+                    },
+                    reopenInputWindow() {
+                      if (
+                        !record.terminalEmitted
+                        && isActiveRunPhase(record.phase)
+                        && options.abortSignal?.aborted !== true
+                      ) {
+                        record.interruptInputOpen = true;
+                      }
+                    },
+                  },
+                }
               : {}),
             ...(agentPlane && record.agentContext
               ? {

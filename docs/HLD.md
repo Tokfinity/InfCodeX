@@ -301,10 +301,16 @@ User follow-ups are routed with the session-root Actor queue id. Queue display,
 idle-yield wakeups, and prompt consumption use the same scope, preventing one
 session or child actor from draining another session's pending input.
 SDK/daemon hosts with `interruptInput:1` may also route ordered user input into
-the current active root Run. One safe Runner boundary drains the accepted FIFO
-batch as separate user messages; this is distinct from `after_turn`, which
-creates a continuation Run. Terminal cleanup closes the admission window and
-prevents undelivered input from reaching later Runs.
+the current active root Run. Tool boundaries and terminal candidates drain the
+accepted FIFO batch as separate user messages; a terminal candidate first
+closes admission synchronously, then either continues the same Run with the
+accepted batch (reserving one model turn at the iteration ceiling) or completes
+with the window closed. Managed idle-yield waiting reopens the window because
+its wake path is a guaranteed consumption boundary. Failure, cancellation, and
+terminal cleanup close it before asynchronous teardown. Ordinary coding rotates
+live-turn ownership when it consumes a queued prompt and persists the current
+assistant response before a COMPLETE continuation. This is distinct from
+`after_turn`, which creates a continuation Run.
 
 ## 8. Sessions
 

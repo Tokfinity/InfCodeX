@@ -3004,9 +3004,11 @@ describe('createKodaXRuntime', () => {
     const session = await runtime.sessions.create({ title: 'Interrupt Test' });
     const starts: string[] = [];
     let activeEvents: KodaXOptions['events'];
+    let activeInterruptInput: NonNullable<KodaXOptions['context']>['interruptInput'];
     codingMock.startKodaX.mockImplementation((options: KodaXOptions, prompt: string) => {
       starts.push(prompt);
       activeEvents = options.events;
+      activeInterruptInput = options.context?.interruptInput;
       return fakeRunningSession(options, new Promise<KodaXResult>(() => undefined));
     });
 
@@ -3044,6 +3046,18 @@ describe('createKodaXRuntime', () => {
       afterRunId: first.runId,
     });
     expect(starts).toEqual(['first']);
+    expect(activeInterruptInput).toBeDefined();
+    activeInterruptInput?.closeInputWindow();
+    await expect(runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: first.runId,
+      delivery: 'interrupt',
+      input: { type: 'text', text: 'too late for this boundary' },
+    })).resolves.toMatchObject({
+      accepted: false,
+      reason: 'interrupt_window_closed',
+    });
+    activeInterruptInput?.reopenInputWindow();
 
     const queueAgentId = actorQueueId(session.id, '/root');
     const queued = getMessageQueue().peek({

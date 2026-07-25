@@ -1008,6 +1008,164 @@ describe('Runner', () => {
       expect(beforeNextTurn).not.toHaveBeenCalled();
     });
 
+    it('closes the active input window and consumes an accepted terminal continuation before returning', async () => {
+      const agent = createAgent({ name: 'terminal-continuation', instructions: 'sys' });
+      let inputWindowOpen = true;
+      let turn = 0;
+      const closeInputWindow = vi.fn(() => {
+        inputWindowOpen = false;
+      });
+      const reopenInputWindow = vi.fn(() => {
+        inputWindowOpen = true;
+      });
+      const drain = vi.fn(async () => {
+        expect(inputWindowOpen).toBe(false);
+        return turn === 1
+          ? [{ role: 'user' as const, content: 'accepted during the final request' }]
+          : [];
+      });
+      const llm = vi.fn(async (messages: readonly AgentMessage[]): Promise<RunnerLlmResult> => {
+        turn += 1;
+        expect(inputWindowOpen).toBe(true);
+        if (turn === 2) {
+          expect(messages.at(-1)).toMatchObject({
+            role: 'user',
+            content: 'accepted during the final request',
+          });
+        }
+        return {
+          text: turn === 1 ? 'first answer' : 'follow-up answer',
+          toolCalls: [],
+        };
+      });
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        terminalContinuation: {
+          closeInputWindow,
+          reopenInputWindow,
+          drain,
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(2);
+      expect(closeInputWindow).toHaveBeenCalledTimes(2);
+      expect(reopenInputWindow).toHaveBeenCalledTimes(1);
+      expect(drain).toHaveBeenCalledTimes(2);
+      expect(result.output).toBe('follow-up answer');
+      expect(inputWindowOpen).toBe(false);
+    });
+
+    it('reserves a generation turn when terminal continuation arrives at the iteration cap', async () => {
+      const agent = createAgent({ name: 'terminal-continuation-at-cap', instructions: 'sys' });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        return {
+          text: turn === 1 ? 'first answer' : 'follow-up answer',
+          toolCalls: [],
+        };
+      });
+      const drain = vi.fn(async () => (
+        turn === 1
+          ? [{ role: 'user' as const, content: 'accepted at the final iteration' }]
+          : []
+      ));
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        maxToolLoopIterations: 1,
+        terminalContinuation: {
+          closeInputWindow: vi.fn(),
+          reopenInputWindow: vi.fn(),
+          drain,
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(2);
+      expect(result.output).toBe('follow-up answer');
+    });
+
+    it('reserves a generation turn when a stop hook reanimates at the iteration cap', async () => {
+      const agent = createAgent({ name: 'stop-hook-reanimate-at-cap', instructions: 'sys' });
+      let turn = 0;
+      let inputWindowOpen = true;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        expect(inputWindowOpen).toBe(true);
+        return {
+          text: turn === 1 ? 'premature answer' : 'verified answer',
+          toolCalls: [],
+        };
+      });
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        maxToolLoopIterations: 1,
+        stopHook: vi.fn(async () => (
+          turn === 1 ? 'verify before stopping' : undefined
+        )),
+        terminalContinuation: {
+          closeInputWindow: () => {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow: () => {
+            inputWindowOpen = true;
+          },
+          drain: vi.fn(async () => []),
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(2);
+      expect(result.output).toBe('verified answer');
+      expect(inputWindowOpen).toBe(false);
+    });
+
+    it('reserves a generation turn for a terminal tool signal at the iteration cap', async () => {
+      const terminalTool: RunnableTool = {
+        name: 'finish',
+        description: 'Finish the current step',
+        input_schema: { type: 'object', properties: {} },
+        execute: async () => ({
+          content: 'finished',
+          metadata: { isTerminal: true },
+        }),
+      };
+      const agent = createAgent({
+        name: 'terminal-tool-continuation-at-cap',
+        instructions: 'sys',
+        tools: [terminalTool],
+        handoffs: [],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        return turn === 1
+          ? {
+              text: '',
+              toolCalls: [{ id: 'finish-1', name: 'finish', input: {} }],
+            }
+          : { text: 'follow-up answer', toolCalls: [] };
+      });
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        maxToolLoopIterations: 1,
+        terminalContinuation: {
+          closeInputWindow: vi.fn(),
+          reopenInputWindow: vi.fn(),
+          drain: vi.fn(async () => (
+            turn === 1
+              ? [{ role: 'user' as const, content: 'accepted after terminal tool' }]
+              : []
+          )),
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(2);
+      expect(result.output).toBe('follow-up answer');
+    });
+
     it('persists injected messages to the Session when configured', async () => {
       const echoTool = makeEchoTool();
       const agent = createAgent({

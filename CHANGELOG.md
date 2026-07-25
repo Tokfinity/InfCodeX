@@ -8,6 +8,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Closed the Runtime interrupt finalization race in both managed and ordinary
+  coding runs. A terminal candidate now closes active-run input admission
+  atomically, drains every interrupt accepted before that boundary into the
+  same Run, reserves a continuation model turn even at the configured iteration
+  limit, and reopens admission only when another model turn is guaranteed.
+  Idle-yield waiting reopens admission, while failure, cancellation, and
+  terminal cleanup close it before asynchronous teardown. Ordinary coding also
+  rotates live-turn attribution for each queued prompt and commits a COMPLETE
+  assistant response before any accepted continuation input. REPL follow-ups
+  retain their existing fresh-round ownership.
 - Deduplicated built-in default models across `/model` completion, provider
   metadata, and SDK capability listings while preserving default-first order
   and per-model capability overrides.

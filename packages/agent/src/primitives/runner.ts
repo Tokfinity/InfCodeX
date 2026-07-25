@@ -265,6 +265,29 @@ export interface RunOptions {
     readonly lastTurnToolNames: readonly string[];
   }) => Promise<readonly AgentMessage[]>;
   /**
+   * Active-run input continuation owned by an embedder that accepts input
+   * against a specific in-flight run.
+   *
+   * Unlike `beforeNextTurn`, this hook is consulted at a terminal candidate:
+   * a no-tool model response or a terminal tool signal. Runner synchronously
+   * closes admission as soon as it recognizes the candidate, then drains input
+   * that was already accepted. A non-empty drain is committed to the
+   * transcript, admission reopens, and the same run continues.
+   *
+   * REPL hosts should omit this option so their existing round boundary keeps
+   * ownership of queued follow-ups.
+   */
+  readonly terminalContinuation?: {
+    readonly closeInputWindow: () => void;
+    readonly reopenInputWindow: () => void;
+    readonly drain: (ctx: {
+      readonly agent: Agent;
+      readonly transcript: readonly AgentMessage[];
+      readonly iteration: number;
+      readonly lastTurnToolNames: readonly string[];
+    }) => Promise<readonly AgentMessage[]>;
+  };
+  /**
    * FEATURE_166 (v0.7.41 follow-up) — agent-switch hook.
    *
    * Fires AFTER `currentAgent` has been swapped to the handoff target
@@ -747,6 +770,7 @@ async function genericRun<TData>(
   const manifestCap = getAdmittedAgentBindings(startAgent)?.manifest.maxIterations;
   const iterationCap =
     typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
+  let iterationLimit = iterationCap;
   // FEATURE_184 (v0.7.45) — Stop hook reanimate budget. Per-run counter
   // tracks how many times the hook converted a text-only termination
   // into a synthetic-user-message continuation. Bounded by
@@ -765,7 +789,29 @@ async function genericRun<TData>(
   // more accurate error if the iteration cap is reached via a reanimate
   // loop rather than a runaway tool loop.
   let allIterationsWereReanimates = true;
-  for (let iteration = 0; iteration < iterationCap; iteration += 1) {
+  const consumeTerminalContinuation = async (ctx: {
+    readonly agent: Agent;
+    readonly iteration: number;
+    readonly lastTurnToolNames: readonly string[];
+  }): Promise<boolean> => {
+    const continuation = opts.terminalContinuation;
+    if (!continuation) return false;
+    const extraMessages = await continuation.drain({
+      ...ctx,
+      transcript,
+    });
+    if (extraMessages.length === 0) return false;
+    for (const message of extraMessages) {
+      transcript.push(message);
+      await commitMessage(opts, message);
+    }
+    if (ctx.iteration + 1 >= iterationLimit) {
+      iterationLimit += 1;
+    }
+    continuation.reopenInputWindow();
+    return true;
+  };
+  for (let iteration = 0; iteration < iterationLimit; iteration += 1) {
     // FEATURE_179 (v0.7.42): compaction hook fires at the TOP of every
     // iteration, BEFORE the LLM call. Mirrors claudecode `query.ts` and
     // KodaX SA `run-substrate.ts:621-627`. The legacy post-tool-result
@@ -808,6 +854,13 @@ async function genericRun<TData>(
       agentSpan,
     );
     const toolCalls = turn.toolCalls ?? [];
+    if (
+      toolCalls.length > 0
+      && opts.terminalContinuation
+      && iteration + 1 >= iterationLimit
+    ) {
+      opts.terminalContinuation.closeInputWindow();
+    }
 
     // Preserve the v0.7.23 wire shape: when the llm returned a plain string
     // AND no tool calls happened, the assistant message carries plain-string
@@ -823,6 +876,10 @@ async function genericRun<TData>(
     assistantMessage = { ...assistantMessage, timestamp: new Date().toISOString() };
 
     if (toolCalls.length === 0) {
+      // Close admission at the first terminal-candidate boundary. Inputs
+      // accepted before this synchronous call belong to the drain below;
+      // later submissions are rejected deterministically.
+      opts.terminalContinuation?.closeInputWindow();
       // Final turn — apply output guardrails before returning.
       if (guardrailSlots.output.length > 0) {
         assistantMessage = await runOutputGuardrails(
@@ -845,6 +902,14 @@ async function genericRun<TData>(
         typeof assistantMessage.content === 'string'
           ? assistantMessage.content
           : extractLastText(assistantMessage);
+
+      if (await consumeTerminalContinuation({
+        agent: currentAgent,
+        iteration,
+        lastTurnToolNames: [],
+      })) {
+        continue;
+      }
 
       // FEATURE_184 (v0.7.45) — Stop hook fires here, AFTER output
       // guardrails (so the hook sees the guardrail-filtered text) and
@@ -927,6 +992,13 @@ async function genericRun<TData>(
             reason: reanimate.content,
           }).end();
           reanimateCount += 1;
+          if (
+            opts.terminalContinuation
+            && iteration + 1 >= iterationLimit
+          ) {
+            iterationLimit += 1;
+          }
+          opts.terminalContinuation?.reopenInputWindow();
           continue;
         }
 
@@ -1290,6 +1362,14 @@ async function genericRun<TData>(
     // so extractUserFacingText (status-derivation.ts) can surface it as
     // lastText even though the final transcript message is a tool_result.
     if (!handoffSignal && detectTerminalToolSignal(currentAgent, results)) {
+      opts.terminalContinuation?.closeInputWindow();
+      if (await consumeTerminalContinuation({
+        agent: currentAgent,
+        iteration,
+        lastTurnToolNames: finalCalls.map((call) => call.name),
+      })) {
+        continue;
+      }
       return {
         output: extractLastText(assistantMessage),
         messages: transcript,
@@ -1318,6 +1398,13 @@ async function genericRun<TData>(
         for (const message of extraMessages) {
           transcript.push(message);
           await commitMessage(opts, message);
+        }
+        if (
+          opts.terminalContinuation
+          && iteration + 1 >= iterationLimit
+        ) {
+          iterationLimit += 1;
+          opts.terminalContinuation.reopenInputWindow();
         }
       }
     }

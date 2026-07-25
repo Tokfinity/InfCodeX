@@ -35,7 +35,6 @@ import type {
 import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import type {
   Agent,
-  QueuedInputArtifact,
   QueuedMessage,
   RunnerToolObserver,
   StopHookFn,
@@ -68,9 +67,6 @@ import {
 } from '../memory-runtime.js';
 import type {
   KodaXHarnessProfile,
-  KodaXImageMediaType,
-  KodaXInputArtifact,
-  KodaXInputArtifactSource,
   KodaXManagedTask,
   KodaXManagedProtocolPayload,
   KodaXOptions,
@@ -79,7 +75,6 @@ import type {
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
-  KodaXVideoMediaType,
   KodaXAgentProfile,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
@@ -193,7 +188,10 @@ import {
 // scope-aware-harness-guardrail.ts deleted (V1 Scout H0→H1/H2 guardrail).
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
 import { createBlobSummarizer } from '../tools/blob-summarizer.js';
-import { buildPromptMessageContent } from '../input-artifacts.js';
+import {
+  buildPromptMessageContent,
+  toKodaXInputArtifacts,
+} from '../input-artifacts.js';
 import { validateInputArtifactsForModel } from '../media/index.js';
 import {
   createRunnerToolResultBatchTransform,
@@ -341,53 +339,6 @@ function isSessionBindableExtensionRuntime(
   const candidate: Partial<SessionBindableExtensionRuntime> | undefined = runtime;
   return typeof candidate?.bindController === 'function'
     && typeof candidate.hydrateSession === 'function';
-}
-
-function toKodaXInputArtifacts(
-  inputArtifacts: readonly QueuedInputArtifact[] | undefined,
-): readonly KodaXInputArtifact[] | undefined {
-  if (!inputArtifacts || inputArtifacts.length === 0) return undefined;
-
-  return inputArtifacts.map((artifact): KodaXInputArtifact => {
-    if (artifact.kind === 'image') {
-      return {
-        kind: 'image',
-        path: artifact.path,
-        ...(artifact.mediaType
-          ? { mediaType: artifact.mediaType as KodaXImageMediaType }
-          : {}),
-        ...(artifact.source
-          ? { source: artifact.source as KodaXInputArtifactSource }
-          : {}),
-        ...(artifact.description ? { description: artifact.description } : {}),
-      };
-    }
-
-    if (artifact.kind === 'video') {
-      return {
-        kind: 'video',
-        path: artifact.path,
-        mediaType: artifact.mediaType as KodaXVideoMediaType,
-        ...(artifact.name ? { name: artifact.name } : {}),
-        ...(artifact.source
-          ? { source: artifact.source as KodaXInputArtifactSource }
-          : {}),
-        ...(artifact.description ? { description: artifact.description } : {}),
-      };
-    }
-
-    return {
-      kind: 'file',
-      path: artifact.path,
-      ...(artifact.mediaType ? { mediaType: artifact.mediaType } : {}),
-      ...(artifact.mimeType ? { mimeType: artifact.mimeType } : {}),
-      ...(artifact.name ? { name: artifact.name } : {}),
-      ...(artifact.source
-        ? { source: artifact.source as KodaXInputArtifactSource }
-        : {}),
-      ...(artifact.description ? { description: artifact.description } : {}),
-    };
-  });
 }
 
 /**
@@ -1925,6 +1876,19 @@ async function runManagedTaskViaRunnerInner(
       // Definition is hoisted to the `beforeNextTurn` const built just
       // above `runOnce` so the wrapping happens once.
       beforeNextTurn,
+      ...(options.context?.interruptInput
+        ? {
+            terminalContinuation: {
+              closeInputWindow: () => {
+                options.context?.interruptInput?.closeInputWindow();
+              },
+              reopenInputWindow: () => {
+                options.context?.interruptInput?.reopenInputWindow();
+              },
+              drain: beforeNextTurn,
+            },
+          }
+        : {}),
       // FEATURE_166 (v0.7.41 follow-up) — agent-switch UI label flip.
       // Fires once per handoff after the agent runtime has fully
       // committed the transition (target's system prompt installed,
@@ -1982,6 +1946,7 @@ async function runManagedTaskViaRunnerInner(
       // so the SDK iteration callbacks reflect the real cap, not a stale 20.
       maxToolLoopIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
     }).catch(async (err: unknown) => {
+      options.context?.interruptInput?.closeInputWindow();
       // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
       // any LLM / Runner error before the rejection propagates.
       // Without this, a non-success terminal exit leaves a fresh
@@ -2103,6 +2068,7 @@ async function runManagedTaskViaRunnerInner(
     // including any user prompt that shares this wake-up request.
     envelopeAggregateEnforcer: enforceMailboxEnvelope,
     onIdleWaiting: (currentAgent) => {
+      options.context?.interruptInput?.reopenInputWindow();
       // FEATURE_156 — surface "alive but suspended" to the REPL.
       // Agent-agnostic identity lookup: today only the Worker can
       // reach this (see `dispatch-child-tasks.ts` role guard +
@@ -2137,6 +2103,9 @@ async function runManagedTaskViaRunnerInner(
     // snapshot, so a legitimate run that completes at the cap still
     // returns its result.
       });
+    } catch (error) {
+      options.context?.interruptInput?.closeInputWindow();
+      throw error;
     } finally {
       releaseRuntimeBinding?.();
     }

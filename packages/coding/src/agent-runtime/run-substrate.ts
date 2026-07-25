@@ -73,7 +73,10 @@ import { loadCompactionConfig } from '../compaction-config.js';
 // `agent-runtime/max-tokens-continuation.ts` since FEATURE_100 P3.5a.
 import { waitForRetryDelay } from '../retry-handler.js';
 import { telemetryRecovery } from '../resilience/index.js';
-import { buildPromptMessageContent } from '../input-artifacts.js';
+import {
+  buildPromptMessageContent,
+  toKodaXInputArtifacts,
+} from '../input-artifacts.js';
 import {
   appendPromptIfNotDuplicate,
   discoverAutoResumeSessionId,
@@ -110,6 +113,7 @@ import {
   createAgent,
   ContextCapacityError,
   emitKodaXDiagnostic,
+  getMessageQueue,
   validateAndFixToolHistory,
   type Agent,
 } from '@kodax-ai/agent';
@@ -477,6 +481,7 @@ export async function runSubstrate(
   let releaseActiveRootQueueRoute: (() => void) | undefined;
   try {
   const maxIter = options.maxIter ?? 200;
+  let iterationLimit = maxIter;
   let events = options.events ?? {};
   const toolGuardrails = collectGuardrails(options.guardrails).tool;
   const guardrailAgent = toolGuardrails.length > 0
@@ -557,6 +562,7 @@ export async function runSubstrate(
         }
       : {}),
   });
+  const liveTurnScopeRef = { current: liveTurnScope };
   events = withDurableCompactionPersistence({
     events,
     storage: options.session?.storage,
@@ -571,7 +577,7 @@ export async function runSubstrate(
       ...(options.session?.tag !== undefined ? { tag: options.session.tag } : {}),
     },
   });
-  events = withLiveTurnAttribution(events, liveTurnScope);
+  events = withLiveTurnAttribution(events, liveTurnScopeRef);
   const memoryIdentity = options.context?.memoryIdentity
     ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
   let memoryController: MemoryController | undefined;
@@ -629,7 +635,7 @@ export async function runSubstrate(
     resumed.messages,
     prompt,
     options.context?.inputArtifacts,
-    liveTurnScope.turnId,
+    liveTurnScopeRef.current.turnId,
   );
   let title = resumed.title || (prompt.slice(0, 50) + (prompt.length > 50 ? '...' : ''));
   const errorMetadata: SessionErrorMetadata | undefined = resumed.errorMetadata;
@@ -665,6 +671,35 @@ export async function runSubstrate(
   if (messageQueueAgentId !== undefined && ctx.actorControl?.callerPath === '/root') {
     releaseActiveRootQueueRoute = registerActiveRootQueueRoute(messageQueueAgentId);
   }
+  const consumeRuntimeInterruptInput = (): boolean => {
+    if (!options.context?.interruptInput) return false;
+    const prompts = getMessageQueue().dequeue({
+      agentId: messageQueueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    });
+    if (prompts.length === 0) return false;
+    const queuedTurnId = startQueuedLiveTurn(prompts[0]?.id);
+    const timestamp = new Date().toISOString();
+    for (const queued of prompts) {
+      const inputArtifacts = toKodaXInputArtifacts(queued.inputArtifacts);
+      validateInputArtifactsForModel(inputArtifacts ?? [], {
+        provider: turnState.currentProviderName,
+        model: turnState.currentModelOverride,
+      });
+      messages.push({
+        role: 'user',
+        content: buildPromptMessageContent(queued.content, inputArtifacts),
+        turnId: queuedTurnId,
+        timestamp,
+      });
+    }
+    events.onMidTurnUserMessages?.(
+      prompts.map((queued) => queued.content),
+      { queuedMessageIds: prompts.map((queued) => queued.id) },
+    );
+    return true;
+  };
 
   let contextTokenSnapshot = rebaseContextTokenSnapshot(
     messages,
@@ -705,20 +740,34 @@ export async function runSubstrate(
     },
     thinkingLevel: turnState.runtimeThinkingLevel,
   });
-  let liveTurnTerminalEmitted = false;
+  const terminalLiveTurnIds = new Set<string>();
   const emitLiveTurnCompletedOnce = (
     status: 'completed' | 'interrupted',
   ): void => {
-    if (!liveTurnTerminalEmitted) {
-      liveTurnTerminalEmitted = true;
-      emitTurnCompleted(events, liveTurnScope, status);
-    }
+    const scope = liveTurnScopeRef.current;
+    if (terminalLiveTurnIds.has(scope.turnId)) return;
+    terminalLiveTurnIds.add(scope.turnId);
+    emitTurnCompleted(events, scope, status);
   };
   const emitLiveTurnFailedOnce = (error: Error): void => {
-    if (!liveTurnTerminalEmitted) {
-      liveTurnTerminalEmitted = true;
-      emitTurnFailed(events, liveTurnScope, error);
-    }
+    const scope = liveTurnScopeRef.current;
+    if (terminalLiveTurnIds.has(scope.turnId)) return;
+    terminalLiveTurnIds.add(scope.turnId);
+    emitTurnFailed(events, scope, error);
+  };
+  const startQueuedLiveTurn = (promptId: string | undefined): string => {
+    emitLiveTurnCompletedOnce('completed');
+    liveTurnScopeRef.current = createLiveTurnScope({
+      sessionId,
+      deliveryKind: 'queued',
+      promptId,
+      contextId: liveTurnScope.contextId,
+      contextKind: liveTurnScope.contextKind,
+      parentContextId: liveTurnScope.parentContextId,
+      agentId: liveTurnScope.agentId,
+    });
+    emitTurnStarted(events, liveTurnScopeRef.current);
+    return liveTurnScopeRef.current.turnId;
   };
   let memorySession: MemorySession | undefined;
   let memoryDecisionBinding: CodingMemoryContext | undefined;
@@ -949,7 +998,7 @@ export async function runSubstrate(
   ): typeof contextTokenSnapshot => {
     contextTokenSnapshot = emitIterationEndStep(events, {
       iter: iterNumber,
-      maxIter,
+      maxIter: iterationLimit,
       messages,
       currentSnapshot: contextTokenSnapshot,
       snapshotOverride,
@@ -959,7 +1008,7 @@ export async function runSubstrate(
   const currentRoutingDecision = () => reasoningPlan.decision;
     emitSessionStart(events, { provider: initialProvider.name, sessionId });
     await emitActiveExtensionEvent('session:start', { provider: initialProvider.name, sessionId });
-    emitTurnStarted(events, liveTurnScope);
+    emitTurnStarted(events, liveTurnScopeRef.current);
 
     // Cost tracking — lightweight session-scoped tracker. The closure
     // captures the stable `turnState` reference; reads see the latest
@@ -969,7 +1018,7 @@ export async function runSubstrate(
       events.getCostReport.current = () => formatCostReport(getSummary(turnState.costTracker));
     }
 
-    for (let iter = 0; iter < maxIter; iter++) {
+    for (let iter = 0; iter < iterationLimit; iter++) {
     try {
       // CAP-055: per-turn provider/model/thinkingLevel re-resolution +
       // CAP-042 per-turn isConfigured check + CAP-056 contextWindow cascade.
@@ -1000,10 +1049,10 @@ export async function runSubstrate(
       await emitActiveExtensionEvent('turn:start', {
         sessionId,
         iteration: iter + 1,
-        maxIter,
+        maxIter: iterationLimit,
       });
       // CAP-058: user-facing iteration-start event.
-      emitIterationStartStep(events, iter, maxIter);
+      emitIterationStartStep(events, iter, iterationLimit);
 
       const preparedProviderState = await applyProviderPrepareHook({
         provider: turnState.currentProviderName,
@@ -1125,7 +1174,7 @@ export async function runSubstrate(
       );
       const planningBudgetSnapshotBase = createRuntimeContextBudgetSnapshot({
         sessionId,
-        turnId: liveTurnScope.turnId,
+        turnId: liveTurnScopeRef.current.turnId,
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride ?? streamProvider.getModel(),
         profile: 'report_only',
@@ -1158,7 +1207,7 @@ export async function runSubstrate(
       );
       const requestBudgetSnapshot = createRuntimeContextBudgetSnapshot({
         sessionId,
-        turnId: liveTurnScope.turnId,
+        turnId: liveTurnScopeRef.current.turnId,
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride ?? streamProvider.getModel(),
         profile: contextOptimizationProfile,
@@ -1250,7 +1299,7 @@ export async function runSubstrate(
       const budgetSnapshot = {
         ...createRuntimeContextBudgetSnapshot({
           sessionId,
-          turnId: liveTurnScope.turnId,
+          turnId: liveTurnScopeRef.current.turnId,
           provider: turnState.currentProviderName,
           model: turnState.currentModelOverride ?? streamProvider.getModel(),
           profile: contextOptimizationProfile,
@@ -1515,47 +1564,43 @@ export async function runSubstrate(
       const visibleToolBlocks = result.toolBlocks.filter((block) => isVisibleToolName(block.name));
 
       // Promise 信号检测
-      const [signal, _reason] = checkPromiseSignal(turnState.lastText);
-      if (signal) {
+      const [rawSignal, _reason] = checkPromiseSignal(turnState.lastText);
+      const signal = rawSignal === 'COMPLETE'
+        || rawSignal === 'BLOCKED'
+        || rawSignal === 'DECIDE'
+        ? rawSignal
+        : undefined;
+      if (
+        result.toolBlocks.length === 0
+        || signal === 'COMPLETE'
+        || iter + 1 >= iterationLimit
+      ) {
+        options.context?.interruptInput?.closeInputWindow();
+      }
+      if (signal && signal !== 'COMPLETE') {
         await settleExtensionTurn(sessionId, turnState.lastText, runtimeSessionState, {
           hadToolCalls: false,
           success: true,
-          signal: signal as 'COMPLETE' | 'BLOCKED' | 'DECIDE',
+          signal,
         });
         const appendedQueuedMessages = appendQueuedRuntimeMessages(messages, runtimeSessionState);
-        if (appendedQueuedMessages) {
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (appendedQueuedMessages || consumedInterruptInput) {
+          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+            iterationLimit += 1;
+          }
+          if (iter + 1 < iterationLimit) {
+            options.context?.interruptInput?.reopenInputWindow();
+          }
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
             sessionId,
             iteration: iter + 1,
             lastText: turnState.lastText,
             hadToolCalls: false,
-            signal: signal as 'COMPLETE' | 'BLOCKED' | 'DECIDE',
+            signal,
           });
           continue;
-        }
-        if (signal === 'COMPLETE') {
-          emitIterationEnd(iter + 1, preAssistantTokenSnapshot);
-          await emitActiveExtensionEvent('turn:end', {
-            sessionId,
-            iteration: iter + 1,
-            lastText: turnState.lastText,
-            hadToolCalls: false,
-            signal: 'COMPLETE',
-          });
-          emitLiveTurnCompletedOnce('completed');
-          emitComplete(events);
-          await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
-          return finalizeManagedProtocolResult({
-            success: true,
-            lastText: turnState.lastText,
-            signal: 'COMPLETE',
-            messages,
-            sessionId,
-            routingDecision: currentRoutingDecision(),
-            contextTokenSnapshot,
-            limitReached: false,
-          });
         }
       }
 
@@ -1586,14 +1631,14 @@ export async function runSubstrate(
       const assistantContent = guardEmptyAssistantContent([
         ...result.thinkingBlocks,
         ...result.textBlocks,
-        ...visibleToolBlocks,
+        ...(signal === 'COMPLETE' ? [] : visibleToolBlocks),
       ]);
       // GOAL 2: stamp when the LLM stream completed so the session entry carries
       // a real per-message time (SA path; parallel to runner.ts). Additive.
       messages.push({
         role: 'assistant',
         content: assistantContent,
-        turnId: liveTurnScope.turnId,
+        turnId: liveTurnScopeRef.current.turnId,
         timestamp: new Date().toISOString(),
       });
       const reportedCompletedTurnTokenSnapshot = createCompletedTurnTokenSnapshot(
@@ -1604,6 +1649,60 @@ export async function runSubstrate(
         ? reportedCompletedTurnTokenSnapshot
         : rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
       contextTokenSnapshot = completedTurnTokenSnapshot;
+
+      if (signal === 'COMPLETE') {
+        await settleExtensionTurn(sessionId, turnState.lastText, runtimeSessionState, {
+          hadToolCalls: false,
+          success: true,
+          signal: 'COMPLETE',
+        });
+        const appendedQueuedMessages = appendQueuedRuntimeMessages(
+          messages,
+          runtimeSessionState,
+        );
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (appendedQueuedMessages || consumedInterruptInput) {
+          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+            iterationLimit += 1;
+          }
+          if (iter + 1 < iterationLimit) {
+            options.context?.interruptInput?.reopenInputWindow();
+          }
+          contextTokenSnapshot = rebaseContextTokenSnapshot(
+            messages,
+            completedTurnTokenSnapshot,
+          );
+          await emitActiveExtensionEvent('turn:end', {
+            sessionId,
+            iteration: iter + 1,
+            lastText: turnState.lastText,
+            hadToolCalls: false,
+            signal: 'COMPLETE',
+          });
+          continue;
+        }
+        emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText: turnState.lastText,
+          hadToolCalls: false,
+          signal: 'COMPLETE',
+        });
+        emitLiveTurnCompletedOnce('completed');
+        emitComplete(events);
+        await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
+        return finalizeManagedProtocolResult({
+          success: true,
+          lastText: turnState.lastText,
+          signal: 'COMPLETE',
+          messages,
+          sessionId,
+          routingDecision: currentRoutingDecision(),
+          contextTokenSnapshot,
+          limitReached: false,
+        });
+      }
 
       // L5 continuation: max_tokens hit and no tool was emitted (so the
       // model was producing pure text and got cut mid-thought). Inject a
@@ -1629,7 +1728,19 @@ export async function runSubstrate(
       });
       turnState.maxTokensRetryCount = maxTokensOutcome.nextMaxTokensRetryCount;
       if (maxTokensOutcome.outcome === 'continue') {
-        contextTokenSnapshot = maxTokensOutcome.nextContextTokenSnapshot;
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+          iterationLimit += 1;
+        }
+        if (iter + 1 < iterationLimit) {
+          options.context?.interruptInput?.reopenInputWindow();
+        }
+        contextTokenSnapshot = consumedInterruptInput
+          ? rebaseContextTokenSnapshot(
+              messages,
+              maxTokensOutcome.nextContextTokenSnapshot,
+            )
+          : maxTokensOutcome.nextContextTokenSnapshot;
         continue;
       }
 
@@ -1647,7 +1758,19 @@ export async function runSubstrate(
       });
       turnState.managedProtocolContinueAttempted = protocolContinueOutcome.nextContinueAttempted;
       if (protocolContinueOutcome.outcome === 'continue') {
-        contextTokenSnapshot = protocolContinueOutcome.nextContextTokenSnapshot;
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+          iterationLimit += 1;
+        }
+        if (iter + 1 < iterationLimit) {
+          options.context?.interruptInput?.reopenInputWindow();
+        }
+        contextTokenSnapshot = consumedInterruptInput
+          ? rebaseContextTokenSnapshot(
+              messages,
+              protocolContinueOutcome.nextContextTokenSnapshot,
+            )
+          : protocolContinueOutcome.nextContextTokenSnapshot;
         continue;
       }
 
@@ -1674,7 +1797,18 @@ export async function runSubstrate(
           hadToolCalls: false,
           success: true,
         });
-        if (appendQueuedRuntimeMessages(messages, runtimeSessionState)) {
+        const appendedQueuedMessages = appendQueuedRuntimeMessages(
+          messages,
+          runtimeSessionState,
+        );
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (appendedQueuedMessages || consumedInterruptInput) {
+          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+            iterationLimit += 1;
+          }
+          if (iter + 1 < iterationLimit) {
+            options.context?.interruptInput?.reopenInputWindow();
+          }
           await commitActorNotificationReceipts(ctx, messages);
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
@@ -1915,11 +2049,23 @@ export async function runSubstrate(
       const hasCancellation = hasCancelledToolResult(toolResults);
 
       if (toolResults.length === 0) {
+        options.context?.interruptInput?.closeInputWindow();
         await settleExtensionTurn(sessionId, turnState.lastText, runtimeSessionState, {
           hadToolCalls: false,
           success: true,
         });
-        if (appendQueuedRuntimeMessages(messages, runtimeSessionState)) {
+        const appendedQueuedMessages = appendQueuedRuntimeMessages(
+          messages,
+          runtimeSessionState,
+        );
+        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        if (appendedQueuedMessages || consumedInterruptInput) {
+          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
+            iterationLimit += 1;
+          }
+          if (iter + 1 < iterationLimit) {
+            options.context?.interruptInput?.reopenInputWindow();
+          }
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
           await emitActiveExtensionEvent('turn:end', {
             sessionId,
@@ -1997,6 +2143,7 @@ export async function runSubstrate(
       }
 
       if (hasCancellation) {
+        options.context?.interruptInput?.closeInputWindow();
         // CAP-080: cancellation terminal — push results, fire turn:end +
         // stream:end, return KodaXResult with interrupted flag derived
         // from queued-follow-up presence.
@@ -2040,10 +2187,29 @@ export async function runSubstrate(
       });
       await commitActorNotificationReceipts(ctx, messages);
       contextTokenSnapshot = settleOutcome.contextTokenSnapshot;
-      if (settleOutcome.drainedQueuedMessages) {
+      const consumedInterruptInput = consumeRuntimeInterruptInput();
+      if (consumedInterruptInput) {
+        if (iter + 1 >= iterationLimit) {
+          iterationLimit += 1;
+        }
+        contextTokenSnapshot = rebaseContextTokenSnapshot(messages, contextTokenSnapshot);
+      }
+      if (settleOutcome.drainedQueuedMessages || consumedInterruptInput) {
+        if (iter + 1 < iterationLimit) {
+          options.context?.interruptInput?.reopenInputWindow();
+        }
+        if (settleOutcome.drainedQueuedMessages) {
+          continue;
+        }
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText: turnState.lastText,
+          hadToolCalls: true,
+          signal: undefined,
+        });
         continue;
       }
-
       const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(
         events,
         messageQueueAgentId,
@@ -2092,6 +2258,7 @@ export async function runSubstrate(
         signal: undefined,
       });
     } catch (e) {
+      options.context?.interruptInput?.closeInputWindow();
       const error = e instanceof Error ? e : new Error(String(e));
 
       // CAP-082: cleanup chain — ALWAYS runs first in the catch branch.
@@ -2161,6 +2328,7 @@ export async function runSubstrate(
   // call `applyIterationLimitTerminal` to preserve the snapshot+signal
   // side effects byte-for-byte, but return with `limitReached: false`
   // — see the call sites above guarded by `emitComplete(events)`.
+  options.context?.interruptInput?.closeInputWindow();
   const iterTerminal = await applyIterationLimitTerminal({
     options,
     sessionId,

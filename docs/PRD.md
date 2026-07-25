@@ -96,9 +96,15 @@ through the SDK and daemon control-plane APIs.
 Runtime hosts may submit real user input to the current active root Run only
 through the advertised `interruptInput:1` contract. Input accepted before a
 safe Runner boundary must remain FIFO, retain separate user-message authorship,
-and enter one next model request without creating a continuation Run. Closed or
-terminal Runs must reject or terminalize undelivered input rather than leak it
-into later work. `after_turn` remains the explicit continuation mechanism.
+and enter one next model request without creating a continuation Run. A
+terminal candidate atomically closes admission before draining the accepted
+batch; admission reopens only if that drain or another lifecycle hook guarantees
+a next model turn. An accepted batch at the configured iteration limit grants
+exactly the continuation turn needed to consume it. Idle-yield waiting is an
+active consumption state and therefore admits input; failure, cancellation, and
+terminal cleanup close admission before asynchronous teardown. Closed or
+terminal Runs reject or terminalize undelivered input rather than leak it into
+later work. `after_turn` remains the explicit continuation mechanism.
 
 ## 6. Required Capabilities
 
