@@ -13,6 +13,7 @@ import type { KodaXTimeoutConfig } from './timeouts.js';
 import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
 import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
 import type { RuntimeCompactionSkippedEvent } from './agent-runtime/middleware/compaction-pressure.js';
+import type { MemoryRecallRunner } from '@kodax-ai/agent/experimental-memory';
 
 import type {
   KodaXImageBlock,
@@ -1637,6 +1638,8 @@ export interface KodaXOptions {
   context?: KodaXContextOptions;
   events?: KodaXEvents;
   memoryReviewer?: MemoryReviewRunner;
+  /** Optional host-owned semantic selector for sparse governed memory interventions. */
+  memoryRecallRunner?: MemoryRecallRunner;
   extensionRuntime?: ExtensionRuntimeContract;
   /** FEATURE_229: host-owned policy for workflow auto-start and ceilings. */
   workflowHostPolicy?: import('./workflows/invocation-policy.js').WorkflowHostPolicy;

@@ -20,6 +20,12 @@ export function recordMemoryDecisionReceipt(receipt: MemoryDecisionReceipt): voi
 function freezeReceipt(receipt: MemoryDecisionReceipt): MemoryDecisionReceipt {
   return Object.freeze({
     ...receipt,
+    candidateIds: Object.freeze([...receipt.candidateIds]),
+    selectedCandidateIds: Object.freeze([...receipt.selectedCandidateIds]),
+    injectedEvidenceRefs: Object.freeze([...receipt.injectedEvidenceRefs]),
+    ...(receipt.triggers !== undefined
+      ? { triggers: Object.freeze([...receipt.triggers]) }
+      : {}),
     candidateRefs: Object.freeze([...receipt.candidateRefs]),
     selectedRefs: Object.freeze([...receipt.selectedRefs]),
     injectedRefs: Object.freeze([...receipt.injectedRefs]),

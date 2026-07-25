@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 
-import type { PersistedOutcomeDigest } from '@kodax-ai/agent/experimental-memory';
+import type {
+  MemoryRecallCandidate,
+  PersistedOutcomeDigest,
+} from '@kodax-ai/agent/experimental-memory';
 import type { KodaXSessionArtifactLedgerEntry } from '../types.js';
 import type { TodoStore } from '../task-engine/todo-store.js';
 
@@ -25,6 +28,7 @@ export interface CodingMemoryContext {
   readonly decisionIntent: string;
   readonly actionSignature?: string;
   readonly throughSequence: number;
+  readonly currentCandidates: readonly MemoryRecallCandidate[];
 }
 
 export function buildCodingMemoryContext(input: CodingMemoryContextInput): CodingMemoryContext {
@@ -51,12 +55,30 @@ export function buildCodingMemoryContext(input: CodingMemoryContextInput): Codin
     lines.push(`Outcome ${digest.outcome}: ${compact(digest.summary)}`);
   }
   const text = boundedLines(lines);
+  const currentCandidates: MemoryRecallCandidate[] = [{
+    refId: 'current:objective',
+    claim: compact(input.objective),
+    claimKind: 'objective',
+    source: 'current',
+    evidenceRefs: ['user:current-objective'],
+  }];
+  for (const todo of input.todoStore?.getAll() ?? []) {
+    if (todo.status === 'completed' || todo.status === 'skipped') continue;
+    currentCandidates.push({
+      refId: `current:todo:${todo.id}`,
+      claim: `Open todo (${todo.status}): ${compact(todo.subject)}`,
+      claimKind: 'todo',
+      source: 'current',
+      evidenceRefs: [`todo:${todo.id}`],
+    });
+  }
   return {
     revision: createHash('sha256').update(text).digest('hex'),
     text,
     decisionIntent: input.decisionIntent,
     ...(input.actionSignature !== undefined ? { actionSignature: input.actionSignature } : {}),
     throughSequence: input.observationSequence,
+    currentCandidates,
   };
 }
 

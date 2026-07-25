@@ -35,6 +35,22 @@ describe('FEATURE_260 coding memory context', () => {
     expect(context.text).toContain('Artifact check_result: Typecheck failed');
     expect(context.text).toContain('Reviewer found a stale scope check');
     expect(context.throughSequence).toBe(4);
+    expect(context.currentCandidates).toEqual([
+      {
+        refId: 'current:objective',
+        claim: 'Ship memory support',
+        claimKind: 'objective',
+        source: 'current',
+        evidenceRefs: ['user:current-objective'],
+      },
+      {
+        refId: 'current:todo:todo_1',
+        claim: 'Open todo (pending): Run tests',
+        claimKind: 'todo',
+        source: 'current',
+        evidenceRefs: ['todo:todo_1'],
+      },
+    ]);
     expect(todos.getAll()).toEqual(before);
   });
 

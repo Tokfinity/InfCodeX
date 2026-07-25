@@ -61,7 +61,8 @@ import {
 } from '@kodax-ai/agent';
 import {
   createMemoryAgent,
-  type MemoryObservation,
+  type MemoryInterventionTrigger,
+  type MemoryReminder,
   type MemorySession,
 } from '@kodax-ai/agent/experimental-memory';
 import { loadCompactionConfig } from '../compaction-config.js';
@@ -421,34 +422,9 @@ function legacyReasoningModeToRuntimeEffort(
   return mapped ?? mode;
 }
 
-function buildUserConstraintObservation(
-  prompt: string,
-  actionSignature: string,
-  sequence: number,
-): MemoryObservation | undefined {
-  if (!/(?:\b(?:must|must not|do not|don't|never|always|forbid)\b|必须|不要|不能|禁止|始终)/iu.test(prompt)) {
-    return undefined;
-  }
+function renderMemoryReminderSuffix(reminder: MemoryReminder): KodaXEphemeralSuffix {
   return {
-    id: `user-constraint:${sequence}`,
-    sequence,
-    kind: 'constraint',
-    summary: prompt.replace(/\s+/g, ' ').trim().slice(0, 1_600),
-    evidence: [{
-      ref: `user:prompt:${sequence}`,
-      requestedGrade: 'authoritative',
-      source: 'user',
-      observedAt: new Date().toISOString(),
-    }],
-    visibility: 'prompt_safe',
-    actionSignature,
-    occurredAt: new Date().toISOString(),
-  };
-}
-
-function renderMemoryReminderSuffix(content: string): KodaXEphemeralSuffix {
-  return {
-    content: renderMemoryEvidenceEnvelope(content) ?? '',
+    content: renderMemoryEvidenceEnvelope(reminder.content, reminder.evidenceRefs) ?? '',
   };
 }
 
@@ -887,11 +863,15 @@ export async function runSubstrate(
     messages.length === 1,
   );
   let memoryObservationSequence = 0;
+  let pendingMemoryInterventionTriggers: MemoryInterventionTrigger[] = [];
   if (memoryController !== undefined && memoryPack !== undefined) {
     memorySession = await createMemoryAgent({
       controlPlane: memoryController,
       initialMemoryPack: memoryPack,
       sourcePolicy: codingMemorySourcePolicy,
+      ...(options.memoryRecallRunner !== undefined
+        ? { recallRunner: options.memoryRecallRunner }
+        : {}),
       persistOutcomeDigest: async (digest) => {
         await persistPendingEpisodeReview(memoryIdentity, digest);
         await persistMemoryOutcomeToSession(options, sessionId, digest);
@@ -952,12 +932,6 @@ export async function runSubstrate(
               throughSequence: memoryDecisionBinding.throughSequence,
             });
     }
-    const constraint = buildUserConstraintObservation(
-      prompt,
-      `task:${reasoningPlan.decision.primaryTask}`,
-      ++memoryObservationSequence,
-    );
-    if (constraint !== undefined) memorySession.observe(constraint);
   }
 
   let incompleteRetryCount = 0;
@@ -1010,27 +984,6 @@ export async function runSubstrate(
       const provider = turnProvider.provider;
       let contextWindow = turnProvider.contextWindow;
       let memorySuffix: KodaXEphemeralSuffix | undefined;
-      if (memorySession !== undefined) {
-        const memoryContext = buildCodingMemoryContext({
-          objective: prompt,
-          decisionIntent: reasoningPlan.decision.primaryTask,
-          actionSignature: `task:${reasoningPlan.decision.primaryTask}`,
-          todoStore: ctx.todoStore,
-          observationSequence: memoryObservationSequence,
-        });
-        memoryDecisionBinding = memoryContext;
-        if (iter > 0) {
-          const reminder = memorySession.recall({
-            decisionRevision: memoryContext.revision,
-            objective: prompt,
-            decisionContext: memoryContext.text,
-            decisionIntent: memoryContext.decisionIntent,
-            actionSignature: memoryContext.actionSignature,
-            throughSequence: memoryContext.throughSequence,
-          });
-          if (reminder !== undefined) memorySuffix = renderMemoryReminderSuffix(reminder.content);
-        }
-      }
 
       // CAP-057: per-turn effectiveReasoningPlan + currentExecution rebuild.
       const turnReasoning = await resolvePerTurnReasoning({
@@ -1248,6 +1201,51 @@ export async function runSubstrate(
       turnState.compactAntiThrash = compactionLifecycle.nextCompactionAntiThrash;
       if (compactionLifecycle.contextTokenSnapshot !== undefined) {
         contextTokenSnapshot = compactionLifecycle.contextTokenSnapshot;
+      }
+      if (memorySession !== undefined) {
+        const memoryContext = buildCodingMemoryContext({
+          objective: prompt,
+          decisionIntent: reasoningPlan.decision.primaryTask,
+          actionSignature: `task:${reasoningPlan.decision.primaryTask}`,
+          todoStore: ctx.todoStore,
+          observationSequence: memoryObservationSequence,
+        });
+        memoryDecisionBinding = memoryContext;
+        const triggers = [
+          ...pendingMemoryInterventionTriggers,
+          ...(compactionLifecycle.didCompactMessages
+            ? ['context_compacted' as const]
+            : []),
+        ].filter((trigger, index, values) => values.indexOf(trigger) === index);
+        pendingMemoryInterventionTriggers = [];
+        try {
+          const reminder = triggers.length > 0
+            ? await memorySession.intervene({
+                decisionRevision: memoryContext.revision,
+                objective: prompt,
+                decisionContext: memoryContext.text,
+                decisionIntent: memoryContext.decisionIntent,
+                actionSignature: memoryContext.actionSignature,
+                throughSequence: memoryContext.throughSequence,
+                triggers,
+                currentCandidates: memoryContext.currentCandidates,
+              })
+            : iter > 0
+              ? memorySession.recall({
+                  decisionRevision: memoryContext.revision,
+                  objective: prompt,
+                  decisionContext: memoryContext.text,
+                  decisionIntent: memoryContext.decisionIntent,
+                  actionSignature: memoryContext.actionSignature,
+                  throughSequence: memoryContext.throughSequence,
+                })
+              : undefined;
+          if (reminder !== undefined) memorySuffix = renderMemoryReminderSuffix(reminder);
+        } catch (error) {
+          emitResilienceDebug('[memory:intervention:error]', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       const budgetSnapshot = {
         ...createRuntimeContextBudgetSnapshot({
@@ -1892,9 +1890,22 @@ export async function runSubstrate(
             toolResults,
             startSequence: memoryObservationSequence,
             observedAt: new Date().toISOString(),
+            ...(memoryDecisionBinding?.actionSignature !== undefined
+              ? { decisionActionSignature: memoryDecisionBinding.actionSignature }
+              : {}),
           });
           for (const observation of observations) memorySession.observe(observation);
           memoryObservationSequence = observations.at(-1)?.sequence ?? memoryObservationSequence;
+          for (const observation of observations) {
+            if (observation.metadata?.failed !== true) continue;
+            const trigger: MemoryInterventionTrigger =
+              observation.metadata.verification === true
+                ? 'verification_failure'
+                : 'tool_failure';
+            if (!pendingMemoryInterventionTriggers.includes(trigger)) {
+              pendingMemoryInterventionTriggers.push(trigger);
+            }
+          }
         }
       }
 

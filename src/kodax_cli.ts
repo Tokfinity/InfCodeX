@@ -714,6 +714,7 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
     extensionRuntime: _extensionRuntime,
     sessionControl: _sessionControl,
     memoryReviewer: _memoryReviewer,
+    memoryRecallRunner: _memoryRecallRunner,
     guardrails: _guardrails,
     skillDynamicContext,
     ...wireOptions
@@ -754,6 +755,7 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
     ['extensionRuntime', options.extensionRuntime],
     ['sessionControl', options.sessionControl],
     ['memoryReviewer', options.memoryReviewer],
+    ['memoryRecallRunner', options.memoryRecallRunner],
     ['guardrails', options.guardrails],
     ['events.beforeToolExecute', options.events?.beforeToolExecute],
     ['skillDynamicContext.execute', options.skillDynamicContext?.execute],

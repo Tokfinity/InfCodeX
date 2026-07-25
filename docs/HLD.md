@@ -424,14 +424,22 @@ domain-neutral `MemoryAgent` / `MemorySession` contracts; the existing
 authority. `packages/coding` owns coding observations, prompt-safe rendering,
 the `memory_recall` tool, Action-LLM integration, and trace correlation.
 
-Passive recall is computed before the run and injected as a bounded dynamic
-suffix, so it adds no extra LLM wait. Deliberate `query()` / `memory_recall` is
-read-only and initiated by the Action LLM. Episode review may create a governed
+Routine exact recall is synchronous and injected as a bounded dynamic suffix.
+FEATURE_275 adds sparse foreground intervention after tool failure,
+verification failure, or a durably committed context compaction. At those
+events the Memory Agent rebuilds one closed candidate set from current
+objective/open todos, recent governed observations, and a fresh F228 pack.
+An optional host-owned selector can return only offered IDs; the default
+runtime makes no selector call. Intervention completes after compaction and
+before the affected Action-LLM request, so the reminder cannot be compacted
+away before use. Deliberate `query()` / `memory_recall` remains read-only and
+initiated by the Action LLM. Episode review may create a governed
 proposal or defer it to the scoped inbox; only the existing
 proposal/preview/fingerprint/apply path can mutate durable memory. Exact scope,
-secret filtering, poisoning checks, and managed-path guards remain
-deterministic. Decision receipts are trace-only references and never store
-hidden reasoning.
+private/sensitive filtering, prompt-injection rejection, stale-result fences,
+and managed-path guards remain deterministic. Decision receipts separately
+record offered candidate IDs, selected candidate IDs, and exposed evidence refs;
+they are trace-only and never store hidden reasoning.
 
 The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; it does not
 become an implicit dependency for consumers of the stable root or Runtime SDK.

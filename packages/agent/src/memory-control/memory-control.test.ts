@@ -803,7 +803,7 @@ describe('MemoryControlPlane', () => {
     expect(store.proposals[0]?.status).toBe('approved');
     expect(store.proposals[0]).toMatchObject({
       approvedBy: 'host',
-      approvalPolicyId: 'f260-v0.7.68.2:episode-promotion',
+      approvalPolicyId: 'f275-v0.7.77.1:episode-promotion',
       approvalExpectedFingerprints: expect.any(Object),
       approvalResultingFingerprints: expect.any(Object),
     });

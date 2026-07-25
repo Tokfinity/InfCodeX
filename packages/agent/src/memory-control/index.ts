@@ -50,6 +50,10 @@ export {
 } from './controller.js';
 
 export {
+  sanitizePromptSafeMemoryClaim,
+} from './prompt-safety.js';
+
+export {
   completeEpisodeReview,
   drainPendingEpisodeReviews,
   listPendingEpisodeReviews,

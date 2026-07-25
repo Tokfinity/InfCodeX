@@ -65,8 +65,11 @@ describe('FEATURE_260 eval contract', () => {
     });
   });
 
-  it('pins the source-controlled policy and production tool bytes', () => {
-    expect(MEMORY_POLICY_ARTIFACT.policyVersion).toBe('f260-v0.7.68.2');
+  it('keeps the frozen panel while pinning the current production policy bytes', () => {
+    // FEATURE_275 supersedes the production intervention policy. The F260
+    // cases and scorers above remain byte-frozen; only this current-policy
+    // integration assertion advances with the production artifact.
+    expect(MEMORY_POLICY_ARTIFACT.policyVersion).toBe('f275-v0.7.77.1');
     expect(MEMORY_POLICY_ARTIFACT.deliberateRecallToolSha256)
       .toBe(MEMORY_RECALL_TOOL_BYTES_SHA256);
   });

@@ -64,6 +64,7 @@ import type {
   MemorySourceAdapter,
   MemoryVisibility,
 } from './types.js';
+import { sanitizePromptSafeMemoryClaim } from './prompt-safety.js';
 import {
   archiveManagedMemoryRef,
   forgetManagedMemoryRef,
@@ -962,15 +963,22 @@ export class MemoryControlPlane implements MemoryController {
     const hints: MemoryPackHint[] = [];
     for (const ref of refs) {
       const snapshot = input.includeSnippets === true ? await this.readRef(ref) : undefined;
+      const hook = sanitizePromptSafeMemoryClaim(ref.title ?? ref.id, 240) ?? ref.id;
+      const rawSnippet = snapshot === undefined || snapshot.body.trim().length === 0
+        ? undefined
+        : input.purpose === 'deliberate_query' || input.purpose === 'intervention'
+          ? promptSafeClaimSnippet(snapshot.body)
+          : firstSnippet(snapshot.body);
+      const bodySnippet = rawSnippet === undefined
+        ? undefined
+        : sanitizePromptSafeMemoryClaim(rawSnippet, 512);
       hints.push({
         ref,
-        hook: ref.title ?? ref.id,
+        hook,
         reason: packReason(ref, memoryPackRankingText(input)),
-        ...(snapshot !== undefined && snapshot.body.trim().length > 0
+        ...(bodySnippet !== undefined && snapshot !== undefined
           ? {
-              bodySnippet: input.purpose === 'deliberate_query'
-                ? promptSafeClaimSnippet(snapshot.body)
-                : firstSnippet(snapshot.body),
+              bodySnippet,
               bodyFingerprint: snapshot.bodyFingerprint,
             }
           : ref.bodyFingerprint !== undefined ? { bodyFingerprint: ref.bodyFingerprint } : {}),

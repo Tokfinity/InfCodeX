@@ -59,13 +59,23 @@ export interface MemoryDecisionTraceReceipt {
   readonly decisionRevision: string;
   readonly policyVersion: string;
   readonly candidateSetFingerprint: string;
+  readonly candidateIds: readonly string[];
+  readonly selectedCandidateIds: readonly string[];
+  readonly injectedEvidenceRefs: readonly string[];
+  readonly triggers?: readonly (
+    | 'tool_failure'
+    | 'verification_failure'
+    | 'context_compacted'
+  )[];
   readonly candidateRefs: readonly string[];
   readonly selectedRefs: readonly string[];
   readonly injectedRefs: readonly string[];
   readonly selectionModes: readonly (
     | 'task_hint'
     | 'exact'
+    /** @deprecated Retained for source compatibility; F275 no longer emits this mode. */
     | 'semantic_prefetch'
+    | 'semantic_intervention'
     | 'deliberate_query'
   )[];
   readonly actionSignature?: string;

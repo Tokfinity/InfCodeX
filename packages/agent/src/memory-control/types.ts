@@ -231,7 +231,7 @@ export interface MemoryPackInput {
   readonly includeSensitive?: boolean;
   readonly includeSnippets?: boolean;
   readonly ignoreMemory?: boolean;
-  readonly purpose?: 'automatic' | 'deliberate_query';
+  readonly purpose?: 'automatic' | 'deliberate_query' | 'intervention';
 }
 
 export interface MemoryPackHint {

@@ -71,10 +71,11 @@ function constraint(overrides: Partial<MemoryObservation> = {}): MemoryObservati
 }
 
 describe('FEATURE_260 MemoryAgent', () => {
-  it('prefetches semantic selection without making recall await an LLM', async () => {
-    const memoryPack = pack();
-    const candidatePack: MemoryPack = {
-      ...memoryPack,
+  it('builds a fresh governed pack and performs one bounded event intervention', async () => {
+    const initialPack = pack();
+    const freshPack: MemoryPack = {
+      ...initialPack,
+      memoryRevision: 'memory-2',
       candidates: [{
         ref: {
           kind: 'memdir',
@@ -90,39 +91,106 @@ describe('FEATURE_260 MemoryAgent', () => {
         },
         hook: 'Use npm workspaces for dependency changes.',
         reason: 'semantic candidate',
+        bodySnippet: 'Change dependencies through the root npm workspace.',
       }],
     };
-    let resolvePrefetch: ((value: { readonly selectedRefIds: readonly string[] }) => void) | undefined;
-    const prefetch = new Promise<{ readonly selectedRefIds: readonly string[] }>((resolve) => {
-      resolvePrefetch = resolve;
-    });
-    let resolveCompleted: (() => void) | undefined;
-    const completed = new Promise<void>((resolve) => {
-      resolveCompleted = resolve;
-    });
+    const controlPlane = controller();
+    vi.mocked(controlPlane.buildMemoryPack)
+      .mockResolvedValueOnce(initialPack)
+      .mockResolvedValueOnce(freshPack);
+    const candidateSets: string[][] = [];
+    const trace: MemoryAgentTraceEvent[] = [];
     const session = await createMemoryAgent({
-      controlPlane: controller(candidatePack),
-      recallRunner: async () => prefetch,
-      onTrace: (event) => {
-        if (event.type === 'recall.prefetch.completed') resolveCompleted?.();
+      controlPlane,
+      recallRunner: async (input) => {
+        candidateSets.push(input.candidates.map((candidate) => candidate.refId));
+        return {
+          selectedRefIds: [
+            'tool-result:edit-1',
+            'memdir:procedure-npm',
+            'memdir:not-offered',
+          ],
+        };
       },
+      onTrace: (event) => trace.push(event),
     }).startSession({ identity, objective: 'Change dependencies' });
+    session.observe(constraint({
+      id: 'failure-1',
+      kind: 'outcome',
+      summary: 'The edit failed under the current inputs.',
+      actionSignature: 'task:dependency-update',
+      evidence: [{
+        ref: 'tool-result:edit-1',
+        requestedGrade: 'observed',
+        source: 'tool',
+        observedAt: '2026-07-12T00:00:00.000Z',
+      }],
+    }));
     const input = {
       decisionRevision: 'decision-1',
       objective: 'Change dependencies',
       decisionContext: 'The package graph needs an update.',
       decisionIntent: 'dependency-update',
-      throughSequence: 0,
+      actionSignature: 'task:dependency-update',
+      throughSequence: 1,
+      triggers: ['tool_failure'],
+      currentCandidates: [{
+        refId: 'current:objective',
+        claim: 'Change dependencies',
+        claimKind: 'objective',
+        source: 'current',
+        evidenceRefs: ['user:current-objective'],
+      }],
     } as const;
 
-    expect(session.recall(input)).toBeUndefined();
-    resolvePrefetch?.({ selectedRefIds: ['memdir:procedure-npm', 'memdir:not-offered'] });
-    await completed;
-
-    expect(session.recall(input)).toEqual({
-      content: 'Use npm workspaces for dependency changes.',
-      evidenceRefs: ['memdir:procedure-npm'],
+    await expect(session.intervene(input)).resolves.toEqual({
+      content: [
+        'Change dependencies',
+        'The edit failed under the current inputs.',
+        'Change dependencies through the root npm workspace.',
+      ].join('\n'),
+      evidenceRefs: [
+        'user:current-objective',
+        'tool-result:edit-1',
+        'memdir:procedure-npm',
+      ],
     });
+    expect(candidateSets).toEqual([[
+      'current:objective',
+      'observation:failure-1',
+      'memdir:procedure-npm',
+    ]]);
+    expect(controlPlane.buildMemoryPack).toHaveBeenNthCalledWith(2, {
+      task: 'Change dependencies',
+      identity,
+      decisionIntent: 'dependency-update',
+      actionSignature: 'task:dependency-update',
+      maxCandidates: 12,
+      maxHints: 12,
+      includeSnippets: true,
+      purpose: 'intervention',
+    });
+    expect(trace).toContainEqual(expect.objectContaining({
+      type: 'memory.decision',
+      receipt: expect.objectContaining({
+        triggers: ['tool_failure'],
+        candidateIds: [
+          'current:objective',
+          'observation:failure-1',
+          'memdir:procedure-npm',
+        ],
+        selectedCandidateIds: [
+          'current:objective',
+          'observation:failure-1',
+          'memdir:procedure-npm',
+        ],
+        injectedEvidenceRefs: [
+          'user:current-objective',
+          'tool-result:edit-1',
+          'memdir:procedure-npm',
+        ],
+      }),
+    }));
   });
 
   it('recalls an exact constraint synchronously and consumes it once', async () => {
@@ -415,6 +483,102 @@ describe('FEATURE_260 MemoryAgent', () => {
       throughSequence: 1,
     })).resolves.toBeUndefined();
     expect(controlPlane.buildMemoryPack).toHaveBeenCalledTimes(1);
+  });
+
+  it('never injects or offers private and sensitive observations', async () => {
+    const offered: string[][] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      recallRunner: async (input) => {
+        offered.push(input.candidates.map((candidate) => candidate.refId));
+        return { selectedRefIds: input.candidates.map((candidate) => candidate.refId) };
+      },
+    }).startSession({ identity, objective: 'Keep private state private' });
+    session.observe(constraint({
+      id: 'private-1',
+      visibility: 'private',
+      actionSignature: 'task:privacy',
+    }));
+    session.observe(constraint({
+      id: 'sensitive-1',
+      sequence: 2,
+      visibility: 'sensitive',
+      actionSignature: 'task:privacy',
+    }));
+
+    expect(session.recall({
+      decisionRevision: 'decision-private',
+      objective: 'Keep private state private',
+      decisionContext: 'privacy decision',
+      decisionIntent: 'privacy',
+      actionSignature: 'task:privacy',
+      throughSequence: 2,
+    })).toBeUndefined();
+    await expect(session.intervene({
+      decisionRevision: 'decision-private-intervention',
+      objective: 'Keep private state private',
+      decisionContext: 'privacy decision',
+      decisionIntent: 'privacy',
+      actionSignature: 'task:privacy',
+      throughSequence: 2,
+      triggers: ['context_compacted'],
+      currentCandidates: [],
+    })).resolves.toBeUndefined();
+    expect(offered).toEqual([]);
+  });
+
+  it('discards a selector result when the observation revision changes while it is running', async () => {
+    const freshPack: MemoryPack = {
+      ...pack(),
+      candidates: [{
+        ref: {
+          kind: 'memdir',
+          id: 'memdir:procedure-npm',
+          scope: 'project',
+          owner: 'project',
+          lifecycle: 'active',
+          authority: 'approved_write',
+          visibility: 'prompt_safe',
+          sourceRefs: ['tool:test'],
+          relatedRefs: [],
+        },
+        hook: 'Use npm workspaces.',
+        reason: 'fresh candidate',
+      }],
+    };
+    const controlPlane = controller();
+    vi.mocked(controlPlane.buildMemoryPack)
+      .mockResolvedValueOnce(pack())
+      .mockResolvedValueOnce(freshPack);
+    let resolveSelection: ((value: { readonly selectedRefIds: readonly string[] }) => void) | undefined;
+    const selection = new Promise<{ readonly selectedRefIds: readonly string[] }>((resolve) => {
+      resolveSelection = resolve;
+    });
+    const trace: MemoryAgentTraceEvent[] = [];
+    const session = await createMemoryAgent({
+      controlPlane,
+      recallRunner: async () => selection,
+      onTrace: (event) => trace.push(event),
+    }).startSession({ identity, objective: 'Change dependencies' });
+
+    const intervention = session.intervene({
+      decisionRevision: 'decision-stale',
+      objective: 'Change dependencies',
+      decisionContext: 'dependency update',
+      decisionIntent: 'dependency-update',
+      throughSequence: 0,
+      triggers: ['context_compacted'],
+      currentCandidates: [],
+    });
+    session.observe(constraint({ id: 'newer', sequence: 1 }));
+    resolveSelection?.({ selectedRefIds: ['memdir:procedure-npm'] });
+
+    await expect(intervention).resolves.toBeUndefined();
+    expect(trace).toContainEqual(expect.objectContaining({
+      type: 'recall.intervention.discarded',
+      key: expect.any(String),
+      detail: 'state_revision_changed',
+    }));
   });
 
   it('clamps requested evidence authority through a registered host source policy', async () => {

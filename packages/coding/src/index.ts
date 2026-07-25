@@ -759,6 +759,17 @@ export {
 } from '@kodax-ai/llm';
 export type { ResolveWireEffortInput, ResolvedWireEffort } from '@kodax-ai/llm';
 
+// FEATURE_275 (v0.7.77): host-opt-in selector for sparse governed
+// memory interventions. The normal coding runtime remains provider-neutral.
+export {
+  createCodingMemoryInterventionRunner,
+  MEMORY_INTERVENTION_SELECTOR_SHA256,
+  MEMORY_INTERVENTION_SELECTOR_PROMPT,
+} from './memory/intervention-selector.js';
+export type {
+  CodingMemoryInterventionRunnerOptions,
+} from './memory/intervention-selector.js';
+
 export {
   KODAX_REASONING_MODE_SEQUENCE,
   resolveReasoningMode,

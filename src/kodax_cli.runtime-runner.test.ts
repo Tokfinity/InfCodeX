@@ -175,6 +175,11 @@ describe('interactive daemon runtime bridge', () => {
       provider: 'mock-provider',
       context: { planModeBlockCheck: () => null },
     } as unknown as KodaXOptions)).toThrow(/context\.planModeBlockCheck.*cannot cross/i);
+
+    expect(() => toDaemonRuntimeRunOptions({
+      provider: 'mock-provider',
+      memoryRecallRunner: async () => ({ selectedRefIds: [] }),
+    } as unknown as KodaXOptions)).toThrow(/memoryRecallRunner.*cannot cross/i);
   });
 
   it('forwards daemon stream events and returns the selected Runtime-issued grant', async () => {

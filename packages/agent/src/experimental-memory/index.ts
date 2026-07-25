@@ -9,6 +9,8 @@ export type {
   MemoryEpisodeOutcome,
   MemoryEvidenceGrade,
   MemoryEvidenceRef,
+  MemoryInterventionInput,
+  MemoryInterventionTrigger,
   MemoryObservation,
   MemoryObservationKind,
   MemoryRecallInput,

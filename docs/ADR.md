@@ -4562,3 +4562,71 @@ evidence that it carries action-critical information unavailable through the
 mailbox and a cost/behavior eval showing it does not recreate progress-driven
 resampling. Broader replay requires a versioned durable delivery marker written
 by the older producer; absence of that marker remains non-replayable.
+
+---
+
+## ADR-059: Memory Intervention Reuses the Governed Plane and Awaits Sparse Events
+
+**Status**: Accepted (2026-07-25)
+
+**Driver**: `FEATURE_275`, adversarial review of arXiv:2607.08716 and
+FEATURE_260's production recall timing
+
+**Context**: Long-horizon agents can retain a relevant fact yet fail to let it
+shape the next action. FEATURE_260 introduced a thin Memory Agent, but its
+semantic prefetch became usable only if a later recall repeated the same
+decision key after the asynchronous selector completed. The coding loop usually
+advances its revision or observation sequence, so a valid result could miss its
+decision. Directly copying the paper's mutable private status/knowledge/
+procedure bank would also create a second memory authority beside F228 and
+bypass KodaX scope, lifecycle, approval, and provenance work.
+
+**Decision**:
+
+1. F228 remains the only durable memory authority. F275 introduces no second
+   bank, vector index, sidecar store, or free-form status persistence.
+2. Current objective and open todos are read-only candidates rebuilt from
+   authoritative run state. Recent observations are session-local; durable
+   candidates come from a fresh F228 pack at intervention time.
+3. Automatic semantic intervention occurs only after tool failure,
+   verification failure, or a durably committed context compaction. It is
+   awaited before the affected Action-LLM request.
+4. The runtime makes no selector call by default. An in-process host may inject
+   `memoryRecallRunner`; daemon DTOs reject the function binding.
+5. The selector receives a closed, prompt-safe candidate set and may return
+   only exact offered IDs. Deterministic exact pins remain authoritative.
+   Malformed/fuzzy/unknown output, timeout, provider error, cancellation, or
+   state revision change fails silent.
+6. Central claim safety runs before selection and before prompt rendering.
+   Private/sensitive observations are excluded. Suspicious tool text is
+   represented by a neutral evidence reference rather than copied prose.
+7. Trace receipts distinguish offered candidate identity, selected candidate
+   identity, and evidence actually exposed. Exposure is not causality.
+8. Semantic selector quality and end-task effect remain experimental until a
+   preregistered candidate/selector/action evaluation passes. Architecture
+   integrity alone cannot justify a “better than the paper” claim.
+
+**Consequences**:
+
+- A memory decision can affect the intended next action instead of arriving as
+  dead prefetch.
+- The only extra latency is on sparse registered events and only when a host
+  explicitly supplies a selector.
+- KodaX preserves stronger governance and package independence, but makes no
+  unmeasured task-effect superiority claim.
+- Compaction becomes an intervention trigger only after commit, avoiding a
+  reminder that is erased by the same compaction wave.
+- A selector outage or malformed response removes optional semantic recall
+  without blocking the coding run.
+
+**Rejected alternatives**: fixed-interval calls, every-step calls, asynchronous
+same-key prefetch, a paper-shaped second mutable bank, LLM extraction of every
+trajectory fact, free-form advisor output, fuzzy tool matching, main-provider
+implicit reuse, pre-compaction injection, or declaring success from routing
+metrics alone.
+
+**Reconsideration gates**: making semantic selection default-on requires frozen
+task-effect evidence with zero privacy/unknown-ID violations, no registered
+case regression, and a positive paired confidence interval. Adding a durable
+execution-state bank requires three concrete cases F228 projections cannot
+serve plus a new authority/lifecycle ADR.

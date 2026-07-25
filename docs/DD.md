@@ -556,13 +556,26 @@ FEATURE_260 adds these focused layers:
 - `packages/coding/src/tools/memory-recall.ts`: the session-bound read-only
   `memory_recall` tool; mutation tools share the managed-path guard.
 
-Passive recall is prepared outside the Action-LLM turn and rendered only into
-the dynamic prompt suffix. Deliberate query appends a normal tool call/result
-tail. Neither path writes memory. Episode promotion first consults existing
+Routine exact recall remains synchronous and renders only into the dynamic
+prompt suffix. FEATURE_275 adds `MemorySession.intervene()` for three sparse
+events: tool failure, verification failure, and committed context compaction.
+The coding loop projects current objective/open todos, then combines them with
+recent prompt-safe observations and a fresh governed pack. Deterministic exact
+pins run first; an optional host `memoryRecallRunner` may add only exact offered
+IDs. Selection is awaited before the Action-LLM request, capped at three
+candidates and three calls per Session, and discarded if the observation
+sequence changes.
+
+The central prompt-safe claim gate runs before selection and again before the
+evidence envelope. Private/sensitive observations are excluded; suspicious
+tool text becomes a neutral source reference. The daemon DTO explicitly rejects
+the function-valued runner. Deliberate query appends a normal tool call/result
+tail. None of these paths writes memory. Episode promotion first consults existing
 claims, then emits at most a governed proposal or a deferred inbox record; the
 existing preview/fingerprint/apply controller is the only durable write path.
-`MemoryDecisionReceipt` stores identifiers and policy facts in tracing, not
-hidden reasoning or a second event database.
+`MemoryDecisionReceipt` stores candidate IDs, selected candidate IDs, exposed
+evidence refs, event triggers, and policy facts in tracing, not hidden reasoning
+or a second event database.
 
 ## 15. Workflow Runtime
 

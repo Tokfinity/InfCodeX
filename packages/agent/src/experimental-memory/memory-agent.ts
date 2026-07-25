@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
 
-import type { MemoryPackHint } from '../memory-control/index.js';
+import {
+  sanitizePromptSafeMemoryClaim,
+  type MemoryPackHint,
+} from '../memory-control/index.js';
 import type {
   CreateMemoryAgentOptions,
   MemoryAgent,
   MemoryDecisionReceipt,
   MemoryEpisodeOutcome,
+  MemoryInterventionInput,
   MemoryObservation,
   MemoryQueryInput,
+  MemoryRecallCandidate,
   MemoryRecallInput,
   MemoryReminder,
   MemorySelectionMode,
@@ -45,12 +50,12 @@ class DefaultMemoryAgent implements MemoryAgent {
 class DefaultMemorySession implements MemorySession {
   private readonly observations = new Map<string, MemoryObservation>();
   private readonly consumedReminderKeys = new Set<string>();
+  private readonly interventionEpochs = new Set<string>();
   private lastSequence = 0;
   private closed = false;
   private completion?: Promise<void>;
-  private prefetchGeneration = 0;
-  private prefetch?: { readonly key: string; readonly controller: AbortController };
-  private readyPrefetch?: { readonly key: string; readonly refIds: readonly string[] };
+  private activeIntervention = false;
+  private interventionRunnerCalls = 0;
   private readonly queryByEpoch = new Map<
     string,
     { readonly key: string; readonly result: Promise<MemoryReminder | undefined> }
@@ -89,44 +94,123 @@ class DefaultMemorySession implements MemorySession {
     this.assertOpen();
     const observations = [...this.observations.values()]
       .filter((observation) => observation.sequence <= input.throughSequence)
+      .filter(isAutomaticObservation)
       .filter((observation) => exactObservationMatch(observation, input))
       .sort((left, right) => right.sequence - left.sequence)
-      .slice(0, 3);
+      .map(observationCandidate);
     const candidateHints = this.candidates
+      .filter(isGovernedHint)
       .filter((candidate) => exactCandidateMatch(candidate, input))
-      .slice(0, Math.max(0, 3 - observations.length));
-    const prefetchKey = this.prefetchKey(input);
-    const semanticHints = this.consumeReadyPrefetch(prefetchKey)
-      .filter((candidate) => !candidateHints.some((hint) => hint.ref.id === candidate.ref.id))
-      .slice(0, Math.max(0, 3 - observations.length - candidateHints.length));
-    const selectedRefs = unique([
-      ...observations.flatMap((observation) => observation.evidence.map((evidence) => evidence.ref)),
-      ...candidateHints.map((candidate) => candidate.ref.id),
-      ...semanticHints.map((candidate) => candidate.ref.id),
-    ]);
-    const selectionModes = uniqueModes([
-      ...(observations.length > 0 || candidateHints.length > 0 ? ['exact' as const] : []),
-      ...(semanticHints.length > 0 ? ['semantic_prefetch' as const] : []),
-    ]);
-    if (observations.length === 0 && candidateHints.length === 0 && semanticHints.length === 0) {
-      this.startPrefetch(prefetchKey, input);
-      this.emitDecisionReceipt(input, [], [], selectionModes);
+      .map(durableCandidate);
+    const candidates = uniqueCandidates([...observations, ...candidateHints]).slice(0, 3);
+    if (candidates.length === 0) {
+      this.emitDecisionReceipt(input, [], [], [], []);
       return undefined;
     }
 
-    const content = [
-      ...observations.map((observation) => observation.summary.trim()),
-      ...candidateHints.map((candidate) => candidate.bodySnippet ?? candidate.hook),
-      ...semanticHints.map((candidate) => candidate.bodySnippet ?? candidate.hook),
-    ].join('\n');
-    const key = digest(`${selectedRefs.join('\0')}\0${input.actionSignature ?? input.decisionIntent}`);
+    const selectedCandidateIds = candidates.map((candidate) => candidate.refId);
+    const evidenceRefs = unique(candidates.flatMap((candidate) => candidate.evidenceRefs ?? []));
+    const key = digest(
+      `${selectedCandidateIds.join('\0')}\0${input.actionSignature ?? input.decisionIntent}`,
+    );
     if (this.consumedReminderKeys.has(key)) {
-      this.emitDecisionReceipt(input, selectedRefs, [], selectionModes);
+      this.emitDecisionReceipt(input, candidates, selectedCandidateIds, [], ['exact']);
       return undefined;
     }
     this.consumedReminderKeys.add(key);
-    this.emitDecisionReceipt(input, selectedRefs, selectedRefs, selectionModes);
-    return { content, evidenceRefs: selectedRefs };
+    this.emitDecisionReceipt(input, candidates, selectedCandidateIds, evidenceRefs, ['exact']);
+    return {
+      content: candidates.map((candidate) => candidate.claim).join('\n'),
+      evidenceRefs,
+    };
+  }
+
+  async intervene(input: MemoryInterventionInput): Promise<MemoryReminder | undefined> {
+    this.assertOpen();
+    if (input.triggers.length === 0) return undefined;
+    const epoch = interventionEpoch(input);
+    if (this.interventionEpochs.has(epoch) || this.activeIntervention) return undefined;
+    this.interventionEpochs.add(epoch);
+    this.activeIntervention = true;
+    const sequenceAtStart = this.lastSequence;
+    try {
+      const candidates = await this.buildInterventionCandidates(input);
+      if (this.lastSequence !== sequenceAtStart || input.throughSequence !== sequenceAtStart) {
+        this.options.onTrace?.({
+          type: 'recall.intervention.discarded',
+          key: epoch,
+          detail: 'state_revision_changed',
+        });
+        return undefined;
+      }
+      if (candidates.length === 0) {
+        this.emitDecisionReceipt(input, [], [], [], [], input.triggers);
+        return undefined;
+      }
+
+      const pinnedIds = unique([
+        ...input.currentCandidates.slice(0, 1).map((candidate) => candidate.refId),
+        ...candidates
+          .filter((candidate) => candidate.source !== 'current')
+          .filter((candidate) => candidateMatchesInput(candidate, input))
+          .map((candidate) => candidate.refId),
+      ]).slice(0, 3);
+      const semanticIds = pinnedIds.length >= 3
+        ? []
+        : await this.selectInterventionCandidates(input, candidates, epoch);
+      if (this.lastSequence !== sequenceAtStart) {
+        this.options.onTrace?.({
+          type: 'recall.intervention.discarded',
+          key: epoch,
+          detail: 'state_revision_changed',
+        });
+        return undefined;
+      }
+      const selectedCandidateIds = unique([...pinnedIds, ...semanticIds]).slice(0, 3);
+      const selected = selectedCandidateIds
+        .map((id) => candidates.find((candidate) => candidate.refId === id))
+        .filter((candidate): candidate is ResolvedMemoryCandidate => candidate !== undefined);
+      const evidenceRefs = unique(selected.flatMap((candidate) => candidate.evidenceRefs ?? []));
+      const modes: MemorySelectionMode[] = [
+        ...(pinnedIds.length > 0 ? ['exact' as const] : []),
+        ...(semanticIds.length > 0 ? ['semantic_intervention' as const] : []),
+      ];
+      if (selected.length === 0) {
+        this.emitDecisionReceipt(input, candidates, [], [], modes, input.triggers);
+        return undefined;
+      }
+
+      const reminderKey = digest([
+        epoch,
+        ...selectedCandidateIds,
+      ].join('\0'));
+      if (this.consumedReminderKeys.has(reminderKey)) {
+        this.emitDecisionReceipt(
+          input,
+          candidates,
+          selectedCandidateIds,
+          [],
+          modes,
+          input.triggers,
+        );
+        return undefined;
+      }
+      this.consumedReminderKeys.add(reminderKey);
+      this.emitDecisionReceipt(
+        input,
+        candidates,
+        selectedCandidateIds,
+        evidenceRefs,
+        modes,
+        input.triggers,
+      );
+      return {
+        content: selected.map((candidate) => candidate.claim).join('\n'),
+        evidenceRefs,
+      };
+    } finally {
+      this.activeIntervention = false;
+    }
   }
 
   query(input: MemoryQueryInput): Promise<MemoryReminder | undefined> {
@@ -146,7 +230,7 @@ class DefaultMemorySession implements MemorySession {
       ? Promise.resolve(undefined)
       : this.queryOnce(input, need);
     this.queryByEpoch.set(epoch, { key, result });
-    if (need === undefined) this.emitDecisionReceipt(input, [], [], ['deliberate_query']);
+    if (need === undefined) this.emitDecisionReceipt(input, [], [], [], ['deliberate_query']);
     return result;
   }
 
@@ -160,9 +244,9 @@ class DefaultMemorySession implements MemorySession {
     }
     this.lastSequence = input.throughSequence;
     this.consumedReminderKeys.clear();
+    this.interventionEpochs.clear();
     this.queryByEpoch.clear();
     while (this.injectedReceiptIds.length > 0) this.injectedReceiptIds.pop();
-    this.cancelPrefetch('rewind');
   }
 
   complete(outcome: MemoryEpisodeOutcome): Promise<void> {
@@ -173,7 +257,6 @@ class DefaultMemorySession implements MemorySession {
   }
 
   async close(options: { readonly drain?: boolean } = {}): Promise<void> {
-    this.cancelPrefetch('close');
     if (options.drain !== false && this.completion !== undefined) await this.completion;
     this.closed = true;
   }
@@ -226,15 +309,84 @@ class DefaultMemorySession implements MemorySession {
     if (this.closed) throw new Error('memory session is closed');
   }
 
-  private prefetchKey(input: MemoryRecallInput): string {
-    return digest([
-      input.decisionRevision,
-      input.decisionIntent,
-      input.actionSignature ?? '',
-      String(input.throughSequence),
-      this.memoryRevision,
-      this.candidates.map((candidate) => candidate.ref.id).join(','),
-    ].join('\0'));
+  private async buildInterventionCandidates(
+    input: MemoryInterventionInput,
+  ): Promise<readonly ResolvedMemoryCandidate[]> {
+    const current = input.currentCandidates
+      .map(currentCandidate)
+      .filter((candidate): candidate is ResolvedMemoryCandidate => candidate !== undefined);
+    const observations = [...this.observations.values()]
+      .filter((observation) => observation.sequence <= input.throughSequence)
+      .filter(isAutomaticObservation)
+      .sort((left, right) => right.sequence - left.sequence)
+      .slice(0, 6)
+      .map(observationCandidate);
+    let durable: readonly ResolvedMemoryCandidate[] = [];
+    try {
+      const freshPack = await this.options.controlPlane.buildMemoryPack({
+        task: this.input.objective,
+        identity: this.input.identity,
+        decisionIntent: input.decisionIntent,
+        ...(input.actionSignature !== undefined
+          ? { actionSignature: input.actionSignature }
+          : {}),
+        maxCandidates: 12,
+        maxHints: 12,
+        includeSnippets: true,
+        purpose: 'intervention',
+      });
+      durable = freshPack.candidates
+        .filter(isGovernedHint)
+        .map(durableCandidate);
+    } catch (error) {
+      this.options.onTrace?.({
+        type: 'recall.intervention.failed',
+        key: interventionEpoch(input),
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return uniqueCandidates([...current, ...observations, ...durable]).slice(0, 12);
+  }
+
+  private async selectInterventionCandidates(
+    input: MemoryInterventionInput,
+    candidates: readonly ResolvedMemoryCandidate[],
+    epoch: string,
+  ): Promise<readonly string[]> {
+    const runner = this.options.recallRunner;
+    if (runner === undefined || this.interventionRunnerCalls >= 3) return [];
+    this.interventionRunnerCalls += 1;
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        runner({
+          objective: input.objective,
+          decisionContext: input.decisionContext,
+          decisionIntent: input.decisionIntent,
+          triggers: input.triggers,
+          candidates,
+          signal: controller.signal,
+        }),
+        new Promise<{ readonly selectedRefIds: readonly string[] }>((resolve) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            resolve({ selectedRefIds: [] });
+          }, 5_000);
+        }),
+      ]);
+      const allowed = new Set(candidates.map((candidate) => candidate.refId));
+      return unique(result.selectedRefIds.filter((id) => allowed.has(id))).slice(0, 3);
+    } catch (error) {
+      this.options.onTrace?.({
+        type: 'recall.intervention.failed',
+        key: epoch,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 
   private async queryOnce(
@@ -254,21 +406,27 @@ class DefaultMemorySession implements MemorySession {
       });
       const selected = pack.promptHints
         .filter(isGovernedQueryHint)
-        .filter((hint) => hint.bodySnippet !== undefined && hint.bodySnippet.trim().length > 0)
+        .map((hint) => ({
+          hint,
+          claim: sanitizePromptSafeMemoryClaim(hint.bodySnippet ?? ''),
+        }))
+        .filter((entry): entry is { readonly hint: MemoryPackHint; readonly claim: string } =>
+          entry.claim !== undefined)
         .slice(0, 3);
-      const selectedRefs = selected.map((hint) => hint.ref.id);
-      const content = boundedQueryContent(selected.map((hint) => hint.bodySnippet ?? ''));
+      const selectedRefs = selected.map(({ hint }) => hint.ref.id);
+      const content = boundedQueryContent(selected.map(({ claim }) => claim));
       const injectedRefs = content.length === 0 ? [] : selectedRefs;
+      const candidates = pack.candidates.map(durableCandidate);
       this.emitDecisionReceipt(
         input,
+        candidates,
         selectedRefs,
         injectedRefs,
         ['deliberate_query'],
-        pack.candidates.map((candidate) => candidate.ref.id),
       );
       return content.length === 0 ? undefined : { content, evidenceRefs: selectedRefs };
     } catch (error) {
-      this.emitDecisionReceipt(input, [], [], ['deliberate_query']);
+      this.emitDecisionReceipt(input, [], [], [], ['deliberate_query']);
       this.options.onTrace?.({
         type: 'query.failed',
         key: decisionEpoch(input.decisionRevision, input.throughSequence),
@@ -280,93 +438,55 @@ class DefaultMemorySession implements MemorySession {
 
   private emitDecisionReceipt(
     input: Pick<MemoryRecallInput, 'decisionRevision' | 'actionSignature' | 'throughSequence'>,
-    selectedRefs: readonly string[],
-    injectedRefs: readonly string[],
+    candidates: readonly ResolvedMemoryCandidate[],
+    selectedCandidateIds: readonly string[],
+    injectedEvidenceRefs: readonly string[],
     selectionModes: readonly MemorySelectionMode[],
-    candidateRefs = this.candidates.map((candidate) => candidate.ref.id),
+    triggers?: readonly MemoryInterventionInput['triggers'][number][],
   ): void {
     const epoch = decisionEpoch(input.decisionRevision, input.throughSequence);
-    const candidateSetFingerprint = digest(candidateRefs.join('\0'));
+    const candidateIds = candidates.map((candidate) => candidate.refId);
+    const selectedIdSet = new Set(selectedCandidateIds);
+    const legacySelectedRefs = unique(candidates
+      .filter((candidate) => selectedIdSet.has(candidate.refId))
+      .flatMap((candidate) => candidate.evidenceRefs));
+    const candidateSetFingerprint = digest(candidates
+      .map((candidate) => [
+        candidate.refId,
+        candidate.source ?? '',
+        candidate.claim,
+        ...(candidate.evidenceRefs ?? []),
+      ].join('\0'))
+      .join('\n'));
     const receipt: MemoryDecisionReceipt = {
       id: `memory-decision:${digest([
         epoch,
         MEMORY_POLICY_VERSION,
         candidateSetFingerprint,
-        selectedRefs.join(','),
-        injectedRefs.join(','),
+        selectedCandidateIds.join(','),
+        injectedEvidenceRefs.join(','),
         selectionModes.join(','),
+        triggers?.join(',') ?? '',
       ].join('\0')).slice(0, 24)}`,
       decisionEpoch: epoch,
       decisionRevision: input.decisionRevision,
       policyVersion: MEMORY_POLICY_VERSION,
       candidateSetFingerprint,
-      candidateRefs: [...candidateRefs],
-      selectedRefs: [...selectedRefs],
-      injectedRefs: [...injectedRefs],
+      candidateIds: [...candidateIds],
+      selectedCandidateIds: [...selectedCandidateIds],
+      injectedEvidenceRefs: [...injectedEvidenceRefs],
+      ...(triggers !== undefined && triggers.length > 0 ? { triggers: [...triggers] } : {}),
+      candidateRefs: [...candidateIds],
+      selectedRefs: [...legacySelectedRefs],
+      injectedRefs: [...injectedEvidenceRefs],
       selectionModes: [...selectionModes],
       ...(input.actionSignature !== undefined ? { actionSignature: input.actionSignature } : {}),
       throughSequence: input.throughSequence,
     };
-    if (injectedRefs.length > 0 && !this.injectedReceiptIds.includes(receipt.id)) {
+    if (injectedEvidenceRefs.length > 0 && !this.injectedReceiptIds.includes(receipt.id)) {
       this.injectedReceiptIds.push(receipt.id);
     }
     this.options.onTrace?.({ type: 'memory.decision', receipt });
-  }
-
-  private consumeReadyPrefetch(key: string): readonly MemoryPackHint[] {
-    if (this.readyPrefetch?.key !== key) return [];
-    const selected = new Set(this.readyPrefetch.refIds);
-    this.readyPrefetch = undefined;
-    return this.candidates.filter((candidate) => selected.has(candidate.ref.id));
-  }
-
-  private startPrefetch(key: string, input: MemoryRecallInput): void {
-    const runner = this.options.recallRunner;
-    if (runner === undefined || this.candidates.length === 0 || this.prefetch?.key === key) return;
-    this.cancelPrefetch('superseded');
-    const controller = new AbortController();
-    const generation = ++this.prefetchGeneration;
-    this.prefetch = { key, controller };
-    const allowedRefs = new Set(this.candidates.map((candidate) => candidate.ref.id));
-    void runner({
-      objective: input.objective,
-      decisionContext: input.decisionContext,
-      decisionIntent: input.decisionIntent,
-      candidates: this.candidates.map((candidate) => ({
-        refId: candidate.ref.id,
-        claim: candidate.bodySnippet ?? candidate.hook,
-        ...(candidate.ref.claimKind !== undefined ? { claimKind: candidate.ref.claimKind } : {}),
-      })),
-      signal: controller.signal,
-    }).then((result) => {
-      if (controller.signal.aborted || generation !== this.prefetchGeneration || this.prefetch?.key !== key) {
-        this.options.onTrace?.({ type: 'recall.prefetch.discarded', key });
-        return;
-      }
-      this.readyPrefetch = {
-        key,
-        refIds: unique(result.selectedRefIds.filter((refId) => allowedRefs.has(refId))),
-      };
-      this.prefetch = undefined;
-      this.options.onTrace?.({ type: 'recall.prefetch.completed', key });
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted) return;
-      if (generation === this.prefetchGeneration) this.prefetch = undefined;
-      this.options.onTrace?.({
-        type: 'recall.prefetch.failed',
-        key,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
-
-  private cancelPrefetch(detail: string): void {
-    if (this.prefetch === undefined) return;
-    const key = this.prefetch.key;
-    this.prefetch.controller.abort();
-    this.prefetch = undefined;
-    this.prefetchGeneration += 1;
-    this.options.onTrace?.({ type: 'recall.prefetch.discarded', key, detail });
   }
 }
 
@@ -382,6 +502,90 @@ function exactCandidateMatch(candidate: MemoryPackHint, input: MemoryRecallInput
     return candidate.ref.actionSignature === input.actionSignature;
   }
   return candidate.ref.claimKey !== undefined && candidate.ref.claimKey === input.decisionIntent;
+}
+
+interface ResolvedMemoryCandidate extends MemoryRecallCandidate {
+  readonly source: 'current' | 'session' | 'durable';
+  readonly evidenceRefs: readonly string[];
+  readonly actionSignature?: string;
+  readonly claimKey?: string;
+}
+
+function currentCandidate(
+  candidate: MemoryRecallCandidate,
+): ResolvedMemoryCandidate | undefined {
+  const claim = sanitizePromptSafeMemoryClaim(candidate.claim);
+  if (claim === undefined) return undefined;
+  return {
+    ...candidate,
+    claim,
+    source: 'current',
+    evidenceRefs: unique(candidate.evidenceRefs ?? [candidate.refId]),
+  };
+}
+
+function observationCandidate(observation: MemoryObservation): ResolvedMemoryCandidate {
+  const claim = sanitizePromptSafeMemoryClaim(observation.summary)
+    ?? `Prior observation is available at ${observation.evidence[0]?.ref ?? observation.id}.`;
+  return {
+    refId: `observation:${observation.id}`,
+    claim,
+    claimKind: observation.kind,
+    source: 'session',
+    evidenceRefs: unique(observation.evidence.map((evidence) => evidence.ref)),
+    ...(observation.actionSignature !== undefined
+      ? { actionSignature: observation.actionSignature }
+      : {}),
+    ...(observation.claimKey !== undefined ? { claimKey: observation.claimKey } : {}),
+  };
+}
+
+function durableCandidate(candidate: MemoryPackHint): ResolvedMemoryCandidate {
+  const claim = sanitizePromptSafeMemoryClaim(candidate.bodySnippet ?? candidate.hook)
+    ?? `Governed memory is available at ${candidate.ref.id}.`;
+  return {
+    refId: candidate.ref.id,
+    claim,
+    ...(candidate.ref.claimKind !== undefined ? { claimKind: candidate.ref.claimKind } : {}),
+    source: 'durable',
+    evidenceRefs: [candidate.ref.id],
+    ...(candidate.ref.actionSignature !== undefined
+      ? { actionSignature: candidate.ref.actionSignature }
+      : {}),
+    ...(candidate.ref.claimKey !== undefined ? { claimKey: candidate.ref.claimKey } : {}),
+  };
+}
+
+function isAutomaticObservation(observation: MemoryObservation): boolean {
+  if (observation.visibility !== 'prompt_safe') return false;
+  if (sanitizePromptSafeMemoryClaim(observation.summary) === undefined) return false;
+  return observation.evidence.some((evidence) => evidence.source !== 'agent');
+}
+
+function isGovernedHint(hint: MemoryPackHint): boolean {
+  return isGovernedQueryHint(hint)
+    && sanitizePromptSafeMemoryClaim(hint.bodySnippet ?? hint.hook) !== undefined;
+}
+
+function candidateMatchesInput(
+  candidate: ResolvedMemoryCandidate,
+  input: MemoryRecallInput,
+): boolean {
+  if (candidate.actionSignature !== undefined && input.actionSignature !== undefined) {
+    return candidate.actionSignature === input.actionSignature;
+  }
+  return candidate.claimKey !== undefined && candidate.claimKey === input.decisionIntent;
+}
+
+function uniqueCandidates(
+  candidates: readonly ResolvedMemoryCandidate[],
+): readonly ResolvedMemoryCandidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.refId)) return false;
+    seen.add(candidate.refId);
+    return true;
+  });
 }
 
 function buildOutcomeDigest(
@@ -483,8 +687,11 @@ function decisionEpoch(decisionRevision: string, throughSequence: number): strin
   return digest(`${decisionRevision}\0${throughSequence}`).slice(0, 24);
 }
 
-function uniqueModes(values: readonly MemorySelectionMode[]): readonly MemorySelectionMode[] {
-  return [...new Set(values)];
+function interventionEpoch(input: MemoryInterventionInput): string {
+  return digest([
+    decisionEpoch(input.decisionRevision, input.throughSequence),
+    ...input.triggers,
+  ].join('\0')).slice(0, 24);
 }
 
 function freezeObservation(

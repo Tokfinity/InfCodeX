@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+
+import { sanitizePromptSafeMemoryClaim } from '@kodax-ai/agent';
 import type {
   MemoryEvidenceGrade,
   MemoryEvidenceRef,
@@ -11,6 +14,7 @@ export interface ToolMemoryObservationInput {
   readonly toolResults: readonly KodaXToolResultBlock[];
   readonly startSequence: number;
   readonly observedAt: string;
+  readonly decisionActionSignature?: string;
 }
 
 export function buildToolMemoryObservations(
@@ -25,30 +29,51 @@ export function buildToolMemoryObservations(
     if (result === undefined) continue;
     const content = toolResultText(result);
     const failure = result.is_error === true || /^\s*\[Tool Error\]/i.test(content);
-    const verification = !failure && isVerificationToolCall(block);
+    const verificationCall = isVerificationToolCall(block);
+    const verification = !failure && verificationCall;
     if (!failure && !verification) continue;
-    if (isRestrictedMemoryContent(content)) continue;
+    if (verification && isRestrictedMemoryContent(content)) continue;
+    const evidenceRef = `tool-result:${block.id}`;
+    const safeResult = sanitizePromptSafeMemoryClaim(boundedSummary(content), 480);
+    const neutralFailure = `${block.name} failed under the current inputs and environment. Inspect source ref ${evidenceRef}.`;
+    const summary = failure
+      ? safeResult === undefined
+        ? neutralFailure
+        : `${block.name} failed under the current inputs and environment: ${safeResult}`
+      : `Verification command succeeded: ${safeResult ?? 'Inspect the referenced tool result.'}`;
     sequence += 1;
     observations.push({
       id: `tool-outcome:${block.id}`,
       sequence,
       kind: 'outcome',
-      summary: failure
-        ? `${block.name} failed under the current inputs and environment: ${boundedSummary(content)}`
-        : `Verification command succeeded: ${boundedSummary(content)}`,
+      summary,
       evidence: [{
-        ref: `tool-result:${block.id}`,
+        ref: evidenceRef,
         requestedGrade: 'observed',
         source: 'tool',
         observedAt: input.observedAt,
       }],
       visibility: 'prompt_safe',
-      actionSignature: verification ? `${block.name}:verify` : block.name,
+      ...(failure
+        ? {
+            actionSignature: input.decisionActionSignature ?? block.name,
+            claimKey: `tool-failure:${block.name}:${failureFingerprint(safeResult)}`,
+          }
+        : { actionSignature: `${block.name}:verify` }),
       occurredAt: input.observedAt,
-      metadata: { toolName: block.name, failed: failure },
+      metadata: { toolName: block.name, failed: failure, verification: verificationCall },
     });
   }
   return observations;
+}
+
+function failureFingerprint(safeResult: string | undefined): string {
+  const normalized = (safeResult ?? 'restricted-result')
+    .toLowerCase()
+    .replace(/\b\d+\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
 }
 
 export const codingMemorySourcePolicy: MemorySourcePolicy = (evidence) => {
