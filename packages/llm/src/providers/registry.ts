@@ -465,9 +465,7 @@ export function getProviderList(): Array<{
     result.push({
       name,
       model: snapshot.model,
-      models: snapshot.models
-        ? [snapshot.model, ...snapshot.models.map((m) => m.id)]
-        : [snapshot.model],
+      models: getProviderModels(name),
       configured: !!process.env[snapshot.apiKeyEnv],
       reasoningCapability: snapshot.reasoningCapability,
       reasoningProfile: snapshot.reasoningProfile,
@@ -479,11 +477,7 @@ export function getProviderList(): Array<{
 
 // 获取内置 Provider 的可用模型列表（不需要实例化 Provider，不依赖 API Key）
 export function getProviderModels(name: string): string[] {
-  const snapshot = KODAX_PROVIDER_SNAPSHOTS[name as ProviderName];
-  if (!snapshot) return [];
-  return snapshot.models
-    ? [snapshot.model, ...snapshot.models.map((m) => m.id)]
-    : [snapshot.model];
+  return getProviderModelDescriptors(name).map((model) => model.id);
 }
 
 // 类型守卫函数：检查字符串是否为有效的 Provider 名称
@@ -679,9 +673,8 @@ export function listBuiltinModelCapabilities(): KodaXModelCapabilities[] {
   const result: KodaXModelCapabilities[] = [];
   for (const name of Object.keys(KODAX_PROVIDERS) as ProviderName[]) {
     const snapshot = KODAX_PROVIDER_SNAPSHOTS[name];
-    result.push(effectiveCapabilities(name, snapshot, makeDefaultDescriptor(snapshot)));
-    for (const entry of snapshot.models ?? []) {
-      result.push(effectiveCapabilities(name, snapshot, entry));
+    for (const descriptor of getProviderModelDescriptors(name)) {
+      result.push(effectiveCapabilities(name, snapshot, descriptor));
     }
   }
   return result;

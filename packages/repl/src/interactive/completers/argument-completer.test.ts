@@ -210,6 +210,25 @@ describe('ArgumentCompleter', () => {
         expect(modelNames).toContain('MiniMax-M3');
       });
 
+      it('should list each provider default model once in two-stage completion', async () => {
+        const affectedRoutes = [
+          ['kimi-code', 'k3-256k'],
+          ['zhipu-coding', 'glm-5.2'],
+          ['zai-coding', 'glm-5.2'],
+          ['ark-coding', 'glm-5.2'],
+        ] as const;
+
+        for (const [provider, model] of affectedRoutes) {
+          const input = `/model ${provider}/`;
+          const completions = await completer.getCompletions(input, input.length);
+          const route = `${provider}/${model}`;
+
+          expect(
+            completions.filter((completion) => completion.display === route),
+          ).toHaveLength(1);
+        }
+      });
+
       it('should expose the default CLI bridge model for codex-cli two-stage completion', async () => {
         const completions = await completer.getCompletions('/model codex-cli/', 18);
 

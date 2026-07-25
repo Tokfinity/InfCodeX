@@ -124,4 +124,14 @@ describe('provider capability profiles', () => {
       getProviderList().find((provider) => provider.name === 'minimax-coding')?.model,
     ).toBe('MiniMax-M3');
   });
+
+  it('lists each built-in provider model once with the default first', () => {
+    for (const provider of getProviderList()) {
+      const models = getProviderModels(provider.name);
+
+      expect(models[0]).toBe(provider.model);
+      expect(new Set(models).size).toBe(models.length);
+      expect(provider.models).toEqual(models);
+    }
+  });
 });

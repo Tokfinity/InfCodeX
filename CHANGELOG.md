@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Deduplicated built-in default models across `/model` completion, provider
+  metadata, and SDK capability listings while preserving default-first order
+  and per-model capability overrides.
+
 ## [0.7.76] - 2026-07-25
 
 > Git tag and GitHub Release are published by the release workflow. npm

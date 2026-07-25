@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-24_
+_Last Updated: 2026-07-25_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-24_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 development | 2026-07-25 | 2026-07-25 |
 | 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 202 | High | Resolved | PowerShell bracket wildcards could bypass protected-path auto-mode review | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -114,6 +115,55 @@ _Last Updated: 2026-07-24_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 206: Static provider model catalogs duplicated default models in REPL completion and SDK listings
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.43 static model catalog; expanded v0.7.76
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-25
+- **Resolved**: 2026-07-25
+
+#### Original Problem
+
+Two-stage `/model <provider>/` completion showed the default model twice when
+the provider also declared a descriptor for that model. The visible cases were
+`kimi-code/k3-256k`, `zhipu-coding/glm-5.2`, and
+`zai-coding/glm-5.2`; the same catalog shape also affected
+`ark-coding/glm-5.2`. Each logical `provider/model` route should appear once.
+
+#### Root Cause
+
+The descriptor and Provider-instance paths already treated a default model
+descriptor as the canonical default entry. The older static helpers instead
+prepended `snapshot.model` and then appended every `snapshot.models[]` ID.
+That duplicated defaults carrying per-model context or reasoning overrides.
+REPL completion consumed this older helper directly, and the SDK capability
+listing repeated the same construction independently.
+
+#### Solution Implemented
+
+- Make `getProviderModels()` derive IDs from the existing default-aware
+  `getProviderModelDescriptors()` result.
+- Make `getProviderList().models` reuse `getProviderModels()`.
+- Make `listBuiltinModelCapabilities()` enumerate the same canonical
+  descriptors, preserving default-first catalog order and per-model metadata.
+- Add whole-catalog uniqueness and four-alias REPL completion regressions.
+
+#### Files Changed
+
+- `packages/llm/src/providers/registry.ts`
+- `packages/llm/src/providers/capability-profile.test.ts`
+- `packages/llm/src/providers/model-capabilities.test.ts`
+- `packages/repl/src/interactive/completers/argument-completer.test.ts`
+
+#### Verification
+
+- Focused provider catalog, SDK capability, and REPL completion suite:
+  90 tests passed.
+
+---
 
 ### 204: Auto mode could render without an engine and rapid permission-mode writes could settle out of order
 
@@ -6589,7 +6639,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 91 (25 Open, 66 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 92 (25 Open, 67 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

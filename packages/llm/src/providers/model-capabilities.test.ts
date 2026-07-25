@@ -207,6 +207,9 @@ describe('built-in provider model capabilities (no API key required)', () => {
 
   it('listBuiltinModelCapabilities returns every (provider, model) pair', () => {
     const list = listBuiltinModelCapabilities();
+    const routeKeys = list.map((c) => `${c.provider}/${c.model}`);
+
+    expect(new Set(routeKeys).size).toBe(routeKeys.length);
     // At least one entry per built-in provider; default models always present.
     const anthropicDefault = list.find(
       (c) => c.provider === 'anthropic' && c.model === 'claude-sonnet-4-6',
