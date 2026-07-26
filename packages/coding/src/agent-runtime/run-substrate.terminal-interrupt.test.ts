@@ -23,6 +23,7 @@ import { CodingActorSession } from './actor-runtime.js';
 
 const PROVIDER_NAME = 'terminal-interrupt-provider';
 const API_KEY_ENV = 'TERMINAL_INTERRUPT_PROVIDER_API_KEY';
+const MAX_CONTINUATION_TURNS = 8;
 
 describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }, () => {
   let actorSession: CodingActorSession | undefined;
@@ -152,6 +153,78 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
       maxPriority: 'user',
       mode: 'prompt',
     })).toBe(false);
+  });
+
+  it('bounds continuously accepted terminal input to a fixed continuation allowance', async () => {
+    const sessionId = 'ordinary-bounded-terminal-interrupt';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+    let turn = 0;
+    let inputWindowOpen = true;
+
+    class ContinuousTerminalInterruptProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(messages: KodaXMessage[]): Promise<KodaXStreamResult> {
+        turn += 1;
+        if (inputWindowOpen && turn <= MAX_CONTINUATION_TURNS + 3) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: `interrupt-${turn}`,
+          });
+        }
+        if (turn === MAX_CONTINUATION_TURNS + 1) {
+          expect(JSON.stringify(messages.at(-1)?.content)).toContain(
+            `interrupt-${MAX_CONTINUATION_TURNS}`,
+          );
+        }
+        return {
+          textBlocks: [{ type: 'text', text: `answer-${turn}` }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new ContinuousTerminalInterruptProvider());
+    actorSession = new CodingActorSession({ sessionId });
+
+    const result = await runKodaX(
+      {
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        maxIter: 1,
+        lsp: false,
+        session: { id: sessionId },
+        context: {
+          actorSession,
+          gitRoot: process.cwd(),
+          executionCwd: process.cwd(),
+          repoIntelligenceMode: 'off',
+          interruptInput: {
+            closeInputWindow() {
+              inputWindowOpen = false;
+            },
+            reopenInputWindow() {
+              inputWindowOpen = true;
+            },
+          },
+        },
+      },
+      'first prompt',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.lastText).toBe(`answer-${MAX_CONTINUATION_TURNS + 1}`);
+    expect(turn).toBe(MAX_CONTINUATION_TURNS + 1);
+    expect(inputWindowOpen).toBe(false);
   });
 
   it('commits a COMPLETE assistant before continuing with accepted input', async () => {

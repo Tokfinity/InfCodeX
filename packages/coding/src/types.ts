@@ -563,7 +563,10 @@ export interface KodaXEvents {
   onContextBudgetSnapshot?: (
     event: RuntimeContextBudgetSnapshot & Partial<KodaXLiveEventMeta>,
   ) => void;
-  /** Hash-only prompt-cache diagnostics; never contains prompt or message text. */
+  /**
+   * Hash-only prompt-cache diagnostics; never contains prompt or message text.
+   * Emitted only when context.contextDiagnostics is true.
+   */
   onPromptCacheDiagnostics?: (
     event: KodaXPromptCacheDiagnosticEvent & Partial<KodaXLiveEventMeta>,
   ) => void;

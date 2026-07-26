@@ -113,7 +113,9 @@ exactly the continuation turn needed to consume it. Idle-yield waiting is an
 active consumption state and therefore admits input; failure, cancellation, and
 terminal cleanup close admission before asynchronous teardown. Closed or
 terminal Runs reject or terminalize undelivered input rather than leak it into
-later work. `after_turn` remains the explicit continuation mechanism.
+later work. A fixed internal continuation allowance keeps one active Run under
+an absolute iteration bound; once exhausted, admission stays closed and
+`after_turn` remains the explicit continuation mechanism.
 
 ## 6. Required Capabilities
 

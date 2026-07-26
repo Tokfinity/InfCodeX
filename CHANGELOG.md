@@ -42,6 +42,8 @@ All notable changes to this project will be documented in this file.
   atomically, drains every interrupt accepted before that boundary into the
   same Run, reserves a continuation model turn even at the configured iteration
   limit, and reopens admission only when another model turn is guaranteed.
+  A fixed internal continuation allowance now preserves an absolute Run bound
+  when a client keeps submitting input.
   Idle-yield waiting reopens admission, while failure, cancellation, and
   terminal cleanup close it before asynchronous teardown. Ordinary coding also
   rotates live-turn attribution for each queued prompt and commits a COMPLETE
@@ -55,7 +57,14 @@ All notable changes to this project will be documented in this file.
   without a resolvable default retain the existing actionable error.
 - Stabilized Anthropic-compatible prompt-cache prefixes across managed role
   turns, exported cache diagnostic events, and added a focused
-  `probe:prompt-cache` operator command.
+  `probe:prompt-cache` operator command. Marking the latest user turn seeds the
+  next request but can add cache-write overhead to isolated one-shot requests;
+  those callers can set `disablePromptCache:true` or
+  `KODAX_DISABLE_PROMPT_CACHE=1`.
+- Expanded the governed-memory prompt-safety gate for common override/reset
+  variants, role-mode claims, self-closing role tags, and sentence-shaped
+  credentials; prompt-cache diagnostics now document their existing
+  `contextDiagnostics` gate.
 - Made abort completion emission exactly-once and kept governed memory
   intervention delivery ordered with terminal cleanup.
 

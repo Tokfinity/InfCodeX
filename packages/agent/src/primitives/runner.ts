@@ -37,6 +37,7 @@ import {
 } from '../admission/admission-session.js';
 import type { Session } from './session.js';
 import {
+  MAX_RUN_CONTINUATION_ITERATIONS,
   MAX_TOOL_LOOP_ITERATIONS,
   buildAssistantMessageFromLlmResult,
   buildToolResultMessage,
@@ -273,6 +274,9 @@ export interface RunOptions {
    * closes admission as soon as it recognizes the candidate, then drains input
    * that was already accepted. A non-empty drain is committed to the
    * transcript, admission reopens, and the same run continues.
+   * Lifecycle continuations may reserve only a small fixed number of turns
+   * beyond the configured iteration cap; the final absolute turn keeps
+   * admission closed.
    *
    * REPL hosts should omit this option so their existing round boundary keeps
    * ownership of queued follow-ups.
@@ -771,6 +775,7 @@ async function genericRun<TData>(
   const iterationCap =
     typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
   let iterationLimit = iterationCap;
+  const absoluteIterationLimit = iterationCap + MAX_RUN_CONTINUATION_ITERATIONS;
   // FEATURE_184 (v0.7.45) — Stop hook reanimate budget. Per-run counter
   // tracks how many times the hook converted a text-only termination
   // into a synthetic-user-message continuation. Bounded by
@@ -789,6 +794,12 @@ async function genericRun<TData>(
   // more accurate error if the iteration cap is reached via a reanimate
   // loop rather than a runaway tool loop.
   let allIterationsWereReanimates = true;
+  const reserveContinuationIteration = (iteration: number): boolean => {
+    if (iteration + 1 < iterationLimit) return true;
+    if (iterationLimit >= absoluteIterationLimit) return false;
+    iterationLimit += 1;
+    return true;
+  };
   const consumeTerminalContinuation = async (ctx: {
     readonly agent: Agent;
     readonly iteration: number;
@@ -796,22 +807,35 @@ async function genericRun<TData>(
   }): Promise<boolean> => {
     const continuation = opts.terminalContinuation;
     if (!continuation) return false;
+    // The final absolute iteration starts with admission closed, so no valid
+    // input can be waiting here. Do not call a buggy drain implementation that
+    // could otherwise manufacture another unbounded continuation.
+    if (ctx.iteration + 1 >= absoluteIterationLimit) return false;
     const extraMessages = await continuation.drain({
       ...ctx,
       transcript,
     });
     if (extraMessages.length === 0) return false;
+    if (!reserveContinuationIteration(ctx.iteration)) return false;
     for (const message of extraMessages) {
       transcript.push(message);
       await commitMessage(opts, message);
     }
-    if (ctx.iteration + 1 >= iterationLimit) {
-      iterationLimit += 1;
+    if (iterationLimit < absoluteIterationLimit) {
+      continuation.reopenInputWindow();
     }
-    continuation.reopenInputWindow();
     return true;
   };
   for (let iteration = 0; iteration < iterationLimit; iteration += 1) {
+    // Close before the last absolute generation starts. Waiting until its
+    // terminal candidate would admit input that no bounded next turn can
+    // consume.
+    if (
+      opts.terminalContinuation
+      && iteration + 1 >= absoluteIterationLimit
+    ) {
+      opts.terminalContinuation.closeInputWindow();
+    }
     // FEATURE_179 (v0.7.42): compaction hook fires at the TOP of every
     // iteration, BEFORE the LLM call. Mirrors claudecode `query.ts` and
     // KodaX SA `run-substrate.ts:621-627`. The legacy post-tool-result
@@ -973,6 +997,21 @@ async function genericRun<TData>(
               stoppedByHook: true,
             };
           }
+          if (
+            opts.terminalContinuation
+            && !reserveContinuationIteration(iteration)
+          ) {
+            if (invariantSession) {
+              const dispatch = invariantSession.assertTerminal();
+              enforceInvariant(dispatch.results);
+            }
+            return {
+              output: `run continuation budget exhausted: ${reanimate.content}`,
+              messages: transcript,
+              sessionId: opts.session?.id,
+              stoppedByHook: true,
+            };
+          }
           // Inject synthetic user message + continue loop. Emit the
           // span with the PRE-increment count to align with
           // `StopHookContext.reanimateCount` semantics (0-indexed).
@@ -998,11 +1037,10 @@ async function genericRun<TData>(
           reanimateCount += 1;
           if (
             opts.terminalContinuation
-            && iteration + 1 >= iterationLimit
+            && iterationLimit < absoluteIterationLimit
           ) {
-            iterationLimit += 1;
+            opts.terminalContinuation.reopenInputWindow();
           }
-          opts.terminalContinuation?.reopenInputWindow();
           continue;
         }
 
@@ -1391,7 +1429,7 @@ async function genericRun<TData>(
     // throw here means the caller asked for the run to fail. Unlike
     // `compactionHook` (where a buggy compactor must NOT abort the run),
     // injection failures are explicit caller decisions.
-    if (opts.beforeNextTurn) {
+    if (opts.beforeNextTurn && iteration + 1 < absoluteIterationLimit) {
       const extraMessages = await opts.beforeNextTurn({
         agent: currentAgent,
         transcript,
@@ -1406,9 +1444,11 @@ async function genericRun<TData>(
         if (
           opts.terminalContinuation
           && iteration + 1 >= iterationLimit
+          && reserveContinuationIteration(iteration)
         ) {
-          iterationLimit += 1;
-          opts.terminalContinuation.reopenInputWindow();
+          if (iterationLimit < absoluteIterationLimit) {
+            opts.terminalContinuation.reopenInputWindow();
+          }
         }
       }
     }

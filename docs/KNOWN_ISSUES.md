@@ -14,6 +14,7 @@ _Last Updated: 2026-07-26_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 208 | Medium | Resolved | v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching | v0.7.77 release candidate | v0.7.77 release candidate | 2026-07-26 | 2026-07-26 |
 | 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
 | 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
 | 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -116,6 +117,87 @@ _Last Updated: 2026-07-26_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 208: v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.77 release candidate
+- **Fixed**: v0.7.77 release candidate
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+The v0.7.77 active-Run finalization fix replaced the managed Runner's and
+ordinary coding substrate's absolute iteration conditions with mutable limits.
+Every accepted terminal continuation, and some lifecycle messages at the cap,
+could add another iteration and reopen the Runtime input window. A continuously
+submitting authenticated client could therefore keep one Run alive
+indefinitely, accumulating model calls and transcript state.
+
+The governed-memory content gate also recognized only a narrow
+`ignore/disregard/override ... instructions` shape. Common reset/role variants,
+self-closing role tags, and sentence-shaped credentials could pass the content
+gate. Current coding consumers still applied the low-authority memory envelope,
+but the documented deterministic defense-in-depth contract was incomplete.
+
+The adjacent `onPromptCacheDiagnostics` event was correctly gated at runtime but
+its public JSDoc omitted the same `context.contextDiagnostics` condition
+documented on sibling events.
+
+#### Root Cause
+
+- `iterationLimit` had no absolute ceiling after lifecycle extensions.
+- Prompt safety treated a small word list as the complete override/secret/tag
+  detector.
+- The cache diagnostic callback was added without copying the sibling gating
+  note.
+
+#### Resolution
+
+- Added a fixed eight-iteration lifecycle allowance beyond the configured cap
+  in both execution loops. The final absolute generation closes admission
+  before the model call, consumes the last already-accepted batch in the
+  preceding reserved turn, and never reopens the window without remaining
+  headroom.
+- Expanded the central memory gate to reject common prompt reset/override noun
+  variants, forged role-mode claims, self-closing role tags, and
+  `password/api key/token is ...` credential forms while preserving ordinary
+  nearby-word claims.
+- Documented the existing prompt-cache diagnostics gate.
+
+#### Files Changed
+
+- `packages/agent/src/primitives/runner-tool-loop.ts`
+- `packages/agent/src/primitives/runner.ts`
+- `packages/agent/src/primitives/runner.test.ts`
+- `packages/agent/src/memory-control/prompt-safety.ts`
+- `packages/agent/src/memory-control/prompt-safety.test.ts`
+- `packages/coding/src/agent-runtime/run-substrate.ts`
+- `packages/coding/src/agent-runtime/run-substrate.terminal-interrupt.test.ts`
+- `packages/coding/src/types.ts`
+- `CHANGELOG.md`
+- `docs/PRD.md`
+- `docs/DD.md`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Verification
+
+- TDD reproduced unbounded extension in both execution loops (the focused
+  substrate case reached twelve model calls after eleven repeated submissions)
+  with a one-iteration base cap before the fix. Each bounded path now performs
+  nine calls, exposes the eighth accepted input to the ninth generation, and
+  leaves admission closed.
+- Adversarial prompt-safety cases failed before implementation and now reject
+  all reported variants; five nearby-word controls remain accepted.
+- The complete agent suite passes 1,593 tests; the final focused Runner and
+  prompt-safety rerun passes 59, the ordinary substrate regression passes 4,
+  LLM cache/Kimi contract suites pass 166, Runtime passes 134, and tracker
+  consistency passes 4.
+- The complete production build passes config-template validation, workspace
+  TypeScript compilation, SDK/CLI/worker bundles, worker audits, and declaration
+  bundling.
 
 ### 207: Provider-only model selection leaves Runtime Auto LLM without the provider default model
 
@@ -6694,11 +6776,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 93 (25 Open, 68 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 94 (25 Open, 69 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-26: Issue 208 resolved (v0.7.77 release candidate)
+- Restored absolute managed Runner and ordinary coding bounds for repeated
+  active-Run lifecycle continuations while preserving one final generation for
+  accepted input.
+- Expanded governed-memory prompt-safety matching and documented the existing
+  prompt-cache diagnostics gate.
 
 ### 2026-07-25: Issue 207 resolved (v0.7.77 release candidate)
 - Runtime run admission now resolves a provider-only selection to that

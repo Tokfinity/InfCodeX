@@ -3992,7 +3992,10 @@ The accepted result's `runId` is the existing owning Run (equal to
 Interrupt admission closes when the Runner publishes its final completion or
 terminal error signal, or when the Run's supplied `abortSignal` aborts, even if
 the outer Run is still settling. Non-terminal observer diagnostics do not close
-the window. A submission after closure returns `accepted:false` with
+the window. Same-Run lifecycle continuations also have a fixed internal
+allowance beyond the configured iteration ceiling; the Runner closes admission
+before its final absolute generation so repeated submissions cannot keep one
+Run alive indefinitely. A submission after closure returns `accepted:false` with
 `reason:'interrupt_window_closed'` and is not queued. Keep the original input
 available for retry after the Run ends; do not silently change its delivery to
 `after_turn`. As a final race/recovery

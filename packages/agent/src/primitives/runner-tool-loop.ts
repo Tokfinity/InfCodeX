@@ -36,6 +36,15 @@ import type { Agent, AgentMessage, AgentTool } from './agent.js';
 export const MAX_TOOL_LOOP_ITERATIONS = 20;
 
 /**
+ * Additional Runner iterations that lifecycle continuations may reserve beyond
+ * the configured tool-loop cap. This is an internal safety allowance, not a
+ * second unbounded loop: accepted input can still receive its promised next
+ * generation, while a continuously submitting embedder cannot keep one Run
+ * alive forever.
+ */
+export const MAX_RUN_CONTINUATION_ITERATIONS = 8;
+
+/**
  * One tool invocation requested by the LLM.
  */
 export interface RunnerToolCall {

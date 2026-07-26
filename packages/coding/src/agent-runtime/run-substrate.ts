@@ -487,6 +487,8 @@ function withCompletionEventOnce(events: KodaXEvents): KodaXEvents {
  * `runKodaX` shim) only — SDK consumers should use `runKodaX` or
  * `Runner.run(createDefaultCodingAgent(), …)`.
  */
+const MAX_INTERRUPT_CONTINUATION_ITERATIONS = 8;
+
 export async function runSubstrate(
   options: KodaXOptions,
   prompt: string,
@@ -506,7 +508,16 @@ export async function runSubstrate(
   let releaseActiveRootQueueRoute: (() => void) | undefined;
   try {
   const maxIter = options.maxIter ?? 200;
+  const absoluteIterationLimit = maxIter + MAX_INTERRUPT_CONTINUATION_ITERATIONS;
   let iterationLimit = maxIter;
+  const reserveInterruptContinuation = (iteration: number): boolean => {
+    if (iteration + 1 < iterationLimit) return true;
+    if (iterationLimit >= absoluteIterationLimit) return false;
+    iterationLimit += 1;
+    return true;
+  };
+  const canReopenInterruptInput = (iteration: number): boolean =>
+    iteration + 1 < iterationLimit && iterationLimit < absoluteIterationLimit;
   let events = options.events ?? {};
   const toolGuardrails = collectGuardrails(options.guardrails).tool;
   const guardrailAgent = toolGuardrails.length > 0
@@ -1058,6 +1069,12 @@ export async function runSubstrate(
 
     for (let iter = 0; iter < iterationLimit; iter++) {
     try {
+      if (
+        options.context?.interruptInput
+        && iter + 1 >= absoluteIterationLimit
+      ) {
+        options.context.interruptInput.closeInputWindow();
+      }
       // CAP-055: per-turn provider/model/thinkingLevel re-resolution +
       // CAP-042 per-turn isConfigured check + CAP-056 contextWindow cascade.
       const turnProvider = resolvePerTurnProvider(
@@ -1629,10 +1646,10 @@ export async function runSubstrate(
         const appendedQueuedMessages = appendQueuedRuntimeMessages(messages, runtimeSessionState);
         const consumedInterruptInput = consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
-          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-            iterationLimit += 1;
-          }
-          if (iter + 1 < iterationLimit) {
+          const hasContinuationIteration = consumedInterruptInput
+            ? reserveInterruptContinuation(iter)
+            : iter + 1 < iterationLimit;
+          if (hasContinuationIteration && canReopenInterruptInput(iter)) {
             options.context?.interruptInput?.reopenInputWindow();
           }
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
@@ -1705,10 +1722,10 @@ export async function runSubstrate(
         );
         const consumedInterruptInput = consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
-          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-            iterationLimit += 1;
-          }
-          if (iter + 1 < iterationLimit) {
+          const hasContinuationIteration = consumedInterruptInput
+            ? reserveInterruptContinuation(iter)
+            : iter + 1 < iterationLimit;
+          if (hasContinuationIteration && canReopenInterruptInput(iter)) {
             options.context?.interruptInput?.reopenInputWindow();
           }
           contextTokenSnapshot = rebaseContextTokenSnapshot(
@@ -1772,10 +1789,10 @@ export async function runSubstrate(
       turnState.maxTokensRetryCount = maxTokensOutcome.nextMaxTokensRetryCount;
       if (maxTokensOutcome.outcome === 'continue') {
         const consumedInterruptInput = consumeRuntimeInterruptInput();
-        if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-          iterationLimit += 1;
-        }
-        if (iter + 1 < iterationLimit) {
+        const hasContinuationIteration = consumedInterruptInput
+          ? reserveInterruptContinuation(iter)
+          : iter + 1 < iterationLimit;
+        if (hasContinuationIteration && canReopenInterruptInput(iter)) {
           options.context?.interruptInput?.reopenInputWindow();
         }
         contextTokenSnapshot = consumedInterruptInput
@@ -1802,10 +1819,10 @@ export async function runSubstrate(
       turnState.managedProtocolContinueAttempted = protocolContinueOutcome.nextContinueAttempted;
       if (protocolContinueOutcome.outcome === 'continue') {
         const consumedInterruptInput = consumeRuntimeInterruptInput();
-        if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-          iterationLimit += 1;
-        }
-        if (iter + 1 < iterationLimit) {
+        const hasContinuationIteration = consumedInterruptInput
+          ? reserveInterruptContinuation(iter)
+          : iter + 1 < iterationLimit;
+        if (hasContinuationIteration && canReopenInterruptInput(iter)) {
           options.context?.interruptInput?.reopenInputWindow();
         }
         contextTokenSnapshot = consumedInterruptInput
@@ -1846,10 +1863,10 @@ export async function runSubstrate(
         );
         const consumedInterruptInput = consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
-          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-            iterationLimit += 1;
-          }
-          if (iter + 1 < iterationLimit) {
+          const hasContinuationIteration = consumedInterruptInput
+            ? reserveInterruptContinuation(iter)
+            : iter + 1 < iterationLimit;
+          if (hasContinuationIteration && canReopenInterruptInput(iter)) {
             options.context?.interruptInput?.reopenInputWindow();
           }
           await commitActorNotificationReceipts(ctx, messages);
@@ -2103,10 +2120,10 @@ export async function runSubstrate(
         );
         const consumedInterruptInput = consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
-          if (consumedInterruptInput && iter + 1 >= iterationLimit) {
-            iterationLimit += 1;
-          }
-          if (iter + 1 < iterationLimit) {
+          const hasContinuationIteration = consumedInterruptInput
+            ? reserveInterruptContinuation(iter)
+            : iter + 1 < iterationLimit;
+          if (hasContinuationIteration && canReopenInterruptInput(iter)) {
             options.context?.interruptInput?.reopenInputWindow();
           }
           contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
@@ -2232,13 +2249,11 @@ export async function runSubstrate(
       contextTokenSnapshot = settleOutcome.contextTokenSnapshot;
       const consumedInterruptInput = consumeRuntimeInterruptInput();
       if (consumedInterruptInput) {
-        if (iter + 1 >= iterationLimit) {
-          iterationLimit += 1;
-        }
+        reserveInterruptContinuation(iter);
         contextTokenSnapshot = rebaseContextTokenSnapshot(messages, contextTokenSnapshot);
       }
       if (settleOutcome.drainedQueuedMessages || consumedInterruptInput) {
-        if (iter + 1 < iterationLimit) {
+        if (canReopenInterruptInput(iter)) {
           options.context?.interruptInput?.reopenInputWindow();
         }
         if (settleOutcome.drainedQueuedMessages) {

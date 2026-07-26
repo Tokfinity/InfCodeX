@@ -24,6 +24,7 @@ import {
   type PresetDispatcher,
 } from './runner.js';
 import {
+  MAX_RUN_CONTINUATION_ITERATIONS,
   MAX_TOOL_LOOP_ITERATIONS,
   type RunnableTool,
   type RunnerLlmResult,
@@ -1122,6 +1123,50 @@ describe('Runner', () => {
 
       expect(llm).toHaveBeenCalledTimes(2);
       expect(result.output).toBe('follow-up answer');
+    });
+
+    it('bounds repeated terminal continuations beyond the configured iteration cap', async () => {
+      const agent = createAgent({ name: 'bounded-terminal-continuation', instructions: 'sys' });
+      let inputWindowOpen = true;
+      let turn = 0;
+      const queuedInputs: AgentMessage[] = [];
+      const reopenInputWindow = vi.fn(() => {
+        inputWindowOpen = true;
+      });
+      const llm = vi.fn(async (messages: readonly AgentMessage[]): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (
+          inputWindowOpen
+          && turn <= MAX_RUN_CONTINUATION_ITERATIONS + 2
+        ) {
+          queuedInputs.push({ role: 'user', content: `interrupt-${turn}` });
+        }
+        if (turn === MAX_RUN_CONTINUATION_ITERATIONS + 1) {
+          expect(inputWindowOpen).toBe(false);
+          expect(messages.at(-1)).toMatchObject({
+            role: 'user',
+            content: `interrupt-${MAX_RUN_CONTINUATION_ITERATIONS}`,
+          });
+        }
+        return { text: `answer-${turn}`, toolCalls: [] };
+      });
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        maxToolLoopIterations: 1,
+        terminalContinuation: {
+          closeInputWindow: () => {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow,
+          drain: vi.fn(async () => queuedInputs.splice(0)),
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(MAX_RUN_CONTINUATION_ITERATIONS + 1);
+      expect(reopenInputWindow).toHaveBeenCalledTimes(MAX_RUN_CONTINUATION_ITERATIONS - 1);
+      expect(result.output).toBe(`answer-${MAX_RUN_CONTINUATION_ITERATIONS + 1}`);
+      expect(inputWindowOpen).toBe(false);
     });
 
     it('reserves a generation turn when a stop hook reanimates at the iteration cap', async () => {
