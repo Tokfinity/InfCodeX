@@ -596,6 +596,10 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return out;
   }
 
+  override supportsEphemeralSuffix(): boolean {
+    return true;
+  }
+
   async stream(
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],

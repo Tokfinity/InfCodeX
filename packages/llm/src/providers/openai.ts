@@ -64,6 +64,23 @@ function getOpenAICompatDefaultHeaders(
     : { 'User-Agent': KODAX_OPENAI_COMPAT_USER_AGENT };
 }
 
+function appendOpenAIEphemeralSuffix(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  suffix: string | undefined,
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  if (!suffix) return messages;
+  const last = messages.at(-1);
+  if (last?.role !== 'user') {
+    return [...messages, { role: 'user', content: suffix }];
+  }
+  const content = typeof last.content === 'string'
+    ? last.content.length > 0
+      ? `${last.content}\n\n${suffix}`
+      : suffix
+    : [...last.content, { type: 'text' as const, text: suffix }];
+  return [...messages.slice(0, -1), { ...last, content }];
+}
+
 function selectOpenAIReasoningEffort(
   reasoning: KodaXNormalizedReasoningRequest,
 ): string | undefined {
@@ -275,6 +292,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
   private _client?: OpenAI;
+
+  override supportsEphemeralSuffix(): boolean {
+    return true;
+  }
 
   /**
    * The SDK client is built lazily on first use. Constructing it requires the
@@ -751,13 +772,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       // Resolve the active model up front so the message serializer can
       // pick per-model replayReasoningContent overrides (KodaXModelDescriptor).
       const model = streamOptions?.modelOverride ?? this.config.model;
-      const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      const fullMessages = appendOpenAIEphemeralSuffix([
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
-        ...(streamOptions?.ephemeralSuffix?.content
-          ? [{ role: 'user' as const, content: streamOptions.ephemeralSuffix.content }]
-          : []),
-      ];
+      ], streamOptions?.ephemeralSuffix?.content);
       const openaiTools = tools.map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }));
       const forcedToolName = streamOptions?.forcedToolName;
       let shouldForceToolChoice = Boolean(forcedToolName);
@@ -1039,13 +1057,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const { system: mergedSystem, rest: nonSystemMessages } =
         this.normalizeSystemForWire(system, cleanMessages);
       const model = streamOptions?.modelOverride ?? this.config.model;
-      const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      const fullMessages = appendOpenAIEphemeralSuffix([
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
-        ...(streamOptions?.ephemeralSuffix?.content
-          ? [{ role: 'user' as const, content: streamOptions.ephemeralSuffix.content }]
-          : []),
-      ];
+      ], streamOptions?.ephemeralSuffix?.content);
       const openaiTools = tools.map((tool) => ({
         type: 'function' as const,
         function: {

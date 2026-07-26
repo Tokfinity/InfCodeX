@@ -80,6 +80,10 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
     private _sessionMap = new Map<string, string>();
     private _activeStreams = new Map<string, ActiveStreamContext>();
 
+    override supportsEphemeralSuffix(): boolean {
+        return true;
+    }
+
     // CLI-backed ACP adapters do not require a real API key.
     override isConfigured(): boolean {
         return true;

@@ -128,9 +128,6 @@ export function createRolePrompt(
       workspace.gitRoot && workspace.gitRoot !== workspace.executionCwd
         ? `Git Root: ${workspace.gitRoot}`
         : undefined,
-      workspace.scratchDir
-        ? `Session Scratch Directory: ${workspace.scratchDir}`
-        : undefined,
       `Platform: ${
         workspace.platform === 'win32'
           ? 'Windows'
@@ -151,6 +148,12 @@ export function createRolePrompt(
         : 'Shell defaults: Unix shell. Use: ls, mv, cp, rm, cat, head, tail.',
       'All relative paths you emit in tool calls (read/write/edit/bash) resolve against the Working Directory above. Do NOT `cd` into invented paths or assume a different cwd.',
     ].filter((line): line is string => Boolean(line)).join('\n')
+    : undefined;
+  const workspaceRunContextSection = workspace?.scratchDir
+    ? [
+      '## Session Environment',
+      `Session Scratch Directory: ${workspace.scratchDir}`,
+    ].join('\n')
     : undefined;
 
   // v0.7.35.1 FEATURE_144 — capability-context sections the AMA worker
@@ -191,13 +194,10 @@ export function createRolePrompt(
   // result: workers wrote scratch files to project root / system tmp
   // instead of `.agent/tmp/`. Re-inject the essential discipline as a
   // shared block prepended to every role's prompt.
-  const scratchTarget = workspace?.scratchDir
-    ? `the Session Scratch Directory above: ${workspace.scratchDir}`
-    : 'a session-scoped subdirectory under `.agent/tmp/sessions/` (relative to the git root)';
   const sharedWorkerDiscipline = [
     'Workspace discipline:',
     '- Helper scripts / scratch files are a last resort, not a default recovery path.',
-    `- If you must write a temporary file, write it under ${scratchTarget}. Do not write directly in the shared \`.agent/tmp/\` root.`,
+    '- If you must write a temporary file, use the Session Scratch Directory named in Managed Run Context. If none is provided, use a session-scoped subdirectory under `.agent/tmp/sessions/` relative to the git root. Do not write directly in the shared `.agent/tmp/` root.',
     "- NEVER write scratch files to the project root, to `.agent/` top level (reserved for managed-tasks/, project/, repo-intelligence/), or to the system temp directory. Files in system tmp are invisible to the project and block code review.",
     '- The `write` tool creates parent directories automatically. Calling `mkdir` before `write` is redundant and may fail on Windows shells where `mkdir -p` is unsupported.',
     '- If you truly need an empty directory: `mkdir dir` (Windows) or `mkdir -p dir` (Unix).',
@@ -326,6 +326,7 @@ export function createRolePrompt(
       }
       if (renderMode === 'context') {
         return [
+          workspaceRunContextSection,
           actorCapacityContract,
           capabilityContextSection,
           teamModeSection,
@@ -347,6 +348,7 @@ export function createRolePrompt(
         // sections so the LLM sees the same machine-readable context
         // the legacy roles get.
         workspaceSection,
+        workspaceRunContextSection,
         capabilityContextSection,
         teamModeSection,
         decisionSummary,

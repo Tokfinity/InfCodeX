@@ -300,6 +300,15 @@ export abstract class KodaXBaseProvider {
     signal?: AbortSignal
   ): Promise<KodaXStreamResult>;
 
+  /**
+   * Whether this Provider lowers `streamOptions.ephemeralSuffix` onto the wire.
+   * Runtime-registered Providers default to false so callers can fall back to a
+   * request-only message copy instead of silently dropping managed context.
+   */
+  supportsEphemeralSuffix(): boolean {
+    return false;
+  }
+
   supportsNonStreamingFallback(): boolean {
     return false;
   }

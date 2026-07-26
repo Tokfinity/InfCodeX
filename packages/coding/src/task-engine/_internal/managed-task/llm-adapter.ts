@@ -20,6 +20,7 @@
 
 import type {
   KodaXContentBlock,
+  KodaXEphemeralSuffix,
   KodaXMessage,
   KodaXReasoningRequest,
   KodaXRedactedThinkingBlock,
@@ -163,12 +164,42 @@ function estimateFinalEnvelopeTokens(
   messages: readonly KodaXMessage[],
   tools: readonly KodaXToolDefinition[],
   system: string,
+  ephemeralSuffix?: KodaXEphemeralSuffix,
 ): number {
   const toolSchemaTokens = tools.reduce(
     (total, definition) => total + estimateToolSchemaTokens(definition),
     0,
   );
-  return estimateTokens(messages) + countTokens(system) + toolSchemaTokens;
+  return estimateTokens(messages)
+    + countTokens(system)
+    + toolSchemaTokens
+    + countTokens(ephemeralSuffix?.content ?? '');
+}
+
+function appendEphemeralSuffixToMessages(
+  messages: readonly KodaXMessage[],
+  ephemeralSuffix: KodaXEphemeralSuffix | undefined,
+): KodaXMessage[] {
+  const suffix = ephemeralSuffix?.content;
+  if (!suffix) return [...messages];
+  const last = messages.at(-1);
+  if (last?.role !== 'user') {
+    return [
+      ...messages,
+      {
+        role: 'user',
+        content: suffix,
+        _synthetic: true,
+        _source: 'managed-run-context',
+      },
+    ];
+  }
+  const content = typeof last.content === 'string'
+    ? last.content.length > 0
+      ? `${last.content}\n\n${suffix}`
+      : suffix
+    : [...last.content, { type: 'text' as const, text: suffix }];
+  return [...messages.slice(0, -1), { ...last, content }];
 }
 
 export { hashProviderVisibleMessages };
@@ -194,6 +225,7 @@ export function buildRunnerLlmAdapter(
     messages: readonly KodaXMessage[],
     tools: readonly KodaXToolDefinition[],
     system: string,
+    ephemeralSuffix?: KodaXEphemeralSuffix,
   ) => Promise<{ textBlocks?: readonly { text: string }[]; toolBlocks?: readonly KodaXToolUseBlock[] }>,
   tokenStateRef?: { current: RunnerAdapterTokenState },
   /**
@@ -253,6 +285,8 @@ export function buildRunnerLlmAdapter(
     readonly mcpCatalogText?: string;
     readonly contextWindow?: number;
   },
+  /** Volatile request-only context appended after Provider cache breakpoints. */
+  getEphemeralSuffix?: () => KodaXEphemeralSuffix | undefined,
 ): (messages: readonly KodaXMessage[], agent: Agent) => Promise<RunnerLlmResult> {
   // FEATURE_072 parity: the REPL's token-count indicator reads
   // `onIterationEnd` to refresh after each worker LLM turn. The iteration
@@ -300,6 +334,7 @@ export function buildRunnerLlmAdapter(
     }
     const system = systemParts.join('\n\n');
     let transcript = messages.slice(cut);
+    const ephemeralSuffix = getEphemeralSuffix?.();
     const runtimeReminders: string[] = [];
     const injectedInputMessages: KodaXMessage[] = [];
 
@@ -400,10 +435,26 @@ export function buildRunnerLlmAdapter(
       usage?: KodaXTokenUsage;
     };
     if (overrideStream) {
-      streamResult = await overrideStream(transcript, wireTools, system);
+      streamResult = await overrideStream(
+        transcript,
+        wireTools,
+        system,
+        ephemeralSuffix,
+      );
     } else {
       const provider = resolveProvider(options.provider ?? 'anthropic');
       const providerName = options.provider ?? provider.name ?? 'anthropic';
+      const supportsNativeEphemeralSuffix =
+        typeof provider.supportsEphemeralSuffix === 'function'
+        && provider.supportsEphemeralSuffix();
+      const nativeEphemeralSuffix = supportsNativeEphemeralSuffix
+        ? ephemeralSuffix
+        : undefined;
+      const lowerProviderMessages = (
+        providerMessages: readonly KodaXMessage[],
+      ): KodaXMessage[] => supportsNativeEphemeralSuffix
+        ? [...providerMessages]
+        : appendEphemeralSuffixToMessages(providerMessages, ephemeralSuffix);
       const diagnosticSessionId = options.context?.contextIdentitySessionId
         ?? options.session?.id;
       const diagnosticAgentId = options.context?.currentAgentId;
@@ -448,8 +499,20 @@ export function buildRunnerLlmAdapter(
             .reverse()
             .find((message) => message.turnId !== undefined)
             ?.turnId;
+          const budgetMessages: readonly KodaXMessage[] = ephemeralSuffix?.content
+            ? [
+                ...diagnosticEnvelope.messages,
+                {
+                  role: 'user',
+                  content: ephemeralSuffix.content,
+                  _synthetic: true,
+                  _source: 'managed-run-context',
+                  ...(turnId !== undefined ? { turnId } : {}),
+                },
+              ]
+            : diagnosticEnvelope.messages;
           const messageTokenBreakdown = partitionContextBudgetMessages(
-            diagnosticEnvelope.messages,
+            budgetMessages,
             {
               skillTexts: [
                 contextBudgetCatalogs?.skillCatalogText,
@@ -496,6 +559,7 @@ export function buildRunnerLlmAdapter(
           system,
           tools: wireTools,
           messages: providerMessages,
+          ...(ephemeralSuffix !== undefined ? { ephemeralSuffix } : {}),
           attempt,
           transport,
         });
@@ -564,10 +628,11 @@ export function buildRunnerLlmAdapter(
       let emptyCompletionRetries = 0;
       while (true) {
         attempt += 1;
+        const wireProviderMessages = lowerProviderMessages(providerMessages);
         boundaryTracker.beginRequest(
           providerName,
           activeModel ?? provider.getModel?.() ?? 'unknown',
-          providerMessages,
+          wireProviderMessages,
           attempt,
           false,
         );
@@ -601,7 +666,8 @@ export function buildRunnerLlmAdapter(
           ? AbortSignal.any([options.abortSignal, retryTimeoutController.signal])
           : retryTimeoutController.signal;
 
-        const payloadBytes = estimateProviderPayloadBytes(providerMessages, system);
+        const payloadBytes = estimateProviderPayloadBytes(providerMessages, system)
+          + Buffer.byteLength(ephemeralSuffix?.content ?? '', 'utf8');
         emitResilienceDebug('[resilience:request]', {
           provider: providerName,
           attempt,
@@ -615,6 +681,7 @@ export function buildRunnerLlmAdapter(
         // happened before the first delta, mid-stream, post-tool, etc.
         const streamOptions = {
           modelOverride: activeModel,
+          ephemeralSuffix: nativeEphemeralSuffix,
           onTextDelta: (text: string) => {
             boundaryTracker.markTextDelta(text);
             resetIdleTimer();
@@ -666,7 +733,7 @@ export function buildRunnerLlmAdapter(
           emitContextBudgetSnapshot(providerMessages);
           const cacheDiagnostic = beginPromptCacheDiagnostic(providerMessages, attempt);
           raw = await provider.stream(
-            providerMessages,
+            wireProviderMessages,
             [...wireTools],
             system,
             providerReasoning,
@@ -802,10 +869,11 @@ export function buildRunnerLlmAdapter(
               if (hardTimer) clearTimeout(hardTimer);
               hardTimer = undefined;
               idleTimer = undefined;
+              const wireFallbackMessages = lowerProviderMessages(providerMessages);
               boundaryTracker.beginRequest(
                 providerName,
                 activeModel ?? provider.getModel?.() ?? 'unknown',
-                providerMessages,
+                wireFallbackMessages,
                 attempt,
                 true,
               );
@@ -817,12 +885,13 @@ export function buildRunnerLlmAdapter(
                 'complete',
               );
               raw = await provider.complete(
-                providerMessages,
+                wireFallbackMessages,
                 [...wireTools],
                 system,
                 providerReasoning,
                 {
                   modelOverride: activeModel,
+                  ephemeralSuffix: nativeEphemeralSuffix,
                   onTextDelta: (text: string) => {
                     boundaryTracker.markTextDelta(text);
                     options.events?.onTextDelta?.(text);
@@ -967,18 +1036,20 @@ export function buildRunnerLlmAdapter(
         );
         const l5Signal = options.abortSignal ?? undefined;
         try {
+          const wireContinuationMessages = lowerProviderMessages(providerMessages);
           emitContextBudgetSnapshot(providerMessages);
           const cacheDiagnostic = beginPromptCacheDiagnostic(
             providerMessages,
             attempt + l5Retries,
           );
           raw = await provider.stream(
-            providerMessages,
+            wireContinuationMessages,
             [...wireTools],
             system,
             providerReasoning,
             {
               modelOverride: activeModel,
+              ephemeralSuffix: nativeEphemeralSuffix,
               onTextDelta: (text: string) => {
                 const hasMarker = text.includes('```')
                   || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));
@@ -1137,6 +1208,7 @@ export function buildRunnerLlmAdapter(
             completedProviderTranscript,
             wireTools,
             system,
+            ephemeralSuffix,
           ),
           baselineEstimatedTokens: estimateTokens(completedRunnerTranscript),
           source: 'estimate',

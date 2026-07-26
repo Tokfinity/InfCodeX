@@ -133,8 +133,8 @@ export function resolveRoleInstructions(
 }
 
 /**
- * Resolve volatile per-run facts as a synthetic user/context message. Keeping
- * this material out of the leading system prompt preserves the provider cache
+ * Resolve volatile per-run facts as request-only user-role tail context.
+ * Keeping this material after Provider cache breakpoints preserves the stable
  * prefix while retaining every managed-task contract and repository fact.
  */
 export function resolveRoleRunContext(
@@ -162,13 +162,19 @@ export function resolveRoleRunContext(
     : undefined;
 }
 
-/** Render only runtime facts that may change between tool-loop iterations. */
+/** Render runtime facts for topology-only callers that have no full task plan. */
 export function resolveRoleRuntimeStateContext(
   context: ManagedRolePromptContext | undefined,
 ): string | undefined {
+  const scratchDirectory = context?.workspace?.scratchDir
+    ? [
+      '## Session Environment',
+      `Session Scratch Directory: ${context.workspace.scratchDir}`,
+    ].join('\n')
+    : undefined;
   const actorCapacity = buildWorkerActorCapacityContract(context?.actorCapacity);
   const teamMode = context?.teamModeSection?.trim();
-  const composed = [actorCapacity, teamMode]
+  const composed = [scratchDirectory, actorCapacity, teamMode]
     .filter((section): section is string => Boolean(section))
     .join('\n\n');
   return composed.length > 0

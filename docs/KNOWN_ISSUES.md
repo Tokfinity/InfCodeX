@@ -14,6 +14,7 @@ _Last Updated: 2026-07-26_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 211 | High | Resolved | AMA stable System prompt still embeds the Session scratch path across new Sessions | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 210 | High | Resolved | Runtime diagnostic identity and latest cache query contracts are incomplete | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 209 | High | Resolved | Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 208 | Medium | Resolved | v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching | v0.7.77 release candidate | v0.7.77 release candidate | 2026-07-26 | 2026-07-26 |
@@ -119,6 +120,100 @@ _Last Updated: 2026-07-26_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 211: AMA stable System prompt still embeds the Session scratch path across new Sessions
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 development
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+Two first requests from fresh Sessions in the same project, using the same
+provider, model, query, reasoning, and 66-tool set, produced identical
+message/tool hashes but different System-prompt and request-envelope hashes.
+The requests were only about 26 seconds apart, yet the Qwen
+Anthropic-compatible endpoint reported a full cache write and zero cache read
+for both.
+
+#### Context
+
+- Runtime-persisted request events prove that only the System portion of the
+  otherwise-equivalent request envelope changed.
+- Provider TTL, routing, and cache sharding can still affect cache reuse, but
+  they do not explain a locally observed System hash change.
+- The absent `ephemeralSuffixHash` is not evidence that the Provider cache
+  marker was omitted. That field describes an optional request-only suffix;
+  Anthropic-compatible `cache_control` markers are a separate wire mechanism.
+- Anthropic-compatible usage must continue to normalize uncached input plus
+  cache creation/read input into total input tokens.
+
+#### Root Cause
+
+The AMA stable role prompt includes the Session-specific scratch directory
+twice: once in the Environment block and again in workspace-discipline
+guidance. The existing cache-stability regression covers two runs in one
+Session, so both paths reuse the same scratch directory and the defect remains
+invisible.
+
+#### Proposed Solution
+
+- Keep only project/provider/platform facts in the stable Environment block.
+- Move the concrete Session scratch directory into the synthetic managed-run
+  user/context message after the System/tool cache boundary.
+- Make workspace-discipline wording stable while retaining the same scratch
+  safety contract.
+- Add a two-new-Session wire-prefix regression and lock the Qwen
+  Anthropic-compatible total-input usage semantics.
+
+#### Resolution
+
+- Removed the concrete Session scratch path from both stable System locations
+  and made the scratch-discipline rule byte-stable.
+- AMA now supplies run-scoped repository, memory, routing, Session, and
+  verification facts on each logical LLM turn through the existing request-only
+  `ephemeralSuffix`; live Actor and Team facts are refreshed for each turn.
+- Anthropic-compatible providers place the latest-user cache marker before this
+  suffix. Equivalent new-Session requests therefore keep System, tools, and
+  persistent Provider-visible messages identical while allowing the volatile
+  suffix hash to change independently.
+- The same suffix is forwarded through stream retry, non-streaming fallback,
+  and max-token continuation paths. Context-budget diagnostics classify it
+  once without exposing prompt text, and provider-cache diagnostics now emit
+  its hash.
+- OpenAI-compatible transports merge the suffix into the final wire user turn,
+  avoiding consecutive `user,user` messages rejected by stricter Qwen/proxy
+  endpoints.
+- Providers explicitly declare whether they lower native suffix options.
+  Runtime-registered legacy Providers default to a request-only message-copy
+  fallback, so managed context cannot be silently discarded.
+- Managed context is no longer persisted into canonical transcript history;
+  current facts are regenerated on each call, including Actor-capacity changes
+  and idle-yield resumes.
+- Topology-only callers without a full ReasoningPlan retain Session scratch
+  guidance through the same request-only suffix.
+
+#### Files Changed
+
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts`
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- Anthropic usage and AMA prefix/diagnostic regression tests
+
+#### Verification
+
+- Two-new-Session RED reproduction identified both Session-path occurrences in
+  System; the fixed test proves identical System, tools, and Provider-visible
+  persistent messages with distinct request-only suffixes.
+- AMA Actor-capacity refresh, prompt-cache/context-budget diagnostics,
+  retry/fallback, compaction, Anthropic cache-control/serialization, and exact
+  Qwen `6 + 25,408 = 25,414` input normalization regressions pass.
+- The full fast/unit/contract/system matrix, root package build, bundle build,
+  and declaration build pass.
 
 ### 210: Runtime diagnostic identity and latest cache query contracts are incomplete
 
@@ -6983,11 +7078,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 96 (25 Open, 71 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 97 (25 Open, 72 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-26: Issue 211 resolved (v0.7.77 development)
+- Removed Session scratch paths from the AMA stable System prompt and moved
+  all volatile managed-run facts to the existing request-only Provider suffix.
+- Added two-new-Session prefix stability, suffix diagnostics/context-budget,
+  Actor refresh, and exact Qwen cache-creation usage regressions.
 
 ### 2026-07-26: Issue 210 resolved (v0.7.77 development)
 - Completed logical root/child identity on diagnostic payloads without

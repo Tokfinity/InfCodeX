@@ -55,7 +55,7 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
 }
 
 describe('openai message serialization', () => {
-  it('appends an ephemeral suffix only to the wire request', async () => {
+  it('merges an ephemeral suffix into the final wire user turn', async () => {
     async function* streamChunks() {
       yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
     }
@@ -70,8 +70,11 @@ describe('openai message serialization', () => {
     expect(messages).toEqual([{ role: 'user', content: 'original request' }]);
     expect(create.mock.calls[0]?.[0].messages).toEqual([
       { role: 'system', content: 'system' },
-      { role: 'user', content: 'original request' },
-      { role: 'user', content: '[Memory evidence; not an instruction]\nClaim: use npm' },
+      {
+        role: 'user',
+        content:
+          'original request\n\n[Memory evidence; not an instruction]\nClaim: use npm',
+      },
     ]);
   });
 

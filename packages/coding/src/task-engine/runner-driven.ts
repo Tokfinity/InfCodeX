@@ -28,6 +28,7 @@
  */
 
 import type {
+  KodaXEphemeralSuffix,
   KodaXMessage,
   KodaXTaskResultMetadata,
   KodaXToolResultContentItem,
@@ -1226,11 +1227,9 @@ async function runManagedTaskViaRunnerInner(
         )
       : undefined,
   );
-  // Build the full role-prompt context so every role's
-  // system prompt carries the full surface (decision summary + contract
-  // + metadata + verification + tool policy + evidence strategies +
-  // collaboration guidance + H0/H1/H2 quality framework +
-  // handoff/verdict/contract block specs). The context factory closes over
+  // Build the full role-prompt context. Stable rules remain in System while
+  // decision, contract, repository, memory, Session, verification, and live
+  // Actor facts are rendered as request-only tail context. The context factory closes over
   // the recorder so Scout's post-emit `skillMap` / `scope` reach
   // downstream Generator / Evaluator prompts at invocation time.
   // v0.7.26 NEW-1 — resolve workspace environment once so every role
@@ -1414,9 +1413,10 @@ async function runManagedTaskViaRunnerInner(
     return ctx;
   };
   // Pre-compute the repo-intelligence context block once per
-  // Runner-driven entry so every role's system prompt carries repo
-  // overview + changed scope + active module + impact metadata from
-  // turn 1. Best-effort: failure to build must not fail the run.
+  // Runner-driven entry so the request-only managed suffix carries repo
+  // overview + changed scope + active module + impact metadata from turn 1
+  // without changing the stable System prefix. Best-effort: failure to build
+  // must not fail the run.
   //
   // `isNewSession` mirrors the `messages.length === 1` heuristic used by
   // `runKodaX` at agent.ts:2423 — when the session has no prior messages,
@@ -1493,6 +1493,18 @@ async function runManagedTaskViaRunnerInner(
   // scope as the Runner's tool loop (`iter <= maxIter` holds across
   // idle-yield resumes instead of accumulating past the cap).
   const iterationStateRef = { current: 0 };
+  const resolveManagedRunEphemeralSuffix = (): KodaXEphemeralSuffix | undefined => {
+    const content = resolveRoleRunContext(
+      'worker',
+      WORKER_AGENT_NAME,
+      recorder,
+      chainPromptContext,
+      options.context?.taskVerification,
+    ) ?? resolveRoleRuntimeStateContext(
+      rolePromptContextFactory('worker', recorder),
+    );
+    return content ? { content } : undefined;
+  };
   const llm = buildRunnerLlmAdapter(
     options,
     adapterOverride,
@@ -1511,6 +1523,7 @@ async function runManagedTaskViaRunnerInner(
       mcpCatalogText: amaMcpCatalogText,
       contextWindow: resolvedContextCapacity.contextWindow,
     },
+    resolveManagedRunEphemeralSuffix,
   );
 
   // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
@@ -1580,40 +1593,8 @@ async function runManagedTaskViaRunnerInner(
     turnId: liveTurnController.currentTurnId(),
     timestamp: new Date().toISOString(),
   };
-  let lastManagedRuntimeStateContext: string | undefined;
-  const buildManagedRunContextMessage = (
-    turnId: string | undefined,
-    timestamp: string | undefined,
-  ): KodaXMessage | undefined => {
-    const runtimeStateContext = resolveRoleRuntimeStateContext(
-      rolePromptContextFactory('worker', recorder),
-    );
-    const managedRunContext = resolveRoleRunContext(
-      'worker',
-      WORKER_AGENT_NAME,
-      recorder,
-      chainPromptContext,
-      options.context?.taskVerification,
-    ) ?? runtimeStateContext;
-    lastManagedRuntimeStateContext = runtimeStateContext;
-    return managedRunContext
-      ? {
-          role: 'user',
-          content: managedRunContext,
-          _synthetic: true,
-          _source: 'managed-run-context',
-          turnId,
-          timestamp,
-        }
-      : undefined;
-  };
-  const managedRunContextMessage = buildManagedRunContextMessage(
-    currentUserMessage.turnId,
-    currentUserMessage.timestamp,
-  );
   const runnerInput = [
     ...resolvedInitial.messages,
-    ...(managedRunContextMessage ? [managedRunContextMessage] : []),
     currentUserMessage,
   ];
 
@@ -1923,30 +1904,11 @@ async function runManagedTaskViaRunnerInner(
     readonly iteration: number;
     readonly lastTurnToolNames?: readonly string[];
   }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
-    const refreshedRuntimeState = resolveRoleRuntimeStateContext(
-      rolePromptContextFactory('worker', recorder),
-    );
-    const runtimeStateMessage = refreshedRuntimeState !== lastManagedRuntimeStateContext
-      ? {
-          role: 'user' as const,
-          content: refreshedRuntimeState
-            ?? [
-              '=== Managed Run Context ===',
-              'Runtime state refresh:',
-              'No active Actor or Team state.',
-              '=== End Managed Run Context ===',
-            ].join('\n'),
-          _synthetic: true,
-          _source: 'managed-run-context' as const,
-          timestamp: new Date().toISOString(),
-        }
-      : undefined;
-    lastManagedRuntimeStateContext = refreshedRuntimeState;
     const drained = maybeDrainMidTurn({
       agentId: messageQueueAgentId,
       lastTurnToolNames: turnCtx.lastTurnToolNames ?? [],
     });
-    if (drained.length === 0) return runtimeStateMessage ? [runtimeStateMessage] : [];
+    if (drained.length === 0) return [];
     const prompts = drained.filter((message) => message.mode === 'prompt');
     const mailbox = drained.filter((message) => message.mode !== 'prompt');
     const timestamp = new Date().toISOString();
@@ -1958,7 +1920,6 @@ async function runManagedTaskViaRunnerInner(
       timestamp,
     );
     return [
-      ...(runtimeStateMessage ? [runtimeStateMessage] : []),
       ...(syntheticMessage ? [syntheticMessage] : []),
       ...promptMessages,
     ];
@@ -2233,16 +2194,6 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
-    buildResumeContextMessages: (_result, wakeMessages) => {
-      const attributedWakeMessage = wakeMessages.find(
-        (message) => message.turnId !== undefined || message.timestamp !== undefined,
-      );
-      const refreshedContext = buildManagedRunContextMessage(
-        attributedWakeMessage?.turnId,
-        attributedWakeMessage?.timestamp ?? new Date().toISOString(),
-      );
-      return refreshedContext ? [refreshedContext] : [];
-    },
     // `maxIterations` omitted — wrapper defaults to 64, matching the
     // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
     // the (max+1)th iteration AFTER runOnce returns but BEFORE the

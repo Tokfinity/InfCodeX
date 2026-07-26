@@ -105,8 +105,9 @@ export interface RunnerChainPromptContext {
    * Pre-computed repo-intelligence context block (Repository Overview /
    * Changed Scope / Active Module / Impact / Fallback Guidance /
    * Premium Context sections). Built once per `runManagedTaskViaRunner`
-   * entry via `buildAutoRepoIntelligenceContext` and prepended to every
-   * role's system prompt so the Worker sees repo context from turn 1.
+   * entry via `buildAutoRepoIntelligenceContext` and appended in the
+   * request-only managed context so the Worker sees it from turn 1 without
+   * destabilizing the leading System prefix.
    */
   readonly repoIntelligenceContext?: string;
   /**

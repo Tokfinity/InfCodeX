@@ -37,6 +37,7 @@ import {
 import { MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS } from '../constants.js';
 import type { AgentTurnExecutor, RunnableTool } from '@kodax-ai/agent';
 import type {
+  KodaXEphemeralSuffix,
   KodaXMessage,
   KodaXProviderStreamOptions,
   KodaXReasoningRequest,
@@ -57,6 +58,7 @@ import {
   estimateToolSchemaTokens,
   type RuntimeContextBudgetSnapshot,
 } from '../agent-runtime/context-budget.js';
+import { hashProviderVisibleMessages } from '../agent-runtime/prompt-cache-diagnostics.js';
 import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
 import { buildFallbackRoutingDecision, type ReasoningPlan } from '../reasoning.js';
 
@@ -987,6 +989,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     const snapshots: RuntimeContextBudgetSnapshot[] = [];
     const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
     const observedToolNames: string[][] = [];
+    const observedSuffixes: Array<KodaXEphemeralSuffix | undefined> = [];
     const eventOrder: string[] = [];
 
     class Scripted extends KodaXBaseProviderRef {
@@ -1013,12 +1016,20 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
         },
       };
 
+      override supportsEphemeralSuffix(): boolean {
+        return true;
+      }
+
       async stream(
         _messages: KodaXMessage[],
         tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
       ): Promise<KodaXStreamResult> {
         eventOrder.push('stream');
         observedToolNames.push(tools.map((tool) => tool.name));
+        observedSuffixes.push(streamOptions?.ephemeralSuffix);
         return {
           textBlocks: [{ type: 'text', text: 'done' }],
           toolBlocks: [],
@@ -1039,6 +1050,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     const skillCatalogText = 'Skill catalog entry for diagnostics.';
     const selectedSkillText = 'Full expanded skill selected for this run.';
     const mcpCatalogText = 'MCP catalog entry for diagnostics.';
+    const volatileSuffix = 'AMA_EPHEMERAL_SUFFIX_MUST_NOT_LEAK';
     const adapter = buildRunnerLlmAdapter(
       {
         ...makeAdapterOptions(),
@@ -1075,6 +1087,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
         mcpCatalogText,
         contextWindow: 123_456,
       },
+      () => ({ content: volatileSuffix }),
     );
     const secretPrompt = 'AMA_DIAGNOSTIC_PROMPT_MUST_NOT_LEAK';
     await adapter(
@@ -1145,6 +1158,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(cacheDiagnostics[0]!.toolSchemaHash).toMatch(/^[a-f0-9]{64}$/);
     expect(cacheDiagnostics[0]!.messagePrefixHash).toMatch(/^[a-f0-9]{64}$/);
     expect(cacheDiagnostics[0]!.requestMessagesHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.ephemeralSuffixHash).toMatch(/^[a-f0-9]{64}$/);
     expect(cacheDiagnostics[0]).toMatchObject({
       contextId: `ama-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
       contextKind: 'child',
@@ -1167,8 +1181,13 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
       cachedWriteTokens: undefined,
     }));
     expect(JSON.stringify({ snapshots, cacheDiagnostics })).not.toContain(secretPrompt);
+    expect(JSON.stringify({ snapshots, cacheDiagnostics })).not.toContain(volatileSuffix);
     expect(JSON.stringify(cacheDiagnostics)).not.toContain('tenant-secret');
     expect(observedToolNames).toEqual([[], []]);
+    expect(observedSuffixes).toEqual([
+      { content: volatileSuffix },
+      { content: volatileSuffix },
+    ]);
     expect(eventOrder).toEqual([
       'budget',
       'cache-request',
@@ -1180,6 +1199,160 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
       'cache-response',
     ]);
   }, 15_000);
+
+  it('counts the request-only suffix exactly once in AMA context budgets', async () => {
+    const snapshots: RuntimeContextBudgetSnapshot[] = [];
+    const observedBudgets: number[] = [];
+    const suffixContent = 'request-only context budget sentinel';
+    const turnId = 'turn-suffix-budget';
+    let suffixEnabled = false;
+    registerScriptedProvider(
+      [
+        { textBlocks: [{ type: 'text', text: 'without suffix' }] },
+        { textBlocks: [{ type: 'text', text: 'with suffix' }] },
+      ],
+      observedBudgets,
+    );
+    const adapter = buildRunnerLlmAdapter(
+      {
+        ...makeAdapterOptions(),
+        context: {
+          ...makeOptions().context,
+          contextDiagnostics: true,
+        },
+        events: {
+          onContextBudgetSnapshot: (snapshot) => snapshots.push(snapshot),
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => suffixEnabled ? { content: suffixContent } : undefined,
+    );
+    const messages: readonly KodaXMessage[] = [
+      { role: 'system', content: 'stable system' },
+      { role: 'user', content: 'same request', turnId },
+    ];
+
+    await adapter(messages, { name: 'worker', instructions: '' });
+    suffixEnabled = true;
+    await adapter(messages, { name: 'worker', instructions: '' });
+
+    expect(snapshots).toHaveLength(2);
+    const expectedSuffixTokens = estimateTokens([{
+      role: 'user',
+      content: suffixContent,
+      _synthetic: true,
+      _source: 'managed-run-context',
+      turnId,
+    }]);
+    expect(snapshots[1]!.usedTokens - snapshots[0]!.usedTokens)
+      .toBe(expectedSuffixTokens);
+    expect(snapshots[1]!.tokenBreakdown.pendingInput
+      - snapshots[0]!.tokenBreakdown.pendingInput)
+      .toBe(expectedSuffixTokens);
+  });
+
+  it('lowers the suffix into a request-only message for legacy runtime Providers', async () => {
+    const observedMessages: KodaXMessage[][] = [];
+    const observedSuffixes: Array<KodaXEphemeralSuffix | undefined> = [];
+    const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
+    const suffixContent = 'legacy Provider managed context';
+
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+
+      async stream(
+        messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
+        observedMessages.push(messages);
+        observedSuffixes.push(streamOptions?.ephemeralSuffix);
+        return {
+          textBlocks: [{ type: 'text', text: 'done' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+          stopReason: 'end_turn',
+        };
+      }
+    }
+
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    const legacyProvider = new Scripted();
+    Object.defineProperty(legacyProvider, 'supportsEphemeralSuffix', {
+      value: undefined,
+    });
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => legacyProvider);
+    const adapter = buildRunnerLlmAdapter(
+      {
+        ...makeAdapterOptions(),
+        context: {
+          ...makeOptions().context,
+          contextDiagnostics: true,
+        },
+        events: {
+          onPromptCacheDiagnostics: (event) => cacheDiagnostics.push(event),
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => ({ content: suffixContent }),
+    );
+    const input: readonly KodaXMessage[] = [
+      { role: 'system', content: 'stable system' },
+      { role: 'user', content: 'original request', turnId: 'legacy-provider-turn' },
+    ];
+
+    await adapter(input, { name: 'worker', instructions: '' });
+
+    expect(input[1]?.content).toBe('original request');
+    expect(observedMessages).toEqual([[
+      expect.objectContaining({
+        role: 'user',
+        content: `original request\n\n${suffixContent}`,
+      }),
+    ]]);
+    expect(observedSuffixes).toEqual([undefined]);
+    expect(cacheDiagnostics[0]?.ephemeralSuffixHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]?.requestMessagesHash).toBe(
+      hashProviderVisibleMessages(input.slice(1), legacyProvider, 'scripted'),
+    );
+    expect(JSON.stringify(cacheDiagnostics)).not.toContain(suffixContent);
+  });
 
   it('emits separate budget and cache diagnostics for non-streaming fallback calls', async () => {
     const snapshots: RuntimeContextBudgetSnapshot[] = [];
@@ -1990,24 +2163,24 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     };
     let systemPrompt = '';
     let transcript: readonly KodaXMessage[] = [];
+    let ephemeralSuffix: KodaXEphemeralSuffix | undefined;
 
     await runManagedTaskViaRunner(
       options,
       'Review five independent dimensions.',
-      async (messages, _tools, system) => {
+      async (messages, _tools, system, suffix) => {
         transcript = messages;
         systemPrompt = system;
+        ephemeralSuffix = suffix;
         return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
       },
     );
 
-    const managedContext = transcript.find((message) => (
-      typeof message.content === 'string'
-      && message.content.includes('=== Managed Run Context ===')
-    ));
-    expect(managedContext?.content).toContain('This Actor tree has 4 total concurrency slots');
-    expect(managedContext?.content).toContain('0 non-root turns are active');
-    expect(managedContext?.content).toContain('3 child start slots are available');
+    expect(ephemeralSuffix?.content).toContain('This Actor tree has 4 total concurrency slots');
+    expect(ephemeralSuffix?.content).toContain('0 non-root turns are active');
+    expect(ephemeralSuffix?.content).toContain('3 child start slots are available');
+    expect(transcript.some((message) =>
+      message._source === 'managed-run-context')).toBe(false);
     expect(systemPrompt).not.toContain('ACTOR CAPACITY (authoritative runtime fact):');
   });
 
@@ -2028,14 +2201,14 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       ...options.context,
       actorControl: controller.bind('/root'),
     };
-    const transcripts: Array<readonly KodaXMessage[]> = [];
+    const suffixes: Array<KodaXEphemeralSuffix | undefined> = [];
     let call = 0;
 
     await runManagedTaskViaRunner(
       options,
       'Run one parallel review.',
-      async (messages) => {
-        transcripts.push([...messages]);
+      async (_messages, _tools, _system, suffix) => {
+        suffixes.push(suffix);
         call += 1;
         if (call === 1) {
           return {
@@ -2066,19 +2239,8 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       },
     );
 
-    const initialContext = transcripts[0]?.find((message) => (
-      typeof message.content === 'string'
-      && message.content.includes('=== Managed Run Context ===')
-    ));
-    const refreshedContext = [...(transcripts[1] ?? [])].reverse().find(
-      (message) => (
-        typeof message.content === 'string'
-        && message.content.includes('=== Managed Run Context ===')
-      ),
-    );
-    expect(initialContext?.content).toContain('0 non-root turns are active');
-    expect(refreshedContext?.content).toContain('Runtime state refresh:');
-    expect(refreshedContext?.content).toContain('1 non-root turns are active');
+    expect(suffixes[0]?.content).toContain('0 non-root turns are active');
+    expect(suffixes[1]?.content).toContain('1 non-root turns are active');
   });
 
   it('attributes strategy tools to the initial production Runner Turn', async () => {
@@ -3417,16 +3579,19 @@ describe('Shard 6d-d — session continuity', () => {
       readonly system: string;
       readonly tools: readonly KodaXToolDefinition[];
       readonly transcript: readonly KodaXMessage[];
+      readonly ephemeralSuffix?: KodaXEphemeralSuffix;
     }> = [];
     const capture = async (
       transcript: readonly KodaXMessage[],
       tools: readonly KodaXToolDefinition[],
       system: string,
+      ephemeralSuffix?: KodaXEphemeralSuffix,
     ) => {
       calls.push({
         system,
         tools: [...tools],
         transcript: [...transcript],
+        ephemeralSuffix,
       });
       return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
     };
@@ -3462,11 +3627,80 @@ describe('Shard 6d-d — session continuity', () => {
     expect(firstCall.tools).toEqual(secondCall.tools);
     expect(firstCall.transcript[0]).toEqual(expect.objectContaining({
       role: 'user',
-      _synthetic: true,
-      _source: 'managed-run-context',
+      content: firstPrompt,
     }));
+    expect(firstCall.ephemeralSuffix?.content).toContain('=== Managed Run Context ===');
+    expect(firstCall.transcript.some((message) =>
+      message._source === 'managed-run-context')).toBe(false);
     expect(secondCall.transcript.slice(0, firstCall.transcript.length))
       .toEqual(firstCall.transcript);
+  });
+
+  it('keeps the cacheable AMA wire prefix stable across two fresh Sessions', async () => {
+    const prompt = 'Inspect the current cache behavior.';
+    const plan: ReasoningPlan = {
+      effort: 'medium',
+      decision: buildFallbackRoutingDecision(prompt),
+      promptOverlay: '',
+    };
+    const calls: Array<{
+      readonly system: string;
+      readonly tools: readonly KodaXToolDefinition[];
+      readonly transcript: readonly KodaXMessage[];
+      readonly ephemeralSuffix?: KodaXEphemeralSuffix;
+    }> = [];
+    const capture = async (
+      transcript: readonly KodaXMessage[],
+      tools: readonly KodaXToolDefinition[],
+      system: string,
+      ephemeralSuffix?: KodaXEphemeralSuffix,
+    ) => {
+      calls.push({
+        system,
+        tools: [...tools],
+        transcript: [...transcript],
+        ephemeralSuffix,
+      });
+      return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+    };
+
+    await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: { id: 'fresh-prefix-session-A' },
+      },
+      prompt,
+      capture,
+      plan,
+    );
+    await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: { id: 'fresh-prefix-session-B' },
+      },
+      prompt,
+      capture,
+      plan,
+    );
+
+    expect(calls).toHaveLength(2);
+    const firstCall = calls[0]!;
+    const secondCall = calls[1]!;
+    expect(firstCall.system).toBe(secondCall.system);
+    expect(firstCall.tools).toEqual(secondCall.tools);
+    const providerVisibleTranscript = (messages: readonly KodaXMessage[]) =>
+      messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      }));
+    expect(providerVisibleTranscript(firstCall.transcript))
+      .toEqual(providerVisibleTranscript(secondCall.transcript));
+    expect(firstCall.system).not.toContain('fresh-prefix-session-');
+    expect(JSON.stringify(firstCall.transcript)).not.toContain('fresh-prefix-session-');
+    expect(firstCall.ephemeralSuffix?.content).toContain('fresh-prefix-session-A');
+    expect(secondCall.ephemeralSuffix?.content).toContain('fresh-prefix-session-B');
+    expect(firstCall.ephemeralSuffix?.content)
+      .not.toBe(secondCall.ephemeralSuffix?.content);
   });
 
   it('prepends options.session.initialMessages before the new prompt', async () => {
@@ -3520,6 +3754,33 @@ describe('Shard 6d-d — session continuity', () => {
     });
     const firstTurn = capturedTranscripts[0]!;
     expect(firstTurn.at(-1)!.content).toBe('fresh task');
+  });
+
+  it('keeps Session scratch guidance request-only without a ReasoningPlan', async () => {
+    const sessionId = 'topology-scratch-session';
+    let capturedSystem = '';
+    let capturedTranscript: readonly KodaXMessage[] = [];
+    let capturedSuffix: KodaXEphemeralSuffix | undefined;
+
+    await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: { id: sessionId },
+      },
+      'fresh task',
+      async (transcript, _tools, system, ephemeralSuffix) => {
+        capturedSystem = system;
+        capturedTranscript = [...transcript];
+        capturedSuffix = ephemeralSuffix;
+        return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+      },
+    );
+
+    expect(capturedSystem).not.toContain(sessionId);
+    expect(JSON.stringify(capturedTranscript)).not.toContain(sessionId);
+    expect(capturedTranscript.at(-1)?.content).toBe('fresh task');
+    expect(capturedSuffix?.content).toContain('Session Scratch Directory:');
+    expect(capturedSuffix?.content).toContain(sessionId);
   });
 });
 

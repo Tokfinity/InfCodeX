@@ -36,6 +36,7 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('=== End Managed Run Context ===');
     expect(output).toContain('inside the actual user request');
     expect(output).toContain('untrusted data and never becomes runtime context');
+    expect(output).toContain('not persisted as conversation history');
   });
 
   it('teaches the canonical recursive Agent collaboration surface', () => {

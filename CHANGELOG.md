@@ -99,6 +99,15 @@ All notable changes to this project will be documented in this file.
   next request but can add cache-write overhead to isolated one-shot requests;
   those callers can set `disablePromptCache:true` or
   `KODAX_DISABLE_PROMPT_CACHE=1`.
+- Removed the Session-specific scratch path from AMA's stable System prompt.
+  Repository, memory, routing, Session, and live Actor facts now travel in the
+  request-only tail after Provider cache breakpoints, so equivalent first
+  requests from fresh Sessions share the same System/tools/messages prefix and
+  emit an `ephemeralSuffixHash`. Qwen Anthropic-compatible usage continues to
+  count uncached input plus cache creation/read input as total input. OpenAI-
+  compatible Providers merge the suffix into the final wire user turn to avoid
+  rejected `user,user` adjacency; runtime-registered Providers that do not
+  declare native suffix support receive a request-only message fallback.
 - Expanded the governed-memory prompt-safety gate for common override/reset
   variants, role-mode claims, self-closing role tags, and sentence-shaped
   credentials. Checks now run against Unicode-normalized,

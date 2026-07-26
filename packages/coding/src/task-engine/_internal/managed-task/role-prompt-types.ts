@@ -32,7 +32,10 @@ export interface ManagedRolePromptContext {
   workspace?: {
     executionCwd: string;
     gitRoot?: string;
-    /** Session-scoped directory for helper scripts and scratch outputs. */
+    /**
+     * Session-scoped directory for helper scripts and scratch outputs.
+     * Rendered only in request-tail managed context, never in stable System.
+     */
     scratchDir?: string;
     platform: NodeJS.Platform;
     osRelease?: string;

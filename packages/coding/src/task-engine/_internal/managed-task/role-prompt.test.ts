@@ -84,12 +84,31 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
     expect(rendered).toContain('Platform: Windows');
   });
 
-  it('emits Session Scratch Directory and scratch discipline when supplied', () => {
+  it('keeps Session Scratch Directory in dynamic context while preserving stable discipline', () => {
     const scratchDir = 'C:\\Works\\GitWorks\\KodaX-author\\KodaX\\.agent\\tmp\\sessions\\session-1';
-    const rendered = callWorker(buildContext({ scratchDir }));
+    const ctx = buildContext({ scratchDir });
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const render = (mode: 'stable' | 'context') => createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+      mode,
+    );
+    const rendered = callWorker(ctx);
+    const stable = render('stable');
+    const dynamic = render('context');
 
     expect(rendered).toContain(`Session Scratch Directory: ${scratchDir}`);
-    expect(rendered).toContain(`write it under the Session Scratch Directory above: ${scratchDir}`);
+    expect(stable).not.toContain(scratchDir);
+    expect(dynamic).toContain(`Session Scratch Directory: ${scratchDir}`);
+    expect(stable).toContain('use the Session Scratch Directory named in Managed Run Context');
     expect(rendered).toContain('Do not write directly in the shared `.agent/tmp/` root.');
   });
 

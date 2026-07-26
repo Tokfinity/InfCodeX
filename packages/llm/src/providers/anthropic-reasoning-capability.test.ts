@@ -190,6 +190,34 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
+  it('normalizes Qwen cache creation tokens into total input usage', async () => {
+    const create = vi.fn().mockResolvedValue(
+      createCompletedAnthropicStream({
+        startUsage: {
+          input_tokens: 6,
+          cache_creation_input_tokens: 25_408,
+          cache_read_input_tokens: 0,
+        },
+        deltaUsage: {
+          output_tokens: 4_683,
+        },
+      }),
+    );
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(result.usage).toEqual({
+      inputTokens: 25_414,
+      outputTokens: 4_683,
+      totalTokens: 30_097,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 25_408,
+    });
+  });
+
   it('preserves provider-reported zero cache usage distinctly from missing fields', async () => {
     const create = vi.fn().mockResolvedValue(
       createCompletedAnthropicStream({
