@@ -31,7 +31,7 @@ Build and focused automation:
 
 ```powershell
 npm run build:packages
-npx vitest run packages/agent/src/experimental-memory/memory-agent.test.ts packages/coding/src/memory/coding-context.test.ts packages/coding/src/memory/coding-observations.test.ts packages/coding/src/memory/intervention-selector.test.ts packages/coding/src/memory/decision-trace.test.ts packages/coding/src/memory/policy-artifact.test.ts src/kodax_cli.runtime-runner.test.ts
+npx vitest run packages/agent/src/experimental-memory/memory-agent.test.ts packages/agent/src/memory-control/memory-control.test.ts packages/coding/src/agent-runtime/run-substrate.memory-intervention.test.ts packages/coding/src/agent-runtime/context-budget.test.ts packages/coding/src/memory/coding-context.test.ts packages/coding/src/memory/coding-observations.test.ts packages/coding/src/memory/intervention-selector.test.ts packages/coding/src/memory/rendering.test.ts packages/coding/src/memory/decision-trace.test.ts packages/coding/src/memory/policy-artifact.test.ts benchmark/datasets/feature-275/experiment-contract.test.ts src/kodax_cli.runtime-runner.test.ts
 ```
 
 Expected: TypeScript build succeeds and all focused tests pass.
@@ -170,5 +170,6 @@ Record:
 - links to raw traces with secrets removed.
 
 Do not mark the semantic selector generally effective from this guide. That
-claim requires the preregistered pilot and frozen validation in
+claim requires the authorized preregistered pilot and pre-call-frozen
+validation in
 `docs/features/v0.7.77.md`.
