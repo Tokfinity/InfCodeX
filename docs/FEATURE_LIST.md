@@ -409,13 +409,15 @@ remains the sole durable memory authority.
 
 The candidate also adds public `kimi-k3`, prompt-cache diagnostics, provider
 default-model resolution before Auto preflight, default-model catalog
-deduplication, and active-run interrupt finalization hardening. Package metadata
-is synchronized at `0.7.77`; candidate commit `5b5da1a4` passed the complete
-GitHub CI matrix on 2026-07-26, including Node 20/22, the Unix Runtime socket,
-and Windows packaged Electron. The Git tag, GitHub Release, and npm publication
-do not exist yet. Deterministic tests cannot close the remaining preregistered
-paid pilot or joint owner ship decision, and no task-effect improvement is
-claimed before those gates.
+deduplication, active-run interrupt finalization hardening, and the final
+child-runtime cache/context identity and Actor capability fixes. The code
+candidate through `dfce6cd5` passed the complete GitHub CI matrix on
+2026-07-26, including Node 20/22, the Unix Runtime socket, and Windows packaged
+Electron; the final release-metadata commit must pass the same matrix before
+tagging. Package metadata is synchronized at `0.7.77`. The Git tag, GitHub
+Release, and npm publication do not exist yet. Deterministic tests cannot close
+the remaining preregistered paid pilot or joint owner ship decision, and no
+task-effect improvement is claimed before those gates.
 
 ---
 

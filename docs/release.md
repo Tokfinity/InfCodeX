@@ -82,7 +82,8 @@ Release state: the root package, all four workspace packages, and every
 `package-lock.json` workspace entry are version `0.7.77`. The candidate adds
 FEATURE_274 pattern-aware adaptive AMA, FEATURE_275 governed event-triggered
 memory intervention, the public 1M `kimi-k3` route, prompt-cache diagnostics,
-and Runtime interrupt/default-model reliability fixes.
+Runtime interrupt/default-model reliability fixes, and the final child-runtime
+cache/context identity and Actor capability hardening.
 
 The candidate is not yet a release. Before tagging, all of the following must
 be true:
@@ -117,6 +118,12 @@ node scripts/release.mjs --pack-only
 bundled Sidecar prompt and budget bridge, and restores the development
 manifest. Use `kodax-ai-kodax-0.7.77.tgz` for consumer validation; a real npm
 publication sends those same audited bytes.
+
+Final local candidate evidence on 2026-07-26: the clean-install deterministic
+sequence above and the exact tarball audit passed. The packaged Electron
+boundary remains a required check in the final GitHub CI matrix. The audited
+`kodax-ai-kodax-0.7.77.tgz` SHA-256 is
+`95DB1DA510840A918A3B55105F6CCF81D2871C363A2D21D2F20223382BCB17A8`.
 
 For a focused v0.7.77 rerun:
 
