@@ -12,7 +12,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.76` (Git tag / GitHub Release; npm publication remains manual) |
-| Current package version | `@kodax-ai/kodax@0.7.77` release candidate (untagged; CI, paid pilot, and joint ship decision pending) |
+| Current package version | `@kodax-ai/kodax@0.7.77` release candidate (untagged; paid pilot and joint ship decision pending) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `62` |
 | InProgress | `3` |
@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.76 remains the current Git/GitHub release. |
-| InProgress | 3 | `274, 275, 225` | `274` and `275` are in the v0.7.77 candidate and await a clean CI/full-suite record, authorized paid evaluation, and the joint release decision; `225` remains the bounded v0.7.100 cleanup. |
+| InProgress | 3 | `274, 275, 225` | `274` and `275` have a clean v0.7.77 candidate CI/full-suite record and await authorized paid evaluation plus the joint release decision; `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.78` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -410,7 +410,9 @@ remains the sole durable memory authority.
 The candidate also adds public `kimi-k3`, prompt-cache diagnostics, provider
 default-model resolution before Auto preflight, default-model catalog
 deduplication, and active-run interrupt finalization hardening. Package metadata
-is synchronized at `0.7.77`; the Git tag, GitHub Release, and npm publication
+is synchronized at `0.7.77`; candidate commit `5b5da1a4` passed the complete
+GitHub CI matrix on 2026-07-26, including Node 20/22, the Unix Runtime socket,
+and Windows packaged Electron. The Git tag, GitHub Release, and npm publication
 do not exist yet. Deterministic tests cannot close the remaining preregistered
 paid pilot or joint owner ship decision, and no task-effect improvement is
 claimed before those gates.
