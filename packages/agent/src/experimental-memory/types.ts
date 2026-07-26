@@ -95,6 +95,7 @@ export type MemoryInterventionTrigger =
 export interface MemoryInterventionInput extends MemoryRecallInput {
   readonly triggers: readonly MemoryInterventionTrigger[];
   readonly currentCandidates: readonly MemoryRecallCandidate[];
+  readonly signal?: AbortSignal;
 }
 
 export interface MemoryDecisionReceipt {

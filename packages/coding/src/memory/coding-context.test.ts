@@ -68,6 +68,29 @@ describe('FEATURE_260 coding memory context', () => {
     expect(first.text.length).toBeLessThanOrEqual(6_000);
   });
 
+  it('offers the active todo before queued todos without mutating store order', () => {
+    const todos = createTodoStore();
+    todos.init([
+      { id: 'todo_1', subject: 'Queued first' },
+      { id: 'todo_2', subject: 'Active second' },
+    ]);
+    todos.updateStatus('todo_2', 'in_progress');
+
+    const context = buildCodingMemoryContext({
+      objective: 'Continue the active milestone',
+      decisionIntent: 'implementation',
+      todoStore: todos,
+      observationSequence: 0,
+    });
+
+    expect(context.currentCandidates.map((candidate) => candidate.refId)).toEqual([
+      'current:objective',
+      'current:todo:todo_2',
+      'current:todo:todo_1',
+    ]);
+    expect(todos.getAll().map((todo) => todo.id)).toEqual(['todo_1', 'todo_2']);
+  });
+
   it('redacts restricted values before optional semantic recall can see the context', () => {
     const context = buildCodingMemoryContext({
       objective: 'Investigate token=super-secret-value',

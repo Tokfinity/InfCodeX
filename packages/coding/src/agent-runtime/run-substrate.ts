@@ -154,7 +154,10 @@ import {
   type CodingMemoryContext,
 } from '../memory/coding-context.js';
 import { recordMemoryDecisionReceipt } from '../memory/decision-trace.js';
-import { renderMemoryEvidenceEnvelope } from '../memory/rendering.js';
+import {
+  MEMORY_EVIDENCE_TOKEN_RESERVE,
+  renderMemoryEvidenceEnvelope,
+} from '../memory/rendering.js';
 import {
   buildToolMemoryObservations,
   codingMemorySourcePolicy,
@@ -426,10 +429,18 @@ function legacyReasoningModeToRuntimeEffort(
   return mapped ?? mode;
 }
 
-function renderMemoryReminderSuffix(reminder: MemoryReminder): KodaXEphemeralSuffix {
-  return {
-    content: renderMemoryEvidenceEnvelope(reminder.content, reminder.evidenceRefs) ?? '',
-  };
+function renderMemoryReminderSuffix(reminder: MemoryReminder): KodaXEphemeralSuffix | undefined {
+  const content = renderMemoryEvidenceEnvelope(reminder.content, reminder.evidenceRefs);
+  return content === undefined ? undefined : { content };
+}
+
+function throwCallerAbort(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error(
+    signal.reason === undefined ? 'Operation aborted.' : String(signal.reason),
+  );
+  error.name = 'AbortError';
+  throw error;
 }
 
 function replaceLatestAssistantToolBlocks(
@@ -1232,6 +1243,8 @@ export async function runSubstrate(
       const reservedResponseTokens = streamProvider.getEffectiveMaxOutputTokens(
         turnState.currentModelOverride,
       );
+      const physicalReserveTokens = reservedResponseTokens
+        + (memorySession === undefined ? 0 : MEMORY_EVIDENCE_TOKEN_RESERVE);
       const requestBudgetSnapshot = createRuntimeContextBudgetSnapshot({
         sessionId,
         turnId: liveTurnScopeRef.current.turnId,
@@ -1252,7 +1265,7 @@ export async function runSubstrate(
         compactionConfig,
         contextWindow,
         currentTokens,
-        reservedResponseTokens,
+        reservedResponseTokens: physicalReserveTokens,
       });
       const compactionLifecycle = await runCompactionLifecycle({
         messages,
@@ -1266,7 +1279,7 @@ export async function runSubstrate(
         toolDefinitions: activeToolDefinitions,
         reasoning: effectiveProviderReasoning,
         currentTokens,
-        reservedResponseTokens,
+        reservedResponseTokens: physicalReserveTokens,
         events,
         compactionAntiThrash: turnState.compactAntiThrash,
         emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
@@ -1305,6 +1318,7 @@ export async function runSubstrate(
                 throughSequence: memoryContext.throughSequence,
                 triggers,
                 currentCandidates: memoryContext.currentCandidates,
+                ...(options.abortSignal === undefined ? {} : { signal: options.abortSignal }),
               })
             : iter > 0
               ? memorySession.recall({
@@ -1323,6 +1337,7 @@ export async function runSubstrate(
           });
         }
       }
+      throwCallerAbort(options.abortSignal);
       const budgetSnapshot = {
         ...createRuntimeContextBudgetSnapshot({
           sessionId,
@@ -1334,6 +1349,7 @@ export async function runSubstrate(
           systemPrompt: effectiveSystemPrompt,
           toolDefinitions: activeToolDefinitions,
           messages: providerMessages,
+          ...(memorySuffix?.content ? { pendingInput: memorySuffix.content } : {}),
           reservedResponseTokens,
         }),
         profile: contextOptimizationProfile,

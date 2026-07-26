@@ -59,36 +59,51 @@ export function createCodingMemoryInterventionRunner(
   options: CodingMemoryInterventionRunnerOptions,
 ): MemoryRecallRunner {
   return async (input) => {
-    const offered = new Set(input.candidates.map((candidate) => candidate.refId));
+    const aliased = input.candidates.map((candidate, index) => ({
+      ...candidate,
+      refId: `candidate:${index + 1}`,
+      evidenceRefs: [],
+    }));
+    const offered = new Set(aliased.map((candidate) => candidate.refId));
     const selected = await invokeLlmJudge<{ readonly selectedRefIds: readonly string[] }>({
       provider: options.provider,
       ...(options.model !== undefined ? { model: options.model } : {}),
       systemPrompt: MEMORY_INTERVENTION_SELECTOR_PROMPT,
       reportTool: SELECTOR_TOOL,
       reportToolName: TOOL_NAME,
-      userMessage: buildSelectorInput(input),
+      userMessage: buildSelectorInput(input, aliased),
       parseToolCall: (block, exact) => parseSelection(block, exact, offered),
       defaultVerdict: emptySelection,
       timeoutMs: 5_000,
       maxOutputTokens: 256,
       abortSignal: input.signal,
     });
-    return { selectedRefIds: unique(selected.selectedRefIds).slice(0, MAX_SELECTED) };
+    const originalByAlias = new Map(
+      aliased.map((candidate, index) => [candidate.refId, input.candidates[index]!.refId]),
+    );
+    return {
+      selectedRefIds: unique(selected.selectedRefIds
+        .map((id) => originalByAlias.get(id))
+        .filter((id): id is string => id !== undefined))
+        .slice(0, MAX_SELECTED),
+    };
   };
 }
 
-function buildSelectorInput(input: MemoryRecallRunnerInput): string {
+function buildSelectorInput(
+  input: MemoryRecallRunnerInput,
+  candidates: MemoryRecallRunnerInput['candidates'],
+): string {
   return JSON.stringify({
     objective: input.objective,
     decisionContext: input.decisionContext,
     decisionIntent: input.decisionIntent,
     triggers: input.triggers ?? [],
-    candidates: input.candidates.map((candidate) => ({
+    candidates: candidates.map((candidate) => ({
       refId: candidate.refId,
       claim: candidate.claim,
       claimKind: candidate.claimKind ?? 'unknown',
       source: candidate.source ?? 'durable',
-      evidenceRefs: candidate.evidenceRefs ?? [],
     })),
   });
 }

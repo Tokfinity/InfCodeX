@@ -46,9 +46,9 @@ describe('FEATURE_275 coding memory intervention selector', () => {
   it('returns only exact offered IDs from the forced tool call', async () => {
     const provider = providerWithToolInput({
       selectedRefIds: [
-        'memdir:procedure-npm',
-        'memdir:not-offered',
-        'observation:failure-1',
+        'candidate:2',
+        'candidate:99',
+        'candidate:1',
       ],
     });
     const runner = createCodingMemoryInterventionRunner({ provider });
@@ -57,6 +57,12 @@ describe('FEATURE_275 coding memory intervention selector', () => {
       selectedRefIds: ['memdir:procedure-npm', 'observation:failure-1'],
     });
     expect(provider.stream).toHaveBeenCalledOnce();
+    const wire = JSON.stringify(vi.mocked(provider.stream).mock.calls[0]);
+    expect(wire).toContain('candidate:1');
+    expect(wire).toContain('candidate:2');
+    expect(wire).not.toContain('observation:failure-1');
+    expect(wire).not.toContain('memdir:procedure-npm');
+    expect(wire).not.toContain('tool-result:edit-1');
   });
 
   it('fails silent when the selector uses a fuzzy tool name', async () => {
@@ -68,7 +74,7 @@ describe('FEATURE_275 coding memory intervention selector', () => {
           type: 'tool_use',
           id: 'selector-1',
           name: 'select_memory_candidate',
-          input: { selectedRefIds: ['memdir:procedure-npm'] },
+          input: { selectedRefIds: ['candidate:2'] },
         }],
       }),
     } as unknown as KodaXBaseProvider;

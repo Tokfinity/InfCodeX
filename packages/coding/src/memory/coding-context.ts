@@ -40,8 +40,9 @@ export function buildCodingMemoryContext(input: CodingMemoryContextInput): Codin
   if (input.goal !== undefined) {
     lines.push(`Goal (${compact(input.goal.status)}): ${compact(input.goal.objective)}`);
   }
-  for (const todo of input.todoStore?.getAll() ?? []) {
-    if (todo.status === 'completed' || todo.status === 'skipped') continue;
+  const openTodos = (input.todoStore?.getAll() ?? [])
+    .filter((todo) => todo.status !== 'completed' && todo.status !== 'skipped');
+  for (const todo of openTodos) {
     lines.push(`Todo ${todo.id} (${todo.status}): ${compact(todo.subject)}`);
   }
   for (const artifact of (input.artifacts ?? []).slice(-12)) {
@@ -62,8 +63,11 @@ export function buildCodingMemoryContext(input: CodingMemoryContextInput): Codin
     source: 'current',
     evidenceRefs: ['user:current-objective'],
   }];
-  for (const todo of input.todoStore?.getAll() ?? []) {
-    if (todo.status === 'completed' || todo.status === 'skipped') continue;
+  const orderedTodos = [
+    ...openTodos.filter((todo) => todo.status === 'in_progress'),
+    ...openTodos.filter((todo) => todo.status !== 'in_progress'),
+  ];
+  for (const todo of orderedTodos) {
     currentCandidates.push({
       refId: `current:todo:${todo.id}`,
       claim: `Open todo (${todo.status}): ${compact(todo.subject)}`,

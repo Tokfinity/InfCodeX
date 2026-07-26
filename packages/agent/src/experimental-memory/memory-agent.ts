@@ -22,6 +22,7 @@ import type {
   PersistedOutcomeDigest,
 } from './types.js';
 import { MEMORY_POLICY_VERSION } from './policy.js';
+import { renderMemoryEvidenceEnvelope } from './reminder-envelope.js';
 
 export function createMemoryAgent(options: CreateMemoryAgentOptions): MemoryAgent {
   return new DefaultMemoryAgent(options);
@@ -118,16 +119,23 @@ class DefaultMemorySession implements MemorySession {
       return undefined;
     }
     this.consumedReminderKeys.add(key);
-    this.emitDecisionReceipt(input, candidates, selectedCandidateIds, evidenceRefs, ['exact']);
-    return {
-      content: candidates.map((candidate) => candidate.claim).join('\n'),
+    const reminder = buildSafeReminder(
+      candidates.map((candidate) => candidate.claim),
       evidenceRefs,
-    };
+    );
+    this.emitDecisionReceipt(
+      input,
+      candidates,
+      selectedCandidateIds,
+      reminder?.evidenceRefs ?? [],
+      ['exact'],
+    );
+    return reminder;
   }
 
   async intervene(input: MemoryInterventionInput): Promise<MemoryReminder | undefined> {
     this.assertOpen();
-    if (input.triggers.length === 0) return undefined;
+    if (input.triggers.length === 0 || input.signal?.aborted) return undefined;
     const epoch = interventionEpoch(input);
     if (this.interventionEpochs.has(epoch) || this.activeIntervention) return undefined;
     this.interventionEpochs.add(epoch);
@@ -135,6 +143,7 @@ class DefaultMemorySession implements MemorySession {
     const sequenceAtStart = this.lastSequence;
     try {
       const candidates = await this.buildInterventionCandidates(input);
+      if (input.signal?.aborted) return undefined;
       if (this.lastSequence !== sequenceAtStart || input.throughSequence !== sequenceAtStart) {
         this.options.onTrace?.({
           type: 'recall.intervention.discarded',
@@ -149,7 +158,13 @@ class DefaultMemorySession implements MemorySession {
       }
 
       const pinnedIds = unique([
-        ...input.currentCandidates.slice(0, 1).map((candidate) => candidate.refId),
+        ...(input.triggers.includes('context_compacted')
+          ? candidates
+            .filter((candidate) => candidate.source === 'current')
+            .filter((candidate) => candidate.claimKind === 'objective')
+            .slice(0, 1)
+            .map((candidate) => candidate.refId)
+          : []),
         ...candidates
           .filter((candidate) => candidate.source !== 'current')
           .filter((candidate) => candidateMatchesInput(candidate, input))
@@ -158,6 +173,7 @@ class DefaultMemorySession implements MemorySession {
       const semanticIds = pinnedIds.length >= 3
         ? []
         : await this.selectInterventionCandidates(input, candidates, epoch);
+      if (input.signal?.aborted) return undefined;
       if (this.lastSequence !== sequenceAtStart) {
         this.options.onTrace?.({
           type: 'recall.intervention.discarded',
@@ -196,18 +212,19 @@ class DefaultMemorySession implements MemorySession {
         return undefined;
       }
       this.consumedReminderKeys.add(reminderKey);
+      const reminder = buildSafeReminder(
+        selected.map((candidate) => candidate.claim),
+        evidenceRefs,
+      );
       this.emitDecisionReceipt(
         input,
         candidates,
         selectedCandidateIds,
-        evidenceRefs,
+        reminder?.evidenceRefs ?? [],
         modes,
         input.triggers,
       );
-      return {
-        content: selected.map((candidate) => candidate.claim).join('\n'),
-        evidenceRefs,
-      };
+      return reminder;
     } finally {
       this.activeIntervention = false;
     }
@@ -315,12 +332,14 @@ class DefaultMemorySession implements MemorySession {
     const current = input.currentCandidates
       .map(currentCandidate)
       .filter((candidate): candidate is ResolvedMemoryCandidate => candidate !== undefined);
-    const observations = [...this.observations.values()]
+    const observations = prioritizeExactCandidates(
+      [...this.observations.values()]
       .filter((observation) => observation.sequence <= input.throughSequence)
       .filter(isAutomaticObservation)
       .sort((left, right) => right.sequence - left.sequence)
-      .slice(0, 6)
-      .map(observationCandidate);
+      .map(observationCandidate),
+      input,
+    );
     let durable: readonly ResolvedMemoryCandidate[] = [];
     try {
       const freshPack = await this.options.controlPlane.buildMemoryPack({
@@ -335,9 +354,12 @@ class DefaultMemorySession implements MemorySession {
         includeSnippets: true,
         purpose: 'intervention',
       });
-      durable = freshPack.candidates
-        .filter(isGovernedHint)
-        .map(durableCandidate);
+      durable = prioritizeExactCandidates(
+        freshPack.promptHints
+          .filter(isGovernedHint)
+          .map(durableCandidate),
+        input,
+      );
     } catch (error) {
       this.options.onTrace?.({
         type: 'recall.intervention.failed',
@@ -345,7 +367,7 @@ class DefaultMemorySession implements MemorySession {
         detail: error instanceof Error ? error.message : String(error),
       });
     }
-    return uniqueCandidates([...current, ...observations, ...durable]).slice(0, 12);
+    return admitInterventionCandidates(current, observations, durable);
   }
 
   private async selectInterventionCandidates(
@@ -357,15 +379,26 @@ class DefaultMemorySession implements MemorySession {
     if (runner === undefined || this.interventionRunnerCalls >= 3) return [];
     this.interventionRunnerCalls += 1;
     const controller = new AbortController();
+    const forwardAbort = (): void => controller.abort(input.signal?.reason);
+    input.signal?.addEventListener('abort', forwardAbort, { once: true });
+    if (input.signal?.aborted) forwardAbort();
+    const aliased = candidates.map((candidate, index) => ({
+      alias: `candidate:${index + 1}`,
+      candidate: {
+        ...candidate,
+        refId: `candidate:${index + 1}`,
+        evidenceRefs: [],
+      },
+    }));
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
         runner({
-          objective: input.objective,
-          decisionContext: input.decisionContext,
-          decisionIntent: input.decisionIntent,
+          objective: promptSafeSelectorText(input.objective),
+          decisionContext: promptSafeSelectorText(input.decisionContext, 2_048),
+          decisionIntent: promptSafeSelectorText(input.decisionIntent),
           triggers: input.triggers,
-          candidates,
+          candidates: aliased.map(({ candidate }) => candidate),
           signal: controller.signal,
         }),
         new Promise<{ readonly selectedRefIds: readonly string[] }>((resolve) => {
@@ -375,8 +408,13 @@ class DefaultMemorySession implements MemorySession {
           }, 5_000);
         }),
       ]);
-      const allowed = new Set(candidates.map((candidate) => candidate.refId));
-      return unique(result.selectedRefIds.filter((id) => allowed.has(id))).slice(0, 3);
+      const originalByAlias = new Map(
+        aliased.map(({ alias }, index) => [alias, candidates[index]!.refId]),
+      );
+      return unique(result.selectedRefIds
+        .map((id) => originalByAlias.get(id))
+        .filter((id): id is string => id !== undefined))
+        .slice(0, 3);
     } catch (error) {
       this.options.onTrace?.({
         type: 'recall.intervention.failed',
@@ -386,6 +424,7 @@ class DefaultMemorySession implements MemorySession {
       return [];
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
+      input.signal?.removeEventListener('abort', forwardAbort);
     }
   }
 
@@ -414,8 +453,12 @@ class DefaultMemorySession implements MemorySession {
           entry.claim !== undefined)
         .slice(0, 3);
       const selectedRefs = selected.map(({ hint }) => hint.ref.id);
-      const content = boundedQueryContent(selected.map(({ claim }) => claim));
-      const injectedRefs = content.length === 0 ? [] : selectedRefs;
+      const reminder = buildSafeReminder(
+        selected.map(({ claim }) => claim),
+        selectedRefs,
+      );
+      const content = reminder?.content ?? '';
+      const injectedRefs = reminder?.evidenceRefs ?? [];
       const candidates = pack.candidates.map(durableCandidate);
       this.emitDecisionReceipt(
         input,
@@ -424,7 +467,7 @@ class DefaultMemorySession implements MemorySession {
         injectedRefs,
         ['deliberate_query'],
       );
-      return content.length === 0 ? undefined : { content, evidenceRefs: selectedRefs };
+      return reminder;
     } catch (error) {
       this.emitDecisionReceipt(input, [], [], [], ['deliberate_query']);
       this.options.onTrace?.({
@@ -449,7 +492,8 @@ class DefaultMemorySession implements MemorySession {
     const selectedIdSet = new Set(selectedCandidateIds);
     const legacySelectedRefs = unique(candidates
       .filter((candidate) => selectedIdSet.has(candidate.refId))
-      .flatMap((candidate) => candidate.evidenceRefs));
+      .flatMap((candidate) => candidate.evidenceRefs)
+      .filter(isSafeEvidenceRef));
     const candidateSetFingerprint = digest(candidates
       .map((candidate) => [
         candidate.refId,
@@ -577,6 +621,37 @@ function candidateMatchesInput(
   return candidate.claimKey !== undefined && candidate.claimKey === input.decisionIntent;
 }
 
+function prioritizeExactCandidates(
+  candidates: readonly ResolvedMemoryCandidate[],
+  input: MemoryRecallInput,
+): readonly ResolvedMemoryCandidate[] {
+  return [
+    ...candidates.filter((candidate) => candidateMatchesInput(candidate, input)),
+    ...candidates.filter((candidate) => !candidateMatchesInput(candidate, input)),
+  ];
+}
+
+function admitInterventionCandidates(
+  current: readonly ResolvedMemoryCandidate[],
+  session: readonly ResolvedMemoryCandidate[],
+  durable: readonly ResolvedMemoryCandidate[],
+): readonly ResolvedMemoryCandidate[] {
+  const objective = current.filter((candidate) => candidate.claimKind === 'objective').slice(0, 1);
+  const currentTodo = current.filter((candidate) => candidate.claimKind === 'todo');
+  const admitted = uniqueCandidates([
+    ...objective,
+    ...currentTodo.slice(0, 3),
+    ...session.slice(0, 4),
+    ...durable.slice(0, 4),
+  ]);
+  const remaining = uniqueCandidates([
+    ...currentTodo.slice(3),
+    ...session.slice(4),
+    ...durable.slice(4),
+  ]);
+  return uniqueCandidates([...admitted, ...remaining]).slice(0, 12);
+}
+
 function uniqueCandidates(
   candidates: readonly ResolvedMemoryCandidate[],
 ): readonly ResolvedMemoryCandidate[] {
@@ -666,21 +741,39 @@ function isGovernedQueryHint(hint: MemoryPackHint): boolean {
       || hint.ref.lifecycle === 'readonly');
 }
 
-function boundedQueryContent(values: readonly string[]): string {
-  const safe = values
-    .map((value) => value
-      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-      .replace(/<\/?[^>]+>/g, '')
-      .replace(/[<>]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim())
-    .filter((value) => value.length > 0);
-  let content = safe.join('\n');
-  while (estimateMemoryTokens(content) > 512 && safe.length > 1) {
-    safe.pop();
-    content = safe.join('\n');
+function buildSafeReminder(
+  claims: readonly string[],
+  evidenceRefs: readonly string[],
+): MemoryReminder | undefined {
+  const normalizedClaims = claims
+    .map((claim) => sanitizePromptSafeMemoryClaim(claim, 512))
+    .filter((claim): claim is string => claim !== undefined);
+  const content = normalizedClaims.join('\n').slice(0, 2_048);
+  if (
+    normalizedClaims.length !== claims.length
+    || sanitizePromptSafeMemoryClaim(content, 2_048) === undefined
+    || estimateMemoryTokens(content) > 512
+  ) {
+    return undefined;
   }
-  return estimateMemoryTokens(content) <= 512 ? content : '';
+  const reminder = {
+    content,
+    evidenceRefs: unique(evidenceRefs.filter(isSafeEvidenceRef)).slice(0, 3),
+  };
+  return renderMemoryEvidenceEnvelope(reminder.content, reminder.evidenceRefs) === undefined
+    ? undefined
+    : reminder;
+}
+
+function promptSafeSelectorText(value: string, maxChars = 512): string {
+  return sanitizePromptSafeMemoryClaim(value, maxChars) ?? '[withheld by prompt-safety policy]';
+}
+
+function isSafeEvidenceRef(value: string): boolean {
+  return value.length > 0
+    && value.length <= 256
+    && !/[\r\n\u0000-\u001f\u007f]/.test(value)
+    && sanitizePromptSafeMemoryClaim(value, 256) === value;
 }
 
 function decisionEpoch(decisionRevision: string, throughSequence: number): string {

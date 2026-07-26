@@ -33,9 +33,11 @@ export function buildToolMemoryObservations(
     const verification = !failure && verificationCall;
     if (!failure && !verification) continue;
     if (verification && isRestrictedMemoryContent(content)) continue;
-    const evidenceRef = `tool-result:${block.id}`;
+    const callRefId = canonicalToolCallId(block.id);
+    const evidenceRef = `tool-result:${callRefId}`;
     const safeResult = sanitizePromptSafeMemoryClaim(boundedSummary(content), 480);
-    const neutralFailure = `${block.name} failed under the current inputs and environment. Inspect source ref ${evidenceRef}.`;
+    const neutralFailure =
+      `${block.name} failed under the current inputs and environment. Inspect the referenced tool result.`;
     const summary = failure
       ? safeResult === undefined
         ? neutralFailure
@@ -43,7 +45,7 @@ export function buildToolMemoryObservations(
       : `Verification command succeeded: ${safeResult ?? 'Inspect the referenced tool result.'}`;
     sequence += 1;
     observations.push({
-      id: `tool-outcome:${block.id}`,
+      id: `tool-outcome:${callRefId}`,
       sequence,
       kind: 'outcome',
       summary,
@@ -65,6 +67,11 @@ export function buildToolMemoryObservations(
     });
   }
   return observations;
+}
+
+function canonicalToolCallId(value: string): string {
+  if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) return value;
+  return `sha256-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
 }
 
 function failureFingerprint(safeResult: string | undefined): string {

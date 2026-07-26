@@ -252,6 +252,44 @@ describe('MemoryControlPlane', () => {
     });
   });
 
+  it('ranks structured exact refs before truncation and breaks equal scores by canonical id', async () => {
+    const refs = Array.from({ length: 13 }, (_, index): MemoryItemRef => ({
+      ...extraRef(`session:rank-${String(index + 1).padStart(2, '0')}`, 'session_trace', 'active'),
+      title: 'Equivalent candidate',
+      ...(index === 12 ? { actionSignature: 'task:exact-recovery' } : {}),
+    }));
+    const options = {
+      cwd,
+      learningStorePath,
+      memoryRoot,
+      discoverSkills: false,
+      now: () => '2026-07-06T00:00:00.000Z',
+    } as const;
+    const first = createMemoryControlPlane({ ...options, extraRefs: refs });
+    const second = createMemoryControlPlane({ ...options, extraRefs: [...refs].reverse() });
+
+    const [firstPack, secondPack] = await Promise.all([
+      first.buildMemoryPack({
+        task: 'Recover from the failure',
+        actionSignature: 'task:exact-recovery',
+        maxCandidates: 12,
+        maxHints: 12,
+      }),
+      second.buildMemoryPack({
+        task: 'Recover from the failure',
+        actionSignature: 'task:exact-recovery',
+        maxCandidates: 12,
+        maxHints: 12,
+      }),
+    ]);
+    const firstIds = firstPack.candidates.map((hint) => hint.ref.id);
+    const secondIds = secondPack.candidates.map((hint) => hint.ref.id);
+
+    expect(firstIds[0]).toBe('session:rank-13');
+    expect(firstIds).toEqual(secondIds);
+    expect(firstIds).toHaveLength(12);
+  });
+
   it('archives and forgets governed refs with retrieval exclusion and acknowledgement', async () => {
     await mkdir(memoryRoot, { recursive: true });
     const topicPath = join(memoryRoot, 'project_stack.md');

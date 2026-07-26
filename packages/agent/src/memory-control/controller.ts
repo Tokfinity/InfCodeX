@@ -421,7 +421,11 @@ export class MemoryControlPlane implements MemoryController {
     });
     const eligible = refs
       .filter((ref) => isPackEligible(ref, input))
-      .sort((left, right) => scoreRef(right, rankingText) - scoreRef(left, rankingText));
+      .sort((left, right) => (
+        structuredMatchScore(right, input) - structuredMatchScore(left, input)
+        || scoreRef(right, rankingText) - scoreRef(left, rankingText)
+        || left.id.localeCompare(right.id)
+      ));
     const maxCandidates = Math.max(0, input.maxCandidates ?? 12);
     const maxHints = Math.min(maxCandidates, Math.max(0, input.maxHints ?? 5));
     const selectedCandidates = eligible.slice(0, maxCandidates);
@@ -2162,6 +2166,24 @@ function scoreRef(ref: MemoryItemRef, task: string): number {
     if (taskLower.includes(token)) score += 3;
   }
   return score;
+}
+
+function structuredMatchScore(ref: MemoryItemRef, input: MemoryPackInput): number {
+  if (
+    input.actionSignature !== undefined
+    && ref.actionSignature !== undefined
+    && ref.actionSignature === input.actionSignature
+  ) {
+    return 2;
+  }
+  if (
+    input.decisionIntent !== undefined
+    && ref.claimKey !== undefined
+    && ref.claimKey === input.decisionIntent
+  ) {
+    return 1;
+  }
+  return 0;
 }
 
 function packReason(ref: MemoryItemRef, task: string): string {
