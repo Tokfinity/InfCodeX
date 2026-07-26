@@ -37,6 +37,10 @@ describe('runtime context budget snapshot', () => {
       sessionId: 's1',
       runId: 'r1',
       turnId: 't1',
+      contextId: 's1/agent/%2Froot%2Freviewer',
+      contextKind: 'child',
+      parentContextId: 's1',
+      agentId: '/root/reviewer',
       provider: 'test',
       model: 'test-model',
       contextWindow: 128_000,
@@ -49,6 +53,12 @@ describe('runtime context budget snapshot', () => {
     });
 
     expect(snapshot.sessionId).toBe('s1');
+    expect(snapshot).toMatchObject({
+      contextId: 's1/agent/%2Froot%2Freviewer',
+      contextKind: 'child',
+      parentContextId: 's1',
+      agentId: '/root/reviewer',
+    });
     expect(snapshot.profile).toBe('report_only');
     expect(snapshot.pressure).toBe('low');
     expect(snapshot.tokenBreakdown.toolSchemas).toBe(estimateToolSchemaTokens(sampleTool));

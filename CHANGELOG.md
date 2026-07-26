@@ -37,6 +37,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Completed the Runtime diagnostics query contract for reconnecting hosts.
+  Budget, tool-exposure, compaction-skip, and provider-cache diagnostics now
+  carry stable logical `contextId` / `parentContextId` identity while retaining
+  isolated child transcript Sessions. Inline and daemon Runtime services expose
+  `latestProviderCacheDiagnostic(filter?)`; root defaults and child
+  Session/Agent isolation share the same strict matching semantics. Existing
+  hash-only request-envelope, ephemeral-suffix, retry/fallback/repair, and
+  compaction diagnostics remain intact.
 - Extended prompt-cache and context-budget diagnostics to the SA substrate used
   by Runtime child Agents, including retries, non-streaming fallback, workflow
   digest, structured-output repair, and compaction summary requests. Diagnostics

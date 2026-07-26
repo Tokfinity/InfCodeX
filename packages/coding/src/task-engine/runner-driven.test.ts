@@ -1046,6 +1046,9 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
         context: {
           ...makeOptions().context,
           contextDiagnostics: true,
+          contextIdentitySessionId: 'ama-root-session',
+          currentAgentId: '/root/reviewer',
+          parentAgentId: '/root',
         },
         events: {
           onContextBudgetSnapshot: (event) => {
@@ -1116,6 +1119,10 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(snapshots[0]).toEqual(expect.objectContaining({
       sessionId: 'ama-context-diagnostics',
       turnId: 'turn-current',
+      contextId: `ama-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
+      contextKind: 'child',
+      parentContextId: 'ama-root-session',
+      agentId: '/root/reviewer',
       contextWindow: 123_456,
     }));
     expect(snapshots[0]!.tokenBreakdown.reservedResponse).toBe(8_000);
@@ -1138,6 +1145,12 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(cacheDiagnostics[0]!.toolSchemaHash).toMatch(/^[a-f0-9]{64}$/);
     expect(cacheDiagnostics[0]!.messagePrefixHash).toMatch(/^[a-f0-9]{64}$/);
     expect(cacheDiagnostics[0]!.requestMessagesHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]).toMatchObject({
+      contextId: `ama-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
+      contextKind: 'child',
+      parentContextId: 'ama-root-session',
+      agentId: '/root/reviewer',
+    });
     expect(cacheDiagnostics[0]!.messagePrefixCount).toBe(2);
     expect(cacheDiagnostics[2]!.messagePrefixCount).toBe(2);
     expect(cacheDiagnostics[0]!.messagePrefixHash)

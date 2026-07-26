@@ -53,6 +53,8 @@ describe('runtime daemon protocol schema', () => {
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['tool.exposure.preview'].result).toMatchObject({
       oneOf: expect.arrayContaining([{ type: 'null' }]),
     });
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['provider.cache.diagnostics.get'].params)
+      .toEqual(RUNTIME_DAEMON_METHOD_SCHEMAS['context.budget.get'].params);
   });
 
   it('validates required, typed, and additional properties', () => {

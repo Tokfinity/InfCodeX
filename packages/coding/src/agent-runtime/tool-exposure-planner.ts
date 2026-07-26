@@ -36,7 +36,9 @@ export interface RuntimeToolExposureDecision {
 }
 
 export interface RuntimeToolExposurePlan {
+  readonly contextId?: string;
   readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
   readonly agentId?: string;
   readonly profile: RuntimeContextOptimizationProfile;
   readonly reportOnly: boolean;
@@ -155,6 +157,14 @@ export function planToolExposure(input: RuntimeToolExposurePlanInput): RuntimeTo
   const estimatedToolSchemaTokensIfApplied = sumDecisionTokens(decisions, 'estimatedTokensIfApplied');
 
   return {
+    ...(input.budget.contextId !== undefined ? { contextId: input.budget.contextId } : {}),
+    ...(input.budget.contextKind !== undefined
+      ? { contextKind: input.budget.contextKind }
+      : {}),
+    ...(input.budget.parentContextId !== undefined
+      ? { parentContextId: input.budget.parentContextId }
+      : {}),
+    ...(input.budget.agentId !== undefined ? { agentId: input.budget.agentId } : {}),
     profile,
     reportOnly,
     pressure: input.budget.pressure,

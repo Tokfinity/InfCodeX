@@ -502,7 +502,9 @@ export interface PromptCacheDiagnosticRequestInput {
   readonly enabled: boolean;
   readonly provider: KodaXBaseProvider;
   readonly providerName: string;
+  readonly contextId?: string;
   readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
   readonly agentId?: string;
   readonly model: string;
   readonly reasoning: boolean | KodaXReasoningRequest | undefined;
@@ -520,6 +522,10 @@ export interface CompactionPromptCacheObserverInput {
   readonly enabled: boolean;
   readonly provider: KodaXBaseProvider;
   readonly providerName: string;
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
   readonly model: string;
   readonly disablePromptCache: boolean | undefined;
 }
@@ -536,6 +542,12 @@ export function createCompactionPromptCacheObserver(
         enabled: true,
         provider: input.provider,
         providerName: input.providerName,
+        ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+        ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+        ...(input.parentContextId !== undefined
+          ? { parentContextId: input.parentContextId }
+          : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
         model: request.modelOverride ?? input.model,
         reasoning: request.reasoning,
         disablePromptCache: input.disablePromptCache,
@@ -587,7 +599,11 @@ export function emitPromptCacheDiagnosticRequest(
       requestId: randomUUID(),
       requestedAt: new Date().toISOString(),
       provider: input.providerName,
+      ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
       ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+      ...(input.parentContextId !== undefined
+        ? { parentContextId: input.parentContextId }
+        : {}),
       ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
       model: input.model,
       wireModel: input.provider.getWireModel(input.model),

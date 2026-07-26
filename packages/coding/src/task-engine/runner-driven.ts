@@ -613,7 +613,7 @@ export async function runManagedTaskViaRunner(
       ? {
           contextId: `${contextIdentitySessionId}/agent/${encodeURIComponent(currentAgentId)}`,
           contextKind: 'child' as const,
-          parentContextId: parentAgentId === undefined
+          parentContextId: parentAgentId === undefined || parentAgentId === '/root'
             ? contextIdentitySessionId
             : `${contextIdentitySessionId}/agent/${encodeURIComponent(parentAgentId)}`,
           agentId: currentAgentId,

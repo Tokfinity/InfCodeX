@@ -652,6 +652,9 @@ function makeRuntime(
       async latestToolExposure() {
         return null;
       },
+      async latestProviderCacheDiagnostic() {
+        return null;
+      },
     },
     async close() {
       runtime.closed = true;

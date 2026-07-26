@@ -98,6 +98,10 @@ export interface TryIntelligentCompactInput {
   readonly compactionConfig: CompactionConfig;
   readonly provider: KodaXBaseProvider;
   readonly model?: string;
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly toolDefinitions?: readonly KodaXToolDefinition[];
@@ -152,6 +156,12 @@ export async function tryIntelligentCompact(
     const nextAntiThrash = consumeCompactionCooldown(antiThrash);
     if (input.emitCompactionDiagnostics) {
       input.events.onContextCompactionSkipped?.({
+        ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+        ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+        ...(input.parentContextId !== undefined
+          ? { parentContextId: input.parentContextId }
+          : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
         reason: antiThrash.cooldownTurnsRemaining > 0
           ? 'low_savings_cooldown'
           : 'covered_context_unchanged',
@@ -201,6 +211,12 @@ export async function tryIntelligentCompact(
               enabled: input.emitCompactionDiagnostics === true,
               provider: input.provider,
               providerName: input.provider.name,
+              ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+              ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+              ...(input.parentContextId !== undefined
+                ? { parentContextId: input.parentContextId }
+                : {}),
+              ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
               model: input.model ?? input.provider.getModel(),
               disablePromptCache: input.disablePromptCache,
             }),
@@ -536,6 +552,10 @@ export interface CompactionLifecycleInput {
   readonly compactionConfig: CompactionConfig;
   readonly provider: KodaXBaseProvider;
   readonly model?: string;
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
   readonly contextWindow: number;
   readonly systemPrompt: string;
   readonly toolDefinitions?: readonly KodaXToolDefinition[];
@@ -585,6 +605,12 @@ export async function runCompactionLifecycle(
     compactionConfig: input.compactionConfig,
     provider: input.provider,
     model: input.model,
+    ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+    ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+    ...(input.parentContextId !== undefined
+      ? { parentContextId: input.parentContextId }
+      : {}),
+    ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     contextWindow: input.contextWindow,
     systemPrompt: input.systemPrompt,
     toolDefinitions: input.toolDefinitions,

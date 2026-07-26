@@ -133,7 +133,8 @@ export type RuntimeDaemonMethod =
   | 'agents.events'
   | 'agents.wait'
   | 'context.budget.get'
-  | 'tool.exposure.preview';
+  | 'tool.exposure.preview'
+  | 'provider.cache.diagnostics.get';
 
 export type RuntimeDaemonRetiredMethod =
   | 'agentTasks.list'
@@ -421,6 +422,7 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'agents.wait',
   'context.budget.get',
   'tool.exposure.preview',
+  'provider.cache.diagnostics.get',
 ];
 
 export const RUNTIME_DAEMON_MUTATION_METHODS: readonly RuntimeDaemonMutationMethod[] = [

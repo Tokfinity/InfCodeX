@@ -26,6 +26,10 @@ export interface CompactionSavingsDecision {
 export type CompactionSkipReason = 'low_savings_cooldown' | 'covered_context_unchanged';
 
 export interface RuntimeCompactionSkippedEvent {
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
   readonly reason: CompactionSkipReason;
   readonly currentTokens: number;
   readonly contextWindow: number;

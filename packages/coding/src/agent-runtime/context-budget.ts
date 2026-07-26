@@ -30,7 +30,9 @@ export interface RuntimeContextBudgetSnapshot {
   readonly sessionId?: string;
   readonly runId?: string;
   readonly turnId?: string;
+  readonly contextId?: string;
   readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
   readonly agentId?: string;
   readonly provider?: string;
   readonly model?: string;
@@ -58,7 +60,9 @@ export interface RuntimeContextBudgetSnapshotInput {
   readonly sessionId?: string;
   readonly runId?: string;
   readonly turnId?: string;
+  readonly contextId?: string;
   readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
   readonly agentId?: string;
   readonly provider?: string;
   readonly model?: string;
@@ -194,7 +198,11 @@ export function createRuntimeContextBudgetSnapshot(
     sessionId: input.sessionId,
     runId: input.runId,
     turnId: input.turnId,
+    ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
     ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+    ...(input.parentContextId !== undefined
+      ? { parentContextId: input.parentContextId }
+      : {}),
     ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
     provider: input.provider,
     model: input.model,

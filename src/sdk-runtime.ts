@@ -293,6 +293,7 @@ export type {
 } from './runtime-daemon/schema.js';
 export type { RuntimeDaemonEndpoint } from './runtime-daemon/transport.js';
 export type {
+  KodaXPromptCacheDiagnosticEvent,
   RuntimeContextBudgetSnapshot,
   RuntimeToolExposurePlan,
 } from '@kodax-ai/coding';
@@ -711,6 +712,9 @@ export interface RuntimeDiagnosticsService {
   latestToolExposure(
     filter?: RuntimeDiagnosticFilter,
   ): Promise<RuntimeToolExposurePlan | null>;
+  latestProviderCacheDiagnostic(
+    filter?: RuntimeDiagnosticFilter,
+  ): Promise<KodaXPromptCacheDiagnosticEvent | null>;
 }
 
 export interface RuntimeConnectionState {
@@ -6011,6 +6015,13 @@ function createRuntimeDiagnosticsService(
         filter,
       );
     },
+    latestProviderCacheDiagnostic(filter) {
+      return latestRuntimeDiagnosticPayload<KodaXPromptCacheDiagnosticEvent>(
+        events,
+        'provider.cache.diagnostics',
+        filter,
+      );
+    },
   };
 }
 
@@ -8159,6 +8170,43 @@ function runtimePermissionGrantSuggestionLabel(
   return `Allow this exact ${toolName} call for this Runtime session`;
 }
 
+interface RuntimeDiagnosticIdentityPayload {
+  readonly contextId?: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
+}
+
+function childParentContextId(rootSessionId: string, agentId: string): string {
+  const separator = agentId.lastIndexOf('/');
+  if (separator <= 0) return rootSessionId;
+  const parentAgentId = agentId.slice(0, separator);
+  return parentAgentId === '/root'
+    ? rootSessionId
+    : `${rootSessionId}/agent/${encodeURIComponent(parentAgentId)}`;
+}
+
+function withRuntimeDiagnosticIdentity<T extends RuntimeDiagnosticIdentityPayload>(
+  event: T,
+  rootSessionId: string,
+): T & RuntimeDiagnosticIdentityPayload {
+  const contextKind = event.contextKind ?? (event.agentId === undefined ? 'root' : 'child');
+  const contextId = event.contextId
+    ?? (contextKind === 'child' && event.agentId !== undefined
+      ? `${rootSessionId}/agent/${encodeURIComponent(event.agentId)}`
+      : rootSessionId);
+  const parentContextId = event.parentContextId
+    ?? (contextKind === 'child' && event.agentId !== undefined
+      ? childParentContextId(rootSessionId, event.agentId)
+      : undefined);
+  return {
+    ...event,
+    contextId,
+    contextKind,
+    ...(parentContextId !== undefined ? { parentContextId } : {}),
+  };
+}
+
 function permissionScopesEqual(
   left: RuntimePermissionScope,
   right: RuntimePermissionScope,
@@ -8471,20 +8519,24 @@ function wrapKodaXEvents(input: {
       original?.onRepoIntelligenceTrace?.(event);
     },
     onContextBudgetSnapshot(event) {
-      emit('context.budget.snapshot', event, event);
-      original?.onContextBudgetSnapshot?.(event);
+      const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
+      emit('context.budget.snapshot', attributed, attributed);
+      original?.onContextBudgetSnapshot?.(attributed);
     },
     onPromptCacheDiagnostics(event) {
-      emit('provider.cache.diagnostics', event, event);
-      original?.onPromptCacheDiagnostics?.(event);
+      const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
+      emit('provider.cache.diagnostics', attributed, attributed);
+      original?.onPromptCacheDiagnostics?.(attributed);
     },
     onToolExposurePlanned(event) {
-      emit('tool.exposure.planned', event, event);
-      original?.onToolExposurePlanned?.(event);
+      const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
+      emit('tool.exposure.planned', attributed, attributed);
+      original?.onToolExposurePlanned?.(attributed);
     },
     onContextCompactionSkipped(event) {
-      emit('context.compaction.skipped', event, event);
-      original?.onContextCompactionSkipped?.(event);
+      const attributed = withRuntimeDiagnosticIdentity(event, record.sessionId);
+      emit('context.compaction.skipped', attributed, attributed);
+      original?.onContextCompactionSkipped?.(attributed);
     },
     onSidecarMessage(event) {
       emit('sidecar.message', event, event);

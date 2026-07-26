@@ -404,12 +404,31 @@ export function buildRunnerLlmAdapter(
     } else {
       const provider = resolveProvider(options.provider ?? 'anthropic');
       const providerName = options.provider ?? provider.name ?? 'anthropic';
+      const diagnosticSessionId = options.context?.contextIdentitySessionId
+        ?? options.session?.id;
+      const diagnosticAgentId = options.context?.currentAgentId;
+      const diagnosticParentAgentId = options.context?.parentAgentId;
       const diagnosticContextIdentity = {
-        contextKind: options.context?.currentAgentId !== undefined
+        ...(diagnosticSessionId !== undefined
+          ? {
+              contextId: diagnosticAgentId === undefined
+                ? diagnosticSessionId
+                : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`,
+            }
+          : {}),
+        contextKind: diagnosticAgentId !== undefined
           ? 'child' as const
           : 'root' as const,
-        ...(options.context?.currentAgentId !== undefined
-          ? { agentId: options.context.currentAgentId }
+        ...(diagnosticSessionId !== undefined && diagnosticAgentId !== undefined
+          ? {
+              parentContextId: diagnosticParentAgentId === undefined
+                || diagnosticParentAgentId === '/root'
+                ? diagnosticSessionId
+                : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticParentAgentId)}`,
+            }
+          : {}),
+        ...(diagnosticAgentId !== undefined
+          ? { agentId: diagnosticAgentId }
           : {}),
       };
       const emitContextBudgetSnapshot = (

@@ -545,6 +545,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   },
   'context.budget.get': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
   'tool.exposure.preview': { params: diagnosticParamsSchema(), result: { oneOf: [objectAnySchema, { type: 'null' }] } },
+  'provider.cache.diagnostics.get': {
+    params: diagnosticParamsSchema(),
+    result: { oneOf: [objectAnySchema, { type: 'null' }] },
+  },
 } satisfies Record<RuntimeDaemonMethod, RuntimeDaemonMethodSchema>;
 
 export const RUNTIME_DAEMON_NOTIFICATION_SCHEMAS = {

@@ -1436,6 +1436,72 @@ describe('runtime daemon dispatcher', () => {
       type: 'tool.exposure.planned',
       payload: { profile: 'bridge_non_core', bridgedCount: 4 },
     });
+    runtime.emit({
+      id: 'evt-cache-root',
+      seq: 107,
+      time: '2026-07-09T00:00:05.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'provider.cache.diagnostics',
+      payload: {
+        contextId: 'session-1',
+        contextKind: 'root',
+        requestId: 'cache-root',
+        phase: 'response',
+        cachedReadTokens: 70,
+      },
+    });
+    runtime.emit({
+      id: 'evt-cache-child',
+      seq: 108,
+      time: '2026-07-09T00:00:06.000Z',
+      sessionId: 'child-worker-session',
+      runId: 'run-1',
+      type: 'provider.cache.diagnostics',
+      payload: {
+        contextId: `session-1/agent/${encodeURIComponent('/root/reviewer')}`,
+        parentContextId: 'session-1',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+        requestId: 'cache-child',
+        phase: 'response',
+        cachedReadTokens: 96,
+      },
+    });
+    runtime.emit({
+      id: 'evt-cache-other-agent',
+      seq: 109,
+      time: '2026-07-09T00:00:07.000Z',
+      sessionId: 'other-child-worker-session',
+      runId: 'run-1',
+      type: 'provider.cache.diagnostics',
+      payload: {
+        contextId: `session-1/agent/${encodeURIComponent('/root/other')}`,
+        parentContextId: 'session-1',
+        contextKind: 'child',
+        agentId: '/root/other',
+        requestId: 'cache-other-agent',
+        phase: 'response',
+        cachedReadTokens: 12,
+      },
+    });
+    runtime.emit({
+      id: 'evt-cache-unrelated-session',
+      seq: 110,
+      time: '2026-07-09T00:00:08.000Z',
+      sessionId: 'unrelated-child-worker-session',
+      runId: 'run-2',
+      type: 'provider.cache.diagnostics',
+      payload: {
+        contextId: `unrelated-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
+        parentContextId: 'unrelated-root-session',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+        requestId: 'cache-unrelated-session',
+        phase: 'response',
+        cachedReadTokens: 999,
+      },
+    });
 
     const budget = await dispatcher.handle(createRuntimeDaemonRequest('req-1', 'context.budget.get', {
       sessionId: 'session-1',
@@ -1462,11 +1528,47 @@ describe('runtime daemon dispatcher', () => {
         agentId: '/root/reviewer',
       },
     ));
+    const rootCache = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-root-cache',
+      'provider.cache.diagnostics.get',
+      { sessionId: 'session-1' },
+    ));
+    const childCache = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-child-cache',
+      'provider.cache.diagnostics.get',
+      {
+        sessionId: 'session-1',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      },
+    ));
+    const unrelatedChildCache = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-unrelated-child-cache',
+      'provider.cache.diagnostics.get',
+      {
+        sessionId: 'unrelated-root-session',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      },
+    ));
+    const unknownChildCache = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-unknown-child-cache',
+      'provider.cache.diagnostics.get',
+      {
+        sessionId: 'unknown-root-session',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(budget)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(exposure)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(childBudget)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(unrelatedRootChildBudget)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(rootCache)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(childCache)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(unrelatedChildCache)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(unknownChildCache)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(budget)) {
       expect(budget.result).toEqual({ usedTokens: 80 });
     }
@@ -1483,6 +1585,31 @@ describe('runtime daemon dispatcher', () => {
     }
     if (isRuntimeDaemonSuccessResponse(unrelatedRootChildBudget)) {
       expect(unrelatedRootChildBudget.result).toBeNull();
+    }
+    if (isRuntimeDaemonSuccessResponse(rootCache)) {
+      expect(rootCache.result).toMatchObject({
+        contextId: 'session-1',
+        requestId: 'cache-root',
+        cachedReadTokens: 70,
+      });
+    }
+    if (isRuntimeDaemonSuccessResponse(childCache)) {
+      expect(childCache.result).toMatchObject({
+        contextId: `session-1/agent/${encodeURIComponent('/root/reviewer')}`,
+        agentId: '/root/reviewer',
+        requestId: 'cache-child',
+        cachedReadTokens: 96,
+      });
+    }
+    if (isRuntimeDaemonSuccessResponse(unrelatedChildCache)) {
+      expect(unrelatedChildCache.result).toMatchObject({
+        contextId: `unrelated-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
+        requestId: 'cache-unrelated-session',
+        cachedReadTokens: 999,
+      });
+    }
+    if (isRuntimeDaemonSuccessResponse(unknownChildCache)) {
+      expect(unknownChildCache.result).toBeNull();
     }
   });
 
@@ -1532,6 +1659,11 @@ describe('runtime daemon dispatcher', () => {
       sessionId: 'session-1',
       runId: 'run-1',
     }));
+    const basicCache = await basic.handle(createRuntimeDaemonRequest(
+      'req-basic-cache',
+      'provider.cache.diagnostics.get',
+      { sessionId: 'session-1', runId: 'run-1' },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(basicReplay)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(basicReplay)) {
@@ -1540,8 +1672,12 @@ describe('runtime daemon dispatcher', () => {
       ]);
     }
     expect(isRuntimeDaemonSuccessResponse(basicBudget)).toBe(false);
+    expect(isRuntimeDaemonSuccessResponse(basicCache)).toBe(false);
     if (!isRuntimeDaemonSuccessResponse(basicBudget)) {
       expect(basicBudget.error.code).toBe('unauthorized');
+    }
+    if (!isRuntimeDaemonSuccessResponse(basicCache)) {
+      expect(basicCache.error.code).toBe('unauthorized');
     }
 
     const diagnostic = createRuntimeDaemonDispatcher({ runtime });
@@ -1555,6 +1691,11 @@ describe('runtime daemon dispatcher', () => {
       'context.budget.get',
       { sessionId: 'session-1', runId: 'run-1' },
     ));
+    const diagnosticCache = await diagnostic.handle(createRuntimeDaemonRequest(
+      'req-diagnostic-cache',
+      'provider.cache.diagnostics.get',
+      { sessionId: 'session-1', runId: 'run-1' },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(diagnosticReplay)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(diagnosticReplay)) {
@@ -1566,8 +1707,15 @@ describe('runtime daemon dispatcher', () => {
       ]);
     }
     expect(isRuntimeDaemonSuccessResponse(diagnosticBudget)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(diagnosticCache)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(diagnosticBudget)) {
       expect(diagnosticBudget.result).toEqual({ usedTokens: 42 });
+    }
+    if (isRuntimeDaemonSuccessResponse(diagnosticCache)) {
+      expect(diagnosticCache.result).toEqual({
+        phase: 'response',
+        cachedReadTokens: 80,
+      });
     }
   });
 
@@ -2019,6 +2167,7 @@ const METHOD_SMOKE_PARAMS = {
   'agents.wait': { sessionId: 'session-1', afterSequence: 0, timeoutMs: 1 },
   'context.budget.get': { sessionId: 'session-1', runId: 'run-1' },
   'tool.exposure.preview': { sessionId: 'session-1', runId: 'run-1' },
+  'provider.cache.diagnostics.get': { sessionId: 'session-1', runId: 'run-1' },
 } satisfies Record<RuntimeDaemonMethod, unknown>;
 
 function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
@@ -2561,6 +2710,9 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
         return null;
       },
       async latestToolExposure() {
+        return null;
+      },
+      async latestProviderCacheDiagnostic() {
         return null;
       },
     },

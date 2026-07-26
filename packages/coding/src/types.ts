@@ -377,7 +377,10 @@ export interface KodaXPromptCacheDiagnosticEvent {
   readonly requestedAt: string;
   readonly completedAt?: string;
   readonly provider: string;
+  /** Stable logical Runtime context. Prompt/message text is never included. */
+  readonly contextId?: string;
   readonly contextKind?: 'root' | 'child';
+  readonly parentContextId?: string;
   readonly agentId?: string;
   /** Caller-facing model id selected for this request. */
   readonly model: string;

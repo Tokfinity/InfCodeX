@@ -596,7 +596,7 @@ export async function runSubstrate(
       ? {
           contextId: `${contextIdentitySessionId}/agent/${encodeURIComponent(currentAgentId)}`,
           contextKind: 'child' as const,
-          parentContextId: parentAgentId === undefined
+          parentContextId: parentAgentId === undefined || parentAgentId === '/root'
             ? contextIdentitySessionId
             : `${contextIdentitySessionId}/agent/${encodeURIComponent(parentAgentId)}`,
           agentId: currentAgentId,
@@ -1241,10 +1241,15 @@ export async function runSubstrate(
       const fullActiveToolDefinitions = ctx.workflowHost
         ? resolvedActiveToolDefinitions
         : resolvedActiveToolDefinitions.filter((tool) => tool.name !== 'run_workflow');
+      const diagnosticScope = liveTurnScopeRef.current;
       const diagnosticContextIdentity = {
-        contextKind: liveTurnScope.contextKind,
-        ...(liveTurnScope.agentId !== undefined
-          ? { agentId: liveTurnScope.agentId }
+        contextId: diagnosticScope.contextId,
+        contextKind: diagnosticScope.contextKind,
+        ...(diagnosticScope.parentContextId !== undefined
+          ? { parentContextId: diagnosticScope.parentContextId }
+          : {}),
+        ...(diagnosticScope.agentId !== undefined
+          ? { agentId: diagnosticScope.agentId }
           : {}),
       };
       const planningBudgetSnapshotBase = createRuntimeContextBudgetSnapshot({
@@ -1313,6 +1318,7 @@ export async function runSubstrate(
         compactionConfig,
         provider: streamProvider,
         model: turnState.currentModelOverride,
+        ...diagnosticContextIdentity,
         contextWindow,
         systemPrompt: effectiveSystemPrompt,
         toolDefinitions: activeToolDefinitions,

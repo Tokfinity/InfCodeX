@@ -227,6 +227,29 @@ export async function buildManagedTaskCompactionHook(
   const events = options.events;
   const snapshotRef = hookOptions.contextTokenSnapshotRef;
   const reservedResponseTokens = provider.getEffectiveMaxOutputTokens(activeModel);
+  const diagnosticSessionId = options.context?.contextIdentitySessionId
+    ?? options.session?.id;
+  const diagnosticAgentId = options.context?.currentAgentId;
+  const diagnosticParentAgentId = options.context?.parentAgentId;
+  const diagnosticContextIdentity = {
+    ...(diagnosticSessionId !== undefined
+      ? {
+          contextId: diagnosticAgentId === undefined
+            ? diagnosticSessionId
+            : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`,
+        }
+      : {}),
+    contextKind: diagnosticAgentId === undefined ? 'root' as const : 'child' as const,
+    ...(diagnosticSessionId !== undefined && diagnosticAgentId !== undefined
+      ? {
+          parentContextId: diagnosticParentAgentId === undefined
+            || diagnosticParentAgentId === '/root'
+            ? diagnosticSessionId
+            : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticParentAgentId)}`,
+        }
+      : {}),
+    ...(diagnosticAgentId !== undefined ? { agentId: diagnosticAgentId } : {}),
+  };
   let consecutiveFailures = 0;
 
   return async (transcript) => {
@@ -273,6 +296,7 @@ export async function buildManagedTaskCompactionHook(
               enabled: options.context?.contextDiagnostics === true,
               provider,
               providerName: provider.name,
+              ...diagnosticContextIdentity,
               model: activeModel ?? provider.getModel(),
               disablePromptCache: options.disablePromptCache,
             }),

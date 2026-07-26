@@ -55,7 +55,9 @@ describe('prompt-cache diagnostics', () => {
       enabled: true,
       provider,
       providerName: 'test-provider',
+      contextId: 'session-1/agent/%2Froot%2Freviewer',
       contextKind: 'child' as const,
+      parentContextId: 'session-1',
       agentId: '/root/reviewer',
       model: 'test-model',
       reasoning: undefined,
@@ -76,7 +78,9 @@ describe('prompt-cache diagnostics', () => {
     });
 
     expect(first).toMatchObject({
+      contextId: 'session-1/agent/%2Froot%2Freviewer',
       contextKind: 'child',
+      parentContextId: 'session-1',
       agentId: '/root/reviewer',
       messagePrefixCount: 2,
     });
@@ -95,6 +99,10 @@ describe('prompt-cache diagnostics', () => {
       enabled: true,
       provider,
       providerName: 'test-provider',
+      contextId: 'session-1/agent/%2Froot%2Freviewer',
+      contextKind: 'child',
+      parentContextId: 'session-1',
+      agentId: '/root/reviewer',
       model: 'test-model',
       disablePromptCache: false,
     });
@@ -117,10 +125,14 @@ describe('prompt-cache diagnostics', () => {
     expect(emitted).toHaveLength(2);
     expect(emitted[0]).toMatchObject({
       phase: 'request',
+      contextId: 'session-1/agent/%2Froot%2Freviewer',
+      parentContextId: 'session-1',
       ephemeralSuffixHash: expect.any(String),
     });
     expect(emitted[1]).toMatchObject({
       phase: 'response',
+      contextId: 'session-1/agent/%2Froot%2Freviewer',
+      parentContextId: 'session-1',
       cachedReadTokens: 80,
     });
     expect(JSON.stringify(emitted)).not.toContain('summarize this prefix');

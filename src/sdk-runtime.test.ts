@@ -2459,12 +2459,20 @@ describe('createKodaXRuntime', () => {
   it('forwards context diagnostics hooks into runtime event subscriptions', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
-      sessionsDir: tempRoot,
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
       defaultProvider: 'mock-provider',
     });
     const session = await runtime.sessions.create({ title: 'Context Diagnostics Test' });
     const seen: string[] = [];
     const payloads: unknown[] = [];
+    const callbackCacheDiagnostics: Array<{
+      readonly requestId: string;
+      readonly contextId?: string;
+      readonly contextKind?: 'root' | 'child';
+      readonly parentContextId?: string;
+      readonly agentId?: string;
+    }> = [];
     runtime.events.subscribe({ sessionId: session.id }, (event) => {
       const diagnosticPayload = event.payload !== null
         && typeof event.payload === 'object'
@@ -2486,7 +2494,6 @@ describe('createKodaXRuntime', () => {
     codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
       const sessionId = options.session?.id ?? 'missing-session';
       const childSessionId = `${sessionId}-child-worker`;
-      const childContextId = `${sessionId}/agent/${encodeURIComponent('/root/reviewer')}`;
       queueMicrotask(() => {
         options.events?.onContextBudgetSnapshot?.({
           sessionId,
@@ -2529,6 +2536,7 @@ describe('createKodaXRuntime', () => {
           messagePrefixHash: 'c'.repeat(64),
           messagePrefixCount: 1,
           requestMessagesHash: 'd'.repeat(64),
+          requestEnvelopeHash: 'e'.repeat(64),
           messageCount: 2,
           toolCount: 1,
           inputTokens: 100,
@@ -2573,10 +2581,8 @@ describe('createKodaXRuntime', () => {
         options.events?.onContextBudgetSnapshot?.({
           sessionId: childSessionId,
           turnId: 'turn-child-diagnostics',
-          contextId: childContextId,
           contextKind: 'child',
           agentId: '/root/reviewer',
-          contextRevision: 0,
           profile: 'report_only',
           contextWindow: 32_000,
           smallWindow: true,
@@ -2604,10 +2610,8 @@ describe('createKodaXRuntime', () => {
           options.events?.onContextBudgetSnapshot?.({
             sessionId: childSessionId,
             turnId: `turn-child-diagnostics-${index}`,
-            contextId: childContextId,
             contextKind: 'child',
             agentId: '/root/reviewer',
-            contextRevision: 0,
             profile: 'report_only',
             contextWindow: 32_000,
             smallWindow: true,
@@ -2633,10 +2637,8 @@ describe('createKodaXRuntime', () => {
         }
         options.events?.onToolExposurePlanned?.({
           sessionId: childSessionId,
-          contextId: childContextId,
           contextKind: 'child',
           agentId: '/root/reviewer',
-          contextRevision: 0,
           profile: 'report_only',
           reportOnly: true,
           pressure: 'low',
@@ -2655,6 +2657,29 @@ describe('createKodaXRuntime', () => {
           nativeDeferredToolCount: 0,
           hiddenToolCount: 0,
         });
+        options.events?.onPromptCacheDiagnostics?.({
+          phase: 'response',
+          transport: 'stream',
+          requestId: 'cache-request-child',
+          requestedAt: '2026-07-08T00:00:00.004Z',
+          completedAt: '2026-07-08T00:00:00.005Z',
+          provider: 'mock-provider',
+          contextKind: 'child',
+          agentId: '/root/reviewer',
+          model: 'mock-model',
+          attempt: 1,
+          systemPromptHash: 'f'.repeat(64),
+          toolSchemaHash: 'g'.repeat(64),
+          messagePrefixHash: 'h'.repeat(64),
+          messagePrefixCount: 2,
+          requestMessagesHash: 'i'.repeat(64),
+          requestEnvelopeHash: 'j'.repeat(64),
+          messageCount: 3,
+          toolCount: 1,
+          inputTokens: 120,
+          outputTokens: 8,
+          cachedReadTokens: 96,
+        });
       });
       return fakeRunningSession(options, Promise.resolve({
         success: true,
@@ -2669,6 +2694,11 @@ describe('createKodaXRuntime', () => {
       prompt: 'diagnostics',
       options: {
         context: { contextDiagnostics: true },
+        events: {
+          onPromptCacheDiagnostics: (event) => {
+            callbackCacheDiagnostics.push(event);
+          },
+        },
       },
     });
     await handle.result;
@@ -2676,6 +2706,9 @@ describe('createKodaXRuntime', () => {
     const replay = await runtime.events.replay({ runId: handle.runId });
     const latestBudget = await runtime.diagnostics.latestContextBudget({ runId: handle.runId });
     const latestExposure = await runtime.diagnostics.latestToolExposure({ runId: handle.runId });
+    const latestCache = await runtime.diagnostics.latestProviderCacheDiagnostic({
+      runId: handle.runId,
+    });
     const latestChildBudget = await runtime.diagnostics.latestContextBudget({
       runId: handle.runId,
       contextKind: 'child',
@@ -2691,11 +2724,23 @@ describe('createKodaXRuntime', () => {
       contextKind: 'child',
       agentId: '/root/reviewer',
     });
+    const latestChildCacheByRootSession =
+      await runtime.diagnostics.latestProviderCacheDiagnostic({
+        sessionId: session.id,
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      });
     const unrelatedRootChildBudget = await runtime.diagnostics.latestContextBudget({
       sessionId: 'unrelated-root-session',
       contextKind: 'child',
       agentId: '/root/reviewer',
     });
+    const unrelatedRootChildCache =
+      await runtime.diagnostics.latestProviderCacheDiagnostic({
+        sessionId: 'unrelated-root-session',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      });
 
     expect(seen).toEqual([
       'context.budget.snapshot',
@@ -2716,6 +2761,13 @@ describe('createKodaXRuntime', () => {
     expect(replay.map((event) => event.type)).toContain('context.compaction.skipped');
     expect(latestBudget).toMatchObject({ pressure: 'low', usedTokens: 6 });
     expect(latestExposure).toMatchObject({ reportOnly: true, modelVisibleToolNames: ['read', 'tool_search'] });
+    expect(latestCache).toMatchObject({
+      contextId: session.id,
+      contextKind: 'root',
+      requestId: 'cache-request-1',
+      phase: 'response',
+      cachedReadTokens: 80,
+    });
     expect(latestChildBudget).toMatchObject({
       contextKind: 'child',
       agentId: '/root/reviewer',
@@ -2733,7 +2785,24 @@ describe('createKodaXRuntime', () => {
       agentId: '/root/reviewer',
       usedTokens: 110,
     });
+    expect(latestChildCacheByRootSession).toMatchObject({
+      contextId: `${session.id}/agent/${encodeURIComponent('/root/reviewer')}`,
+      parentContextId: session.id,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+      requestId: 'cache-request-child',
+      cachedReadTokens: 96,
+    });
     expect(unrelatedRootChildBudget).toBeNull();
+    expect(unrelatedRootChildCache).toBeNull();
+    expect(callbackCacheDiagnostics.find(
+      (event) => event.requestId === 'cache-request-child',
+    )).toMatchObject({
+      contextId: `${session.id}/agent/${encodeURIComponent('/root/reviewer')}`,
+      parentContextId: session.id,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
 
     await runtime.close();
   });
@@ -4207,7 +4276,8 @@ describe('createKodaXRuntime', () => {
   it('retains the latest managed_task context budget and cache diagnostics', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
-      sessionsDir: tempRoot,
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
       defaultProvider: 'mock-provider',
     });
     const session = await runtime.sessions.create({ title: 'Managed Diagnostics Test' });
@@ -4253,6 +4323,7 @@ describe('createKodaXRuntime', () => {
         messagePrefixHash: 'c'.repeat(64),
         messagePrefixCount: 2,
         requestMessagesHash: 'd'.repeat(64),
+        requestEnvelopeHash: 'e'.repeat(64),
         messageCount: 3,
         toolCount: 4,
         cachedReadTokens: 80,
@@ -4273,6 +4344,9 @@ describe('createKodaXRuntime', () => {
     });
     await handle.result;
     const latestBudget = await runtime.diagnostics.latestContextBudget({ runId: handle.runId });
+    const latestCache = await runtime.diagnostics.latestProviderCacheDiagnostic({
+      runId: handle.runId,
+    });
     const cacheEvents = await runtime.events.replay({
       runId: handle.runId,
       type: 'provider.cache.diagnostics',
@@ -4283,6 +4357,12 @@ describe('createKodaXRuntime', () => {
       usedTokens: 1_065,
     });
     expect(latestBudget?.tokenBreakdown.total).toBe(latestBudget?.usedTokens);
+    expect(latestCache).toMatchObject({
+      contextId: session.id,
+      contextKind: 'root',
+      requestId: 'managed-cache-request',
+      cachedReadTokens: 80,
+    });
     expect(cacheEvents).toEqual([
       expect.objectContaining({
         payload: expect.objectContaining({
@@ -4293,6 +4373,21 @@ describe('createKodaXRuntime', () => {
     ]);
 
     await runtime.close();
+
+    const reconnectedRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, 'sessions'),
+      defaultProvider: 'mock-provider',
+    });
+    await expect(reconnectedRuntime.diagnostics.latestProviderCacheDiagnostic({
+      sessionId: session.id,
+    })).resolves.toMatchObject({
+      contextId: session.id,
+      contextKind: 'root',
+      requestId: 'managed-cache-request',
+      cachedReadTokens: 80,
+    });
+    await reconnectedRuntime.close();
   });
 
   it('reports failed run status when the coding layer rejects', async () => {

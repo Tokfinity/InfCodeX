@@ -68,6 +68,7 @@ import type {
   RuntimeWorkflowSnapshot,
   RuntimeWorkflowSummary,
 } from '../sdk-runtime.js';
+import type { KodaXPromptCacheDiagnosticEvent } from '@kodax-ai/coding';
 import { parseRuntimeEvent } from '../runtime-event.js';
 import type {
   LearningEvent,
@@ -843,6 +844,12 @@ export function createRuntimeDaemonClient(
       },
       latestToolExposure(filter?: RuntimeDiagnosticFilter) {
         return request('tool.exposure.preview', filter) as Promise<RuntimeToolExposurePlan | null>;
+      },
+      latestProviderCacheDiagnostic(filter?: RuntimeDiagnosticFilter) {
+        return request(
+          'provider.cache.diagnostics.get',
+          filter,
+        ) as Promise<KodaXPromptCacheDiagnosticEvent | null>;
       },
     },
     connection: {

@@ -150,7 +150,8 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<RuntimeDaemonMethod, RuntimeGrantedScop
     'event.replay', 'permission.list', 'permission.listPending', 'permission.grants.list',
     'user_input.listPending', 'workflow.list',
     'workflow.get', 'workflow.subscribe', 'workflow.unsubscribe', 'context.budget.get',
-    'tool.exposure.preview', 'config.read', 'model.list', 'provider.list',
+    'tool.exposure.preview', 'provider.cache.diagnostics.get',
+    'config.read', 'model.list', 'provider.list',
     'provider.custom.list', 'mcp.server.list', 'mcp.server.get', 'mcp.tool.list',
     'extension.list', 'command.list', 'command.resolve', 'skill.list', 'skill.describe',
     'skill.read', 'artifact.get',
@@ -1352,6 +1353,17 @@ async function dispatchRuntimeDaemonRequest(
       return latestRuntimeDiagnosticPayload(
         runtime,
         'tool.exposure.planned',
+        optionalRecord(request.params),
+      );
+    case 'provider.cache.diagnostics.get':
+      requireContextDiagnosticsCapability(getClientCapabilities());
+      await assertAdmittedSessionId(
+        runtime,
+        optionalStringField(optionalRecord(request.params) ?? {}, 'sessionId'),
+      );
+      return latestRuntimeDiagnosticPayload(
+        runtime,
+        'provider.cache.diagnostics',
         optionalRecord(request.params),
       );
 

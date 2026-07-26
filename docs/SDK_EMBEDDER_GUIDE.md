@@ -2801,10 +2801,17 @@ Hosts that set `capabilities.contextDiagnostics: true` can read:
 ```ts
 const budget = await runtime.diagnostics.latestContextBudget({ sessionId });
 const exposure = await runtime.diagnostics.latestToolExposure({ sessionId });
+const cache = await runtime.diagnostics.latestProviderCacheDiagnostic({ sessionId });
 ```
 
-These diagnostics are designed for status panels and debugging. They should not
-contain raw sensitive tool input/output.
+Pass `{ sessionId, contextKind: 'child', agentId }` to query one logical child
+even though its physical transcript uses an isolated Session. Diagnostic
+payloads carry `contextId` and, for children, `parentContextId`; reconnecting
+hosts can use the same latest APIs instead of fabricating identity fields.
+These diagnostics are designed for status panels and debugging. Budget
+snapshots contain counts, and cache diagnostics contain hashes plus
+Provider-reported usage; they do not contain raw prompt or sensitive tool
+input/output.
 
 ### Protocol schema and versioning
 

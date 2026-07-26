@@ -222,6 +222,21 @@ describe('runtime daemon client proxy', () => {
       journalEpoch: 'journal-epoch-1',
     });
     expect(seen.at(-1)).toMatchObject({ state: 'disconnected', reason: 'socket closed' });
+    transport.emitLifecycle({
+      state: 'connected',
+      connectionId: 'connection-2',
+      reconnectable: false,
+    });
+    await expect(client.diagnostics.latestProviderCacheDiagnostic({
+      sessionId: 'session-1',
+    })).resolves.toMatchObject({
+      requestId: 'cache-latest',
+      cachedReadTokens: 80,
+    });
+    expect(calls.at(-1)).toEqual({
+      method: 'provider.cache.diagnostics.get',
+      params: { sessionId: 'session-1' },
+    });
     subscription?.close();
     await client.close();
   });
@@ -697,6 +712,11 @@ describe('runtime daemon client proxy', () => {
     await client.artifacts.create({ kind: 'file', path: '/tmp/a.txt' });
     await client.diagnostics.latestContextBudget({ sessionId: 'session-1' });
     await client.diagnostics.latestToolExposure({ runId: 'run-1' });
+    await client.diagnostics.latestProviderCacheDiagnostic({
+      sessionId: 'session-1',
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
 
     expect(calls.map((call) => call.method)).toEqual([
       'config.patch',
@@ -712,6 +732,7 @@ describe('runtime daemon client proxy', () => {
       'artifact.create',
       'context.budget.get',
       'tool.exposure.preview',
+      'provider.cache.diagnostics.get',
     ]);
   });
 
@@ -1388,6 +1409,13 @@ function fakeTransport(
       }
       if (method === 'tool.exposure.preview') {
         return { reportOnly: true };
+      }
+      if (method === 'provider.cache.diagnostics.get') {
+        return {
+          requestId: 'cache-latest',
+          phase: 'response',
+          cachedReadTokens: 80,
+        };
       }
       return {};
     },

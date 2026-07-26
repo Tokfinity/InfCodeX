@@ -14,6 +14,7 @@ _Last Updated: 2026-07-26_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 210 | High | Resolved | Runtime diagnostic identity and latest cache query contracts are incomplete | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 209 | High | Resolved | Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 208 | Medium | Resolved | v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching | v0.7.77 release candidate | v0.7.77 release candidate | 2026-07-26 | 2026-07-26 |
 | 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
@@ -118,6 +119,84 @@ _Last Updated: 2026-07-26_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 210: Runtime diagnostic identity and latest cache query contracts are incomplete
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 development
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+Runtime child diagnostic lookup matches logical child identity through
+`contextId`, but the base public budget, tool-exposure, compaction-skip, and
+prompt-cache payload types do not consistently declare or construct
+`contextId` / `parentContextId`. Production SA/AMA paths normally gain those
+fields from live-turn attribution, while direct callback fixtures and other
+boundary paths can omit them. Existing latest-child tests manually inserted
+the missing identity and therefore did not exercise the Runtime boundary
+contract.
+
+`provider.cache.diagnostics` is available as a live/replay event, but
+`RuntimeDiagnosticsService` and the daemon protocol expose latest queries only
+for context budget and tool exposure. A reconnecting Space client cannot fetch
+the most recent provider cache diagnostic without replaying and filtering the
+event stream itself.
+
+#### Context
+
+- Affected components: coding diagnostics payloads, inline Runtime event
+  normalization, Runtime diagnostics service, daemon client/server/schema.
+- The strict child filter is intentional: removing its logical Session check
+  would permit same-`agentId` diagnostics from another root Session to match.
+- Provider cache hashes and Provider-reported usage are not the defect and must
+  remain unchanged.
+
+#### Proposed Solution
+
+- Declare and fill stable logical `contextId` / `parentContextId` on diagnostic
+  payloads while retaining physical child `sessionId` ownership.
+- Normalize missing identity once at the Runtime boundary without prompt text.
+- Add `latestProviderCacheDiagnostic(filter?)` to inline and daemon Runtime
+  services with the same root-default and child-isolation semantics.
+- Cover real-source identity, root/child latest lookup, Session/Agent
+  isolation, and persisted reconnect recovery.
+
+#### Resolution
+
+- Diagnostic source objects now carry logical `contextId` and
+  `parentContextId` through SA, AMA, compaction, retry, and fallback paths.
+  The Runtime event boundary normalizes the same identity for direct callback
+  integrations before persistence or live delivery.
+- Strict child lookup remains based on logical context identity. It was not
+  weakened to physical event-envelope Session matching, so isolated child
+  transcript Sessions cannot collide with another root Session using the same
+  `agentId`.
+- Added `latestProviderCacheDiagnostic(filter?)` to inline Runtime and the
+  daemon client/server/schema under `provider.cache.diagnostics.get`.
+- Added root/child, same-Agent cross-Session, different-Agent, inline
+  persistence restart, and daemon-client reconnect coverage. Existing
+  request-envelope/ephemeral hashes and Provider-only cache usage remain
+  unchanged.
+- Runtime event persistence, live subscribers, and inline `options.events`
+  callbacks now receive the same normalized diagnostic identity.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/` and
+  `packages/coding/src/task-engine/_internal/managed-task/`
+- `packages/coding/src/types.ts`
+- `src/sdk-runtime.ts` and `src/runtime-daemon/`
+- `docs/SDK_EMBEDDER_GUIDE.md` and `CHANGELOG.md`
+
+#### Verification
+
+- The full fast/unit/contract/system matrix passes 10,939 tests across 886
+  files (1 skipped, 21 todo).
+- Root TypeScript and complete package/bundle/declaration builds pass.
 
 ### 209: Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps
 
@@ -6904,11 +6983,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 95 (25 Open, 70 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 96 (25 Open, 71 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-26: Issue 210 resolved (v0.7.77 development)
+- Completed logical root/child identity on diagnostic payloads without
+  weakening Session/Agent isolation.
+- Added inline/daemon latest provider-cache lookup and reconnect recovery.
 
 ### 2026-07-26: Issue 209 resolved (v0.7.77 development)
 - Made root/child cache and budget diagnostics logical-identity aware,

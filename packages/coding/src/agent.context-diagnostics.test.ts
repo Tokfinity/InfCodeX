@@ -127,7 +127,9 @@ describe('runKodaX context diagnostics', () => {
     expect(budgets[0]?.contextWindow).toBe(32_000);
     expect(budgets[0]?.profile).toBe('small_window');
     expect(budgets[0]).toMatchObject({
+      contextId: `${budgets[0]?.sessionId}/agent/${encodeURIComponent('/root/first-tier-child')}`,
       contextKind: 'child',
+      parentContextId: budgets[0]?.sessionId,
       agentId: '/root/first-tier-child',
     });
     expect(budgets[0]?.tokenBreakdown.toolSchemas).toBeGreaterThan(0);
@@ -136,7 +138,9 @@ describe('runKodaX context diagnostics', () => {
     expect(exposures).toHaveLength(1);
     expect(exposures[0]?.profile).toBe('small_window');
     expect(exposures[0]).toMatchObject({
+      contextId: budgets[0]?.contextId,
       contextKind: 'child',
+      parentContextId: budgets[0]?.parentContextId,
       agentId: '/root/first-tier-child',
     });
     expect(exposures[0]?.reportOnly).toBe(false);
@@ -154,7 +158,9 @@ describe('runKodaX context diagnostics', () => {
       provider: TEST_PROVIDER_NAME,
       model: 'diagnostic-model',
       attempt: 1,
+      contextId: budgets[0]?.contextId,
       contextKind: 'child',
+      parentContextId: budgets[0]?.parentContextId,
       agentId: '/root/first-tier-child',
     });
     expect(cacheDiagnostics[0]).not.toHaveProperty('inputTokens');
@@ -164,7 +170,9 @@ describe('runKodaX context diagnostics', () => {
       inputTokens: 42,
       outputTokens: 3,
       cachedReadTokens: 21,
+      contextId: budgets[0]?.contextId,
       contextKind: 'child',
+      parentContextId: budgets[0]?.parentContextId,
       agentId: '/root/first-tier-child',
     });
     expect(cacheDiagnostics[0]?.systemPromptHash).toMatch(/^[a-f0-9]{64}$/);
