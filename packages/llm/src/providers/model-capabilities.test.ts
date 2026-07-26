@@ -46,6 +46,17 @@ describe('built-in provider model capabilities (no API key required)', () => {
   });
 
   it('exposes the current public Kimi lineup at the exact 256 Ki-token limit', () => {
+    const k3 = getModelCapabilities('kimi', 'kimi-k3');
+    expect(k3?.displayName).toBe('Kimi K3');
+    expect(k3?.contextWindow).toBe(1_048_576);
+    expect(k3?.maxOutputTokens).toBe(32_000);
+    expect(k3?.isDefault).toBe(false);
+    expect(k3?.reasoningProfile).toMatchObject({
+      reasoningPreset: 'kimi-k3',
+      defaultEffort: 'high',
+      disabledEfforts: ['none'],
+    });
+
     const k27 = getModelCapabilities('kimi', 'kimi-k2.7-code');
     expect(k27?.contextWindow).toBe(262_144);
     expect(k27?.maxOutputTokens).toBe(32_768);
@@ -87,6 +98,16 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(stable?.reasoningProfile).toMatchObject({
       reasoningPreset: 'kimi-k2.7-code',
     });
+  });
+
+  it('keeps public K3 runtime parameters aligned with kimi-code/k3', () => {
+    const publicK3 = getModelCapabilities('kimi', 'kimi-k3');
+    const subscriptionK3 = getModelCapabilities('kimi-code', 'k3');
+
+    expect(publicK3?.contextWindow).toBe(subscriptionK3?.contextWindow);
+    expect(publicK3?.maxOutputTokens).toBe(subscriptionK3?.maxOutputTokens);
+    expect(publicK3?.reasoningCapability).toBe(subscriptionK3?.reasoningCapability);
+    expect(publicK3?.reasoningProfile).toEqual(subscriptionK3?.reasoningProfile);
   });
 
   it('exposes Zhipu GLM-5.2 at 1M context / 128K max output', () => {

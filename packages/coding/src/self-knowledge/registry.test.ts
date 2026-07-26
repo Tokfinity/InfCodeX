@@ -56,6 +56,7 @@ describe('FEATURE_218 manual registry', () => {
 
     expect(content).toContain('kimi-k2.7-code');
     expect(content).toContain('kimi-k2.7-code-highspeed');
+    expect(content).toContain('kimi-k3');
     expect(content).toContain('262,144');
     expect(content).toContain('KIMI_API_KEY');
     expect(content).toContain('KIMI_CODE_API_KEY');

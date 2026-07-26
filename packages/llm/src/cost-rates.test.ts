@@ -58,14 +58,20 @@ describe('cost-rates', () => {
       });
     });
 
-    it('should price every routed Kimi model, including both K2.7 Code tiers', () => {
+    it('should price every routed Kimi model, including public K3', () => {
       const kimi = DEFAULT_COST_RATES.kimi;
       expect(Object.keys(kimi)).toEqual([
+        'kimi-k3',
         'kimi-k2.7-code',
         'kimi-k2.7-code-highspeed',
         'kimi-k2.6',
         'kimi-k2.5',
       ]);
+      expect(kimi['kimi-k3']).toEqual({
+        inputPer1M: 2.8,
+        outputPer1M: 14,
+        cachePer1M: 0.28,
+      });
       expect(kimi['kimi-k2.7-code']).toEqual({
         inputPer1M: 0.91,
         outputPer1M: 3.78,

@@ -59,6 +59,54 @@ describe.skipIf(!RUN_INTEGRATION)('Kimi public API — real provider HTTP', () =
     );
   }, 60_000);
 
+  it('streams public K3 with the shared K3 reasoning profile', async () => {
+    const provider = resolveProvider('kimi');
+
+    expect(provider.getAvailableModels()).toContain('kimi-k3');
+    expect(provider.getEffectiveContextWindow('kimi-k3')).toBe(1_048_576);
+
+    const result = await provider.stream(
+      [{ role: 'user', content: 'Reply with exactly: OK' }],
+      [],
+      'Follow the user request exactly and keep the answer terse.',
+      { enabled: true, effort: 'low' },
+      {
+        modelOverride: 'kimi-k3',
+        maxOutputTokensOverride: 512,
+      },
+      AbortSignal.timeout(45_000),
+    );
+
+    expect(result.textBlocks.map((block) => block.text).join('')).toMatch(/\S/);
+    expect(result.thinkingBlocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'thinking',
+          thinking: expect.stringMatching(/\S/),
+        }),
+      ]),
+    );
+  }, 60_000);
+
+  it('disables public K3 reasoning through the shared K3 control', async () => {
+    const provider = resolveProvider('kimi');
+
+    const result = await provider.stream(
+      [{ role: 'user', content: 'Reply with exactly: OK' }],
+      [],
+      'Follow the user request exactly and keep the answer terse.',
+      false,
+      {
+        modelOverride: 'kimi-k3',
+        maxOutputTokensOverride: 512,
+      },
+      AbortSignal.timeout(45_000),
+    );
+
+    expect(result.textBlocks.map((block) => block.text).join('')).toMatch(/\S/);
+    expect(result.thinkingBlocks).toEqual([]);
+  }, 60_000);
+
   it('recovers when K2.7 rejects a forced tool choice', async () => {
     const provider = resolveProvider('kimi');
 

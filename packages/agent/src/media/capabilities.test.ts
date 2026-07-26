@@ -32,6 +32,8 @@ describe('getModelInputCapabilities', () => {
   });
 
   it('supports documented Kimi model aliases', () => {
+    expect(getModelInputCapabilities({ provider: 'kimi', model: 'kimi-k3' }).image.status).toBe('supported');
+    expect(getModelInputCapabilities({ provider: 'kimi', model: 'kimi-k3' }).video.status).toBe('provider-native-unwired');
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.6' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.7-code' }).image.status).toBe('supported');
     expect(getModelInputCapabilities({ provider: 'kimi', model: 'k2.7-code-highspeed' }).image.status).toBe('supported');

@@ -71,6 +71,7 @@ const SOURCE_BACKED_NATIVE_MEDIA_ROUTES = new Set([
   'kimi-code/kimi-for-coding',
   'kimi-code/kimi-for-coding-highspeed',
   'kimi-code/k3',
+  'kimi/kimi-k3',
   'kimi/kimi-k2.5',
   'kimi/kimi-k2.6',
   'kimi/kimi-k2.7-code',

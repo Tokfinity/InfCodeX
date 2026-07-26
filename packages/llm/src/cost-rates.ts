@@ -71,6 +71,7 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // Official prices are published in CNY; converted at ¥1 ≈ $0.14,
     // matching the convention used for DeepSeek above. cachePer1M is
     // the automatic context-cache hit price.
+    'kimi-k3': { inputPer1M: 2.8, outputPer1M: 14.0, cachePer1M: 0.28 },
     'kimi-k2.7-code': { inputPer1M: 0.91, outputPer1M: 3.78, cachePer1M: 0.182 },
     'kimi-k2.7-code-highspeed': { inputPer1M: 1.82, outputPer1M: 7.56, cachePer1M: 0.364 },
     'kimi-k2.6': { inputPer1M: 0.91, outputPer1M: 3.78, cachePer1M: 0.154 },

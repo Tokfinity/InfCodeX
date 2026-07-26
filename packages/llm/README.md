@@ -48,7 +48,7 @@ Capability 数据的单一来源是 `src/providers/provider-capabilities.json`�
 
 - OpenAI 默认 `gpt-5.3-codex`，并提供 `gpt-5.4` / `gpt-5.3-codex-spark`。
 - Qwen Token Plan 使用 Anthropic 兼容端点，默认 `qwen3.8-max-preview`，并提供 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；六个模型均为 1M context。`qwen3.8-max-preview`、`qwen3.7-plus`、`qwen3.6-flash` 支持图片理解，其余三个为纯文本；Qwen 3.8 的思考模式不可关闭。
-- Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；四者上下文均为 262,144 token。
+- Kimi 默认 `kimi-k2.7-code`（思考始终开启），并提供 `kimi-k3`（1,048,576 token、共享 Kimi Code K3 推理参数）、同模型高速路由 `kimi-k2.7-code-highspeed`，以及可切换思考的 `kimi-k2.6` / `kimi-k2.5`；K2 路由上下文均为 262,144 token。
 - Kimi Code 默认使用官方 `k3-256k`（Moderato 及以上，262,144 token），并直接请求同名上游 Model ID；`/model` 仍可选择 `k3`（本地按 Allegretto+ 的 1,048,576 token tier 配置）、`kimi-for-coding`（K2.7 Code）与 `kimi-for-coding-highspeed`。K3 支持 `low` / `high` / `max` 三档思考强度，默认 `high`，也支持显式关闭；`k3-256k` 支持图片但不支持视频输入。
 - `kimi` 使用开放平台 `KIMI_API_KEY`；`kimi-code` 是独立的 Kimi For Coding 订阅端点和 `KIMI_CODE_API_KEY`，两类密钥不可互换。
 - Zhipu 开放平台保留上游 `glm-5` 路由；Zhipu Coding 默认 `glm-5.2`（1M context, 131072 max output），并保留 `glm-5.1` / `glm-5-turbo` 供显式兼容选择。

@@ -191,6 +191,36 @@
       "model": "kimi-k2.7-code",
       "models": [
         {
+          "id": "kimi-k3",
+          "displayName": "Kimi K3",
+          "contextWindow": 1048576,
+          "maxOutputTokens": 32000,
+          "reasoningCapability": "native-effort",
+          "reasoningProfile": {
+            "reasoningPreset": "kimi-k3",
+            "effortStrategy": "provider-toggle",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "high",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "low", "description": "Low thinking effort" },
+              { "value": "high", "description": "High thinking effort", "isDefault": true },
+              { "value": "max", "description": "Maximum thinking effort" }
+            ],
+            "effortAliases": {
+              "minimal": "low",
+              "minimum": "low",
+              "light": "low",
+              "medium": "high",
+              "xhigh": "max",
+              "ultra": "max"
+            },
+            "disabledEfforts": ["none"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        },
+        {
           "id": "kimi-k2.7-code-highspeed",
           "displayName": "Kimi K2.7 Code HighSpeed"
         },

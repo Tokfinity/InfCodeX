@@ -291,7 +291,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(k.models?.find((model) => model.id === 'k3-256k')).not.toHaveProperty('wireModel');
     });
 
-    it('kimi: defaults to the complete K2.7 Code lineup at the upstream context limit', () => {
+    it('kimi: retains the K2.7 default and exposes public K3 with the Kimi Code K3 parameters', () => {
       const k = getProviderSnapshots().kimi;
       expect(k.model).toBe('kimi-k2.7-code');
       expect(k.contextWindow).toBe(262_144);
@@ -301,10 +301,24 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
         localRejectEfforts: ['none', 'minimal'],
       }));
       expect(k.models?.map((model) => model.id)).toEqual([
+        'kimi-k3',
         'kimi-k2.7-code-highspeed',
         'kimi-k2.6',
         'kimi-k2.5',
       ]);
+      expect(k.models?.find((model) => model.id === 'kimi-k3')).toEqual(
+        expect.objectContaining({
+          displayName: 'Kimi K3',
+          contextWindow: 1_048_576,
+          maxOutputTokens: 32_000,
+          reasoningCapability: 'native-effort',
+          reasoningProfile: expect.objectContaining({
+            reasoningPreset: 'kimi-k3',
+            defaultEffort: 'high',
+            disabledEfforts: ['none'],
+          }),
+        }),
+      );
       expect(k.models?.find((model) => model.id === 'kimi-k2.7-code-highspeed')).toEqual(
         expect.objectContaining({ displayName: 'Kimi K2.7 Code HighSpeed' }),
       );

@@ -303,16 +303,20 @@ describe('provider registry', () => {
     expect(kimi.getModel()).toBe('kimi-k2.7-code');
     expect(kimi.getAvailableModels()).toEqual([
       'kimi-k2.7-code',
+      'kimi-k3',
       'kimi-k2.7-code-highspeed',
       'kimi-k2.6',
       'kimi-k2.5',
     ]);
+    expect(kimi.getEffectiveContextWindow('kimi-k3')).toBe(1_048_576);
     expect(kimi.getEffectiveContextWindow('kimi-k2.7-code')).toBe(262_144);
     expect(kimi.getEffectiveContextWindow('kimi-k2.7-code-highspeed')).toBe(262_144);
     expect(kimi.getEffectiveContextWindow('kimi-k2.6')).toBe(262_144);
     expect(kimi.getEffectiveContextWindow('kimi-k2.5')).toBe(262_144);
+    expect(kimi.getEffectiveMaxOutputTokens('kimi-k3')).toBe(32_000);
     expect(kimi.getEffectiveMaxOutputTokens('kimi-k2.7-code')).toBe(32_768);
     expect(kimi.getEffectiveMaxOutputTokens('kimi-k2.7-code-highspeed')).toBe(32_768);
+    expectReasoningPreset('kimi', 'kimi-k3', 'kimi-k3');
     expectReasoningPreset('kimi', 'kimi-k2.7-code', 'kimi-k2.7-code');
     expectReasoningPreset('kimi', 'kimi-k2.7-code-highspeed', 'kimi-k2.7-code');
     expectReasoningPreset('kimi', 'kimi-k2.6', 'kimi-hybrid-toggle');
