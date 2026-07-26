@@ -51,7 +51,7 @@ describe('FEATURE_218 manual registry', () => {
     }
   });
 
-  it('documents the v0.7.76 public and subscription Kimi model contracts', () => {
+  it('documents the v0.7.77 public and subscription Kimi model contracts', () => {
     const content = resolveKodaXManual({ topic: 'providers' }).content;
 
     expect(content).toContain('kimi-k2.7-code');
@@ -67,6 +67,27 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('1,048,576');
     expect(content).toContain('thinking.effort');
     expect(content).toContain('defaults to high');
+  });
+
+  it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {
+    const agents = resolveKodaXManual({ topic: 'agents' }).content;
+    const memory = resolveKodaXManual({ topic: 'memory' }).content;
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(agents).toContain('six-pattern');
+    expect(agents).toContain('fan-out-and-synthesize');
+    expect(agents).toContain('quality_strategy');
+    expect(agents).toContain('PatternTrace');
+    expect(agents).toMatch(/sole\s+terminal-answer quality adjudicator/);
+    expect(memory).toContain('MemorySession.intervene()');
+    expect(memory).toContain('tool_failure');
+    expect(memory).toContain('verification_failure');
+    expect(memory).toContain('context_compacted');
+    expect(memory).toContain('memoryRecallRunner');
+    expect(memory).toContain('fails silent');
+    expect(sdk).toContain('memoryRecallRunner');
+    expect(sdk).toContain('iteration limit');
+    expect(sdk).toMatch(/input\s+window/);
   });
 
   it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {

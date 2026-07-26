@@ -28,7 +28,7 @@ are NOT obvious from inspecting the type definitions alone:
 18. [External-agent executor plane](#18-external-agent-executor-plane-feature_258-v0767)
 19. [Session surface filtering and cursor pagination](#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767)
 20. [Cost-disciplined workflow routing and telemetry](#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)
-21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260-v0768)
+21. [Experimental governed memory — `/experimental-memory`](#21-experimental-governed-memory--experimental-memory-feature_260--feature_275-v0768v0777)
 22. [Bidirectional A2A 1.0 — `/a2a`](#22-bidirectional-a2a-10--a2a-feature_267-v0769)
 23. [Shared Coder daemon for Space and IDE hosts](#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)
 24. [Runtime-owned Auto Mode and plan-approval bridges](#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773)
@@ -3219,7 +3219,7 @@ workflow's structured findings, verification results, and quality gates.
 
 ---
 
-## 21. Experimental governed memory — `/experimental-memory` (FEATURE_260, v0.7.68)
+## 21. Experimental governed memory — `/experimental-memory` (FEATURE_260 + FEATURE_275, v0.7.68–v0.7.77)
 
 KodaX has one durable memory plane: the F228 Memory Control Plane. FEATURE_260
 adds a thin, opt-in agent/session API over that plane; it does not add a second
@@ -3280,11 +3280,53 @@ await session.complete({
 await session.close();
 ```
 
-`recall()` is synchronous: exact observations/hints can be returned immediately,
-while an optional semantic prefetch finishes for a later matching decision.
-`query()` is deliberate and read-only; one distinct query is admitted per
-decision epoch, and the result is bounded to at most three prompt-safe hints and
-512 estimated tokens. `undefined` means there is no governed reminder to inject.
+`recall()` is synchronous and exact. `query()` is deliberate and read-only; one
+distinct query is admitted per decision epoch, and the result is bounded to at
+most three prompt-safe hints and 512 estimated tokens. `undefined` means there
+is no governed reminder to inject.
+
+### Sparse foreground intervention (FEATURE_275, v0.7.77)
+
+`MemorySession.intervene()` replaces the old timing-ineffective semantic
+prefetch. It is awaited only after `tool_failure`, `verification_failure`, or a
+durably committed `context_compacted` event, then supplies at most three
+prompt-safe, low-authority evidence items to the next Action-LLM request. The
+candidate set is rebuilt from current objective/open todos, recent governed
+observations, and a fresh F228 pack. Exact selection is deterministic; stale,
+unknown, malformed, timed-out, cancelled, or failed semantic results are
+discarded without blocking the coding run.
+
+Top-level coding runs wire the deterministic path automatically and make zero
+selector calls by default. An inline host that deliberately wants semantic
+selection can provide the coding-owned forced-tool runner:
+
+```ts
+import {
+  createCodingMemoryInterventionRunner,
+  runKodaX,
+} from '@kodax-ai/kodax/coding';
+import { resolveProvider } from '@kodax-ai/kodax/llm';
+
+const memoryRecallRunner = createCodingMemoryInterventionRunner({
+  provider: resolveProvider('zhipu-coding'),
+  model: 'glm-5.2',
+});
+
+await runKodaX(
+  {
+    provider: 'zhipu-coding',
+    model: 'glm-5.2',
+    memoryRecallRunner,
+  },
+  'Finish the repository migration and verify it.',
+);
+```
+
+`memoryRecallRunner` is a process-local function binding. Worker and daemon DTO
+options reject it instead of silently dropping it; configure the binding
+inside the Runtime owner or keep this run inline. The selector can return only
+exact IDs from the closed offered set and is capped at three calls per memory
+Session.
 
 ### Evidence, tracing, and persistence boundaries
 
@@ -3295,8 +3337,10 @@ decision epoch, and the result is bounded to at most three prompt-safe hints and
 - `complete()` can emit an Outcome Digest through `persistOutcomeDigest` and run
   bounded episode review through `reviewEpisode`; cancellation creates neither.
 - `onTrace` receives policy-versioned `MemoryDecisionReceipt` metadata that links
-  candidates, selection, injection, and later outcome influence. Receipts are
-  trace-only and contain no hidden reasoning.
+  offered `candidateIds`, validated `selectedCandidateIds`, exposed
+  `injectedEvidenceRefs`, triggers, and later outcome influence. Receipts are
+  trace-only and contain no hidden reasoning; exposure is not proof of
+  causality.
 - Durable memory mutation remains owned by F228's
   proposal/preview/fingerprint/apply flow. `/memory` is the CLI governance
   surface; direct file/shell writes to managed memory roots are denied.

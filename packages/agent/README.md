@@ -12,6 +12,8 @@
 - Session lineage: branchable session tree、compaction、persistence helpers
 - Capabilities: MCP integration、Skills loader、builtin skills
 - Observability: tracing spans / trace store
+- Experimental governed memory: `MemoryAgent`, `MemorySession`, sparse
+  `intervene()`, prompt-safe evidence envelopes, and trace-only receipts
 - Workflow runtime: domain-neutral workflow execution primitives plus `WorkflowProcessEvent` / `WorkflowProcessSnapshot` process types
 
 ## 安装 / 导入
@@ -74,6 +76,13 @@ long-poll consumers. Completion notifications are acknowledged only after the
 parent transcript commits. An explicit pending-delivery set restores an
 unacknowledged root completion after restart without replaying acknowledged or
 legacy historical mail.
+
+Actor Turn metadata remains domain-neutral and opaque at this layer. The coding
+package may store validated quality-strategy metadata and derive `PatternTrace`
+facts, but the agent controller does not decide which pattern is good or
+whether a task is complete. `MemorySession.intervene()` likewise exposes a
+domain-neutral, bounded primitive while F228's memory-control plane remains the
+only durable write authority.
 
 `DefaultSummaryCompaction` 是给自定义 Agent loop 使用的独立 primitive；它不替代、也不能关闭 KodaX coding runtime 在 FEATURE_272 中定义的始终开启大型压缩策略。
 

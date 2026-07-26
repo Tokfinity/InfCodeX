@@ -405,6 +405,19 @@ for K2.7 Code, alongside `kimi-for-coding-highspeed` and the 1M `k3` tier. K3
 supports `low` / `high` / `max` reasoning with `high` as default; the 256K
 route supports image input but not video input.
 
+**v0.7.77 release candidate:** AMA now chooses and composes six named
+problem-solving patterns through the existing Actor control plane instead of
+using a fixed topology or hidden Workflow. Optional strategy metadata becomes
+a bounded, fact-only `PatternTrace`; the existing Sidecar remains the only
+terminal-answer quality judge. Governed memory can also react sparsely after a
+tool failure, verification failure, or committed compaction and place at most
+three prompt-safe, low-authority evidence items before the next Action-LLM
+request. The default path adds no selector model call; SDK hosts may opt into
+`memoryRecallRunner` in process. Public `kimi` also gains the 1M `kimi-k3`
+route while retaining K2.7 Code as its default. See the
+[v0.7.77 design](docs/features/v0.7.77.md) and
+[release checklist](docs/release.md#v0777-release-candidate-verification).
+
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or

@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-25
+> Last updated: 2026-07-26
 >
-> Current release baseline: `v0.7.76`
-> (`@kodax-ai/kodax@0.7.76`)
+> Current release baseline: `v0.7.77` release candidate
+> (`@kodax-ai/kodax@0.7.77`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,10 +20,11 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.76`. The current release
-retains the v0.7.75 Windows GUI and Sidecar/Runtime stabilization contracts and
-refreshes Kimi Code to use the independent `k3-256k` Model ID as its default
-without removing the K2.7 Code routes.
+The root workspace package is `@kodax-ai/kodax@0.7.77`. The release candidate
+adds pattern-aware adaptive AMA and governed event-triggered memory
+intervention, closes active-run interrupt finalization races, and adds public
+Kimi K3 without changing the Kimi Code `k3-256k` default established in
+v0.7.76.
 
 `package.json` exposes:
 
@@ -270,6 +271,10 @@ Important contracts:
   Runner configuration.
 - Sidecar verifier can ask for revision, but the Worker remains the main task
   owner and final-answer author.
+- AMA strategy is selected stage by stage from the shared pattern catalog.
+  Actor turns store validated opaque metadata; coding derives a bounded,
+  fact-only `PatternTrace` for the existing Sidecar rather than adding a
+  scheduler or quality gate.
 
 ## 5. Provider Design
 
@@ -412,6 +417,15 @@ children for bounded parallel investigation or specialist work. Children do
 not own final response. When pending children remain and the
 main Worker has no useful work, idle-yield is the wait mechanism.
 
+`packages/coding/src/orchestration/pattern-catalog.ts` is the shared semantic
+source for the six AMA/Workflow pattern names.
+`pattern-strategy.ts` validates optional `quality_strategy` metadata at the
+coding boundary, while `pattern-trace.ts` derives delegated-stage facts from
+trusted Actor Turn metadata and result envelopes. The agent controller stores
+the metadata opaquely and prevents a running Turn from switching strategy.
+Root-only work creates no synthetic stage; old or unsupported paths carry no
+fabricated trace.
+
 The queue routing key for user follow-ups is derived from the session and root
 Actor. MessageQueue, idle-yield wake subscriptions, StreamingContext, and the
 Ink queued-input view all filter by that same key; a process-global
@@ -431,6 +445,9 @@ Design split:
 - content-aware gate skips trivial conversational turns.
 - verifier accept is silent by default in UI but preserved in session/artifacts
   where applicable.
+- when that gate fires, the Sidecar packet may include a bounded
+  `PatternTrace` and quality signals as context, never as proof; a `revise` or
+  `blocked` verdict may carry one focused optional strategy recommendation.
 
 The verifier is not an in-chain Evaluator role. Do not represent it as a second
 visible agent in current product docs.

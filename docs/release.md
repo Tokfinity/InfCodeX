@@ -76,79 +76,97 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.76 release verification
+## v0.7.77 release-candidate verification
 
-Release state: the root and four workspace packages are version `0.7.76`.
-This feature-free maintenance release promotes the direct Kimi Code
-`k3-256k` route to the provider default while retaining both K2.7 Code routes
-and the 1M K3 tier. It also carries the v0.7.75 Windows GUI and Sidecar/Runtime
-stabilization changes because no v0.7.75 Git tag was created. Before tagging,
-commit the complete candidate and verify that `git status` contains no
-untracked release files or dirty documentation submodules. The `v0.7.76` tag
-triggers the five-platform GitHub Release workflow; npm publication remains a
-separate manual operator step.
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.77`. The candidate adds
+FEATURE_274 pattern-aware adaptive AMA, FEATURE_275 governed event-triggered
+memory intervention, the public 1M `kimi-k3` route, prompt-cache diagnostics,
+and Runtime interrupt/default-model reliability fixes.
 
-Run the template drift check, full deterministic gate, build, and package
+The candidate is not yet a release. Before tagging, all of the following must
+be true:
+
+1. the deterministic local gate and exact tarball audit pass from a clean
+   install;
+2. the candidate commit's GitHub `CI` workflow is green for Node 20, Node 22,
+   the Unix Runtime socket gate, and packaged Electron on Windows;
+3. the `docs/features` submodule points at the reviewed v0.7.77 design commit
+   and both repositories are clean;
+4. the preregistered F274/F275 paid pilot is run only after explicit owner
+   authorization and a frozen pre-call manifest, the main-session review is
+   recorded, and the owner makes the joint ship decision.
+
+No task-effect improvement may be claimed from deterministic tests alone.
+
+Run the same deterministic shape as GitHub CI, followed by the exact package
 inspection:
 
 ```bash
+npm ci
 npm run config:templates:check
+npm run build:packages
+npm run build:bundle
+npm run build:dts
 npm run test:full
 node scripts/release.mjs --pack-only
 ```
 
 `--pack-only` runs the production build, temporarily applies the publishable
-`private: false` package metadata, creates the exact candidate archive, audits
-the bundled Sidecar prompt and budget bridge, and restores the development
-manifest. Use the resulting `kodax-ai-kodax-0.7.76.tgz` for SDK/Space testing;
-real publication sends the same audited archive to npm.
+`private: false` metadata, creates the exact candidate archive, audits the
+bundled Sidecar prompt and budget bridge, and restores the development
+manifest. Use `kodax-ai-kodax-0.7.77.tgz` for consumer validation; a real npm
+publication sends those same audited bytes.
 
-The full deterministic gate is authoritative. For a focused Kimi Code rerun:
+For a focused v0.7.77 rerun:
 
 ```bash
 npx vitest run \
-  packages/llm/src/providers/provider-capabilities.test.ts \
-  packages/llm/src/providers/model-capabilities.test.ts \
-  packages/llm/src/providers/registry.test.ts \
-  packages/llm/src/providers/anthropic-reasoning-capability.test.ts \
-  packages/llm/src/cost-rates.test.ts \
-  packages/agent/src/media/capabilities.test.ts \
-  packages/coding/src/self-knowledge/registry.test.ts
+  benchmark/datasets/feature-274/experiment-contract.test.ts \
+  benchmark/datasets/feature-275/experiment-contract.test.ts \
+  packages/agent/src/experimental-memory/memory-agent.test.ts \
+  packages/coding/src/memory/intervention-selector.test.ts \
+  packages/coding/src/orchestration/pattern-catalog.test.ts \
+  packages/coding/src/orchestration/pattern-strategy.test.ts \
+  packages/coding/src/orchestration/pattern-trace.test.ts \
+  packages/coding/src/agent-runtime/run-substrate.memory-intervention.test.ts \
+  packages/coding/src/agent-runtime/run-substrate.terminal-interrupt.test.ts \
+  packages/coding/src/self-knowledge/registry.test.ts \
+  packages/coding/src/tools/manual.test.ts \
+  src/sdk-runtime.test.ts
 ```
 
-With `KIMI_CODE_API_KEY` configured, run the four-route live-wire smoke:
+The paid experiment declarations are contracts, not drivers. Their current
+combined ceilings reach hundreds of provider calls and require explicit
+authorization; do not infer permission from available environment keys. Raw
+outputs and the blinded main-session review belong under the OS temp directory
+specified by `benchmark/EVAL_GUIDELINES.md`, never in the repository.
+
+With the relevant live credentials configured, the provider and cache probes
+are optional operator checks:
 
 ```powershell
 $env:KODAX_INTEGRATION_TEST = '1'
 npm run test:integration -- packages/llm/src/providers/kimi-wire.integration.test.ts
+npm run probe:prompt-cache
 ```
 
-For a focused Windows GUI subprocess rerun:
-
-```bash
-npx vitest run \
-  packages/agent/src/memory/paths.test.ts \
-  packages/coding/src/lsp/spawn-options.test.ts \
-  packages/coding/src/task-engine/runner-windows-hide.test.ts \
-  packages/llm/src/cli-events/command-utils.test.ts \
-  packages/llm/src/cli-events/executor.test.ts \
-  packages/llm/src/cli-events/acp-client.spawn.test.ts \
-  tests/runtime-worker-windows-hide-audit.test.ts
-```
-
-`npm run build` executes the Runtime Worker child-process audit. On Windows,
-after a successful build, run the packaged Electron boundary regression:
+On Windows, after a successful build, run the packaged Electron boundary:
 
 ```bash
 npm run test:electron-daemon:built
 ```
 
-Packaged KodaX Space validation is a non-blocking product follow-up; it does not
-gate the tag, package build, or npm publication. To complete that validation,
-install the exact generated tarball into packaged KodaX Space and run
+Packaged KodaX Space validation remains a non-blocking product follow-up. Install
+the exact generated tarball and run
 [`ISSUE_205_v0.7.75_REGRESSION_GUIDE.md`](test-guides/ISSUE_205_v0.7.75_REGRESSION_GUIDE.md)
-on Windows 10 and Windows 11. Record the Space build, OS build, tarball hash,
+on Windows 10 and Windows 11, recording the Space build, OS build, tarball hash,
 tester, date, and outcome. Automated output must not pre-fill the human result.
+
+After every gate above is satisfied, commit the complete candidate, verify a
+clean status in both repositories, tag that exact commit `v0.7.77`, and let the
+five-platform GitHub Release workflow build the binaries. npm publication
+remains a separate manual operator action.
 
 ## Automated release (CI)
 

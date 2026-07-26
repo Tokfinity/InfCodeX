@@ -25,6 +25,19 @@ once at the next safe Runner boundary. Use `list_agents` for tree state and
 `agent_output` for a targeted known result. SDK callers that need raw event
 replay/long-poll continue to use the Actor event APIs directly.
 
+v0.7.77 adds one shared six-pattern AMA catalog. The Worker composes useful
+stages through the existing Actor tools and may attach validated
+`quality_strategy` metadata; coding derives a bounded, fact-only
+`PatternTrace` for the existing Sidecar. This does not activate Workflow,
+create a fixed Agent topology, or add another quality judge.
+
+The same release replaces asynchronous semantic memory prefetch with sparse
+foreground intervention after tool/verification failure or committed
+compaction. The default path performs deterministic exact selection with zero
+selector calls. Inline hosts may opt into `memoryRecallRunner` or construct the
+coding-owned forced-tool selector with
+`createCodingMemoryInterventionRunner()`.
+
 Auto Mode is enforced by the active Runtime guardrail before the generic
 permission bridge. A host only receives a permission request for an explicit
 guardrail escalation; Runtime sessions retain the selected/fallback LLM or
@@ -120,6 +133,10 @@ console.log(result.success);
 - Tools: `KODAX_TOOLS`, `executeTool`, `registerTool`, `KODAX_TOOL_REQUIRED_PARAMS`
 - Repo intelligence: protocol helpers and premium/native mode integration
 - Provider policy: capability checks, model hints, fallback helpers
+- Adaptive AMA: shared pattern catalog, strategy validation, bounded
+  `PatternTrace`, and Sidecar strategy context
+- Governed memory: `createCodingMemoryInterventionRunner` for host-opt-in
+  semantic selection; deterministic intervention remains the default
 - Workflows: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `generateWorkflowFromOptions`, `createWorkflowRunManager`, `createWorkflowLifecycleController`, built-in/saved workflow discovery
 - Events: `KodaXEvents.onSidecarMessage` surfaces Sidecar Verifier `revise` / `blocked` messages for SDK and headless hosts
 - Types: `KodaXOptions`, `KodaXResult`, `KodaXEvents`, `KodaXSidecarMessageEvent`, `KodaXToolExecutionContext`, session and task types

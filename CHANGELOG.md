@@ -6,6 +6,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.77] - 2026-07-26
+
+> Release candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,
+> GitHub Release, and npm publication are not created yet. F274/F275 paid
+> evaluation and the joint owner ship decision remain explicit pre-release
+> gates; no unmeasured task-effect improvement is claimed.
+
+### Added
+
+- **Pattern-aware adaptive AMA (FEATURE_274).** Ordinary AMA now shares one
+  six-pattern problem-solving catalog with Workflow semantics while continuing
+  to execute through the existing Runtime-owned Actor/Turn tree. Optional
+  `quality_strategy` metadata distinguishes coverage, replication, opposition,
+  filtering, judging, and challenge intent; Runtime derives a bounded,
+  fact-only `PatternTrace`, and the existing Sidecar remains the sole
+  terminal-answer quality adjudicator. Pattern presence does not activate a
+  Workflow, force a child, create a fixed topology, or add another verifier.
+- **Governed event-triggered memory intervention (FEATURE_275).** Tool failure,
+  verification failure, and durably committed compaction can rebuild a closed,
+  prompt-safe candidate set before the next Action-LLM request.
+  `MemorySession.intervene()` performs deterministic exact selection by
+  default; an in-process host may opt into the bounded `memoryRecallRunner` or
+  `createCodingMemoryInterventionRunner()`. F228 remains the only durable
+  memory authority, daemon DTOs reject the function binding, and malformed,
+  unknown, stale, timed-out, or cancelled selector output fails silent.
+- **Public Kimi K3 route.** The `kimi` provider now exposes `kimi-k3` with a
+  1,048,576-token context and the same K3 reasoning profile used by Kimi Code,
+  while preserving `kimi-k2.7-code` as the public default.
+
 ### Fixed
 
 - Closed the Runtime interrupt finalization race in both managed and ordinary
@@ -21,6 +50,28 @@ All notable changes to this project will be documented in this file.
 - Deduplicated built-in default models across `/model` completion, provider
   metadata, and SDK capability listings while preserving default-first order
   and per-model capability overrides.
+- Resolved provider-only Auto LLM admission before preflight by materializing
+  the provider's static default model when one is available; custom providers
+  without a resolvable default retain the existing actionable error.
+- Stabilized Anthropic-compatible prompt-cache prefixes across managed role
+  turns, exported cache diagnostic events, and added a focused
+  `probe:prompt-cache` operator command.
+- Made abort completion emission exactly-once and kept governed memory
+  intervention delivery ordered with terminal cleanup.
+
+### Documentation
+
+- Updated the English/Chinese READMEs, current PRD/HLD/DD baselines, ADR
+  addendum, SDK embedder guide, feature and issue trackers, release guide,
+  package READMEs, and `kodax_manual` for the v0.7.77 candidate.
+
+### Verification
+
+- Added deterministic F274/F275 experiment-contract, pattern/trace,
+  Sidecar-alignment, prompt-safety, candidate-admission, intervention-ordering,
+  and Runtime interrupt regressions. External model generation remains blocked
+  by the preregistered contracts until the owner authorizes the frozen paid
+  pilot.
 
 ## [0.7.76] - 2026-07-25
 

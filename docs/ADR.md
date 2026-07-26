@@ -1,6 +1,15 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-24
+> Last updated: 2026-07-26
+>
+> **v0.7.77 adaptive-quality and memory addendum:** FEATURE_274 gives AMA one
+> shared six-pattern catalog and Runtime-derived, fact-only `PatternTrace`
+> without adding a scheduler, hidden Workflow, or second quality gate; the
+> existing Sidecar remains the sole terminal-answer adjudicator. FEATURE_275
+> follows ADR-059: F228 stays the only durable memory authority, while sparse
+> post-event foreground intervention uses a closed prompt-safe candidate set
+> and an optional in-process selector. The default path makes zero selector
+> calls, and unmeasured task-effect improvement is not a release claim.
 >
 > **v0.7.75 stabilization addendum:** the published Runtime Worker now treats
 > hidden Windows consoles as part of the non-interactive background-process

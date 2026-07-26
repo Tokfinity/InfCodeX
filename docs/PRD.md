@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-25
+> Last updated: 2026-07-26
 >
-> Current implementation baseline: `v0.7.76`
-> (`@kodax-ai/kodax@0.7.76` workspace package)
+> Current implementation baseline: `v0.7.77` release candidate
+> (`@kodax-ai/kodax@0.7.77` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -79,6 +79,15 @@ Child work is handled by one Runtime-owned Actor/Turn tree and the canonical
 collaboration tools: `spawn_agent`, `send_message`, `followup_task`,
 `wait_agent`, `interrupt_agent`, `list_agents`, and `agent_output`. The main
 Worker remains responsible for final user-facing synthesis.
+
+AMA uses one shared six-pattern problem-solving catalog:
+`classify-and-act`, `fan-out-and-synthesize`, `generate-and-filter`,
+`tournament`, `adversarial-verification`, and `loop-until-done`. The Worker
+chooses and composes only the stages justified by the task through existing
+Actor operations. Strategy metadata and Runtime-derived `PatternTrace` are
+bounded execution facts, not proof of quality. They must not activate Workflow,
+force a child or model call, create a fixed topology, or replace the existing
+Sidecar as the sole terminal-answer quality adjudicator.
 
 Queued user input belongs to the session-root Actor queue rather than a
 process-global "main thread" bucket. A waiting Actor can therefore yield at a
@@ -316,6 +325,16 @@ F228 Memory Control Plane. `@kodax-ai/kodax/experimental-memory` exposes scoped
 `query()`, bounded observations, and episode outcomes. The coding runtime may
 offer the same deliberate path through `memory_recall`, but the Action LLM
 retains final decision authority and recalled text remains low-authority.
+
+FEATURE_275 (`v0.7.77`) replaces timing-ineffective semantic prefetch with a
+sparse foreground `MemorySession.intervene()` path after tool failure,
+verification failure, or durably committed compaction. Each trigger rebuilds a
+closed prompt-safe candidate set from current objective/todos, recent governed
+observations, and a fresh F228 pack. Deterministic exact selection adds no
+model call; an in-process host may opt into a bounded `memoryRecallRunner` that
+can return only offered IDs. At most three candidates enter the next
+Action-LLM request, while stale, malformed, unknown, timed-out, cancelled, or
+failed selector results remain silent.
 
 Durable changes must continue through proposal, preview, fingerprint, and apply.
 Identity and applicability checks, secret filtering, poisoning defenses, and

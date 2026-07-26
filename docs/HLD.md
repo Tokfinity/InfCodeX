@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-25
+> Last updated: 2026-07-26
 >
-> Current implementation baseline: `v0.7.76`
-> (`@kodax-ai/kodax@0.7.76` workspace package)
+> Current implementation baseline: `v0.7.77` release candidate
+> (`@kodax-ai/kodax@0.7.77` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -235,6 +235,7 @@ family.
 - permission and auto-mode integration,
 - built-in full/light repo-intelligence context and semantic worker wiring,
 - sidecar verifier integration,
+- shared adaptive AMA pattern catalog and bounded `PatternTrace` projection,
 - session snapshots and runtime state,
 - construction and self-modification tools,
 - workflow backend integration.
@@ -296,6 +297,16 @@ Coordination separates the model control plane from runtime telemetry:
 
 Children are a coordination primitive, not a replacement for the main Worker.
 The main Worker owns final synthesis and user communication.
+
+FEATURE_274 gives the Worker a shared six-pattern decision catalog without
+adding another scheduler. Existing Actor operations accept optional,
+coding-owned `quality_strategy` metadata. The agent layer stores opaque turn
+metadata and lifecycle facts; the coding layer validates pattern semantics,
+derives the bounded `PatternTrace`, and projects it into the existing Sidecar
+packet. Coverage, replication, and opposition remain distinct, and neither a
+trace nor an Agent count proves correctness. The content-aware Sidecar gate
+still decides whether verification runs, and Sidecar remains the single
+terminal-answer quality adjudicator.
 
 User follow-ups are routed with the session-root Actor queue id. Queue display,
 idle-yield wakeups, and prompt consumption use the same scope, preventing one

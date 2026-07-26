@@ -107,6 +107,16 @@ daemon Runtime 边界保留结构化 blocked 原因。
 可选模型，同时保留 `kimi-for-coding-highspeed` 与 1M `k3` tier。K3 支持
 `low` / `high` / `max` 思考强度，默认 `high`；256K 路由支持图片但不支持视频输入。
 
+**v0.7.77 发布候选版**：AMA 现在通过现有 Actor 控制面按需组合六种具名问题解决
+模式，不引入固定拓扑或隐藏 Workflow。可选策略元数据会形成有界、仅记录事实的
+`PatternTrace`，现有 Sidecar 仍是唯一的终态答案质量裁决者。治理式记忆可在工具
+失败、验证失败或已提交 compact 之后稀疏触发，在下一次 Action-LLM 请求前注入最多
+三条 prompt-safe、低权威证据；默认路径不增加 selector 模型调用，SDK 宿主可在
+进程内显式注入 `memoryRecallRunner`。公开 `kimi` provider 同时新增 1M
+`kimi-k3` 路由，并继续以 K2.7 Code 为默认。详见
+[v0.7.77 设计](docs/features/v0.7.77.md)与
+[发布检查清单](docs/release.md#v0777-release-candidate-verification)。
+
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
 仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到

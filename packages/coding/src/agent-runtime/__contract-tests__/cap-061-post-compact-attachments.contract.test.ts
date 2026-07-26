@@ -105,10 +105,15 @@ describe('CAP-061: applyPostCompactAttachments — non-empty ledger injection', 
 
     // Compacted now carries the injected ledger message.
     expect(out.compacted.length).toBeGreaterThan(compactedSeed.length);
-    // Lineage list is non-empty and starts with the ledger message.
+    // Lineage list is non-empty and starts with synthetic user-shaped
+    // compaction context so the stable System prefix remains cacheable.
     expect(out.postCompactAttachmentsForLineage.length).toBeGreaterThan(0);
     const ledgerMsg = out.postCompactAttachmentsForLineage[0];
-    expect(ledgerMsg?.role).toBe('system');
+    expect(ledgerMsg).toMatchObject({
+      role: 'user',
+      _synthetic: true,
+      _source: 'compaction-context',
+    });
     expect(typeof ledgerMsg?.content).toBe('string');
     expect(ledgerMsg?.content as string).toMatch(/Post-compact/);
   });

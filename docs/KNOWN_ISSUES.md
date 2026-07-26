@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-25_
+_Last Updated: 2026-07-26_
 
 ---
 
@@ -14,8 +14,8 @@ _Last Updated: 2026-07-25_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 development | 2026-07-25 | 2026-07-25 |
-| 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 development | 2026-07-25 | 2026-07-25 |
+| 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
+| 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
 | 204 | Medium | Resolved | Auto mode could render without an engine and rapid permission-mode writes could settle out of order | v0.7.72 Runtime REPL bridge | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 203 | High | Resolved | Compaction recovery guidance detached the compaction entry from the active lineage | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
 | 202 | High | Resolved | PowerShell bracket wildcards could bypass protected-path auto-mode review | v0.7.74 development | v0.7.74 | 2026-07-23 | 2026-07-23 |
@@ -122,7 +122,7 @@ _Last Updated: 2026-07-25_
 - **Priority**: Medium
 - **Status**: Resolved
 - **Introduced**: v0.7.73 Runtime Auto preflight
-- **Fixed**: v0.7.77 development
+- **Fixed**: v0.7.77 release candidate
 - **Created**: 2026-07-25
 - **Resolved**: 2026-07-25
 
@@ -176,7 +176,7 @@ whether an effective model existed.
 - **Priority**: Medium
 - **Status**: Resolved
 - **Introduced**: v0.7.43 static model catalog; expanded v0.7.76
-- **Fixed**: v0.7.77 development
+- **Fixed**: v0.7.77 release candidate
 - **Created**: 2026-07-25
 - **Resolved**: 2026-07-25
 
@@ -6700,7 +6700,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-07-25: Issue 207 resolved (v0.7.77 development)
+### 2026-07-25: Issue 207 resolved (v0.7.77 release candidate)
 - Runtime run admission now resolves a provider-only selection to that
   provider's static default model before Auto LLM preflight and launch.
 - Explicit model precedence and fail-fast behavior for providers with no
