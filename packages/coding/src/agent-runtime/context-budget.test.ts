@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
 import {
   createRuntimeContextBudgetSnapshot,
+  partitionContextBudgetMessages,
   estimateToolSchemaTokens,
 } from './context-budget.js';
 
@@ -81,5 +82,93 @@ describe('runtime context budget snapshot', () => {
     expect(snapshot.pressure).toBe('critical');
     expect(snapshot.availableTokens).toBe(0);
     expect(snapshot.usedRatio).toBe(1);
+  });
+
+  it('partitions transcript, pending input, and tool results without double counting', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'old question', turnId: 'turn-old' },
+      { role: 'assistant', content: 'old answer', turnId: 'turn-old' },
+      {
+        role: 'user',
+        content: [
+          'trusted current-run context',
+          'SELECTED_SKILL_CONTENT',
+          'MCP_CATALOG_CONTENT',
+        ].join('\n'),
+        turnId: 'turn-current',
+        _synthetic: true,
+      },
+      { role: 'user', content: 'current question', turnId: 'turn-current' },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read-1',
+          content: 'bounded tool result',
+        }],
+      },
+    ];
+    const partition = partitionContextBudgetMessages(messages, {
+      skillTexts: ['SELECTED_SKILL_CONTENT'],
+      mcpTexts: ['MCP_CATALOG_CONTENT'],
+    });
+    const snapshot = createRuntimeContextBudgetSnapshot({
+      contextWindow: 128_000,
+      messageTokenBreakdown: partition,
+      reservedResponseTokens: 4_000,
+    });
+    const { tokenBreakdown } = snapshot;
+    const mutuallyExclusiveTotal =
+      tokenBreakdown.systemPrompt
+      + tokenBreakdown.toolSchemas
+      + tokenBreakdown.skillCatalog
+      + tokenBreakdown.mcpCatalog
+      + tokenBreakdown.transcript
+      + tokenBreakdown.pendingInput
+      + tokenBreakdown.recentToolResults
+      + tokenBreakdown.reservedResponse;
+
+    expect(tokenBreakdown.transcript).toBeGreaterThan(0);
+    expect(tokenBreakdown.pendingInput).toBeGreaterThan(0);
+    expect(tokenBreakdown.recentToolResults).toBeGreaterThan(0);
+    expect(tokenBreakdown.skillCatalog).toBeGreaterThan(0);
+    expect(tokenBreakdown.mcpCatalog).toBeGreaterThan(0);
+    expect(mutuallyExclusiveTotal).toBe(snapshot.usedTokens);
+    expect(tokenBreakdown.total).toBe(snapshot.usedTokens);
+  });
+
+  it('moves answered current-turn input into transcript on a tool round', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'user',
+        content: 'managed context',
+        turnId: 'turn-current',
+        _synthetic: true,
+      },
+      { role: 'user', content: 'current question', turnId: 'turn-current' },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'read-1',
+          name: 'read',
+          input: { path: 'src/index.ts' },
+        }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'read-1',
+          content: 'bounded tool result',
+        }],
+      },
+    ];
+
+    const partition = partitionContextBudgetMessages(messages);
+
+    expect(partition.transcript).toBeGreaterThan(0);
+    expect(partition.pendingInput).toBe(0);
+    expect(partition.recentToolResults).toBeGreaterThan(0);
   });
 });

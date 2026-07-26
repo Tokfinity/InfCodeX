@@ -295,6 +295,9 @@ export function withLiveTurnAttribution(
     onContextBudgetSnapshot: (event) => {
       baseEvents.onContextBudgetSnapshot?.(withLiveMeta(scope, event));
     },
+    onPromptCacheDiagnostics: (event) => {
+      baseEvents.onPromptCacheDiagnostics?.(withLiveMeta(scope, event));
+    },
     onToolExposurePlanned: (event) => {
       baseEvents.onToolExposurePlanned?.(withLiveMeta(scope, event));
     },

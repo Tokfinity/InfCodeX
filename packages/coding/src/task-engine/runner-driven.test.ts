@@ -35,7 +35,7 @@ import {
   observeTodoDriftAfterToolResult,
 } from './todo-drift-reminder.js';
 import { MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS } from '../constants.js';
-import type { RunnableTool } from '@kodax-ai/agent';
+import type { AgentTurnExecutor, RunnableTool } from '@kodax-ai/agent';
 import type {
   KodaXMessage,
   KodaXProviderStreamOptions,
@@ -47,13 +47,18 @@ import type {
 import type {
   KodaXEvents,
   KodaXOptions,
+  KodaXPromptCacheDiagnosticEvent,
   KodaXToolEventMeta,
   KodaXToolExecutionContext,
 } from '../types.js';
 import { countTokens, estimateTokens } from '../tokenizer.js';
 import { resolveContextTokenCount } from '../token-accounting.js';
-import { estimateToolSchemaTokens } from '../agent-runtime/context-budget.js';
+import {
+  estimateToolSchemaTokens,
+  type RuntimeContextBudgetSnapshot,
+} from '../agent-runtime/context-budget.js';
 import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
+import { buildFallbackRoutingDecision, type ReasoningPlan } from '../reasoning.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
 // Shard 6d-h artifact writes (contract.json / managed-task.json /
@@ -396,10 +401,12 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     });
 
     const capturedSystems: string[] = [];
+    const capturedTranscripts: Array<readonly KodaXMessage[]> = [];
     const adapter = buildRunnerLlmAdapter(
       makeOptions(),
-      async (_transcript, _tools, system) => {
+      async (transcript, _tools, system) => {
         capturedSystems.push(system);
+        capturedTranscripts.push(transcript);
         return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
       },
       undefined,
@@ -411,13 +418,27 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       driftState,
     );
 
-    await adapter([{ role: 'system', content: 'sys-text' }], { name: 'worker', instructions: 'ignored' });
+    const firstResult = await adapter(
+      [{ role: 'system', content: 'sys-text' }],
+      { name: 'worker', instructions: 'ignored' },
+    );
     await adapter([{ role: 'system', content: 'sys-text' }], { name: 'worker', instructions: 'ignored' });
 
-    expect(capturedSystems[0]).toContain('sys-text');
-    expect(capturedSystems[0]).toContain('no item marked in_progress');
-    expect(capturedSystems[0]).toContain('call todo_update now');
-    expect(capturedSystems[1]).toBe('sys-text');
+    expect(capturedSystems).toEqual(['sys-text', 'sys-text']);
+    expect(capturedTranscripts[0]?.at(-1)).toEqual(expect.objectContaining({
+      role: 'user',
+      _synthetic: true,
+      _source: 'managed-runtime-reminder',
+      content: expect.stringContaining('no item marked in_progress'),
+    }));
+    expect(String(capturedTranscripts[0]?.at(-1)?.content)).toContain('call todo_update now');
+    expect(firstResult.injectedInputMessages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        _source: 'managed-runtime-reminder',
+      }),
+    ]);
+    expect(capturedTranscripts[1]).toHaveLength(0);
   });
 
   it('injects one Agent-completion todo checkpoint and deduplicates transcript replay', async () => {
@@ -426,10 +447,12 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     todoStore.updateStatus('todo_1', 'in_progress');
     const driftState = createTodoDriftReminderState();
     const capturedSystems: string[] = [];
+    const capturedTranscripts: Array<readonly KodaXMessage[]> = [];
     const adapter = buildRunnerLlmAdapter(
       makeOptions(),
-      async (_transcript, _tools, system) => {
+      async (transcript, _tools, system) => {
         capturedSystems.push(system);
+        capturedTranscripts.push(transcript);
         return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
       },
       undefined,
@@ -458,10 +481,12 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     await adapter([...baseline, completion], { name: 'worker', instructions: 'ignored' });
     await adapter([...baseline, completion], { name: 'worker', instructions: 'ignored' });
 
-    expect(capturedSystems[0]).toBe('sys-text');
-    expect(capturedSystems[1]).toContain('terminal child Agent result');
-    expect(capturedSystems[1]).toContain('semantic milestones, not Actor instances');
-    expect(capturedSystems[2]).toBe('sys-text');
+    expect(capturedSystems).toEqual(['sys-text', 'sys-text', 'sys-text']);
+    expect(String(capturedTranscripts[1]?.at(-1)?.content))
+      .toContain('terminal child Agent result');
+    expect(String(capturedTranscripts[1]?.at(-1)?.content))
+      .toContain('semantic milestones, not Actor instances');
+    expect(capturedTranscripts[2]).toEqual([completion]);
   });
 
   // Regression: after compaction + `injectPostCompactAttachments`, the
@@ -593,6 +618,34 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       expect(t.execute).toBeUndefined();
     }
     expect(capturedTools.some((t) => t.name === 'read')).toBe(true);
+  });
+
+  it('preserves the agent-declared tool order on the wire', async () => {
+    const observedNames: string[] = [];
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      async (_messages, tools) => {
+        observedNames.push(...tools.map((tool) => tool.name));
+        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    );
+    const makeTool = (name: string) => ({
+      name,
+      description: name,
+      input_schema: { type: 'object' as const, properties: {} },
+      execute: async () => ({ content: 'ok' }),
+    });
+
+    await adapter(
+      [{ role: 'system', content: 's' }, { role: 'user', content: 'q' }],
+      {
+        name: 'worker',
+        instructions: '',
+        tools: [makeTool('z_last_by_name'), makeTool('a_first_by_name')],
+      },
+    );
+
+    expect(observedNames).toEqual(['z_last_by_name', 'a_first_by_name']);
   });
 
   it('converts textBlocks+toolBlocks to RunnerLlmResult shape', async () => {
@@ -930,6 +983,322 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     });
   }, 15_000);
 
+  it('emits prompt-free AMA budget snapshots and provider cache diagnostics before streaming', async () => {
+    const snapshots: RuntimeContextBudgetSnapshot[] = [];
+    const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
+    const observedToolNames: string[][] = [];
+    const eventOrder: string[] = [];
+
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        baseUrl: 'https://user:secret@example.test/v1/tenant-secret?api_key=secret',
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_000,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+
+      async stream(
+        _messages: KodaXMessage[],
+        tools: KodaXToolDefinition[],
+      ): Promise<KodaXStreamResult> {
+        eventOrder.push('stream');
+        observedToolNames.push(tools.map((tool) => tool.name));
+        return {
+          textBlocks: [{ type: 'text', text: 'done' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 144_563,
+            outputTokens: 545,
+            totalTokens: 145_108,
+            cachedReadTokens: 19_328,
+          },
+        };
+      }
+    }
+
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+    const skillCatalogText = 'Skill catalog entry for diagnostics.';
+    const selectedSkillText = 'Full expanded skill selected for this run.';
+    const mcpCatalogText = 'MCP catalog entry for diagnostics.';
+    const adapter = buildRunnerLlmAdapter(
+      {
+        ...makeAdapterOptions(),
+        session: { id: 'ama-context-diagnostics' },
+        context: {
+          ...makeOptions().context,
+          contextDiagnostics: true,
+        },
+        events: {
+          onContextBudgetSnapshot: (event) => {
+            eventOrder.push('budget');
+            snapshots.push(event);
+          },
+          onPromptCacheDiagnostics: (event) => {
+            eventOrder.push(`cache-${event.phase}`);
+            cacheDiagnostics.push(event);
+          },
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        skillCatalogText,
+        selectedSkillText,
+        mcpCatalogText,
+        contextWindow: 123_456,
+      },
+    );
+    const secretPrompt = 'AMA_DIAGNOSTIC_PROMPT_MUST_NOT_LEAK';
+    await adapter(
+      [
+        { role: 'system', content: 'stable system\n\ninline policy' },
+        { role: 'user', content: 'old query', turnId: 'turn-old' },
+        { role: 'assistant', content: 'old answer', turnId: 'turn-old' },
+        {
+          role: 'user',
+          content: [
+            skillCatalogText,
+            selectedSkillText,
+            mcpCatalogText,
+            secretPrompt,
+          ].join('\n\n'),
+          turnId: 'turn-current',
+        },
+      ],
+      { name: 'worker', instructions: '' },
+    );
+    await adapter(
+      [
+        { role: 'system', content: 'stable system' },
+        { role: 'user', content: 'old query', turnId: 'turn-old' },
+        { role: 'assistant', content: 'old answer', turnId: 'turn-old' },
+        { role: 'system', content: 'inline policy' },
+        {
+          role: 'user',
+          content: [
+            skillCatalogText,
+            selectedSkillText,
+            mcpCatalogText,
+            'different current request',
+          ].join('\n\n'),
+          turnId: 'turn-current-2',
+        },
+      ],
+      { name: 'worker', instructions: '' },
+    );
+
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]).toEqual(expect.objectContaining({
+      sessionId: 'ama-context-diagnostics',
+      turnId: 'turn-current',
+      contextWindow: 123_456,
+    }));
+    expect(snapshots[0]!.tokenBreakdown.reservedResponse).toBe(8_000);
+    expect(snapshots[0]!.tokenBreakdown.total).toBe(snapshots[0]!.usedTokens);
+    expect(snapshots[0]!.tokenBreakdown.skillCatalog).toBeGreaterThan(0);
+    expect(snapshots[0]!.tokenBreakdown.mcpCatalog).toBeGreaterThan(0);
+    expect(snapshots[0]!.tokenBreakdown.pendingInput).toBeGreaterThan(0);
+    expect(cacheDiagnostics.map((event) => event.phase)).toEqual([
+      'request',
+      'response',
+      'request',
+      'response',
+    ]);
+    expect(cacheDiagnostics[0]!.systemPromptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.transport).toBe('stream');
+    expect(cacheDiagnostics[0]!.wireModel).toBe('scripted');
+    expect(cacheDiagnostics[0]!.reasoningHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.maxOutputTokens).toBe(8_000);
+    expect(cacheDiagnostics[0]!.kodaxPromptCacheEnabled).toBe(true);
+    expect(cacheDiagnostics[0]!.toolSchemaHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.messagePrefixHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.requestMessagesHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]!.messagePrefixCount).toBe(2);
+    expect(cacheDiagnostics[2]!.messagePrefixCount).toBe(2);
+    expect(cacheDiagnostics[0]!.messagePrefixHash)
+      .toBe(cacheDiagnostics[2]!.messagePrefixHash);
+    expect(cacheDiagnostics[0]!.systemPromptHash)
+      .toBe(cacheDiagnostics[2]!.systemPromptHash);
+    expect(cacheDiagnostics[0]!.requestMessagesHash)
+      .not.toBe(cacheDiagnostics[2]!.requestMessagesHash);
+    expect(cacheDiagnostics[1]).toEqual(expect.objectContaining({
+      requestId: cacheDiagnostics[0]!.requestId,
+      endpoint: 'https://example.test',
+      endpointPathHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      cachedReadTokens: 19_328,
+      cachedWriteTokens: undefined,
+    }));
+    expect(JSON.stringify({ snapshots, cacheDiagnostics })).not.toContain(secretPrompt);
+    expect(JSON.stringify(cacheDiagnostics)).not.toContain('tenant-secret');
+    expect(observedToolNames).toEqual([[], []]);
+    expect(eventOrder).toEqual([
+      'budget',
+      'cache-request',
+      'stream',
+      'cache-response',
+      'budget',
+      'cache-request',
+      'stream',
+      'cache-response',
+    ]);
+  }, 15_000);
+
+  it('emits separate budget and cache diagnostics for non-streaming fallback calls', async () => {
+    const snapshots: RuntimeContextBudgetSnapshot[] = [];
+    const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
+    let streamCalls = 0;
+    let completeCalls = 0;
+
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_000,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        streamCalls += 1;
+        throw new Error('zhipu-coding API error: terminated');
+      }
+
+      override supportsNonStreamingFallback(): boolean {
+        return true;
+      }
+
+      override async complete(): Promise<KodaXStreamResult> {
+        completeCalls += 1;
+        return {
+          textBlocks: [{ type: 'text', text: 'fallback done' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 100,
+            outputTokens: 5,
+            totalTokens: 105,
+            cachedReadTokens: 0,
+          },
+        };
+      }
+    }
+
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      context: {
+        ...makeOptions().context,
+        contextDiagnostics: true,
+      },
+      events: {
+        onContextBudgetSnapshot: (event) => snapshots.push(event),
+        onPromptCacheDiagnostics: (event) => cacheDiagnostics.push(event),
+      },
+    });
+
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Retry please.' }],
+      { name: 'worker', instructions: '' },
+    );
+
+    expect(result.text).toBe('fallback done');
+    expect(streamCalls).toBe(2);
+    expect(completeCalls).toBe(1);
+    expect(snapshots).toHaveLength(3);
+    expect(cacheDiagnostics.map((event) => `${event.transport}:${event.phase}`)).toEqual([
+      'stream:request',
+      'stream:request',
+      'complete:request',
+      'complete:response',
+    ]);
+    expect(cacheDiagnostics.at(-1)?.cachedReadTokens).toBe(0);
+  }, 15_000);
+
+  it('keeps provider execution independent from throwing diagnostics callbacks', async () => {
+    const streamSpy = vi.fn(async (): Promise<KodaXStreamResult> => ({
+      textBlocks: [{ type: 'text', text: 'done' }],
+      toolBlocks: [],
+      thinkingBlocks: [],
+      stopReason: 'end_turn',
+    }));
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        baseUrl: 'https://example.test/v1',
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+      };
+      stream = streamSpy;
+    }
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      context: {
+        ...makeOptions().context,
+        contextDiagnostics: true,
+      },
+      events: {
+        onContextBudgetSnapshot: () => {
+          throw new Error('budget observer failed');
+        },
+        onPromptCacheDiagnostics: () => {
+          throw new Error('cache observer failed');
+        },
+      },
+    });
+
+    await expect(adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'query' }],
+      { name: 'worker', instructions: '' },
+    )).resolves.toEqual(expect.objectContaining({ text: 'done' }));
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('passes the requested model into every provider stream call, including L5 continuation', async () => {
     const observedModels: Array<string | undefined> = [];
     const responses: KodaXStreamResult[] = [
@@ -1007,6 +1376,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
 
   it('escalates capped budget to 64K on first max_tokens, reissues same turn', async () => {
     const observedBudgets: number[] = [];
+    const reservedResponseTokens: number[] = [];
     registerScriptedProvider(
       [
         { textBlocks: [], stopReason: 'max_tokens' },
@@ -1015,7 +1385,18 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
       observedBudgets,
     );
 
-    const adapter = buildRunnerLlmAdapter(makeAdapterOptions());
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      context: {
+        ...makeOptions().context,
+        contextDiagnostics: true,
+      },
+      events: {
+        onContextBudgetSnapshot: (snapshot) => {
+          reservedResponseTokens.push(snapshot.tokenBreakdown.reservedResponse);
+        },
+      },
+    });
     const result = await adapter(
       [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Generate a long file.' }],
       { name: 'scout', instructions: '' },
@@ -1023,6 +1404,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
 
     expect(result.text).toBe('done at 64K');
     expect(observedBudgets).toEqual([KODAX_CAPPED, KODAX_ESCALATED]);
+    expect(reservedResponseTokens).toEqual([KODAX_CAPPED, KODAX_ESCALATED]);
   }, 15_000);
 
   it('does not escalate a second time within the same adapter call', async () => {
@@ -1586,7 +1968,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
   });
 
-  it('injects the current Actor capacity into the production Worker prompt', async () => {
+  it('injects the current Actor capacity as dynamic context outside System', async () => {
     const controller = await createAgentActorController();
     const options = makeOptions();
     options.context = {
@@ -1594,20 +1976,96 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       actorControl: controller.bind('/root'),
     };
     let systemPrompt = '';
+    let transcript: readonly KodaXMessage[] = [];
 
     await runManagedTaskViaRunner(
       options,
       'Review five independent dimensions.',
-      async (_transcript, _tools, system) => {
+      async (messages, _tools, system) => {
+        transcript = messages;
         systemPrompt = system;
         return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
       },
     );
 
-    expect(systemPrompt).toContain('This Actor tree has 4 total concurrency slots');
-    expect(systemPrompt).toContain('0 non-root turns are active');
-    expect(systemPrompt).toContain('3 child start slots are available');
-    expect(systemPrompt).toMatch(/^ACTOR CAPACITY \(authoritative runtime fact\):/);
+    const managedContext = transcript.find((message) => (
+      typeof message.content === 'string'
+      && message.content.includes('=== Managed Run Context ===')
+    ));
+    expect(managedContext?.content).toContain('This Actor tree has 4 total concurrency slots');
+    expect(managedContext?.content).toContain('0 non-root turns are active');
+    expect(managedContext?.content).toContain('3 child start slots are available');
+    expect(systemPrompt).not.toContain('ACTOR CAPACITY (authoritative runtime fact):');
+  });
+
+  it('refreshes changed Actor capacity before the next provider call', async () => {
+    const executor: AgentTurnExecutor = {
+      execute: async ({ signal }) => new Promise((resolve) => {
+        const finish = () => resolve({ output: 'interrupted' });
+        if (signal.aborted) {
+          finish();
+        } else {
+          signal.addEventListener('abort', finish, { once: true });
+        }
+      }),
+    };
+    const controller = await createAgentActorController({ executor });
+    const options = makeOptions();
+    options.context = {
+      ...options.context,
+      actorControl: controller.bind('/root'),
+    };
+    const transcripts: Array<readonly KodaXMessage[]> = [];
+    let call = 0;
+
+    await runManagedTaskViaRunner(
+      options,
+      'Run one parallel review.',
+      async (messages) => {
+        transcripts.push([...messages]);
+        call += 1;
+        if (call === 1) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'spawn-cache-state',
+              name: 'spawn_agent',
+              input: {
+                task_name: 'cache-state-lane',
+                objective: 'Wait until the parent observes capacity.',
+              },
+            }],
+          };
+        }
+        if (call === 2) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'interrupt-cache-state',
+              name: 'interrupt_agent',
+              input: { target: '/root/cache-state-lane' },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    );
+
+    const initialContext = transcripts[0]?.find((message) => (
+      typeof message.content === 'string'
+      && message.content.includes('=== Managed Run Context ===')
+    ));
+    const refreshedContext = [...(transcripts[1] ?? [])].reverse().find(
+      (message) => (
+        typeof message.content === 'string'
+        && message.content.includes('=== Managed Run Context ===')
+      ),
+    );
+    expect(initialContext?.content).toContain('0 non-root turns are active');
+    expect(refreshedContext?.content).toContain('Runtime state refresh:');
+    expect(refreshedContext?.content).toContain('1 non-root turns are active');
   });
 
   it('delivers mailbox evidence as synthetic context after wait_agent', async () => {
@@ -1678,6 +2136,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     const warnings: Array<Parameters<NonNullable<KodaXEvents['onTodoDriftWarning']>>[0]> = [];
     const todoSnapshots: Array<Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[0]> = [];
     const systems: string[] = [];
+    const transcripts: Array<readonly KodaXMessage[]> = [];
     let callCount = 0;
     const options: KodaXOptions = {
       ...makeOptions(),
@@ -1694,7 +2153,8 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     const result = await runManagedTaskViaRunner(
       options,
       'Inspect todo drift wiring',
-      async (_transcript, _tools, system) => {
+      async (transcript, _tools, system) => {
+        transcripts.push(transcript);
         systems.push(system);
         callCount += 1;
         if (callCount === 1) {
@@ -1730,8 +2190,9 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       firstPendingTodoSubject: 'Inspect implementation',
     });
     expect(todoSnapshots.some((snapshot) => snapshot[0]?.status === 'pending')).toBe(true);
-    expect(systems[1]).toContain('no item marked in_progress');
-    expect(systems[1]).toContain('call todo_update now');
+    expect(systems[1]).toBe(systems[0]);
+    expect(String(transcripts[1]?.at(-1)?.content)).toContain('no item marked in_progress');
+    expect(String(transcripts[1]?.at(-1)?.content)).toContain('call todo_update now');
     expect(warnings[0]).toEqual(expect.objectContaining({
       sessionId: expect.any(String),
       seq: expect.any(Number),
@@ -2795,6 +3256,71 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
 // The F167 three-layer B0/B1/B2 retry/synth fallback is superseded by Sidecar Verifier (Phase D.2).
 
 describe('Shard 6d-d — session continuity', () => {
+  it('keeps the AMA wire prefix stable across runs in the same session', async () => {
+    const sessionId = 'runner-prefix-stability';
+    const firstPrompt = 'Inspect the current cache behavior.';
+    const secondPrompt = 'Now check the context diagnostics.';
+    const makePlan = (prompt: string): ReasoningPlan => ({
+      effort: 'medium',
+      decision: buildFallbackRoutingDecision(prompt),
+      promptOverlay: '',
+    });
+    const calls: Array<{
+      readonly system: string;
+      readonly tools: readonly KodaXToolDefinition[];
+      readonly transcript: readonly KodaXMessage[];
+    }> = [];
+    const capture = async (
+      transcript: readonly KodaXMessage[],
+      tools: readonly KodaXToolDefinition[],
+      system: string,
+    ) => {
+      calls.push({
+        system,
+        tools: [...tools],
+        transcript: [...transcript],
+      });
+      return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+    };
+
+    const first = await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: { id: sessionId },
+      },
+      firstPrompt,
+      capture,
+      makePlan(firstPrompt),
+    );
+    await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: {
+          id: sessionId,
+          initialMessages: first.messages,
+        },
+      },
+      secondPrompt,
+      capture,
+      makePlan(secondPrompt),
+    );
+
+    expect(calls).toHaveLength(2);
+    const firstCall = calls[0]!;
+    const secondCall = calls[1]!;
+    expect(firstCall.system).toBe(secondCall.system);
+    expect(firstCall.system).not.toContain(firstPrompt);
+    expect(firstCall.system).not.toContain(secondPrompt);
+    expect(firstCall.tools).toEqual(secondCall.tools);
+    expect(firstCall.transcript[0]).toEqual(expect.objectContaining({
+      role: 'user',
+      _synthetic: true,
+      _source: 'managed-run-context',
+    }));
+    expect(secondCall.transcript.slice(0, firstCall.transcript.length))
+      .toEqual(firstCall.transcript);
+  });
+
   it('prepends options.session.initialMessages before the new prompt', async () => {
     const capturedTranscripts: KodaXMessage[][] = [];
     const opts = {
@@ -2810,8 +3336,8 @@ describe('Shard 6d-d — session continuity', () => {
       capturedTranscripts.push([...transcript]);
       return { textBlocks: [{ text: 'got it' }], toolBlocks: [] };
     });
-    // The first LLM turn's transcript (post-system-strip) should contain
-    // the prior user/assistant pair + the new user prompt.
+    // The topology-only path has no managed prompt context, so the first LLM
+    // turn contains the prior user/assistant pair + the new prompt.
     const firstTurn = capturedTranscripts[0]!;
     expect(firstTurn.length).toBe(3);
     expect(firstTurn[0]!.role).toBe('user');
@@ -2845,8 +3371,7 @@ describe('Shard 6d-d — session continuity', () => {
       return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
     });
     const firstTurn = capturedTranscripts[0]!;
-    expect(firstTurn.length).toBe(1);
-    expect(firstTurn[0]!.content).toBe('fresh task');
+    expect(firstTurn.at(-1)!.content).toBe('fresh task');
   });
 });
 

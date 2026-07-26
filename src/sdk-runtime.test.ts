@@ -2468,6 +2468,7 @@ describe('createKodaXRuntime', () => {
     runtime.events.subscribe({ sessionId: session.id }, (event) => {
       if (
         event.type === 'context.budget.snapshot'
+        || event.type === 'provider.cache.diagnostics'
         || event.type === 'tool.exposure.planned'
         || event.type === 'context.compaction.skipped'
       ) {
@@ -2505,6 +2506,26 @@ describe('createKodaXRuntime', () => {
           toolSchemaRatio: 0.0001,
           recommendations: [],
           createdAt: '2026-07-08T00:00:00.000Z',
+        });
+        options.events?.onPromptCacheDiagnostics?.({
+          phase: 'response',
+          requestId: 'cache-request-1',
+          requestedAt: '2026-07-08T00:00:00.000Z',
+          completedAt: '2026-07-08T00:00:00.001Z',
+          provider: 'mock-provider',
+          model: 'mock-model',
+          endpoint: 'https://example.test/v1',
+          attempt: 1,
+          systemPromptHash: 'a'.repeat(64),
+          toolSchemaHash: 'b'.repeat(64),
+          messagePrefixHash: 'c'.repeat(64),
+          messagePrefixCount: 1,
+          requestMessagesHash: 'd'.repeat(64),
+          messageCount: 2,
+          toolCount: 1,
+          inputTokens: 100,
+          outputTokens: 5,
+          cachedReadTokens: 80,
         });
         options.events?.onToolExposurePlanned?.({
           sessionId,
@@ -2565,13 +2586,19 @@ describe('createKodaXRuntime', () => {
 
     expect(seen).toEqual([
       'context.budget.snapshot',
+      'provider.cache.diagnostics',
       'tool.exposure.planned',
       'context.compaction.skipped',
     ]);
     expect(payloads[0]).toMatchObject({ pressure: 'low', usedTokens: 6 });
-    expect(payloads[1]).toMatchObject({ reportOnly: true, modelVisibleToolNames: ['read', 'tool_search'] });
-    expect(payloads[2]).toMatchObject({ reason: 'low_savings_cooldown', cooldownTurnsRemaining: 1 });
+    expect(payloads[1]).toMatchObject({
+      phase: 'response',
+      cachedReadTokens: 80,
+    });
+    expect(payloads[2]).toMatchObject({ reportOnly: true, modelVisibleToolNames: ['read', 'tool_search'] });
+    expect(payloads[3]).toMatchObject({ reason: 'low_savings_cooldown', cooldownTurnsRemaining: 1 });
     expect(replay.map((event) => event.type)).toContain('context.budget.snapshot');
+    expect(replay.map((event) => event.type)).toContain('provider.cache.diagnostics');
     expect(replay.map((event) => event.type)).toContain('tool.exposure.planned');
     expect(replay.map((event) => event.type)).toContain('context.compaction.skipped');
     expect(latestBudget).toMatchObject({ pressure: 'low', usedTokens: 6 });
@@ -4042,6 +4069,97 @@ describe('createKodaXRuntime', () => {
     await expect(expectSettles(handle.result, 'managed task abort result')).resolves.toMatchObject({
       phase: 'cancelled',
     });
+
+    await runtime.close();
+  });
+
+  it('retains the latest managed_task context budget and cache diagnostics', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({ title: 'Managed Diagnostics Test' });
+
+    codingMock.runManagedTask.mockImplementation(async (options: KodaXOptions) => {
+      options.events?.onContextBudgetSnapshot?.({
+        sessionId: session.id,
+        turnId: 'turn-managed-diagnostics',
+        profile: 'report_only',
+        contextWindow: 32_000,
+        smallWindow: true,
+        pressure: 'low',
+        tokenBreakdown: {
+          systemPrompt: 10,
+          toolSchemas: 20,
+          skillCatalog: 0,
+          mcpCatalog: 0,
+          transcript: 30,
+          pendingInput: 5,
+          recentToolResults: 0,
+          reservedResponse: 1_000,
+          total: 1_065,
+        },
+        usedTokens: 1_065,
+        availableTokens: 30_935,
+        usedRatio: 1_065 / 32_000,
+        toolSchemaRatio: 20 / 32_000,
+        recommendations: [],
+        createdAt: '2026-07-26T00:00:00.000Z',
+      });
+      options.events?.onPromptCacheDiagnostics?.({
+        phase: 'response',
+        transport: 'stream',
+        requestId: 'managed-cache-request',
+        requestedAt: '2026-07-26T00:00:00.000Z',
+        completedAt: '2026-07-26T00:00:01.000Z',
+        provider: 'mock-provider',
+        model: 'mock-model',
+        wireModel: 'wire-model',
+        attempt: 1,
+        systemPromptHash: 'a'.repeat(64),
+        toolSchemaHash: 'b'.repeat(64),
+        messagePrefixHash: 'c'.repeat(64),
+        messagePrefixCount: 2,
+        requestMessagesHash: 'd'.repeat(64),
+        messageCount: 3,
+        toolCount: 4,
+        cachedReadTokens: 80,
+      });
+      return {
+        success: true,
+        lastText: 'managed diagnostics complete',
+        messages: [],
+        sessionId: session.id,
+      };
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'managed diagnostics',
+      mode: 'managed_task',
+      options: { context: { contextDiagnostics: true } },
+    });
+    await handle.result;
+    const latestBudget = await runtime.diagnostics.latestContextBudget({ runId: handle.runId });
+    const cacheEvents = await runtime.events.replay({
+      runId: handle.runId,
+      type: 'provider.cache.diagnostics',
+    });
+
+    expect(latestBudget).toMatchObject({
+      turnId: 'turn-managed-diagnostics',
+      usedTokens: 1_065,
+    });
+    expect(latestBudget?.tokenBreakdown.total).toBe(latestBudget?.usedTokens);
+    expect(cacheEvents).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          requestId: 'managed-cache-request',
+          cachedReadTokens: 80,
+        }),
+      }),
+    ]);
 
     await runtime.close();
   });

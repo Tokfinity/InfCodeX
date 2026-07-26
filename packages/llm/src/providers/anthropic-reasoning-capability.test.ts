@@ -190,6 +190,48 @@ describe('anthropic reasoning capability', () => {
     });
   });
 
+  it('preserves provider-reported zero cache usage distinctly from missing fields', async () => {
+    const create = vi.fn().mockResolvedValue(
+      createCompletedAnthropicStream({
+        startUsage: {
+          input_tokens: 100,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        deltaUsage: {
+          output_tokens: 40,
+        },
+      }),
+    );
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(result.usage).toMatchObject({
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+    });
+  });
+
+  it('keeps absent provider cache usage fields undefined', async () => {
+    const create = vi.fn().mockResolvedValue(
+      createCompletedAnthropicStream({
+        startUsage: { input_tokens: 100 },
+        deltaUsage: { output_tokens: 40 },
+      }),
+    );
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(result.usage).not.toHaveProperty('cachedReadTokens');
+    expect(result.usage).not.toHaveProperty('cachedWriteTokens');
+  });
+
   it('sends budget_tokens only for native-budget providers', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider('native-budget', {

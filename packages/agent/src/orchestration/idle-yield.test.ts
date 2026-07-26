@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { MessageQueue } from '../messaging/queue.js';
+import { createAgent } from '../primitives/agent.js';
 import {
   composeIdleYieldUserMessage,
   waitForWakeEvent,
 } from './idle-yield.js';
+import { runWithIdleYield } from './runner-with-idle-yield.js';
 
 describe('Actor-aware idle yield', () => {
   it('drains a message that already exists before waiting', async () => {
@@ -146,5 +148,65 @@ describe('Actor-aware idle yield', () => {
       content: '<agent-message>critical evidence</agent-message>',
     }]);
     expect(onUserPrompts).not.toHaveBeenCalled();
+  });
+
+  it('inserts refreshed runtime context immediately before idle-resume wake messages', async () => {
+    const messageQueue = new MessageQueue();
+    messageQueue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      agentId: '/root',
+      content: '<agent-completed>done</agent-completed>',
+    });
+    const agent = createAgent({ name: 'worker', instructions: 'sys' });
+    const inputs: Array<readonly import('../primitives/agent.js').AgentMessage[]> = [];
+    let calls = 0;
+
+    await runWithIdleYield({
+      initialAgent: agent,
+      initialInput: [{ role: 'user', content: 'start' }],
+      runOnce: async (_agent, input) => {
+        inputs.push(input);
+        calls += 1;
+        return {
+          // Mirror Runner.run: every invocation owns and prepends one system
+          // message to the caller-provided transcript.
+          messages: [
+            { role: 'system' as const, content: 'sys' },
+            ...input,
+            { role: 'assistant' as const, content: `turn-${calls}` },
+          ],
+        };
+      },
+      computeSnapshot: () => ({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: calls === 1 ? 1 : 0,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
+      }),
+      messageQueue,
+      agentId: '/root',
+      resumeAgent: () => agent,
+      buildResumeContextMessages: (_result, wakeMessages) => [{
+        role: 'user',
+        content: 'fresh runtime context',
+        _synthetic: true,
+        _source: 'managed-run-context',
+        turnId: wakeMessages[0]?.turnId,
+      }],
+    });
+
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]?.filter((message) => message.role === 'system')).toHaveLength(0);
+    expect(inputs[1]?.slice(-2)).toEqual([
+      expect.objectContaining({
+        content: 'fresh runtime context',
+        _source: 'managed-run-context',
+      }),
+      expect.objectContaining({
+        content: '<agent-completed>done</agent-completed>',
+      }),
+    ]);
   });
 });

@@ -46,8 +46,10 @@ function snapshot(currentTokens: number, messages: KodaXMessage[]): KodaXContext
 
 function compactedResult(messages: KodaXMessage[]): CompactionResult {
   const compacted = [{
-    role: 'system' as const,
+    role: 'user' as const,
     content: '[对话历史摘要]\n\nComplete semantic summary with preserved decisions.',
+    _synthetic: true,
+    _source: 'compaction-checkpoint',
   }];
   const tokensBefore = estimateTokens(messages);
   const tokensAfter = estimateTokens(compacted);
@@ -212,7 +214,7 @@ describe('managed history compaction', () => {
     expect(nextLlmMessages[0]).toEqual({ role: 'system', content: systemText });
     expect(nextLlmMessages.some((message, index) => (
       index > 0
-      && message.role === 'system'
+      && message.role === 'user'
       && String(message.content).includes('Complete semantic summary')
     ))).toBe(true);
   });

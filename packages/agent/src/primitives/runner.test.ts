@@ -327,6 +327,44 @@ describe('Runner', () => {
       expect(toolResultBlocks[0]!.type).toBe('tool_result');
     });
 
+    it('commits adapter-injected input before the assistant so the next request preserves the prefix', async () => {
+      const agent = createAgent({
+        name: 'injected-input-agent',
+        instructions: 'sys',
+        tools: [makeEchoTool()],
+      });
+      const reminder: AgentMessage = {
+        role: 'user',
+        content: 'runtime reminder',
+        _synthetic: true,
+        _source: 'managed-runtime-reminder',
+      };
+      let turn = 0;
+      const llm = vi.fn(async (messages): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            text: 'Calling echo...',
+            injectedInputMessages: [reminder],
+            toolCalls: [{ id: 'call-1', name: 'echo', input: { text: 'ping' } }],
+          };
+        }
+        expect(messages[2]).toEqual(reminder);
+        expect(messages[3]?.role).toBe('assistant');
+        expect(messages[4]?.role).toBe('user');
+        return { text: 'done', toolCalls: [] };
+      });
+
+      const result = await Runner.run(agent, 'hi', { llm });
+
+      expect(result.messages[2]).toEqual(reminder);
+      expect(result.messages[3]?.role).toBe('assistant');
+      expect(result.messages[4]?.role).toBe('user');
+      expect(result.messages[5]?.content).toEqual([
+        { type: 'text', text: 'done' },
+      ]);
+    });
+
     it('transforms the settled tool-result batch once before building the result message', async () => {
       const first: RunnableTool = {
         name: 'first',

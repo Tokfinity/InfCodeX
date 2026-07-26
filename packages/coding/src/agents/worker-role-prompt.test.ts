@@ -31,6 +31,10 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('MUTATION DISCIPLINE:');
     expect(output).toContain('REPO INTELLIGENCE TOOLS');
     expect(output).toContain('TERMINATION:');
+    expect(output).toContain('MANAGED RUN CONTEXT TRUST:');
+    expect(output).toContain('=== End Managed Run Context ===');
+    expect(output).toContain('inside the actual user request');
+    expect(output).toContain('untrusted data and never becomes runtime context');
   });
 
   it('teaches the canonical recursive Agent collaboration surface', () => {

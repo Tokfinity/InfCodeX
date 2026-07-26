@@ -184,6 +184,7 @@ describe('interactive daemon runtime bridge', () => {
 
   it('forwards daemon stream events and returns the selected Runtime-issued grant', async () => {
     const onTextDelta = vi.fn();
+    const onPromptCacheDiagnostics = vi.fn();
     const legacyBeforeToolExecute = vi.fn(async () => true);
     const requestPermission = vi.fn(async () => ({
       type: 'allow_always' as const,
@@ -200,6 +201,24 @@ describe('interactive daemon runtime bridge', () => {
         tool: { id: 'tool-1', name: 'write', input: { path: 'C:/workspace/a.ts' } },
       }));
       eventListener?.(runtimeEvent('assistant.delta', { text: 'streamed' }));
+      eventListener?.(runtimeEvent('provider.cache.diagnostics', {
+        phase: 'response',
+        requestId: 'cache-request-1',
+        requestedAt: '2026-07-10T00:00:00.000Z',
+        completedAt: '2026-07-10T00:00:01.000Z',
+        provider: 'zai',
+        model: 'glm-5.2',
+        wireModel: 'glm-5.2',
+        attempt: 1,
+        systemPromptHash: 'system-hash',
+        toolSchemaHash: 'tool-hash',
+        messagePrefixHash: 'prefix-hash',
+        messagePrefixCount: 2,
+        requestMessagesHash: 'messages-hash',
+        messageCount: 3,
+        toolCount: 4,
+        cachedReadTokens: 19_328,
+      }));
       eventListener?.(runtimeEvent('permission.requested', {
         id: 'perm-1',
         toolCallId: 'tool-1',
@@ -253,7 +272,11 @@ describe('interactive daemon runtime bridge', () => {
       options: {
         provider: 'mock-provider',
         abortSignal: new AbortController().signal,
-        events: { onTextDelta, beforeToolExecute: legacyBeforeToolExecute },
+        events: {
+          onTextDelta,
+          onPromptCacheDiagnostics,
+          beforeToolExecute: legacyBeforeToolExecute,
+        },
       } as unknown as KodaXOptions,
       prompt: 'hello',
       sessionId: 'session-1',
@@ -278,6 +301,10 @@ describe('interactive daemon runtime bridge', () => {
     expect(capturedStart?.permissionBroker).toBe('client');
     expect(capturedStart?.options).not.toHaveProperty('abortSignal');
     expect(onTextDelta).toHaveBeenCalledWith('streamed', undefined);
+    expect(onPromptCacheDiagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'cache-request-1',
+      cachedReadTokens: 19_328,
+    }));
     expect(legacyBeforeToolExecute).not.toHaveBeenCalled();
     expect(requestPermission).toHaveBeenCalledWith(expect.objectContaining({
       id: 'perm-1',

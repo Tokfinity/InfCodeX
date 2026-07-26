@@ -355,6 +355,45 @@ export interface KodaXTodoDriftWarningEvent {
   readonly firstPendingTodoSubject?: string;
 }
 
+export interface KodaXPromptCacheDiagnosticEvent {
+  readonly phase: 'request' | 'response';
+  /** Provider API path used for this physical request. */
+  readonly transport?: 'stream' | 'complete';
+  readonly requestId: string;
+  readonly requestedAt: string;
+  readonly completedAt?: string;
+  readonly provider: string;
+  /** Caller-facing model id selected for this request. */
+  readonly model: string;
+  /** Exact provider wire model after alias resolution. */
+  readonly wireModel?: string;
+  /** Hash of the caller-level reasoning controls; never contains prompt text. */
+  readonly reasoningHash?: string;
+  /** Effective output reservation sent for this adapter request. */
+  readonly maxOutputTokens?: number;
+  /** Whether KodaX explicit prompt-cache controls are enabled. */
+  readonly kodaxPromptCacheEnabled?: boolean;
+  /** Credential-free provider origin. */
+  readonly endpoint?: string;
+  /** Hash of the endpoint path, which may itself contain tenant credentials. */
+  readonly endpointPathHash?: string;
+  readonly attempt: number;
+  readonly systemPromptHash: string;
+  readonly toolSchemaHash: string;
+  /** Hash of provider-visible messages before the current turn starts. */
+  readonly messagePrefixHash: string;
+  readonly messagePrefixCount: number;
+  /** Hash of the complete provider-visible message list for this request. */
+  readonly requestMessagesHash: string;
+  readonly messageCount: number;
+  readonly toolCount: number;
+  /** Provider-reported usage only. Missing fields remain undefined. */
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cachedReadTokens?: number;
+  readonly cachedWriteTokens?: number;
+}
+
 export interface KodaXEvents {
   /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
   workflowCorrelation?: WorkflowEventCorrelation;
@@ -509,6 +548,10 @@ export interface KodaXEvents {
   /** Optional bounded context diagnostics. Emitted only when context.contextDiagnostics is true. */
   onContextBudgetSnapshot?: (
     event: RuntimeContextBudgetSnapshot & Partial<KodaXLiveEventMeta>,
+  ) => void;
+  /** Hash-only prompt-cache diagnostics; never contains prompt or message text. */
+  onPromptCacheDiagnostics?: (
+    event: KodaXPromptCacheDiagnosticEvent & Partial<KodaXLiveEventMeta>,
   ) => void;
   /** Optional bounded tool-exposure diagnostics. Emitted only when context.contextDiagnostics is true. */
   onToolExposurePlanned?: (

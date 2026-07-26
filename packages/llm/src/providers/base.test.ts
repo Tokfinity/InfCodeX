@@ -262,6 +262,26 @@ describe('KodaXBaseProvider', () => {
     expect(provider.getEffectiveContextWindow('unknown-model')).toBe(200_000);
   });
 
+  it('exposes the exact wire model used by provider requests', () => {
+    class WireAliasProvider extends KodaXBaseProvider {
+      readonly name = 'wire-alias';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'WIRE_ALIAS_KEY',
+        model: 'friendly-model',
+        models: [{ id: 'friendly-model', wireModel: 'upstream-model-v2' }],
+        supportsThinking: false,
+      };
+      async stream(): Promise<KodaXStreamResult> {
+        throw new Error('not implemented in unit test');
+      }
+    }
+    const provider = new WireAliasProvider();
+    expect(provider.getWireModel()).toBe('upstream-model-v2');
+    expect(provider.getWireModel('friendly-model')).toBe('upstream-model-v2');
+    expect(provider.getWireModel('unknown-model')).toBe('unknown-model');
+  });
+
   it('reads default-model contextWindow from models[] when declared there', () => {
     // Regression: a custom provider whose DEFAULT model also appears in
     // models[] with a per-model contextWindow must resolve to that window,

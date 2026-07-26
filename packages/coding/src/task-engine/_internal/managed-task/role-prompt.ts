@@ -32,6 +32,8 @@ import type {
 import {
   buildWorkerActorCapacityContract,
   buildWorkerInstructions,
+  buildWorkerRoutingContext,
+  buildWorkerStableInstructions,
   EXPLICIT_WORKFLOW_POLICY,
   ULTRA_AGENT_POLICY,
 } from '../../../agents/worker-role-prompt.js';
@@ -65,6 +67,8 @@ import {
  * does not read it.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
+export type ManagedRolePromptRenderMode = 'combined' | 'stable' | 'context';
+
 export function createRolePrompt(
   role: KodaXTaskRole,
   prompt: string,
@@ -76,6 +80,7 @@ export function createRolePrompt(
   rolePromptContext: ManagedRolePromptContext | undefined,
   workerId?: string,
   isTerminalAuthority = false,
+  renderMode: ManagedRolePromptRenderMode = 'combined',
 ): string {
   void workerId;
   // FEATURE_193 (v0.7.43): isTerminalAuthority was used by the deleted
@@ -159,6 +164,10 @@ export function createRolePrompt(
   const capabilityContextSection = rolePromptContext?.capabilityContextBlock?.trim()
     ? rolePromptContext.capabilityContextBlock
     : undefined;
+  const stableCapabilityContextSection =
+    rolePromptContext?.stableCapabilityContextBlock?.trim()
+      ? rolePromptContext.stableCapabilityContextBlock
+      : undefined;
 
   // Harness LLM-judgment refactor (H3): the Worker no longer receives the
   // router-injected `plan.promptOverlay` (EXECUTION_MODE / HARNESS_PROFILE
@@ -302,6 +311,35 @@ export function createRolePrompt(
         verification,
         isResumeAfterReviseFailure,
       );
+      if (renderMode === 'stable') {
+        return [
+          workspaceSection,
+          agentSection,
+          stableCapabilityContextSection,
+          parallelBatchGuidance,
+          ULTRA_AGENT_POLICY,
+          EXPLICIT_WORKFLOW_POLICY,
+          buildWorkerStableInstructions(),
+          sharedWorkerDiscipline,
+          sharedClosingRule,
+        ].filter((section): section is string => Boolean(section)).join('\n\n');
+      }
+      if (renderMode === 'context') {
+        return [
+          actorCapacityContract,
+          capabilityContextSection,
+          teamModeSection,
+          decisionSummary,
+          roundInstructionSection,
+          contractSection,
+          metadataSection,
+          verificationSection,
+          toolPolicySection,
+          workerSkillSection,
+          previousRoleSummarySection,
+          buildWorkerRoutingContext(decision),
+        ].filter((section): section is string => Boolean(section)).join('\n\n');
+      }
       return [
         actorCapacityContract,
         // Worker is its own role announcement, but we still emit the

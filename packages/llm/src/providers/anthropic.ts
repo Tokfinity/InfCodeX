@@ -87,36 +87,29 @@ function normalizeAnthropicUsage(
     return previous;
   }
 
-  const hasInputUsage =
-    usage.input_tokens !== undefined && usage.input_tokens !== null
-    || usage.cache_creation_input_tokens !== undefined && usage.cache_creation_input_tokens !== null
-    || usage.cache_read_input_tokens !== undefined && usage.cache_read_input_tokens !== null;
-  const inputTokens = typeof usage.input_tokens === 'number'
-    ? usage.input_tokens
-    : hasInputUsage
-      ? 0
-      : previous?.inputTokens ?? 0;
-  const cachedWriteTokens =
-    typeof usage.cache_creation_input_tokens === 'number'
-      ? usage.cache_creation_input_tokens
-      : hasInputUsage
-        ? 0
-        : previous?.cachedWriteTokens ?? 0;
-  const cachedReadTokens =
-    typeof usage.cache_read_input_tokens === 'number'
-      ? usage.cache_read_input_tokens
-      : hasInputUsage
-        ? 0
-        : previous?.cachedReadTokens ?? 0;
+  const hasInputTokens = typeof usage.input_tokens === 'number';
+  const hasCachedWriteTokens = typeof usage.cache_creation_input_tokens === 'number';
+  const hasCachedReadTokens = typeof usage.cache_read_input_tokens === 'number';
+  const hasInputUsage = hasInputTokens || hasCachedWriteTokens || hasCachedReadTokens;
+  const inputTokens = hasInputTokens ? usage.input_tokens! : 0;
+  const cachedWriteTokens = hasInputUsage
+    ? hasCachedWriteTokens ? usage.cache_creation_input_tokens! : undefined
+    : previous?.cachedWriteTokens;
+  const cachedReadTokens = hasInputUsage
+    ? hasCachedReadTokens ? usage.cache_read_input_tokens! : undefined
+    : previous?.cachedReadTokens;
   const outputTokens =
     typeof usage.output_tokens === 'number'
       ? usage.output_tokens
       : previous?.outputTokens ?? 0;
   const totalInputTokens = hasInputUsage
-    ? inputTokens + cachedWriteTokens + cachedReadTokens
+    ? inputTokens + (cachedWriteTokens ?? 0) + (cachedReadTokens ?? 0)
     : previous?.inputTokens ?? 0;
 
-  if ([totalInputTokens, outputTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+  if (
+    [totalInputTokens, outputTokens, cachedWriteTokens, cachedReadTokens]
+      .some((value) => value !== undefined && (!Number.isFinite(value) || value < 0))
+  ) {
     return undefined;
   }
 
@@ -124,8 +117,8 @@ function normalizeAnthropicUsage(
     inputTokens: totalInputTokens,
     outputTokens,
     totalTokens: totalInputTokens + outputTokens,
-    cachedReadTokens: cachedReadTokens || undefined,
-    cachedWriteTokens: cachedWriteTokens || undefined,
+    ...(cachedReadTokens !== undefined ? { cachedReadTokens } : {}),
+    ...(cachedWriteTokens !== undefined ? { cachedWriteTokens } : {}),
   };
 }
 
@@ -544,12 +537,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
    * applyCacheControlToTools); without a message-level breakpoint the whole
    * growing transcript is re-billed as uncached input every turn.
    *
-   * Strategy: mark the LAST content block of the second-to-last `user` turn.
-   * The most recent user turn is skipped — it is the current, still-changing
-   * input. The prior user turn's content is settled, so its prefix is a stable
-   * cache write-point that later turns read back incrementally (Anthropic caches
-   * the whole prefix up to and including the marked block: tools + system + all
-   * earlier messages). Total breakpoints stay at 3 (≤ Anthropic's limit of 4).
+   * Strategy: mark the LAST content block of the latest `user` message.
+   * Anthropic writes the whole prefix through that breakpoint. On the next
+   * request its lookback can match the previous turn's write even though the
+   * breakpoint has advanced to the new current turn. This also lets a
+   * single-call run seed the cache for the next run. Total
+   * breakpoints stay at 3 (≤ Anthropic's limit of 4).
    *
    * Only anthropic-compat providers reach this path; OpenAI/ACP strip cache
    * markers and rely on upstream automatic prefix caching. Escape hatch:
@@ -563,26 +556,30 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     if (messages.length === 0) return messages;
     if (this.isPromptCacheDisabled()) return messages;
 
-    // Find the second-to-last `user` turn (skip the most recent user turn,
-    // which is the current unstable input).
-    let userTurnsSeen = 0;
     let targetIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i]!.role === 'user') {
-        userTurnsSeen += 1;
-        if (userTurnsSeen === 2) {
-          targetIdx = i;
-          break;
-        }
+        targetIdx = i;
+        break;
       }
     }
     if (targetIdx === -1) return messages;
 
     const target = messages[targetIdx]!;
-    // A string content block cannot carry a cache_control attribute; only
-    // block arrays can. Settled history user turns normally hold tool_result
-    // block arrays (the common path); string / empty content is skipped safely.
-    if (typeof target.content === 'string' || target.content.length === 0) {
+    if (typeof target.content === 'string') {
+      if (target.content.length === 0) return messages;
+      const out = messages.slice();
+      out[targetIdx] = {
+        ...target,
+        content: [{
+          type: 'text',
+          text: target.content,
+          cache_control: { type: 'ephemeral' as const },
+        }],
+      };
+      return out;
+    }
+    if (target.content.length === 0) {
       return messages;
     }
 

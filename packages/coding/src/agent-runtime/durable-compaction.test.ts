@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSessionLineage, type KodaXSessionData } from '@kodax-ai/agent';
+import {
+  createSessionLineage,
+  getSessionMessagesFromLineage,
+  type KodaXSessionData,
+} from '@kodax-ai/agent';
 import { withDurableCompactionPersistence } from './durable-compaction.js';
 
 describe('withDurableCompactionPersistence', () => {
@@ -36,6 +40,51 @@ describe('withDurableCompactionPersistence', () => {
       },
     );
     expect(order).toEqual(['save', 'event']);
+  });
+
+  it('does not persist Runner-owned leading System messages', async () => {
+    const saved: KodaXSessionData[] = [];
+    const initial: KodaXSessionData = {
+      title: 'root',
+      gitRoot: 'C:/repo',
+      messages: [{ role: 'user', content: 'old' }],
+      lineage: createSessionLineage([{ role: 'user', content: 'old' }]),
+    };
+    const events = withDurableCompactionPersistence({
+      events: {},
+      storage: {
+        load: async () => initial,
+        save: async (_id, data) => {
+          saved.push(data);
+        },
+      },
+      sessionId: 'root',
+    });
+
+    await events.onCompactedMessages?.(
+      [
+        { role: 'system', content: 'stable worker instructions' },
+        {
+          role: 'user',
+          content: '[对话历史摘要]\n\ncheckpoint',
+          _synthetic: true,
+          _source: 'compaction-checkpoint',
+        },
+      ],
+      {
+        preCompactionMessages: [
+          { role: 'system', content: 'stable worker instructions' },
+          { role: 'user', content: 'old' },
+        ],
+      },
+    );
+
+    expect(saved[0]?.messages).toEqual([expect.objectContaining({
+      role: 'user',
+      _source: 'compaction-checkpoint',
+    })]);
+    expect(getSessionMessagesFromLineage(saved[0]!.lineage!))
+      .not.toContainEqual(expect.objectContaining({ role: 'system' }));
   });
 
   it('leaves host-owned and child persistence untouched', async () => {

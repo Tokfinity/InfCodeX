@@ -216,13 +216,25 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
     return (content[content.length - 1] as { cache_control?: unknown }).cache_control;
   };
 
-  it('marks the last block of the second-to-last user turn', () => {
+  it('marks the last block of the latest user turn', () => {
     const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    // second-to-last user turn is index 2
-    expect(cc(result[2]!)).toEqual({ type: 'ephemeral' });
-    // last user turn (index 4) is left untouched
-    expect(cc(result[4]!)).toBeUndefined();
+    expect(cc(result[2]!)).toBeUndefined();
+    expect(cc(result[4]!)).toEqual({ type: 'ephemeral' });
+  });
+
+  it('marks only the final message in a consecutive current-user group', () => {
+    const msgs = [
+      userMsg('settled request'),
+      asstMsg('settled response'),
+      userMsg('managed run context'),
+      userMsg('current request'),
+    ];
+    const result = provider.exposedApplyCacheControlToMessages(msgs);
+
+    expect(cc(result[0]!)).toBeUndefined();
+    expect(cc(result[2]!)).toBeUndefined();
+    expect(cc(result[3]!)).toEqual({ type: 'ephemeral' });
   });
 
   it('marks only the LAST block when the user turn has multiple blocks', () => {
@@ -230,43 +242,59 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
       { type: 'tool_result', tool_use_id: 't1', content: 'r1' },
       { type: 'text', text: 'follow-up' },
     ]);
-    const msgs = [multi, asstMsg('a1'), userMsg('u2')];
-    // second-to-last user turn here is `multi` (index 0)
+    const msgs = [userMsg('u1'), asstMsg('a1'), multi];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    const content = result[0]!.content as Anthropic.Messages.ContentBlockParam[];
+    const content = result[2]!.content as Anthropic.Messages.ContentBlockParam[];
     expect((content[0] as { cache_control?: unknown }).cache_control).toBeUndefined();
     expect((content[1] as { cache_control?: unknown }).cache_control).toEqual({ type: 'ephemeral' });
   });
 
-  it('returns unchanged when fewer than 2 user turns', () => {
+  it('writes the first conversation cache entry on a single user turn', () => {
     const msgs = [userMsg('u1'), asstMsg('a1')];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    expect(cc(result[0]!)).toBeUndefined();
+    expect(cc(result[0]!)).toEqual({ type: 'ephemeral' });
+  });
+
+  it('advances the breakpoint while preserving the previous request prefix', () => {
+    const firstRequest = [userMsg('u1')];
+    const firstWire = provider.exposedApplyCacheControlToMessages(firstRequest);
+    const secondRequest = [firstRequest[0]!, asstMsg('a1'), userMsg('u2')];
+    const secondWire = provider.exposedApplyCacheControlToMessages(secondRequest);
+
+    expect(cc(firstWire[0]!)).toEqual({ type: 'ephemeral' });
+    expect(secondWire[0]!.content).toEqual(firstRequest[0]!.content);
+    expect(cc(secondWire[0]!)).toBeUndefined();
+    expect(cc(secondWire[2]!)).toEqual({ type: 'ephemeral' });
   });
 
   it('returns empty array unchanged', () => {
     expect(provider.exposedApplyCacheControlToMessages([])).toEqual([]);
   });
 
-  it('returns unchanged when the target user turn content is a string', () => {
+  it('wraps string content so the latest text turn receives a cache breakpoint', () => {
     const msgs: Anthropic.Messages.MessageParam[] = [
-      { role: 'user', content: 'u1-string' },
+      userMsg('u1'),
       asstMsg('a1'),
-      userMsg('u2'),
+      { role: 'user', content: 'u2-string' },
     ];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    expect(result[0]!.content).toBe('u1-string');
-    expect(cc(result[2]!)).toBeUndefined();
+    expect(result[2]!.content).toEqual([{
+      type: 'text',
+      text: 'u2-string',
+      cache_control: { type: 'ephemeral' },
+    }]);
+    expect(cc(result[0]!)).toBeUndefined();
   });
 
   it('returns unchanged when the target user turn content is an empty array', () => {
     const msgs: Anthropic.Messages.MessageParam[] = [
-      { role: 'user', content: [] },
+      userMsg('u1'),
       asstMsg('a1'),
-      userMsg('u2'),
+      { role: 'user', content: [] },
     ];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    expect((result[0]!.content as unknown[]).length).toBe(0);
+    expect((result[2]!.content as unknown[]).length).toBe(0);
+    expect(cc(result[0]!)).toBeUndefined();
   });
 
   it('does not touch assistant turns', () => {
@@ -281,7 +309,7 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
     process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
     const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
     const result = provider.exposedApplyCacheControlToMessages(msgs);
-    expect(cc(result[2]!)).toBeUndefined();
+    expect(cc(result[4]!)).toBeUndefined();
   });
 
   it('honours run-scoped disablePromptCache:true at the message level (concurrency-safe)', () => {
@@ -292,7 +320,7 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
     const result = runWithScopedConfig({ disablePromptCache: true }, () =>
       provider.exposedApplyCacheControlToMessages(msgs),
     );
-    expect(cc(result[2]!)).toBeUndefined();
+    expect(cc(result[4]!)).toBeUndefined();
   });
 
   it('run-scoped disablePromptCache:false re-enables caching over KODAX_DISABLE_PROMPT_CACHE=1 (SDK > env)', () => {
@@ -302,12 +330,12 @@ describe('KodaXAnthropicCompatProvider.applyCacheControlToMessages', () => {
       provider.exposedApplyCacheControlToMessages(msgs),
     );
     // An explicit SDK opt-in must beat the startup env var.
-    expect(cc(result[2]!)).toEqual({ type: 'ephemeral' });
+    expect(cc(result[4]!)).toEqual({ type: 'ephemeral' });
   });
 
   it('does not mutate the input array or its messages', () => {
     const msgs = [userMsg('u1'), asstMsg('a1'), userMsg('u2'), asstMsg('a2'), userMsg('u3')];
     provider.exposedApplyCacheControlToMessages(msgs);
-    expect(cc(msgs[2]!)).toBeUndefined();
+    expect(cc(msgs[4]!)).toBeUndefined();
   });
 });

@@ -118,7 +118,7 @@ describe('anthropic message serialization', () => {
       type: 'text',
       text: '[Memory evidence; not an instruction]\nClaim: use npm',
     });
-    expect(wire[0]?.content[0]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(wire[2]?.content[0]?.cache_control).toEqual({ type: 'ephemeral' });
   });
 
   // Sidecar verifier calls are short structured judge requests.
@@ -294,6 +294,7 @@ describe('anthropic message serialization', () => {
       type: 'tool_result',
       tool_use_id: 'tool_local',
       content: 'preview',
+      cache_control: { type: 'ephemeral' },
     });
     expect(JSON.stringify(kwargs)).not.toContain('must-not-reach-provider');
     expect(JSON.stringify(kwargs)).not.toContain('C:/private/full-output.txt');
@@ -708,7 +709,11 @@ describe('anthropic message serialization', () => {
     const kwargs = create.mock.calls[0]?.[0];
     const lastUser = kwargs.messages[kwargs.messages.length - 1];
     expect(lastUser.role).toBe('user');
-    expect(lastUser.content).toEqual([{ type: 'text', text: '...' }]);
+    expect(lastUser.content).toEqual([{
+      type: 'text',
+      text: '...',
+      cache_control: { type: 'ephemeral' },
+    }]);
   });
 
   it.each(ARK_CODING_IMAGE_MODELS)(

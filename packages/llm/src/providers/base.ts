@@ -388,6 +388,11 @@ export abstract class KodaXBaseProvider {
     return this.getModelDescriptor(id)?.wireModel ?? id;
   }
 
+  /** Exact model identifier serialized into native provider requests. */
+  getWireModel(modelId?: string): string {
+    return this.getWireModelId(modelId);
+  }
+
   getBaseUrl(): string | undefined {
     return this.config.baseUrl;
   }

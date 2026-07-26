@@ -23,6 +23,7 @@ import {
   type WorkerActorCapacity,
 } from '../../../agents/worker-role-prompt.js';
 import { createRolePrompt } from './role-prompt.js';
+import type { ManagedRolePromptContext } from './role-prompt-types.js';
 import type { RunnerChainPromptContext, VerdictRecorder } from './types.js';
 
 // FEATURE_193 (v0.7.43): SCOUT_INSTRUCTIONS_FALLBACK, PLANNER_INSTRUCTIONS_FALLBACK,
@@ -44,6 +45,38 @@ export const WORKER_INSTRUCTIONS_FALLBACK = [
   '/ blocked. You may call: read, grep, glob, bash, write, edit, multi_edit, ',
   'todo_create, todo_update, todo_list, spawn_agent, send_message, followup_task, wait_agent, interrupt_agent, list_agents, agent_output, exit_plan_mode.',
 ].join('\n');
+
+function createResolvedRolePrompt(
+  role: KodaXTaskRole,
+  agentName: string,
+  recorder: VerdictRecorder,
+  promptContext: RunnerChainPromptContext,
+  verification: KodaXTaskVerificationContract | undefined,
+  renderMode: 'stable' | 'context',
+): string {
+  const ctx = promptContext.contextFactory
+    ? promptContext.contextFactory(role, recorder)
+    : { originalTask: promptContext.prompt };
+  const toolPolicy = promptContext.toolPolicyFactory
+    ? promptContext.toolPolicyFactory(role, recorder)
+    : promptContext.toolPolicy;
+  const decision = typeof promptContext.decision === 'function'
+    ? promptContext.decision()
+    : promptContext.decision;
+  return createRolePrompt(
+    role,
+    promptContext.prompt,
+    decision,
+    verification,
+    toolPolicy,
+    agentName,
+    promptContext.metadata,
+    ctx,
+    undefined,
+    false,
+    renderMode,
+  );
+}
 
 // FEATURE_193 (v0.7.43): `renderScoutSkillMapBlock` removed — fed
 // Scout's skillMap into Generator/Evaluator prompts. V1 Scout retired,
@@ -73,48 +106,17 @@ export function resolveRoleInstructions(
     // Legacy minimal-instructions path for tests / topology-only calls.
     // FEATURE_193 (v0.7.43): removed role === 'generator' skillMap append —
     // generator role deleted along with V1 chain.
-    const capacityContract = buildWorkerActorCapacityContract(fallbackActorCapacity);
-    return capacityContract === undefined
-      ? fallback
-      : [capacityContract, '', fallback].join('\n');
+    void fallbackActorCapacity;
+    return fallback;
   }
-  const ctx = promptContext.contextFactory
-    ? promptContext.contextFactory(role, recorder)
-    : { originalTask: promptContext.prompt };
-  // P1 parity — resolve per-role tool policy at invocation time so the
-  // Future role policies can attach here; falls back to the static
-  // `toolPolicy` for tests / topology-only paths.
-  const toolPolicy = promptContext.toolPolicyFactory
-    ? promptContext.toolPolicyFactory(role, recorder)
-    : promptContext.toolPolicy;
-  // M4 parity — resolve routing decision lazily. When the caller supplies
-  // a thunk, prompt construction reads the latest plan decision. Tests pass a
-  // static decision for topology checks.
-  const decision = typeof promptContext.decision === 'function'
-    ? promptContext.decision()
-    : promptContext.decision;
-  const basePrompt = createRolePrompt(
+  const basePrompt = createResolvedRolePrompt(
     role,
-    promptContext.prompt,
-    decision,
-    verification,
-    toolPolicy,
     agentName,
-    promptContext.metadata,
-    ctx,
-    undefined, // workerId — unused by createRolePrompt body
-    false, // isTerminalAuthority — Generator is terminal via Sidecar Verifier (FEATURE_184)
+    recorder,
+    promptContext,
+    verification,
+    'stable',
   );
-  // FEATURE_086: prepend the pre-computed repo-intelligence context
-  // block so every role sees repo overview /
-  // changed scope / active module / impact metadata from turn 1. Legacy
-  // `runKodaX` injected this via `buildAutoRepoIntelligenceContext` inside
-  // `buildReasoningExecutionState`; the Runner-driven path (FEATURE_084
-  // Shard 6d-L) routed around `runKodaX` and lost the injection.
-  const repoBlock = promptContext.repoIntelligenceContext?.trim();
-  const composed = repoBlock
-    ? `${repoBlock}\n\n${basePrompt}`
-    : basePrompt;
   // FEATURE_247 (R1): a Partner profile (or any SDK-consumer profile) can carry
   // its own behavior instructions. On the SA path the embedder uses
   // `context.systemPromptOverride`; the AMA/AMAW Worker builds its role prompt
@@ -126,8 +128,52 @@ export function resolveRoleInstructions(
     ? promptContext.partnerInstructions?.trim()
     : undefined;
   return partnerBlock
-    ? `${partnerBlock}\n\n${composed}`
-    : composed;
+    ? `${partnerBlock}\n\n${basePrompt}`
+    : basePrompt;
+}
+
+/**
+ * Resolve volatile per-run facts as a synthetic user/context message. Keeping
+ * this material out of the leading system prompt preserves the provider cache
+ * prefix while retaining every managed-task contract and repository fact.
+ */
+export function resolveRoleRunContext(
+  role: KodaXTaskRole,
+  agentName: string,
+  recorder: VerdictRecorder,
+  promptContext: RunnerChainPromptContext | undefined,
+  verification: KodaXTaskVerificationContract | undefined,
+): string | undefined {
+  if (!promptContext) return undefined;
+  const roleContext = createResolvedRolePrompt(
+    role,
+    agentName,
+    recorder,
+    promptContext,
+    verification,
+    'context',
+  );
+  const repoBlock = promptContext.repoIntelligenceContext?.trim();
+  const composed = repoBlock
+    ? `${repoBlock}\n\n${roleContext}`
+    : roleContext;
+  return composed.trim().length > 0
+    ? `=== Managed Run Context ===\n${composed}\n=== End Managed Run Context ===`
+    : undefined;
+}
+
+/** Render only runtime facts that may change between tool-loop iterations. */
+export function resolveRoleRuntimeStateContext(
+  context: ManagedRolePromptContext | undefined,
+): string | undefined {
+  const actorCapacity = buildWorkerActorCapacityContract(context?.actorCapacity);
+  const teamMode = context?.teamModeSection?.trim();
+  const composed = [actorCapacity, teamMode]
+    .filter((section): section is string => Boolean(section))
+    .join('\n\n');
+  return composed.length > 0
+    ? `=== Managed Run Context ===\nRuntime state refresh:\n${composed}\n=== End Managed Run Context ===`
+    : undefined;
 }
 
 /**

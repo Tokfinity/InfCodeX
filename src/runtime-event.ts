@@ -17,7 +17,8 @@ const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
   'context.compaction.started', 'context.compaction.stats', 'context.compaction.finished',
   'context.compaction.messages', 'context.compaction.ended', 'context.compaction.skipped',
   'context.budget.snapshot', 'tool.exposure.planned', 'child_activity.finished', 'provider.retry',
-  'provider.recovery', 'repo_intelligence.trace', 'todo.updated', 'todo.warning', 'sidecar.message',
+  'provider.recovery', 'provider.cache.diagnostics', 'repo_intelligence.trace', 'todo.updated',
+  'todo.warning', 'sidecar.message',
   'run.completed', 'run.failed', 'run.cancelled', 'run.interrupted', 'artifact.created',
   'config.effective', 'runtime.warning',
 ]);
@@ -190,7 +191,11 @@ function validateKnownRuntimeEventPayload(
   if (type === 'workflow.started' || type === 'workflow.updated' || type === 'workflow.finished') {
     return isRecord(payload) ? undefined : 'requires a workflow event payload.';
   }
-  if (type === 'context.budget.snapshot' || type === 'tool.exposure.planned') {
+  if (
+    type === 'context.budget.snapshot'
+    || type === 'tool.exposure.planned'
+    || type === 'provider.cache.diagnostics'
+  ) {
     return isRecord(payload) ? undefined : 'requires an object payload.';
   }
   if (type === 'runtime.warning') {

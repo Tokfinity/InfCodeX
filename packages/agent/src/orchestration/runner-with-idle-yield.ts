@@ -133,6 +133,16 @@ export interface RunWithIdleYieldOptions<
    */
   readonly resolveResumeTurnId?: () => string | undefined;
   /**
+   * Optional fresh runtime context inserted after the completed transcript
+   * and immediately before wake messages. The callback runs for every idle
+   * resume so callers can refresh Actor/team/capability facts without
+   * replacing any previously sent prefix.
+   */
+  readonly buildResumeContextMessages?: (
+    runResult: TRunResult,
+    wakeMessages: readonly AgentMessage[],
+  ) => readonly AgentMessage[] | Promise<readonly AgentMessage[]>;
+  /**
    * Optional hook fired when the iteration cap is hit. Coding does not
    * currently log here (matches v0.7.38 behavior — silent break) but
    * the hook exists so SDK consumers can record the prompt-bug signal.
@@ -266,7 +276,20 @@ export async function runWithIdleYield<
     }
     if (resumeMessages.length === 0) break;
 
-    currentInput = [...runResult.messages, ...resumeMessages];
+    const resumeContextMessages = opts.buildResumeContextMessages
+      ? await opts.buildResumeContextMessages(runResult, resumeMessages)
+      : [];
+    // Runner.run owns the leading system message and prepends a fresh one on
+    // every invocation. Feeding its prior copy back as input would accumulate
+    // S, S+S, S+S+S across idle resumes and invalidate the prompt prefix.
+    const previousTranscript = runResult.messages[0]?.role === 'system'
+      ? runResult.messages.slice(1)
+      : runResult.messages;
+    currentInput = [
+      ...previousTranscript,
+      ...resumeContextMessages,
+      ...resumeMessages,
+    ];
     currentAgent = opts.resumeAgent(runResult);
   }
 

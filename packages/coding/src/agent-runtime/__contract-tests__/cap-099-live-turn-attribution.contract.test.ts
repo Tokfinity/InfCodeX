@@ -176,6 +176,41 @@ describe('CAP-099: live turn attribution', () => {
     }));
   });
 
+  it('forwards prompt-cache diagnostics with live turn attribution', () => {
+    const onPromptCacheDiagnostics = vi.fn();
+    const scope = createLiveTurnScope({
+      sessionId: 'session-cache-diagnostics',
+      turnId: 'turn-cache-diagnostics',
+      deliveryId: 'delivery-cache-diagnostics',
+    });
+    const events = withLiveTurnAttribution({ onPromptCacheDiagnostics }, scope);
+
+    events.onPromptCacheDiagnostics?.({
+      phase: 'request',
+      requestId: 'request-1',
+      requestedAt: '2026-07-26T00:00:00.000Z',
+      provider: 'zai',
+      model: 'glm-5.2',
+      wireModel: 'glm-5.2',
+      attempt: 1,
+      systemPromptHash: 'system-hash',
+      toolSchemaHash: 'tool-hash',
+      messagePrefixHash: 'prefix-hash',
+      messagePrefixCount: 2,
+      requestMessagesHash: 'messages-hash',
+      messageCount: 3,
+      toolCount: 4,
+    });
+
+    expect(onPromptCacheDiagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'request-1',
+      sessionId: 'session-cache-diagnostics',
+      turnId: 'turn-cache-diagnostics',
+      deliveryId: 'delivery-cache-diagnostics',
+      seq: 1,
+    }));
+  });
+
   it('uses the current scope for secondary activity events', () => {
     const todoMeta: KodaXActivityEventMeta[] = [];
     const iterationMeta: KodaXActivityEventMeta[] = [];

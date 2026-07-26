@@ -972,6 +972,10 @@ function forwardDaemonDiagnosticEvent(
     events?.onContextBudgetSnapshot?.(
       event.payload as Parameters<NonNullable<KodaXEvents['onContextBudgetSnapshot']>>[0],
     );
+  } else if (event.type === 'provider.cache.diagnostics') {
+    events?.onPromptCacheDiagnostics?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onPromptCacheDiagnostics']>>[0],
+    );
   } else if (event.type === 'tool.exposure.planned') {
     events?.onToolExposurePlanned?.(
       event.payload as Parameters<NonNullable<KodaXEvents['onToolExposurePlanned']>>[0],

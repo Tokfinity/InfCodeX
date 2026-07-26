@@ -70,6 +70,13 @@ export interface ManagedRolePromptContext {
    */
   capabilityContextBlock?: string;
   /**
+   * Capability rules that are stable for the session and retain System-level
+   * authority (for example project AGENTS rules and fixed tool-construction
+   * guidance). A real rule/config change may legitimately change the provider
+   * cache prefix; ordinary per-run facts stay in `capabilityContextBlock`.
+   */
+  stableCapabilityContextBlock?: string;
+  /**
    * FEATURE_143 (v0.7.36) — routing-notes overlay (`plan.promptOverlay`)
    * that v0.7.26 FEATURE_084 mistakenly stitched onto the user prompt
    * head. Now flows here instead so the role-prompt builder can emit

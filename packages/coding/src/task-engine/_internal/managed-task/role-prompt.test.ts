@@ -142,6 +142,99 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
   // FEATURE_184 (v0.7.45) Phase C.3: 'evaluator' removed — in-chain Evaluator retired.
   const roles = ['worker'] as const;
 
+  it('keeps stable project rules in System while volatile capability facts stay in context', () => {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      stableCapabilityContextBlock: 'PROJECT_AGENTS_STABLE_RULE',
+      capabilityContextBlock: 'MCP_DYNAMIC_FACT',
+    };
+    const render = (mode: 'stable' | 'context') => createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+      mode,
+    );
+
+    expect(render('stable')).toContain('PROJECT_AGENTS_STABLE_RULE');
+    expect(render('stable')).not.toContain('MCP_DYNAMIC_FACT');
+    expect(render('context')).toContain('MCP_DYNAMIC_FACT');
+    expect(render('context')).not.toContain('PROJECT_AGENTS_STABLE_RULE');
+  });
+
+  it('partitions every managed Worker field between stable rules and dynamic context', () => {
+    const decision = buildFallbackRoutingDecision('ROUND_QUERY_SENTINEL');
+    const ctx: ManagedRolePromptContext = {
+      originalTask: 'ORIGINAL_QUERY_SENTINEL',
+      workspace: {
+        executionCwd: 'C:\\STABLE_WORKSPACE_SENTINEL',
+        platform: 'win32',
+      },
+      stableCapabilityContextBlock: 'PROJECT_RULE_SENTINEL',
+      capabilityContextBlock: 'DYNAMIC_CAPABILITY_SENTINEL',
+      teamModeSection: 'TEAM_STATE_SENTINEL',
+      actorCapacity: { maxConcurrentThreads: 4, activeNonRootTurns: 1 },
+      skillInvocation: {
+        name: 'SKILL_NAME_SENTINEL',
+        path: 'skill/sentinel',
+        expandedContent: 'SKILL_CONTENT_SENTINEL',
+      },
+    };
+    const render = (mode: 'stable' | 'context') => createRolePrompt(
+      'worker',
+      'ROUND_QUERY_SENTINEL',
+      decision,
+      {
+        summary: 'VERIFICATION_SENTINEL',
+        requiredEvidence: ['EVIDENCE_SENTINEL'],
+      },
+      {
+        summary: 'TOOL_POLICY_SENTINEL',
+        allowedTools: ['read'],
+      },
+      'AGENT_IDENTITY_SENTINEL',
+      { metadataSentinel: 'METADATA_SENTINEL' },
+      ctx,
+      undefined,
+      false,
+      mode,
+    );
+
+    const stable = render('stable');
+    const dynamic = render('context');
+    for (const marker of [
+      'C:\\STABLE_WORKSPACE_SENTINEL',
+      'PROJECT_RULE_SENTINEL',
+      'AGENT_IDENTITY_SENTINEL',
+    ]) {
+      expect(stable).toContain(marker);
+      expect(dynamic).not.toContain(marker);
+    }
+    for (const marker of [
+      'ROUND_QUERY_SENTINEL',
+      'DYNAMIC_CAPABILITY_SENTINEL',
+      'TEAM_STATE_SENTINEL',
+      '1 non-root turns are active',
+      'Primary task:',
+      'VERIFICATION_SENTINEL',
+      'TOOL_POLICY_SENTINEL',
+      'METADATA_SENTINEL',
+      'SKILL_NAME_SENTINEL',
+      'SKILL_CONTENT_SENTINEL',
+    ]) {
+      expect(dynamic).toContain(marker);
+      expect(stable).not.toContain(marker);
+    }
+    expect(stable).not.toContain('ORIGINAL_QUERY_SENTINEL');
+  });
+
   it('renders capabilityContextBlock for every role when present', () => {
     const block = [
       '## MCP Capability Provider',

@@ -16,6 +16,12 @@ export interface DurableCompactionEventsInput {
   readonly initialSessionData?: Omit<KodaXSessionData, 'messages' | 'lineage'>;
 }
 
+function stripRunnerSystemMessage<T extends { readonly role: string }>(
+  messages: readonly T[],
+): readonly T[] {
+  return messages[0]?.role === 'system' ? messages.slice(1) : messages;
+}
+
 /** Add an awaited durable commit for a core-owned root or isolated child run. */
 export function withDurableCompactionPersistence(
   input: DurableCompactionEventsInput,
@@ -37,11 +43,16 @@ export function withDurableCompactionPersistence(
       if (!update?.preCompactionMessages) {
         throw new Error('Committed compaction is missing its exact pre-compaction snapshot.');
       }
+      const persistentMessages = stripRunnerSystemMessage(messages);
+      const persistentUpdate = {
+        ...update,
+        preCompactionMessages: stripRunnerSystemMessage(update.preCompactionMessages),
+      };
       await persistCompactedSessionHistory({
         storage,
         sessionId: input.sessionId,
-        compactedMessages: messages,
-        update,
+        compactedMessages: persistentMessages,
+        update: persistentUpdate,
         initialSessionData: input.initialSessionData,
       });
       await original?.(messages, update, meta);

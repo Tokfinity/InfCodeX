@@ -1,4 +1,8 @@
-import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import type {
+  KodaXContentBlock,
+  KodaXMessage,
+  KodaXToolDefinition,
+} from '@kodax-ai/llm';
 import { countTokens, estimateTokens } from '../tokenizer.js';
 
 export type RuntimeContextOptimizationProfile =
@@ -61,10 +65,73 @@ export interface RuntimeContextBudgetSnapshotInput {
   readonly skillCatalogText?: string;
   readonly mcpCatalogText?: string;
   readonly messages?: readonly KodaXMessage[];
+  readonly messageTokenBreakdown?: RuntimeContextBudgetMessageBreakdown;
   readonly pendingInput?: string;
   readonly recentToolResults?: readonly string[];
   readonly reservedResponseTokens?: number;
   readonly now?: () => Date;
+}
+
+export interface RuntimeContextBudgetMessageBreakdown {
+  readonly transcript: number;
+  readonly pendingInput: number;
+  readonly recentToolResults: number;
+  readonly skillCatalog: number;
+  readonly mcpCatalog: number;
+}
+
+export function partitionContextBudgetMessages(
+  messages: readonly KodaXMessage[],
+  catalogs?: {
+    readonly skillTexts?: readonly string[];
+    readonly mcpTexts?: readonly string[];
+  },
+): RuntimeContextBudgetMessageBreakdown {
+  const currentTurnId = [...messages]
+    .reverse()
+    .find((message) => message.turnId !== undefined)
+    ?.turnId;
+  const fallbackPendingStart = findLastRealUserMessageIndex(messages);
+  const currentTurnStart = currentTurnId === undefined
+    ? fallbackPendingStart
+    : messages.findIndex((message) => message.turnId === currentTurnId);
+  const latestAssistantIndex = findLastAssistantIndex(messages);
+  const pendingStart = currentTurnStart < 0
+    ? messages.length
+    : latestAssistantIndex >= currentTurnStart
+      ? latestAssistantIndex + 1
+      : currentTurnStart;
+  const totals = {
+    transcript: 0,
+    pendingInput: 0,
+    recentToolResults: 0,
+    skillCatalog: 0,
+    mcpCatalog: 0,
+  };
+
+  messages.forEach((message, index) => {
+    const messageTokens = estimateTokens([message]);
+    if (containsToolResult(message)) {
+      totals.recentToolResults += messageTokens;
+      return;
+    }
+    const catalogTokens = countCatalogTokens(message, catalogs);
+    const mcpTokens = Math.min(messageTokens, catalogTokens.mcpCatalog);
+    const skillTokens = Math.min(
+      messageTokens - mcpTokens,
+      catalogTokens.skillCatalog,
+    );
+    totals.mcpCatalog += mcpTokens;
+    totals.skillCatalog += skillTokens;
+    const ordinaryTokens = messageTokens - mcpTokens - skillTokens;
+    if (pendingStart >= 0 && index >= pendingStart) {
+      totals.pendingInput += ordinaryTokens;
+    } else {
+      totals.transcript += ordinaryTokens;
+    }
+  });
+
+  return totals;
 }
 
 export function estimateToolSchemaTokens(
@@ -85,11 +152,21 @@ export function createRuntimeContextBudgetSnapshot(
   const reservedResponse = toNonNegativeInteger(input.reservedResponseTokens ?? 0);
   const systemPrompt = estimateStringTokens(input.systemPrompt ?? '');
   const toolSchemas = sumTokens(input.toolDefinitions ?? [], estimateToolSchemaTokens);
-  const skillCatalog = estimateStringTokens(input.skillCatalogText ?? '');
-  const mcpCatalog = estimateStringTokens(input.mcpCatalogText ?? '');
-  const transcript = estimateTokens(input.messages ?? []);
-  const pendingInput = estimateStringTokens(input.pendingInput ?? '');
-  const recentToolResults = sumTokens(input.recentToolResults ?? [], estimateStringTokens);
+  const skillCatalog = input.messageTokenBreakdown
+    ? toNonNegativeInteger(input.messageTokenBreakdown.skillCatalog)
+    : estimateStringTokens(input.skillCatalogText ?? '');
+  const mcpCatalog = input.messageTokenBreakdown
+    ? toNonNegativeInteger(input.messageTokenBreakdown.mcpCatalog)
+    : estimateStringTokens(input.mcpCatalogText ?? '');
+  const transcript = input.messageTokenBreakdown
+    ? toNonNegativeInteger(input.messageTokenBreakdown.transcript)
+    : estimateTokens(input.messages ?? []);
+  const pendingInput = input.messageTokenBreakdown
+    ? toNonNegativeInteger(input.messageTokenBreakdown.pendingInput)
+    : estimateStringTokens(input.pendingInput ?? '');
+  const recentToolResults = input.messageTokenBreakdown
+    ? toNonNegativeInteger(input.messageTokenBreakdown.recentToolResults)
+    : sumTokens(input.recentToolResults ?? [], estimateStringTokens);
   const total = systemPrompt
     + toolSchemas
     + skillCatalog
@@ -142,6 +219,92 @@ export function createRuntimeContextBudgetSnapshot(
     }),
     createdAt: (input.now?.() ?? new Date()).toISOString(),
   };
+}
+
+function containsToolResult(message: KodaXMessage): boolean {
+  return Array.isArray(message.content)
+    && message.content.some((block) => block.type === 'tool_result');
+}
+
+function findLastRealUserMessageIndex(messages: readonly KodaXMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === 'user' && message._synthetic !== true && !containsToolResult(message)) {
+      let start = index;
+      while (start > 0 && messages[start - 1]?.role === 'user') start -= 1;
+      return start;
+    }
+  }
+  return -1;
+}
+
+function findLastAssistantIndex(messages: readonly KodaXMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'assistant') return index;
+  }
+  return -1;
+}
+
+interface CatalogMatch {
+  readonly start: number;
+  readonly end: number;
+  readonly kind: 'skillCatalog' | 'mcpCatalog';
+}
+
+function countCatalogTokens(
+  message: KodaXMessage,
+  catalogs: {
+    readonly skillTexts?: readonly string[];
+    readonly mcpTexts?: readonly string[];
+  } | undefined,
+): { readonly skillCatalog: number; readonly mcpCatalog: number } {
+  const text = messageText(message);
+  if (text.length === 0 || catalogs === undefined) {
+    return { skillCatalog: 0, mcpCatalog: 0 };
+  }
+  const candidates = [
+    ...findTextMatches(text, catalogs.skillTexts, 'skillCatalog'),
+    ...findTextMatches(text, catalogs.mcpTexts, 'mcpCatalog'),
+  ].sort((left, right) => left.start - right.start || right.end - left.end);
+  const accepted: CatalogMatch[] = [];
+  for (const candidate of candidates) {
+    if (accepted.some((match) => candidate.start < match.end && candidate.end > match.start)) {
+      continue;
+    }
+    accepted.push(candidate);
+  }
+  return accepted.reduce(
+    (totals, match) => ({
+      ...totals,
+      [match.kind]: totals[match.kind] + countTokens(text.slice(match.start, match.end)),
+    }),
+    { skillCatalog: 0, mcpCatalog: 0 },
+  );
+}
+
+function findTextMatches(
+  text: string,
+  needles: readonly string[] | undefined,
+  kind: CatalogMatch['kind'],
+): CatalogMatch[] {
+  const matches: CatalogMatch[] = [];
+  for (const needle of new Set(needles?.map((value) => value.trim()).filter(Boolean) ?? [])) {
+    let start = text.indexOf(needle);
+    while (start >= 0) {
+      matches.push({ start, end: start + needle.length, kind });
+      start = text.indexOf(needle, start + needle.length);
+    }
+  }
+  return matches;
+}
+
+function messageText(message: KodaXMessage): string {
+  if (typeof message.content === 'string') return message.content;
+  return message.content
+    .filter((block): block is Extract<KodaXContentBlock, { type: 'text' }> =>
+      block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
 }
 
 function estimateStringTokens(value: string): number {

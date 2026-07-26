@@ -1440,6 +1440,15 @@ describe('runtime daemon dispatcher', () => {
       type: 'context.compaction.skipped',
       payload: { reason: 'cooldown' },
     });
+    runtime.emit({
+      id: 'evt-cache-diagnostics',
+      seq: 4,
+      time: '2026-07-09T00:00:03.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'provider.cache.diagnostics',
+      payload: { phase: 'response', cachedReadTokens: 80 },
+    });
 
     const basic = createRuntimeDaemonDispatcher({ runtime });
     await initializeDispatcher(basic, {});
@@ -1478,6 +1487,7 @@ describe('runtime daemon dispatcher', () => {
         expect.objectContaining({ type: 'run.completed' }),
         expect.objectContaining({ type: 'context.budget.snapshot' }),
         expect.objectContaining({ type: 'context.compaction.skipped' }),
+        expect.objectContaining({ type: 'provider.cache.diagnostics' }),
       ]);
     }
     expect(isRuntimeDaemonSuccessResponse(diagnosticBudget)).toBe(true);

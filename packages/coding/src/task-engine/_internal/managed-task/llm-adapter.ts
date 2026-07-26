@@ -18,6 +18,8 @@
  * previous in-file declarations.
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type {
   KodaXContentBlock,
   KodaXMessage,
@@ -72,7 +74,11 @@ import {
   type CostTracker,
 } from '../../../agent-runtime/middleware/cost-tracker.js';
 import { countTokens, estimateTokens } from '../../../tokenizer.js';
-import { estimateToolSchemaTokens } from '../../../agent-runtime/context-budget.js';
+import {
+  createRuntimeContextBudgetSnapshot,
+  estimateToolSchemaTokens,
+  partitionContextBudgetMessages,
+} from '../../../agent-runtime/context-budget.js';
 import {
   resolveReasoningMode,
   resolveRoleEffort,
@@ -81,6 +87,7 @@ import { mapLegacyReasoningModeToEffortIntent } from '@kodax-ai/llm';
 import type {
   KodaXEvents,
   KodaXOptions,
+  KodaXPromptCacheDiagnosticEvent,
   KodaXReasoningMode,
   KodaXWireReasoningEffort,
 } from '../../../types.js';
@@ -160,6 +167,121 @@ function estimateFinalEnvelopeTokens(
   return estimateTokens(messages) + countTokens(system) + toolSchemaTokens;
 }
 
+function hashPromptCacheValue(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
+}
+
+function hashImageFile(path: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return `unreadable:${hashPromptCacheValue(path)}`;
+  }
+}
+
+function projectProviderVisibleContent(content: KodaXMessage['content']): unknown {
+  if (typeof content === 'string') return content;
+  return content.map((block) => {
+    if (block.type === 'image') {
+      return {
+        type: block.type,
+        mediaType: block.mediaType,
+        dataHash: hashImageFile(block.path),
+      };
+    }
+    if (block.type === 'tool_result') {
+      return {
+        type: block.type,
+        tool_use_id: block.tool_use_id,
+        content: typeof block.content === 'string'
+          ? block.content
+          : block.content.map((item) => item.type === 'image'
+              ? {
+                  type: item.type,
+                  mediaType: item.mediaType,
+                  dataHash: hashImageFile(item.path),
+                }
+              : item),
+        is_error: block.is_error,
+      };
+    }
+    return block;
+  });
+}
+
+export function hashProviderVisibleMessages(messages: readonly KodaXMessage[]): string {
+  return hashPromptCacheValue(messages.map((message) => ({
+    role: message.role,
+    content: projectProviderVisibleContent(message.content),
+  })));
+}
+
+function serializeSystemContentForDiagnostics(
+  content: KodaXMessage['content'],
+): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is Extract<KodaXContentBlock, { type: 'text' }> =>
+      block.type === 'text')
+    .map((block) => block.text)
+    .filter((text) => text.trim().length > 0)
+    .join('\n');
+}
+
+function normalizeDiagnosticEnvelope(
+  system: string,
+  messages: readonly KodaXMessage[],
+): { readonly system: string; readonly messages: readonly KodaXMessage[] } {
+  const systemParts = system.trim().length > 0 ? [system] : [];
+  const nonSystemMessages: KodaXMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== 'system') {
+      nonSystemMessages.push(message);
+      continue;
+    }
+    const text = serializeSystemContentForDiagnostics(message.content);
+    if (text.length > 0) systemParts.push(text);
+  }
+  return {
+    system: systemParts.join('\n\n'),
+    messages: nonSystemMessages,
+  };
+}
+
+function findCurrentTurnStart(messages: readonly KodaXMessage[]): number {
+  const currentTurnId = [...messages]
+    .reverse()
+    .find((message) => message.turnId !== undefined)
+    ?.turnId;
+  if (currentTurnId !== undefined) {
+    const turnStart = messages.findIndex((message) => message.turnId === currentTurnId);
+    if (turnStart >= 0) return turnStart;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'user' || message._synthetic === true) continue;
+    let start = index;
+    while (start > 0 && messages[start - 1]?.role === 'user') start -= 1;
+    return start;
+  }
+  return messages.length;
+}
+
+function sanitizeProviderEndpoint(
+  endpoint: string | undefined,
+): { readonly origin: string; readonly pathHash: string } | undefined {
+  if (!endpoint) return undefined;
+  try {
+    const parsed = new URL(endpoint);
+    return {
+      origin: parsed.origin,
+      pathHash: hashPromptCacheValue(parsed.pathname),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve the provider reasoning envelope shared by the managed request and
  * its cache-stable compaction request. Keeping this in one function prevents
  * the two payload prefixes from drifting and invalidating provider KV cache. */
@@ -209,8 +331,8 @@ export function buildRunnerLlmAdapter(
    * provided, the adapter:
    *   1. detects agent transitions and resets the counter on each one
    *   2. checks `shouldFireTodoReminder` before each provider call;
-   *      if it fires, appends the `<system-reminder>` text to `system`
-   *      so the model sees it before its next response
+   *      if it fires, appends a synthetic user/context message so the
+   *      stable leading system prompt remains cacheable
    *   3. ticks the counter forward (one round = one adapter call)
    * Omitting either argument disables the reminder logic entirely
    * (older callers / unit-test fixtures).
@@ -234,6 +356,12 @@ export function buildRunnerLlmAdapter(
    * the adapter consumes it once on the next provider call.
    */
   todoDriftReminderState?: TodoDriftReminderState,
+  contextBudgetCatalogs?: {
+    readonly skillCatalogText?: string;
+    readonly selectedSkillText?: string;
+    readonly mcpCatalogText?: string;
+    readonly contextWindow?: number;
+  },
 ): (messages: readonly KodaXMessage[], agent: Agent) => Promise<RunnerLlmResult> {
   // FEATURE_072 parity: the REPL's token-count indicator reads
   // `onIterationEnd` to refresh after each worker LLM turn. The iteration
@@ -279,13 +407,15 @@ export function buildRunnerLlmAdapter(
         systemParts.push(text);
       }
     }
-    let system = systemParts.join('\n\n');
-    const transcript = messages.slice(cut);
+    const system = systemParts.join('\n\n');
+    let transcript = messages.slice(cut);
+    const runtimeReminders: string[] = [];
+    const injectedInputMessages: KodaXMessage[] = [];
 
     if (todoStore && todoDriftReminderState) {
       const reminder = consumeTodoDriftReminderText(todoDriftReminderState, todoStore);
       if (reminder) {
-        system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
+        runtimeReminders.push(reminder);
       }
       const completionReminder = consumeAgentCompletionTodoReminderText(
         todoDriftReminderState,
@@ -293,9 +423,7 @@ export function buildRunnerLlmAdapter(
         transcript,
       );
       if (completionReminder) {
-        system = system.length > 0
-          ? `${system}\n\n${completionReminder}`
-          : completionReminder;
+        runtimeReminders.push(completionReminder);
       }
     }
 
@@ -304,25 +432,41 @@ export function buildRunnerLlmAdapter(
     // role swap is a natural reset point — Scout → Planner → Generator
     // → Evaluator each represent a fresh attempt at making progress on
     // the list). Then, if the threshold has been hit and we're armed,
-    // append the reminder text to `system` so the model reads it
-    // alongside its role instructions on this exact turn. Finally,
-    // tick the counter forward — one adapter call = one round.
+    // append the reminder as a persisted synthetic input for this exact
+    // turn. Finally, tick the counter forward — one adapter call = one round.
     if (todoStore && todoReminderState) {
       if (detectAgentTransition(todoReminderState, agent.name)) {
         resetTodoReminderState(todoReminderState);
       }
       if (shouldFireTodoReminder(todoReminderState, todoStore)) {
         const reminder = buildTodoReminderText(todoStore, todoReminderState.roundsSinceUpdate.current);
-        system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
+        runtimeReminders.push(reminder);
       }
       tickTodoReminder(todoReminderState);
     }
 
-    const wireTools: KodaXToolDefinition[] = (agent.tools ?? []).map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.input_schema,
-    }));
+    if (runtimeReminders.length > 0) {
+      const reminderAnchor = [...transcript]
+        .reverse()
+        .find((message) => message.turnId !== undefined || message.timestamp !== undefined);
+      const reminderMessage: KodaXMessage = {
+        role: 'user',
+        content: runtimeReminders.join('\n\n'),
+        _synthetic: true,
+        _source: 'managed-runtime-reminder',
+        turnId: reminderAnchor?.turnId,
+        timestamp: reminderAnchor?.timestamp ?? new Date().toISOString(),
+      };
+      injectedInputMessages.push(reminderMessage);
+      transcript = [...transcript, reminderMessage];
+    }
+
+    const wireTools: KodaXToolDefinition[] = (agent.tools ?? [])
+      .map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.input_schema,
+      }));
 
     // Reasoning single-tracking: resolve the per-turn reasoning EFFORT through
     // the FEATURE_078 L1-L2 chain (effort-native):
@@ -369,6 +513,128 @@ export function buildRunnerLlmAdapter(
     } else {
       const provider = resolveProvider(options.provider ?? 'anthropic');
       const providerName = options.provider ?? provider.name ?? 'anthropic';
+      const emitContextBudgetSnapshot = (
+        providerMessages: readonly KodaXMessage[],
+      ): void => {
+        if (
+          options.context?.contextDiagnostics !== true
+          || !options.events?.onContextBudgetSnapshot
+        ) {
+          return;
+        }
+        const diagnosticEnvelope = normalizeDiagnosticEnvelope(system, providerMessages);
+        const contextWindow = contextBudgetCatalogs?.contextWindow
+          ?? provider.getEffectiveContextWindow(activeModel);
+        const turnId = [...diagnosticEnvelope.messages]
+          .reverse()
+          .find((message) => message.turnId !== undefined)
+          ?.turnId;
+        const messageTokenBreakdown = partitionContextBudgetMessages(
+          diagnosticEnvelope.messages,
+          {
+            skillTexts: [
+              contextBudgetCatalogs?.skillCatalogText,
+              contextBudgetCatalogs?.selectedSkillText,
+            ].filter((value): value is string => value !== undefined),
+            mcpTexts: contextBudgetCatalogs?.mcpCatalogText
+              ? [contextBudgetCatalogs.mcpCatalogText]
+              : [],
+          },
+        );
+        try {
+          options.events.onContextBudgetSnapshot(createRuntimeContextBudgetSnapshot({
+            sessionId: options.session?.id,
+            turnId,
+            provider: providerName,
+            model: activeModel ?? provider.getModel?.() ?? 'unknown',
+            contextWindow,
+            systemPrompt: diagnosticEnvelope.system,
+            toolDefinitions: wireTools,
+            messageTokenBreakdown,
+            reservedResponseTokens: provider.getEffectiveMaxOutputTokens(activeModel),
+            profile: 'report_only',
+          }));
+        } catch (error) {
+          emitResilienceDebug('[context-diagnostics:budget-callback-error]', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
+      const beginPromptCacheDiagnostic = (
+        providerMessages: readonly KodaXMessage[],
+        attempt: number,
+        transport: 'stream' | 'complete' = 'stream',
+      ): KodaXPromptCacheDiagnosticEvent | undefined => {
+        if (
+          options.context?.contextDiagnostics !== true
+          || !options.events?.onPromptCacheDiagnostics
+        ) {
+          return undefined;
+        }
+        const diagnosticEnvelope = normalizeDiagnosticEnvelope(system, providerMessages);
+        const messagePrefixCount = findCurrentTurnStart(diagnosticEnvelope.messages);
+        const endpointIdentity = sanitizeProviderEndpoint(provider.getBaseUrl());
+        const event: KodaXPromptCacheDiagnosticEvent = {
+          phase: 'request',
+          transport,
+          requestId: randomUUID(),
+          requestedAt: new Date().toISOString(),
+          provider: providerName,
+          model: activeModel ?? provider.getModel?.() ?? 'unknown',
+          wireModel: provider.getWireModel(activeModel),
+          reasoningHash: hashPromptCacheValue(providerReasoning ?? null),
+          maxOutputTokens: provider.getEffectiveMaxOutputTokens(activeModel),
+          kodaxPromptCacheEnabled: options.disablePromptCache === true
+            ? false
+            : options.disablePromptCache === false
+              ? true
+              : process.env.KODAX_DISABLE_PROMPT_CACHE !== '1',
+          endpoint: endpointIdentity?.origin,
+          endpointPathHash: endpointIdentity?.pathHash,
+          attempt,
+          systemPromptHash: hashPromptCacheValue(diagnosticEnvelope.system),
+          toolSchemaHash: hashPromptCacheValue(wireTools),
+          messagePrefixHash: hashProviderVisibleMessages(
+            diagnosticEnvelope.messages.slice(0, messagePrefixCount),
+          ),
+          messagePrefixCount,
+          requestMessagesHash: hashProviderVisibleMessages(diagnosticEnvelope.messages),
+          messageCount: diagnosticEnvelope.messages.length,
+          toolCount: wireTools.length,
+        };
+        try {
+          options.events.onPromptCacheDiagnostics(event);
+        } catch (error) {
+          emitResilienceDebug('[context-diagnostics:cache-callback-error]', {
+            phase: event.phase,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return event;
+      };
+      const completePromptCacheDiagnostic = (
+        request: KodaXPromptCacheDiagnosticEvent | undefined,
+        usage: KodaXTokenUsage | undefined,
+      ): void => {
+        if (!request || !options.events?.onPromptCacheDiagnostics) return;
+        const event: KodaXPromptCacheDiagnosticEvent = {
+          ...request,
+          phase: 'response',
+          completedAt: new Date().toISOString(),
+          inputTokens: usage?.inputTokens,
+          outputTokens: usage?.outputTokens,
+          cachedReadTokens: usage?.cachedReadTokens,
+          cachedWriteTokens: usage?.cachedWriteTokens,
+        };
+        try {
+          options.events.onPromptCacheDiagnostics(event);
+        } catch (error) {
+          emitResilienceDebug('[context-diagnostics:cache-callback-error]', {
+            phase: event.phase,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
       // Shard 6d-P: restore the legacy second-tier retry/recovery loop
       // (agent.ts:1955-2198). Without this, any transient stream error
       // (network/terminated/stream-incomplete/idle-timeout) aborts the
@@ -526,6 +792,8 @@ export function buildRunnerLlmAdapter(
         };
 
         try {
+          emitContextBudgetSnapshot(providerMessages);
+          const cacheDiagnostic = beginPromptCacheDiagnostic(providerMessages, attempt);
           raw = await provider.stream(
             providerMessages,
             [...wireTools],
@@ -534,6 +802,7 @@ export function buildRunnerLlmAdapter(
             streamOptions,
             retrySignal,
           );
+          completePromptCacheDiagnostic(cacheDiagnostic, raw.usage);
           // max_tokens escalation: if the capped budget hit the cap and
           // we haven't yet escalated this adapter call, stage
           // KODAX_ESCALATED_MAX_OUTPUT_TOKENS for the next iteration and
@@ -670,6 +939,12 @@ export function buildRunnerLlmAdapter(
                 true,
               );
               telemetryBoundary(boundaryTracker.snapshot());
+              emitContextBudgetSnapshot(providerMessages);
+              const fallbackCacheDiagnostic = beginPromptCacheDiagnostic(
+                providerMessages,
+                attempt,
+                'complete',
+              );
               raw = await provider.complete(
                 providerMessages,
                 [...wireTools],
@@ -692,6 +967,7 @@ export function buildRunnerLlmAdapter(
                 },
                 fallbackSignal,
               );
+              completePromptCacheDiagnostic(fallbackCacheDiagnostic, raw.usage);
               break;
             } catch (fallbackError) {
               error = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
@@ -820,6 +1096,11 @@ export function buildRunnerLlmAdapter(
         );
         const l5Signal = options.abortSignal ?? undefined;
         try {
+          emitContextBudgetSnapshot(providerMessages);
+          const cacheDiagnostic = beginPromptCacheDiagnostic(
+            providerMessages,
+            attempt + l5Retries,
+          );
           raw = await provider.stream(
             providerMessages,
             [...wireTools],
@@ -858,6 +1139,7 @@ export function buildRunnerLlmAdapter(
             },
             l5Signal,
           );
+          completePromptCacheDiagnostic(cacheDiagnostic, raw.usage);
         } catch {
           // L5 retries are best-effort — any failure here falls back to
           // the partial result we already have.
@@ -950,7 +1232,12 @@ export function buildRunnerLlmAdapter(
     // provider returns 400 if prior assistant turns with tool_use are
     // missing the thinking block in history.
     const thinkingBlocks = streamResult.thinkingBlocks;
-    const runnerResult: RunnerLlmResult = { text, toolCalls, thinkingBlocks };
+    const runnerResult: RunnerLlmResult = {
+      text,
+      toolCalls,
+      thinkingBlocks,
+      injectedInputMessages,
+    };
 
     // Anchor the API total to the same completed assistant transcript Runner
     // appends. Future tool-result growth is then counted exactly once by
@@ -958,6 +1245,7 @@ export function buildRunnerLlmAdapter(
     if (contextTokenSnapshotRef) {
       const completedRunnerTranscript = [
         ...messages,
+        ...injectedInputMessages,
         buildAssistantMessageFromLlmResult(runnerResult),
       ] as KodaXMessage[];
       const apiTotal = streamResult.usage?.totalTokens;

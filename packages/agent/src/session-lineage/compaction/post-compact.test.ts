@@ -52,6 +52,11 @@ describe('buildPostCompactAttachments', () => {
     ];
     const result = buildPostCompactAttachments(ledger, 50000);
     expect(result.ledgerMessage).not.toBeNull();
+    expect(result.ledgerMessage).toMatchObject({
+      role: 'user',
+      _synthetic: true,
+      _source: 'compaction-context',
+    });
     const content = result.ledgerMessage?.content as string;
     expect(content).toContain('Modified:');
     expect(content).toContain('src/auth.ts (edit)');
@@ -445,6 +450,30 @@ describe('FEATURE_185 (v0.7.42): bash exit_code + tail rendering', () => {
 });
 
 describe('injectPostCompactAttachments', () => {
+  it('keeps dynamic attachments after a user-shaped checkpoint instead of leading System', () => {
+    const checkpoint = {
+      role: 'user' as const,
+      content: '[对话历史摘要]\n\nsummary',
+      _synthetic: true,
+      _source: 'compaction-checkpoint',
+    };
+    const ledger = {
+      role: 'user' as const,
+      content: '[Post-compact: recent operations]\nledger',
+      _synthetic: true,
+      _source: 'compaction-context',
+    };
+
+    expect(injectPostCompactAttachments(
+      [checkpoint, { role: 'assistant', content: 'tail' }],
+      { ledgerMessage: ledger, fileMessages: [], totalTokens: 10 },
+    )).toEqual([
+      checkpoint,
+      ledger,
+      { role: 'assistant', content: 'tail' },
+    ]);
+  });
+
   it('returns original messages when no attachments', () => {
     const messages: KodaXMessage[] = [
       { role: 'system', content: 'summary' },
@@ -522,12 +551,16 @@ describe('buildFileContentMessages', () => {
     expect(result).toEqual([]);
   });
 
-  it('reads a modified file and creates a system message', async () => {
+  it('reads a modified file into synthetic user context', async () => {
     const filePath = await createTmpFile('test.ts', 'const x = 1;\nconst y = 2;\n');
     const ledger = [createLedgerEntry('file_modified', filePath)];
     const result = await buildFileContentMessages(ledger, 10000);
     expect(result).toHaveLength(1);
-    expect(result[0]?.role).toBe('system');
+    expect(result[0]).toMatchObject({
+      role: 'user',
+      _synthetic: true,
+      _source: 'compaction-context',
+    });
     expect(typeof result[0]?.content === 'string' && result[0].content).toContain('const x = 1');
     expect(typeof result[0]?.content === 'string' && result[0].content).toContain(filePath);
   });

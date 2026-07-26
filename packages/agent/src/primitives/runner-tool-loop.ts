@@ -54,6 +54,13 @@ export interface RunnerLlmResult {
   readonly toolCalls?: readonly RunnerToolCall[];
   readonly stopReason?: string;
   /**
+   * Provider-visible input messages synthesized by the LLM adapter for this
+   * exact generation (for example a runtime reminder). Runner commits them
+   * immediately before the generated assistant message so the authoritative
+   * transcript remains a faithful prefix of the next provider request.
+   */
+  readonly injectedInputMessages?: readonly AgentMessage[];
+  /**
    * v0.7.26 parity: extended-thinking blocks from the provider stream.
    * Must be preserved on the assistant message so (a) session resume can
    * re-render them and (b) Anthropic's extended-thinking API contract is

@@ -79,6 +79,7 @@
     "dev:mem-snapshot": "node scripts/mem-diag-launch.cjs 2",
     "probe:reasoning": "tsx scripts/probe-reasoning.ts",
     "probe:max-tokens": "node scripts/probe-max-tokens.mjs",
+    "probe:prompt-cache": "node scripts/probe-prompt-cache.mjs",
     "start": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs dist/kodax_bootstrap.js",
     "build:binary": "node scripts/build-binary.mjs",
     "build:binary:all": "node scripts/build-binary.mjs --all",

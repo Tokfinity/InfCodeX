@@ -56,6 +56,7 @@ import type {
   KodaXMessage,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
+  KodaXPromptCacheDiagnosticEvent,
   KodaXReasoningMode,
   KodaXResult,
   KodaXSessionData,
@@ -1661,6 +1662,7 @@ export type RuntimeEventType =
   | 'child_activity.finished'
   | 'provider.retry'
   | 'provider.recovery'
+  | 'provider.cache.diagnostics'
   | 'repo_intelligence.trace'
   | 'todo.updated'
   | 'todo.warning'
@@ -1854,6 +1856,7 @@ export type RuntimeEventPayloadMap = Omit<
   | 'workflow.updated'
   | 'workflow.finished'
   | 'context.budget.snapshot'
+  | 'provider.cache.diagnostics'
   | 'tool.exposure.planned'
   | 'context.compaction.messages'
   | 'context.compaction.finished'
@@ -1891,6 +1894,7 @@ export type RuntimeEventPayloadMap = Omit<
   readonly 'workflow.updated': WorkflowProcessEvent;
   readonly 'workflow.finished': WorkflowProcessEvent;
   readonly 'context.budget.snapshot': RuntimeContextBudgetSnapshot;
+  readonly 'provider.cache.diagnostics': KodaXPromptCacheDiagnosticEvent;
   readonly 'tool.exposure.planned': RuntimeToolExposurePlan;
   readonly 'context.compaction.messages': RuntimeContextCompactionMessagesEventPayload;
   readonly 'context.compaction.finished': RuntimeContextCompactionFinishedEventPayload;
@@ -8434,6 +8438,10 @@ function wrapKodaXEvents(input: {
     onContextBudgetSnapshot(event) {
       emit('context.budget.snapshot', event, event);
       original?.onContextBudgetSnapshot?.(event);
+    },
+    onPromptCacheDiagnostics(event) {
+      emit('provider.cache.diagnostics', event, event);
+      original?.onPromptCacheDiagnostics?.(event);
     },
     onToolExposurePlanned(event) {
       emit('tool.exposure.planned', event, event);

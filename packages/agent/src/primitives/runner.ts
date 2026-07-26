@@ -853,6 +853,10 @@ async function genericRun<TData>(
       opts.llm,
       agentSpan,
     );
+    for (const injectedInputMessage of turn.injectedInputMessages ?? []) {
+      transcript.push(injectedInputMessage);
+      await commitMessage(opts, injectedInputMessage);
+    }
     const toolCalls = turn.toolCalls ?? [];
     if (
       toolCalls.length > 0

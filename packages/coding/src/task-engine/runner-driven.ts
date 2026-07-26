@@ -105,6 +105,7 @@ import { attachManagedTaskRepoIntelligence } from './_internal/managed-task/repo
 // last consumer (Shard 6d-k Scout suspicious-completion block) deleted
 // alongside the V1 `recorder.scout` slot.
 import { buildManagedWorkerToolPolicy } from './_internal/managed-task/tool-policy.js';
+import { formatFullSkillSection } from './_internal/managed-task/formatting.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
 import {
@@ -293,6 +294,10 @@ import {
   buildRunnerAgentChain,
   type RunnerAgentChain,
 } from './_internal/managed-task/agent-chain.js';
+import {
+  resolveRoleRunContext,
+  resolveRoleRuntimeStateContext,
+} from './_internal/managed-task/role-prompts.js';
 import {
   buildRunnerLlmAdapter,
   resolveManagedProviderReasoning,
@@ -1006,6 +1011,7 @@ async function runManagedTaskViaRunnerInner(
     configurable: true,
   });
 
+
   const recorder: VerdictRecorder = {};
   // FEATURE_193 (v0.7.43): V1 `recorder.scout` / `recorder.contract`
   // resume-seed restoration removed — slots deleted in v0.7.43 along
@@ -1176,6 +1182,7 @@ async function runManagedTaskViaRunnerInner(
   const contextTokenSnapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
     current: options.context?.contextTokenSnapshot,
   };
+  const resolvedContextCapacity = await resolveManagedTaskContextCapacity(options);
   const messageQueueAgentId = actorMessageQueueId(baseCtx);
   const enforceMailboxEnvelope = createEnvelopeAggregateBudgetEnforcer(
     baseCtx,
@@ -1236,6 +1243,9 @@ async function runManagedTaskViaRunnerInner(
   const isNewSessionForCapabilities = !options.session?.initialMessages
     || options.session.initialMessages.length === 0;
   let prebuiltCapabilityContextBlock: string | undefined;
+  let prebuiltStableCapabilityContextBlock: string | undefined;
+  let amaSkillCatalogText: string | undefined;
+  let amaMcpCatalogText: string | undefined;
   try {
     const capabilitySections = await buildCapabilityContextSections(
       options,
@@ -1261,8 +1271,33 @@ async function runManagedTaskViaRunnerInner(
     const filtered = capabilitySections.filter(
       (section) => !AMA_OWNED_SECTION_IDS.has(section.id),
     );
-    if (filtered.length > 0) {
-      prebuiltCapabilityContextBlock = filtered
+    const AMA_STABLE_CAPABILITY_SECTION_IDS = new Set<string>([
+      'project-agents',
+      'self-knowledge-routing',
+      'memory-rules',
+      'tool-construction',
+    ]);
+    const stableCapabilitySections = filtered.filter(
+      (section) => AMA_STABLE_CAPABILITY_SECTION_IDS.has(section.id),
+    );
+    const dynamicCapabilitySections = filtered.filter(
+      (section) => !AMA_STABLE_CAPABILITY_SECTION_IDS.has(section.id),
+    );
+    amaSkillCatalogText = dynamicCapabilitySections
+      .filter((section) => section.id === 'skills-addendum')
+      .map((section) => section.content)
+      .join('\n\n') || undefined;
+    amaMcpCatalogText = dynamicCapabilitySections
+      .filter((section) => section.id === 'mcp-capability-context')
+      .map((section) => section.content)
+      .join('\n\n') || undefined;
+    if (stableCapabilitySections.length > 0) {
+      prebuiltStableCapabilityContextBlock = stableCapabilitySections
+        .map((section) => section.content)
+        .join('\n\n');
+    }
+    if (dynamicCapabilitySections.length > 0) {
+      prebuiltCapabilityContextBlock = dynamicCapabilitySections
         .map((section) => section.content)
         .join('\n\n');
     }
@@ -1311,6 +1346,7 @@ async function runManagedTaskViaRunnerInner(
       originalTask: prompt,
       workspace: managedWorkspace,
       capabilityContextBlock: prebuiltCapabilityContextBlock,
+      stableCapabilityContextBlock: prebuiltStableCapabilityContextBlock,
       ...(teamModeBlock ? { teamModeSection: teamModeBlock } : {}),
       ...(actorTree ? {
         actorCapacity: {
@@ -1445,6 +1481,14 @@ async function runManagedTaskViaRunnerInner(
     todoReminderState,
     iterationStateRef,
     todoDriftReminderState,
+    {
+      skillCatalogText: amaSkillCatalogText,
+      selectedSkillText: skillInvocationCtx
+        ? formatFullSkillSection(skillInvocationCtx)
+        : undefined,
+      mcpCatalogText: amaMcpCatalogText,
+      contextWindow: resolvedContextCapacity.contextWindow,
+    },
   );
 
   // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
@@ -1514,9 +1558,42 @@ async function runManagedTaskViaRunnerInner(
     turnId: liveTurnController.currentTurnId(),
     timestamp: new Date().toISOString(),
   };
-  const runnerInput = resolvedInitial.messages.length > 0
-    ? [...resolvedInitial.messages, currentUserMessage]
-    : [currentUserMessage];
+  let lastManagedRuntimeStateContext: string | undefined;
+  const buildManagedRunContextMessage = (
+    turnId: string | undefined,
+    timestamp: string | undefined,
+  ): KodaXMessage | undefined => {
+    const runtimeStateContext = resolveRoleRuntimeStateContext(
+      rolePromptContextFactory('worker', recorder),
+    );
+    const managedRunContext = resolveRoleRunContext(
+      'worker',
+      WORKER_AGENT_NAME,
+      recorder,
+      chainPromptContext,
+      options.context?.taskVerification,
+    ) ?? runtimeStateContext;
+    lastManagedRuntimeStateContext = runtimeStateContext;
+    return managedRunContext
+      ? {
+          role: 'user',
+          content: managedRunContext,
+          _synthetic: true,
+          _source: 'managed-run-context',
+          turnId,
+          timestamp,
+        }
+      : undefined;
+  };
+  const managedRunContextMessage = buildManagedRunContextMessage(
+    currentUserMessage.turnId,
+    currentUserMessage.timestamp,
+  );
+  const runnerInput = [
+    ...resolvedInitial.messages,
+    ...(managedRunContextMessage ? [managedRunContextMessage] : []),
+    currentUserMessage,
+  ];
 
   // Load the compaction hook once per run. `intelligentCompact` runs
   // before every provider.stream call; the Runner-driven path routes
@@ -1535,7 +1612,6 @@ async function runManagedTaskViaRunnerInner(
   // FEATURE_193 (v0.7.43): V1 chain (Scout/Planner/Generator) retired. The
   // Worker single-loop is the only entry path.
   const entryAgent: Agent = chain.worker;
-  const resolvedContextCapacity = await resolveManagedTaskContextCapacity(options);
   const compactionHook = await buildManagedTaskCompactionHook(options, {
     resolvedContextCapacity,
     contextTokenSnapshotRef,
@@ -1810,11 +1886,30 @@ async function runManagedTaskViaRunnerInner(
     readonly iteration: number;
     readonly lastTurnToolNames?: readonly string[];
   }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
+    const refreshedRuntimeState = resolveRoleRuntimeStateContext(
+      rolePromptContextFactory('worker', recorder),
+    );
+    const runtimeStateMessage = refreshedRuntimeState !== lastManagedRuntimeStateContext
+      ? {
+          role: 'user' as const,
+          content: refreshedRuntimeState
+            ?? [
+              '=== Managed Run Context ===',
+              'Runtime state refresh:',
+              'No active Actor or Team state.',
+              '=== End Managed Run Context ===',
+            ].join('\n'),
+          _synthetic: true,
+          _source: 'managed-run-context' as const,
+          timestamp: new Date().toISOString(),
+        }
+      : undefined;
+    lastManagedRuntimeStateContext = refreshedRuntimeState;
     const drained = maybeDrainMidTurn({
       agentId: messageQueueAgentId,
       lastTurnToolNames: turnCtx.lastTurnToolNames ?? [],
     });
-    if (drained.length === 0) return [];
+    if (drained.length === 0) return runtimeStateMessage ? [runtimeStateMessage] : [];
     const prompts = drained.filter((message) => message.mode === 'prompt');
     const mailbox = drained.filter((message) => message.mode !== 'prompt');
     const timestamp = new Date().toISOString();
@@ -1825,7 +1920,11 @@ async function runManagedTaskViaRunnerInner(
       promptMessages,
       timestamp,
     );
-    return syntheticMessage ? [syntheticMessage, ...promptMessages] : promptMessages;
+    return [
+      ...(runtimeStateMessage ? [runtimeStateMessage] : []),
+      ...(syntheticMessage ? [syntheticMessage] : []),
+      ...promptMessages,
+    ];
   };
   // Transcript snapshot ref — populated by the adapter's beforeNextTurn
   // each turn boundary; read by the goal verifyComplete closure when
@@ -2097,6 +2196,16 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
+    buildResumeContextMessages: (_result, wakeMessages) => {
+      const attributedWakeMessage = wakeMessages.find(
+        (message) => message.turnId !== undefined || message.timestamp !== undefined,
+      );
+      const refreshedContext = buildManagedRunContextMessage(
+        attributedWakeMessage?.turnId,
+        attributedWakeMessage?.timestamp ?? new Date().toISOString(),
+      );
+      return refreshedContext ? [refreshedContext] : [];
+    },
     // `maxIterations` omitted — wrapper defaults to 64, matching the
     // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
     // the (max+1)th iteration AFTER runOnce returns but BEFORE the

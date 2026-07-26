@@ -123,7 +123,12 @@ export function buildPostCompactAttachments(
   const ledgerBudget = Math.max(1, Math.floor(totalBudget * config.ledgerShare));
   const ledgerSummary = renderLedgerSummary(ledger, ledgerBudget);
   const ledgerMessage: KodaXMessage | null = ledgerSummary
-    ? { role: 'system', content: `[Post-compact: recent operations]\n${ledgerSummary}` }
+    ? {
+        role: 'user',
+        content: `[Post-compact: recent operations]\n${ledgerSummary}`,
+        _synthetic: true,
+        _source: 'compaction-context',
+      }
     : null;
 
   const ledgerTokens = ledgerMessage ? estimateTokens([ledgerMessage]) : 0;
@@ -144,9 +149,12 @@ export function buildPostCompactAttachments(
  * replaces the post-compact attachments wholesale, rather than stacking them.
  */
 export function isPostCompactAttachment(msg: KodaXMessage): boolean {
-  return msg.role === 'system'
-    && typeof msg.content === 'string'
-    && msg.content.startsWith(POST_COMPACT_MESSAGE_PREFIX);
+  return msg._source === 'compaction-context'
+    || (
+      msg.role === 'system'
+      && typeof msg.content === 'string'
+      && msg.content.startsWith(POST_COMPACT_MESSAGE_PREFIX)
+    );
 }
 
 /**
@@ -191,11 +199,15 @@ export function injectPostCompactAttachments(
   if (attachments.ledgerMessage) toInject.push(attachments.ledgerMessage);
   toInject.push(...attachments.fileMessages);
 
-  // Insert after the compaction summary (identified by its unique prefix)
+  // Insert after the compaction summary. Current checkpoints carry a source
+  // tag and use the user role; the string fallback preserves old sessions.
   const summaryIdx = stripped.findIndex(
-    (msg) => msg.role === 'system'
-      && typeof msg.content === 'string'
-      && msg.content.startsWith('[对话历史摘要]'),
+    (msg) => msg._source === 'compaction-checkpoint'
+      || (
+        msg.role === 'system'
+        && typeof msg.content === 'string'
+        && msg.content.startsWith('[对话历史摘要]')
+      ),
   );
 
   if (summaryIdx >= 0) {
@@ -434,8 +446,10 @@ export async function buildFileContentMessages(
     if (!content) continue;
 
     const msg: KodaXMessage = {
-      role: 'system',
+      role: 'user',
       content: `[Post-compact: file content] ${entry.target}\n${content}`,
+      _synthetic: true,
+      _source: 'compaction-context',
     };
     const msgTokens = estimateTokens([msg]);
     if (usedTokens + msgTokens > budgetTokens) break;
