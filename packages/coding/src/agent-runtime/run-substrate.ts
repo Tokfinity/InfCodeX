@@ -450,6 +450,20 @@ function replaceLatestAssistantToolBlocks(
   };
 }
 
+function withCompletionEventOnce(events: KodaXEvents): KodaXEvents {
+  const onComplete = events.onComplete;
+  if (onComplete === undefined) return events;
+  let emitted = false;
+  return {
+    ...events,
+    onComplete: (meta) => {
+      if (emitted) return;
+      emitted = true;
+      onComplete(meta);
+    },
+  };
+}
+
 /**
  * Substrate executor body — the full SA execution pipeline (provider
  * resolution, tool loop, microcompact, edit recovery, extension queue,
@@ -578,6 +592,7 @@ export async function runSubstrate(
     },
   });
   events = withLiveTurnAttribution(events, liveTurnScopeRef);
+  events = withCompletionEventOnce(events);
   const memoryIdentity = options.context?.memoryIdentity
     ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
   let memoryController: MemoryController | undefined;

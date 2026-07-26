@@ -114,6 +114,23 @@ describe('CAP-005: onComplete event contract', { timeout: 30_000 }, () => {
     expect(onComplete).toHaveBeenCalled();
   });
 
+  it('CAP-EVENTS-COMPLETE-001b: does not re-fire when the completion observer throws AbortError', async () => {
+    registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('success'));
+    const onComplete = vi.fn(() => {
+      const error = new Error('observer interrupted');
+      error.name = 'AbortError';
+      throw error;
+    });
+
+    const result = await runKodaX(
+      { provider: PROVIDER_NAME, model: 'baseline-model', events: { onComplete } },
+      'do thing',
+    );
+
+    expect(result.interrupted).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
   it('CAP-EVENTS-COMPLETE-001c: error terminal fires `onError` (not onComplete) — mutually exclusive per CAP-084 contract', async () => {
     registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('throw'));
     const onComplete = vi.fn();
