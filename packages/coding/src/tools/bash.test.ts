@@ -70,23 +70,18 @@ async function waitForOutputMatch(
 }
 
 function getWindowsCommandLine(pid: number): string | undefined {
-  const result = spawnSync('wmic', [
-    'process',
-    'where',
-    `ProcessId=${pid}`,
-    'get',
-    'CommandLine',
-    '/format:list',
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-Command',
+    `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" -ErrorAction SilentlyContinue).CommandLine`,
   ], {
     encoding: 'utf8',
     timeout: 5_000,
     windowsHide: true,
   });
-  const line = result.stdout
-    .split(/\r?\n/)
-    .map((value) => value.trim())
-    .find((value) => value.startsWith('CommandLine='));
-  const commandLine = line?.slice('CommandLine='.length).trim();
+  const commandLine = typeof result.stdout === 'string'
+    ? result.stdout.trim()
+    : undefined;
   return commandLine ? commandLine : undefined;
 }
 
