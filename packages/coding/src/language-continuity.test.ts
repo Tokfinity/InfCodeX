@@ -14,6 +14,7 @@ import { EXECUTION_GUIDANCE } from './prompts/execution-guidance.js';
 import { CHILD_AGENT_SYSTEM_PROMPT } from './child-executor.js';
 import { buildWorkerInstructions } from './agents/worker-role-prompt.js';
 import { BUILTIN_TOOL_DEFINITIONS } from './tools/tool-definitions.js';
+import { renderAmaPatternPlaybook } from './orchestration/pattern-catalog.js';
 import type { KodaXTaskRoutingDecision } from './types.js';
 
 const decision: KodaXTaskRoutingDecision = {
@@ -51,5 +52,18 @@ describe('language-continuity rule coverage (③)', () => {
     const runWorkflow = BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'run_workflow');
     expect(runWorkflow).toBeDefined();
     expect(runWorkflow?.description).toContain("same natural language as the user's request");
+  });
+
+  it('keeps the F274 Worker playbook plus AMA quality_strategy schemas within 3,000 bytes', () => {
+    const strategySchemas = BUILTIN_TOOL_DEFINITIONS
+      .filter((tool) => tool.name === 'spawn_agent' || tool.name === 'followup_task')
+      .map((tool) => tool.input_schema.properties?.quality_strategy);
+    const bytes = Buffer.byteLength(
+      `${renderAmaPatternPlaybook()}\n${JSON.stringify(strategySchemas)}`,
+      'utf8',
+    );
+
+    expect(strategySchemas).toHaveLength(2);
+    expect(bytes).toBeLessThanOrEqual(3_000);
   });
 });

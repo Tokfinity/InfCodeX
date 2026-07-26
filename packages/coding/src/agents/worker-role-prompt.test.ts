@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { WORKFLOW_PATTERN_IDS } from '@kodax-ai/agent';
 import type { KodaXTaskRoutingDecision } from '../types.js';
 import {
   buildWorkerInstructions,
@@ -73,6 +74,15 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('before calling `wait_agent` again or starting a different plan milestone');
     expect(output).toContain('Do not mark a milestone completed merely because one supporting Agent finished');
     expect(output).not.toContain('On a fresh request with independent lanes');
+  });
+
+  it('teaches the compact adaptive collaboration playbook', () => {
+    const output = buildWorkerInstructions(baseDecision, undefined, false);
+
+    expect(output).toContain('ADAPTIVE COLLABORATION PATTERNS');
+    for (const id of WORKFLOW_PATTERN_IDS) expect(output).toContain(`\`${id}\``);
+    expect(output).toContain('guidance, not deterministic routing');
+    expect(output).toContain('Root remains accountable for synthesis');
   });
 
   it('requires milestone updates when progress happens instead of batching them at termination', () => {

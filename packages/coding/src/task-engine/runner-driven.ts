@@ -113,6 +113,7 @@ import {
   emitSidecarMessageEvent,
 } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { buildRunnerSidecarVerifierAdapter } from './runner-sidecar-verifier-adapter.js';
+import { buildPatternTrace } from '../orchestration/pattern-trace.js';
 import { resolveEffectiveVerification } from '../agent-runtime/effective-config.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
@@ -1010,7 +1011,20 @@ async function runManagedTaskViaRunnerInner(
     enumerable: true,
     configurable: true,
   });
-
+  // Collaboration strategy ownership must follow the live user Turn. Queued
+  // prompts rotate that Turn without rebuilding the shared tool context.
+  Object.defineProperty(baseCtx, 'actorTurnRef', {
+    get: () => (
+      baseCtx.actorControl === undefined
+        ? undefined
+        : {
+            actorPath: baseCtx.actorControl.callerPath,
+            turnId: liveTurnController.currentTurnId(),
+          }
+    ),
+    enumerable: true,
+    configurable: true,
+  });
 
   const recorder: VerdictRecorder = {};
   // FEATURE_193 (v0.7.43): V1 `recorder.scout` / `recorder.contract`
@@ -1809,6 +1823,21 @@ async function runManagedTaskViaRunnerInner(
       }),
     }),
     getPlanSnapshot: () => todoStore.getAll(),
+    getPatternTrace: () => (
+      baseCtx.actorControl ? buildPatternTrace(baseCtx.actorControl) : undefined
+    ),
+    getQualitySignals: () => {
+      const decision = planRef.current?.decision;
+      return decision
+        ? {
+            riskLevel: decision.riskLevel,
+            needsIndependentQA: decision.needsIndependentQA,
+            assuranceIntent: decision.assuranceIntent,
+            reviewScale: decision.reviewScale,
+            requiresBrainstorm: decision.requiresBrainstorm,
+          }
+        : undefined;
+    },
     getRoundCount: () => roundRef.current,
     getHasPlan: () => todoStore.getAll().length > 0,
   });

@@ -73,6 +73,19 @@ describe('F270 actor tree and scheduler', () => {
     ]));
   });
 
+  it('rejects a turn id that does not belong to the requested Actor path', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const first = await controller.spawn('/root', { taskName: 'first', objective: 'First.' });
+    const second = await controller.spawn('/root', { taskName: 'second', objective: 'Second.' });
+
+    expect(() => controller.output('/root', first.actorPath, second.turnId)).toThrow(
+      expect.objectContaining<Partial<AgentControlError>>({
+        code: 'permission_denied',
+      }),
+    );
+  });
+
   it('durably acknowledges one observed child completion without consuming earlier evidence', async () => {
     let saved: AgentActorSnapshot | undefined;
     const executor = new DeferredExecutor();
@@ -354,6 +367,50 @@ describe('F270 actor tree and scheduler', () => {
     expect(executor.pending).toHaveLength(1);
     await expect(executor.pending[0]?.input.drainMailbox()).resolves.toMatchObject([
       { content: 'Also check tests.', kind: 'followup' },
+    ]);
+  });
+
+  it('atomically rejects a strategy switch on a running turn before mailbox delivery', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const ownerTurnRef = { actorPath: '/root', turnId: 'root-turn-1' };
+    const firstStrategy = {
+      schemaVersion: 1,
+      stageId: 'review',
+      pattern: 'fan-out-and-synthesize',
+      role: 'investigator',
+      laneRelation: 'coverage',
+      ownerTurnRef,
+    };
+    await controller.spawn('/root', {
+      taskName: 'reviewer',
+      objective: 'First pass.',
+      metadata: { qualityStrategy: firstStrategy },
+    });
+
+    await expect(controller.followup(
+      '/root',
+      '/root/reviewer',
+      'Switch this running lane.',
+      {
+        qualityStrategy: {
+          ...firstStrategy,
+          pattern: 'adversarial-verification',
+          role: 'challenger',
+          laneRelation: 'opposition',
+        },
+      },
+    )).rejects.toMatchObject({ code: 'invalid_message' });
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toEqual([]);
+
+    await expect(controller.followup(
+      '/root',
+      '/root/reviewer',
+      'Continue the same lane.',
+      { qualityStrategy: structuredClone(firstStrategy) },
+    )).resolves.toMatchObject({ delivery: 'current_turn' });
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toMatchObject([
+      { content: 'Continue the same lane.', kind: 'followup' },
     ]);
   });
 
@@ -807,6 +864,50 @@ describe('F270 actor tree and scheduler', () => {
     expect(controller.get('/root', firstTurn.actorPath).mailbox.some((message) => (
       message.content === 'Distinct stale follow-up.'
     ))).toBe(false);
+  });
+
+  it('checks the tree revision inside spawn admission', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const expectedTreeRevision = controller.list('/root').revision;
+    await controller.spawn('/root', { taskName: 'revision-advance', objective: 'Advance.' });
+
+    await expect(controller.spawn(
+      '/root',
+      { taskName: 'stale-spawn', objective: 'Must not start.' },
+      { expectedTreeRevision },
+    )).rejects.toMatchObject({
+      code: 'revision_conflict',
+      expectedRevision: expectedTreeRevision,
+      currentRevision: expectedTreeRevision + 1,
+    });
+    expect(controller.list('/root').actors.map((actor) => actor.path))
+      .not.toContain('/root/stale-spawn');
+  });
+
+  it('merges executor-observed facts into durable turn metadata at completion', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const turn = await controller.spawn('/root', {
+      taskName: 'routed',
+      objective: 'Observe the effective route.',
+      metadata: { requestedProvider: 'primary' },
+    });
+
+    executor.pending[0]?.resolve({
+      output: 'done',
+      turnMetadata: {
+        effectiveProvider: 'fallback',
+        effectiveModel: 'fallback-model',
+      },
+    });
+    await settle();
+
+    expect(controller.get('/root', turn.actorPath).turns[0]?.metadata).toEqual({
+      requestedProvider: 'primary',
+      effectiveProvider: 'fallback',
+      effectiveModel: 'fallback-model',
+    });
   });
 
   it('interrupts unfinished turns on shutdown without permanently closing reusable actors', async () => {

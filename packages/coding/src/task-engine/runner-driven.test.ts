@@ -2068,6 +2068,141 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     expect(refreshedContext?.content).toContain('1 non-root turns are active');
   });
 
+  it('attributes strategy tools to the initial production Runner Turn', async () => {
+    const executor: AgentTurnExecutor = {
+      execute: async () => ({ output: 'strategy lane complete' }),
+    };
+    const controller = await createAgentActorController({ executor });
+    const root = controller.bind('/root');
+    const startedTurnIds: string[] = [];
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      context: {
+        ...makeOptions().context,
+        actorControl: root,
+        interruptInput: {
+          closeInputWindow() {},
+          reopenInputWindow() {},
+        },
+      },
+      events: {
+        onTurnStarted: (event) => startedTurnIds.push(event.turnId),
+      },
+    };
+    let call = 0;
+
+    await runManagedTaskViaRunner(options, 'Run one attributed strategy lane.', async () => {
+      call += 1;
+      return call === 1
+        ? {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'spawn-attributed-1',
+              name: 'spawn_agent',
+              input: {
+                task_name: 'attributed-lane',
+                objective: 'Inspect one independent dimension.',
+                quality_strategy: {
+                  schemaVersion: 1,
+                  stageId: 'initial-stage',
+                  pattern: 'fan-out-and-synthesize',
+                  role: 'investigator',
+                  laneRelation: 'coverage',
+                },
+              },
+            }],
+          }
+        : { textBlocks: [{ text: 'Integrated.' }], toolBlocks: [] };
+    });
+
+    expect(root.get('/root/attributed-lane').turns[0]?.metadata?.qualityStrategy)
+      .toMatchObject({
+        ownerTurnRef: {
+          actorPath: '/root',
+          turnId: startedTurnIds[0],
+        },
+      });
+  });
+
+  it('rotates strategy ownership to the queued production Runner Turn', async () => {
+    const sessionId = 'queued-strategy-owner';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const executor: AgentTurnExecutor = {
+      execute: async () => ({ output: 'queued strategy lane complete' }),
+    };
+    const controller = await createAgentActorController({ executor });
+    const root = controller.bind('/root');
+    const startedTurnIds: string[] = [];
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: { id: sessionId },
+      context: {
+        ...makeOptions().context,
+        actorControl: root,
+        interruptInput: {
+          closeInputWindow() {},
+          reopenInputWindow() {},
+        },
+      },
+      events: {
+        onTurnStarted: (event) => startedTurnIds.push(event.turnId),
+      },
+    };
+    let call = 0;
+    try {
+      await runManagedTaskViaRunner(options, 'First prompt.', async () => {
+        call += 1;
+        if (call === 1) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'Queued prompt.',
+          });
+          return { textBlocks: [{ text: 'First answer.' }], toolBlocks: [] };
+        }
+        if (call === 2) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'spawn-attributed-queued',
+              name: 'spawn_agent',
+              input: {
+                task_name: 'queued-attributed-lane',
+                objective: 'Inspect the queued request.',
+                quality_strategy: {
+                  schemaVersion: 1,
+                  stageId: 'queued-stage',
+                  pattern: 'fan-out-and-synthesize',
+                  role: 'investigator',
+                  laneRelation: 'coverage',
+                },
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'Queued answer integrated.' }], toolBlocks: [] };
+      });
+
+      expect(startedTurnIds).toHaveLength(2);
+      expect(root.get('/root/queued-attributed-lane').turns[0]?.metadata?.qualityStrategy)
+        .toMatchObject({
+          ownerTurnRef: {
+            actorPath: '/root',
+            turnId: startedTurnIds[1],
+          },
+        });
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
   it('delivers mailbox evidence as synthetic context after wait_agent', async () => {
     const sessionId = 'runner-mailbox-wait';
     const queueAgentId = `actor:${sessionId}:/root`;

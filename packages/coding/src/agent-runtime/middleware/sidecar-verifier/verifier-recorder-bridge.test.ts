@@ -93,6 +93,24 @@ describe('buildSidecarVerdictPayload — shape parity with Evaluator emit_verdic
     expect(payload.followups).toEqual(['see foo.ts:42']);
     expect(payload.reason).toBe('add tests');
   });
+
+  it('records focused strategy advice and fail-open degradation', () => {
+    const payload = buildSidecarVerdictPayload({
+      verdict: 'revise',
+      reason: 'Resolve the unsupported claim.',
+      reasonCode: 'unsupported_claim',
+      recommendedPattern: 'adversarial-verification',
+      targetEvidenceRefs: ['finding:auth-boundary'],
+      trace: 'provider_error',
+    });
+
+    expect(payload).toMatchObject({
+      strategyReasonCode: 'unsupported_claim',
+      recommendedPattern: 'adversarial-verification',
+      targetEvidenceRefs: ['finding:auth-boundary'],
+      verificationDegraded: true,
+    });
+  });
 });
 
 describe('buildSidecarMessageEvent', () => {

@@ -64,15 +64,22 @@ describe('run_workflow pattern-combination teaching (review find->verify)', () =
 
   it('Edit 2: generator pattern guidance includes the review/audit combination bullet with a WHY', () => {
     const prompt = buildWorkflowGenerationUserPrompt('review the recent changes');
-    expect(prompt).toContain('review or audit combines fan-out-and-synthesize with adversarial-verification');
+    expect(prompt).toContain(
+      'For an explicitly requested review or audit Workflow, combine fan-out-and-synthesize with adversarial-verification',
+    );
     // ADR-033 §3: the anti-pattern bullet must carry its failure-mode WHY.
     expect(prompt.toLowerCase()).toMatch(/blind spot|refute it before synthesis/);
   });
 
-  it('teaches the judgment clauses matched from Claude Code Workflow (T1/T2/T3/T8/T9/T13)', () => {
+  it('teaches evidence dispositions instead of a majority-as-proof threshold', () => {
     const d = getToolDefinition('run_workflow')!.description.toLowerCase();
     expect(d, 'T1 pipeline-by-default / barrier discipline').toMatch(/as a barrier only when/);
-    expect(d, 'T2 majority-refute threshold').toContain('majority cannot refute');
+    expect(d, 'common evidence rubric').toContain('common rubric');
+    expect(d, 'confirmed disposition').toContain('confirmed');
+    expect(d, 'refuted disposition').toContain('refuted');
+    expect(d, 'unresolved disposition').toContain('unresolved');
+    expect(d, 'majority is not proof').toContain('verifier count is not proof');
+    expect(d).not.toContain('majority cannot refute');
     expect(d, 'T3 distinct failure-mode angle per verifier').toContain('distinct failure-mode angle');
     expect(d, 'T9 scale fan-out to the request').toContain('match the effort to the request');
     expect(d, 'T8 no silent caps (with WHY)').toMatch(/silent cap/);

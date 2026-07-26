@@ -91,6 +91,47 @@ describe('invokeSidecarVerifier — three-state verdict parsing', () => {
     expect(verdict.trace).toBe('verifier_ok');
   });
 
+  it('parses one focused strategy recommendation only for revise/blocked', async () => {
+    const provider = fakeProvider(async () => ({
+      textBlocks: [],
+      toolBlocks: [toolBlock('emit_sidecar_verdict', {
+        verdict: 'revise',
+        reason: 'Resolve the refuted claim before synthesis.',
+        reasonCode: 'contradicted_evidence',
+        recommendedPattern: 'adversarial-verification',
+        targetEvidenceRefs: ['finding:auth-boundary'],
+      })],
+      thinkingBlocks: [],
+    }));
+
+    const verdict = await invokeSidecarVerifier({ provider, inputs: minimalInputs });
+    expect(verdict).toMatchObject({
+      reasonCode: 'contradicted_evidence',
+      recommendedPattern: 'adversarial-verification',
+      targetEvidenceRefs: ['finding:auth-boundary'],
+    });
+    expect(
+      (mapVerifierVerdictToStopHookResult(verdict) as { reanimate: string }).reanimate,
+    ).toContain('pattern=adversarial-verification');
+  });
+
+  it('ignores strategy recommendation fields on accept', async () => {
+    const provider = fakeProvider(async () => ({
+      textBlocks: [],
+      toolBlocks: [toolBlock('emit_sidecar_verdict', {
+        verdict: 'accept',
+        reason: '',
+        reasonCode: 'unsupported_claim',
+        recommendedPattern: 'tournament',
+      })],
+      thinkingBlocks: [],
+    }));
+
+    const verdict = await invokeSidecarVerifier({ provider, inputs: minimalInputs });
+    expect(verdict.reasonCode).toBeUndefined();
+    expect(verdict.recommendedPattern).toBeUndefined();
+  });
+
   it('parses verdict=blocked with reason + suggestedFix', async () => {
     const provider = fakeProvider(async () => ({
       textBlocks: [],

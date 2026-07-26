@@ -28,7 +28,7 @@ vi.mock('../child-executor.js', () => ({
 
 const executeChildAgentsMock = vi.mocked(executeChildAgents);
 
-function completedChild(summary: string): KodaXChildExecutionResult {
+function completedChild(summary: string, structured?: unknown): KodaXChildExecutionResult {
   return {
     results: [{
       childId: '/root/worker',
@@ -38,6 +38,7 @@ function completedChild(summary: string): KodaXChildExecutionResult {
       summary,
       evidenceRefs: [],
       contradictions: [],
+      ...(structured === undefined ? {} : { structured }),
     }],
     mergedFindings: [],
     mergedArtifacts: [],
@@ -98,7 +99,7 @@ function environment(): {
 }
 
 async function settle(): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
 }
 
 afterEach(() => {
@@ -121,7 +122,213 @@ describe('F270 coding Actor runtime adapter', () => {
 
     expect(externalExecutor.execute).not.toHaveBeenCalled();
     expect(executeChildAgentsMock).toHaveBeenCalledOnce();
+    expect(executeChildAgentsMock.mock.calls[0]?.[2].actorTurnId).toBe(turn.turnId);
     expect(root.output(turn.actorPath, turn.turnId).output).toBe('native result');
+  });
+
+  it('attaches the fixed parse-only result contract and preserves it on the exact Actor Turn', async () => {
+    const structured = {
+      schemaVersion: 1,
+      outcomes: [{
+        target: { evidenceRef: 'finding:auth-boundary' },
+        disposition: 'confirmed',
+        evidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
+      }],
+      assertedCoverage: ['ownership boundary'],
+    };
+    executeChildAgentsMock.mockResolvedValue(completedChild('challenged', structured));
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({
+      taskName: 'challenger',
+      objective: 'Challenge the candidate.',
+      metadata: {
+        qualityStrategy: {
+          schemaVersion: 1,
+          stageId: 'challenge-1',
+          pattern: 'adversarial-verification',
+          role: 'challenger',
+          laneRelation: 'opposition',
+          targetEvidenceRefs: ['finding:auth-boundary'],
+          ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        },
+      },
+    });
+    await settle();
+
+    expect(executeChildAgentsMock.mock.calls[0]?.[0][0]).toMatchObject({
+      structuredOutputContract: 'pattern-disposition-parse-only',
+      outputSchema: expect.objectContaining({ type: 'object' }),
+      evidenceRefs: ['finding:auth-boundary'],
+    });
+    expect(root.output(turn.actorPath, turn.turnId).structured).toEqual(structured);
+  });
+
+  it('persists the effective child route and drops only invalid disposition outcomes', async () => {
+    const child = completedChild('mixed challenge', {
+      schemaVersion: 1,
+      outcomes: [
+        {
+          target: { evidenceRef: 'finding:valid' },
+          disposition: 'refuted',
+          evidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
+        },
+        {
+          target: { evidenceRef: 'finding:invalid' },
+          disposition: 'confirmed',
+          evidenceRefs: ['unknown:unresolvable'],
+        },
+      ],
+      assertedCoverage: ['must be cleared after invalid provenance'],
+    });
+    child.results[0]!.provider = 'fallback-provider';
+    child.results[0]!.model = 'fallback-model';
+    executeChildAgentsMock.mockResolvedValue(child);
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+
+    const turn = await root.spawn({
+      taskName: 'mixed-challenger',
+      objective: 'Validate two targets.',
+      metadata: {
+        qualityStrategy: {
+          schemaVersion: 1,
+          stageId: 'challenge-mixed',
+          pattern: 'adversarial-verification',
+          role: 'challenger',
+          targetEvidenceRefs: ['finding:valid', 'finding:invalid'],
+          ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        },
+      },
+    });
+    await settle();
+
+    expect(root.output(turn.actorPath, turn.turnId).structured).toEqual({
+      schemaVersion: 1,
+      outcomes: [{
+        target: { evidenceRef: 'finding:valid' },
+        disposition: 'refuted',
+        evidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
+      }],
+      assertedCoverage: [],
+    });
+    expect(root.get(turn.actorPath).turns[0]?.metadata).toMatchObject({
+      effectiveProvider: 'fallback-provider',
+      effectiveModel: 'fallback-model',
+      qualityStrategyDegradedReasons: ['invalid_disposition_evidence'],
+    });
+  });
+
+  it('accepts a root-validated sibling target delivered to the executing challenger', async () => {
+    executeChildAgentsMock.mockResolvedValueOnce(completedChild('candidate result'));
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+    ctx.actorControl = root;
+
+    const candidate = await root.spawn({
+      taskName: 'candidate',
+      objective: 'Produce a sibling candidate.',
+    });
+    await settle();
+    const targetRef = `agent-turn:${candidate.actorPath}#turn=${candidate.turnId}`;
+    executeChildAgentsMock.mockResolvedValueOnce(completedChild('challenge result', {
+      schemaVersion: 1,
+      outcomes: [{
+        target: {
+          actorPath: candidate.actorPath,
+          turnId: candidate.turnId,
+        },
+        disposition: 'confirmed',
+        evidenceRefs: [],
+      }],
+      assertedCoverage: ['sibling output'],
+    }));
+
+    const challenger = await root.spawn({
+      taskName: 'challenger',
+      objective: 'Challenge the sibling candidate.',
+      metadata: {
+        qualityStrategy: {
+          schemaVersion: 1,
+          stageId: 'challenge-sibling',
+          pattern: 'adversarial-verification',
+          role: 'challenger',
+          laneRelation: 'opposition',
+          targetEvidenceRefs: [targetRef],
+          ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        },
+      },
+    });
+    await settle();
+
+    expect(root.output(challenger.actorPath, challenger.turnId).structured).toEqual({
+      schemaVersion: 1,
+      outcomes: [{
+        target: {
+          actorPath: candidate.actorPath,
+          turnId: candidate.turnId,
+        },
+        disposition: 'confirmed',
+        evidenceRefs: [],
+      }],
+      assertedCoverage: ['sibling output'],
+    });
+    expect(root.get(challenger.actorPath).turns[0]?.metadata)
+      .not.toHaveProperty('qualityStrategyDegradedReasons');
+  });
+
+  it('rejects new support provenance outside the executing Actor visibility boundary', async () => {
+    executeChildAgentsMock.mockResolvedValueOnce(completedChild('sibling result'));
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const root = session.attach(ctx, options);
+    ctx.actorControl = root;
+
+    const sibling = await root.spawn({
+      taskName: 'sibling',
+      objective: 'Produce root-visible evidence.',
+    });
+    await settle();
+    const supportRef = `agent-turn:${sibling.actorPath}#turn=${sibling.turnId}`;
+    executeChildAgentsMock.mockResolvedValueOnce(completedChild('challenge result', {
+      schemaVersion: 1,
+      outcomes: [{
+        target: { evidenceRef: 'finding:declared' },
+        disposition: 'confirmed',
+        evidenceRefs: [supportRef],
+      }],
+      assertedCoverage: ['unavailable sibling support'],
+    }));
+
+    const challenger = await root.spawn({
+      taskName: 'support-challenger',
+      objective: 'Validate the declared finding.',
+      metadata: {
+        qualityStrategy: {
+          schemaVersion: 1,
+          stageId: 'challenge-support',
+          pattern: 'adversarial-verification',
+          role: 'challenger',
+          laneRelation: 'opposition',
+          targetEvidenceRefs: ['finding:declared'],
+          ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        },
+      },
+    });
+    await settle();
+
+    expect(root.output(challenger.actorPath, challenger.turnId).structured).toEqual({
+      schemaVersion: 1,
+      outcomes: [],
+      assertedCoverage: [],
+    });
+    expect(root.get(challenger.actorPath).turns[0]?.metadata).toMatchObject({
+      qualityStrategyDegradedReasons: ['invalid_disposition_evidence'],
+    });
   });
 
   it.each([

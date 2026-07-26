@@ -32,6 +32,7 @@ import type {
   KodaXTaskVerificationContract,
 } from '../types.js';
 import { EXECUTION_GUIDANCE } from '../prompts/execution-guidance.js';
+import { renderAmaPatternPlaybook } from '../orchestration/pattern-catalog.js';
 // F270 keeps the prompt on the canonical Actor wait/completion vocabulary;
 // the runner may still use its generic wake loop internally.
 
@@ -274,6 +275,7 @@ export function buildWorkerStableInstructions(): string {
     scopeCommitment,
     mutationDiscipline,
     repoIntelligenceTools,
+    renderAmaPatternPlaybook(),
     dispatchRules,
     childSteeringRules,
     EXECUTION_GUIDANCE,

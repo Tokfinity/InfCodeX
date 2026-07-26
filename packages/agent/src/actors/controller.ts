@@ -123,7 +123,9 @@ export class AgentActorController {
     this.requireCommittedActor(callerPath);
     return Object.freeze({
       callerPath,
-      spawn: (input: AgentSpawnInput) => this.spawn(callerPath, input),
+      spawn: (input: AgentSpawnInput, options?: AgentMutationOptions) => (
+        this.spawn(callerPath, input, options)
+      ),
       send: (
         targetPath: string,
         content: string,
@@ -252,10 +254,15 @@ export class AgentActorController {
     return abort.signal;
   }
 
-  async spawn(callerPath: string, input: AgentSpawnInput): Promise<AgentTurnRef> {
+  async spawn(
+    callerPath: string,
+    input: AgentSpawnInput,
+    options?: AgentMutationOptions,
+  ): Promise<AgentTurnRef> {
     let admittedTurnId: string | undefined;
     try {
       const plan = await this.mutate(async () => {
+        this.assertExpectedTreeRevision(options);
         const created = await this.prepareSpawn(callerPath, input);
         admittedTurnId = created.turn.turnId;
         return created;
@@ -330,6 +337,7 @@ export class AgentActorController {
     let admittedTurnId: string | undefined;
     try {
       const result = await this.mutate(async () => {
+        this.assertExpectedTreeRevision(options);
         const actor = this.requireControl(callerPath, targetPath);
         if (
           options?.expectedRevision !== undefined
@@ -342,6 +350,17 @@ export class AgentActorController {
           throw new AgentControlError('unsupported_operation', `${targetPath} does not support follow-up`);
         }
         if (actor.currentTurnId) {
+          const turn = this.requireTurn(actor.currentTurnId);
+          const requestedStrategy = metadata?.qualityStrategy;
+          if (
+            requestedStrategy !== undefined
+            && !metadataValueEqual(requestedStrategy, turn.metadata?.qualityStrategy)
+          ) {
+            throw new AgentControlError(
+              'invalid_message',
+              `${targetPath} cannot change quality strategy while its current turn is running`,
+            );
+          }
           this.appendMessage(
             callerPath,
             targetPath,
@@ -350,7 +369,6 @@ export class AgentActorController {
             'internal',
             this.actors.get(callerPath)?.currentTurnId,
           );
-          const turn = this.requireTurn(actor.currentTurnId);
           return { delivery: 'current_turn' as const, turn: turnRef(turn) };
         }
         const plan = await this.prepareExistingTurn(actor, objective, metadata);
@@ -475,7 +493,19 @@ export class AgentActorController {
     const actor = this.requireCommittedActor(targetPath);
     const selected = turnId ?? actor.turnIds.at(-1);
     if (!selected) throw new AgentControlError('no_active_turn', `${targetPath} has no turns`);
+    if (!actor.turnIds.includes(selected)) {
+      throw new AgentControlError(
+        'permission_denied',
+        `turn ${selected} does not belong to ${targetPath}`,
+      );
+    }
     const turn = this.requireCommittedTurn(selected);
+    if (turn.actorPath !== actor.path) {
+      throw new AgentControlError(
+        'permission_denied',
+        `turn ${selected} does not belong to ${targetPath}`,
+      );
+    }
     const output = turn.output === undefined
       ? undefined
       : boundedTextEdges(turn.output, MAX_OUTPUT_PREVIEW_LENGTH, '\n... [truncated] ...\n');
@@ -641,13 +671,7 @@ export class AgentActorController {
         reportProgress: (update) => this.recordProgress(plan.turn.turnId, update),
       }))
       .then(
-        (result) => this.completeExecution(
-          plan.turn.turnId,
-          result.output,
-          result.artifacts,
-          result.artifactDetails,
-          result.structured,
-        ),
+        (result) => this.completeExecution(plan.turn.turnId, result),
         (error: unknown) => this.failExecution(plan.turn.turnId, error),
       )
       .catch((error: unknown) => this.reportBackgroundError(error));
@@ -655,19 +679,18 @@ export class AgentActorController {
 
   private async completeExecution(
     turnId: string,
-    output: string,
-    artifacts: readonly string[] = [],
-    artifactDetails?: readonly AgentArtifactDescriptor[],
-    structured?: AgentMetadataValue,
+    result: AgentExecutionResult,
   ): Promise<void> {
     await this.mutate(() => {
       const turn = this.turns.get(turnId);
       if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'completed', {
-        output,
-        artifacts,
-        ...(artifactDetails === undefined ? {} : { artifactDetails }),
-        ...(structured === undefined ? {} : { structured }),
+        output: result.output,
+        artifacts: result.artifacts ?? [],
+        ...(result.artifactDetails === undefined
+          ? {} : { artifactDetails: result.artifactDetails }),
+        ...(result.structured === undefined ? {} : { structured: result.structured }),
+        ...(result.turnMetadata === undefined ? {} : { turnMetadata: result.turnMetadata }),
       });
       return true;
     }, (changed) => changed);
@@ -690,6 +713,7 @@ export class AgentActorController {
       readonly artifacts?: readonly string[];
       readonly artifactDetails?: readonly AgentArtifactDescriptor[];
       readonly structured?: AgentMetadataValue;
+      readonly turnMetadata?: Readonly<Record<string, AgentMetadataValue>>;
       readonly error?: string;
     },
     notifyParent = true,
@@ -698,7 +722,17 @@ export class AgentActorController {
     if (isTerminal(turn.state)) return;
     const actor = this.requireActor(turn.actorPath);
     const timestamp = this.now();
-    this.turns.set(turnId, { ...turn, ...result, state, completedAt: timestamp, revision: turn.revision + 1 });
+    const { turnMetadata, ...turnResult } = result;
+    this.turns.set(turnId, {
+      ...turn,
+      ...turnResult,
+      ...(turnMetadata === undefined
+        ? {}
+        : { metadata: { ...turn.metadata, ...turnMetadata } }),
+      state,
+      completedAt: timestamp,
+      revision: turn.revision + 1,
+    });
     this.actors.set(actor.path, {
       ...actor, state: 'idle', currentTurnId: undefined, updatedAt: timestamp, revision: actor.revision + 1,
     });
@@ -1158,6 +1192,15 @@ export class AgentActorController {
     }
     setTimeout(() => { throw error; }, 0);
   }
+
+  private assertExpectedTreeRevision(options: AgentMutationOptions | undefined): void {
+    if (
+      options?.expectedTreeRevision !== undefined
+      && this.revision !== options.expectedTreeRevision
+    ) {
+      throw new AgentRevisionConflictError(options.expectedTreeRevision, this.revision);
+    }
+  }
 }
 
 function nonEmptyText(value: string | undefined): string | undefined {
@@ -1341,6 +1384,36 @@ function appendedMessages(
     messages.push(...afterMailbox.slice(beforeLength));
   }
   return messages;
+}
+
+function metadataValueEqual(
+  left: AgentMetadataValue | undefined,
+  right: AgentMetadataValue | undefined,
+): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left)) {
+    return Array.isArray(right)
+      && left.length === right.length
+      && left.every((entry, index) => metadataValueEqual(entry, right[index]));
+  }
+
+  if (isMetadataRecord(left)) {
+    if (!isMetadataRecord(right)) return false;
+    const keys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return keys.length === rightKeys.length
+      && keys.every((key, index) => (
+        key === rightKeys[index]
+        && metadataValueEqual(left[key], right[key])
+      ));
+  }
+  return false;
+}
+
+function isMetadataRecord(
+  value: AgentMetadataValue | undefined,
+): value is Readonly<Record<string, AgentMetadataValue>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): void {

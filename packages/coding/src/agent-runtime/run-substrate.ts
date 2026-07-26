@@ -676,6 +676,12 @@ export async function runSubstrate(
     runtime: runtime ?? undefined,
     managedProtocolPayloadRef,
   });
+  if (ctx.actorControl !== undefined) {
+    ctx.actorTurnRef = {
+      actorPath: ctx.actorControl.callerPath,
+      turnId: liveTurnScopeRef.current.turnId,
+    };
+  }
   // A resumed transcript is already durable. Finish any child-result receipt
   // that was left replayable by a crash between transcript commit and Actor
   // acknowledgement.
@@ -695,6 +701,12 @@ export async function runSubstrate(
     });
     if (prompts.length === 0) return false;
     const queuedTurnId = startQueuedLiveTurn(prompts[0]?.id);
+    if (ctx.actorControl !== undefined) {
+      ctx.actorTurnRef = {
+        actorPath: ctx.actorControl.callerPath,
+        turnId: queuedTurnId,
+      };
+    }
     const timestamp = new Date().toISOString();
     for (const queued of prompts) {
       const inputArtifacts = toKodaXInputArtifacts(queued.inputArtifacts);

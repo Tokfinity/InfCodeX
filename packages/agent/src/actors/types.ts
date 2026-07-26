@@ -226,11 +226,15 @@ export interface AgentExecutionResult {
   readonly artifacts?: readonly string[];
   readonly artifactDetails?: readonly AgentArtifactDescriptor[];
   readonly structured?: AgentMetadataValue;
+  /** Runtime-observed completion facts merged into the durable Turn metadata. */
+  readonly turnMetadata?: Readonly<Record<string, AgentMetadataValue>>;
 }
 
 export interface AgentMutationOptions {
   /** Optimistic Actor revision checked inside the serialized durable mutation. */
   readonly expectedRevision?: number;
+  /** Optimistic tree revision checked inside the serialized durable mutation. */
+  readonly expectedTreeRevision?: number;
 }
 
 export interface AgentTurnExecutor {
@@ -259,7 +263,7 @@ export interface AgentActorStore {
 /** Runtime-bound actor control surface. The caller path is minted by Runtime. */
 export interface AgentActorClient {
   readonly callerPath: string;
-  spawn(input: AgentSpawnInput): Promise<AgentTurnRef>;
+  spawn(input: AgentSpawnInput, options?: AgentMutationOptions): Promise<AgentTurnRef>;
   send(
     targetPath: string,
     content: string,

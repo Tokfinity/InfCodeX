@@ -56,6 +56,7 @@ async function context(
     ctx: {
       backups: new Map(),
       actorControl: controller.bind('/root'),
+      actorTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
       ...(sessionId !== undefined ? { sessionId } : {}),
     },
     executor,
@@ -114,6 +115,182 @@ describe('F270 canonical collaboration tools', () => {
       readOnly: true,
       scope: 'packages/agent',
       evidenceRefs: ['file:packages/agent/src/index.ts'],
+    });
+  });
+
+  it('validates quality_strategy and stamps the trusted owner Turn reference', async () => {
+    const { ctx, executor } = await context();
+    const qualityStrategy = {
+      schemaVersion: 1,
+      stageId: 'review-auth',
+      pattern: 'fan-out-and-synthesize',
+      role: 'investigator',
+      laneRelation: 'coverage',
+      targetEvidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
+    };
+
+    const spawned = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'strategy-reviewer',
+      objective: 'Review the actor boundary.',
+      quality_strategy: qualityStrategy,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(spawned).toMatchObject({ ok: true });
+    expect(executor.pending[0]?.input.turn.metadata?.qualityStrategy).toEqual({
+      ...qualityStrategy,
+      ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+    });
+
+    const invalid = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'invalid-strategy',
+      objective: 'Try an invented pattern.',
+      quality_strategy: { ...qualityStrategy, pattern: 'majority-vote' },
+    }, ctx)) as Record<string, unknown>;
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { code: 'agent_control_failed' },
+    });
+  });
+
+  it('rejects unknown and unreadable strategy targets before creating an Actor', async () => {
+    const { ctx } = await context();
+    const base = {
+      schemaVersion: 1,
+      stageId: 'invalid-target',
+      pattern: 'adversarial-verification',
+      role: 'challenger',
+      laneRelation: 'opposition',
+    };
+    const unknown = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'unknown-target',
+      objective: 'Must not start.',
+      quality_strategy: {
+        ...base,
+        targetEvidenceRefs: ['tool-result:not-visible'],
+      },
+    }, ctx)) as Record<string, unknown>;
+    const missing = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'missing-target',
+      objective: 'Must not start.',
+      quality_strategy: {
+        ...base,
+        targetEvidenceRefs: ['file:packages/coding/src/does-not-exist.ts'],
+      },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(unknown).toMatchObject({ ok: false });
+    expect(missing).toMatchObject({ ok: false });
+    expect(ctx.actorControl?.list().actors.map((actor) => actor.path))
+      .not.toEqual(expect.arrayContaining(['/root/unknown-target', '/root/missing-target']));
+  });
+
+  it('preserves running same-strategy follow-up and rejects a strategy switch before delivery', async () => {
+    const { ctx, executor } = await context();
+    const qualityStrategy = {
+      schemaVersion: 1,
+      stageId: 'coverage-round-1',
+      pattern: 'fan-out-and-synthesize',
+      role: 'investigator',
+      laneRelation: 'coverage',
+    };
+    await executeTool('spawn_agent', {
+      task_name: 'coverage-lane',
+      objective: 'Inspect one bounded scope.',
+      quality_strategy: qualityStrategy,
+    }, ctx);
+
+    const same = JSON.parse(await executeTool('followup_task', {
+      target: 'coverage-lane',
+      objective: 'Also inspect the adjacent test.',
+      quality_strategy: qualityStrategy,
+    }, ctx)) as Record<string, unknown>;
+    expect(same).toMatchObject({ ok: true, delivery: 'current_turn' });
+
+    const switched = JSON.parse(await executeTool('followup_task', {
+      target: 'coverage-lane',
+      objective: 'Become a challenger.',
+      quality_strategy: {
+        ...qualityStrategy,
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: ['finding:coverage candidate'],
+      },
+    }, ctx)) as Record<string, unknown>;
+    expect(switched).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_message' },
+    });
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toMatchObject([
+      { content: 'Also inspect the adjacent test.', kind: 'followup' },
+    ]);
+  });
+
+  it('lets an idle actor start a new attributed stage', async () => {
+    const { ctx, executor } = await context();
+    await executeTool('spawn_agent', {
+      task_name: 'reusable',
+      objective: 'Generate a candidate.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'candidate-1',
+        pattern: 'generate-and-filter',
+        role: 'generator',
+      },
+    }, ctx);
+    executor.pending[0]?.resolve({ output: 'candidate' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    ctx.actorTurnRef = { actorPath: '/root', turnId: 'root-turn-2' };
+    const followup = JSON.parse(await executeTool('followup_task', {
+      target: 'reusable',
+      objective: 'Challenge the candidate.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'challenge-1',
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: ['finding:candidate'],
+      },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(followup).toMatchObject({ ok: true, delivery: 'started_turn' });
+    expect(executor.pending[1]?.input.turn.metadata?.qualityStrategy).toMatchObject({
+      stageId: 'challenge-1',
+      ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-2' },
+    });
+  });
+
+  it('does not reopen a terminal stage id for the same owner Turn', async () => {
+    const { ctx, executor } = await context();
+    const qualityStrategy = {
+      schemaVersion: 1,
+      stageId: 'closed-stage',
+      pattern: 'fan-out-and-synthesize',
+      role: 'investigator',
+      laneRelation: 'coverage',
+    };
+    await executeTool('spawn_agent', {
+      task_name: 'first-lane',
+      objective: 'Complete the first lane.',
+      quality_strategy: qualityStrategy,
+    }, ctx);
+    executor.pending[0]?.resolve({ output: 'done' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const reopened = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'late-lane',
+      objective: 'Try to reopen it.',
+      quality_strategy: qualityStrategy,
+    }, ctx)) as Record<string, unknown>;
+
+    expect(reopened).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_message',
+        message: expect.stringContaining('closed'),
+      },
     });
   });
 

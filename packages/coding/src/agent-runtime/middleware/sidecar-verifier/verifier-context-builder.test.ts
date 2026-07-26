@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXMessage } from '@kodax-ai/llm';
+import type { PatternTrace } from '../../../orchestration/pattern-trace.js';
 
 import {
   buildVerifierContext,
@@ -380,5 +381,138 @@ describe('Sidecar Verifier current user intent', () => {
     expect(evidencePath).toHaveLength(400);
     expect(evidencePath).toMatch(/\.\.\.\[truncated\]$/u);
     expect(buildVerifierUserMessage(context)).not.toContain(longPath);
+  });
+
+  it('keeps the legacy packet byte-identical when quality facts are absent', () => {
+    const context = buildVerifierContext({
+      transcript: [{ role: 'user', content: 'Review the patch.' }],
+      lastAssistantText: 'Reviewed.',
+    });
+
+    expect(buildVerifierUserMessage({
+      ...context,
+      qualitySignals: undefined,
+      patternTrace: undefined,
+    })).toBe(buildVerifierUserMessage(context));
+  });
+
+  it('renders bounded trace facts, unresolved risk, and degradation without calling them proof', () => {
+    const longRef = `finding:${'界'.repeat(504)}`;
+    const trace: PatternTrace = {
+      schemaVersion: 1,
+      stages: Array.from({ length: 24 }, (_, index) => ({
+        schemaVersion: 1 as const,
+        ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        stageId: `stage-${index}`,
+        pattern: 'adversarial-verification' as const,
+        laneRelation: 'opposition' as const,
+        participantTurnRefs: [{
+          actorPath: `/root/challenger-${index}`,
+          turnId: `turn-${index}`,
+        }],
+        targetActorTurnRefs: [],
+        targetEvidenceRefs: [longRef, `${longRef}-${index}`, `finding:${index}`],
+        contextFacts: {
+          participants: [{
+            turnRef: {
+              actorPath: `/root/challenger-${index}`,
+              turnId: `turn-${index}`,
+            },
+            role: 'challenger' as const,
+            forkTurns: 'none' as const,
+            effectiveProviderGroup: 'group-1',
+            effectiveModelGroup: 'group-1',
+            evidenceRefCount: 1,
+          }],
+          sharedEvidenceRefCount: 0,
+          omittedParticipantCount: 0,
+          commonParentActorPath: '/root',
+          contextProjectionOmitted: false,
+        },
+        status: 'degraded' as const,
+        dispositionCounts: { confirmed: 0, refuted: 1, unresolved: 1 },
+        dispositionFacts: [{
+          targetEvidenceRef: `finding:${index}`,
+          disposition: 'refuted' as const,
+          evidenceRefs: [longRef, longRef, longRef],
+          omittedEvidenceRefCount: 0,
+        }],
+        actorAssertedCoverage: [longRef, longRef, longRef, longRef],
+        degradedReasons: ['structured_result_unavailable'],
+      })),
+      omittedStageCount: 3,
+    };
+    const context = buildVerifierContext({
+      transcript: [{ role: 'user', content: 'Review the patch.' }],
+      lastAssistantText: 'Reviewed.',
+      qualitySignals: {
+        riskLevel: 'high',
+        needsIndependentQA: true,
+        assuranceIntent: 'explicit-check',
+        reviewScale: 'large',
+      },
+      patternTrace: trace,
+    });
+    const message = buildVerifierUserMessage(context);
+
+    expect(message).toContain('QUALITY STRATEGY FACTS (context, not proof)');
+    expect(message).toContain('relation=opposition');
+    expect(message).toContain('refuted=1 unresolved=1');
+    expect(message).toContain('provider=group-1/model=group-1');
+    expect(message).toContain('Outcome: target=finding:0 disposition=refuted');
+    expect(message).toContain('Degraded: structured_result_unavailable');
+    expect(message).toMatch(/\(\d+ additional strategy stage\(s\) omitted\)/u);
+    expect(message).toContain('Stage count or completion does not prove correctness');
+    expect(Buffer.byteLength(message, 'utf8')).toBeLessThan(16_000);
+  });
+
+  it('keeps a late refuted target inside the per-stage outcome preview', () => {
+    const dispositionFacts = [
+      ...Array.from({ length: 4 }, (_, index) => ({
+        targetEvidenceRef: `finding:confirmed-${index}`,
+        disposition: 'confirmed' as const,
+        evidenceRefs: [] as const,
+        omittedEvidenceRefCount: 0,
+      })),
+      {
+        targetEvidenceRef: 'finding:late-risk',
+        disposition: 'refuted' as const,
+        evidenceRefs: ['finding:refutation'],
+        omittedEvidenceRefCount: 0,
+      },
+    ];
+    const trace: PatternTrace = {
+      schemaVersion: 1,
+      stages: [{
+        schemaVersion: 1,
+        ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-1' },
+        stageId: 'late-risk-stage',
+        pattern: 'adversarial-verification',
+        laneRelation: 'opposition',
+        participantTurnRefs: [],
+        targetActorTurnRefs: [],
+        targetEvidenceRefs: dispositionFacts.map((fact) => fact.targetEvidenceRef),
+        contextFacts: {
+          participants: [],
+          sharedEvidenceRefCount: 0,
+          omittedParticipantCount: 0,
+          contextProjectionOmitted: false,
+        },
+        status: 'completed',
+        dispositionCounts: { confirmed: 4, refuted: 1, unresolved: 0 },
+        dispositionFacts,
+      }],
+      omittedStageCount: 0,
+    };
+    const message = buildVerifierUserMessage(buildVerifierContext({
+      transcript: [{ role: 'user', content: 'Review the risk.' }],
+      lastAssistantText: 'Reviewed.',
+      patternTrace: trace,
+    }));
+
+    expect(message).toContain(
+      'Outcome: target=finding:late-risk disposition=refuted support=finding:refutation',
+    );
+    expect(message).toContain('(1 outcome fact(s) omitted)');
   });
 });

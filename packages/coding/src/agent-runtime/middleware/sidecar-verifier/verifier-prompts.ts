@@ -18,7 +18,14 @@
  */
 
 import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import type {
+  PatternTrace,
+  PatternTraceDispositionFact,
+  PatternTraceStage,
+} from '../../../orchestration/pattern-trace.js';
 import type { SidecarVerifierContextInputs } from './verifier.js';
+
+const MAX_PATTERN_TRACE_UTF8_BYTES = 8_000;
 
 /**
  * Sidecar Verifier SYSTEM_PROMPT — pinned by the FEATURE_184 Phase D.4
@@ -124,6 +131,34 @@ export const VERIFIER_REPORT_TOOL: KodaXToolDefinition = {
         description:
           'Optional one-line hint about HOW to address the issue (file path, function name, missing import, etc.). May be empty.',
       },
+      reasonCode: {
+        type: 'string',
+        enum: [
+          'missing_requirement',
+          'contradicted_evidence',
+          'unsupported_claim',
+          'unresolved_high_risk',
+          'verification_degraded',
+        ],
+        description: 'Optional focused gap class for revise/blocked only.',
+      },
+      recommendedPattern: {
+        type: 'string',
+        enum: [
+          'classify-and-act',
+          'fan-out-and-synthesize',
+          'adversarial-verification',
+          'generate-and-filter',
+          'tournament',
+          'loop-until-done',
+        ],
+        description: 'Optional advisory next collaboration pattern for revise/blocked only.',
+      },
+      targetEvidenceRefs: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Optional concrete evidence gaps targeted by the recommendation.',
+      },
     },
     required: ['verdict', 'reason'],
   },
@@ -172,6 +207,147 @@ export function renderTranscriptForVerifier(
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return `${s.slice(0, max)}…[truncated]`;
+}
+
+function renderPatternTraceStage(stage: PatternTraceStage): string[] {
+  const lines: string[] = [];
+  const participantRoles = stage.contextFacts.participants
+    .map((participant) => participant.role)
+    .join(',');
+  const dispositions = stage.dispositionCounts
+    ? ` confirmed=${stage.dispositionCounts.confirmed}`
+      + ` refuted=${stage.dispositionCounts.refuted}`
+      + ` unresolved=${stage.dispositionCounts.unresolved}`
+    : '';
+  const targetPreview = stage.targetEvidenceRefs
+    .slice(0, 3)
+    .map((ref) => truncate(ref, 160))
+    .join(',');
+  const participantPreview = stage.participantTurnRefs
+    .slice(0, 3)
+    .map((ref) => `${truncate(ref.actorPath, 100)}#turn=${truncate(ref.turnId, 100)}`)
+    .join(',');
+  const participantContextPreview = stage.contextFacts.participants
+    .slice(0, 3)
+    .map((participant) => (
+      `${participant.role}`
+      + `/fork=${String(participant.forkTurns)}`
+      + `/provider=${participant.effectiveProviderGroup ?? 'unknown'}`
+      + `/model=${participant.effectiveModelGroup ?? 'unknown'}`
+      + `/evidence=${participant.evidenceRefCount}`
+    ))
+    .join(',');
+  const participantCount = stage.participantTurnRefs.length
+    + stage.contextFacts.omittedParticipantCount;
+  lines.push(
+    `- stage=${truncate(stage.stageId, 120)}`
+    + ` pattern=${stage.pattern}`
+    + ` status=${stage.status}`
+    + ` relation=${stage.laneRelation ?? 'unspecified'}`
+    + ` participants=${participantCount}`
+    + ` roles=${participantRoles || 'unknown'}`
+    + `${participantPreview ? ` participantRefs=${participantPreview}` : ''}`
+    + `${participantContextPreview ? ` participantContext=${participantContextPreview}` : ''}`
+    + ` sharedEvidenceRefs=${stage.contextFacts.sharedEvidenceRefCount}`
+    + `${stage.contextFacts.commonParentActorPath
+      ? ` commonParent=${truncate(stage.contextFacts.commonParentActorPath, 120)}`
+      : ''}`
+    + ` targets=${stage.targetEvidenceRefs.length}`
+    + ` projectionOmitted=${String(stage.contextFacts.contextProjectionOmitted)}`
+    + `${targetPreview ? ` targetRefs=${targetPreview}` : ''}`
+    + dispositions,
+  );
+  const renderedFacts = [...(stage.dispositionFacts ?? [])]
+    .map((fact, index) => ({ fact, index }))
+    .sort((left, right) => (
+      dispositionPriority(left.fact) - dispositionPriority(right.fact)
+      || left.index - right.index
+    ))
+    .slice(0, 4)
+    .map(({ fact }) => fact);
+  for (const fact of renderedFacts) {
+    const support = fact.evidenceRefs
+      .map((ref) => truncate(ref, 160))
+      .join(',');
+    lines.push(
+      `  Outcome: target=${truncate(fact.targetEvidenceRef, 180)}`
+      + ` disposition=${fact.disposition}`
+      + `${support ? ` support=${support}` : ''}`
+      + `${fact.omittedEvidenceRefCount > 0
+        ? ` omittedSupport=${fact.omittedEvidenceRefCount}`
+        : ''}`,
+    );
+  }
+  const omittedOutcomes = (stage.dispositionFacts?.length ?? 0) > 4
+    ? (stage.dispositionFacts?.length ?? 0) - 4
+    : 0;
+  if (omittedOutcomes + (stage.omittedDispositionCount ?? 0) > 0) {
+    lines.push(
+      `  (${omittedOutcomes + (stage.omittedDispositionCount ?? 0)} outcome fact(s) omitted)`,
+    );
+  }
+  if (stage.actorAssertedCoverage && stage.actorAssertedCoverage.length > 0) {
+    lines.push(
+      `  Actor-asserted coverage: ${stage.actorAssertedCoverage
+        .slice(0, 4)
+        .map((entry) => truncate(entry, 160))
+        .join(', ')}`,
+    );
+  }
+  if (stage.degradedReasons && stage.degradedReasons.length > 0) {
+    lines.push(`  Degraded: ${stage.degradedReasons.join(', ')}`);
+  }
+  if (stage.stopReason) lines.push(`  Stop: ${truncate(stage.stopReason, 240)}`);
+  return lines;
+}
+
+function renderBoundedPatternTrace(trace: PatternTrace): string[] {
+  const candidates = trace.stages
+    .map((stage, index) => ({ stage, index }))
+    .sort((left, right) => (
+      Number(hasRiskDisposition(right.stage)) - Number(hasRiskDisposition(left.stage))
+      || left.index - right.index
+    ))
+    .slice(0, 18);
+  const renderedBlocks: string[][] = [];
+  for (const { stage } of candidates) {
+    const block = renderPatternTraceStage(stage);
+    const candidateLines = [...renderedBlocks.flat(), ...block];
+    if (Buffer.byteLength(candidateLines.join('\n'), 'utf8')
+      > MAX_PATTERN_TRACE_UTF8_BYTES - 128) {
+      break;
+    }
+    renderedBlocks.push(block);
+  }
+
+  let omittedStageCount = trace.omittedStageCount
+    + trace.stages.length
+    - renderedBlocks.length;
+  let lines = renderedBlocks.flat();
+  if (omittedStageCount > 0) {
+    let marker = `(${omittedStageCount} additional strategy stage(s) omitted)`;
+    while (
+      renderedBlocks.length > 0
+      && Buffer.byteLength([...lines, marker].join('\n'), 'utf8')
+        > MAX_PATTERN_TRACE_UTF8_BYTES
+    ) {
+      renderedBlocks.pop();
+      omittedStageCount += 1;
+      lines = renderedBlocks.flat();
+      marker = `(${omittedStageCount} additional strategy stage(s) omitted)`;
+    }
+    lines.push(marker);
+  }
+  return lines;
+}
+
+function hasRiskDisposition(stage: PatternTraceStage): boolean {
+  return (stage.dispositionCounts?.refuted ?? 0) > 0
+    || (stage.dispositionCounts?.unresolved ?? 0) > 0;
+}
+
+function dispositionPriority(fact: PatternTraceDispositionFact): number {
+  return fact.disposition === 'refuted' ? 0 : fact.disposition === 'unresolved' ? 1 : 2;
 }
 
 function extractTextFromContent(
@@ -297,6 +473,29 @@ export function buildVerifierUserMessage(inputs: SidecarVerifierContextInputs): 
     sections.push(`(${inputs.omittedToolOutcomeEvidenceCount} additional tool outcome(s) omitted)`);
   }
   sections.push('');
+
+  if (inputs.qualitySignals || inputs.patternTrace) {
+    sections.push('=== QUALITY STRATEGY FACTS (context, not proof) ===');
+    if (inputs.qualitySignals) {
+      const signals = inputs.qualitySignals;
+      sections.push(
+        `Signals: risk=${signals.riskLevel ?? 'unknown'}`
+        + ` needsIndependentQA=${String(signals.needsIndependentQA ?? false)}`
+        + ` assuranceIntent=${signals.assuranceIntent ?? 'default'}`
+        + ` reviewScale=${signals.reviewScale ?? 'unknown'}`
+        + ` requiresBrainstorm=${String(signals.requiresBrainstorm ?? false)}`,
+      );
+    }
+    if (inputs.patternTrace) {
+      sections.push(...renderBoundedPatternTrace(inputs.patternTrace));
+    } else {
+      sections.push('(no attributable delegated strategy trace)');
+    }
+    sections.push(
+      'Interpretation: coverage, replication, and opposition are distinct. Stage count or completion does not prove correctness. Do not resurrect refuted findings; resolve or disclose relevant unresolved/degraded facts. Missing optional patterns or solo execution are not failures by themselves. Judge the final answer from this bounded packet; do not repeat the domain audit or orchestrate Agents.',
+    );
+    sections.push('');
+  }
 
   sections.push('=== FILE EDITS PERFORMED THIS TURN ===');
   if (inputs.fileEditSummary.length === 0) {

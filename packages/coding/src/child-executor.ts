@@ -30,7 +30,7 @@ import type {
   KodaXToolExecutionContext,
   KodaXWireReasoningEffort,
 } from './types.js';
-import { resolveExecutionCwd } from './runtime-paths.js';
+import { resolveExecutionCwd, resolveExecutionPath } from './runtime-paths.js';
 import { countTokens } from './tokenizer.js';
 import { resolveProvider } from './providers/index.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
@@ -43,6 +43,8 @@ import {
   buildStructuredOutputRepairPrompt,
   evaluateStructuredOutput,
 } from './workflows/structured-output.js';
+import { parsePatternDispositionEnvelope } from './orchestration/pattern-result.js';
+import { parseActorTurnEvidenceRef } from './orchestration/pattern-strategy.js';
 // FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
 // worktree isolation, briefing, role policy) stay below; the wrapper
@@ -237,6 +239,8 @@ export interface ChildExecutorOptions {
 
   /** Runtime-minted principal inherited by the child runtime for recursive collaboration. */
   readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
+  /** Exact admitted Actor Turn id used as the child run's live Turn identity. */
+  readonly actorTurnId?: string;
   /** Trusted host bridge inherited beside the principal for nested Workflow owners. */
   readonly actorHost?: import('./types.js').KodaXActorHost;
   /** Prior Actor turns and committed mailbox facts projected into this turn. */
@@ -885,7 +889,14 @@ async function resolveChildStructuredOutput(input: {
   if (schema === undefined) return undefined;
 
   const first = evaluateStructuredOutput(input.result.lastText, schema);
-  if (first.ok) return first.value;
+  if (first.ok) {
+    return input.bundle.structuredOutputContract === 'pattern-disposition-parse-only'
+      ? parsePatternDispositionEnvelope(first.value)
+      : first.value;
+  }
+  if (input.bundle.structuredOutputContract === 'pattern-disposition-parse-only') {
+    return undefined;
+  }
 
   // Only attempt repair for a child that genuinely completed; an aborted or
   // interrupted child must not trigger another LLM turn.
@@ -1233,6 +1244,9 @@ async function runReadChildBody(
           // messages and recursively collaborate within its inherited ceiling.
           currentAgentId: bundle.id,
           parentAgentId: scope.ctx.currentAgentId,
+          ...(options.actorTurnId !== undefined
+            ? { liveTurn: { deliveryKind: 'initial' as const, turnId: options.actorTurnId } }
+            : {}),
           ...(scope.ctx.skillInvocation ? { skillInvocation: scope.ctx.skillInvocation } : {}),
         },
         events: childEvents,
@@ -1473,6 +1487,9 @@ async function runWriteChildBody(
           // propagation rules).
           currentAgentId: bundle.id,
           parentAgentId: childCtx.currentAgentId,
+          ...(options.actorTurnId !== undefined
+            ? { liveTurn: { deliveryKind: 'initial' as const, turnId: options.actorTurnId } }
+            : {}),
           ...(childCtx.skillInvocation ? { skillInvocation: childCtx.skillInvocation } : {}),
         },
         events: childEvents,
@@ -1758,7 +1775,7 @@ export async function resolveEvidenceRef(
   if (ref.startsWith('file:')) {
     const filePath = ref.slice(5);
     try {
-      const content = await fsPromises.readFile(filePath, 'utf-8');
+      const content = await fsPromises.readFile(resolveExecutionPath(filePath, ctx), 'utf-8');
       return `### ${filePath}\n\`\`\`\n${content}\n\`\`\``;
     } catch {
       return `- ${ref} (could not read file)`;
@@ -1767,8 +1784,13 @@ export async function resolveEvidenceRef(
   if (ref.startsWith('diff:')) {
     const filePath = ref.slice(5);
     try {
-      const diff = execFileSync('git', ['diff', 'HEAD', '--', filePath], {
-        cwd: ctx.gitRoot ?? undefined,
+      const diff = execFileSync('git', [
+        'diff',
+        'HEAD',
+        '--',
+        resolveExecutionPath(filePath, ctx),
+      ], {
+        cwd: resolveExecutionCwd(ctx),
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 10_000,
@@ -1783,6 +1805,33 @@ export async function resolveEvidenceRef(
   }
   if (ref.startsWith('finding:')) {
     return `- **Known fact**: ${ref.slice(8)}`;
+  }
+  if (ref.startsWith('agent-turn:')) {
+    if (!ctx.actorControl) {
+      return '- [evidence_refs error] agent-turn: requires Actor control.';
+    }
+    let target;
+    try {
+      target = parseActorTurnEvidenceRef(ref);
+    } catch (error) {
+      return `- [evidence_refs error] ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (target === undefined) {
+      return '- [evidence_refs error] invalid agent-turn reference.';
+    }
+    let output;
+    try {
+      output = ctx.actorControl.output(target.actorPath, target.turnId);
+    } catch {
+      return `- ${ref} (not visible or not controlled by this Agent)`;
+    }
+    if (output.state === 'running' || output.state === 'accepted') {
+      return `- ${ref} (turn still running; wait for its terminal event before forwarding output)`;
+    }
+    const FENCE = '```';
+    let body = output.output ?? output.error ?? '(no final text recorded)';
+    if (body.includes(FENCE)) body = body.replace(/```/g, '`鈥媊鈥媊');
+    return `### agent-turn:${target.actorPath}#turn=${target.turnId} (${output.state})\n${FENCE}\n${body}\n${FENCE}`;
   }
   if (ref.startsWith('agent:')) {
     const actorPath = ref.slice('agent:'.length).trim();
@@ -1814,7 +1863,7 @@ export async function resolveEvidenceRef(
   // the failure to the parent on the next turn (it appears in the
   // dispatch tool_result that wraps the child summary) so the Worker
   // can self-correct the prefix.
-  return `- [evidence_refs error] unrecognized prefix in "${ref}" — valid prefixes: file:, diff:, finding:, agent:`;
+  return `- [evidence_refs error] unrecognized prefix in "${ref}" — valid prefixes: file:, diff:, finding:, agent-turn:, agent:`;
 }
 
 /* ---------- Child events (progress visibility) ---------- */

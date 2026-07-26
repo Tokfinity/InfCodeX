@@ -36,12 +36,14 @@ import type {
 import type { ObserverBridge } from './_internal/managed-task/types.js';
 import {
   createSidecarVerifierStopHook,
+  type SidecarQualitySignals,
   type SidecarVerifierVerdict,
 } from '../agent-runtime/middleware/sidecar-verifier/verifier.js';
 import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifier/verifier-context-builder.js';
 import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
 import { composeGateDecision } from '../agent-runtime/middleware/sidecar-verifier/gate.js';
 import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
+import type { PatternTrace } from '../orchestration/pattern-trace.js';
 
 export interface RunnerSidecarVerifierAdapterDeps {
   /** Resolved main provider (the Worker's provider). */
@@ -82,6 +84,10 @@ export interface RunnerSidecarVerifierAdapterDeps {
   readonly getCollaborationState: () => SidecarCollaborationState;
   /** Read-only plan snapshot for structured verifier evidence. */
   readonly getPlanSnapshot: () => TodoList;
+  /** Lazily rebuilt only after the existing Sidecar gate decides to fire. */
+  readonly getPatternTrace?: () => PatternTrace | undefined;
+  /** Lazily read routing facts; never participates in the firing decision. */
+  readonly getQualitySignals?: () => SidecarQualitySignals | undefined;
   /** Total rounds (LLM turns) the Worker ran this task — `roundRef.current`. */
   readonly getRoundCount: () => number;
   /** Whether the Worker committed a Todolist — `todoStore.getAll().length > 0`. */
@@ -145,6 +151,8 @@ export function buildRunnerSidecarVerifierAdapter(
             plan: deps.getPlanSnapshot(),
             // FEATURE_247 (R3): thread the profile/task verification standard.
             verification: deps.verification,
+            qualitySignals: deps.getQualitySignals?.(),
+            patternTrace: deps.getPatternTrace?.(),
           }),
         onVerdict: (verdict) => {
           capturedSidecarVerdictRef.current = verdict;

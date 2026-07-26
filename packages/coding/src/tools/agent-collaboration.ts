@@ -19,6 +19,11 @@ import {
   listCodingDispatchableAgents,
   resolveCodingDispatchableAgent,
 } from '../external-agents/local-catalog.js';
+import {
+  assertStageCanAcceptTurn,
+  buildStoredActorStrategy,
+  toActorStrategyMetadataValue,
+} from '../orchestration/pattern-strategy.js';
 
 const MAX_BROADCAST_RECIPIENTS = 20;
 const DEFAULT_LIST_PAGE_SIZE = 20;
@@ -99,27 +104,39 @@ export async function toolSpawnAgent(
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const client = requireActorControl(ctx);
-  const taskName = requiredString(input, 'task_name');
-  const objective = requiredString(input, 'objective');
-  const readOnly = input.read_only !== false;
-  const provider = optionalString(input.provider);
-  const agentId = optionalString(input.agent_id);
-  const selector = await resolveAgentSelector(ctx, agentId, readOnly);
-  const spawn: AgentSpawnInput = {
-    taskName,
-    objective,
-    forkTurns: parseForkTurns(input.fork_turns),
-    kind: selector.kind,
-    capabilities: {
-      filesystem: readOnly ? 'read' : 'write',
-      ...(provider ? { providers: [provider] } : {}),
-      canAskUser: false,
-      ...(selector.control ? { control: selector.control } : {}),
-    },
-    metadata: spawnMetadata(input, readOnly, provider, agentId, selector.specialistName),
-  };
   try {
-    const turn = await client.spawn(spawn);
+    const taskName = requiredString(input, 'task_name');
+    const objective = requiredString(input, 'objective');
+    const readOnly = input.read_only !== false;
+    const provider = optionalString(input.provider);
+    const agentId = optionalString(input.agent_id);
+    const selector = await resolveAgentSelector(ctx, agentId, readOnly);
+    const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
+    const spawn: AgentSpawnInput = {
+      taskName,
+      objective,
+      forkTurns: parseForkTurns(input.fork_turns),
+      kind: selector.kind,
+      capabilities: {
+        filesystem: readOnly ? 'read' : 'write',
+        ...(provider ? { providers: [provider] } : {}),
+        canAskUser: false,
+        ...(selector.control ? { control: selector.control } : {}),
+      },
+      metadata: spawnMetadata(
+        input,
+        readOnly,
+        provider,
+        agentId,
+        selector.specialistName,
+        qualityStrategy === undefined
+          ? undefined
+          : toActorStrategyMetadataValue(qualityStrategy),
+      ),
+    };
+    const turn = qualityStrategy === undefined
+      ? await client.spawn(spawn)
+      : await spawnStrategyTurn(client, spawn, qualityStrategy);
     return render({ ok: true, ...turn });
   } catch (error) {
     return renderActorError('spawn_agent', error);
@@ -179,7 +196,11 @@ export async function toolFollowupTask(
   const client = requireActorControl(ctx);
   try {
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
-    const result = await client.followup(actorPath, requiredString(input, 'objective'));
+    const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
+    const objective = requiredString(input, 'objective');
+    const result = qualityStrategy === undefined
+      ? await client.followup(actorPath, objective)
+      : await followupStrategyTurn(client, actorPath, objective, qualityStrategy);
     return render({ ok: true, actorPath, ...result });
   } catch (error) {
     return renderActorError('followup_task', error);
@@ -463,6 +484,7 @@ function spawnMetadata(
   provider: string | undefined,
   agentId: string | undefined,
   specialistName: string | undefined,
+  qualityStrategy: AgentMetadataValue | undefined,
 ): Readonly<Record<string, AgentMetadataValue>> {
   return {
     readOnly,
@@ -476,7 +498,54 @@ function spawnMetadata(
     ...(provider ? { provider } : {}),
     ...(agentId ? { agentId } : {}),
     ...(specialistName ? { specialistName } : {}),
+    ...(qualityStrategy === undefined ? {} : { qualityStrategy }),
   };
+}
+
+async function spawnStrategyTurn(
+  client: AgentActorClient,
+  input: AgentSpawnInput,
+  strategy: NonNullable<Awaited<ReturnType<typeof buildStoredActorStrategy>>>,
+): Promise<Awaited<ReturnType<AgentActorClient['spawn']>>> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const expectedTreeRevision = assertStageCanAcceptTurn(client, strategy);
+    try {
+      return await client.spawn(input, { expectedTreeRevision });
+    } catch (error) {
+      if (!isRevisionConflict(error) || attempt > 0) throw error;
+    }
+  }
+  throw new Error('quality_strategy admission could not stabilize.');
+}
+
+async function followupStrategyTurn(
+  client: AgentActorClient,
+  actorPath: string,
+  objective: string,
+  strategy: NonNullable<Awaited<ReturnType<typeof buildStoredActorStrategy>>>,
+): Promise<Awaited<ReturnType<AgentActorClient['followup']>>> {
+  const metadata = { qualityStrategy: toActorStrategyMetadataValue(strategy) };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const expectedTreeRevision = assertStageCanAcceptTurn(client, strategy);
+    try {
+      return await client.followup(
+        actorPath,
+        objective,
+        metadata,
+        { expectedTreeRevision },
+      );
+    } catch (error) {
+      if (!isRevisionConflict(error) || attempt > 0) throw error;
+    }
+  }
+  throw new Error('quality_strategy admission could not stabilize.');
+}
+
+function isRevisionConflict(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'revision_conflict';
 }
 
 async function resolveAgentSelector(

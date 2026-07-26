@@ -520,6 +520,85 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(result.results[0]?.digest).toBe('Distilled by the fallback.');
   });
 
+  it('parses a valid fixed AMA disposition envelope without a repair turn', async () => {
+    const structuredText = JSON.stringify({
+      schemaVersion: 1,
+      outcomes: [{
+        target: { evidenceRef: 'finding:auth-boundary' },
+        disposition: 'refuted',
+        evidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
+      }],
+      assertedCoverage: ['actor output ownership'],
+    });
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: structuredText,
+      messages: [{ role: 'assistant' as const, content: structuredText }],
+      sessionId: 'ama-structured-valid',
+    });
+
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'ama-challenger-valid',
+        readOnly: true,
+        outputSchema: {
+          type: 'object',
+          required: ['schemaVersion', 'outcomes', 'assertedCoverage'],
+          properties: {
+            schemaVersion: { type: 'number', enum: [1] },
+            outcomes: { type: 'array', items: { type: 'object' } },
+            assertedCoverage: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        structuredOutputContract: 'pattern-disposition-parse-only',
+      })],
+      createCtx(),
+      createOptions(),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(result.results[0]?.structured).toEqual(JSON.parse(structuredText));
+  });
+
+  it('marks an invalid fixed AMA disposition envelope unavailable with zero repair calls', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: JSON.stringify({
+        schemaVersion: 1,
+        outcomes: [{
+          target: { actorPath: '/root/reviewer' },
+          disposition: 'confirmed',
+          evidenceRefs: [],
+        }],
+        assertedCoverage: [],
+      }),
+      messages: [{ role: 'assistant' as const, content: 'invalid actor target' }],
+      sessionId: 'ama-structured-invalid',
+    });
+
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'ama-challenger-invalid',
+        readOnly: true,
+        outputSchema: {
+          type: 'object',
+          required: ['schemaVersion', 'outcomes', 'assertedCoverage'],
+          properties: {
+            schemaVersion: { type: 'number', enum: [1] },
+            outcomes: { type: 'array', items: { type: 'object' } },
+            assertedCoverage: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        structuredOutputContract: 'pattern-disposition-parse-only',
+      })],
+      createCtx(),
+      createOptions(),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(result.results[0]?.structured).toBeUndefined();
+  });
+
   it('reuses a registered terse finalText but rejects five-line output', async () => {
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
@@ -2408,6 +2487,20 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).not.toContain('[evidence_refs error]');
   });
 
+  it('file: resolves relative references from the execution cwd used by validation', async () => {
+    const executionCwd = join(evidenceTmpDir, 'worktree');
+    mkdirSync(executionCwd);
+    writeFileSync(join(executionCwd, 'relative.ts'), 'export const relativeEvidence = true;');
+
+    const result = await resolveEvidenceRef(
+      'file:relative.ts',
+      makeEvidenceCtx({ executionCwd }),
+    );
+
+    expect(result).toContain('### relative.ts');
+    expect(result).toContain('export const relativeEvidence = true;');
+  });
+
   it('regression: diff: routes to the diff branch (no-changes / could-not-get-diff fallback in non-git temp dir)', async () => {
     const filePath = join(evidenceTmpDir, 'foo.ts');
     writeFileSync(filePath, 'baseline');
@@ -2417,6 +2510,26 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     // rather than falling through to the unknown-prefix error.
     expect(result).toMatch(/diff: |\(no changes\)|\(could not get diff\)/);
     expect(result).not.toContain('[evidence_refs error]');
+  });
+
+  it('diff: resolves relative references from the execution cwd used by validation', async () => {
+    execFileSync('git', ['init'], { cwd: evidenceTmpDir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'tests@kodax.local'], { cwd: evidenceTmpDir });
+    execFileSync('git', ['config', 'user.name', 'KodaX Tests'], { cwd: evidenceTmpDir });
+    const executionCwd = join(evidenceTmpDir, 'worktree');
+    mkdirSync(executionCwd);
+    writeFileSync(join(executionCwd, 'relative.ts'), 'export const value = "before";');
+    execFileSync('git', ['add', 'worktree/relative.ts'], { cwd: evidenceTmpDir });
+    execFileSync('git', ['commit', '-m', 'baseline'], { cwd: evidenceTmpDir, stdio: 'ignore' });
+    writeFileSync(join(executionCwd, 'relative.ts'), 'export const value = "after";');
+
+    const result = await resolveEvidenceRef(
+      'diff:relative.ts',
+      makeEvidenceCtx({ executionCwd }),
+    );
+
+    expect(result).toContain('### diff: relative.ts');
+    expect(result).toContain('+export const value = "after";');
   });
 
   it('diff: preserves a complete diff larger than the former 4000-character cap', async () => {
@@ -2609,6 +2722,29 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
 
     expect(result).toContain('### agent: /root/review (completed)');
     expect(result).toContain('Reviewed src/index.ts');
+  });
+
+  it('agent-turn: resolves one exact terminal Actor Turn instead of drifting to latest', async () => {
+    const output = vi.fn((_actorPath: string, turnId?: string) => ({
+      actorPath: '/root/review',
+      turnId: turnId ?? 'missing',
+      state: 'completed' as const,
+      output: 'Historical review result',
+      artifacts: [],
+      progress: [],
+    }));
+    const actorControl = {
+      output,
+    } as unknown as NonNullable<KodaXToolExecutionContext['actorControl']>;
+
+    const result = await resolveEvidenceRef(
+      'agent-turn:/root/review#turn=turn-review-1',
+      makeEvidenceCtx({ actorControl }),
+    );
+
+    expect(output).toHaveBeenCalledWith('/root/review', 'turn-review-1');
+    expect(result).toContain('Historical review result');
+    expect(result).toContain('turn-review-1');
   });
 
   it('agent: fails visibly when the canonical Actor is not visible', async () => {

@@ -19,10 +19,12 @@ import type {
 } from '../../../types.js';
 import type {
   SidecarPlanEvidence,
+  SidecarQualitySignals,
   SidecarTaskEvidence,
   SidecarToolOutcomeEvidence,
   SidecarVerifierContextInputs,
 } from './verifier.js';
+import type { PatternTrace } from '../../../orchestration/pattern-trace.js';
 
 const ROLLING_BUFFER_SIZE = 24;
 const TASK_EVIDENCE_LIMIT = 20;
@@ -278,6 +280,8 @@ export interface BuildVerifierContextOptions {
    * citations, uncertainty disclosure, no-project-file-modification, …).
    */
   readonly verification?: KodaXTaskVerificationContract;
+  readonly qualitySignals?: SidecarQualitySignals;
+  readonly patternTrace?: PatternTrace;
 }
 
 /**
@@ -339,5 +343,7 @@ export function buildVerifierContext(
     omittedToolOutcomeEvidenceCount: tools.omitted,
     lastAssistantText: options.lastAssistantText,
     ...(additionalCriteria ? { additionalCriteria } : {}),
+    ...(options.qualitySignals ? { qualitySignals: options.qualitySignals } : {}),
+    ...(options.patternTrace ? { patternTrace: options.patternTrace } : {}),
   };
 }

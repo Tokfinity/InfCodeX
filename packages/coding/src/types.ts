@@ -330,6 +330,20 @@ export interface KodaXSidecarMessageEvent {
   /** Exact actionable text from the sidecar. `budget-exhausted` means it was not injected. */
   readonly content: string;
   readonly suggestedFix?: string;
+  readonly strategyReasonCode?:
+    | 'missing_requirement'
+    | 'contradicted_evidence'
+    | 'unsupported_claim'
+    | 'unresolved_high_risk'
+    | 'verification_degraded';
+  readonly recommendedPattern?:
+    | 'classify-and-act'
+    | 'fan-out-and-synthesize'
+    | 'adversarial-verification'
+    | 'generate-and-filter'
+    | 'tournament'
+    | 'loop-until-done';
+  readonly targetEvidenceRefs?: readonly string[];
   readonly trace?: string;
   /**
    * FEATURE_247 (R3/R8) — session id the verdict belongs to, so a host running
@@ -988,6 +1002,11 @@ export interface KodaXChildContextBundle {
    * one bounded repair turn) and surfaces it on `KodaXChildAgentResult.structured`.
    */
   outputSchema?: unknown;
+  /**
+   * Runtime-only fixed AMA result contract. Unlike Workflow outputSchema,
+   * invalid output is parse-only and never starts a repair model turn.
+   */
+  structuredOutputContract?: 'pattern-disposition-parse-only';
   /** Trusted host provenance plus the generated script's terse-result declaration. */
   workflowOutputContract?: {
     readonly kodaxAuthored: boolean;
@@ -1978,6 +1997,20 @@ export interface KodaXManagedVerdictPayload {
   nextHarness?: KodaXTaskRoutingDecision['harnessProfile'];
   protocolParseFailed?: boolean;
   verificationDegraded?: boolean;
+  strategyReasonCode?:
+    | 'missing_requirement'
+    | 'contradicted_evidence'
+    | 'unsupported_claim'
+    | 'unresolved_high_risk'
+    | 'verification_degraded';
+  recommendedPattern?:
+    | 'classify-and-act'
+    | 'fan-out-and-synthesize'
+    | 'adversarial-verification'
+    | 'generate-and-filter'
+    | 'tournament'
+    | 'loop-until-done';
+  targetEvidenceRefs?: string[];
   preferredFallbackWorkerId?: string;
   /**
    * v0.7.26 Risk-3 fix — Evaluator explicit budget-extension request.
@@ -2094,6 +2127,8 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Runtime-minted collaboration principal; model inputs cannot replace its caller path. */
   actorControl?: AgentActorClient;
+  /** Runtime-minted exact Actor/Turn owner for collaboration metadata. */
+  actorTurnRef?: { readonly actorPath: string; readonly turnId: string };
   /** Shared root-run work ledger; descendant runtimes retain this exact object. */
   managedWorkBudget?: KodaXManagedWorkBudget;
   /** Trusted host operations that are intentionally absent from model-facing clients. */

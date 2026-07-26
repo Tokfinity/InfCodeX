@@ -387,6 +387,11 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       activeDescendantTurns: 1,
       hasPendingRootTaskNotifications: false,
     };
+    const getPatternTrace = vi.fn(() => undefined);
+    const getQualitySignals = vi.fn(() => ({
+      riskLevel: 'high',
+      needsIndependentQA: true,
+    }));
     const adapter = buildRunnerSidecarVerifierAdapter({
       mainProvider: fakeProvider(stream),
       mainProviderName: 'fake-verifier',
@@ -397,6 +402,8 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       getSessionId: () => 'session-scoped',
       getCollaborationState: () => collaboration,
       getPlanSnapshot: () => [],
+      getPatternTrace,
+      getQualitySignals,
       getRoundCount: () => 1,
       getHasPlan: () => false,
     });
@@ -422,10 +429,60 @@ describe('buildRunnerSidecarVerifierAdapter', () => {
       await adapter.composedStopHook(stopContext);
 
       expect(stream).toHaveBeenCalledOnce();
+      expect(getPatternTrace).toHaveBeenCalledOnce();
+      expect(getQualitySignals).toHaveBeenCalledOnce();
       expect(observer.sidecarStarted).toHaveBeenCalledOnce();
     } finally {
       if (priorAlways === undefined) delete process.env.KODAX_VERIFIER_ALWAYS;
       else process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
     }
+  });
+
+  it('does not reconstruct PatternTrace when the existing content gate skips', async () => {
+    const stream = vi.fn(async (): Promise<KodaXStreamResult> => ({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [toolBlock({ verdict: 'accept', reason: 'Verified.' })],
+    }));
+    const getPatternTrace = vi.fn(() => undefined);
+    const getQualitySignals = vi.fn(() => ({ riskLevel: 'low' }));
+    const adapter = buildRunnerSidecarVerifierAdapter({
+      mainProvider: fakeProvider(stream),
+      mainProviderName: 'fake-verifier',
+      mainModel: undefined,
+      mutationTracker: makeMutationTracker(),
+      observer: makeObserver(),
+      onVerdict: () => {},
+      getSessionId: () => undefined,
+      getCollaborationState: () => ({
+        activeDescendantTurns: 0,
+        hasPendingRootTaskNotifications: false,
+      }),
+      getPlanSnapshot: () => [],
+      getPatternTrace,
+      getQualitySignals,
+      getRoundCount: () => 1,
+      getHasPlan: () => false,
+    });
+    const priorAlways = process.env.KODAX_VERIFIER_ALWAYS;
+    delete process.env.KODAX_VERIFIER_ALWAYS;
+    try {
+      await adapter.composedStopHook({
+        transcript: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'Hello! How can I help?' },
+        ],
+        lastAssistantText: 'Hello! How can I help?',
+        signal: 'natural-end',
+        reanimateCount: 0,
+        reanimateBudget: 2,
+      });
+    } finally {
+      if (priorAlways !== undefined) process.env.KODAX_VERIFIER_ALWAYS = priorAlways;
+    }
+
+    expect(stream).not.toHaveBeenCalled();
+    expect(getPatternTrace).not.toHaveBeenCalled();
+    expect(getQualitySignals).not.toHaveBeenCalled();
   });
 });

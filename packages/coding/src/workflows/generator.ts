@@ -30,6 +30,7 @@ import {
 import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
+import { renderWorkflowPatternGuidance } from '../orchestration/pattern-catalog.js';
 import type { WorkflowScriptSnapshotInput } from './run-graph.js';
 import { uniqueBareInlineSlashNames, uniqueInlineSkillNames } from '../skill-references.js';
 import type { KodaXOptions } from '../types.js';
@@ -82,16 +83,6 @@ const GENERATED_WORKFLOW_SMOKE_SCENARIOS: readonly GeneratedWorkflowSmokeScenari
     name: 'empty-args-rerun',
     args: () => ({}),
   },
-];
-
-const WORKFLOW_PATTERN_GUIDANCE: readonly string[] = [
-  '- classify-and-act: first classify a mixed request, then route to the right worker behavior.',
-  '- fan-out-and-synthesize: split independent areas, files, hypotheses, reviewers, or perspectives; run them with wf.parallel, then wf.synthesize.',
-  '- adversarial-verification: produce or inspect a candidate, then have an independent verifier attack assumptions, evidence, and edge cases.',
-  '- generate-and-filter: ask several generators for distinct candidates, then filter/dedupe/rank before synthesis.',
-  '- tournament: compare competing approaches or answers and use synthesis as the judge.',
-  '- loop-until-done: run bounded follow-up rounds when findings should drive the next prompt.',
-  '- review or audit combines fan-out-and-synthesize with adversarial-verification: fan independent reviewers out across the dimensions, then pipe each finding straight into a verifier that tries to refute it before synthesis. A review with no verification stage ships findings a single reviewer\'s blind spot would have hidden.',
 ];
 
 export interface WorkflowGenerationTextRequest {
@@ -979,7 +970,7 @@ export function buildWorkflowGenerationUserPrompt(
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
     '',
     'Pattern selection guidance:',
-    ...WORKFLOW_PATTERN_GUIDANCE,
+    ...renderWorkflowPatternGuidance(),
     '- Complex multi-part work should normally include at least two work phases plus a final wf.synthesize barrier.',
     '- Do not collapse independent investigation, verification, ranking, generation/filtering, or iteration into one child agent.',
     '- A generated workflow with only one child agent is appropriate only when the request has one indivisible work product; otherwise decline simple tasks or generate a richer pattern.',

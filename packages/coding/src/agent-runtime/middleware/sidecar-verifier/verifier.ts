@@ -46,6 +46,11 @@ import type {
 import type { StopHookFn, StopHookResult, LlmJudgeFailureReason } from '@kodax-ai/agent';
 import { invokeLlmJudge, createLlmJudgedStopHook } from '@kodax-ai/agent';
 import type { TodoStatus } from '../../../types.js';
+import {
+  COLLABORATION_PATTERN_CATALOG,
+  type CollaborationPatternId,
+} from '../../../orchestration/pattern-catalog.js';
+import type { PatternTrace } from '../../../orchestration/pattern-trace.js';
 
 import {
   VERIFIER_SYSTEM_PROMPT,
@@ -55,6 +60,20 @@ import {
 
 /** Accepted verdict values. Pinned by `VERIFIER_REPORT_TOOL.input_schema`. */
 export type SidecarVerifierVerdictValue = 'accept' | 'revise' | 'blocked';
+export type SidecarStrategyReasonCode =
+  | 'missing_requirement'
+  | 'contradicted_evidence'
+  | 'unsupported_claim'
+  | 'unresolved_high_risk'
+  | 'verification_degraded';
+
+export interface SidecarQualitySignals {
+  readonly riskLevel?: string;
+  readonly needsIndependentQA?: boolean;
+  readonly assuranceIntent?: string;
+  readonly reviewScale?: string;
+  readonly requiresBrainstorm?: boolean;
+}
 
 /**
  * Diagnostic trace tag — explains why the verdict took its final shape.
@@ -86,6 +105,10 @@ export interface SidecarVerifierVerdict {
   readonly reason: string;
   /** Optional one-line how-to-fix hint. */
   readonly suggestedFix?: string;
+  /** Optional focused advice; Root remains free to choose another response. */
+  readonly reasonCode?: SidecarStrategyReasonCode;
+  readonly recommendedPattern?: CollaborationPatternId;
+  readonly targetEvidenceRefs?: readonly string[];
   /** Diagnostic only — not forwarded to Main Agent. */
   readonly trace: SidecarVerifierTrace;
 }
@@ -121,6 +144,10 @@ export interface SidecarVerifierContextInputs {
    * specific section.
    */
   readonly additionalCriteria?: string;
+  /** Existing routing facts, supplied only after the ordinary Sidecar gate fires. */
+  readonly qualitySignals?: SidecarQualitySignals;
+  /** Runtime-derived collaboration facts. Never a quality receipt. */
+  readonly patternTrace?: PatternTrace;
 }
 
 export interface SidecarTaskEvidence {
@@ -167,6 +194,16 @@ export interface SidecarVerifierInvokeOptions {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const REPORT_TOOL_NAME = 'emit_sidecar_verdict';
 const VALID_VERDICTS: readonly SidecarVerifierVerdictValue[] = ['accept', 'revise', 'blocked'];
+const VALID_REASON_CODES: readonly SidecarStrategyReasonCode[] = [
+  'missing_requirement',
+  'contradicted_evidence',
+  'unsupported_claim',
+  'unresolved_high_risk',
+  'verification_degraded',
+];
+const VALID_PATTERN_IDS = new Set<CollaborationPatternId>(
+  COLLABORATION_PATTERN_CATALOG.map((definition) => definition.id),
+);
 
 function getToolInput(block: KodaXToolUseBlock): Record<string, unknown> {
   if (!block.input || typeof block.input !== 'object') return {};
@@ -207,12 +244,44 @@ function parseVerifierToolCall(
   const suggestedFix = typeof input.suggestedFix === 'string' && input.suggestedFix.trim()
     ? input.suggestedFix.trim()
     : undefined;
+  const recommendation = verdict === 'accept'
+    ? {}
+    : parseStrategyRecommendation(input);
 
   return {
     verdict,
     reason,
     suggestedFix,
+    ...recommendation,
     trace: exact ? 'verifier_ok' : 'fuzzy_tool_match',
+  };
+}
+
+function parseStrategyRecommendation(
+  input: Readonly<Record<string, unknown>>,
+): Pick<
+  SidecarVerifierVerdict,
+  'reasonCode' | 'recommendedPattern' | 'targetEvidenceRefs'
+> {
+  const reasonCode = typeof input.reasonCode === 'string'
+    && VALID_REASON_CODES.includes(input.reasonCode as SidecarStrategyReasonCode)
+    ? input.reasonCode as SidecarStrategyReasonCode
+    : undefined;
+  const recommendedPattern = typeof input.recommendedPattern === 'string'
+    && VALID_PATTERN_IDS.has(input.recommendedPattern as CollaborationPatternId)
+    ? input.recommendedPattern as CollaborationPatternId
+    : undefined;
+  const refs = Array.isArray(input.targetEvidenceRefs)
+    && input.targetEvidenceRefs.length <= 20
+    && input.targetEvidenceRefs.every(
+      (ref) => typeof ref === 'string' && ref.trim().length > 0 && ref.length <= 512,
+    )
+    ? input.targetEvidenceRefs.map((ref) => (ref as string).trim())
+    : undefined;
+  return {
+    ...(reasonCode === undefined ? {} : { reasonCode }),
+    ...(recommendedPattern === undefined ? {} : { recommendedPattern }),
+    ...(refs === undefined ? {} : { targetEvidenceRefs: refs }),
   };
 }
 
@@ -279,6 +348,18 @@ export const REVISE_RETROSPECTIVE =
  *
  * Pure function — no I/O. Exported for tests and for D.2 wiring.
  */
+function renderStrategyRecommendation(verdict: SidecarVerifierVerdict): string {
+  const parts: string[] = [];
+  if (verdict.reasonCode) parts.push(`reason=${verdict.reasonCode}`);
+  if (verdict.recommendedPattern) parts.push(`pattern=${verdict.recommendedPattern}`);
+  if (verdict.targetEvidenceRefs && verdict.targetEvidenceRefs.length > 0) {
+    parts.push(`targets=${verdict.targetEvidenceRefs.join(',')}`);
+  }
+  return parts.length === 0
+    ? ''
+    : `\n\nAdvisory strategy recommendation (Root chooses the response): ${parts.join(' ')}`;
+}
+
 export function mapVerifierVerdictToStopHookResult(
   verdict: SidecarVerifierVerdict,
 ): StopHookResult {
@@ -287,11 +368,14 @@ export function mapVerifierVerdictToStopHookResult(
       return undefined;
     case 'revise':
       return {
-        reanimate: `${verdict.reason}\n\n${REVISE_RETROSPECTIVE}`,
+        reanimate: `${verdict.reason}${renderStrategyRecommendation(verdict)}\n\n${REVISE_RETROSPECTIVE}`,
         source: 'sidecar-verifier',
       };
     case 'blocked':
-      return { abort: true, reason: verdict.reason };
+      return {
+        abort: true,
+        reason: `${verdict.reason}${renderStrategyRecommendation(verdict)}`,
+      };
   }
 }
 

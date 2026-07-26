@@ -88,6 +88,14 @@ export function buildSidecarVerdictPayload(
     reason: verdict.reason || undefined,
     followups,
     userFacingText: verdict.reason || '',
+    ...(verdict.reasonCode ? { strategyReasonCode: verdict.reasonCode } : {}),
+    ...(verdict.recommendedPattern ? { recommendedPattern: verdict.recommendedPattern } : {}),
+    ...(verdict.targetEvidenceRefs ? { targetEvidenceRefs: [...verdict.targetEvidenceRefs] } : {}),
+    ...(
+      verdict.trace === 'verifier_ok' || verdict.trace === 'fuzzy_tool_match'
+        ? {}
+        : { verificationDegraded: true }
+    ),
   };
 }
 
@@ -150,6 +158,9 @@ export function buildSidecarMessageEvent(
       delivery: budgetExhausted ? 'budget-exhausted' : 'synthetic-user-message',
       content,
       ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
+      ...(verdict.reasonCode ? { strategyReasonCode: verdict.reasonCode } : {}),
+      ...(verdict.recommendedPattern ? { recommendedPattern: verdict.recommendedPattern } : {}),
+      ...(verdict.targetEvidenceRefs ? { targetEvidenceRefs: verdict.targetEvidenceRefs } : {}),
       trace: verdict.trace,
       ...attr,
     };
@@ -162,6 +173,9 @@ export function buildSidecarMessageEvent(
       delivery: 'terminal-block',
       content,
       ...(verdict.suggestedFix ? { suggestedFix: verdict.suggestedFix } : {}),
+      ...(verdict.reasonCode ? { strategyReasonCode: verdict.reasonCode } : {}),
+      ...(verdict.recommendedPattern ? { recommendedPattern: verdict.recommendedPattern } : {}),
+      ...(verdict.targetEvidenceRefs ? { targetEvidenceRefs: verdict.targetEvidenceRefs } : {}),
       trace: verdict.trace,
       ...attr,
     };

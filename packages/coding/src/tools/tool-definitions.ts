@@ -29,6 +29,10 @@ import {
 import { toolKodaxManual } from './manual.js';
 import { buildManualToolDescription } from '../self-knowledge/tool-description.js';
 import { EXPLICIT_WORKFLOW_POLICY } from '../agents/worker-role-prompt.js';
+import {
+  WORKFLOW_REVIEW_COMPOSITION_GUIDANCE,
+  renderWorkflowPatternGuidance,
+} from '../orchestration/pattern-catalog.js';
 import { toolSkill } from './skill.js';
 import { toolRunSkillScript } from './skill-script.js';
 import { toolWrite } from './write.js';
@@ -192,7 +196,8 @@ const RUN_WORKFLOW_DESCRIPTION = [
   'Make the Workflow acquire and inspect the real scope before analysis, then give child Agents concrete paths, constraints, evidence, and outputSchema values. Write child prompts in the same natural language as the user\'s request. Declared fields live on result.structured: read your declared fields off result.structured, never off the top-level result, where they are undefined and can produce an empty report.',
   'The run(wf, args) body may use wf.runAgent, wf.parallel, wf.pipeline, wf.synthesize, wf.workflow, and wf.artifact. Use wf.pipeline for streaming stages and wf.parallel as a barrier only when a stage needs every prior result.',
   'Do not call this tool for an ordinary review or merely because a task is parallel, partitionable, or needs synthesis. Unless the user explicitly requested a Workflow, use adaptive spawn_agent waves instead.',
-  "Available single-phase shapes include classify-and-act, fan-out-and-synthesize, adversarial-verification, generate-and-filter, tournament, and loop-until-done. For an explicitly requested review or audit Workflow, combine fan-out-and-synthesize with adversarial-verification: declare ['fan-out-and-synthesize', 'adversarial-verification'], then have verifiers attack findings from a distinct failure-mode angle and keep only those a majority cannot refute. Chain more than one pattern when the protocol has more than one shape, match the effort to the request, and disclose every bounded or silent cap.",
+  `Available single-phase shapes:\n${renderWorkflowPatternGuidance().slice(0, -1).join('\n')}`,
+  `${WORKFLOW_REVIEW_COMPOSITION_GUIDANCE} Chain more than one pattern when the protocol has more than one shape, match the effort to the request, and disclose every bounded or silent cap.`,
   'Workflow-local limits can only narrow the shared session scheduler and work budget. The script receives no direct filesystem, shell, network, import, or require access.',
 ].join('\n\n');
 
@@ -611,7 +616,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
         read_only: { type: 'boolean', description: 'true (default) narrows filesystem access to read-only; false retains the parent ceiling.' },
         scope: { type: 'string', description: 'Optional bounded scope hint (e.g. "packages/llm/src/")' },
-        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefix with file:, diff:, finding:, or agent:<canonical-path>. Agent output must already be terminal and visible to the caller.' },
+        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefix with file:, diff:, finding:, or exact agent-turn:<canonical-path>#turn=<id>. Legacy agent:<path> resolves latest. Actor output must already be terminal and visible.' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
         // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
         // no-op for now; FEATURE_102 (v0.7.45) will translate this
@@ -641,6 +646,10 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         },
         isolation: { type: 'string', enum: ['shared', 'worktree'], description: 'Optional execution isolation.' },
         fork_turns: { description: 'History fork: all (default), none, or a positive recent-turn count.' },
+        quality_strategy: {
+          type: 'object',
+          description: 'Optional {schemaVersion:1,stageId,pattern,role,laneRelation?,targetEvidenceRefs?} stage. Use a named playbook pattern; role is classifier|investigator|generator|filter|judge|challenger and relation is coverage|replication|opposition. Actor targets use exact agent-turn refs. Runtime validates it and stamps the owner Turn.',
+        },
       },
       required: ['task_name', 'objective'],
     },
@@ -778,6 +787,10 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       properties: {
         target: { type: 'string', description: 'Canonical child path or direct-child task name.' },
         objective: { type: 'string', description: 'Additional objective or changed evidence.' },
+        quality_strategy: {
+          type: 'object',
+          description: 'Optional quality_strategy stage; a running Actor requires an exact current-stage match, while an idle Actor may start a new stage.',
+        },
       },
       required: ['target', 'objective'],
     },

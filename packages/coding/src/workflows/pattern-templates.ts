@@ -13,6 +13,7 @@ import {
   type WorkflowPatternId,
   type WorkflowScriptManifest,
 } from '@kodax-ai/agent';
+import { getCollaborationPatternDefinition } from '../orchestration/pattern-catalog.js';
 
 export interface WorkflowPatternTemplate {
   readonly name: string;
@@ -191,7 +192,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'fan-out-and-synthesize',
     pattern: 'fan-out-and-synthesize',
-    description: 'Run independent read-only workers in parallel, then synthesize their findings.',
+    description: getCollaborationPatternDefinition('fan-out-and-synthesize').purpose,
     manifest: manifest(
       'fan-out-and-synthesize-template',
       'Parallel workers followed by a synthesis barrier.',
@@ -205,7 +206,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'adversarial-verification',
     pattern: 'adversarial-verification',
-    description: 'Generate a candidate answer, then attack it with an independent verifier.',
+    description: getCollaborationPatternDefinition('adversarial-verification').purpose,
     manifest: manifest(
       'adversarial-verification-template',
       'Candidate worker plus adversarial verifier.',
@@ -219,7 +220,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'tournament',
     pattern: 'tournament',
-    description: 'Run competing approaches and pick the best result.',
+    description: getCollaborationPatternDefinition('tournament').purpose,
     manifest: manifest(
       'tournament-template',
       'Competing agents judged by synthesis.',
@@ -233,7 +234,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'loop-until-done',
     pattern: 'loop-until-done',
-    description: 'Repeat bounded investigation rounds until no new findings remain.',
+    description: getCollaborationPatternDefinition('loop-until-done').purpose,
     manifest: manifest(
       'loop-until-done-template',
       'Bounded investigation loop with a stop phrase.',
@@ -247,7 +248,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'generate-and-filter',
     pattern: 'generate-and-filter',
-    description: 'Generate several candidates, then dedupe and rank them.',
+    description: getCollaborationPatternDefinition('generate-and-filter').purpose,
     manifest: manifest(
       'generate-and-filter-template',
       'Parallel generators with a filter pass.',
@@ -261,7 +262,7 @@ const TEMPLATES: readonly WorkflowPatternTemplate[] = [
   {
     name: 'classify-and-act',
     pattern: 'classify-and-act',
-    description: 'Classify the task, then route to the appropriate worker behavior.',
+    description: getCollaborationPatternDefinition('classify-and-act').purpose,
     manifest: manifest(
       'classify-and-act-template',
       'Classifier-routed worker workflow.',

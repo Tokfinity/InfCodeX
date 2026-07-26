@@ -27,6 +27,17 @@ import type {
   KodaXOptions,
   KodaXToolExecutionContext,
 } from '../types.js';
+import {
+  PATTERN_DISPOSITION_ENVELOPE_SCHEMA,
+  parsePatternDispositionEnvelope,
+  toAgentMetadataValue,
+  type PatternDispositionEnvelope,
+} from '../orchestration/pattern-result.js';
+import {
+  assertPatternEvidenceRefVisible,
+  readStoredActorStrategy,
+  type StoredActorStrategyMetadata,
+} from '../orchestration/pattern-strategy.js';
 import { actorQueueId } from './actor-queue.js';
 
 export { actorQueueId } from './actor-queue.js';
@@ -309,6 +320,7 @@ async function executeCodingActorTurn(
       guardrails: parentCtx.guardrails,
       actorControl,
       actorHost: parentCtx.actorHost,
+      actorTurnId: input.turn.turnId,
       initialMessages,
       actorCapabilities: input.actor.capabilities,
       onProgress: (message) => {
@@ -330,10 +342,90 @@ async function executeCodingActorTurn(
   if (!child || child.status !== 'completed') {
     throw new Error(child?.summary || `Agent turn ${input.turn.turnId} failed without output.`);
   }
+  const strategy = readStoredActorStrategy(input.turn.metadata?.qualityStrategy);
+  const validated = strategy === undefined
+    ? { structured: toAgentMetadataValue(child.structured), degradedReasons: [] }
+    : await validatePatternDispositionResult(
+        child.structured,
+        strategy,
+        parentCtx,
+        actorControl,
+      );
+  if (strategy !== undefined) {
+    emitKodaXDiagnostic({
+      source: 'coding:actors',
+      level: 'debug',
+      message: [
+        `strategy stage=${strategy.stageId}`,
+        `pattern=${strategy.pattern}`,
+        `role=${strategy.role}`,
+        `turn=${input.turn.turnId}`,
+        `status=${validated.degradedReasons.length === 0 ? 'completed' : 'degraded'}`,
+      ].join(' '),
+    });
+  }
+  const turnMetadata: Record<string, AgentMetadataValue> = {
+    ...(child.provider === undefined ? {} : { effectiveProvider: child.provider }),
+    ...(child.model === undefined ? {} : { effectiveModel: child.model }),
+    ...(validated.degradedReasons.length === 0
+      ? {}
+      : { qualityStrategyDegradedReasons: validated.degradedReasons }),
+  };
   return {
     output: child.summary,
     ...(child.artifactPaths && child.artifactPaths.length > 0
       ? { artifacts: child.artifactPaths } : {}),
+    ...(validated.structured === undefined ? {} : { structured: validated.structured }),
+    ...(Object.keys(turnMetadata).length === 0 ? {} : { turnMetadata }),
+  };
+}
+
+async function validatePatternDispositionResult(
+  value: unknown,
+  strategy: StoredActorStrategyMetadata,
+  targetCtx: KodaXToolExecutionContext,
+  supportActorControl: AgentActorClient,
+): Promise<{
+  readonly structured?: AgentMetadataValue;
+  readonly degradedReasons: readonly string[];
+}> {
+  const envelope = parsePatternDispositionEnvelope(value);
+  if (envelope === undefined) {
+    return { structured: toAgentMetadataValue(value), degradedReasons: [] };
+  }
+  const declaredTargets = new Set(strategy.targetEvidenceRefs ?? []);
+  const degradedReasons = new Set<string>();
+  const outcomes: PatternDispositionEnvelope['outcomes'][number][] = [];
+  const supportCtx = {
+    ...targetCtx,
+    actorControl: supportActorControl,
+  };
+  for (const outcome of envelope.outcomes) {
+    const targetRef = 'evidenceRef' in outcome.target
+      ? outcome.target.evidenceRef
+      : `agent-turn:${outcome.target.actorPath}#turn=${outcome.target.turnId}`;
+    if (!declaredTargets.has(targetRef)) {
+      degradedReasons.add('undeclared_disposition_target');
+      continue;
+    }
+    try {
+      await assertPatternEvidenceRefVisible(targetRef, targetCtx);
+      for (const evidenceRef of outcome.evidenceRefs) {
+        await assertPatternEvidenceRefVisible(evidenceRef, supportCtx);
+      }
+      outcomes.push(outcome);
+    } catch {
+      degradedReasons.add('invalid_disposition_evidence');
+    }
+  }
+  const sanitized: PatternDispositionEnvelope = {
+    schemaVersion: 1,
+    outcomes,
+    assertedCoverage: degradedReasons.size === 0 ? envelope.assertedCoverage : [],
+  };
+  return {
+    structured: toAgentMetadataValue(sanitized),
+    degradedReasons: [...degradedReasons].sort(),
   };
 }
 
@@ -438,12 +530,19 @@ function externalTaskId(actorId: string, turnId: string): string {
 
 function actorBundle(input: AgentExecutionInput): KodaXChildContextBundle {
   const metadata = input.turn.metadata ?? {};
+  const qualityStrategy = readStoredActorStrategy(metadata.qualityStrategy);
+  const needsDispositionEnvelope = qualityStrategy?.role === 'filter'
+    || qualityStrategy?.role === 'judge'
+    || qualityStrategy?.role === 'challenger';
   return {
     id: input.actor.path,
     fanoutClass: 'evidence-scan',
     objective: input.turn.objective,
     scopeSummary: metadataString(metadata.scope),
-    evidenceRefs: metadataStringArray(metadata.evidenceRefs),
+    evidenceRefs: [...new Set([
+      ...metadataStringArray(metadata.evidenceRefs),
+      ...(qualityStrategy?.targetEvidenceRefs ?? []),
+    ])],
     constraints: metadataStringArray(metadata.constraints),
     readOnly: input.actor.capabilities.filesystem !== 'write',
     modelHint: modelHint(metadata.modelHint),
@@ -452,6 +551,12 @@ function actorBundle(input: AgentExecutionInput): KodaXChildContextBundle {
     provider: metadataString(metadata.provider),
     model: metadataString(metadata.model),
     effort: effort(metadata.effort),
+    ...(needsDispositionEnvelope
+      ? {
+          outputSchema: PATTERN_DISPOSITION_ENVELOPE_SCHEMA,
+          structuredOutputContract: 'pattern-disposition-parse-only' as const,
+        }
+      : {}),
   };
 }
 
