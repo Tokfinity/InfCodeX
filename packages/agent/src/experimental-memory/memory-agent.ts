@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 
 import {
-  sanitizePromptSafeMemoryClaim,
   type MemoryPackHint,
 } from '../memory-control/index.js';
+import {
+  isRestrictedMemoryContent,
+  sanitizePromptSafeMemoryClaim,
+} from '../memory-control/prompt-safety.js';
 import type {
   CreateMemoryAgentOptions,
   MemoryAgent,
@@ -828,8 +831,4 @@ function unique(values: readonly string[]): readonly string[] {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function isRestrictedMemoryContent(value: string): boolean {
-  return /(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|authorization:\s*bearer\s+\S+|(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+)/i.test(value);
 }

@@ -655,6 +655,22 @@ describe('FEATURE_260 MemoryAgent', () => {
     expect(persistOutcomeDigest).not.toHaveBeenCalled();
   });
 
+  it('does not persist sentence-shaped secret material', async () => {
+    const persistOutcomeDigest = vi.fn();
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest,
+    }).startSession({ identity, objective: 'Test' });
+
+    await session.complete({
+      status: 'failed',
+      summary: 'The pass\u200Bword really is hunter2.',
+      evidence: [],
+    });
+
+    expect(persistOutcomeDigest).not.toHaveBeenCalled();
+  });
+
   it('drops restricted observations and deliberate needs before recall or store access', async () => {
     const controlPlane = controller();
     const session = await createMemoryAgent({ controlPlane }).startSession({ identity, objective: 'Test' });

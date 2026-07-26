@@ -149,22 +149,29 @@ documented on sibling events.
 #### Root Cause
 
 - `iterationLimit` had no absolute ceiling after lifecycle extensions.
+- The first bounded fix treated the lifecycle allowance as wider than an
+  admitted manifest's governance cap.
 - Prompt safety treated a small word list as the complete override/secret/tag
-  detector.
+  detector, checked before normalization, and duplicated an older credential
+  predicate at the persistence boundary.
 - The cache diagnostic callback was added without copying the sibling gating
   note.
 
 #### Resolution
 
 - Added a fixed eight-iteration lifecycle allowance beyond the configured cap
-  in both execution loops. The final absolute generation closes admission
-  before the model call, consumes the last already-accepted batch in the
-  preceding reserved turn, and never reopens the window without remaining
-  headroom.
+  in both execution loops while preserving admitted `maxIterations` as a hard
+  ceiling. The final absolute generation closes admission before the model call,
+  consumes the last already-accepted batch in the preceding reserved turn, and
+  never reopens the window without remaining headroom.
 - Expanded the central memory gate to reject common prompt reset/override noun
   variants, forged role-mode claims, self-closing role tags, and
-  `password/api key/token is ...` credential forms while preserving ordinary
-  nearby-word claims.
+  credential-shaped `password/api key/token is ...` forms while preserving
+  ordinary status statements. The gate checks raw and bounded text through
+  Unicode-normalized, formatting-separated, and formatting-joined detection
+  views, and MemoryAgent persistence/query paths reuse its credential predicate.
+  Direct credential structures fail closed even when formatting obscures the
+  value, and malformed tag scanning remains linear.
 - Documented the existing prompt-cache diagnostics gate.
 
 #### Files Changed
@@ -172,8 +179,11 @@ documented on sibling events.
 - `packages/agent/src/primitives/runner-tool-loop.ts`
 - `packages/agent/src/primitives/runner.ts`
 - `packages/agent/src/primitives/runner.test.ts`
+- `packages/agent/src/primitives/runner-iteration-clamp.test.ts`
 - `packages/agent/src/memory-control/prompt-safety.ts`
 - `packages/agent/src/memory-control/prompt-safety.test.ts`
+- `packages/agent/src/experimental-memory/memory-agent.ts`
+- `packages/agent/src/experimental-memory/memory-agent.test.ts`
 - `packages/coding/src/agent-runtime/run-substrate.ts`
 - `packages/coding/src/agent-runtime/run-substrate.terminal-interrupt.test.ts`
 - `packages/coding/src/types.ts`
@@ -190,9 +200,12 @@ documented on sibling events.
   nine calls, exposes the eighth accepted input to the ninth generation, and
   leaves admission closed.
 - Adversarial prompt-safety cases failed before implementation and now reject
-  all reported variants; five nearby-word controls remain accepted.
-- The complete agent suite passes 1,593 tests; the final focused Runner and
-  prompt-safety rerun passes 59, the ordinary substrate regression passes 4,
+  all reported and normalization-obfuscated variants; ordinary nearby-word and
+  credential-status controls remain accepted. Sentence-shaped secrets are also
+  rejected at the durable digest boundary.
+- The complete agent suite passes 1,652 tests; the final focused Runner,
+  prompt-safety, and MemoryAgent rerun passes 145, the ordinary substrate
+  regression passes 4,
   LLM cache/Kimi contract suites pass 166, Runtime passes 134, and tracker
   consistency passes 4.
 - The complete production build passes config-template validation, workspace

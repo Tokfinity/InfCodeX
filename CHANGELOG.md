@@ -43,7 +43,8 @@ All notable changes to this project will be documented in this file.
   same Run, reserves a continuation model turn even at the configured iteration
   limit, and reopens admission only when another model turn is guaranteed.
   A fixed internal continuation allowance now preserves an absolute Run bound
-  when a client keeps submitting input.
+  when a client keeps submitting input without exceeding an admitted manifest's
+  `maxIterations` governance cap.
   Idle-yield waiting reopens admission, while failure, cancellation, and
   terminal cleanup close it before asynchronous teardown. Ordinary coding also
   rotates live-turn attribution for each queued prompt and commits a COMPLETE
@@ -63,8 +64,11 @@ All notable changes to this project will be documented in this file.
   `KODAX_DISABLE_PROMPT_CACHE=1`.
 - Expanded the governed-memory prompt-safety gate for common override/reset
   variants, role-mode claims, self-closing role tags, and sentence-shaped
-  credentials; prompt-cache diagnostics now document their existing
-  `contextDiagnostics` gate.
+  credentials. Checks now run against Unicode-normalized,
+  formatting-separated, and formatting-joined text; ordinary credential status
+  statements remain usable, and persistence shares the same secret predicate;
+  prompt-cache diagnostics now document their existing `contextDiagnostics`
+  gate.
 - Made abort completion emission exactly-once and kept governed memory
   intervention delivery ordered with terminal cleanup.
 

@@ -114,8 +114,9 @@ active consumption state and therefore admits input; failure, cancellation, and
 terminal cleanup close admission before asynchronous teardown. Closed or
 terminal Runs reject or terminalize undelivered input rather than leak it into
 later work. A fixed internal continuation allowance keeps one active Run under
-an absolute iteration bound; once exhausted, admission stays closed and
-`after_turn` remains the explicit continuation mechanism.
+an absolute iteration bound without expanding an admitted manifest's
+`maxIterations` cap; once exhausted, admission stays closed and `after_turn`
+remains the explicit continuation mechanism.
 
 ## 6. Required Capabilities
 

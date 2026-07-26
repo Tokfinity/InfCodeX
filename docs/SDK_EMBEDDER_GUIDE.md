@@ -3995,10 +3995,11 @@ the outer Run is still settling. Non-terminal observer diagnostics do not close
 the window. Same-Run lifecycle continuations also have a fixed internal
 allowance beyond the configured iteration ceiling; the Runner closes admission
 before its final absolute generation so repeated submissions cannot keep one
-Run alive indefinitely. A submission after closure returns `accepted:false` with
-`reason:'interrupt_window_closed'` and is not queued. Keep the original input
-available for retry after the Run ends; do not silently change its delivery to
-`after_turn`. As a final race/recovery
+Run alive indefinitely. The allowance never expands an admitted manifest's
+`maxIterations` governance cap. A submission after closure returns
+`accepted:false` with `reason:'interrupt_window_closed'` and is not queued. Keep
+the original input available for retry after the Run ends; do not silently
+change its delivery to `after_turn`. As a final race/recovery
 guard, inspect terminal Run status: any `interruptInputs` entry whose state is
 `terminal` was not delivered. Reconcile it by `inputId` and present a visible
 non-delivery outcome rather than leaving a pending queue indicator.

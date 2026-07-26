@@ -202,11 +202,12 @@ without model consumption. Admission reopens only after the batch is committed,
 or while idle-yield is waiting on a wake path that guarantees another model
 turn. Both the managed Runner and ordinary coding substrate permit only a fixed
 internal number of lifecycle-reserved iterations beyond the configured ceiling
-and close admission before the final absolute generation starts. Failure,
-cancellation, and terminal cleanup close admission before asynchronous
-teardown. Ordinary coding rotates live-turn attribution for the queued prompt
-and commits the preceding assistant response before continuing a COMPLETE
-signal. The mechanism creates no continuation Run.
+and close admission before the final absolute generation starts. An admitted
+manifest's `maxIterations` remains a non-expandable governance cap. Failure,
+cancellation, and terminal cleanup close admission before asynchronous teardown.
+Ordinary coding rotates live-turn attribution for the queued prompt and commits
+the preceding assistant response before continuing a COMPLETE signal. The
+mechanism creates no continuation Run.
 Run status exposes queued/delivered/terminal input state; terminal cleanup
 removes undelivered queue entries. Runs without a same-Run safe Actor boundary
 return `unsupported_capability`, while queued or terminal targets return

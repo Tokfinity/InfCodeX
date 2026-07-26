@@ -100,6 +100,47 @@ describe('Runner — manifest.maxIterations clamp', () => {
     }
   });
 
+  it('does not let terminal continuations exceed an admitted manifest cap', async () => {
+    const agent: Agent = {
+      name: 'manifest-terminal-continuation-cap',
+      instructions: 'answer',
+    };
+    const manifest: AgentManifest = { ...agent, maxIterations: 1 };
+    setAdmittedAgentBindings(agent, manifest, ['boundedRevise']);
+    let calls = 0;
+    let inputWindowOpen = true;
+    const queuedInputs: AgentMessage[] = [];
+
+    try {
+      const result = await Runner.run(agent, 'go', {
+        maxToolLoopIterations: 20,
+        tracer: null,
+        llm: async () => {
+          calls += 1;
+          if (inputWindowOpen && calls <= 3) {
+            queuedInputs.push({ role: 'user', content: `interrupt-${calls}` });
+          }
+          return { text: `answer-${calls}`, toolCalls: [] };
+        },
+        terminalContinuation: {
+          closeInputWindow: () => {
+            inputWindowOpen = false;
+          },
+          reopenInputWindow: () => {
+            inputWindowOpen = true;
+          },
+          drain: async () => queuedInputs.splice(0),
+        },
+      });
+
+      expect(calls).toBe(1);
+      expect(result.output).toBe('answer-1');
+      expect(inputWindowOpen).toBe(false);
+    } finally {
+      _resetAdmittedAgentBindings(agent);
+    }
+  });
+
   it('takes min-wins against opts.maxToolLoopIterations (opts narrower)', async () => {
     const agent: Agent = {
       name: 'min-wins-opts',

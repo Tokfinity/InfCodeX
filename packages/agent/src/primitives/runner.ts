@@ -775,7 +775,9 @@ async function genericRun<TData>(
   const iterationCap =
     typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
   let iterationLimit = iterationCap;
-  const absoluteIterationLimit = iterationCap + MAX_RUN_CONTINUATION_ITERATIONS;
+  const absoluteIterationLimit = typeof manifestCap === 'number'
+    ? Math.min(iterationCap + MAX_RUN_CONTINUATION_ITERATIONS, manifestCap)
+    : iterationCap + MAX_RUN_CONTINUATION_ITERATIONS;
   // FEATURE_184 (v0.7.45) — Stop hook reanimate budget. Per-run counter
   // tracks how many times the hook converted a text-only termination
   // into a synthetic-user-message continuation. Bounded by
