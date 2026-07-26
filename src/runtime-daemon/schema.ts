@@ -683,6 +683,8 @@ function diagnosticParamsSchema(): RuntimeDaemonJsonSchema {
   return objectSchema({
     sessionId: stringSchema,
     runId: stringSchema,
+    contextKind: { type: 'string', enum: ['root', 'child'] },
+    agentId: stringSchema,
   }, [], true);
 }
 

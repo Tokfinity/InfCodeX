@@ -311,6 +311,10 @@ async function executeCodingActorTurn(
         repoIntelligenceMode: parentConfig?.repoIntelligenceMode,
         repoIntelligenceTrace: parentConfig?.repoIntelligenceTrace,
         compaction: parentConfig?.compaction ?? options.compaction,
+        contextDiagnostics: parentConfig?.contextDiagnostics
+          ?? options.context?.contextDiagnostics,
+        disablePromptCache: parentConfig?.disablePromptCache
+          ?? options.disablePromptCache,
         extensionRuntime: parentCtx.extensionRuntime,
         events: parentCtx.parentEvents,
       },
@@ -320,6 +324,9 @@ async function executeCodingActorTurn(
       guardrails: parentCtx.guardrails,
       actorControl,
       actorHost: parentCtx.actorHost,
+      ...(input.actor.parentPath !== undefined && input.actor.parentPath !== '/root'
+        ? { actorParentAgentId: input.actor.parentPath }
+        : {}),
       actorTurnId: input.turn.turnId,
       initialMessages,
       actorCapabilities: input.actor.capabilities,

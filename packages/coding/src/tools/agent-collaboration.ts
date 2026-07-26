@@ -111,6 +111,10 @@ export async function toolSpawnAgent(
     const provider = optionalString(input.provider);
     const agentId = optionalString(input.agent_id);
     const selector = await resolveAgentSelector(ctx, agentId, readOnly);
+    const parentTools = client.get(client.callerPath).actor.capabilities.tools;
+    const toolCeiling = selector.tools === undefined
+      ? undefined
+      : intersectToolCeilings(selector.tools, parentTools);
     const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
     const spawn: AgentSpawnInput = {
       taskName,
@@ -119,6 +123,7 @@ export async function toolSpawnAgent(
       kind: selector.kind,
       capabilities: {
         filesystem: readOnly ? 'read' : 'write',
+        ...(toolCeiling !== undefined ? { tools: toolCeiling } : {}),
         ...(provider ? { providers: [provider] } : {}),
         canAskUser: false,
         ...(selector.control ? { control: selector.control } : {}),
@@ -224,7 +229,8 @@ export async function toolWaitAgent(
       return render({ ok: true, status: 'interrupted' });
     }
 
-    const queueAgentId = actorQueueId(ctx.sessionId, client.callerPath);
+    const queueAgentId = ctx.actorQueueAgentId
+      ?? actorQueueId(ctx.contextIdentitySessionId ?? ctx.sessionId, client.callerPath);
     const waiterAbort = new AbortController();
     const forwardAbort = (): void => waiterAbort.abort(ctx.abortSignal?.reason);
     ctx.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
@@ -389,7 +395,8 @@ export async function commitActorNotificationReceipts(
   await client.acknowledgeCompletions(turnIds);
   const ids = new Set(turnIds);
   getMessageQueue().dequeue({
-    agentId: actorQueueId(ctx.sessionId, client.callerPath),
+    agentId: ctx.actorQueueAgentId
+      ?? actorQueueId(ctx.contextIdentitySessionId ?? ctx.sessionId, client.callerPath),
     maxPriority: 'background',
     mode: 'task-notification',
     predicate: (message) => message.taskResult?.source === 'child_task'
@@ -555,6 +562,7 @@ async function resolveAgentSelector(
 ): Promise<{
   readonly kind: AgentSpawnInput['kind'];
   readonly specialistName?: string;
+  readonly tools?: readonly string[];
   readonly control?: AgentCapabilities['control'];
 }> {
   if (!agentId) return { kind: 'native' };
@@ -562,7 +570,11 @@ async function resolveAgentSelector(
   const local = resolveCodingDispatchableAgent(agentId, dispatchContext, ctx.agentScope);
   if (local?.kind === 'native') return { kind: 'native' };
   if (local?.kind === 'constructed') {
-    return { kind: 'constructed', specialistName: local.subagentType };
+    return {
+      kind: 'constructed',
+      specialistName: local.subagentType,
+      ...(local.toolCeiling !== undefined ? { tools: local.toolCeiling } : {}),
+    };
   }
   const binding = ctx.agentExecutorPlane;
   if (!binding) {
@@ -585,6 +597,16 @@ async function resolveAgentSelector(
       artifacts: capabilities.artifacts !== 'unsupported',
     },
   };
+}
+
+function intersectToolCeilings(
+  requested: readonly string[],
+  parent: readonly string[],
+): readonly string[] {
+  if (parent.includes('*')) return requested;
+  if (requested.includes('*')) return parent;
+  const parentSet = new Set(parent);
+  return requested.filter((tool) => parentSet.has(tool));
 }
 
 function parseForkTurns(value: unknown): AgentForkTurns {

@@ -36,6 +36,8 @@ const childExecutorMock = vi.hoisted(() => ({
         readonly effort?: unknown;
         readonly repoIntelligenceMode?: unknown;
         readonly repoIntelligenceTrace?: unknown;
+        readonly contextDiagnostics?: unknown;
+        readonly disablePromptCache?: unknown;
       };
     };
   }>,
@@ -55,6 +57,8 @@ vi.mock('../child-executor.js', () => ({
         readonly effort?: unknown;
         readonly repoIntelligenceMode?: unknown;
         readonly repoIntelligenceTrace?: unknown;
+        readonly contextDiagnostics?: unknown;
+        readonly disablePromptCache?: unknown;
       };
     },
   ) => {
@@ -336,11 +340,13 @@ describe('runWorkflowModule', () => {
       model: 'claude-sonnet-4-6',
       modelOverride: 'claude-opus-4-8',
       effort: 'high',
+      disablePromptCache: false,
       guardrails: [guardrail],
       context: {
         planModeBlockCheck,
         repoIntelligenceMode: 'off',
         repoIntelligenceTrace: true,
+        contextDiagnostics: true,
       },
     };
 
@@ -360,6 +366,8 @@ describe('runWorkflowModule', () => {
     expect(childExecutorMock.calls[0]?.options.parentOptions?.effort).toBe('high');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceMode).toBe('off');
     expect(childExecutorMock.calls[0]?.options.parentOptions?.repoIntelligenceTrace).toBe(true);
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.contextDiagnostics).toBe(true);
+    expect(childExecutorMock.calls[0]?.options.parentOptions?.disablePromptCache).toBe(false);
   });
 
   it('uses a read-only workflow manifest as the default for child agents', async () => {

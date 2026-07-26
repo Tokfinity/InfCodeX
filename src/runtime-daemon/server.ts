@@ -1745,14 +1745,49 @@ async function latestRuntimeDiagnosticPayload(
   params: Record<string, unknown> | undefined,
 ): Promise<unknown> {
   const filter = params ?? {};
+  const requestedContextKind = filter.contextKind === 'root' || filter.contextKind === 'child'
+    ? filter.contextKind
+    : typeof filter.agentId === 'string'
+      ? undefined
+      : 'root';
+  const requestedAgentId = typeof filter.agentId === 'string' ? filter.agentId : undefined;
+  const requestsChildContext = requestedContextKind === 'child'
+    || requestedAgentId !== undefined;
   const replayFilter: RuntimeEventReplayFilter = {
     type,
-    limit: 100,
-    ...(typeof filter.sessionId === 'string' ? { sessionId: filter.sessionId } : {}),
+    ...(!requestsChildContext && typeof filter.sessionId === 'string'
+      ? { sessionId: filter.sessionId }
+      : {}),
     ...(typeof filter.runId === 'string' ? { runId: filter.runId } : {}),
   };
   const events = await runtime.events.replay(replayFilter);
-  return events.at(-1)?.payload ?? null;
+  const matching = [...events].reverse().find((event) => {
+    const payload = event.payload;
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      return requestedContextKind === undefined && requestedAgentId === undefined;
+    }
+    const diagnostic = payload as {
+      readonly contextId?: unknown;
+      readonly contextKind?: unknown;
+      readonly agentId?: unknown;
+    };
+    const actualContextKind = diagnostic.contextKind === 'child' ? 'child' : 'root';
+    if (requestedContextKind !== undefined && actualContextKind !== requestedContextKind) {
+      return false;
+    }
+    if (requestedAgentId !== undefined && diagnostic.agentId !== requestedAgentId) {
+      return false;
+    }
+    if (!requestsChildContext || typeof filter.sessionId !== 'string') {
+      return true;
+    }
+    const expectedPrefix = `${filter.sessionId}/agent/`;
+    if (typeof diagnostic.contextId !== 'string') return false;
+    return requestedAgentId === undefined
+      ? diagnostic.contextId.startsWith(expectedPrefix)
+      : diagnostic.contextId === `${expectedPrefix}${encodeURIComponent(requestedAgentId)}`;
+  });
+  return matching?.payload ?? null;
 }
 
 async function setRunModel(runtime: KodaXRuntime, paramsValue: unknown): Promise<{ readonly ok: true }> {

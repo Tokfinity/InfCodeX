@@ -377,6 +377,8 @@ export interface KodaXPromptCacheDiagnosticEvent {
   readonly requestedAt: string;
   readonly completedAt?: string;
   readonly provider: string;
+  readonly contextKind?: 'root' | 'child';
+  readonly agentId?: string;
   /** Caller-facing model id selected for this request. */
   readonly model: string;
   /** Exact provider wire model after alias resolution. */
@@ -397,8 +399,12 @@ export interface KodaXPromptCacheDiagnosticEvent {
   /** Hash of provider-visible messages before the current turn starts. */
   readonly messagePrefixHash: string;
   readonly messagePrefixCount: number;
-  /** Hash of the complete provider-visible message list for this request. */
+  /** Hash of persistent provider-visible messages, excluding any ephemeral suffix. */
   readonly requestMessagesHash: string;
+  /** Composite hash of system, tools, persistent messages, and ephemeral suffix. */
+  readonly requestEnvelopeHash: string;
+  /** Hash of provider-visible ephemeral request suffixes, when present. */
+  readonly ephemeralSuffixHash?: string;
   readonly messageCount: number;
   readonly toolCount: number;
   /** Provider-reported usage only. Missing fields remain undefined. */
@@ -1452,6 +1458,29 @@ export interface KodaXContextOptions {
   memoryPack?: MemoryPack;
   /** Runtime-minted collaboration principal for this actor execution. */
   actorControl?: AgentActorClient;
+  /**
+   * Exact MessageQueue route for the Actor execution. Actor children keep
+   * independent transcript session ids, so their collaboration mailbox cannot
+   * be derived from the child run's session id.
+   *
+   * @internal
+   */
+  actorQueueAgentId?: string;
+  /**
+   * Stable logical Session namespace used only for context identity. Child
+   * transcripts remain isolated under their physical worker Session ids.
+   *
+   * @internal
+   */
+  contextIdentitySessionId?: string;
+  /**
+   * Whether compaction in this physical run owns the canonical context
+   * revision. Synthetic digest/repair requests share attribution but not
+   * canonical history ownership.
+   *
+   * @internal
+   */
+  ownsContextRevision?: boolean;
   /** Trusted host operations that are intentionally absent from model-facing clients. */
   actorHost?: KodaXActorHost;
   /** Runtime-owned session Actor tree; attached when a root run builds its tool context. */
@@ -2130,6 +2159,10 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Runtime-minted collaboration principal; model inputs cannot replace its caller path. */
   actorControl?: AgentActorClient;
+  /** Runtime-minted MessageQueue route for this Actor's collaboration mailbox. */
+  actorQueueAgentId?: string;
+  /** Stable logical Session namespace used for child context identity. */
+  contextIdentitySessionId?: string;
   /** Runtime-minted exact Actor/Turn owner for collaboration metadata. */
   actorTurnRef?: { readonly actorPath: string; readonly turnId: string };
   /** Shared root-run work ledger; descendant runtimes retain this exact object. */
@@ -2261,6 +2294,8 @@ export interface KodaXToolExecutionContext {
     readonly repoIntelligenceMode?: KodaXRepoIntelligenceMode;
     readonly repoIntelligenceTrace?: boolean;
     readonly compaction?: Readonly<KodaXCompactionOverride>;
+    readonly contextDiagnostics?: boolean;
+    readonly disablePromptCache?: boolean;
   };
   /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */
   parentEvents?: KodaXEvents;

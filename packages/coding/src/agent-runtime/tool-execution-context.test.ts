@@ -40,6 +40,24 @@ describe('resolveResumeFromRunDir (path-traversal guard)', () => {
 });
 
 describe('F270 actor principal wiring', () => {
+  it('snapshots prompt-cache and context-diagnostic controls for child runtimes', () => {
+    const ctx = buildToolExecutionContext({
+      options: {
+        provider: 'mock',
+        disablePromptCache: false,
+        context: { contextDiagnostics: true },
+      },
+      runtime: undefined,
+      managedProtocolPayloadRef: { current: undefined },
+    });
+
+    expect(ctx.parentAgentConfig).toMatchObject({
+      provider: 'mock',
+      disablePromptCache: false,
+      contextDiagnostics: true,
+    });
+  });
+
   it('creates one root-bound collaboration principal for a standalone AMA run', () => {
     const ctx = buildToolExecutionContext({
       options: { provider: 'mock', agentMode: 'ama' },
@@ -60,11 +78,25 @@ describe('F270 actor principal wiring', () => {
       import('../types.js').KodaXContextOptions['actorControl']
     >;
     const ctx = buildToolExecutionContext({
-      options: { provider: 'mock', agentMode: 'ama', context: { actorControl: injected } },
+      options: {
+        provider: 'mock',
+        agentMode: 'ama',
+        context: {
+          actorControl: injected,
+          contextIdentitySessionId: 'logical-root-session',
+          currentAgentId: '/root/injected',
+          parentAgentId: '/root',
+        },
+      },
+      sessionId: 'physical-worker-session',
       runtime: undefined,
       managedProtocolPayloadRef: { current: undefined },
     });
 
     expect(ctx.actorControl).toBe(injected);
+    expect(ctx.sessionId).toBe('physical-worker-session');
+    expect(ctx.contextIdentitySessionId).toBe('logical-root-session');
+    expect(ctx.currentAgentId).toBe('/root/injected');
+    expect(ctx.parentAgentId).toBe('/root');
   });
 });

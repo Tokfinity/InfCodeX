@@ -104,6 +104,40 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         };
     }
 
+    /**
+     * Exact prompt text handed to ACP. Exposed only so diagnostics can hash the
+     * real CLI-visible request instead of incorrectly hashing full history.
+     */
+    public getDiagnosticPromptText(
+        messages: readonly KodaXMessage[],
+        ephemeralSuffix?: string,
+    ): string {
+        const strippedMessages = messages.map((message) => {
+            if (!Array.isArray(message.content)) return message;
+            return { ...message, content: stripCacheBoundaries(message.content) };
+        });
+        const latestMessage = strippedMessages[strippedMessages.length - 1];
+        let promptText = '';
+        if (latestMessage && typeof latestMessage.content === 'string') {
+            promptText = latestMessage.content;
+        } else if (latestMessage && Array.isArray(latestMessage.content)) {
+            const parts: string[] = [];
+            for (const block of latestMessage.content) {
+                if (block.type === 'text') {
+                    parts.push(block.text);
+                } else if (block.type === 'image') {
+                    const token = this.serializeImageBlockToPromptToken(block);
+                    if (token) parts.push(token);
+                }
+            }
+            promptText = parts.join('\n');
+        }
+        if (!ephemeralSuffix) return promptText;
+        return promptText.length > 0
+            ? `${promptText}\n\n${ephemeralSuffix}`
+            : ephemeralSuffix;
+    }
+
     override getCapabilityProfile(): KodaXProviderCapabilityProfile {
         return cloneCapabilityProfile(CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE);
     }
@@ -192,28 +226,8 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         // CLI's `@<path>`) override it to inject a token; the default returns
         // null which preserves the prior silent-drop behavior for CLIs that
         // have no image-input path.
-        const latestMessage = messages[messages.length - 1];
-        let promptText = '';
-        if (latestMessage && typeof latestMessage.content === 'string') {
-            promptText = latestMessage.content;
-        } else if (latestMessage && Array.isArray(latestMessage.content)) {
-            const parts: string[] = [];
-            for (const b of latestMessage.content) {
-                if (b.type === 'text') {
-                    parts.push((b as KodaXTextBlock).text);
-                } else if (b.type === 'image') {
-                    const token = this.serializeImageBlockToPromptToken(b as KodaXImageBlock);
-                    if (token) parts.push(token);
-                }
-            }
-            promptText = parts.join('\n');
-        }
         const ephemeralSuffix = streamOptions?.ephemeralSuffix?.content;
-        if (ephemeralSuffix) {
-            promptText = promptText.length > 0
-                ? `${promptText}\n\n${ephemeralSuffix}`
-                : ephemeralSuffix;
-        }
+        const promptText = this.getDiagnosticPromptText(messages, ephemeralSuffix);
 
         // Build client event hooks once and route updates into the active stream.
         const options: AcpClientOptions = {

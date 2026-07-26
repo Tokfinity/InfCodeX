@@ -17,6 +17,7 @@ import { ContextCapacityError } from '@kodax-ai/agent';
 import { runKodaX } from './agent.js';
 import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
 import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
+import type { KodaXPromptCacheDiagnosticEvent } from './types.js';
 
 const TEST_PROVIDER_NAME = 'context-diagnostics-provider';
 const TEST_PROVIDER_API_KEY_ENV = 'CONTEXT_DIAGNOSTICS_PROVIDER_API_KEY';
@@ -56,6 +57,7 @@ class ContextDiagnosticsProvider extends KodaXBaseProvider {
         inputTokens: 42,
         outputTokens: 3,
         totalTokens: 45,
+        cachedReadTokens: 21,
       },
     };
   }
@@ -98,6 +100,7 @@ describe('runKodaX context diagnostics', () => {
   it('emits bounded budget events and applies small-window bridge exposure when enabled', async () => {
     const budgets: RuntimeContextBudgetSnapshot[] = [];
     const exposures: RuntimeToolExposurePlan[] = [];
+    const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
 
     await runKodaX(
       {
@@ -107,10 +110,12 @@ describe('runKodaX context diagnostics', () => {
         context: {
           contextDiagnostics: true,
           repoIntelligenceMode: 'off',
+          currentAgentId: '/root/first-tier-child',
         },
         events: {
           onContextBudgetSnapshot: (event) => budgets.push(event),
           onToolExposurePlanned: (event) => exposures.push(event),
+          onPromptCacheDiagnostics: (event) => cacheDiagnostics.push(event),
         },
       },
       'inspect this repository',
@@ -121,11 +126,19 @@ describe('runKodaX context diagnostics', () => {
     expect(budgets[0]?.turnId).toBeDefined();
     expect(budgets[0]?.contextWindow).toBe(32_000);
     expect(budgets[0]?.profile).toBe('small_window');
+    expect(budgets[0]).toMatchObject({
+      contextKind: 'child',
+      agentId: '/root/first-tier-child',
+    });
     expect(budgets[0]?.tokenBreakdown.toolSchemas).toBeGreaterThan(0);
     expect(JSON.stringify(budgets[0])).not.toContain('inspect this repository');
 
     expect(exposures).toHaveLength(1);
     expect(exposures[0]?.profile).toBe('small_window');
+    expect(exposures[0]).toMatchObject({
+      contextKind: 'child',
+      agentId: '/root/first-tier-child',
+    });
     expect(exposures[0]?.reportOnly).toBe(false);
     expect(exposures[0]?.modelVisibleToolNames).toContain('read');
     expect(exposures[0]?.modelVisibleToolNames).toContain('tool_search');
@@ -133,6 +146,31 @@ describe('runKodaX context diagnostics', () => {
     expect(exposures[0]?.modelVisibleToolNames).not.toContain('web_fetch');
     expect(ContextDiagnosticsProvider.calls[0]?.tools.map((tool) => tool.name)).not.toContain('web_fetch');
     expect(exposures[0]?.estimatedTokensSaved).toBeGreaterThan(0);
+
+    expect(cacheDiagnostics).toHaveLength(2);
+    expect(cacheDiagnostics.map((event) => event.phase)).toEqual(['request', 'response']);
+    expect(cacheDiagnostics[0]).toMatchObject({
+      transport: 'stream',
+      provider: TEST_PROVIDER_NAME,
+      model: 'diagnostic-model',
+      attempt: 1,
+      contextKind: 'child',
+      agentId: '/root/first-tier-child',
+    });
+    expect(cacheDiagnostics[0]).not.toHaveProperty('inputTokens');
+    expect(cacheDiagnostics[0]).not.toHaveProperty('cachedReadTokens');
+    expect(cacheDiagnostics[1]).toMatchObject({
+      requestId: cacheDiagnostics[0]?.requestId,
+      inputTokens: 42,
+      outputTokens: 3,
+      cachedReadTokens: 21,
+      contextKind: 'child',
+      agentId: '/root/first-tier-child',
+    });
+    expect(cacheDiagnostics[0]?.systemPromptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]?.toolSchemaHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cacheDiagnostics[0]?.messagePrefixHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(cacheDiagnostics)).not.toContain('inspect this repository');
   });
 
   it('propagates a typed capacity failure instead of returning success:false', async () => {

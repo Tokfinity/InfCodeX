@@ -377,6 +377,7 @@ export async function compact(
     messages: toProcess,
     cacheMessages: effectiveCacheContext ? messages : undefined,
     cacheContext: effectiveCacheContext,
+    observer: cacheContext?.observer,
     provider,
     customInstructions,
     systemPrompt,
@@ -444,6 +445,7 @@ interface CompletePrefixSummaryInput {
   readonly messages: KodaXMessage[];
   readonly cacheMessages?: KodaXMessage[];
   readonly cacheContext?: CompactionCacheContext;
+  readonly observer?: CompactionCacheContext['observer'];
   readonly provider: KodaXBaseProvider;
   readonly customInstructions?: string;
   readonly systemPrompt?: string;
@@ -494,6 +496,7 @@ async function summarizeCompletePrefix(
       input.updateSummaryPrompt,
       input.modelOverride,
       input.cacheContext,
+      input.observer,
     );
     assertUsableSummary(summary, input.previousSummary);
     return { summary, strategy: 'full_prefix' };
@@ -521,6 +524,8 @@ async function summarizeCompletePrefix(
       input.summaryPrompt,
       input.updateSummaryPrompt,
       input.modelOverride,
+      undefined,
+      input.observer,
     );
     assertUsableSummary(summary, input.previousSummary);
     return { summary, strategy: 'full_prefix' };
@@ -573,6 +578,8 @@ async function summarizeCompletePrefix(
       input.summaryPrompt,
       input.updateSummaryPrompt,
       input.modelOverride,
+      undefined,
+      input.observer,
     );
     assertUsableSummary(summary);
     mappedSummaries.push(summary);
@@ -595,6 +602,8 @@ async function summarizeCompletePrefix(
     input.summaryPrompt,
     input.updateSummaryPrompt,
     input.modelOverride,
+    undefined,
+    input.observer,
   );
   assertUsableSummary(reduced, input.previousSummary);
   return { summary: reduced, strategy: 'map_reduce' };

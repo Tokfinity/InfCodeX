@@ -52,6 +52,8 @@ export {
 } from './summary-generator.js';
 export type {
   CompactionCacheContext,
+  CompactionProviderObserver,
+  CompactionProviderRequest,
   KodaXCompactionPromptVariant,
   KodaXCompactionPromptSection,
   KodaXCompactionPromptSnapshot,

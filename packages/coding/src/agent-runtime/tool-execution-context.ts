@@ -128,6 +128,8 @@ export function buildToolExecutionContext(
   const context: KodaXToolExecutionContext = {
     backups: new Map(),
     actorControl: options.context?.actorControl,
+    actorQueueAgentId: options.context?.actorQueueAgentId,
+    contextIdentitySessionId: options.context?.contextIdentitySessionId ?? sessionId,
     actorHost: options.context?.actorHost,
     managedWorkBudget: options.context?.managedWorkBudget,
     gitRoot: options.context?.gitRoot ?? undefined,
@@ -189,6 +191,12 @@ export function buildToolExecutionContext(
       repoIntelligenceMode: options.context?.repoIntelligenceMode,
       repoIntelligenceTrace: options.context?.repoIntelligenceTrace,
       ...(options.compaction !== undefined ? { compaction: { ...options.compaction } } : {}),
+      ...(options.context?.contextDiagnostics !== undefined
+        ? { contextDiagnostics: options.context.contextDiagnostics }
+        : {}),
+      ...(options.disablePromptCache !== undefined
+        ? { disablePromptCache: options.disablePromptCache }
+        : {}),
     },
     parentEvents: events,
     // FEATURE_067: onChildProgress removed — progress flows through
@@ -198,6 +206,8 @@ export function buildToolExecutionContext(
     // Worker leaves both undefined; child-executor forwards
     // `bundle.id` (self) + the parent's currentAgentId (parent) when
     // spawning a sub-runtime.
+    currentAgentId: options.context?.currentAgentId,
+    parentAgentId: options.context?.parentAgentId,
     // FEATURE_192 v0.7.44 Phase F — pull the goal-tools context from
     // the host-supplied binding (built by `buildGoalRuntimeBinding`).
     // When unset, leave undefined; the 3 goal tools fall back to

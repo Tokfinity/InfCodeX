@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -170,6 +170,8 @@ describe('buildCompactionPromptSnapshot', () => {
 
   it('reuses the exact main-request prefix through an ephemeral summary suffix', async () => {
     const provider = new RecordingSummaryProvider();
+    const onRequest = vi.fn();
+    const onResponse = vi.fn();
     const messages: KodaXMessage[] = [
       { role: 'user', content: 'first request' },
       { role: 'assistant', content: 'first response' },
@@ -191,7 +193,12 @@ describe('buildCompactionPromptSnapshot', () => {
       undefined,
       undefined,
       'active-model',
-      { tools, reasoning, protectedTailMessageCount: 1 },
+      {
+        tools,
+        reasoning,
+        protectedTailMessageCount: 1,
+        observer: { onRequest, onResponse },
+      },
     );
 
     expect(provider.messageBatches[0]).toEqual(messages);
@@ -201,6 +208,17 @@ describe('buildCompactionPromptSnapshot', () => {
     expect(provider.ephemeralSuffixes[0]).toContain('TEXT ONLY');
     expect(provider.ephemeralSuffixes[0]).toContain('final 1 message');
     expect(provider.ephemeralSuffixes[0]).not.toContain('<conversation>');
+    expect(onRequest).toHaveBeenCalledWith(expect.objectContaining({
+      messages,
+      tools,
+      system: 'MAIN SYSTEM',
+      reasoning,
+      ephemeralSuffix: expect.objectContaining({ content: expect.stringContaining('TEXT ONLY') }),
+    }));
+    expect(onResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ messages }),
+      undefined,
+    );
   });
 
   it('rejects tool use even when the provider also returns text', async () => {

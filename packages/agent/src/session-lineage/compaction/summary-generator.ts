@@ -7,8 +7,10 @@
 import { createHash } from 'crypto';
 import type {
   KodaXBaseProvider,
+  KodaXEphemeralSuffix,
   KodaXMessage,
   KodaXReasoningRequest,
+  KodaXTokenUsage,
   KodaXToolDefinition,
 } from '@kodax-ai/llm';
 import type { CompactionDetails } from './types.js';
@@ -229,6 +231,25 @@ export interface CompactionCacheContext {
   readonly reasoning?: boolean | KodaXReasoningRequest;
   /** Raw tail already present in the cached prefix but excluded from this summary. */
   readonly protectedTailMessageCount?: number;
+  /** Optional diagnostics observer; failures never affect the compaction request. */
+  readonly observer?: CompactionProviderObserver;
+}
+
+export interface CompactionProviderRequest {
+  readonly messages: readonly KodaXMessage[];
+  readonly tools: readonly KodaXToolDefinition[];
+  readonly system: string;
+  readonly reasoning?: boolean | KodaXReasoningRequest;
+  readonly modelOverride?: string;
+  readonly ephemeralSuffix?: KodaXEphemeralSuffix;
+}
+
+export interface CompactionProviderObserver {
+  readonly onRequest?: (request: CompactionProviderRequest) => void;
+  readonly onResponse?: (
+    request: CompactionProviderRequest,
+    usage: KodaXTokenUsage | undefined,
+  ) => void;
 }
 
 export function buildCompactionCacheInstruction(
@@ -429,6 +450,7 @@ export async function generateSummary(
   updateSummaryPrompt?: string,
   modelOverride?: string,
   cacheContext?: CompactionCacheContext,
+  observer?: CompactionProviderObserver,
 ): Promise<string> {
   const promptSnapshot = buildCompactionPromptSnapshot({
     messages,
@@ -444,26 +466,45 @@ export async function generateSummary(
     promptSnapshot,
     cacheContext?.protectedTailMessageCount,
   );
-  const result = cacheContext
-    ? await provider.stream(
+  const request: CompactionProviderRequest = cacheContext
+    ? {
         messages,
-        [...cacheContext.tools],
-        promptSnapshot.systemPrompt,
-        cacheContext.reasoning,
-        {
-          ...(modelOverride ? { modelOverride } : {}),
-          ephemeralSuffix: { content: cacheInstruction },
-        },
-        undefined,
-      )
-    : await provider.stream(
-        [{ role: 'user', content: promptSnapshot.userPrompt }],
-        [],
-        promptSnapshot.systemPrompt,
-        false,
-        modelOverride ? { modelOverride } : undefined,
-        undefined,
-      );
+        tools: cacheContext.tools,
+        system: promptSnapshot.systemPrompt,
+        reasoning: cacheContext.reasoning,
+        ...(modelOverride ? { modelOverride } : {}),
+        ephemeralSuffix: { content: cacheInstruction },
+      }
+    : {
+        messages: [{ role: 'user', content: promptSnapshot.userPrompt }],
+        tools: [],
+        system: promptSnapshot.systemPrompt,
+        reasoning: false,
+        ...(modelOverride ? { modelOverride } : {}),
+      };
+  try {
+    (cacheContext?.observer ?? observer)?.onRequest?.(request);
+  } catch {
+    // Diagnostics are fail-open and must never block compaction.
+  }
+  const result = await provider.stream(
+    [...request.messages],
+    [...request.tools],
+    request.system,
+    request.reasoning,
+    request.modelOverride || request.ephemeralSuffix
+      ? {
+          ...(request.modelOverride ? { modelOverride: request.modelOverride } : {}),
+          ...(request.ephemeralSuffix ? { ephemeralSuffix: request.ephemeralSuffix } : {}),
+        }
+      : undefined,
+    undefined,
+  );
+  try {
+    (cacheContext?.observer ?? observer)?.onResponse?.(request, result.usage);
+  } catch {
+    // Diagnostics are fail-open and must never change a successful summary.
+  }
 
   if (result.toolBlocks.length > 0) {
     throw new Error(

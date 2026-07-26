@@ -115,7 +115,14 @@ describe('F270 coding Actor runtime adapter', () => {
     };
     const session = new CodingActorSession({ executor: externalExecutor, sessionId: 'session-1' });
     const { ctx, options } = environment();
-    const root = session.attach(ctx, options);
+    const root = session.attach({
+      ...ctx,
+      parentAgentConfig: {
+        ...ctx.parentAgentConfig,
+        contextDiagnostics: true,
+        disablePromptCache: false,
+      },
+    }, options);
 
     const turn = await root.spawn({ taskName: 'worker', objective: 'Inspect.' });
     await settle();
@@ -123,6 +130,10 @@ describe('F270 coding Actor runtime adapter', () => {
     expect(externalExecutor.execute).not.toHaveBeenCalled();
     expect(executeChildAgentsMock).toHaveBeenCalledOnce();
     expect(executeChildAgentsMock.mock.calls[0]?.[2].actorTurnId).toBe(turn.turnId);
+    expect(executeChildAgentsMock.mock.calls[0]?.[2].parentOptions).toMatchObject({
+      contextDiagnostics: true,
+      disablePromptCache: false,
+    });
     expect(root.output(turn.actorPath, turn.turnId).output).toBe('native result');
   });
 

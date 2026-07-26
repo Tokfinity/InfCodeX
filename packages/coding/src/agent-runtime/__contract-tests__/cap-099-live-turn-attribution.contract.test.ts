@@ -76,6 +76,36 @@ describe('CAP-099: live turn attribution', () => {
     );
   });
 
+  it('attributes synthetic child requests without advancing canonical history', async () => {
+    const canonical = createLiveTurnScope({
+      sessionId: 'physical-main',
+      contextId: 'logical-session/agent/reviewer',
+      contextKind: 'child',
+      agentId: 'reviewer',
+    });
+    const synthetic = createLiveTurnScope({
+      sessionId: 'physical-digest',
+      contextId: canonical.contextId,
+      contextKind: canonical.contextKind,
+      agentId: canonical.agentId,
+      ownsContextRevision: false,
+    });
+    const onCompactedMessages = vi.fn();
+
+    await withLiveTurnAttribution({ onCompactedMessages }, synthetic)
+      .onCompactedMessages?.([{ role: 'user', content: 'synthetic checkpoint' }]);
+
+    expect(onCompactedMessages).toHaveBeenCalledWith(
+      expect.any(Array),
+      undefined,
+      expect.objectContaining({
+        contextId: canonical.contextId,
+        contextRevision: 0,
+      }),
+    );
+    expect(canonical.nextMeta().contextRevision).toBe(0);
+  });
+
   it('rolls back the context revision when the compaction commit is rejected', async () => {
     const observedRevisions: number[] = [];
     const scope = createLiveTurnScope({ sessionId: 'session-rejected-compaction' });

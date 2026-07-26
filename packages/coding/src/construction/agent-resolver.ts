@@ -193,6 +193,20 @@ export interface ConstructedAgentEntry {
   readonly toolPolicy?: ConstructedAgentToolPolicy;
 }
 
+/**
+ * Explicit specialist tool ceiling. `undefined` means no declared policy;
+ * an empty array is an intentional deny-all ceiling.
+ */
+export function constructedAgentToolCeiling(
+  entry: ConstructedAgentEntry,
+): readonly string[] | undefined {
+  if (entry.toolPolicy?.declaredTools === true) {
+    return entry.toolPolicy.effectiveToolNames;
+  }
+  const names = entry.agent.tools?.map((tool) => tool.name) ?? [];
+  return names.length > 0 ? names : undefined;
+}
+
 /** @internal — see {@link ConstructedAgentEntry} */
 export function listConstructedAgentsWithSource(
   scope?: KodaXAgentScope,

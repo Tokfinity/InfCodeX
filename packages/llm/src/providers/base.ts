@@ -282,6 +282,11 @@ export abstract class KodaXBaseProvider {
     return this.config.strictThinkingSignature ?? false;
   }
 
+  /** Provider-level switch used by serializers for compatibility placeholders. */
+  public getProviderSupportsThinking(): boolean {
+    return this.config.supportsThinking;
+  }
+
   protected getEffectiveThinkingBudgetCap(model?: string): number | undefined {
     return this.getModelDescriptor(model)?.thinkingBudgetCap ?? this.config.thinkingBudgetCap;
   }

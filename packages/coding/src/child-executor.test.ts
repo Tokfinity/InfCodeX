@@ -167,6 +167,130 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.compaction).toEqual(compaction);
   });
 
+  it('inherits prompt-cache and context-diagnostic controls from the parent runtime', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+
+    await executeChildAgents(
+      [createBundle()],
+      createCtx(),
+      createOptions({
+        parentOptions: {
+          provider: 'anthropic',
+          contextDiagnostics: true,
+          disablePromptCache: true,
+        },
+      }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly disablePromptCache?: boolean;
+      readonly context?: { readonly contextDiagnostics?: boolean };
+    };
+    expect(childOptions.disablePromptCache).toBe(true);
+    expect(childOptions.context?.contextDiagnostics).toBe(true);
+  });
+
+  it('preserves explicit false prompt-cache and diagnostic controls from the parent runtime', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+
+    await executeChildAgents(
+      [createBundle()],
+      createCtx(),
+      createOptions({
+        parentOptions: {
+          provider: 'anthropic',
+          contextDiagnostics: false,
+          disablePromptCache: false,
+        },
+      }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly disablePromptCache?: boolean;
+      readonly context?: { readonly contextDiagnostics?: boolean };
+    };
+    expect(childOptions.disablePromptCache).toBe(false);
+    expect(childOptions.context?.contextDiagnostics).toBe(false);
+  });
+
+  it.each([
+    ['read', true],
+    ['write', false],
+  ] as const)(
+    'keeps an Actor-backed %s child in AMA capability mode without replacing actorControl',
+    async (_label, readOnly) => {
+      mockRunKodaX.mockResolvedValue(okResult('inspected'));
+      const actorControl = {} as NonNullable<ChildExecutorOptions['actorControl']>;
+
+      await executeChildAgents(
+        [createBundle({ readOnly })],
+        createCtx(),
+        createOptions({ actorControl }),
+      );
+
+      const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+        readonly agentMode?: string;
+        readonly context?: {
+          readonly actorControl?: unknown;
+          readonly excludeTools?: readonly string[];
+        };
+      };
+      expect(childOptions.agentMode).toBe('ama');
+      expect(childOptions.context?.actorControl).toBe(actorControl);
+      expect(childOptions.context?.excludeTools).not.toContain('spawn_agent');
+      expect(childOptions.context?.excludeTools).not.toContain('wait_agent');
+      expect(mockRunKodaX.mock.calls[0]?.[1]).toContain(
+        'Runtime-bound collaboration tools to spawn direct children',
+      );
+      expect(mockRunKodaX.mock.calls[0]?.[1]).toContain(
+        'send short messages to other in-flight agents',
+      );
+    },
+  );
+
+  it.each([
+    ['read', true],
+    ['write', false],
+  ] as const)(
+    'hides unusable collaboration tools and claims from an actorless %s child',
+    async (_label, readOnly) => {
+      mockRunKodaX.mockResolvedValue(okResult('inspected'));
+
+      await executeChildAgents(
+        [createBundle({ readOnly })],
+        createCtx(),
+        createOptions(),
+      );
+
+      const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+        readonly agentMode?: string;
+        readonly context?: {
+          readonly excludeTools?: readonly string[];
+          readonly systemPromptOverride?: string;
+        };
+      };
+      expect(childOptions.agentMode).toBe('sa');
+      expect(childOptions.context?.excludeTools).toEqual(expect.arrayContaining([
+        'list_dispatchable_agents',
+        'spawn_agent',
+        'run_workflow',
+        'send_message',
+        'followup_task',
+        'wait_agent',
+        'interrupt_agent',
+        'list_agents',
+        'agent_output',
+        'emit_managed_protocol',
+      ]));
+      expect(mockRunKodaX.mock.calls[0]?.[1]).not.toContain(
+        'Runtime-bound collaboration tools to spawn direct children',
+      );
+      expect(childOptions.context?.systemPromptOverride).not.toContain(
+        'send short messages to other in-flight agents',
+      );
+    },
+  );
+
   it('gives a persistent child its own hidden lineage instead of the root session', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
     const storage = { load: vi.fn(async () => null), save: vi.fn(async () => undefined) };
@@ -179,7 +303,7 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
 
     const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
       session?: { id?: string; scope?: string; storage?: unknown; tag?: string };
-      context?: { currentAgentId?: string };
+      context?: { currentAgentId?: string; contextIdentitySessionId?: string };
     };
     expect(childOptions.session).toMatchObject({
       scope: 'managed-task-worker',
@@ -188,6 +312,7 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.session?.id).not.toBe('root-session');
     expect(childOptions.session?.tag).toBeUndefined();
     expect(childOptions.context?.currentAgentId).toBe('/root/reviewer');
+    expect(childOptions.context?.contextIdentitySessionId).toBe('root-session');
   });
 
   it('applies Actor history and tool/network/user-interaction ceilings to the child runtime', async () => {
@@ -348,6 +473,9 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
   });
 
   it('adds a no-tool same-session digest turn for workflow children only', async () => {
+    const onContextBudgetSnapshot = vi.fn();
+    const onPromptCacheDiagnostics = vi.fn();
+    const onTextDelta = vi.fn();
     const childMessages = [
       { role: 'assistant' as const, content: 'Full report with file:line evidence.' },
     ];
@@ -373,10 +501,24 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const result = await executeChildAgents(
       [createBundle({ id: 'cb-digest', readOnly: true })],
-      createCtx(),
+      { ...createCtx(), sessionId: 'test-session' },
       // FEATURE_217: digest gates on `workflowChild`, NOT parentHarness — the
       // workflow runner keeps parentHarness:'tool-dispatch' for write children.
-      createOptions({ workflowChild: true }),
+      createOptions({
+        workflowChild: true,
+        actorControl: {} as NonNullable<ChildExecutorOptions['actorControl']>,
+        actorParentAgentId: '/root/workflow-parent',
+        parentOptions: {
+          provider: 'anthropic',
+          contextDiagnostics: true,
+          disablePromptCache: true,
+          events: {
+            onContextBudgetSnapshot,
+            onPromptCacheDiagnostics,
+            onTextDelta,
+          },
+        },
+      }),
     );
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(2);
@@ -386,10 +528,28 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(timeoutSpy.mock.calls.some((call) => call[1] === 10_000)).toBe(true);
     const digestOptions = mockRunKodaX.mock.calls[1]![0] as {
       maxIter?: number;
+      disablePromptCache?: boolean;
+      events?: {
+        onContextBudgetSnapshot?: unknown;
+        onPromptCacheDiagnostics?: unknown;
+        onTextDelta?: unknown;
+      };
       session?: { initialMessages?: readonly unknown[] };
-      context?: { excludeTools?: readonly string[] };
+      context?: {
+        excludeTools?: readonly string[];
+        contextDiagnostics?: boolean;
+        parentAgentId?: string;
+        contextIdentitySessionId?: string;
+      };
     };
     expect(digestOptions.maxIter).toBe(1);
+    expect(digestOptions.disablePromptCache).toBe(true);
+    expect(digestOptions.context?.contextDiagnostics).toBe(true);
+    expect(digestOptions.events?.onContextBudgetSnapshot).toBe(onContextBudgetSnapshot);
+    expect(digestOptions.events?.onPromptCacheDiagnostics).toBe(onPromptCacheDiagnostics);
+    expect(digestOptions.events?.onTextDelta).toBeUndefined();
+    expect(digestOptions.context?.parentAgentId).toBe('/root/workflow-parent');
+    expect(digestOptions.context?.contextIdentitySessionId).toBe('test-session');
     expect(digestOptions.session?.initialMessages).toBe(childMessages);
     expect(digestOptions.context?.excludeTools).toContain('read');
     timeoutSpy.mockRestore();
@@ -518,6 +678,75 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     );
     expect(mockRunKodaX).toHaveBeenCalledTimes(2);
     expect(result.results[0]?.digest).toBe('Distilled by the fallback.');
+  });
+
+  it('inherits cache controls and diagnostic-only events for structured-output repair', async () => {
+    const onContextBudgetSnapshot = vi.fn();
+    const onPromptCacheDiagnostics = vi.fn();
+    const onTextDelta = vi.fn();
+    mockRunKodaX
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: JSON.stringify({ wrong: true }),
+        messages: [{ role: 'assistant' as const, content: '{"wrong":true}' }],
+        sessionId: 'repair-main',
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: JSON.stringify({ summary: 'repaired' }),
+        messages: [{ role: 'assistant' as const, content: '{"summary":"repaired"}' }],
+        sessionId: 'repair-pass',
+      });
+
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'structured-repair-controls',
+        readOnly: true,
+        outputSchema: {
+          type: 'object',
+          required: ['summary'],
+          properties: { summary: { type: 'string' } },
+        },
+      })],
+      { ...createCtx(), sessionId: 'test-session' },
+      createOptions({
+        actorControl: {} as NonNullable<ChildExecutorOptions['actorControl']>,
+        actorParentAgentId: '/root/repair-parent',
+        parentOptions: {
+          provider: 'anthropic',
+          contextDiagnostics: true,
+          disablePromptCache: true,
+          events: {
+            onContextBudgetSnapshot,
+            onPromptCacheDiagnostics,
+            onTextDelta,
+          },
+        },
+      }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(result.results[0]?.structured).toEqual({ summary: 'repaired' });
+    const repairOptions = mockRunKodaX.mock.calls[1]![0] as {
+      disablePromptCache?: boolean;
+      events?: {
+        onContextBudgetSnapshot?: unknown;
+        onPromptCacheDiagnostics?: unknown;
+        onTextDelta?: unknown;
+      };
+      context?: {
+        contextDiagnostics?: boolean;
+        parentAgentId?: string;
+        contextIdentitySessionId?: string;
+      };
+    };
+    expect(repairOptions.disablePromptCache).toBe(true);
+    expect(repairOptions.context?.contextDiagnostics).toBe(true);
+    expect(repairOptions.events?.onContextBudgetSnapshot).toBe(onContextBudgetSnapshot);
+    expect(repairOptions.events?.onPromptCacheDiagnostics).toBe(onPromptCacheDiagnostics);
+    expect(repairOptions.events?.onTextDelta).toBeUndefined();
+    expect(repairOptions.context?.parentAgentId).toBe('/root/repair-parent');
+    expect(repairOptions.context?.contextIdentitySessionId).toBe('test-session');
   });
 
   it('parses a valid fixed AMA disposition envelope without a repair turn', async () => {
@@ -1533,6 +1762,39 @@ describe('CHILD_EXCLUDE_TOOLS_BASE (FEATURE_074)', () => {
 /* ---------- FEATURE_074: Plan-mode propagation into child events ---------- */
 
 describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
+  it('forwards bounded context and prompt-cache diagnostics to the parent event surface', () => {
+    const onContextBudgetSnapshot = vi.fn();
+    const onPromptCacheDiagnostics = vi.fn();
+    const onToolExposurePlanned = vi.fn();
+    const onContextCompactionSkipped = vi.fn();
+    const events = buildChildEvents(
+      'cb-test',
+      undefined,
+      undefined,
+      undefined,
+      {
+        onContextBudgetSnapshot,
+        onPromptCacheDiagnostics,
+        onToolExposurePlanned,
+        onContextCompactionSkipped,
+      },
+    );
+    const budget = { usedTokens: 123 };
+    const cache = { phase: 'request', requestId: 'req-1' };
+    const exposure = { profile: 'report_only' };
+    const skipped = { reason: 'covered_context_unchanged' };
+
+    events?.onContextBudgetSnapshot?.(budget as never);
+    events?.onPromptCacheDiagnostics?.(cache as never);
+    events?.onToolExposurePlanned?.(exposure as never);
+    events?.onContextCompactionSkipped?.(skipped as never);
+
+    expect(onContextBudgetSnapshot).toHaveBeenCalledWith(budget);
+    expect(onPromptCacheDiagnostics).toHaveBeenCalledWith(cache);
+    expect(onToolExposurePlanned).toHaveBeenCalledWith(exposure);
+    expect(onContextCompactionSkipped).toHaveBeenCalledWith(skipped);
+  });
+
   it('blocks tools when planModeBlockCheck returns a reason', async () => {
     const events = buildChildEvents(
       'cb-test',
@@ -1942,7 +2204,7 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     sessionId: 's-specialist',
   });
 
-  it('overrides systemPromptOverride with specialist instructions when bundle.specialistName resolves', async () => {
+  it('preserves the documented specialist full-prompt override contract', async () => {
     registerConstructedAgent(buildSpecialistArtifact({ name: 'db-reviewer' }));
     mockRunKodaX.mockResolvedValue(okResult());
 
@@ -1958,6 +2220,49 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
       context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
     };
     expect(childOptions.context?.systemPromptOverride).toBe('SPECIALIST DB-REVIEWER PROMPT');
+  });
+
+  it('preserves base and project mutation rules for a write specialist', async () => {
+    const specialistRoot = mkdtempSync(join(tmpdir(), 'kodax-specialist-rules-'));
+    const sentinel = 'SPECIALIST_WRITE_AGENTS_SENTINEL';
+    try {
+      writeFileSync(
+        join(specialistRoot, 'AGENTS.md'),
+        `# Project Rules\n\n- ${sentinel}\n`,
+      );
+      clearAgentsLoaderCacheForTesting();
+      registerConstructedAgent(buildSpecialistArtifact({ name: 'db-reviewer' }));
+      mockRunKodaX.mockResolvedValue(okResult());
+
+      await executeChildAgents(
+        [createBundle({
+          id: 'cb-sp-write-rules',
+          readOnly: false,
+          specialistName: 'db-reviewer',
+        })],
+        {
+          backups: new Map(),
+          gitRoot: specialistRoot,
+          executionCwd: specialistRoot,
+        },
+        createOptions(),
+      );
+
+      const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+        context?: { systemPromptOverride?: string };
+      };
+      const systemPrompt = childOptions.context?.systemPromptOverride ?? '';
+      expect(systemPrompt.startsWith('SPECIALIST DB-REVIEWER PROMPT')).toBe(true);
+      expect(systemPrompt).not.toContain(CHILD_AGENT_SYSTEM_PROMPT);
+      expect(systemPrompt).toContain(sentinel);
+      expect(systemPrompt).toContain('SPECIALIST DB-REVIEWER PROMPT');
+      expect(systemPrompt.indexOf(sentinel)).toBeGreaterThan(
+        systemPrompt.indexOf('SPECIALIST DB-REVIEWER PROMPT'),
+      );
+    } finally {
+      clearAgentsLoaderCacheForTesting();
+      rmSync(specialistRoot, { recursive: true, force: true });
+    }
   });
 
   it('computes excludeTools as the complement of specialist.tools (read child path)', async () => {
@@ -2068,6 +2373,76 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
       provider: 'anthropic',
       model: 'claude-opus-4-8',
     });
+  });
+
+  it('rejects a specialist provider outside the admitted Actor ceiling', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'unauthorized-provider-reviewer',
+      content: {
+        instructions: 'REVIEWER PROMPT',
+        tools: [{ ref: 'builtin:read' }],
+        description: 'review',
+        provider: 'anthropic',
+      },
+    }));
+
+    const result = await executeChildAgents(
+      [createBundle({
+        id: 'cb-provider-ceiling',
+        readOnly: true,
+        specialistName: 'unauthorized-provider-reviewer',
+      })],
+      createCtx(),
+      createOptions({
+        actorCapabilities: {
+          tools: ['*'],
+          filesystem: 'read',
+          network: true,
+          providers: ['deepseek'],
+          canAskUser: false,
+        },
+      }),
+    );
+
+    expect(mockRunKodaX).not.toHaveBeenCalled();
+    expect(result.results[0]).toMatchObject({ status: 'failed' });
+    expect(result.results[0]?.summary).toContain('not authorized to use provider anthropic');
+  });
+
+  it('only claims collaboration capabilities visible after specialist and Actor ceilings', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'spawn-only-reviewer',
+      content: {
+        instructions: 'SPAWN-ONLY PROMPT',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:spawn_agent' }],
+        description: 'delegating reviewer',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+    const actorControl = {} as NonNullable<ChildExecutorOptions['actorControl']>;
+
+    await executeChildAgents(
+      [createBundle({
+        id: 'cb-spawn-only',
+        readOnly: true,
+        specialistName: 'spawn-only-reviewer',
+      })],
+      createCtx(),
+      createOptions({
+        actorControl,
+        actorCapabilities: {
+          tools: ['read', 'spawn_agent', 'send_message'],
+          filesystem: 'read',
+          network: false,
+          providers: ['*'],
+          canAskUser: false,
+        },
+      }),
+    );
+
+    const briefing = mockRunKodaX.mock.calls[0]?.[1] ?? '';
+    expect(briefing).toContain('spawn direct children');
+    expect(briefing).not.toContain('send short messages');
   });
 
   it('applies bundle.provider + bundle.model to the child (FEATURE_102 P2 dispatch override)', async () => {
@@ -2231,7 +2606,7 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(childOptions.context?.systemPromptOverride).toBe('NARRATOR PROMPT');
     // No specialist.tools → standard CHILD_EXCLUDE_TOOLS_READONLY guard applies
     // rather than an empty exclusion (which would unrestrict the child).
-    expect(childOptions.context?.excludeTools).not.toContain('spawn_agent');
+    expect(childOptions.context?.excludeTools).toContain('spawn_agent');
   });
 
   it('fails closed when specialist declares tools but none resolve', async () => {
@@ -2282,7 +2657,8 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     const childOptions = mockRunKodaX.mock.calls[0]![0] as {
       context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
     };
-    expect(childOptions.context?.systemPromptOverride).toBe('REFACTOR HELPER PROMPT');
+    expect(childOptions.context?.systemPromptOverride?.startsWith('REFACTOR HELPER PROMPT')).toBe(true);
+    expect(childOptions.context?.systemPromptOverride).not.toContain(CHILD_AGENT_SYSTEM_PROMPT);
     expect(childOptions.context?.excludeTools).not.toContain('write');
     expect(childOptions.context?.excludeTools).not.toContain('edit');
   });

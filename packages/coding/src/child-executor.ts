@@ -31,6 +31,7 @@ import type {
   KodaXWireReasoningEffort,
 } from './types.js';
 import { resolveExecutionCwd, resolveExecutionPath } from './runtime-paths.js';
+import { actorQueueId } from './agent-runtime/actor-queue.js';
 import { countTokens } from './tokenizer.js';
 import { resolveProvider } from './providers/index.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
@@ -63,7 +64,10 @@ import { normalizeReasoningEffortValue } from '@kodax-ai/llm';
 // `getAllRegisteredTools` powers the complementary excludeTools computation
 // (`KodaXOptions.context` has no `includeOnlyTools` API; the inverse subset
 // is the YAGNI-compliant substitute per ADR-035 R11).
-import { resolveConstructedAgentEntry } from './construction/agent-resolver.js';
+import {
+  constructedAgentToolCeiling,
+  resolveConstructedAgentEntry,
+} from './construction/agent-resolver.js';
 import { getAllRegisteredTools } from './tools/registry.js';
 import {
   applyToolResultBatchGuardrail,
@@ -194,8 +198,8 @@ export interface ChildExecutorOptions {
   /** Parent-provided persistence capability for an isolated child-owned lineage. */
   readonly historyStorage?: KodaXSessionStorage;
   readonly parentOptions: Readonly<Partial<
-    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction'>
-    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace'>
+    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction' | 'disablePromptCache'>
+    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics'>
   >>;
   readonly parentRole: string;
   readonly parentHarness: string;
@@ -239,6 +243,8 @@ export interface ChildExecutorOptions {
 
   /** Runtime-minted principal inherited by the child runtime for recursive collaboration. */
   readonly actorControl?: import('@kodax-ai/agent').AgentActorClient;
+  /** Exact non-root parent identity for nested live-context attribution. */
+  readonly actorParentAgentId?: string;
   /** Exact admitted Actor Turn id used as the child run's live Turn identity. */
   readonly actorTurnId?: string;
   /** Trusted host bridge inherited beside the principal for nested Workflow owners. */
@@ -247,6 +253,10 @@ export interface ChildExecutorOptions {
   readonly initialMessages?: readonly import('./types.js').KodaXMessage[];
   /** Runtime-minted ceiling applied after specialist/default tool resolution. */
   readonly actorCapabilities?: AgentCapabilities;
+  /** Logical diagnostics identity when bundle ids are local to a Workflow backend. */
+  readonly contextAgentId?: string;
+  /** Logical diagnostics parent paired with contextAgentId. */
+  readonly contextParentAgentId?: string;
 }
 
 function buildChildRunSession(
@@ -387,6 +397,20 @@ interface SpecialistOverride {
   effortOverride?: KodaXWireReasoningEffort;
 }
 
+/** Tools that require a Runtime Actor principal or managed-protocol host. */
+export const CHILD_COLLABORATION_TOOLS: readonly string[] = [
+  'list_dispatchable_agents',
+  'spawn_agent',
+  'run_workflow',
+  'send_message',
+  'followup_task',
+  'wait_agent',
+  'interrupt_agent',
+  'list_agents',
+  'agent_output',
+  'emit_managed_protocol',
+];
+
 function restrictToolsForActor(
   excludedTools: readonly string[],
   capabilities: AgentCapabilities | undefined,
@@ -403,6 +427,64 @@ function restrictToolsForActor(
     if (outsideExplicitCeiling || networkDenied || userInteractionDenied) excluded.add(tool.name);
   }
   return [...excluded];
+}
+
+function restrictToolsForChildRuntime(
+  excludedTools: readonly string[],
+  capabilities: AgentCapabilities | undefined,
+  actorControl: ChildExecutorOptions['actorControl'],
+): readonly string[] {
+  const restricted = restrictToolsForActor(excludedTools, capabilities);
+  if (actorControl !== undefined) return restricted;
+  return [...new Set([...restricted, ...CHILD_COLLABORATION_TOOLS])];
+}
+
+function childContextAgentId(
+  bundle: KodaXChildContextBundle,
+  options: ChildExecutorOptions,
+): string {
+  return options.contextAgentId ?? bundle.id;
+}
+
+function childContextParentAgentId(
+  ctx: KodaXToolExecutionContext,
+  options: ChildExecutorOptions,
+): string | undefined {
+  return options.contextParentAgentId
+    ?? (options.actorControl !== undefined ? options.actorParentAgentId : ctx.currentAgentId);
+}
+
+function isChildToolVisible(
+  name: string,
+  excludedTools: readonly string[],
+  ctx: KodaXToolExecutionContext,
+): boolean {
+  if (excludedTools.includes(name)) return false;
+  const tool = getAllRegisteredTools().find((candidate) => candidate.name === name);
+  if (!tool) return false;
+  return ctx.toolVisibilityPolicy?.({
+    name: tool.name,
+    sideEffect: tool.sideEffect,
+    planModeAllowed: tool.planModeAllowed === true,
+  }) ?? true;
+}
+
+function isProviderAllowed(
+  provider: string,
+  capabilities: AgentCapabilities | undefined,
+): boolean {
+  return capabilities === undefined
+    || capabilities.providers.includes('*')
+    || capabilities.providers.includes(provider);
+}
+
+function assertChildProviderAllowed(
+  provider: string,
+  capabilities: AgentCapabilities | undefined,
+): void {
+  if (!isProviderAllowed(provider, capabilities)) {
+    throw new Error(`Child Actor is not authorized to use provider ${provider}.`);
+  }
 }
 
 interface ChildIsolationScope {
@@ -741,6 +823,27 @@ function shouldRunWorkflowDigestAsync(
     shouldCreateWorkflowChildDigest(options, result, bundle, structured);
 }
 
+function selectContextDiagnosticEvents(
+  events: KodaXEvents | undefined,
+): KodaXEvents | undefined {
+  if (events === undefined) return undefined;
+  const selected: KodaXEvents = {
+    ...(events.onContextBudgetSnapshot !== undefined
+      ? { onContextBudgetSnapshot: events.onContextBudgetSnapshot }
+      : {}),
+    ...(events.onPromptCacheDiagnostics !== undefined
+      ? { onPromptCacheDiagnostics: events.onPromptCacheDiagnostics }
+      : {}),
+    ...(events.onToolExposurePlanned !== undefined
+      ? { onToolExposurePlanned: events.onToolExposurePlanned }
+      : {}),
+    ...(events.onContextCompactionSkipped !== undefined
+      ? { onContextCompactionSkipped: events.onContextCompactionSkipped }
+      : {}),
+  };
+  return Object.keys(selected).length > 0 ? selected : undefined;
+}
+
 async function createWorkflowChildDigest(
   input: {
     readonly runFn: RunKodaXFn;
@@ -769,6 +872,7 @@ async function createWorkflowChildDigest(
   input.options.abortSignal?.addEventListener('abort', onParentAbort);
   const timer = setTimeout(() => controller.abort(), input.timeoutMs);
   try {
+    const diagnosticEvents = selectContextDiagnosticEvents(input.options.parentOptions.events);
     const digestRun = await input.runFn(
       {
         provider: input.provider,
@@ -779,8 +883,12 @@ async function createWorkflowChildDigest(
         maxIter: 1,
         abortSignal: controller.signal,
         extensionRuntime: input.options.parentOptions.extensionRuntime,
+        ...(diagnosticEvents !== undefined ? { events: diagnosticEvents } : {}),
         ...(input.options.parentOptions.compaction !== undefined
           ? { compaction: input.options.parentOptions.compaction }
+          : {}),
+        ...(input.options.parentOptions.disablePromptCache !== undefined
+          ? { disablePromptCache: input.options.parentOptions.disablePromptCache }
           : {}),
         guardrails: input.options.guardrails,
         session: { initialMessages: input.result.messages },
@@ -792,10 +900,16 @@ async function createWorkflowChildDigest(
           skillRegistry: input.scopeCtx.skillRegistry,
           skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
+          ...(input.options.parentOptions.contextDiagnostics !== undefined
+            ? { contextDiagnostics: input.options.parentOptions.contextDiagnostics }
+            : {}),
           systemPromptOverride: WORKFLOW_CHILD_DIGEST_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
-          currentAgentId: input.bundle.id,
-          parentAgentId: input.scopeCtx.currentAgentId,
+          contextIdentitySessionId:
+            input.scopeCtx.contextIdentitySessionId ?? input.scopeCtx.sessionId,
+          ownsContextRevision: false,
+          currentAgentId: childContextAgentId(input.bundle, input.options),
+          parentAgentId: childContextParentAgentId(input.scopeCtx, input.options),
         },
       },
       WORKFLOW_CHILD_DIGEST_PROMPT,
@@ -913,6 +1027,7 @@ async function resolveChildStructuredOutput(input: {
   input.options.abortSignal?.addEventListener('abort', onParentAbort);
   const timer = setTimeout(() => controller.abort(), STRUCTURED_OUTPUT_REPAIR_TIMEOUT_MS);
   try {
+    const diagnosticEvents = selectContextDiagnosticEvents(input.options.parentOptions.events);
     const repairRun = await input.runFn(
       {
         provider: input.provider,
@@ -923,8 +1038,12 @@ async function resolveChildStructuredOutput(input: {
         maxIter: 1,
         abortSignal: controller.signal,
         extensionRuntime: input.options.parentOptions.extensionRuntime,
+        ...(diagnosticEvents !== undefined ? { events: diagnosticEvents } : {}),
         ...(input.options.parentOptions.compaction !== undefined
           ? { compaction: input.options.parentOptions.compaction }
+          : {}),
+        ...(input.options.parentOptions.disablePromptCache !== undefined
+          ? { disablePromptCache: input.options.parentOptions.disablePromptCache }
           : {}),
         guardrails: input.options.guardrails,
         session: { initialMessages: input.result.messages },
@@ -936,11 +1055,17 @@ async function resolveChildStructuredOutput(input: {
           skillRegistry: input.scopeCtx.skillRegistry,
           skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
+          ...(input.options.parentOptions.contextDiagnostics !== undefined
+            ? { contextDiagnostics: input.options.parentOptions.contextDiagnostics }
+            : {}),
           systemPromptOverride: STRUCTURED_OUTPUT_REPAIR_SYSTEM_PROMPT,
           excludeTools: getAllRegisteredTools().map((tool) => tool.name),
           agentScope: input.scopeCtx.agentScope,
-          currentAgentId: input.bundle.id,
-          parentAgentId: input.scopeCtx.currentAgentId,
+          contextIdentitySessionId:
+            input.scopeCtx.contextIdentitySessionId ?? input.scopeCtx.sessionId,
+          ownsContextRevision: false,
+          currentAgentId: childContextAgentId(input.bundle, input.options),
+          parentAgentId: childContextParentAgentId(input.scopeCtx, input.options),
         },
       },
       buildStructuredOutputRepairPrompt(first.errors, schema),
@@ -992,11 +1117,8 @@ function resolveSpecialistOverride(
   // API. Computing `allTools - (specialist.tools - defaultExcludeTools)`
   // is semantically equivalent to an allowlist intersected with the
   // caller's child-safety guard, without requiring a new option schema.
-  const declaredToolPolicy = specialistEntry.toolPolicy?.declaredTools === true;
-  const effectiveToolNames = declaredToolPolicy
-    ? specialistEntry.toolPolicy?.effectiveToolNames ?? []
-    : specialist.tools?.map((tool) => tool.name);
-  if (!declaredToolPolicy && (!effectiveToolNames || effectiveToolNames.length === 0)) {
+  const effectiveToolNames = constructedAgentToolCeiling(specialistEntry);
+  if (effectiveToolNames === undefined) {
     // Specialist declared no tools — fall back to defaults so the child
     // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
     // rather than an unrestricted toolset.
@@ -1154,7 +1276,11 @@ async function runReadChildBody(
       CHILD_EXCLUDE_TOOLS_READONLY,
       scope.ctx,
     );
-  const excludeTools = restrictToolsForActor(specialistExcludeTools, options.actorCapabilities);
+  const excludeTools = restrictToolsForChildRuntime(
+    specialistExcludeTools,
+    options.actorCapabilities,
+    options.actorControl,
+  );
 
   // FEATURE_102 P1-auto — model_hint routing applies only when the dispatcher
   // gave neither an explicit provider/model (P2) nor a specialist (P1).
@@ -1175,6 +1301,7 @@ async function runReadChildBody(
     hintTier,
   );
   const { provider, model } = route;
+  assertChildProviderAllowed(provider, options.actorCapabilities);
   let briefing: string;
   try {
     briefing = await buildChildBriefing(
@@ -1182,6 +1309,12 @@ async function runReadChildBody(
       scope.ctx,
       options.maxIterationsPerChild,
       resolveChildBriefingTokenBudget(provider, model, systemPromptOverride, excludeTools),
+      {
+        canSpawn: options.actorControl !== undefined
+          && isChildToolVisible('spawn_agent', excludeTools, scope.ctx),
+        canMessage: options.actorControl !== undefined
+          && isChildToolVisible('send_message', excludeTools, scope.ctx),
+      },
     );
   } catch (error) {
     return extractChildResult(
@@ -1206,12 +1339,18 @@ async function runReadChildBody(
         model,
         effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
+        // The child stays on the direct runKodaX/Runner substrate. Preserve AMA
+        // capability semantics only for Runtime Actor children so recursive
+        // collaboration and future AMA-gated surfaces remain truthful.
         agentMode: options.actorControl ? 'ama' : 'sa',
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
         ...(options.parentOptions.compaction !== undefined
           ? { compaction: options.parentOptions.compaction }
+          : {}),
+        ...(options.parentOptions.disablePromptCache !== undefined
+          ? { disablePromptCache: options.parentOptions.disablePromptCache }
           : {}),
         // FEATURE_092 phase 2b.7b slice D: forward parent-Runner guardrails so
         // child tool calls go through the SAME auto-mode classifier instance
@@ -1234,16 +1373,29 @@ async function runReadChildBody(
           skillRegistry: scope.ctx.skillRegistry,
           skillScriptRunner: scope.ctx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
+          ...(options.parentOptions.contextDiagnostics !== undefined
+            ? { contextDiagnostics: options.parentOptions.contextDiagnostics }
+            : {}),
           systemPromptOverride,
           excludeTools,
           agentScope: scope.ctx.agentScope,
           actorControl: options.actorControl,
+          ...(options.actorControl !== undefined
+            ? {
+                actorQueueAgentId: actorQueueId(
+                  scope.ctx.contextIdentitySessionId ?? scope.ctx.sessionId,
+                  bundle.id,
+                ),
+              }
+            : {}),
+          contextIdentitySessionId:
+            scope.ctx.contextIdentitySessionId ?? scope.ctx.sessionId,
           actorHost: options.actorHost,
           managedWorkBudget: scope.ctx.managedWorkBudget,
           // Propagate Actor identity/control so the child runtime can receive
           // messages and recursively collaborate within its inherited ceiling.
-          currentAgentId: bundle.id,
-          parentAgentId: scope.ctx.currentAgentId,
+          currentAgentId: childContextAgentId(bundle, options),
+          parentAgentId: childContextParentAgentId(scope.ctx, options),
           ...(options.actorTurnId !== undefined
             ? { liveTurn: { deliveryKind: 'initial' as const, turnId: options.actorTurnId } }
             : {}),
@@ -1259,6 +1411,8 @@ async function runReadChildBody(
           fallbackReason = `${fromProvider} → ${toProvider}: ${reason}`;
           options.onProgress?.(`[fallback] ${bundle.id}: ${fallbackReason}`);
         },
+        isProviderAllowed: (candidate) =>
+          isProviderAllowed(candidate, options.actorCapabilities),
       },
     );
 
@@ -1385,19 +1539,33 @@ async function runWriteChildBody(
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
   // (they don't mutate, so project rules don't apply).
-  const writeSystemPrompt = buildWriteSystemPrompt(childCtx.gitRoot ?? childCtx.executionCwd ?? process.cwd());
-
   // FEATURE_191 — specialist override switch on the write path. Same fail-safe
   // semantic as the read path: unknown specialist falls back to defaults.
   // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider/effort.
-  const { systemPromptOverride, excludeTools: specialistExcludeTools, modelOverride, providerOverride, effortOverride } =
+  const {
+    systemPromptOverride: specialistSystemPrompt,
+    excludeTools: specialistExcludeTools,
+    modelOverride,
+    providerOverride,
+    effortOverride,
+  } =
     resolveSpecialistOverride(
       bundle,
-      writeSystemPrompt,
+      CHILD_AGENT_SYSTEM_PROMPT,
       CHILD_EXCLUDE_TOOLS_BASE,
       childCtx,
     );
-  const excludeTools = restrictToolsForActor(specialistExcludeTools, options.actorCapabilities);
+  // Project mutation rules remain the final authoritative block after any
+  // specialist instructions.
+  const systemPromptOverride = buildWriteSystemPrompt(
+    childCtx.gitRoot ?? childCtx.executionCwd ?? process.cwd(),
+    specialistSystemPrompt,
+  );
+  const excludeTools = restrictToolsForChildRuntime(
+    specialistExcludeTools,
+    options.actorCapabilities,
+    options.actorControl,
+  );
 
   // FEATURE_102 P1-auto — write children are NOT eligible for `fast`→cheap
   // (eval covered read-only only); `deep`→strong still applies. Same gate:
@@ -1419,6 +1587,7 @@ async function runWriteChildBody(
     hintTier,
   );
   const { provider, model } = route;
+  assertChildProviderAllowed(provider, options.actorCapabilities);
   let briefing: string;
   try {
     briefing = await buildChildBriefing(
@@ -1426,6 +1595,12 @@ async function runWriteChildBody(
       childCtx,
       options.maxIterationsPerChild,
       resolveChildBriefingTokenBudget(provider, model, systemPromptOverride, excludeTools),
+      {
+        canSpawn: options.actorControl !== undefined
+          && isChildToolVisible('spawn_agent', excludeTools, childCtx),
+        canMessage: options.actorControl !== undefined
+          && isChildToolVisible('send_message', excludeTools, childCtx),
+      },
     );
   } catch (error) {
     return extractChildResult(
@@ -1450,12 +1625,18 @@ async function runWriteChildBody(
         model,
         effort: childEffort,
         reasoningMode: options.parentOptions.reasoningMode,
+        // The child stays on the direct runKodaX/Runner substrate. Preserve AMA
+        // capability semantics only for Runtime Actor children so recursive
+        // collaboration and future AMA-gated surfaces remain truthful.
         agentMode: options.actorControl ? 'ama' : 'sa',
         maxIter: options.maxIterationsPerChild,
         abortSignal: options.abortSignal,
         extensionRuntime: options.parentOptions.extensionRuntime,
         ...(options.parentOptions.compaction !== undefined
           ? { compaction: options.parentOptions.compaction }
+          : {}),
+        ...(options.parentOptions.disablePromptCache !== undefined
+          ? { disablePromptCache: options.parentOptions.disablePromptCache }
           : {}),
         // FEATURE_092 phase 2b.7b slice D: forward parent-Runner guardrails so
         // child tool calls go through the SAME auto-mode classifier instance
@@ -1476,17 +1657,30 @@ async function runWriteChildBody(
           skillRegistry: childCtx.skillRegistry,
           skillScriptRunner: childCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
+          ...(options.parentOptions.contextDiagnostics !== undefined
+            ? { contextDiagnostics: options.parentOptions.contextDiagnostics }
+            : {}),
           systemPromptOverride,
           excludeTools,
           agentScope: childCtx.agentScope,
           actorControl: options.actorControl,
+          ...(options.actorControl !== undefined
+            ? {
+                actorQueueAgentId: actorQueueId(
+                  childCtx.contextIdentitySessionId ?? childCtx.sessionId,
+                  bundle.id,
+                ),
+              }
+            : {}),
+          contextIdentitySessionId:
+            childCtx.contextIdentitySessionId ?? childCtx.sessionId,
           actorHost: options.actorHost,
           managedWorkBudget: childCtx.managedWorkBudget,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).
-          currentAgentId: bundle.id,
-          parentAgentId: childCtx.currentAgentId,
+          currentAgentId: childContextAgentId(bundle, options),
+          parentAgentId: childContextParentAgentId(childCtx, options),
           ...(options.actorTurnId !== undefined
             ? { liveTurn: { deliveryKind: 'initial' as const, turnId: options.actorTurnId } }
             : {}),
@@ -1504,6 +1698,8 @@ async function runWriteChildBody(
             `[fallback] ${bundle.id}: ${fromProvider} → ${toProvider} (${reason})`,
           );
         },
+        isProviderAllowed: (candidate) =>
+          isProviderAllowed(candidate, options.actorCapabilities),
       },
     );
 
@@ -1593,6 +1789,10 @@ async function buildChildBriefing(
   ctx: KodaXToolExecutionContext,
   maxIter: number,
   maxBriefingTokens: number,
+  collaboration: {
+    readonly canSpawn: boolean;
+    readonly canMessage: boolean;
+  },
 ): Promise<string> {
   // v0.7.26 NEW-2 — give the child agent explicit cwd / git root /
   // platform context. Without this block, the child's LLM has to guess
@@ -1645,7 +1845,19 @@ async function buildChildBriefing(
     bundle.readOnly
       ? '- This is a READ-ONLY task. Do NOT modify any files — the parent dispatched this child specifically for investigation, and a sibling write-child (or the parent itself) will handle any mutations the findings imply.'
       : '- You may modify files within the scope listed above.',
-    `- You may use the Runtime-bound collaboration tools to spawn direct children when parallel work materially improves speed or quality. Descendants share the same root concurrency, budget, and capability ceilings.`,
+    ...(collaboration.canSpawn
+      ? [
+          `- You may use the Runtime-bound collaboration tools to spawn direct children when parallel work materially improves speed or quality. Descendants share the same root concurrency, budget, and capability ceilings.`,
+        ]
+      : []),
+    ...(collaboration.canMessage
+      ? [
+          ``,
+          `## Runtime Collaboration`,
+          `You can send short messages to other in-flight agents with \`send_message\`: use a canonical peer path for a sibling, \`parent\` for your direct parent, or \`*\` to broadcast. Send only information that would change another agent's plan.`,
+          `Forwarding: each received \`<agent-message>\` carries a Runtime-generated \`id\`. Pass it as \`forwarded_message_id\` only when intentionally forwarding that message; Runtime rejects cycles and caps forwarding depth.`,
+        ]
+      : []),
     ...(bundle.readOnly
       ? []
       : [
@@ -1890,17 +2102,6 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
   '- When you need multiple independent tool calls (pull-tools, reads, or greps), emit them all in one response. Only serialize when a later call genuinely depends on an earlier result (e.g., you need a file path from grep before you can read it).',
   '- Open broad with a parallel fan-out covering the obvious scope axes, then narrow on follow-up turns. Prefer a few targeted calls over many tiny sequential probes.',
   '',
-  '## Peer Communication',
-  '',
-  'You can send short messages to other in-flight agents in this session with `send_message`:',
-  '- `send_message(to="<canonical peer path>", content="…")` — notify an admitted sibling that your work overlaps or that you found evidence it needs.',
-  '- `send_message(to="parent", content="…")` — surface a mid-flight finding to your direct parent.',
-  '- `send_message(to="*", content="…")` — broadcast to every sibling plus the parent Worker. Capped at 20 recipients per call.',
-  '',
-  'Send a peer message when it would change another agent\'s plan: a file you both edit, a fact you discovered that changes their scope, a blocker the parent should know about. Do not send routine status pings — peer chatter that does not change anyone\'s plan is noise.',
-  '',
-  'Forwarding: each received `<agent-message>` carries a Runtime-generated `id`. If you intentionally forward that message, pass its id as `forwarded_message_id`; Runtime derives the chain, rejects cycles, preserves data classification, and caps forwarding depth. Omit it for fresh sends.',
-  '',
   '## Execution Guidelines',
   '- Focus on the objective described in the user message. Do not deviate.',
   '- Write your final report in the same natural language as the objective you were given, so it reaches the user in their language. Keep code, file paths, and quoted evidence in their source language.',
@@ -1933,21 +2134,24 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
  * path.
  *
  * Cost: AGENTS.md is loaded once via `loadAgentsFiles` (mtime-cached by
- * FEATURE_149 Phase 1.2), formatted, and prepended to the override.
+ * FEATURE_149 Phase 1.2), formatted, and appended to the override.
  * Anthropic `cache_control: ephemeral` covers the system prompt block,
  * so the AGENTS.md tokens are billed once per ~5 min cache window
  * regardless of fan-out size.
  *
  * Returns the base prompt unchanged when no AGENTS.md exists.
  */
-function buildWriteSystemPrompt(gitRoot: string): string {
+function buildWriteSystemPrompt(
+  gitRoot: string,
+  baseSystemPrompt: string = CHILD_AGENT_SYSTEM_PROMPT,
+): string {
   // Sync — `loadAgentsFiles` reads via `readFileSync` and the helper has no
   // async I/O. Kept synchronous so the single mtime-stat-and-cache walk
   // does not pay an unnecessary microtask boundary on every write-child
   // spawn (FEATURE_119 H2 fan-out can dispatch 4-8 children in one wave).
   const agentsFiles = loadAgentsFiles({ cwd: gitRoot, projectRoot: gitRoot });
   const formatted = formatAgentsForPrompt(agentsFiles);
-  if (!formatted) return CHILD_AGENT_SYSTEM_PROMPT;
+  if (!formatted) return baseSystemPrompt;
 
   // `formatted` already has its own `# Project Context` H1 + `## … Rules`
   // H2s + `---` dividers. Don't re-wrap with another H2 (`## Mutation
@@ -1955,7 +2159,7 @@ function buildWriteSystemPrompt(gitRoot: string): string {
   // muddle the structure for the LLM. Just prepend a short framing
   // sentence so the child knows these rules apply to its mutations.
   return [
-    CHILD_AGENT_SYSTEM_PROMPT,
+    baseSystemPrompt,
     '',
     'Project rules apply to your mutations. Follow them as the parent agent would:',
     formatted,
@@ -1964,8 +2168,9 @@ function buildWriteSystemPrompt(gitRoot: string): string {
 
 /**
  * Tools excluded from child agents at API level (LLM never sees these definitions).
- * Mirrors Claude Code's filterToolsForAgent: no AMA, no recursion, no user interaction,
- * no parent-only permission controls.
+ * Mirrors Claude Code's filterToolsForAgent: no user interaction or parent-only
+ * permission controls. Recursive collaboration remains available through the
+ * Runtime Actor control surface.
  *
  * Exported for unit-testing the security contract. Treat as read-only at runtime.
  */
@@ -2152,10 +2357,23 @@ export function buildChildEvents(
     onContextCompactionFinished: (event) => {
       parentEvents?.onContextCompactionFinished?.(event);
     },
+    onContextBudgetSnapshot: (event) => {
+      parentEvents?.onContextBudgetSnapshot?.(event);
+    },
+    onPromptCacheDiagnostics: (event) => {
+      parentEvents?.onPromptCacheDiagnostics?.(event);
+    },
+    onToolExposurePlanned: (event) => {
+      parentEvents?.onToolExposurePlanned?.(event);
+    },
+    onContextCompactionSkipped: (event) => {
+      parentEvents?.onContextCompactionSkipped?.(event);
+    },
     onCompactEnd: (meta) => {
       parentEvents?.onCompactEnd?.(activityEventMeta(meta, { liveOnly: true }));
     },
-    // Block AMA-specific and recursive tools, then enforce live plan mode.
+    // Block parent-only tools, then enforce live plan mode. Runtime Actor
+    // collaboration tools remain available within the inherited capability ceiling.
     // planModeBlockCheck reads parent state at call time, so mid-run mode toggles
     // (common: user flips plan ↔ accept-edits mid-stream) propagate immediately.
     beforeToolExecute: async (

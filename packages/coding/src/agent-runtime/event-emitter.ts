@@ -85,6 +85,7 @@ export interface LiveTurnScope {
   readonly deliveryId?: string;
   readonly deliveryKind: KodaXTurnDeliveryKind;
   readonly promptId?: string;
+  readonly ownsContextRevision: boolean;
   nextMeta(): KodaXLiveEventMeta;
   advanceContextRevision(): number;
 }
@@ -103,6 +104,7 @@ export function createLiveTurnScope(input: {
   readonly contextKind?: 'root' | 'child';
   readonly parentContextId?: string;
   readonly agentId?: string;
+  readonly ownsContextRevision?: boolean;
 }): LiveTurnScope {
   const turnId = input.turnId ?? `turn_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
   const deliveryId = input.deliveryId ?? `delivery_${randomUUID().replace(/-/g, '').slice(0, LIVE_TURN_ID_HEX_LENGTH)}`;
@@ -119,6 +121,7 @@ export function createLiveTurnScope(input: {
     deliveryId,
     deliveryKind: input.deliveryKind ?? 'initial',
     promptId: input.promptId,
+    ownsContextRevision: input.ownsContextRevision ?? true,
     nextMeta() {
       const seq = (liveSessionSeq.get(input.sessionId) ?? 0) + 1;
       liveSessionSeq.set(input.sessionId, seq);
@@ -138,6 +141,9 @@ export function createLiveTurnScope(input: {
       };
     },
     advanceContextRevision() {
+      if (input.ownsContextRevision === false) {
+        return liveContextRevision.get(contextId) ?? 0;
+      }
       const revision = (liveContextRevision.get(contextId) ?? 0) + 1;
       liveContextRevision.set(contextId, revision);
       return revision;
@@ -259,7 +265,10 @@ export function withLiveTurnAttribution(
         // Durability is part of the commit acknowledgement. If it rejects,
         // preserve the prior context identity so later events cannot claim a
         // revision that never became canonical.
-        if (liveContextRevision.get(liveScope.contextId) === committedRevision) {
+        if (
+          liveScope.ownsContextRevision
+          && liveContextRevision.get(liveScope.contextId) === committedRevision
+        ) {
           liveContextRevision.set(liveScope.contextId, committedRevision - 1);
         }
         throw error;

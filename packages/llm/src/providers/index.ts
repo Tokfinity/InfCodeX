@@ -7,6 +7,7 @@
 export { KodaXBaseProvider } from './base.js';
 export { KodaXAnthropicCompatProvider } from './anthropic.js';
 export { KodaXOpenAICompatProvider } from './openai.js';
+export { KodaXAcpProvider } from './acp-base.js';
 export {
   normalizeCapabilityProfile,
   KODAX_PROVIDERS,

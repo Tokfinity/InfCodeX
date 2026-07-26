@@ -75,6 +75,7 @@ import { estimateTokens } from '../../tokenizer.js';
 import { validateAndFixToolHistory } from '@kodax-ai/agent';
 import { gracefulCompactDegradation } from '@kodax-ai/agent';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
+import { createCompactionPromptCacheObserver } from '../prompt-cache-diagnostics.js';
 import {
   consumeCompactionCooldown,
   createCompactionAntiThrashState,
@@ -107,6 +108,7 @@ export interface TryIntelligentCompactInput {
   readonly compactionAntiThrash?: CompactionAntiThrashState;
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
   readonly emitCompactionDiagnostics?: boolean;
+  readonly disablePromptCache?: boolean;
   /** Defaults to {@link COMPACT_CIRCUIT_BREAKER_LIMIT}; tests may override. */
   readonly circuitBreakerLimit?: number;
 }
@@ -191,7 +193,18 @@ export async function tryIntelligentCompact(
       false,
       input.reservedResponseTokens,
       input.toolDefinitions
-        ? { tools: input.toolDefinitions, reasoning: input.reasoning }
+        ? {
+            tools: input.toolDefinitions,
+            reasoning: input.reasoning,
+            observer: createCompactionPromptCacheObserver({
+              events: input.events,
+              enabled: input.emitCompactionDiagnostics === true,
+              provider: input.provider,
+              providerName: input.provider.name,
+              model: input.model ?? input.provider.getModel(),
+              disablePromptCache: input.disablePromptCache,
+            }),
+          }
         : undefined,
     );
 
@@ -533,6 +546,7 @@ export interface CompactionLifecycleInput {
   readonly compactionAntiThrash?: CompactionAntiThrashState;
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
   readonly emitCompactionDiagnostics?: boolean;
+  readonly disablePromptCache?: boolean;
   readonly circuitBreakerLimit?: number;
 }
 
@@ -581,6 +595,7 @@ export async function runCompactionLifecycle(
     compactionAntiThrash: input.compactionAntiThrash,
     compactionAntiThrashConfig: input.compactionAntiThrashConfig,
     emitCompactionDiagnostics: input.emitCompactionDiagnostics,
+    disablePromptCache: input.disablePromptCache,
     circuitBreakerLimit: input.circuitBreakerLimit,
   });
   const degradationPhase = applyGracefulDegradationGate({

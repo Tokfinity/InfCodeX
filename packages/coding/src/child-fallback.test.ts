@@ -102,6 +102,22 @@ describe('invokeChildWithFallback', () => {
     expect(run.mock.calls[1]![0]).toMatchObject({ provider: 'kimi-code' });
   });
 
+  it('skips fallback providers outside the Runtime Actor authority ceiling', async () => {
+    vi.stubEnv('KODAX_FALLBACK_PROVIDERS', 'kimi-code,ark-coding');
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new KodaXRateLimitError('exhausted'))
+      .mockResolvedValueOnce(okResult('from-ark'));
+
+    const result = await invokeChildWithFallback(baseOptions(), 'brief', run, {
+      isProviderAllowed: (candidate) => candidate === 'ark-coding',
+    });
+
+    expect(result.lastText).toBe('from-ark');
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]![0]).toMatchObject({ provider: 'ark-coding' });
+  });
+
   it('does NOT fall back on an ineligible error (task outcome / logic)', async () => {
     vi.stubEnv('KODAX_FALLBACK_PROVIDERS', 'kimi-code');
     const run = vi.fn().mockRejectedValue(new Error('child logic error'));

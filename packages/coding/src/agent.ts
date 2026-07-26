@@ -42,9 +42,10 @@ export async function runKodaX(
   // `context.agentProfile.instructions` via `runKodaX`/`startKodaX` would have
   // them silently dropped. Apply the same mapping here — an explicit caller-set
   // override still wins, and it is byte-identical when neither is set (or when
-  // reached via dispatch, which already set the field: `??` no-op). AMA never
-  // reaches `runKodaX` (dispatch routes it to `runAMA`), so this cannot
-  // double-inject over the AMA role-prompt path.
+  // reached via dispatch, which already set the field: `??` no-op). Top-level
+  // AMA dispatch routes to `runAMA`; Runtime Actor children may call this direct
+  // substrate with AMA capability semantics, but do not use the AMA role-prompt
+  // path, so this cannot double-inject that prompt.
   const profileInstructions = baseOptions.context?.agentProfile?.instructions;
   const effectiveOptions: KodaXOptions =
     profileInstructions !== undefined && baseOptions.context?.systemPromptOverride === undefined

@@ -33,6 +33,10 @@ import {
   listCodingDispatchableAgents,
   resolveCodingDispatchableAgent,
 } from '../external-agents/local-catalog.js';
+import {
+  constructedAgentToolCeiling,
+  resolveConstructedAgentEntry,
+} from '../construction/agent-resolver.js';
 import { assertSupportedOutputSchema } from './structured-output.js';
 import type {
   KodaXChildContextBundle,
@@ -51,6 +55,16 @@ const GIT_STATUS_TIMEOUT_MS = 10_000;
 const DEFAULT_VERIFICATION_REPAIR_ATTEMPTS = 2;
 const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'multi_edit', 'insert_after_anchor']);
 const READING_TOOL_NAMES = new Set(['read']);
+
+function intersectWorkflowToolCeilings(
+  requested: readonly string[],
+  parent: readonly string[],
+): readonly string[] {
+  if (parent.includes('*')) return requested;
+  if (requested.includes('*')) return parent;
+  const parentSet = new Set(parent);
+  return requested.filter((tool) => parentSet.has(tool));
+}
 const PREPARATORY_FINAL_TEXT_RE =
   /^\s*(?:let me|i will|i'll|i am going to)\b[\s\S]{0,120}\b(?:start|create|implement|write|build|plan)\b|^\s*(?:我将|让我|接下来)[\s\S]{0,80}(?:开始|创建|编写|实现|制定)/i;
 
@@ -741,6 +755,12 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     let effectiveInput = resolveSpawnAgentInput(input, deps.defaultChildReadOnly);
     let kind: AgentExecutionKind = effectiveInput.subagentType ? 'constructed' : 'native';
     let specialistName = effectiveInput.subagentType;
+    let specialistToolCeiling = specialistName
+      ? (() => {
+          const entry = resolveConstructedAgentEntry(specialistName, ctx.agentScope);
+          return entry ? constructedAgentToolCeiling(entry) : undefined;
+        })()
+      : undefined;
     let externalControl: AgentCapabilities['control'] | undefined;
     let externalAgentId: string | undefined;
     if (effectiveInput.target && effectiveInput.subagentType) {
@@ -770,6 +790,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         };
         kind = localRoute.kind;
         specialistName = localRoute.subagentType;
+        specialistToolCeiling = localRoute.toolCeiling;
       } else {
         if (effectiveInput.modelHint !== undefined || effectiveInput.effort !== undefined) {
           throw new Error(
@@ -876,8 +897,15 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       abortSignal: execution.signal,
       // Workflow steps are protocol leaves by default. The Actor controller
       // retains lifecycle authority without granting recursive model tools.
+      // The admitted capability snapshot still constrains the leaf's actual
+      // tool/provider route even though no Actor control surface is exposed.
       actorControl: undefined,
       actorHost: undefined,
+      actorCapabilities: execution.actor.capabilities,
+      contextAgentId: execution.actor.path,
+      ...(execution.actor.parentPath !== undefined
+        ? { contextParentAgentId: execution.actor.parentPath }
+        : {}),
     };
 
       await changedPathBaseline;
@@ -898,6 +926,14 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
         capabilities: {
           filesystem: effectiveInput.readOnly !== false ? 'read' : 'write',
           canAskUser: false,
+          ...(specialistToolCeiling !== undefined
+            ? {
+                tools: intersectWorkflowToolCeilings(
+                  specialistToolCeiling,
+                  actorControl.get(actorControl.callerPath).actor.capabilities.tools,
+                ),
+              }
+            : {}),
           ...(externalControl ? { control: externalControl } : {}),
         },
         metadata: workflowActorMetadata({

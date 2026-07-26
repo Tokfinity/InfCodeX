@@ -5,6 +5,10 @@ import {
   type KodaXSessionData,
 } from '@kodax-ai/agent';
 import { withDurableCompactionPersistence } from './durable-compaction.js';
+import {
+  createLiveTurnScope,
+  withLiveTurnAttribution,
+} from './event-emitter.js';
 
 describe('withDurableCompactionPersistence', () => {
   it('publishes the root compaction callback only after exact storage succeeds', async () => {
@@ -40,6 +44,35 @@ describe('withDurableCompactionPersistence', () => {
       },
     );
     expect(order).toEqual(['save', 'event']);
+  });
+
+  it('does not roll back canonical revision when a post-commit observer fails', async () => {
+    const initial: KodaXSessionData = {
+      title: 'root',
+      gitRoot: 'C:/repo',
+      messages: [{ role: 'user', content: 'old' }],
+      lineage: createSessionLineage([{ role: 'user', content: 'old' }]),
+    };
+    const save = vi.fn(async () => undefined);
+    const scope = createLiveTurnScope({ sessionId: 'root-post-commit-observer' });
+    const durableEvents = withDurableCompactionPersistence({
+      events: {
+        onCompactedMessages: async () => {
+          throw new Error('observer unavailable');
+        },
+      },
+      storage: { load: async () => initial, save },
+      sessionId: 'root-post-commit-observer',
+    });
+    const events = withLiveTurnAttribution(durableEvents, scope);
+
+    await expect(events.onCompactedMessages?.(
+      [{ role: 'user', content: 'checkpoint' }],
+      { preCompactionMessages: [{ role: 'user', content: 'old' }] },
+    )).resolves.toBeUndefined();
+
+    expect(save).toHaveBeenCalledOnce();
+    expect(scope.nextMeta().contextRevision).toBe(1);
   });
 
   it('does not persist Runner-owned leading System messages', async () => {

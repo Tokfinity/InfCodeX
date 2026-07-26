@@ -14,6 +14,7 @@ _Last Updated: 2026-07-26_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 209 | High | Resolved | Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 208 | Medium | Resolved | v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching | v0.7.77 release candidate | v0.7.77 release candidate | 2026-07-26 | 2026-07-26 |
 | 207 | Medium | Resolved | Provider-only model selection leaves Runtime Auto LLM without the provider default model | v0.7.73 Runtime Auto preflight | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
 | 206 | Medium | Resolved | Static provider model catalogs duplicated default models in REPL completion and SDK listings | v0.7.43 static model catalog; expanded v0.7.76 | v0.7.77 release candidate | 2026-07-25 | 2026-07-25 |
@@ -117,6 +118,120 @@ _Last Updated: 2026-07-26_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 209: Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 development
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+The v0.7.77 child-cache follow-up review found five connected gaps:
+
+1. Runtime child diagnostics use an isolated worker Session as their event
+   `sessionId`, but the public latest-diagnostic query applies the caller's
+   root Session filter before inspecting logical child identity. A natural
+   `{ sessionId: root, contextKind: "child", agentId }` query therefore returns
+   no result even though the child event exists under the same Runtime Run.
+2. Prompt-cache message hashes include internal KodaX block fields and ordering
+   that Provider serializers omit, lower, or canonicalize. A hash change is not
+   yet strict evidence that the Provider wire prefix changed.
+3. Workflow protocol leaves set `agentMode: "sa"` on a direct `runKodaX` call,
+   but that entry does not apply the managed-dispatch SA collaboration-tool
+   exclusions. The model can see and be encouraged to call Actor tools while
+   no Actor control is bound.
+4. Cache/budget diagnostic construction is only partially fail-open. Errors
+   before the callback guard can enter Provider retry/recovery and prevent the
+   real request from being sent.
+5. Constructed specialist children changed from a full specialist override to
+   the complete default child prompt plus specialist instructions. This
+   improves prefix sharing but conflicts with the documented specialist
+   contract and may inject unrelated output behavior into self-contained
+   specialists.
+
+#### Context
+
+- Affected components: Runtime diagnostics, child Actor execution, Workflow
+  child execution, prompt-cache attribution, constructed specialists.
+- Root Actor recursive execution and mailbox routing themselves are working.
+- Same-Actor follow-ups still reconstruct prior objective/result messages rather
+  than replaying an exact append-only physical transcript; this is a documented
+  remaining cache limitation, not part of the correctness failures above.
+
+#### Root Cause
+
+Logical context identity, physical worker Session identity, and Runtime query
+scope were modeled separately but the query API filters only the physical
+event envelope. Diagnostics hash the pre-Provider KodaX envelope rather than a
+canonical Provider-visible projection. Direct child execution also bypasses
+the SA dispatch transform, while specialist prefix stabilization reused the
+full default behavioral prompt instead of a neutral invariant prefix.
+
+#### Proposed Solution
+
+- Match child diagnostic Session filters against logical context identity while
+  preserving the physical worker Session for transcript ownership.
+- Canonicalize every message block to fields and order that the selected
+  Provider actually serializes before hashing.
+- Explicitly remove Actor collaboration tools and guidance when no Actor
+  control is bound.
+- Make all diagnostic construction observational and fail-open.
+- Keep the default child invariant prefix stable while restoring a selected
+  specialist's full System override and preserving write-child project rules.
+
+#### Resolution
+
+- Runtime diagnostic queries now distinguish physical transcript ownership from
+  logical root/child identity, so child snapshots can be queried through the
+  root Session without displacing the default root result.
+- SA, AMA, retry/fallback, digest/repair, and compaction requests emit the same
+  fail-open diagnostic envelope. Hashes model the selected Provider's effective
+  message projection (including ACP last-message behavior, Anthropic replay
+  rules, OpenAI orphan repair, endpoint query, and optional suffix) and include
+  a composite request-envelope hash. Response cache counts come only from
+  Provider usage; absent cache-write counts stay absent.
+- Actor-backed children remain on the recursive AMA-capable direct substrate.
+  Actorless and Workflow leaves remain SA and cannot see collaboration tools or
+  misleading guidance. Direct runs also hide `run_workflow` when no Workflow
+  host is bound.
+- Specialist System overrides and project mutation rules are preserved.
+  Specialist tool ceilings are persisted into Actor principals and inherited
+  by descendants; explicit deny-all remains deny-all. Final provider routing
+  and fallback also enforce the Actor provider ceiling. Actorless Workflow
+  leaves receive the admitted capability snapshot for enforcement without
+  receiving an Actor collaboration control surface.
+- Child briefings are derived from the final visible tools, and Workflow leaf
+  diagnostic identities use admitted Actor paths to avoid collisions between
+  independent Workflow backends.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/` — Provider-visible cache diagnostics,
+  context-budget snapshots, direct-run tool visibility, and compaction wiring.
+- `packages/agent/src/session-lineage/compaction/` — exact compaction request
+  observation without coupling the generic package to coding telemetry.
+- `packages/coding/src/child-executor.ts`, `child-fallback.ts`,
+  `tools/agent-collaboration.ts`, and `workflows/agent-adapter.ts` — child
+  identity, recursive capability ceilings, truthful briefing, and Workflow
+  leaf behavior.
+- `packages/llm/src/providers/` — shared Provider diagnostics accessors for
+  Anthropic replay semantics and exact ACP prompt projection.
+- `src/sdk-runtime.ts` and `src/runtime-daemon/` — logical child diagnostic
+  query matching and latest-snapshot behavior.
+
+#### Tests
+
+- Added Provider projection, suffix/envelope, fail-open, official usage, and
+  compaction request-observer regressions.
+- Added recursive Actor, specialist deny-all/inherited tool ceiling, provider
+  fallback ceiling, actorless Workflow leaf, collision-free identity, and
+  unbound-tool visibility regressions.
+- Re-ran targeted, fast, unit, contract, system, type-check, and distribution
+  build gates.
 
 ### 208: v0.7.77 review found unbounded active-Run continuation and narrow memory prompt-safety matching
 
@@ -6789,11 +6904,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 94 (25 Open, 69 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 95 (25 Open, 70 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-26: Issue 209 resolved (v0.7.77 development)
+- Made root/child cache and budget diagnostics logical-identity aware,
+  Provider-wire accurate, compaction-complete, prompt-free, and fail-open.
+- Preserved recursive Actor children while restoring specialist contracts,
+  closing descendant tool/provider ceiling gaps, and hiding unbound
+  collaboration/Workflow surfaces from actorless leaves.
 
 ### 2026-07-26: Issue 208 resolved (v0.7.77 release candidate)
 - Restored absolute managed Runner and ordinary coding bounds for repeated

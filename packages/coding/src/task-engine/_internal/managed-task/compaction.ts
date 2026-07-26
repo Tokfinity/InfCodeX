@@ -33,6 +33,7 @@ import type {
 import { countTokens, estimateTokens } from '../../../tokenizer.js';
 import { resolveContextTokenCount } from '../../../token-accounting.js';
 import { estimateToolSchemaTokens } from '../../../agent-runtime/context-budget.js';
+import { createCompactionPromptCacheObserver } from '../../../agent-runtime/prompt-cache-diagnostics.js';
 
 const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;
 
@@ -267,6 +268,14 @@ export async function buildManagedTaskCompactionHook(
         ? {
             tools: hookOptions.activeToolDefinitions,
             reasoning: hookOptions.reasoning,
+            observer: createCompactionPromptCacheObserver({
+              events,
+              enabled: options.context?.contextDiagnostics === true,
+              provider,
+              providerName: provider.name,
+              model: activeModel ?? provider.getModel(),
+              disablePromptCache: options.disablePromptCache,
+            }),
           }
         : undefined;
       const result = await intelligentCompact(

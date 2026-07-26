@@ -36,6 +36,8 @@ export interface RuntimeToolExposureDecision {
 }
 
 export interface RuntimeToolExposurePlan {
+  readonly contextKind?: 'root' | 'child';
+  readonly agentId?: string;
   readonly profile: RuntimeContextOptimizationProfile;
   readonly reportOnly: boolean;
   readonly pressure: RuntimeContextPressure;

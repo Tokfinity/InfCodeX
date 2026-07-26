@@ -10,8 +10,11 @@ npm exec vitest -- run packages/llm/src/providers/anthropic-cache-control.test.t
 ```
 
 Confirm that consecutive AMA runs keep the same `systemPromptHash`,
-`toolSchemaHash`, `messagePrefixHash`, `reasoningHash`, `wireModel`, endpoint,
-output limit, and cache setting before interpreting a cache-hit change.
+`toolSchemaHash`, `messagePrefixHash`, `requestMessagesHash`,
+`ephemeralSuffixHash`, `requestEnvelopeHash`, `reasoningHash`, `wireModel`,
+endpoint, output limit, and cache setting before interpreting a cache-hit
+change. A matching reusable prefix alone is insufficient when compaction or a
+memory intervention changes the ephemeral suffix sent on the same request.
 
 ## Opt-in real-provider lifetime probe
 

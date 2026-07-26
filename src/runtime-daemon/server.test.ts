@@ -1384,9 +1384,53 @@ describe('runtime daemon dispatcher', () => {
       payload: { usedTokens: 80 },
     });
     runtime.emit({
-      id: 'evt-exposure-1',
+      id: 'evt-budget-child',
       seq: 3,
       time: '2026-07-09T00:00:02.000Z',
+      sessionId: 'child-worker-session',
+      runId: 'run-1',
+      type: 'context.budget.snapshot',
+      payload: {
+        contextId: `session-1/agent/${encodeURIComponent('/root/reviewer')}`,
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+        usedTokens: 120,
+      },
+    });
+    for (let index = 0; index < 101; index += 1) {
+      runtime.emit({
+        id: `evt-budget-child-${index}`,
+        seq: 4 + index,
+        time: '2026-07-09T00:00:02.000Z',
+        sessionId: 'child-worker-session',
+        runId: 'run-1',
+        type: 'context.budget.snapshot',
+        payload: {
+          contextId: `session-1/agent/${encodeURIComponent('/root/reviewer')}`,
+          contextKind: 'child',
+          agentId: '/root/reviewer',
+          usedTokens: 121 + index,
+        },
+      });
+    }
+    runtime.emit({
+      id: 'evt-budget-unrelated-child',
+      seq: 105,
+      time: '2026-07-09T00:00:03.000Z',
+      sessionId: 'unrelated-child-worker-session',
+      runId: 'run-2',
+      type: 'context.budget.snapshot',
+      payload: {
+        contextId: `unrelated-root-session/agent/${encodeURIComponent('/root/reviewer')}`,
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+        usedTokens: 999,
+      },
+    });
+    runtime.emit({
+      id: 'evt-exposure-1',
+      seq: 106,
+      time: '2026-07-09T00:00:04.000Z',
       sessionId: 'session-1',
       runId: 'run-1',
       type: 'tool.exposure.planned',
@@ -1400,14 +1444,45 @@ describe('runtime daemon dispatcher', () => {
     const exposure = await dispatcher.handle(createRuntimeDaemonRequest('req-2', 'tool.exposure.preview', {
       sessionId: 'session-1',
     }));
+    const childBudget = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-child-budget',
+      'context.budget.get',
+      {
+        sessionId: 'session-1',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      },
+    ));
+    const unrelatedRootChildBudget = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-unrelated-child-budget',
+      'context.budget.get',
+      {
+        sessionId: 'unrelated-root-session-2',
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+      },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(budget)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(exposure)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(childBudget)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(unrelatedRootChildBudget)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(budget)) {
       expect(budget.result).toEqual({ usedTokens: 80 });
     }
     if (isRuntimeDaemonSuccessResponse(exposure)) {
       expect(exposure.result).toEqual({ profile: 'bridge_non_core', bridgedCount: 4 });
+    }
+    if (isRuntimeDaemonSuccessResponse(childBudget)) {
+      expect(childBudget.result).toEqual({
+        contextId: `session-1/agent/${encodeURIComponent('/root/reviewer')}`,
+        contextKind: 'child',
+        agentId: '/root/reviewer',
+        usedTokens: 221,
+      });
+    }
+    if (isRuntimeDaemonSuccessResponse(unrelatedRootChildBudget)) {
+      expect(unrelatedRootChildBudget.result).toBeNull();
     }
   });
 

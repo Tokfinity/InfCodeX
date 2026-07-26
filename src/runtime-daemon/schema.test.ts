@@ -46,6 +46,8 @@ describe('runtime daemon protocol schema', () => {
       properties: {
         sessionId: { type: 'string' },
         runId: { type: 'string' },
+        contextKind: { type: 'string', enum: ['root', 'child'] },
+        agentId: { type: 'string' },
       },
     });
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['tool.exposure.preview'].result).toMatchObject({

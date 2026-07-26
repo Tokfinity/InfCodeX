@@ -380,12 +380,13 @@ describe('F270 canonical collaboration tools', () => {
       createdAt: '2026-07-22T00:00:00.000Z',
       content: {
         instructions: 'Explore repositories without modifying them.',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:spawn_agent' }],
         description: 'Read-only repository explorer',
       },
       testedAt: '2026-07-22T00:00:00.000Z',
       testReport: { passed: true, results: [] },
     }, { source: 'built-in' });
-    const { ctx, executor } = await context();
+    const { ctx, executor, controller } = await context();
 
     const listed = JSON.parse(await executeTool('list_dispatchable_agents', {}, ctx)) as {
       readonly agents?: readonly { readonly agent_id: string; readonly origin: string }[];
@@ -400,6 +401,10 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
     expect(shortAlias).toMatchObject({ ok: true, actorPath: '/root/short-alias' });
     expect(executor.pending[0]?.input.actor.kind).toBe('constructed');
+    expect(executor.pending[0]?.input.actor.capabilities.tools).toEqual([
+      'read',
+      'spawn_agent',
+    ]);
     expect(executor.pending[0]?.input.turn.metadata).toMatchObject({
       agentId: 'repo-explorer',
       specialistName: 'repo-explorer',
@@ -412,6 +417,41 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
     expect(canonical).toMatchObject({ ok: true, actorPath: '/root/canonical-id' });
     expect(executor.pending[1]?.input.actor.kind).toBe('constructed');
+
+    const nested = await controller.bind('/root/short-alias').spawn({
+      taskName: 'nested-reader',
+      objective: 'Inspect one nested boundary.',
+    });
+    expect(controller.get('/root', nested.actorPath).actor.capabilities.tools).toEqual([
+      'read',
+      'spawn_agent',
+    ]);
+  });
+
+  it('preserves an explicit empty specialist tool ceiling instead of inheriting wildcard tools', async () => {
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'no-tools-reviewer',
+      version: '1.0.0',
+      createdAt: '2026-07-26T00:00:00.000Z',
+      content: {
+        instructions: 'Return a text-only review.',
+        tools: [],
+        description: 'No-tools reviewer',
+      },
+      testedAt: '2026-07-26T00:00:00.000Z',
+      testReport: { passed: true, results: [] },
+    });
+    const { ctx, executor } = await context();
+
+    const spawned = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'no-tools',
+      objective: 'Review without tools.',
+      agent_id: 'no-tools-reviewer',
+    }, ctx)) as Record<string, unknown>;
+
+    expect(spawned).toMatchObject({ ok: true });
+    expect(executor.pending[0]?.input.actor.capabilities.tools).toEqual([]);
   });
 
   it('filters and paginates only the caller-visible actor projection', async () => {
@@ -790,7 +830,8 @@ describe('F270 canonical collaboration tools', () => {
     const ctx: KodaXToolExecutionContext = {
       backups: new Map(),
       actorControl: controller.bind('/root/parent'),
-      sessionId: 'session-nested-terminal',
+      sessionId: 'physical-worker-session',
+      contextIdentitySessionId: 'session-nested-terminal',
     };
     await executeTool('spawn_agent', { task_name: 'child', objective: 'Inspect.' }, ctx);
     const waiting = executeTool('wait_agent', { timeout_ms: 10_000 }, ctx);

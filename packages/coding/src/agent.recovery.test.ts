@@ -14,6 +14,7 @@ import {
   registerModelProvider,
 } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
+import type { KodaXPromptCacheDiagnosticEvent } from './types.js';
 
 const TEST_PROVIDER_NAME = 'feature-045-recovery-provider';
 const TEST_PROVIDER_API_KEY_ENV = 'FEATURE_045_RECOVERY_PROVIDER_API_KEY';
@@ -79,6 +80,12 @@ class Feature045RecoveryProvider extends KodaXBaseProvider {
       textBlocks: [{ type: 'text', text: 'fallback recovery' }],
       toolBlocks: [],
       thinkingBlocks: [],
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        totalTokens: 110,
+        cachedReadTokens: 80,
+      },
     };
   }
 }
@@ -103,14 +110,19 @@ describe('runKodaX provider recovery integration', () => {
   it('uses a fresh signal for non-streaming fallback and suppresses legacy retry spam when structured recovery events are available', async () => {
     const onProviderRecovery = vi.fn();
     const onRetry = vi.fn();
+    const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
+    const onContextBudgetSnapshot = vi.fn();
 
     const result = await runKodaX(
       {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
+        context: { contextDiagnostics: true },
         events: {
           onProviderRecovery,
           onRetry,
+          onContextBudgetSnapshot,
+          onPromptCacheDiagnostics: (event) => cacheDiagnostics.push(event),
         },
       },
       'Recover this response.',
@@ -123,5 +135,12 @@ describe('runKodaX provider recovery integration', () => {
     expect(Feature045RecoveryProvider.fallbackSignalStates).toEqual([false]);
     expect(onProviderRecovery).toHaveBeenCalledTimes(2);
     expect(onRetry).not.toHaveBeenCalled();
+    expect(onContextBudgetSnapshot).toHaveBeenCalledTimes(3);
+    expect(cacheDiagnostics.filter((event) => event.phase === 'request')).toHaveLength(3);
+    expect(cacheDiagnostics.filter((event) => event.phase === 'response')).toHaveLength(1);
+    expect(cacheDiagnostics.find((event) => event.phase === 'response')).toMatchObject({
+      transport: 'complete',
+      cachedReadTokens: 80,
+    });
   }, 30_000);
 });

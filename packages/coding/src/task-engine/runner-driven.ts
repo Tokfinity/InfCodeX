@@ -165,7 +165,11 @@ function activeDescendantTurnCount(ctx: KodaXToolExecutionContext): number {
 }
 
 function actorMessageQueueId(ctx: KodaXToolExecutionContext): string | undefined {
-  return actorQueueId(ctx.sessionId, ctx.actorControl?.callerPath ?? '/root');
+  return ctx.actorQueueAgentId
+    ?? actorQueueId(
+      ctx.contextIdentitySessionId ?? ctx.sessionId,
+      ctx.actorControl?.callerPath ?? '/root',
+    );
 }
 // FEATURE_125 (v0.7.41) — Team Mode runner-side adapter.
 // Per-LLM-round sibling discovery + system-prompt block + content-hash
@@ -597,6 +601,8 @@ export async function runManagedTaskViaRunner(
   const requestedLiveTurn = effectiveOptions.context?.liveTurn;
   const currentAgentId = effectiveOptions.context?.currentAgentId;
   const parentAgentId = effectiveOptions.context?.parentAgentId;
+  const contextIdentitySessionId =
+    effectiveOptions.context?.contextIdentitySessionId ?? initialSessionId;
   const liveTurnScope = createLiveTurnScope({
     sessionId: initialSessionId,
     deliveryKind: requestedLiveTurn?.deliveryKind ?? 'initial',
@@ -605,14 +611,15 @@ export async function runManagedTaskViaRunner(
     promptId: requestedLiveTurn?.promptId,
     ...(currentAgentId !== undefined
       ? {
-          contextId: `${initialSessionId}/agent/${encodeURIComponent(currentAgentId)}`,
+          contextId: `${contextIdentitySessionId}/agent/${encodeURIComponent(currentAgentId)}`,
           contextKind: 'child' as const,
           parentContextId: parentAgentId === undefined
-            ? initialSessionId
-            : `${initialSessionId}/agent/${encodeURIComponent(parentAgentId)}`,
+            ? contextIdentitySessionId
+            : `${contextIdentitySessionId}/agent/${encodeURIComponent(parentAgentId)}`,
           agentId: currentAgentId,
         }
       : {}),
+    ownsContextRevision: effectiveOptions.context?.ownsContextRevision,
   });
   const liveTurnScopeRef = { current: liveTurnScope };
   const terminalTurnIds = new Set<string>();
@@ -667,6 +674,7 @@ export async function runManagedTaskViaRunner(
         contextKind: liveTurnScope.contextKind,
         parentContextId: liveTurnScope.parentContextId,
         agentId: liveTurnScope.agentId,
+        ownsContextRevision: liveTurnScope.ownsContextRevision,
       });
       emitTurnStarted(liveEvents, liveTurnScopeRef.current);
       return liveTurnScopeRef.current.turnId;

@@ -205,6 +205,10 @@ import {
 } from './tool-resolution.js';
 import { createRuntimeContextBudgetSnapshot } from './context-budget.js';
 import {
+  emitPromptCacheDiagnosticRequest,
+  emitPromptCacheDiagnosticResponse,
+} from './prompt-cache-diagnostics.js';
+import {
   applyToolExposurePlan,
   hasPortableToolBridge,
   planToolExposure,
@@ -578,6 +582,7 @@ export async function runSubstrate(
   // `discoverAutoResumeSessionId` during P3.6n.
   const resolvedSessionId = await discoverAutoResumeSessionId(options);
   const sessionId = resolvedSessionId ?? await generateSessionId();
+  const contextIdentitySessionId = options.context?.contextIdentitySessionId ?? sessionId;
   const requestedLiveTurn = options.context?.liveTurn;
   const currentAgentId = options.context?.currentAgentId;
   const parentAgentId = options.context?.parentAgentId;
@@ -589,14 +594,15 @@ export async function runSubstrate(
     promptId: requestedLiveTurn?.promptId,
     ...(currentAgentId !== undefined
       ? {
-          contextId: `${sessionId}/agent/${encodeURIComponent(currentAgentId)}`,
+          contextId: `${contextIdentitySessionId}/agent/${encodeURIComponent(currentAgentId)}`,
           contextKind: 'child' as const,
           parentContextId: parentAgentId === undefined
-            ? sessionId
-            : `${sessionId}/agent/${encodeURIComponent(parentAgentId)}`,
+            ? contextIdentitySessionId
+            : `${contextIdentitySessionId}/agent/${encodeURIComponent(parentAgentId)}`,
           agentId: currentAgentId,
         }
       : {}),
+    ownsContextRevision: options.context?.ownsContextRevision,
   });
   const liveTurnScopeRef = { current: liveTurnScope };
   events = withDurableCompactionPersistence({
@@ -709,7 +715,8 @@ export async function runSubstrate(
   // acknowledgement.
   await commitActorNotificationReceipts(ctx, messages);
   const messageQueueAgentId = ctx.actorControl
-    ? actorQueueId(sessionId, ctx.actorControl.callerPath)
+    ? ctx.actorQueueAgentId
+      ?? actorQueueId(ctx.contextIdentitySessionId ?? sessionId, ctx.actorControl.callerPath)
     : undefined;
   if (messageQueueAgentId !== undefined && ctx.actorControl?.callerPath === '/root') {
     releaseActiveRootQueueRoute = registerActiveRootQueueRoute(messageQueueAgentId);
@@ -814,6 +821,7 @@ export async function runSubstrate(
       contextKind: liveTurnScope.contextKind,
       parentContextId: liveTurnScope.parentContextId,
       agentId: liveTurnScope.agentId,
+      ownsContextRevision: liveTurnScope.ownsContextRevision,
     });
     emitTurnStarted(events, liveTurnScopeRef.current);
     return liveTurnScopeRef.current.turnId;
@@ -1216,7 +1224,7 @@ export async function runSubstrate(
       let result!: KodaXStreamResult;
       let attempt = 0;
       const unlockedDeferredTools = getUnlockedDeferredTools(ctx);
-      const fullActiveToolDefinitions = getActiveToolDefinitions(
+      const resolvedActiveToolDefinitions = getActiveToolDefinitions(
         runtimeSessionState.activeTools,
         options.context?.repoIntelligenceMode,
         options.context?.managedProtocolEmission?.enabled === true,
@@ -1227,9 +1235,22 @@ export async function runSubstrate(
         options.selfManual?.productName,
         options.context?.agentExecutorPlane !== undefined,
       );
+      // Direct Runner children do not pass through the managed-chain
+      // workflowHost gate. Keep the model-visible schema truthful: without a
+      // bound host, run_workflow can only return "unavailable".
+      const fullActiveToolDefinitions = ctx.workflowHost
+        ? resolvedActiveToolDefinitions
+        : resolvedActiveToolDefinitions.filter((tool) => tool.name !== 'run_workflow');
+      const diagnosticContextIdentity = {
+        contextKind: liveTurnScope.contextKind,
+        ...(liveTurnScope.agentId !== undefined
+          ? { agentId: liveTurnScope.agentId }
+          : {}),
+      };
       const planningBudgetSnapshotBase = createRuntimeContextBudgetSnapshot({
         sessionId,
         turnId: liveTurnScopeRef.current.turnId,
+        ...diagnosticContextIdentity,
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride ?? streamProvider.getModel(),
         profile: 'report_only',
@@ -1265,6 +1286,7 @@ export async function runSubstrate(
       const requestBudgetSnapshot = createRuntimeContextBudgetSnapshot({
         sessionId,
         turnId: liveTurnScopeRef.current.turnId,
+        ...diagnosticContextIdentity,
         provider: turnState.currentProviderName,
         model: turnState.currentModelOverride ?? streamProvider.getModel(),
         profile: contextOptimizationProfile,
@@ -1300,6 +1322,7 @@ export async function runSubstrate(
         events,
         compactionAntiThrash: turnState.compactAntiThrash,
         emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
+        disablePromptCache: options.disablePromptCache,
       });
       messages = compactionLifecycle.messages;
       providerMessages = messages;
@@ -1359,6 +1382,7 @@ export async function runSubstrate(
         ...createRuntimeContextBudgetSnapshot({
           sessionId,
           turnId: liveTurnScopeRef.current.turnId,
+          ...diagnosticContextIdentity,
           provider: turnState.currentProviderName,
           model: turnState.currentModelOverride ?? streamProvider.getModel(),
           profile: contextOptimizationProfile,
@@ -1386,9 +1410,44 @@ export async function runSubstrate(
         options.context?.contextDiagnostics === true
         && (events.onContextBudgetSnapshot !== undefined || events.onToolExposurePlanned !== undefined);
       if (shouldEmitContextDiagnostics) {
-        events.onContextBudgetSnapshot?.(budgetSnapshot);
-        events.onToolExposurePlanned?.(exposurePlan);
+        events.onToolExposurePlanned?.({
+          ...exposurePlan,
+          ...diagnosticContextIdentity,
+        });
       }
+      const emitContextBudgetSnapshot = (
+        currentProviderMessages: readonly KodaXMessage[],
+      ): void => {
+        if (
+          options.context?.contextDiagnostics !== true
+          || events.onContextBudgetSnapshot === undefined
+        ) {
+          return;
+        }
+        try {
+          events.onContextBudgetSnapshot({
+            ...createRuntimeContextBudgetSnapshot({
+              sessionId,
+              turnId: liveTurnScopeRef.current.turnId,
+              ...diagnosticContextIdentity,
+              provider: turnState.currentProviderName,
+              model: turnState.currentModelOverride ?? streamProvider.getModel(),
+              profile: contextOptimizationProfile,
+              contextWindow,
+              systemPrompt: effectiveSystemPrompt,
+              toolDefinitions: activeToolDefinitions,
+              messages: currentProviderMessages,
+              ...(memorySuffix?.content ? { pendingInput: memorySuffix.content } : {}),
+              reservedResponseTokens,
+            }),
+            profile: contextOptimizationProfile,
+          });
+        } catch (error) {
+          emitResilienceDebug('[context-diagnostics:budget-callback-error]', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      };
 
       while (true) {
         attempt += 1;
@@ -1457,6 +1516,22 @@ export async function runSubstrate(
             });
             streamCallbacks.onRetryAfter?.(event);
           };
+          emitContextBudgetSnapshot(providerMessages);
+          const cacheDiagnostic = emitPromptCacheDiagnosticRequest({
+            events,
+            enabled: options.context?.contextDiagnostics === true,
+            provider: streamProvider,
+            providerName: turnState.currentProviderName,
+            ...diagnosticContextIdentity,
+            model: turnState.currentModelOverride ?? streamProvider.getModel(),
+            reasoning: effectiveProviderReasoning,
+            disablePromptCache: options.disablePromptCache,
+            system: effectiveSystemPrompt,
+            tools: activeToolDefinitions,
+            messages: providerMessages,
+            ...(memorySuffix !== undefined ? { ephemeralSuffix: memorySuffix } : {}),
+            attempt,
+          });
           result = await streamProvider.stream(
             providerMessages,
             activeToolDefinitions,
@@ -1471,6 +1546,7 @@ export async function runSubstrate(
             },
             retrySignal,
           );
+          emitPromptCacheDiagnosticResponse(events, cacheDiagnostic, result.usage);
 
           messages = providerMessages;
           break;
@@ -1505,6 +1581,23 @@ export async function runSubstrate(
             // attempt loop must `break` with the buffered result. On
             // failure, fall through to recovery-action branches with
             // the new error.
+            emitContextBudgetSnapshot(providerMessages);
+            const fallbackCacheDiagnostic = emitPromptCacheDiagnosticRequest({
+              events,
+              enabled: options.context?.contextDiagnostics === true,
+              provider: streamProvider,
+              providerName: turnState.currentProviderName,
+              ...diagnosticContextIdentity,
+              model: turnState.currentModelOverride ?? streamProvider.getModel(),
+              reasoning: effectiveProviderReasoning,
+              disablePromptCache: options.disablePromptCache,
+              system: effectiveSystemPrompt,
+              tools: activeToolDefinitions,
+              messages: providerMessages,
+              ...(memorySuffix !== undefined ? { ephemeralSuffix: memorySuffix } : {}),
+              attempt,
+              transport: 'complete',
+            });
             const fallbackOutcome = await executeNonStreamingFallback({
               events,
               streamProvider,
@@ -1524,6 +1617,11 @@ export async function runSubstrate(
             });
             if (fallbackOutcome.ok) {
               result = fallbackOutcome.result;
+              emitPromptCacheDiagnosticResponse(
+                events,
+                fallbackCacheDiagnostic,
+                result.usage,
+              );
               messages = providerMessages;
               break;
             }

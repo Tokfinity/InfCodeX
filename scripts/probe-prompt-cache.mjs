@@ -41,7 +41,7 @@ const system = 'KodaX controlled prompt-cache lifetime probe. Keep this prefix s
 const tools = [{
   name: 'cache_probe_marker',
   description: 'Stable no-op schema used only to measure provider prompt-cache behavior.',
-  inputSchema: {
+  input_schema: {
     type: 'object',
     properties: {
       value: { type: 'string' },

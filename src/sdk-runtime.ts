@@ -699,6 +699,9 @@ export interface RuntimeOperationService {
 export interface RuntimeDiagnosticFilter {
   readonly sessionId?: string;
   readonly runId?: string;
+  /** Defaults to root so child physical requests do not replace root diagnostics. */
+  readonly contextKind?: 'root' | 'child';
+  readonly agentId?: string;
 }
 
 export interface RuntimeDiagnosticsService {
@@ -6016,14 +6019,46 @@ async function latestRuntimeDiagnosticPayload<T>(
   type: RuntimeEventType,
   filter: RuntimeDiagnosticFilter | undefined,
 ): Promise<T | null> {
+  const requestedContextKind = filter?.contextKind
+    ?? (filter?.agentId === undefined ? 'root' : undefined);
+  const requestsChildContext = requestedContextKind === 'child'
+    || filter?.agentId !== undefined;
   const replayFilter: RuntimeEventReplayFilter = {
     type,
-    limit: 100,
-    ...(filter?.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+    ...(!requestsChildContext && filter?.sessionId !== undefined
+      ? { sessionId: filter.sessionId }
+      : {}),
     ...(filter?.runId !== undefined ? { runId: filter.runId } : {}),
   };
   const replay = await events.replay(replayFilter);
-  return (replay.at(-1)?.payload as T | undefined) ?? null;
+  const matching = [...replay].reverse().find((event) => {
+    const payload = event.payload;
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      return filter?.contextKind === undefined
+        && filter?.agentId === undefined;
+    }
+    const diagnostic = payload as {
+      readonly contextId?: unknown;
+      readonly contextKind?: unknown;
+      readonly agentId?: unknown;
+    };
+    const actualContextKind = diagnostic.contextKind === 'child' ? 'child' : 'root';
+    if (requestedContextKind !== undefined && actualContextKind !== requestedContextKind) {
+      return false;
+    }
+    if (filter?.agentId !== undefined && diagnostic.agentId !== filter.agentId) {
+      return false;
+    }
+    if (!requestsChildContext || filter?.sessionId === undefined) {
+      return true;
+    }
+    const expectedPrefix = `${filter.sessionId}/agent/`;
+    if (typeof diagnostic.contextId !== 'string') return false;
+    return filter.agentId === undefined
+      ? diagnostic.contextId.startsWith(expectedPrefix)
+      : diagnostic.contextId === `${expectedPrefix}${encodeURIComponent(filter.agentId)}`;
+  });
+  return (matching?.payload as T | undefined) ?? null;
 }
 
 function isActiveRunPhase(phase: RuntimeRunPhase): boolean {

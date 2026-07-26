@@ -161,12 +161,10 @@ export const defaultManagedDispatchDeps: ManagedDispatchDeps = {
   buildPlan: buildManagedReasoningPlan,
 };
 
-// FEATURE_246: Solo (SA) is a single agent — no workflows, no sub-agents. We strip
-// the multi-agent cluster from its tool surface so the model never sees tools it
-// cannot use. This mirrors CHILD_EXCLUDE_TOOLS_BASE (children themselves run as SA)
-// minus the parent-UI tools a top-level solo agent keeps (ask_user_question,
-// worktree_*, exit_plan_mode), plus run_workflow. send_message is excluded too —
-// a solo agent has no peers or Worker to address.
+// FEATURE_246: Solo (SA) is a single agent — no workflows, sub-agents, or peers.
+// Strip the collaboration cluster from its model-visible tool surface. This is
+// intentionally stricter than Runtime Actor children, which retain the injected
+// collaboration control plane.
 const SA_SOLO_EXCLUDE_TOOLS: readonly string[] = [
   'list_dispatchable_agents',
   'spawn_agent',

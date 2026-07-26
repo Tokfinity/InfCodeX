@@ -59,6 +59,8 @@ export interface ChildFallbackHooks {
     readonly toProvider: string;
     readonly reason: string;
   }) => void;
+  /** Runtime authority ceiling; unauthorized providers are never attempted. */
+  readonly isProviderAllowed?: (provider: string) => boolean;
 }
 
 /**
@@ -79,7 +81,8 @@ export async function invokeChildWithFallback(
   } catch (error) {
     if (options.abortSignal?.aborted || !isFallbackEligibleError(error)) throw error;
 
-    const chain = resolveFallbackChain().filter((candidate) => candidate !== primary);
+    const chain = resolveFallbackChain().filter((candidate) =>
+      candidate !== primary && (hooks?.isProviderAllowed?.(candidate) ?? true));
     let lastError: unknown = error;
     for (const toProvider of chain) {
       hooks?.onFallback?.({ fromProvider: primary, toProvider, reason: errorReason(lastError) });

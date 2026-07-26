@@ -153,6 +153,7 @@ export {
   KodaXBaseProvider,
   KodaXAnthropicCompatProvider,
   KodaXOpenAICompatProvider,
+  KodaXAcpProvider,
   KODAX_PROVIDERS,
   KODAX_PROVIDER_SNAPSHOTS,
   KODAX_DEFAULT_PROVIDER,

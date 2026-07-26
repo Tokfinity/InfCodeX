@@ -1,4 +1,5 @@
 import {
+  emitKodaXDiagnostic,
   persistCompactedSessionHistory,
   type KodaXSessionData,
   type KodaXSessionScope,
@@ -55,7 +56,21 @@ export function withDurableCompactionPersistence(
         update: persistentUpdate,
         initialSessionData: input.initialSessionData,
       });
-      await original?.(messages, update, meta);
+      try {
+        await original?.(messages, update, meta);
+      } catch (error) {
+        // Core-owned storage is the canonical commit. A downstream observer
+        // cannot roll that durable fact back after save has succeeded.
+        emitKodaXDiagnostic({
+          source: 'coding:compaction',
+          level: 'warn',
+          message: 'Post-commit compaction observer failed.',
+          detail: {
+            sessionId: input.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
     },
   };
 }

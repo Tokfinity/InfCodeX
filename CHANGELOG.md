@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Extended prompt-cache and context-budget diagnostics to the SA substrate used
+  by Runtime child Agents, including retries, non-streaming fallback, workflow
+  digest, structured-output repair, and compaction summary requests. Diagnostics
+  now hash the Provider-visible projection, endpoint query, ephemeral suffix,
+  and complete request envelope while reporting only Provider-supplied cache
+  usage. Child cache controls preserve explicit `true` and `false` end to end.
+- Kept the default child leading System prefix stable while restoring the
+  documented full specialist System override and write-child project mutation
+  rules. Runtime Actor children retain recursive AMA collaboration semantics on
+  the direct Runner substrate; actorless and protocol-owned Workflow leaves
+  remain SA with collaboration tools and guidance hidden.
+- Separated Runtime Actor mailbox routing and logical context identity from
+  each child's isolated transcript session so child-to-grandchild wait/output
+  delivery completes reliably, follow-up diagnostics keep stable identities,
+  and synthetic digest/repair calls cannot advance canonical history revisions.
+- Enforced specialist tool ceilings across descendants, Actor provider ceilings
+  across final routing and fallback, and model-visible collaboration guidance
+  against the final tool table. Direct children no longer see an unbound
+  `run_workflow`; actorless Workflow leaves execute under their admitted Actor
+  capability snapshot and use collision-free Actor paths for diagnostics.
+- Kept canonical context revisions aligned with core-owned compaction storage:
+  a post-commit observer failure is diagnosed but can no longer roll back an
+  already persisted history replacement.
+- Added root/child diagnostic identity and filtering so child physical requests
+  remain observable without replacing the default root result returned by
+  `context.budget.get`; diagnostics remain fully fail-open and never expose
+  prompt text.
+- Corrected the paid prompt-cache lifetime probe to send the canonical
+  `input_schema` tool field.
+
 ## [0.7.77] - 2026-07-26
 
 > Release candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,

@@ -18,8 +18,6 @@
  * previous in-file declarations.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type {
   KodaXContentBlock,
   KodaXMessage,
@@ -96,6 +94,12 @@ import {
   emitStreamEnd,
 } from '../../../agent-runtime/event-emitter.js';
 import {
+  emitPromptCacheDiagnosticRequest,
+  emitPromptCacheDiagnosticResponse,
+  hashProviderVisibleMessages,
+  normalizeDiagnosticEnvelope,
+} from '../../../agent-runtime/prompt-cache-diagnostics.js';
+import {
   MANAGED_CONTROL_PLANE_MARKERS,
   sanitizeManagedStreamingText,
 } from './sanitize.js';
@@ -167,120 +171,7 @@ function estimateFinalEnvelopeTokens(
   return estimateTokens(messages) + countTokens(system) + toolSchemaTokens;
 }
 
-function hashPromptCacheValue(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
-}
-
-function hashImageFile(path: string): string {
-  try {
-    return createHash('sha256').update(readFileSync(path)).digest('hex');
-  } catch {
-    return `unreadable:${hashPromptCacheValue(path)}`;
-  }
-}
-
-function projectProviderVisibleContent(content: KodaXMessage['content']): unknown {
-  if (typeof content === 'string') return content;
-  return content.map((block) => {
-    if (block.type === 'image') {
-      return {
-        type: block.type,
-        mediaType: block.mediaType,
-        dataHash: hashImageFile(block.path),
-      };
-    }
-    if (block.type === 'tool_result') {
-      return {
-        type: block.type,
-        tool_use_id: block.tool_use_id,
-        content: typeof block.content === 'string'
-          ? block.content
-          : block.content.map((item) => item.type === 'image'
-              ? {
-                  type: item.type,
-                  mediaType: item.mediaType,
-                  dataHash: hashImageFile(item.path),
-                }
-              : item),
-        is_error: block.is_error,
-      };
-    }
-    return block;
-  });
-}
-
-export function hashProviderVisibleMessages(messages: readonly KodaXMessage[]): string {
-  return hashPromptCacheValue(messages.map((message) => ({
-    role: message.role,
-    content: projectProviderVisibleContent(message.content),
-  })));
-}
-
-function serializeSystemContentForDiagnostics(
-  content: KodaXMessage['content'],
-): string {
-  if (typeof content === 'string') return content;
-  return content
-    .filter((block): block is Extract<KodaXContentBlock, { type: 'text' }> =>
-      block.type === 'text')
-    .map((block) => block.text)
-    .filter((text) => text.trim().length > 0)
-    .join('\n');
-}
-
-function normalizeDiagnosticEnvelope(
-  system: string,
-  messages: readonly KodaXMessage[],
-): { readonly system: string; readonly messages: readonly KodaXMessage[] } {
-  const systemParts = system.trim().length > 0 ? [system] : [];
-  const nonSystemMessages: KodaXMessage[] = [];
-  for (const message of messages) {
-    if (message.role !== 'system') {
-      nonSystemMessages.push(message);
-      continue;
-    }
-    const text = serializeSystemContentForDiagnostics(message.content);
-    if (text.length > 0) systemParts.push(text);
-  }
-  return {
-    system: systemParts.join('\n\n'),
-    messages: nonSystemMessages,
-  };
-}
-
-function findCurrentTurnStart(messages: readonly KodaXMessage[]): number {
-  const currentTurnId = [...messages]
-    .reverse()
-    .find((message) => message.turnId !== undefined)
-    ?.turnId;
-  if (currentTurnId !== undefined) {
-    const turnStart = messages.findIndex((message) => message.turnId === currentTurnId);
-    if (turnStart >= 0) return turnStart;
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== 'user' || message._synthetic === true) continue;
-    let start = index;
-    while (start > 0 && messages[start - 1]?.role === 'user') start -= 1;
-    return start;
-  }
-  return messages.length;
-}
-
-function sanitizeProviderEndpoint(
-  endpoint: string | undefined,
-): { readonly origin: string; readonly pathHash: string } | undefined {
-  if (!endpoint) return undefined;
-  try {
-    const parsed = new URL(endpoint);
-    return {
-      origin: parsed.origin,
-      pathHash: hashPromptCacheValue(parsed.pathname),
-    };
-  } catch {
-    return undefined;
-  }
-}
+export { hashProviderVisibleMessages };
 
 /** Resolve the provider reasoning envelope shared by the managed request and
  * its cache-stable compaction request. Keeping this in one function prevents
@@ -513,6 +404,14 @@ export function buildRunnerLlmAdapter(
     } else {
       const provider = resolveProvider(options.provider ?? 'anthropic');
       const providerName = options.provider ?? provider.name ?? 'anthropic';
+      const diagnosticContextIdentity = {
+        contextKind: options.context?.currentAgentId !== undefined
+          ? 'child' as const
+          : 'root' as const,
+        ...(options.context?.currentAgentId !== undefined
+          ? { agentId: options.context.currentAgentId }
+          : {}),
+      };
       const emitContextBudgetSnapshot = (
         providerMessages: readonly KodaXMessage[],
       ): void => {
@@ -522,29 +421,30 @@ export function buildRunnerLlmAdapter(
         ) {
           return;
         }
-        const diagnosticEnvelope = normalizeDiagnosticEnvelope(system, providerMessages);
-        const contextWindow = contextBudgetCatalogs?.contextWindow
-          ?? provider.getEffectiveContextWindow(activeModel);
-        const turnId = [...diagnosticEnvelope.messages]
-          .reverse()
-          .find((message) => message.turnId !== undefined)
-          ?.turnId;
-        const messageTokenBreakdown = partitionContextBudgetMessages(
-          diagnosticEnvelope.messages,
-          {
-            skillTexts: [
-              contextBudgetCatalogs?.skillCatalogText,
-              contextBudgetCatalogs?.selectedSkillText,
-            ].filter((value): value is string => value !== undefined),
-            mcpTexts: contextBudgetCatalogs?.mcpCatalogText
-              ? [contextBudgetCatalogs.mcpCatalogText]
-              : [],
-          },
-        );
         try {
+          const diagnosticEnvelope = normalizeDiagnosticEnvelope(system, providerMessages, provider);
+          const contextWindow = contextBudgetCatalogs?.contextWindow
+            ?? provider.getEffectiveContextWindow(activeModel);
+          const turnId = [...diagnosticEnvelope.messages]
+            .reverse()
+            .find((message) => message.turnId !== undefined)
+            ?.turnId;
+          const messageTokenBreakdown = partitionContextBudgetMessages(
+            diagnosticEnvelope.messages,
+            {
+              skillTexts: [
+                contextBudgetCatalogs?.skillCatalogText,
+                contextBudgetCatalogs?.selectedSkillText,
+              ].filter((value): value is string => value !== undefined),
+              mcpTexts: contextBudgetCatalogs?.mcpCatalogText
+                ? [contextBudgetCatalogs.mcpCatalogText]
+                : [],
+            },
+          );
           options.events.onContextBudgetSnapshot(createRuntimeContextBudgetSnapshot({
             sessionId: options.session?.id,
             turnId,
+            ...diagnosticContextIdentity,
             provider: providerName,
             model: activeModel ?? provider.getModel?.() ?? 'unknown',
             contextWindow,
@@ -555,7 +455,7 @@ export function buildRunnerLlmAdapter(
             profile: 'report_only',
           }));
         } catch (error) {
-          emitResilienceDebug('[context-diagnostics:budget-callback-error]', {
+          emitResilienceDebug('[context-diagnostics:budget-error]', {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -565,75 +465,27 @@ export function buildRunnerLlmAdapter(
         attempt: number,
         transport: 'stream' | 'complete' = 'stream',
       ): KodaXPromptCacheDiagnosticEvent | undefined => {
-        if (
-          options.context?.contextDiagnostics !== true
-          || !options.events?.onPromptCacheDiagnostics
-        ) {
-          return undefined;
-        }
-        const diagnosticEnvelope = normalizeDiagnosticEnvelope(system, providerMessages);
-        const messagePrefixCount = findCurrentTurnStart(diagnosticEnvelope.messages);
-        const endpointIdentity = sanitizeProviderEndpoint(provider.getBaseUrl());
-        const event: KodaXPromptCacheDiagnosticEvent = {
-          phase: 'request',
-          transport,
-          requestId: randomUUID(),
-          requestedAt: new Date().toISOString(),
-          provider: providerName,
+        return emitPromptCacheDiagnosticRequest({
+          events: options.events,
+          enabled: options.context?.contextDiagnostics === true,
+          provider,
+          providerName,
+          ...diagnosticContextIdentity,
           model: activeModel ?? provider.getModel?.() ?? 'unknown',
-          wireModel: provider.getWireModel(activeModel),
-          reasoningHash: hashPromptCacheValue(providerReasoning ?? null),
-          maxOutputTokens: provider.getEffectiveMaxOutputTokens(activeModel),
-          kodaxPromptCacheEnabled: options.disablePromptCache === true
-            ? false
-            : options.disablePromptCache === false
-              ? true
-              : process.env.KODAX_DISABLE_PROMPT_CACHE !== '1',
-          endpoint: endpointIdentity?.origin,
-          endpointPathHash: endpointIdentity?.pathHash,
+          reasoning: providerReasoning,
+          disablePromptCache: options.disablePromptCache,
+          system,
+          tools: wireTools,
+          messages: providerMessages,
           attempt,
-          systemPromptHash: hashPromptCacheValue(diagnosticEnvelope.system),
-          toolSchemaHash: hashPromptCacheValue(wireTools),
-          messagePrefixHash: hashProviderVisibleMessages(
-            diagnosticEnvelope.messages.slice(0, messagePrefixCount),
-          ),
-          messagePrefixCount,
-          requestMessagesHash: hashProviderVisibleMessages(diagnosticEnvelope.messages),
-          messageCount: diagnosticEnvelope.messages.length,
-          toolCount: wireTools.length,
-        };
-        try {
-          options.events.onPromptCacheDiagnostics(event);
-        } catch (error) {
-          emitResilienceDebug('[context-diagnostics:cache-callback-error]', {
-            phase: event.phase,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        return event;
+          transport,
+        });
       };
       const completePromptCacheDiagnostic = (
         request: KodaXPromptCacheDiagnosticEvent | undefined,
         usage: KodaXTokenUsage | undefined,
       ): void => {
-        if (!request || !options.events?.onPromptCacheDiagnostics) return;
-        const event: KodaXPromptCacheDiagnosticEvent = {
-          ...request,
-          phase: 'response',
-          completedAt: new Date().toISOString(),
-          inputTokens: usage?.inputTokens,
-          outputTokens: usage?.outputTokens,
-          cachedReadTokens: usage?.cachedReadTokens,
-          cachedWriteTokens: usage?.cachedWriteTokens,
-        };
-        try {
-          options.events.onPromptCacheDiagnostics(event);
-        } catch (error) {
-          emitResilienceDebug('[context-diagnostics:cache-callback-error]', {
-            phase: event.phase,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        emitPromptCacheDiagnosticResponse(options.events, request, usage);
       };
       // Shard 6d-P: restore the legacy second-tier retry/recovery loop
       // (agent.ts:1955-2198). Without this, any transient stream error

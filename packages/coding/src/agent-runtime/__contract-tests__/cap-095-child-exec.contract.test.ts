@@ -205,10 +205,8 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     const excluded = opts.context?.excludeTools as readonly string[];
     expect(excluded).not.toContain('write');
     expect(excluded).not.toContain('edit');
-    // Base exclusions still in effect (no recursion / no AMA / no
-    // ask_user / no plan-mode-exit). worktree_create / worktree_remove
-    // remain in CHILD_EXCLUDE_TOOLS_BASE so children cannot call them
-    // explicitly even though the parent path no longer auto-invokes.
+    // Base exclusions still block user interaction, parent-managed worktree
+    // lifecycle, and plan-mode exit. Recursive collaboration stays available.
     expect(excluded).toEqual(expect.arrayContaining([...CHILD_EXCLUDE_TOOLS_BASE]));
   });
 
@@ -250,7 +248,7 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     // Register a specialist agent in the resolver registry. The child
     // executor's specialist branch (child-executor.ts
     // `resolveSpecialistOverride`) reads instructions from the registered
-    // Agent and uses them wholesale as the systemPromptOverride. This
+    // Agent and appends them after the stable child system prefix. This
     // contract guarantee mirrors CAP-CHILD-EXEC-001 for the new branch:
     // the parent's KodaXOptions are not leaked, and the specialist's
     // declared tools narrow the child's tool surface.
@@ -297,9 +295,8 @@ describe('CAP-095: child-executor SA invocation contract', () => {
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
     const [opts] = mockRunKodaX.mock.calls[0]!;
-    // Specialist prompt replaces the default CHILD_AGENT_SYSTEM_PROMPT
-    // verbatim — the resolver returns Agent.instructions as a string for
-    // constructed agents.
+    // Constructed specialists retain the documented full-prompt override
+    // contract; child safety is enforced independently through tool policy.
     expect(opts.context?.systemPromptOverride).toBe(SPECIALIST_PROMPT);
     // Complementary exclusion: specialist whitelisted `read` + `grep`,
     // so the executor builds excludeTools = allTools - specialistTools.

@@ -2466,6 +2466,12 @@ describe('createKodaXRuntime', () => {
     const seen: string[] = [];
     const payloads: unknown[] = [];
     runtime.events.subscribe({ sessionId: session.id }, (event) => {
+      const diagnosticPayload = event.payload !== null
+        && typeof event.payload === 'object'
+        && !Array.isArray(event.payload)
+        ? event.payload as { readonly contextKind?: unknown }
+        : undefined;
+      if (diagnosticPayload?.contextKind === 'child') return;
       if (
         event.type === 'context.budget.snapshot'
         || event.type === 'provider.cache.diagnostics'
@@ -2479,6 +2485,8 @@ describe('createKodaXRuntime', () => {
 
     codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => {
       const sessionId = options.session?.id ?? 'missing-session';
+      const childSessionId = `${sessionId}-child-worker`;
+      const childContextId = `${sessionId}/agent/${encodeURIComponent('/root/reviewer')}`;
       queueMicrotask(() => {
         options.events?.onContextBudgetSnapshot?.({
           sessionId,
@@ -2562,6 +2570,91 @@ describe('createKodaXRuntime', () => {
           cooldownTurnsRemaining: 1,
           lowSavingsStreak: 0,
         });
+        options.events?.onContextBudgetSnapshot?.({
+          sessionId: childSessionId,
+          turnId: 'turn-child-diagnostics',
+          contextId: childContextId,
+          contextKind: 'child',
+          agentId: '/root/reviewer',
+          contextRevision: 0,
+          profile: 'report_only',
+          contextWindow: 32_000,
+          smallWindow: true,
+          pressure: 'low',
+          tokenBreakdown: {
+            systemPrompt: 2,
+            toolSchemas: 3,
+            skillCatalog: 0,
+            mcpCatalog: 0,
+            transcript: 4,
+            pendingInput: 0,
+            recentToolResults: 0,
+            reservedResponse: 0,
+            total: 9,
+          },
+          usedTokens: 9,
+          availableTokens: 31_991,
+          usedRatio: 0.0003,
+          toolSchemaRatio: 0.0001,
+          recommendations: [],
+          createdAt: '2026-07-08T00:00:00.003Z',
+        });
+        for (let index = 0; index < 101; index += 1) {
+          const usedTokens = 10 + index;
+          options.events?.onContextBudgetSnapshot?.({
+            sessionId: childSessionId,
+            turnId: `turn-child-diagnostics-${index}`,
+            contextId: childContextId,
+            contextKind: 'child',
+            agentId: '/root/reviewer',
+            contextRevision: 0,
+            profile: 'report_only',
+            contextWindow: 32_000,
+            smallWindow: true,
+            pressure: 'low',
+            tokenBreakdown: {
+              systemPrompt: 2,
+              toolSchemas: 3,
+              skillCatalog: 0,
+              mcpCatalog: 0,
+              transcript: usedTokens - 5,
+              pendingInput: 0,
+              recentToolResults: 0,
+              reservedResponse: 0,
+              total: usedTokens,
+            },
+            usedTokens,
+            availableTokens: 32_000 - usedTokens,
+            usedRatio: usedTokens / 32_000,
+            toolSchemaRatio: 0.0001,
+            recommendations: [],
+            createdAt: '2026-07-08T00:00:00.003Z',
+          });
+        }
+        options.events?.onToolExposurePlanned?.({
+          sessionId: childSessionId,
+          contextId: childContextId,
+          contextKind: 'child',
+          agentId: '/root/reviewer',
+          contextRevision: 0,
+          profile: 'report_only',
+          reportOnly: true,
+          pressure: 'low',
+          bridgeAvailable: false,
+          nativeDeferredAvailable: true,
+          decisions: [],
+          modelVisibleToolNames: ['read'],
+          estimatedToolSchemaTokensBefore: 5,
+          estimatedToolSchemaTokensAfter: 5,
+          estimatedToolSchemaTokensIfApplied: 5,
+          estimatedTokensSaved: 0,
+          estimatedTokensSavedIfApplied: 0,
+          residentToolCount: 1,
+          hintedToolCount: 0,
+          bridgeToolCount: 0,
+          nativeDeferredToolCount: 0,
+          hiddenToolCount: 0,
+        });
       });
       return fakeRunningSession(options, Promise.resolve({
         success: true,
@@ -2583,6 +2676,26 @@ describe('createKodaXRuntime', () => {
     const replay = await runtime.events.replay({ runId: handle.runId });
     const latestBudget = await runtime.diagnostics.latestContextBudget({ runId: handle.runId });
     const latestExposure = await runtime.diagnostics.latestToolExposure({ runId: handle.runId });
+    const latestChildBudget = await runtime.diagnostics.latestContextBudget({
+      runId: handle.runId,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
+    const latestChildExposure = await runtime.diagnostics.latestToolExposure({
+      runId: handle.runId,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
+    const latestChildBudgetByRootSession = await runtime.diagnostics.latestContextBudget({
+      sessionId: session.id,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
+    const unrelatedRootChildBudget = await runtime.diagnostics.latestContextBudget({
+      sessionId: 'unrelated-root-session',
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+    });
 
     expect(seen).toEqual([
       'context.budget.snapshot',
@@ -2603,6 +2716,24 @@ describe('createKodaXRuntime', () => {
     expect(replay.map((event) => event.type)).toContain('context.compaction.skipped');
     expect(latestBudget).toMatchObject({ pressure: 'low', usedTokens: 6 });
     expect(latestExposure).toMatchObject({ reportOnly: true, modelVisibleToolNames: ['read', 'tool_search'] });
+    expect(latestChildBudget).toMatchObject({
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+      usedTokens: 110,
+    });
+    expect(latestChildExposure).toMatchObject({
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+      modelVisibleToolNames: ['read'],
+    });
+    expect(latestChildBudgetByRootSession).toMatchObject({
+      sessionId: `${session.id}-child-worker`,
+      contextId: `${session.id}/agent/${encodeURIComponent('/root/reviewer')}`,
+      contextKind: 'child',
+      agentId: '/root/reviewer',
+      usedTokens: 110,
+    });
+    expect(unrelatedRootChildBudget).toBeNull();
 
     await runtime.close();
   });

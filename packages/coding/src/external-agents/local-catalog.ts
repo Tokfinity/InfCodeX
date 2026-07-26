@@ -7,6 +7,7 @@ import type {
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import {
+  constructedAgentToolCeiling,
   listConstructedAgentsWithSource,
   type ConstructedAgentEntry,
   type KodaXAgentScope,
@@ -18,6 +19,7 @@ export interface CodingDispatchableAgentRoute {
   readonly kind: 'native' | 'constructed';
   readonly descriptor: DispatchableAgentDescriptor;
   readonly subagentType?: string;
+  readonly toolCeiling?: readonly string[];
 }
 
 export function codingDispatchContext(
@@ -129,9 +131,14 @@ export function resolveCodingDispatchableAgent(
     if (descriptor.origin === 'native') return { kind: 'native', descriptor };
     const entry = listConstructedAgentsWithSource(scope)
       .find((candidate) => constructedAgentId(candidate, context, scope) === descriptor.agentId);
-    return entry
-      ? { kind: 'constructed', descriptor, subagentType: entry.agent.name }
-      : undefined;
+    if (!entry) return undefined;
+    const toolCeiling = constructedAgentToolCeiling(entry);
+    return {
+      kind: 'constructed',
+      descriptor,
+      subagentType: entry.agent.name,
+      ...(toolCeiling !== undefined ? { toolCeiling } : {}),
+    };
   }
   return undefined;
 }

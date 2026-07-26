@@ -15,8 +15,10 @@ import {
 } from './agent-adapter.js';
 import type { ChildExecutorOptions } from '../child-executor.js';
 import { CodingActorSession } from '../agent-runtime/actor-runtime.js';
+import { registerConstructedAgent } from '../construction/agent-resolver.js';
 import type {
   KodaXChildAgentResult,
+  KodaXChildContextBundle,
   KodaXChildExecutionResult,
   KodaXToolExecutionContext,
 } from '../types.js';
@@ -419,6 +421,113 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       itemId: 'agent:task-correlation',
     });
     expect(seenChildActivityName).toBe('x');
+  });
+
+  it('uses the admitted Workflow Actor path as logical context identity across backends', async () => {
+    const ctx = fakeCtx();
+    const identities: string[] = [];
+    const parents: Array<string | undefined> = [];
+    const runChild = (
+      _bundles: KodaXChildContextBundle[],
+      _ctx: KodaXToolExecutionContext,
+      opts: ChildExecutorOptions,
+    ): Promise<KodaXChildExecutionResult> => {
+      identities.push(opts.contextAgentId ?? '');
+      parents.push(opts.contextParentAgentId);
+      expect(opts.actorControl).toBeUndefined();
+      return Promise.resolve(execResult());
+    };
+    const first = createCodingWorkflowBackend({
+      ctx,
+      childOptions,
+      runId: 'identity-first',
+      runChild,
+    });
+    const second = createCodingWorkflowBackend({
+      ctx,
+      childOptions,
+      runId: 'identity-second',
+      runChild,
+    });
+
+    const firstHandle = await first.spawn({ name: 'first', prompt: 'x', readOnly: true });
+    const secondHandle = await second.spawn({ name: 'second', prompt: 'x', readOnly: true });
+    await Promise.all([
+      first.wait(firstHandle.taskId),
+      second.wait(secondHandle.taskId),
+    ]);
+
+    expect(identities).toHaveLength(2);
+    expect(new Set(identities).size).toBe(2);
+    expect(identities.every((identity) => identity.startsWith('/root/'))).toBe(true);
+    expect(parents.every((parent) => parent === '/root')).toBe(true);
+  });
+
+  it('passes the admitted parent-specialist capability ceiling to an actorless Workflow leaf', async () => {
+    const unregister = registerConstructedAgent({
+      kind: 'agent',
+      name: 'workflow-reader',
+      version: '1.0.0',
+      createdAt: '2026-07-26T00:00:00.000Z',
+      content: {
+        instructions: 'Read repository evidence without mutation.',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:spawn_agent' }],
+      },
+      testedAt: '2026-07-26T00:00:00.000Z',
+      testReport: { passed: true, results: [] },
+    });
+    const ctx = { backups: new Map<string, string>() } as KodaXToolExecutionContext;
+    const session = new CodingActorSession({
+      executor: {
+        execute: async () => ({ output: 'parent ready' }),
+      },
+    });
+    ctx.actorHost = session;
+    ctx.actorControl = session.attach(ctx, { provider: 'anthropic' });
+
+    try {
+      const parent = await ctx.actorControl.spawn({
+        taskName: 'limited-parent',
+        objective: 'Own a restricted Workflow.',
+        kind: 'external',
+        capabilities: {
+          tools: ['read'],
+          providers: ['deepseek'],
+        },
+      });
+      await vi.waitFor(() => {
+        expect(ctx.actorControl?.get(parent.actorPath).turns[0]?.state).toBe('completed');
+      });
+      ctx.actorControl = session.bindActor(parent.actorPath);
+
+      let seenCapabilities: ChildExecutorOptions['actorCapabilities'];
+      const backend = createCodingWorkflowBackend({
+        ctx,
+        childOptions,
+        runChild: async (_bundles, _ctx, options) => {
+          seenCapabilities = options.actorCapabilities;
+          expect(options.actorControl).toBeUndefined();
+          expect(options.actorHost).toBeUndefined();
+          return execResult();
+        },
+      });
+      const handle = await backend.spawn({
+        name: 'leaf',
+        prompt: 'Inspect one boundary.',
+        readOnly: true,
+        subagentType: 'workflow-reader',
+      });
+      await backend.wait(handle.taskId);
+
+      expect(seenCapabilities).toMatchObject({
+        tools: ['read'],
+        providers: ['deepseek'],
+        filesystem: 'read',
+      });
+    } finally {
+      unregister();
+      await session.close();
+    }
   });
 
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {
