@@ -72,6 +72,9 @@ export function renderAmaPatternPlaybook(): string {
     ...COLLABORATION_PATTERN_CATALOG.map((definition) =>
       `- \`${definition.id}\`: ${definition.purpose} Evidence: ${definition.expectedEvidence[0]}. Stop: ${definition.stopRules[0]}.`),
     '- Compose stages only when they add decision value; ordinary work may stay solo. Root remains accountable for synthesis.',
+    '- When delegating a named pattern stage, set `quality_strategy` on every `spawn_agent` or stage-changing `followup_task`: use `{schemaVersion:1, stageId, pattern, role, laneRelation?, targetEvidenceRefs?}`. Keep one stable `stageId` across participants in the same stage.',
+    '- Use `laneRelation:"coverage"` for distinct scopes, `"replication"` only for genuinely independent checks, and `"opposition"` for challengers. A challenger must name a terminal exact `agent-turn:` or immutable evidence target.',
+    '- Omit `quality_strategy` for solo/direct work. Metadata records intent and provenance; it never proves correctness or requires starting an Agent for telemetry.',
   ].join('\n');
 }
 

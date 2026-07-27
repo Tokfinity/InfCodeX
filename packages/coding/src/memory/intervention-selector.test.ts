@@ -82,4 +82,27 @@ describe('FEATURE_275 coding memory intervention selector', () => {
 
     await expect(runner(candidateInput)).resolves.toEqual({ selectedRefIds: [] });
   });
+
+  it('does not offer current objective or todo projections to semantic selection', async () => {
+    const provider = providerWithToolInput({ selectedRefIds: ['candidate:1'] });
+    const runner = createCodingMemoryInterventionRunner({ provider });
+
+    await expect(runner({
+      ...candidateInput,
+      candidates: [
+        {
+          refId: 'current:objective',
+          claim: 'Current objective is already visible.',
+          claimKind: 'objective',
+          source: 'current',
+        },
+        candidateInput.candidates[1]!,
+      ],
+    })).resolves.toEqual({
+      selectedRefIds: ['memdir:procedure-npm'],
+    });
+    const wire = JSON.stringify(vi.mocked(provider.stream).mock.calls[0]);
+    expect(wire).not.toContain('Current objective is already visible.');
+    expect(wire).toContain('Use npm workspaces.');
+  });
 });

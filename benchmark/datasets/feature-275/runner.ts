@@ -262,7 +262,7 @@ async function runFeature275Stage(
             physicalResults.push(selector);
             selectedCandidateIds = uniqueStrings([
               ...selectedCandidateIds,
-              ...parseSelectorSelection(selector, fixture.candidates),
+              ...parseSelectorSelection(selector, semanticCandidates(fixture.candidates)),
             ]).slice(0, 3);
           }
           const actionResult = await readOrRunAction(
@@ -349,7 +349,8 @@ async function readOrRunSelector(
   manifest: Feature275RunManifest,
   prior: readonly Feature275PhysicalResult[],
 ): Promise<{ readonly result: Feature275PhysicalResult; readonly resumed: boolean }> {
-  const aliased = fixture.candidates.map((candidate, index) => ({
+  const selectable = semanticCandidates(fixture.candidates);
+  const aliased = selectable.map((candidate, index) => ({
     ...candidate,
     refId: `candidate:${index + 1}`,
     evidenceRefs: [],
@@ -359,7 +360,7 @@ async function readOrRunSelector(
     decisionContext: fixture.decisionContext,
     decisionIntent: fixture.decisionIntent,
     triggers: fixture.triggers,
-    candidates: fixture.candidates,
+    candidates: selectable,
     signal: new AbortController().signal,
   };
   return readOrRunPhysical({
@@ -662,7 +663,7 @@ function actionObservationPass(evalCase: Feature275EvalCase, text: string): bool
   }
   if (evalCase.kind === 'irrelevant_control') {
     return /package\.json|package version|current version/.test(normalized)
-      && !/old release|legacy version-file|memory/.test(normalized);
+      && !/old release|legacy version-file/.test(normalized);
   }
   if (evalCase.kind === 'failed_tool') {
     return /fixture|precondition|prepare|generat/.test(normalized)
@@ -833,6 +834,12 @@ function uniqueAliases(values: readonly ModelAlias[]): readonly ModelAlias[] {
 
 function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
+}
+
+function semanticCandidates(
+  candidates: readonly MemoryRecallCandidate[],
+): readonly MemoryRecallCandidate[] {
+  return candidates.filter((candidate) => candidate.source !== 'current');
 }
 
 function isUsage(value: unknown): value is KodaXTokenUsage {

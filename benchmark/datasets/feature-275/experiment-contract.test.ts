@@ -19,7 +19,7 @@ describe('FEATURE_275 experiment revision', () => {
     expect(contract).toMatchObject({
       featureId: 275,
       release: '0.7.77',
-      revision: 'f275-v0.7.77.2',
+      revision: 'f275-v0.7.77.3',
     });
     expect(contract.revision).not.toContain('feature-260');
     expect(FEATURE_275_CASES).toHaveLength(4);

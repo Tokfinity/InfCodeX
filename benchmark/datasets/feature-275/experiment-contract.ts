@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ModelAlias } from '../../harness/aliases.js';
 import { FEATURE_275_CASES, FEATURE_275_PILOT_CASES } from './cases.js';
 
-export const FEATURE_275_REVISION = 'f275-v0.7.77.2' as const;
+export const FEATURE_275_REVISION = 'f275-v0.7.77.3' as const;
 export const FEATURE_275_PILOT_CASES_SHA256 =
   '5cc116eee4c43403f24799cbc94dd9ae6ba90a134fb53512648df237f7f41361' as const;
 export const FEATURE_275_CASES_SHA256 =
@@ -29,6 +29,12 @@ export function buildFeature275ExperimentContract(): object {
     featureId: 275,
     release: '0.7.77',
     revision: FEATURE_275_REVISION,
+    supersedes: {
+      revision: 'f275-v0.7.77.2',
+      status: 'recommend-iterate',
+      reason: 'semantic selector redundantly selected current objective in both negative controls and the negative scorer rejected a correct no-memory action',
+      reuseAllowed: false,
+    },
     arms: {
       A: {
         policy: 'F260 control',

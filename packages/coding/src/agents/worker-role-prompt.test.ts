@@ -84,6 +84,9 @@ describe('buildWorkerInstructions', () => {
     for (const id of WORKFLOW_PATTERN_IDS) expect(output).toContain(`\`${id}\``);
     expect(output).toContain('guidance, not deterministic routing');
     expect(output).toContain('Root remains accountable for synthesis');
+    expect(output).toContain('set `quality_strategy` on every `spawn_agent`');
+    expect(output).toContain('Omit `quality_strategy` for solo/direct work');
+    expect(output).toContain('A challenger must name a terminal exact `agent-turn:`');
   });
 
   it('requires milestone updates when progress happens instead of batching them at termination', () => {

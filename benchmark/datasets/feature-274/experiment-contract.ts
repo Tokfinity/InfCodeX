@@ -8,7 +8,7 @@ import {
   FEATURE_274_POLICY_CASES,
 } from './cases.js';
 
-export const FEATURE_274_REVISION = 'f274-v0.7.77.3' as const;
+export const FEATURE_274_REVISION = 'f274-v0.7.77.4' as const;
 export const FEATURE_274_POLICY_CASES_SHA256 =
   '10cf0872ecbb4b86f911a1d7397057389f7b8df13e54f270582dbc5eb66f750e' as const;
 export const FEATURE_274_JOURNEY_CASES_SHA256 =
@@ -31,12 +31,20 @@ export function buildFeature274ExperimentContract(): object {
     featureId: 274,
     release: '0.7.77',
     revision: FEATURE_274_REVISION,
-    supersedes: {
-      revision: 'f274-v0.7.77.2',
-      status: 'eval-invalid',
-      reason: 'pilot framing did not terminate scope acquisition, so neither arm reached the frozen collaboration decision',
-      reuseAllowed: false,
-    },
+    supersedes: [
+      {
+        revision: 'f274-v0.7.77.2',
+        status: 'eval-invalid',
+        reason: 'pilot framing did not terminate scope acquisition, so neither arm reached the frozen collaboration decision',
+        reuseAllowed: false,
+      },
+      {
+        revision: 'f274-v0.7.77.3',
+        status: 'recommend-iterate',
+        reason: 'valid pilot reached collaboration decisions but no delegated call adopted quality_strategy',
+        reuseAllowed: false,
+      },
+    ],
     splitHashes: {
       layer2: FEATURE_274_POLICY_CASES_SHA256,
       layer3: FEATURE_274_JOURNEY_CASES_SHA256,
