@@ -22,6 +22,7 @@
 import {
   getProvider,
   type KodaXMessage,
+  type KodaXEphemeralSuffix,
   type KodaXReasoningRequest,
   type KodaXStreamResult,
   type KodaXTokenUsage,
@@ -102,6 +103,8 @@ export interface OneShotInput {
   readonly timeoutMs?: number;
   /** Optional provider-enforced response cap for controlled eval calls. */
   readonly maxOutputTokens?: number;
+  /** Optional request-only suffix used by production memory/context paths. */
+  readonly ephemeralSuffix?: KodaXEphemeralSuffix;
 }
 
 export interface OneShotOutput {
@@ -154,6 +157,9 @@ export async function runOneShot(
             ? { maxOutputTokensOverride: input.maxOutputTokens }
             : {}),
           ...(controller ? { signal: controller.signal } : {}),
+          ...(input.ephemeralSuffix !== undefined
+            ? { ephemeralSuffix: input.ephemeralSuffix }
+            : {}),
         },
       );
     } finally {

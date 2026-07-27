@@ -26,7 +26,7 @@ export const MEMORY_INTERVENTION_SELECTOR_PROMPT = [
   `Output only the forced ${TOOL_NAME} tool call.`,
 ].join('\n');
 
-const SELECTOR_TOOL: KodaXToolDefinition = {
+export const MEMORY_INTERVENTION_SELECTOR_TOOL: KodaXToolDefinition = {
   name: TOOL_NAME,
   description: 'Select governed memory candidate IDs for one coding decision.',
   input_schema: {
@@ -46,7 +46,7 @@ const SELECTOR_TOOL: KodaXToolDefinition = {
 export const MEMORY_INTERVENTION_SELECTOR_SHA256 = `sha256:${createHash('sha256')
   .update(JSON.stringify({
     prompt: MEMORY_INTERVENTION_SELECTOR_PROMPT,
-    tool: SELECTOR_TOOL,
+    tool: MEMORY_INTERVENTION_SELECTOR_TOOL,
   }))
   .digest('hex')}`;
 
@@ -69,9 +69,9 @@ export function createCodingMemoryInterventionRunner(
       provider: options.provider,
       ...(options.model !== undefined ? { model: options.model } : {}),
       systemPrompt: MEMORY_INTERVENTION_SELECTOR_PROMPT,
-      reportTool: SELECTOR_TOOL,
+      reportTool: MEMORY_INTERVENTION_SELECTOR_TOOL,
       reportToolName: TOOL_NAME,
-      userMessage: buildSelectorInput(input, aliased),
+      userMessage: buildMemoryInterventionSelectorInput(input, aliased),
       parseToolCall: (block, exact) => parseSelection(block, exact, offered),
       defaultVerdict: emptySelection,
       timeoutMs: 5_000,
@@ -90,7 +90,7 @@ export function createCodingMemoryInterventionRunner(
   };
 }
 
-function buildSelectorInput(
+export function buildMemoryInterventionSelectorInput(
   input: MemoryRecallRunnerInput,
   candidates: MemoryRecallRunnerInput['candidates'],
 ): string {
