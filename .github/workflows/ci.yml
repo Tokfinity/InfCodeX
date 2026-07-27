@@ -224,5 +224,11 @@ jobs:
           packages/coding/src/task-engine/deterministic-evaluator.test.ts
           packages/coding/src/tools/bash.test.ts
           src/runtime-permission-scope.test.ts
+          --reporter=dot
+
+      - name: Runtime Session shell contract gate
+        run: >-
+          npx vitest run
           src/sdk-runtime.test.ts
+          --testNamePattern "persists session settings and applies them as run defaults"
           --reporter=dot

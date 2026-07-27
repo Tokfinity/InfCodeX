@@ -417,7 +417,8 @@ metadata is synchronized at `0.7.77`; the final candidate must pass Node 20/22,
 Unix Runtime socket, Windows Shell Contract, and packaged Electron CI before
 tagging. Candidate commit `9ff9a944` passed that complete matrix in
 [CI run 30231771153](https://github.com/icetomoyo/KodaX/actions/runs/30231771153)
-on 2026-07-27; the final evidence-only documentation commit must pass it again.
+on 2026-07-27; the final release-evidence and CI-hardening commit must pass it
+again.
 The Git tag, GitHub Release, and npm publication do not exist yet.
 Deterministic tests cannot close the remaining preregistered paid pilot or
 joint owner ship decision, and no task-effect improvement is claimed before

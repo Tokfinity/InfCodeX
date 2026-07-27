@@ -131,7 +131,7 @@ Candidate commit `9ff9a944` passed
 [GitHub CI run 30231771153](https://github.com/icetomoyo/KodaX/actions/runs/30231771153)
 on 2026-07-27: Node 20, Node 22 (including the Unix Runtime socket gate), the
 dedicated Windows Shell Contract job, and packaged Electron all succeeded. The
-final evidence-only documentation commit must pass the same matrix before
+final release-evidence and CI-hardening commit must pass the same matrix before
 tagging.
 
 For a focused v0.7.77 rerun:
