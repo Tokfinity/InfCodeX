@@ -127,8 +127,12 @@ package build, bundle, declaration, fast/unit/contract/system, packaged
 Electron, and exact tarball audit gates passed. The audited
 `kodax-ai-kodax-0.7.77.tgz` is 4,130,893 bytes with SHA-256
 `693D19B1BBDAF68A9695F0DE1115D3631D12F2A3ACCE16F91F1602C77439D23A`.
-The candidate commit must still pass the complete GitHub CI matrix, including
-the dedicated Windows Shell Contract job.
+Candidate commit `9ff9a944` passed
+[GitHub CI run 30231771153](https://github.com/icetomoyo/KodaX/actions/runs/30231771153)
+on 2026-07-27: Node 20, Node 22 (including the Unix Runtime socket gate), the
+dedicated Windows Shell Contract job, and packaged Electron all succeeded. The
+final evidence-only documentation commit must pass the same matrix before
+tagging.
 
 For a focused v0.7.77 rerun:
 
