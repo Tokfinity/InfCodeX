@@ -323,10 +323,12 @@ function policySpec(
     tools: feature274Tools(arm, explicitWorkflow),
     userMessage: [
       evalCase.prompt,
-      'The relevant scope is supplied. Decide the next collaboration actions now.',
-      'Emit collaboration tool calls immediately when useful; otherwise answer directly.',
+      policyProbeFacts(evalCase),
+      'This is a controlled collaboration-decision probe, not task execution.',
+      'Scope acquisition and inspection are complete. Do not inspect files, execute code, or request more scope.',
+      'Use only collaboration tools actually advertised for this request. Emit them immediately when useful; otherwise answer with one direct solo decision.',
     ].join('\n'),
-    priorMessages: evalCase.kind === 'solo' ? [] : suppliedScopeMessages(),
+    priorMessages: evalCase.kind === 'solo' ? [] : suppliedScopeMessages(evalCase),
     timeoutMs: 90_000,
     maxOutputTokens: 512,
   };
@@ -418,9 +420,25 @@ function removeQualityStrategy(definition: KodaXToolDefinition): KodaXToolDefini
   };
 }
 
-function suppliedScopeMessages(): readonly KodaXMessage[] {
+function policyProbeFacts(evalCase: Feature274PolicyCase): string {
+  if (evalCase.id === 'simple-direct-solo') {
+    return 'Frozen facts: in packages/sdk.ts function normalizeProjectName, rename local variable `result` to `normalized`; the focused test is packages/sdk.test.ts.';
+  }
+  if (evalCase.id === 'independent-interface-coverage') {
+    return 'Frozen facts: CLI parses `--protocol-version`, SDK serializes `protocolVersion`, and daemon validates the field; all three inspected diffs are available and independent review scopes are complete.';
+  }
+  if (evalCase.id === 'concrete-candidate-challenge') {
+    return 'Frozen facts: candidate `agent-turn:/root/candidate#turn=turn-1` is terminal; target `finding:auth-boundary` and failing evidence `test:auth-boundary` are visible.';
+  }
+  if (evalCase.id === 'explicit-workflow-request') {
+    return 'Frozen facts: the reusable audit covers packages/sdk.ts, src/daemon.ts, and src/cli.ts and must persist one structured result per package.';
+  }
+  return 'Frozen facts: the complete synthetic scope and decision-relevant evidence are already present in the prior messages.';
+}
+
+function suppliedScopeMessages(evalCase: Feature274PolicyCase): readonly KodaXMessage[] {
   return [
-    { role: 'user', content: 'Acquire the supplied synthetic change scope.' },
+    { role: 'user', content: `Acquire and inspect the frozen scope for ${evalCase.id}.` },
     {
       role: 'assistant',
       content: '<captured_tool_calls>[{"name":"changed_scope","arguments":{}}]</captured_tool_calls>',
@@ -428,6 +446,16 @@ function suppliedScopeMessages(): readonly KodaXMessage[] {
     {
       role: 'user',
       content: '<tool_result name="changed_scope">{"files":["packages/sdk.ts","src/daemon.ts","src/cli.ts"],"complete":true}</tool_result>',
+      _synthetic: true,
+      _source: 'feature-274-eval',
+    },
+    {
+      role: 'assistant',
+      content: '<captured_tool_calls>[{"name":"changed_diff_bundle","arguments":{"paths":["packages/sdk.ts","src/daemon.ts","src/cli.ts"]}}]</captured_tool_calls>',
+    },
+    {
+      role: 'user',
+      content: `<tool_result name="changed_diff_bundle">{"case":"${evalCase.id}","scopeComplete":true,"inspectionComplete":true,"decisionEvidence":"${policyProbeFacts(evalCase).replaceAll('"', '\\"')}"}</tool_result>`,
       _synthetic: true,
       _source: 'feature-274-eval',
     },
