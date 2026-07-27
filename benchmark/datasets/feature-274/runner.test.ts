@@ -61,6 +61,18 @@ describe('FEATURE_274 paid runner safety', () => {
     });
     expect(runOneShotMock).toHaveBeenCalledTimes(8);
 
+    const experiment = JSON.parse(await readFile(
+      path.join(rawRoot, 'experiment.json'),
+      'utf8',
+    )) as {
+      readonly exactPayloads: {
+        readonly candidateTools: ReadonlyArray<{ readonly name: string }>;
+      };
+    };
+    const candidateToolNames = experiment.exactPayloads.candidateTools.map((tool) => tool.name);
+    expect(candidateToolNames).toEqual(['read', 'edit', 'bash', 'spawn_agent']);
+    expect(candidateToolNames).not.toContain('send_message');
+
     runOneShotMock.mockClear();
     const resumed = await runFeature274Pilot({ allowGeneration: true, rawRoot });
     expect(resumed.externalCallsThisRun).toBe(0);

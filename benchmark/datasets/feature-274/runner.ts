@@ -50,6 +50,9 @@ const PILOT_CASE_IDS = new Set([
   'explicit-workflow-request',
 ]);
 const POLICY_TOOL_NAMES = [
+  'read',
+  'edit',
+  'bash',
   'spawn_agent',
   'run_workflow',
 ] as const;
@@ -321,7 +324,7 @@ function policySpec(
       'This is a controlled collaboration-decision probe, not task execution.',
       'Raw evidence acquisition is complete; analysis and the collaboration decision are not complete.',
       'Do not inspect files, execute code, or request more scope.',
-      'Use only `spawn_agent` or an explicitly advertised `run_workflow`. Emit the decision tool calls immediately when useful; otherwise answer with one direct solo decision.',
+      'For collaboration, use only `spawn_agent` or an explicitly advertised `run_workflow`; `send_message` is unavailable. Direct work may use the advertised production read/edit/bash tools. Emit the first decision/action tool calls immediately when useful; otherwise answer with one direct solo decision.',
     ].join('\n'),
     priorMessages: evalCase.kind === 'solo' ? [] : suppliedScopeMessages(evalCase),
     timeoutMs: 90_000,
@@ -428,7 +431,19 @@ function policyProbeFacts(evalCase: Feature274PolicyCase): string {
   if (evalCase.id === 'explicit-workflow-request') {
     return 'Frozen facts: the reusable audit covers packages/sdk.ts, src/daemon.ts, and src/cli.ts and must persist one structured result per package.';
   }
-  return 'Frozen facts: the complete synthetic scope and decision-relevant evidence are already present in the prior messages.';
+  if (evalCase.id === 'mixed-request-classify') {
+    return 'Frozen raw evidence: the documentation question asks which README documents the existing flag and does not block release; the code defect is that daemon validation rejects the SDK-serialized protocolVersion field and does block release. The route and bounded execution consequence still require analysis.';
+  }
+  if (evalCase.id === 'design-search-filter') {
+    return 'Frozen raw evidence: the handoff must preserve one authoritative state store, survive daemon reconnect, and remain serializable. No candidate design has yet been generated or filtered; any design adding a second store violates a hard constraint.';
+  }
+  if (evalCase.id === 'complete-alternative-tournament') {
+    return 'Frozen raw evidence: plan A performs an in-place protocol migration with a rollback flag and lower implementation cost; plan B uses a compatibility bridge with safer mixed-version rollout but higher cost. Both are complete and still require one common rollback, compatibility, and cost rubric.';
+  }
+  if (evalCase.id === 'evidence-delta-loop') {
+    return 'Frozen raw evidence: the intermittent failure reproduced once under concurrent reconnect but not under serial reconnect. One bounded investigation lane may continue only when each round reports a new evidence delta that can change the next decision; stop on resolution, no delta, external input, or budget.';
+  }
+  throw new Error(`feature-274 missing frozen facts for ${evalCase.id}`);
 }
 
 function suppliedScopeMessages(evalCase: Feature274PolicyCase): readonly KodaXMessage[] {

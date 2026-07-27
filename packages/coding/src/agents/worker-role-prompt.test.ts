@@ -85,6 +85,8 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('guidance, not deterministic routing');
     expect(output).toContain('Root remains accountable for synthesis');
     expect(output).toContain('set `quality_strategy` on every `spawn_agent`');
+    expect(output).toContain('A named-pattern `spawn_agent` without it is invalid');
+    expect(output).toContain('stageId:"interface-coverage"');
     expect(output).toContain('Omit `quality_strategy` for solo/direct work');
     expect(output).toContain('A challenger must name a terminal exact `agent-turn:`');
   });

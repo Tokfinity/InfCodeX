@@ -8,7 +8,7 @@ import {
   FEATURE_274_POLICY_CASES,
 } from './cases.js';
 
-export const FEATURE_274_REVISION = 'f274-v0.7.77.5' as const;
+export const FEATURE_274_REVISION = 'f274-v0.7.77.6' as const;
 export const FEATURE_274_POLICY_CASES_SHA256 =
   '10cf0872ecbb4b86f911a1d7397057389f7b8df13e54f270582dbc5eb66f750e' as const;
 export const FEATURE_274_JOURNEY_CASES_SHA256 =
@@ -48,6 +48,12 @@ export function buildFeature274ExperimentContract(): object {
         revision: 'f274-v0.7.77.4',
         status: 'recommend-iterate',
         reason: 'probe framing said independent analysis was complete and exposed send_message as an unintended challenger escape path',
+        reuseAllowed: false,
+      },
+      {
+        revision: 'f274-v0.7.77.5',
+        status: 'recommend-iterate',
+        reason: 'the simple-task cell withheld direct production tools and both coverage arms omitted structured strategy metadata',
         reuseAllowed: false,
       },
     ],
