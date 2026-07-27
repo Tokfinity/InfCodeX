@@ -83,7 +83,9 @@ Release state: the root package, all four workspace packages, and every
 FEATURE_274 pattern-aware adaptive AMA, FEATURE_275 governed event-triggered
 memory intervention, the public 1M `kimi-k3` route, prompt-cache diagnostics,
 Runtime interrupt/default-model reliability fixes, and the final child-runtime
-cache/context identity and Actor capability hardening.
+cache/context identity and Actor capability hardening. Release hardening also
+adds the host-configurable Shell Execution Contract, compaction-safe
+request-only managed context, and terminal/schema/memory integrity fixes.
 
 The candidate is not yet a release. Before tagging, all of the following must
 be true:
@@ -91,7 +93,8 @@ be true:
 1. the deterministic local gate and exact tarball audit pass from a clean
    install;
 2. the candidate commit's GitHub `CI` workflow is green for Node 20, Node 22,
-   the Unix Runtime socket gate, and packaged Electron on Windows;
+   the Unix Runtime socket gate, the dedicated Windows Shell Contract gate,
+   and packaged Electron on Windows;
 3. the `docs/features` submodule points at the reviewed v0.7.77 design commit
    and both repositories are clean;
 4. the preregistered F274/F275 paid pilot is run only after explicit owner
@@ -119,11 +122,13 @@ bundled Sidecar prompt and budget bridge, and restores the development
 manifest. Use `kodax-ai-kodax-0.7.77.tgz` for consumer validation; a real npm
 publication sends those same audited bytes.
 
-Final local candidate evidence on 2026-07-26: the clean-install deterministic
-sequence above and the exact tarball audit passed. The packaged Electron
-boundary remains a required check in the final GitHub CI matrix. The audited
-`kodax-ai-kodax-0.7.77.tgz` SHA-256 is
-`95DB1DA510840A918A3B55105F6CCF81D2871C363A2D21D2F20223382BCB17A8`.
+Final local candidate evidence on 2026-07-27: the clean-install template,
+package build, bundle, declaration, fast/unit/contract/system, packaged
+Electron, and exact tarball audit gates passed. The audited
+`kodax-ai-kodax-0.7.77.tgz` is 4,130,893 bytes with SHA-256
+`693D19B1BBDAF68A9695F0DE1115D3631D12F2A3ACCE16F91F1602C77439D23A`.
+The candidate commit must still pass the complete GitHub CI matrix, including
+the dedicated Windows Shell Contract job.
 
 For a focused v0.7.77 rerun:
 
@@ -138,10 +143,27 @@ npx vitest run \
   packages/coding/src/orchestration/pattern-trace.test.ts \
   packages/coding/src/agent-runtime/run-substrate.memory-intervention.test.ts \
   packages/coding/src/agent-runtime/run-substrate.terminal-interrupt.test.ts \
+  packages/coding/src/child-executor.test.ts \
+  packages/coding/src/orchestration/pattern-result.test.ts \
+  packages/coding/src/shell-execution/contract.test.ts \
+  packages/coding/src/shell-execution/environment.test.ts \
+  packages/coding/src/shell-execution/resolver.test.ts \
+  packages/coding/src/agent-runtime/tool-execution-context.test.ts \
+  packages/coding/src/task-engine/runner-driven.compaction-context.test.ts \
+  packages/coding/src/tools/bash.test.ts \
+  packages/coding/src/workflows/structured-output.test.ts \
   packages/coding/src/self-knowledge/registry.test.ts \
   packages/coding/src/tools/manual.test.ts \
+  packages/llm/src/providers/runtime-registry.test.ts \
+  src/runtime-permission-scope.test.ts \
   src/sdk-runtime.test.ts
 ```
+
+The focused human/host contracts are
+[`ISSUE_212_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_212_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_213_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_213_v0.7.77_REGRESSION_GUIDE.md),
+and
+[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
 
 The paid experiment declarations are contracts, not drivers. Their current
 combined ceilings reach hundreds of provider calls and require explicit

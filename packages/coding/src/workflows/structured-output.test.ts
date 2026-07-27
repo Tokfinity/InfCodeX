@@ -67,8 +67,50 @@ describe('validateAgainstSchema', () => {
   it('imposes no constraint for a non-object schema', () => {
     expect(validateAgainstSchema({ anything: true }, undefined)).toEqual([]);
   });
-});
 
+  it('enforces oneOf: exactly one variant must match', () => {
+    const schema = {
+      oneOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['actorPath', 'turnId'],
+          properties: { actorPath: { type: 'string' }, turnId: { type: 'string' } },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['evidenceRef'],
+          properties: { evidenceRef: { type: 'string' } },
+        },
+      ],
+    };
+    expect(
+      validateAgainstSchema({ actorPath: '/root/reviewer', turnId: 'turn-1' }, schema),
+    ).toEqual([]);
+    expect(validateAgainstSchema({ evidenceRef: 'agent-turn:/root/reviewer#turn=turn-1' }, schema))
+      .toEqual([]);
+    // Both target forms present → matches zero variants (additionalProperties).
+    const both = validateAgainstSchema(
+      { actorPath: '/root/reviewer', turnId: 'turn-1', evidenceRef: 'x' },
+      schema,
+    );
+    expect(both).toHaveLength(1);
+    expect(both[0]).toContain('exactly one');
+    expect(both[0]).toContain('matched 0');
+    // Neither required set complete → also zero matches.
+    const neither = validateAgainstSchema({ actorPath: '/root/reviewer' }, schema);
+    expect(neither).toHaveLength(1);
+    expect(neither[0]).toContain('matched 0');
+  });
+
+  it('enforces oneOf: matching more than one variant is an error', () => {
+    const schema = { oneOf: [{ type: 'string' }, { type: 'string' }] };
+    const errors = validateAgainstSchema('x', schema);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('matched 2');
+  });
+});
 describe('extractJsonCandidate', () => {
   it('extracts a fenced json block surrounded by prose', () => {
     const text = 'Here is my analysis.\n\n```json\n{"lens":"x","findings":[]}\n```\n';
@@ -176,15 +218,43 @@ describe('assertSupportedOutputSchema', () => {
     expect(message).toContain('at severity');
   });
 
-  it('rejects composition keywords nested under items', () => {
+  it('rejects unsupported composition keywords nested under items', () => {
     expect(() =>
       assertSupportedOutputSchema({
         type: 'array',
-        items: { oneOf: [{ type: 'string' }, { type: 'number' }] },
+        items: { allOf: [{ type: 'string' }, { minLength: 1 }] },
       }),
-    ).toThrow(/oneOf/);
+    ).toThrow(/allOf/);
   });
 
+  it('accepts oneOf at declaration and rejects unsupported keywords inside its variants', () => {
+    expect(() =>
+      assertSupportedOutputSchema({
+        type: 'object',
+        properties: {
+          target: {
+            oneOf: [
+              { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+              { type: 'object', required: ['b'], properties: { b: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertSupportedOutputSchema({
+        type: 'object',
+        properties: {
+          target: {
+            oneOf: [
+              { type: 'object', properties: { a: { type: 'string', pattern: '^a' } } },
+              { type: 'object', properties: { b: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    ).toThrow(/pattern/);
+  });
   it('is a no-op for a non-object schema', () => {
     expect(() => assertSupportedOutputSchema(undefined)).not.toThrow();
     expect(() => assertSupportedOutputSchema('nope')).not.toThrow();

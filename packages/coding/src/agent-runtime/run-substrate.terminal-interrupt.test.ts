@@ -307,6 +307,80 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
     expect(inputWindowOpen).toBe(false);
   });
 
+  it('keeps the complete interrupt batch queued when any artifact fails validation', async () => {
+    const sessionId = 'ordinary-invalid-terminal-interrupt';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+
+    class InvalidInterruptProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'user',
+          mode: 'prompt',
+          content: 'valid queued input',
+        });
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'user',
+          mode: 'prompt',
+          content: 'invalid queued input',
+          inputArtifacts: [{
+            kind: 'file',
+            path: 'report.pdf',
+            mediaType: 'application/pdf',
+          }],
+        });
+        return {
+          textBlocks: [{ type: 'text', text: 'first answer' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new InvalidInterruptProvider());
+    actorSession = new CodingActorSession({ sessionId });
+
+    const result = await runKodaX(
+      {
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        maxIter: 1,
+        lsp: false,
+        session: { id: sessionId },
+        context: {
+          actorSession,
+          gitRoot: process.cwd(),
+          executionCwd: process.cwd(),
+          repoIntelligenceMode: 'off',
+          interruptInput: {
+            closeInputWindow() {},
+            reopenInputWindow() {},
+          },
+        },
+      },
+      'first prompt',
+    );
+
+    expect(result.success).toBe(false);
+    expect(getMessageQueue().peek({
+      agentId: queueAgentId,
+      maxPriority: 'user',
+      mode: 'prompt',
+    }).map((message) => message.content)).toEqual([
+      'valid queued input',
+      'invalid queued input',
+    ]);
+  });
+
   it('closes interrupt admission before ordinary failure cleanup', async () => {
     const sessionId = 'ordinary-terminal-failure';
     let inputWindowOpen = true;

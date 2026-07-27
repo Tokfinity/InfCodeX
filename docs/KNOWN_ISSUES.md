@@ -15,6 +15,8 @@ _Last Updated: 2026-07-27_
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 214 | High | Resolved | Daemon shell tools freeze startup PATH and expose inherited credentials | v0.7.77 and earlier | v0.7.77 development | 2026-07-26 | 2026-07-27 |
+| 213 | High | Resolved | Published v0.7.77 archive predates AMA request-only managed-context reinjection | v0.7.77 package | v0.7.77 repack | 2026-07-26 | 2026-07-26 |
+| 212 | High | Resolved | v0.7.77 review found child-briefing corruption, lossy interrupt validation, and terminal/schema contract drift | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 211 | High | Resolved | AMA stable System prompt still embeds the Session scratch path across new Sessions | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 210 | High | Resolved | Runtime diagnostic identity and latest cache query contracts are incomplete | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 209 | High | Resolved | Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
@@ -186,6 +188,125 @@ cmd, Registry, and Git Bash contract suite.
 - Focused shell, evaluator, Runtime, daemon, permission, and child regressions
 - `docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`
 
+### 213: Published v0.7.77 archive predates AMA request-only managed-context reinjection
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 package
+- **Fixed**: v0.7.77 repack
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+The `kodax-ai-kodax-0.7.77.tgz` supplied to KodaX-Space was built before
+commit `3363f1cf`. Its AMA Worker persisted Skills, MCP, task, Session, and
+other managed-run context as `_source: managed-run-context` transcript
+messages. Automatic compaction could summarize or remove that message, so
+later Worker requests lost the full Skill catalog and context diagnostics
+reported `skillCatalog: 0`.
+
+#### Root Cause
+
+The archive version matched the source package version but not the release
+commit. The bundle did not contain the `supportsEphemeralSuffix` capability
+contract or the request-only managed-context resolver introduced by
+`3363f1cf`, and no end-to-end automatic-compaction test covered both native
+ephemeral suffix delivery and the legacy Provider lowering path.
+
+#### Resolution
+
+Rebuilt the archive from a detached, clean `3363f1cf` worktree and verified
+the packed SDK entry points plus the native/fallback suffix markers. Added a
+real Runner automatic-compaction regression proving each pre/post-compaction
+Worker request contains exactly one Skills addendum and selected Skill,
+`skillCatalog` remains non-zero, and compactable/durable transcripts never
+persist the managed-run context. The regression covers native ephemeral suffix
+delivery and legacy Provider request-only lowering.
+
+#### Files Changed
+
+- `packages/coding/src/task-engine/runner-driven.compaction-context.test.ts`
+- `kodax-ai-kodax-0.7.77.tgz`
+- `docs/test-guides/ISSUE_213_v0.7.77_REGRESSION_GUIDE.md`
+
+### 212: v0.7.77 review found child-briefing corruption, lossy interrupt validation, and terminal/schema contract drift
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 development
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-26
+
+#### Original Problem
+
+- Nested Markdown fences in `agent-turn:` evidence were replaced with visible
+  mojibake instead of the invisible fence-breaking sequence used for ordinary
+  `agent:` evidence.
+- Runtime interrupt input was dequeued before every artifact in the batch had
+  passed validation. A later invalid artifact could discard the complete batch
+  and leave a partially appended user-message batch.
+- Memory prompt safety missed qualified credential claims such as
+  `db password used by staging is ...`.
+- The governed memory renderer gained prompt-safety, evidence-ref, and token
+  limits without changing its frozen evidence fingerprint.
+- Natural iteration-limit success omitted `onComplete`; a completion observer
+  throwing `AbortError` could also leave the live turn marked `completed` while
+  the returned result was `interrupted`.
+- The pattern-disposition JSON Schema allowed both target forms together even
+  though the parser requires exactly one. Tightening the Schema with `oneOf`
+  was also not viable on its own: the workflow subset validator silently
+  ignored `oneOf` at validation time, while `assertSupportedOutputSchema`
+  rejected the keyword at declaration time.
+
+#### Root Cause
+
+- The `agent-turn:` sanitizer contained a corrupted string literal and lacked
+  an assertion for the exact replacement sequence.
+- Interrupt consumption combined destructive queue access, per-item
+  validation, and message mutation in one pass.
+- The credential heuristic only matched a credential noun immediately followed
+  by a copula.
+- The evidence hash covered display text but not the policy identity and
+  governed renderer limits.
+- Terminal events were emitted at individual early-return sites instead of
+  consistently reflecting the final result, and loop exhaustion lacked the
+  shared completion event.
+- The target Schema described a loose union while `parseOutcome` enforced XOR,
+  and the subset validator predated any `oneOf` usage and listed the keyword
+  as unsupported.
+
+#### Resolution
+
+- Unified both child-evidence fence sanitizers on explicit zero-width
+  separators and pinned the invisible output.
+- Changed interrupt consumption to peek and validate the complete batch before
+  one dequeue or message append.
+- Added bounded matching for common qualified credential sentences while
+  retaining ordinary non-secret status statements.
+- Exported the renderer limits as shared constants and included them with the
+  policy identity in the pinned SHA-256 evidence fingerprint.
+- Centralized caught-terminal finalization, derived live-turn completion from
+  the final result, and emitted exactly one `onComplete` for iteration-limit
+  success.
+- Made the disposition target Schema a closed `oneOf` matching the parser's
+  actor-turn-or-evidence target contract, and taught the subset validator
+  `oneOf` (exactly-one-variant) so first-pass structured-output validation
+  genuinely rejects mixed targets and the Schema remains declarable on the
+  workflow path.
+
+#### Files Changed
+
+- `packages/coding/src/child-executor.ts`
+- `packages/coding/src/agent-runtime/run-substrate.ts`
+- `packages/coding/src/orchestration/pattern-result.ts`
+- `packages/coding/src/workflows/structured-output.ts`
+- `packages/agent/src/memory-control/prompt-safety.ts`
+- `packages/agent/src/experimental-memory/reminder-envelope.ts`
+- `packages/coding/src/memory/rendering.ts`
+- Focused unit and contract tests for each corrected behavior
+- `docs/test-guides/ISSUE_212_v0.7.77_REGRESSION_GUIDE.md`
 
 ### 211: AMA stable System prompt still embeds the Session scratch path across new Sessions
 
@@ -7144,7 +7265,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 98 (25 Open, 73 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 100 (25 Open, 75 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -7170,6 +7291,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - Confirmed daemon shell execution couples per-run cwd to a stale startup
   environment, implicit interpreter, and unfiltered process credentials.
 
+### 2026-07-26: Issue 213 resolved (v0.7.77 repack)
+- Rebuilt the v0.7.77 archive from clean commit `3363f1cf`, verified its
+  request-only suffix implementation, and added native/legacy automatic-
+  compaction regressions.
+
+### 2026-07-26: Issue 213 added
+- Confirmed the supplied v0.7.77 archive predates the request-only AMA
+  managed-context implementation even though its package version is current.
+
+### 2026-07-26: Issue 212 resolved (v0.7.77 development)
+- Repaired child-evidence sanitization and made interrupt-batch validation
+  non-destructive and all-or-nothing.
+- Aligned memory governance hashing, terminal events, live-turn status, and the
+  pattern-disposition Schema with their production contracts.
 
 ### 2026-07-26: Issue 211 resolved (v0.7.77 development)
 - Removed Session scratch paths from the AMA stable System prompt and moved

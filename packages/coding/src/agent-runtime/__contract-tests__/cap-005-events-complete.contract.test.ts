@@ -7,13 +7,15 @@
  * - CAP-EVENTS-COMPLETE-001c: error terminal fires `onError` (not
  *   `onComplete`) — these terminal events are mutually exclusive per
  *   CAP-084 contract
+ * - CAP-EVENTS-COMPLETE-001d: fires exactly once on iteration-limit success
  *
  * Risk: HIGH — REPL terminal cleanup relies on exactly-one terminal
  * event per run.
  *
- * Verified call sites: agent-runtime/run-substrate.ts (3 success/block
- * sites) + agent-runtime/catch-terminals.ts:applyGenericErrorTerminal
- * (error site fires `onError` only).
+ * Verified call sites: agent-runtime/run-substrate.ts (model completion,
+ * iteration-limit completion, and block sites) +
+ * agent-runtime/catch-terminals.ts:applyGenericErrorTerminal (error site
+ * fires `onError` only).
  *
  * STATUS: ACTIVE since FEATURE_100 P3.6u.
  */
@@ -38,7 +40,7 @@ import { runKodaX } from '../../agent.js';
 const PROVIDER_NAME = 'cap-005-test-provider';
 const API_KEY_ENV = 'CAP_005_TEST_PROVIDER_API_KEY';
 
-type Behavior = 'success' | 'throw';
+type Behavior = 'success' | 'throw' | 'tool-loop';
 
 class CompleteEventProvider extends KodaXBaseProvider {
   readonly name = PROVIDER_NAME;
@@ -60,6 +62,19 @@ class CompleteEventProvider extends KodaXBaseProvider {
     _signal?: AbortSignal,
   ): Promise<KodaXStreamResult> {
     if (this.behavior === 'throw') throw new Error('synthetic terminal failure');
+    if (this.behavior === 'tool-loop') {
+      return {
+        textBlocks: [],
+        toolBlocks: [{
+          type: 'tool_use',
+          id: 'read-package',
+          name: 'read',
+          input: { path: 'package.json' },
+        }],
+        thinkingBlocks: [],
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+    }
     return {
       textBlocks: [{ type: 'text', text: 'done' }],
       toolBlocks: [],
@@ -121,13 +136,41 @@ describe('CAP-005: onComplete event contract', { timeout: 30_000 }, () => {
       error.name = 'AbortError';
       throw error;
     });
+    const completedStatuses: string[] = [];
 
     const result = await runKodaX(
-      { provider: PROVIDER_NAME, model: 'baseline-model', events: { onComplete } },
+      {
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        events: {
+          onComplete,
+          onTurnCompleted: (event) => completedStatuses.push(event.status),
+        },
+      },
       'do thing',
     );
 
     expect(result.interrupted).toBe(true);
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(completedStatuses).toEqual(['interrupted']);
+  });
+
+  it('CAP-EVENTS-COMPLETE-001d: iteration-limit success fires onComplete exactly once', async () => {
+    registerModelProvider(PROVIDER_NAME, () => new CompleteEventProvider('tool-loop'));
+    const onComplete = vi.fn();
+
+    const result = await runKodaX(
+      {
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        maxIter: 1,
+        events: { onComplete },
+      },
+      'inspect the package',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.limitReached).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
   });
 

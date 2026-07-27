@@ -1,5 +1,12 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -378,7 +385,7 @@ describe('resolved shell execution', () => {
         { command: nodePrint('KODAX_PROFILE_CWD', true) },
         context(cwd, contract),
       );
-      expect(result).toContain(cwd);
+      expect(result.toLowerCase()).toContain((await realpath(cwd)).toLowerCase());
     },
   );
 

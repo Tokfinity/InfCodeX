@@ -84,6 +84,12 @@ whether a task is complete. `MemorySession.intervene()` likewise exposes a
 domain-neutral, bounded primitive while F228's memory-control plane remains the
 only durable write authority.
 
+The v0.7.77 release hardens the memory evidence envelope as one frozen policy
+artifact: prompt-safety identity, claim/reference limits, reference count, and
+token reserve all participate in its evidence fingerprint. Qualified
+credential sentences are rejected before they can become model-visible memory
+evidence.
+
 `DefaultSummaryCompaction` 是给自定义 Agent loop 使用的独立 primitive；它不替代、也不能关闭 KodaX coding runtime 在 FEATURE_272 中定义的始终开启大型压缩策略。
 
 ## Subpath 说明

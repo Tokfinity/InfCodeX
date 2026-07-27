@@ -4700,6 +4700,79 @@ This follow-up does not gate SDK packaging, tagging, or publication.
 
 ---
 
+## 28. Host-configurable Shell Execution Contract (v0.7.77)
+
+The shared daemon is long-lived, so its startup `process.env.PATH` is not a
+reliable description of every project's toolchain. A host can opt a Session
+into a serializable shell contract:
+
+```ts
+await runtime.sessions.updateSettings(session.id, {
+  executionCwd: projectDirectory,
+  shellExecution: {
+    version: 1,
+    shell: {
+      kind: 'pwsh',             // pwsh | powershell | cmd | bash | zsh
+      profile: 'default',
+    },
+    environment: {
+      inherit: 'filtered',
+      // Trusted host code, not model input. Use it for a directory-aware
+      // activation command when the shell profile does not switch on cwd.
+      setup: 'fnm use --silent-if-unchanged',
+      windowsPath: 'registry',
+    },
+    cache: {
+      ttlMs: 30_000,
+      refreshToken: 'toolchain-revision-1',
+    },
+    probeTimeoutMs: 10_000,
+  },
+});
+```
+
+An individual Run can supply `options.context.shellExecution`; a concrete Run
+contract overrides the Session setting. An omitted value or explicit
+`undefined` does not erase the Session setting. Use a `null` Session patch to
+remove it.
+
+The contract supports an optional absolute `shell.executable` (for example Git
+Bash) and bounded fixed `shell.args`. Command/file/persistence/profile/server
+and working-directory control flags are rejected from those fixed arguments.
+`environment.set` is for non-secret host variables. `denyPatterns` can remove
+additional names but cannot weaken the built-in Provider credential deny set.
+`inherit: "none"` retains only the OS variables required to start the selected
+shell. On Windows, `windowsPath: "registry"` re-reads current Machine/User
+environment values instead of reusing the daemon's startup PATH.
+
+Resolution is two-stage and uses the effective cwd:
+
+1. sanitize the bootstrap environment, including credentials for built-in,
+   custom, active, inactive, and stacked runtime Providers;
+2. start the selected shell, load the requested profile/setup, capture a
+   random-framed environment, validate and sanitize it again;
+3. execute the actual command through that same explicit interpreter.
+
+The cache is in-memory and isolated by normalized contract, canonical cwd,
+Session scratch identity, credential deny names, and refresh generation. TTL
+is bounded to ten minutes; zero disables caching. Daemon restart clears it.
+`clearShellExecutionEnvironmentCache()` is available for an in-process owner
+that needs immediate global invalidation.
+
+Native children, nested Actor turns, Workflow child paths, and deterministic
+build/test/lint evaluators inherit the effective contract. Runtime exact-command
+permission grants bind the interpreter family and contract fingerprint, so a
+grant created under cmd cannot silently authorize the same command after a
+switch to PowerShell or Bash.
+
+Configured-shell failures are visible and fail closed: KodaX does not reinterpret
+the command through another shell. When `shellExecution` is absent, KodaX keeps
+the pre-v0.7.77 platform-shell behavior for compatibility. See
+[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)
+for cross-project, cache, cancellation, credential, and Windows argv checks.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start
@@ -4710,3 +4783,4 @@ This follow-up does not gate SDK packaging, tagging, or publication.
 - [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
 - [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release-candidate design and verification record
 - [docs/features/v0.7.75.md](features/v0.7.75.md) — v0.7.75 Windows GUI and Sidecar/Runtime stabilization candidate
+- [docs/features/v0.7.77.md](features/v0.7.77.md) — v0.7.77 adaptive-quality, governed-memory, and release-hardening record

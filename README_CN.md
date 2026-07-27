@@ -117,6 +117,15 @@ daemon Runtime 边界保留结构化 blocked 原因。
 [v0.7.77 设计](docs/features/v0.7.77.md)与
 [发布检查清单](docs/release.md#v0777-release-candidate-verification)。
 
+同一候选版还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
+设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
+或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一
+解释器执行命令。环境缓存按 contract 与 cwd 隔离，使用有界 TTL，也可由宿主显式
+刷新。Provider 凭据与执行控制变量会在加载 profile/setup 前以及实际执行前分别
+过滤。没有配置 `shellExecution` 的调用保持原有命令行为。详见
+[SDK Embedder Guide 第 28 节](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
+与 [Issue 214 回归指南](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)。
+
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
 仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到

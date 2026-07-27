@@ -270,6 +270,15 @@ Major tool families include:
 Permission modes and auto-mode guardrails must operate on tool side effects and
 runtime context, not on prompt-only convention.
 
+Configured shell execution is owned by the Runtime host and coding tool layer,
+not by the daemon process environment. A normalized, JSON-only contract flows
+from Session/Run settings into root and descendant tool contexts. The resolver
+sanitizes bootstrap variables, loads the selected shell/profile in the real
+execution cwd, captures and validates a framed environment, sanitizes again,
+then uses the same explicit interpreter for the command. Cache identity binds
+the contract, canonical cwd, Session scratch identity, denied credential
+names, and refresh generation. Legacy callers bypass this resolver.
+
 The permission boundary treats `gitRoot` as an allowed repository boundary and
 `executionCwd` as the base for relative operands. It never promotes quoted
 script or regular-expression source into a filesystem path. Permission events

@@ -11,7 +11,8 @@
  * tool-call parser (ADR-044 §4 — the validate-and-repair path was chosen over a
  * forced `structured_output` tool precisely to avoid that coupling). The
  * validator covers the JSON-Schema keywords real workflow schemas use: `type`,
- * `enum`, `required`, `properties`, `items`, `additionalProperties:false`.
+ * `enum`, `required`, `properties`, `items`, `additionalProperties:false`, and
+ * `oneOf` (exactly-one-variant composition, e.g. exclusive target forms).
  */
 
 export interface StructuredOutputEvaluation {
@@ -97,6 +98,19 @@ export function validateAgainstSchema(value: unknown, schema: unknown, path = ''
     errors.push(`${loc}: value is not one of the allowed enum values`);
   }
 
+  // `oneOf`: exactly one variant must validate cleanly. Zero matches means the
+  // value fits no allowed shape; more than one means the variants are not
+  // exclusive for this value (e.g. both target forms present).
+  if (Array.isArray(schema.oneOf)) {
+    const matchCount = schema.oneOf.filter(
+      (variant) => validateAgainstSchema(value, variant, path).length === 0,
+    ).length;
+    if (matchCount !== 1) {
+      errors.push(
+        `${loc}: value must match exactly one of the ${schema.oneOf.length} oneOf variants (matched ${matchCount})`,
+      );
+    }
+  }
   if (isRecord(value)) {
     const properties = isRecord(schema.properties) ? schema.properties : undefined;
     if (Array.isArray(schema.required)) {
@@ -145,9 +159,7 @@ const UNSUPPORTED_SCHEMA_KEYWORDS: readonly string[] = [
   '$ref',
   '$defs',
   'definitions',
-  'oneOf',
-  'allOf',
-  'anyOf',
+  'allOf', 'anyOf',
   'not',
   'if',
   'then',
@@ -198,6 +210,13 @@ function collectUnsupportedKeywords(schema: unknown, path: string, found: Map<st
   if (isRecord(schema.items)) {
     collectUnsupportedKeywords(schema.items, `${path || '(root)'}[]`, found);
   }
+  // `oneOf` is honored by the validator, so unsupported keywords nested inside
+  // its variants must still be caught at declaration time.
+  if (Array.isArray(schema.oneOf)) {
+    for (const variant of schema.oneOf) {
+      collectUnsupportedKeywords(variant, `${path || '(root)'}(oneOf)`, found);
+    }
+  }
   // `validateAgainstSchema` only honors `additionalProperties === false` (the
   // "no extra keys" case). A schema-object form (`additionalProperties: {type:
   // 'string'}`) means "extra keys must match this schema" — which the validator
@@ -212,7 +231,7 @@ function collectUnsupportedKeywords(schema: unknown, path: string, found: Map<st
  * Throw if `schema` uses a JSON-Schema keyword the subset validator can't honor.
  * Called when a workflow child declares `outputSchema`, so the author/model gets
  * immediate feedback rather than a silently-unvalidated result. No-op for the
- * supported subset (`type`/`enum`/`required`/`properties`/`items`/
+ * supported subset (`type`/`enum`/`required`/`properties`/`items`/`oneOf`/
  * `additionalProperties`) and for non-object schemas.
  */
 export function assertSupportedOutputSchema(schema: unknown): void {
@@ -226,7 +245,7 @@ export function assertSupportedOutputSchema(schema: unknown): void {
   throw new Error(
     `outputSchema uses unsupported JSON-Schema keyword(s): ${detail}. ` +
       'The workflow validator supports only type, enum, required, properties, ' +
-      'items, and additionalProperties: false (nested object arrays included). ' +
+      'items, oneOf, and additionalProperties: false (nested object arrays included). ' +
       'Inline the referenced shapes, drop value-constraint keywords, and use that subset.',
   );
 }

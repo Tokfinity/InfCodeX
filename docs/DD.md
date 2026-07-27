@@ -371,6 +371,29 @@ that remains parseable even for a large write input and records the effective
 execution directory. Tool exposure removes `exit_plan_mode` unless an
 `events.exitPlanMode` approval bridge exists for the active run.
 
+When `context.shellExecution` is present, `normalizeShellExecutionContract()`
+admits only version 1 and the bounded `pwsh` / `powershell` / `cmd` / `bash` /
+`zsh` forms. Host arguments cannot override KodaX command, persistence,
+profile, server, or working-directory flags. `resolveShellExecution()`:
+
+1. canonicalizes the effective cwd;
+2. builds a credential-filtered bootstrap environment, including every
+   registered Provider's exact credential variable;
+3. loads the selected profile and trusted setup in that cwd;
+4. captures the environment through a random framed payload with timeout and
+   output bounds;
+5. validates and filters it again before explicit-interpreter execution.
+
+The in-memory cache key includes normalized contract bytes, canonical cwd,
+Session scratch identity, provider deny names, and a generation. TTL is capped;
+`refreshToken`, daemon restart, or `clearShellExecutionEnvironmentCache()`
+invalidates the result. In-flight probes are waiter-counted: one cancelled
+caller does not kill another caller's shared probe, while the last waiter
+terminates it and cannot populate the cache. Native children, nested Actors,
+Workflow leaves, and deterministic evaluators inherit the contract. Exact
+command permission matchers bind the interpreter family and contract SHA-256.
+No contract keeps `shell: true` plus the legacy process environment.
+
 The default terminal bindings keep Shift-Tab for the three permission modes and
 Shift+Enter for newline input. Rapid Shift-Tab changes enter the per-Session
 Runtime settings queue in input order, so the final visible mode is also the

@@ -1,6 +1,6 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-26
+> Last updated: 2026-07-27
 >
 > **v0.7.77 adaptive-quality and memory addendum:** FEATURE_274 gives AMA one
 > shared six-pattern catalog and Runtime-derived, fact-only `PatternTrace`
@@ -10,6 +10,17 @@
 > post-event foreground intervention uses a closed prompt-safe candidate set
 > and an optional in-process selector. The default path makes zero selector
 > calls, and unmeasured task-effect improvement is not a release claim.
+>
+> **v0.7.77 shell/cache/terminal hardening addendum:** a host-selected shell is
+> a serializable Session/Run execution contract, not an inference from the
+> daemon's startup environment and not a version-manager-specific adapter.
+> Resolution and command execution use the same explicit interpreter in the
+> effective cwd; provider credentials are filtered before and after profile
+> loading; cache identity is contract/cwd scoped; configured failures are
+> fail-closed; absent configuration retains compatibility. Managed AMA Skills,
+> MCP, and task context remain request-only across compaction. Terminal events,
+> interrupt batches, pattern target Schema, and governed-memory evidence hashes
+> are aligned with their public contracts without adding new authorities.
 >
 > **v0.7.75 stabilization addendum:** the published Runtime Worker now treats
 > hidden Windows consoles as part of the non-interactive background-process

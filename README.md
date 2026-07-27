@@ -418,6 +418,18 @@ route while retaining K2.7 Code as its default. See the
 [v0.7.77 design](docs/features/v0.7.77.md) and
 [release checklist](docs/release.md#v0777-release-candidate-verification).
 
+The same candidate adds an opt-in, host-configurable Shell Execution Contract.
+Runtime Session settings or an individual Run can select `pwsh`, Windows
+PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX
+resolves the shell environment in the effective project cwd and then executes
+the command through that same interpreter. Resolved environments are isolated
+by contract and cwd, expire after a bounded TTL, and can be explicitly
+refreshed. Provider credentials and execution-control variables are removed
+before profile/setup code and again before the command starts. When
+`shellExecution` is absent, established command behavior is unchanged. See
+[SDK Embedder Guide section 28](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
+and the [Issue 214 regression guide](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
+
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that
 session. Multiple `kodax` processes can attach to the same daemon and open or

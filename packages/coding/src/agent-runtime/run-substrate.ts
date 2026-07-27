@@ -723,12 +723,23 @@ export async function runSubstrate(
   }
   const consumeRuntimeInterruptInput = (): boolean => {
     if (!options.context?.interruptInput) return false;
-    const prompts = getMessageQueue().dequeue({
+    const queue = getMessageQueue();
+    const promptFilter = {
       agentId: messageQueueAgentId,
-      maxPriority: 'user',
-      mode: 'prompt',
-    });
+      maxPriority: 'user' as const,
+      mode: 'prompt' as const,
+    };
+    const prompts = queue.peek(promptFilter);
     if (prompts.length === 0) return false;
+    const preparedPrompts = prompts.map((queued) => {
+      const inputArtifacts = toKodaXInputArtifacts(queued.inputArtifacts);
+      validateInputArtifactsForModel(inputArtifacts ?? [], {
+        provider: turnState.currentProviderName,
+        model: turnState.currentModelOverride,
+      });
+      return { queued, inputArtifacts };
+    });
+    queue.dequeue(promptFilter);
     const queuedTurnId = startQueuedLiveTurn(prompts[0]?.id);
     if (ctx.actorControl !== undefined) {
       ctx.actorTurnRef = {
@@ -737,12 +748,7 @@ export async function runSubstrate(
       };
     }
     const timestamp = new Date().toISOString();
-    for (const queued of prompts) {
-      const inputArtifacts = toKodaXInputArtifacts(queued.inputArtifacts);
-      validateInputArtifactsForModel(inputArtifacts ?? [], {
-        provider: turnState.currentProviderName,
-        model: turnState.currentModelOverride,
-      });
+    for (const { queued, inputArtifacts } of preparedPrompts) {
       messages.push({
         role: 'user',
         content: buildPromptMessageContent(queued.content, inputArtifacts),
@@ -1063,6 +1069,51 @@ export async function runSubstrate(
     return contextTokenSnapshot;
   };
   const currentRoutingDecision = () => reasoningPlan.decision;
+  const finalizeCaughtError = async (cause: unknown): Promise<KodaXResult> => {
+    options.context?.interruptInput?.closeInputWindow();
+    const error = cause instanceof Error ? cause : new Error(String(cause));
+    const cleanup = await runCatchCleanup({
+      error,
+      messages,
+      errorMetadata,
+      options,
+      sessionId,
+      title,
+      runtimeSessionState,
+    });
+    const cleanedMessages = cleanup.cleanedMessages;
+    const updatedErrorMetadata = cleanup.updatedErrorMetadata;
+    contextTokenSnapshot = cleanup.contextTokenSnapshot;
+
+    if (error instanceof ContextCapacityError) {
+      throw error;
+    }
+    if (error.name === 'AbortError') {
+      await applyAbortErrorTerminal({ events, emitActiveExtensionEvent });
+      return finalizeManagedProtocolResult({
+        success: true,
+        lastText: turnState.lastText,
+        messages: cleanedMessages,
+        sessionId,
+        routingDecision: currentRoutingDecision(),
+        contextTokenSnapshot,
+        interrupted: true,
+        errorMetadata: updatedErrorMetadata,
+      });
+    }
+
+    emitLiveTurnFailedOnce(error);
+    await applyGenericErrorTerminal({ error, events, emitActiveExtensionEvent });
+    return finalizeManagedProtocolResult({
+      success: false,
+      lastText: turnState.lastText,
+      messages: cleanedMessages,
+      sessionId,
+      routingDecision: currentRoutingDecision(),
+      contextTokenSnapshot,
+      errorMetadata: updatedErrorMetadata,
+    });
+  };
     emitSessionStart(events, { provider: initialProvider.name, sessionId });
     await emitActiveExtensionEvent('session:start', { provider: initialProvider.name, sessionId });
     emitTurnStarted(events, liveTurnScopeRef.current);
@@ -1853,7 +1904,6 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: 'COMPLETE',
         });
-        emitLiveTurnCompletedOnce('completed');
         emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
         return finalizeManagedProtocolResult({
@@ -2019,7 +2069,6 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
-        emitLiveTurnCompletedOnce('completed');
         emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path. We still
@@ -2271,7 +2320,6 @@ export async function runSubstrate(
           hadToolCalls: false,
           signal: undefined,
         });
-        emitLiveTurnCompletedOnce('completed');
         emitComplete(events);
         await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // CAP-085 (clean-exit variant): natural completion path after a
@@ -2420,64 +2468,7 @@ export async function runSubstrate(
         signal: undefined,
       });
     } catch (e) {
-      options.context?.interruptInput?.closeInputWindow();
-      const error = e instanceof Error ? e : new Error(String(e));
-
-      // CAP-082: cleanup chain — ALWAYS runs first in the catch branch.
-      // Cleans incomplete tool calls + validates history (Issue 072
-      // prevention), increments consecutiveErrors, persists snapshot
-      // with cleaned messages, rebases the context-token snapshot.
-      const cleanup = await runCatchCleanup({
-        error,
-        messages,
-        errorMetadata,
-        options,
-        sessionId,
-        title,
-        runtimeSessionState,
-      });
-      const cleanedMessages = cleanup.cleanedMessages;
-      const updatedErrorMetadata = cleanup.updatedErrorMetadata;
-      contextTokenSnapshot = cleanup.contextTokenSnapshot;
-
-      // Capacity is a control-flow failure, not a model/tool result. Cleanup
-      // above preserves the resumable canonical history; the typed error must
-      // still reach the caller so no known-overflow request is reported as a
-      // normal `success:false` turn.
-      if (error instanceof ContextCapacityError) {
-        throw error;
-      }
-
-      // CAP-083: AbortError silent terminal. Per Gemini CLI parity,
-      // user interrupts return success:true with interrupted flag.
-      if (error.name === 'AbortError') {
-        await applyAbortErrorTerminal({ events, emitActiveExtensionEvent });
-        return finalizeManagedProtocolResult({
-          success: true,
-          lastText: turnState.lastText,
-          messages: cleanedMessages,
-          sessionId,
-          routingDecision: currentRoutingDecision(),
-          contextTokenSnapshot,
-          interrupted: true,
-          errorMetadata: updatedErrorMetadata,
-        });
-      }
-
-      // CAP-084: generic error terminal. Emits `error` event +
-      // events.onError; returns success:false with the cleaned
-      // messages so a follow-up resume doesn't reload corrupt history.
-      emitLiveTurnFailedOnce(error);
-      await applyGenericErrorTerminal({ error, events, emitActiveExtensionEvent });
-      return finalizeManagedProtocolResult({
-        success: false,
-        lastText: turnState.lastText,
-        messages: cleanedMessages,
-        sessionId,
-        routingDecision: currentRoutingDecision(),
-        contextTokenSnapshot,
-        errorMetadata: updatedErrorMetadata,
-      });
+      return finalizeCaughtError(e);
     }
   }
 
@@ -2499,6 +2490,15 @@ export async function runSubstrate(
     runtimeSessionState,
     lastText: turnState.lastText,
   });
+  try {
+    emitComplete(events);
+    await emitActiveExtensionEvent('complete', {
+      success: true,
+      signal: iterTerminal.finalSignal || undefined,
+    });
+  } catch (error) {
+    return finalizeCaughtError(error);
+  }
   return finalizeManagedProtocolResult({
     success: true,
     lastText: turnState.lastText,

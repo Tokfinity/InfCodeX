@@ -145,6 +145,15 @@ checkpoint, and sandbox paths reachable from the published Runtime Worker.
 Explicit editor, terminal, and PTY interactions remain interactive and are not
 hidden by this requirement.
 
+Runtime hosts must be able to opt into a JSON-serializable Shell Execution
+Contract per Session or Run. The contract selects one explicit interpreter,
+fixed non-command arguments, profile mode, environment inheritance/setup, and
+bounded cache policy. Environment resolution must occur in the effective
+execution cwd so directory-scoped toolchains can take effect. Provider
+credentials and execution-control variables must be removed before profile
+code and before command execution. A configured interpreter failure is visible
+and fail-closed; an absent contract preserves established behavior.
+
 Sidecar completion must distinguish an optional offer made after the current
 request is satisfied from clarification required to satisfy the request.
 Runtime hosts must receive budget-approval state only for an eligible revision,

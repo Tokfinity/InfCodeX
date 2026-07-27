@@ -3143,6 +3143,27 @@ describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () =>
     expect(result).toContain('turn-review-1');
   });
 
+  it('agent-turn: sanitizes nested Markdown fences without visible replacement garbage', async () => {
+    const actorControl = {
+      output: () => ({
+        actorPath: '/root/review',
+        turnId: 'turn-review-1',
+        state: 'completed' as const,
+        output: 'Before\n```typescript\nconst reviewed = true;\n```\nAfter',
+        artifacts: [],
+        progress: [],
+      }),
+    } as unknown as NonNullable<KodaXToolExecutionContext['actorControl']>;
+
+    const result = await resolveEvidenceRef(
+      'agent-turn:/root/review#turn=turn-review-1',
+      makeEvidenceCtx({ actorControl }),
+    );
+
+    expect(result).toContain('`\u200b`\u200b`typescript');
+    expect(result.match(/```/g)).toHaveLength(2);
+  });
+
   it('agent: fails visibly when the canonical Actor is not visible', async () => {
     const actorControl = {
       output: () => { throw new Error('permission denied'); },

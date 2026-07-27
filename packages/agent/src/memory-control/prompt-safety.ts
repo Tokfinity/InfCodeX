@@ -2,6 +2,8 @@ const DIRECT_RESTRICTED_MEMORY_PATTERN =
   /(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|authorization:\s*bearer\b|\b(?:api[_\s-]?key|password|secret|token)\b\s*(?:[:=]|->|=>))/i;
 const SENTENCE_CREDENTIAL_PATTERN =
   /\b(?:api[_\s-]?key|password|secret|token)\b\s+(?:(?:actually|currently|now|presently|really)\s+)?(?:is|was|equals?)\s+(.+)/i;
+const QUALIFIED_SENTENCE_CREDENTIAL_PATTERN =
+  /\b(?:api[_\s-]?key|password|secret|token)\b\s+(?:(?:used|stored|configured|set|issued|deployed|assigned|shared|provided|required)\b(?:\s+(?:by|for|in|on|at|with|from|to)\b)?|(?:for|in|on|at)\b)(?:\s+[\p{L}\p{N}._-]+){0,3}\s+(?:is|was|equals?)\s+(.+)/iu;
 const SAFE_CREDENTIAL_STATES = new Set([
   'active',
   'disabled',
@@ -71,7 +73,8 @@ function memoryClaimDetectionViews(value: string): readonly [string, string] {
 }
 
 function containsSentenceCredential(value: string): boolean {
-  const match = SENTENCE_CREDENTIAL_PATTERN.exec(value);
+  const match = SENTENCE_CREDENTIAL_PATTERN.exec(value)
+    ?? QUALIFIED_SENTENCE_CREDENTIAL_PATTERN.exec(value);
   const candidate = match?.[1]
     ?.replace(/^["'`]+|[.!?'"`]+$/g, '')
     .trim();

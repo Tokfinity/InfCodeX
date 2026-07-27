@@ -31,6 +31,13 @@ stages through the existing Actor tools and may attach validated
 `PatternTrace` for the existing Sidecar. This does not activate Workflow,
 create a fixed Agent topology, or add another quality judge.
 
+The same release adds the JSON-only `KodaXShellExecutionContract`. Configured
+Runtime sessions and runs resolve a credential-filtered shell environment in
+the effective cwd, execute through the same explicit interpreter, inherit the
+contract into native children and deterministic evaluators, and bind exact
+command grants to the contract fingerprint. The feature is opt-in; callers
+without `shellExecution` keep the legacy platform-shell path.
+
 The same release replaces asynchronous semantic memory prefetch with sparse
 foreground intervention after tool/verification failure or committed
 compaction. The default path performs deterministic exact selection with zero
@@ -135,6 +142,9 @@ console.log(result.success);
 - Provider policy: capability checks, model hints, fallback helpers
 - Adaptive AMA: shared pattern catalog, strategy validation, bounded
   `PatternTrace`, and Sidecar strategy context
+- Shell execution: `KodaXShellExecutionContract`,
+  `normalizeShellExecutionContract`, `shellExecutionContractFingerprint`, and
+  `clearShellExecutionEnvironmentCache`
 - Governed memory: `createCodingMemoryInterventionRunner` for host-opt-in
   semantic selection; deterministic intervention remains the default
 - Workflows: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `generateWorkflowFromOptions`, `createWorkflowRunManager`, `createWorkflowLifecycleController`, built-in/saved workflow discovery

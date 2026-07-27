@@ -2046,7 +2046,7 @@ export async function resolveEvidenceRef(
     }
     const FENCE = '```';
     let body = output.output ?? output.error ?? '(no final text recorded)';
-    if (body.includes(FENCE)) body = body.replace(/```/g, '`鈥媊鈥媊');
+    if (body.includes(FENCE)) body = body.replace(/```/g, '`\u200b`\u200b`');
     return `### agent-turn:${target.actorPath}#turn=${target.turnId} (${output.state})\n${FENCE}\n${body}\n${FENCE}`;
   }
   if (ref.startsWith('agent:')) {
@@ -2066,7 +2066,7 @@ export async function resolveEvidenceRef(
     const FENCE = '```';
     let body = output.output ?? output.error ?? '(no final text recorded)';
     if (body.includes(FENCE)) {
-      body = body.replace(/```/g, '`​`​`');
+      body = body.replace(/```/g, '`\u200b`\u200b`');
     }
     return `### agent: ${actorPath} (${output.state})\n${FENCE}\n${body}\n${FENCE}`;
   }

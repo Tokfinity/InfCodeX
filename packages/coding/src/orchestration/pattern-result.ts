@@ -30,13 +30,25 @@ export const PATTERN_DISPOSITION_ENVELOPE_SCHEMA = {
         required: ['target', 'disposition', 'evidenceRefs'],
         properties: {
           target: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              actorPath: { type: 'string' },
-              turnId: { type: 'string' },
-              evidenceRef: { type: 'string' },
-            },
+            oneOf: [
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['actorPath', 'turnId'],
+                properties: {
+                  actorPath: { type: 'string' },
+                  turnId: { type: 'string' },
+                },
+              },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['evidenceRef'],
+                properties: {
+                  evidenceRef: { type: 'string' },
+                },
+              },
+            ],
           },
           disposition: {
             type: 'string',

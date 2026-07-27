@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.77] - 2026-07-26
+## [0.7.77] - 2026-07-27
 
 > Release candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,
 > GitHub Release, and npm publication are not created yet. F274/F275 paid
@@ -55,6 +55,26 @@ All notable changes to this project will be documented in this file.
   cmd-only hints under PowerShell or Git Bash. Last-waiter cancellation now
   terminates an in-flight profile probe without interrupting shared waiters.
   A targeted Windows CI gate covers the cross-platform shell paths.
+- Rebuilt the supplied v0.7.77 package from the cache-stability fix and added
+  an end-to-end AMA automatic-compaction regression. Before and after
+  compaction, native and legacy Providers now prove the Skills addendum and
+  selected Skill are injected exactly once per Worker request, remain visible
+  to context-budget diagnostics, and never persist in compactable history.
+- Repaired nested `agent-turn:` evidence fence sanitization so downstream child
+  briefings use invisible zero-width separators instead of visible mojibake.
+- Made queued Runtime interrupt validation atomic at the batch boundary:
+  invalid artifacts now leave every accepted prompt queued and append no
+  partial user-message batch.
+- Extended governed-memory prompt safety to qualified credential sentences and
+  advanced its frozen evidence fingerprint to cover the policy identity and
+  renderer limits.
+- Aligned terminal contracts by emitting `onComplete` on iteration exhaustion
+  and deriving live-turn status from the final result; pattern-disposition
+  output Schema now enforces the parser's exclusive target forms.
+- Taught the workflow structured-output validator to honor `oneOf`
+  (exactly-one-variant), so Schemas using it—including the
+  pattern-disposition envelope—are genuinely validated instead of silently
+  passing, and remain legal for workflow `outputSchema` declarations.
 - Completed the Runtime diagnostics query contract for reconnecting hosts.
   Budget, tool-exposure, compaction-skip, and provider-cache diagnostics now
   carry stable logical `contextId` / `parentContextId` identity while retaining
@@ -140,15 +160,19 @@ All notable changes to this project will be documented in this file.
 
 - Updated the English/Chinese READMEs, current PRD/HLD/DD baselines, ADR
   addendum, SDK embedder guide, feature and issue trackers, release guide,
-  package READMEs, and `kodax_manual` for the v0.7.77 candidate.
+  package READMEs, and `kodax_manual` for the v0.7.77 candidate. Added focused
+  Issues 212–214 regression guides for terminal/schema/memory hardening,
+  compaction-safe managed context, and the Shell Execution Contract.
 
 ### Verification
 
 - Added deterministic F274/F275 experiment-contract, pattern/trace,
   Sidecar-alignment, prompt-safety, candidate-admission, intervention-ordering,
-  and Runtime interrupt regressions. External model generation remains blocked
-  by the preregistered contracts until the owner authorizes the frozen paid
-  pilot.
+  Runtime interrupt, structured-output, real auto-compaction, and
+  cross-platform Shell Execution Contract regressions. A dedicated Windows CI
+  job exercises pwsh, Windows PowerShell, cmd, Registry environment refresh,
+  and Git Bash behavior. External model generation remains blocked by the
+  preregistered contracts until the owner authorizes the frozen paid pilot.
 
 ## [0.7.76] - 2026-07-25
 

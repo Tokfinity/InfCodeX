@@ -208,6 +208,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build packages and Runtime Worker
+        run: |
+          npm run build:packages
+          npm run build:bundle
+
       - name: Shell contract Windows gate
         run: >-
           npx vitest run
