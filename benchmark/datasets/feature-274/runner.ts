@@ -49,15 +49,9 @@ const PILOT_CASE_IDS = new Set([
   'concrete-candidate-challenge',
   'explicit-workflow-request',
 ]);
-const COLLABORATION_TOOL_NAMES = [
+const POLICY_TOOL_NAMES = [
   'spawn_agent',
   'run_workflow',
-  'send_message',
-  'followup_task',
-  'wait_agent',
-  'list_agents',
-  'interrupt_agent',
-  'agent_output',
 ] as const;
 
 const LIMITS = {
@@ -325,8 +319,9 @@ function policySpec(
       evalCase.prompt,
       policyProbeFacts(evalCase),
       'This is a controlled collaboration-decision probe, not task execution.',
-      'Scope acquisition and inspection are complete. Do not inspect files, execute code, or request more scope.',
-      'Use only collaboration tools actually advertised for this request. Emit them immediately when useful; otherwise answer with one direct solo decision.',
+      'Raw evidence acquisition is complete; analysis and the collaboration decision are not complete.',
+      'Do not inspect files, execute code, or request more scope.',
+      'Use only `spawn_agent` or an explicitly advertised `run_workflow`. Emit the decision tool calls immediately when useful; otherwise answer with one direct solo decision.',
     ].join('\n'),
     priorMessages: evalCase.kind === 'solo' ? [] : suppliedScopeMessages(evalCase),
     timeoutMs: 90_000,
@@ -396,7 +391,7 @@ function feature274Tools(
   arm: Feature274Arm,
   explicitWorkflow: boolean,
 ): readonly KodaXToolDefinition[] {
-  return COLLABORATION_TOOL_NAMES
+  return POLICY_TOOL_NAMES
     .filter((name) => name !== 'run_workflow' || explicitWorkflow)
     .map((name) => {
       const definition = getToolDefinition(name);
@@ -425,10 +420,10 @@ function policyProbeFacts(evalCase: Feature274PolicyCase): string {
     return 'Frozen facts: in packages/sdk.ts function normalizeProjectName, rename local variable `result` to `normalized`; the focused test is packages/sdk.test.ts.';
   }
   if (evalCase.id === 'independent-interface-coverage') {
-    return 'Frozen facts: CLI parses `--protocol-version`, SDK serializes `protocolVersion`, and daemon validates the field; all three inspected diffs are available and independent review scopes are complete.';
+    return 'Frozen raw evidence: CLI parses `--protocol-version`, SDK serializes `protocolVersion`, and daemon validates the field. These are three independent review scopes; their compatibility analysis and synthesis have not been performed.';
   }
   if (evalCase.id === 'concrete-candidate-challenge') {
-    return 'Frozen facts: candidate `agent-turn:/root/candidate#turn=turn-1` is terminal; target `finding:auth-boundary` and failing evidence `test:auth-boundary` are visible.';
+    return 'Frozen raw evidence: candidate `agent-turn:/root/candidate#turn=turn-1` is terminal; target `finding:auth-boundary` and failing evidence `test:auth-boundary` are visible. The failure cause is unresolved and requires one independent adversarial lane; do not disposition it from this summary alone.';
   }
   if (evalCase.id === 'explicit-workflow-request') {
     return 'Frozen facts: the reusable audit covers packages/sdk.ts, src/daemon.ts, and src/cli.ts and must persist one structured result per package.';
@@ -455,7 +450,7 @@ function suppliedScopeMessages(evalCase: Feature274PolicyCase): readonly KodaXMe
     },
     {
       role: 'user',
-      content: `<tool_result name="changed_diff_bundle">{"case":"${evalCase.id}","scopeComplete":true,"inspectionComplete":true,"decisionEvidence":"${policyProbeFacts(evalCase).replaceAll('"', '\\"')}"}</tool_result>`,
+      content: `<tool_result name="changed_diff_bundle">{"case":"${evalCase.id}","scopeAcquisitionComplete":true,"rawEvidencePresent":true,"analysisComplete":false,"decisionEvidence":"${policyProbeFacts(evalCase).replaceAll('"', '\\"')}"}</tool_result>`,
       _synthetic: true,
       _source: 'feature-274-eval',
     },
