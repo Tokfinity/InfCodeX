@@ -193,3 +193,31 @@ jobs:
           KODAX_ELECTRON_DIST: ${{ github.workspace }}\.electron-smoke\node_modules\electron\dist
           KODAX_ELECTRON_BUILDER_CLI: ${{ github.workspace }}\.electron-smoke\node_modules\electron-builder\out\cli\cli.js
         run: npm run test:electron-daemon
+
+  shell-contract-windows:
+    name: shell execution contract (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Shell contract Windows gate
+        run: >-
+          npx vitest run
+          packages/llm/src/providers/runtime-registry.test.ts
+          packages/coding/src/shell-execution/contract.test.ts
+          packages/coding/src/shell-execution/environment.test.ts
+          packages/coding/src/shell-execution/resolver.test.ts
+          packages/coding/src/agent-runtime/tool-execution-context.test.ts
+          packages/coding/src/task-engine/deterministic-evaluator.test.ts
+          packages/coding/src/tools/bash.test.ts
+          src/runtime-permission-scope.test.ts
+          src/sdk-runtime.test.ts
+          --reporter=dot

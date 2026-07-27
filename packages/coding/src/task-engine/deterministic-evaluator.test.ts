@@ -5,15 +5,58 @@
  * exercises the same code path production uses. Each test uses a
  * one-liner that finishes in well under 1s.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { KodaXShellExecutionContract } from '../types.js';
+import { clearShellExecutionEnvironmentCache } from '../shell-execution/resolver.js';
 import {
   formatDeterministicEvaluatorResult,
   runDeterministicEvaluator,
 } from './deterministic-evaluator.js';
 
+afterEach(() => {
+  clearShellExecutionEnvironmentCache();
+  vi.unstubAllEnvs();
+});
+
 describe('runDeterministicEvaluator', () => {
+  it('uses the configured project shell environment without provider credentials', async () => {
+    vi.stubEnv('KODAX_EVALUATOR_PROVIDER_AUTH', 'must-not-leak');
+    const cwd = await mkdtemp(path.join(tmpdir(), 'kodax-evaluator-shell-'));
+    const setup = process.platform === 'win32'
+      ? 'set "KODAX_EVALUATOR_TOOLCHAIN=project-node"'
+      : 'export KODAX_EVALUATOR_TOOLCHAIN=project-node';
+    const shellExecution: KodaXShellExecutionContract = {
+      version: 1,
+      shell: {
+        kind: process.platform === 'win32' ? 'cmd' : 'bash',
+        profile: 'none',
+      },
+      environment: { setup },
+      cache: { ttlMs: 0 },
+    };
+    const script = [
+      "process.stdout.write(process.env.KODAX_EVALUATOR_TOOLCHAIN||'missing')",
+      "process.stdout.write('|'+(process.env.KODAX_EVALUATOR_PROVIDER_AUTH||'missing'))",
+    ].join(';');
+
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd,
+      shellExecution,
+      providerCredentialEnvironmentNames: ['KODAX_EVALUATOR_PROVIDER_AUTH'],
+      commandOverride: `"${process.execPath}" -e "${script}"`,
+      timeoutMs: 5_000,
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.stdoutTail).toBe('project-node|missing');
+    expect(result.stdoutTail).not.toContain('must-not-leak');
+  });
+
   it("reports 'pass' for an exit-0 command override", async () => {
     const result = await runDeterministicEvaluator({
       hint: 'build',

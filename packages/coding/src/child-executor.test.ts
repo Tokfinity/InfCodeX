@@ -190,6 +190,26 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.context?.contextDiagnostics).toBe(true);
   });
 
+  it('inherits the host shell execution contract into native child runtimes', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const shellExecution = {
+      version: 1 as const,
+      shell: { kind: 'bash' as const, profile: 'login' as const },
+      environment: { inherit: 'filtered' as const },
+    };
+
+    await executeChildAgents(
+      [createBundle()],
+      { ...createCtx(), shellExecution },
+      createOptions(),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly context?: { readonly shellExecution?: unknown };
+    };
+    expect(childOptions.context?.shellExecution).toEqual(shellExecution);
+  });
+
   it('preserves explicit false prompt-cache and diagnostic controls from the parent runtime', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
 

@@ -14,6 +14,7 @@ import {
 } from './runtime-registry.js';
 import {
   getAvailableProviderNames,
+  getProviderCredentialEnvironmentNames,
   isKnownProvider,
   resolveProvider,
 } from './resolver.js';
@@ -22,7 +23,7 @@ class TestRuntimeProvider extends KodaXBaseProvider {
   readonly name = 'runtime-test-provider';
   readonly supportsThinking = false;
   protected readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'RUNTIME_TEST_PROVIDER_API_KEY',
+    apiKeyEnv: 'RUNTIME_TEST_PROVIDER_AUTH',
     model: 'runtime-model',
     supportsThinking: false,
   };
@@ -48,6 +49,16 @@ class TestRuntimeProvider extends KodaXBaseProvider {
   }
 }
 
+class NamedCredentialRuntimeProvider extends TestRuntimeProvider {
+  constructor(private readonly credentialEnvironmentName: string) {
+    super();
+  }
+
+  override getApiKeyEnv(): string {
+    return this.credentialEnvironmentName;
+  }
+}
+
 describe('runtime model provider registry', () => {
   afterEach(() => {
     clearRuntimeModelProviders();
@@ -64,9 +75,33 @@ describe('runtime model provider registry', () => {
     expect(provider).toBeInstanceOf(TestRuntimeProvider);
     expect(isKnownProvider('runtime-test-provider')).toBe(true);
     expect(getAvailableProviderNames()).toContain('runtime-test-provider');
+    expect(getProviderCredentialEnvironmentNames()).toContain(
+      'RUNTIME_TEST_PROVIDER_AUTH',
+    );
 
     dispose();
 
     expect(isKnownProvider('runtime-test-provider')).toBe(false);
+  });
+
+  it('reports credentials from every stacked runtime registration', () => {
+    const disposeShadowed = registerModelProvider(
+      'stacked-runtime-provider',
+      () => new NamedCredentialRuntimeProvider('SHADOWED_PROVIDER_AUTH'),
+    );
+    const disposeActive = registerModelProvider(
+      'stacked-runtime-provider',
+      () => new NamedCredentialRuntimeProvider('ACTIVE_PROVIDER_AUTH'),
+    );
+
+    expect(getProviderCredentialEnvironmentNames()).toEqual(
+      expect.arrayContaining([
+        'SHADOWED_PROVIDER_AUTH',
+        'ACTIVE_PROVIDER_AUTH',
+      ]),
+    );
+
+    disposeActive();
+    disposeShadowed();
   });
 });

@@ -581,6 +581,18 @@ export function buildRunnerAgentChain(
             const checkResult = await runEvaluator({
               hint,
               cwd: runtimeCwd,
+              ...(ctx.shellExecution !== undefined
+                ? { shellExecution: ctx.shellExecution }
+                : {}),
+              ...(ctx.sessionScratchDir !== undefined
+                ? { sessionScratchDir: ctx.sessionScratchDir }
+                : {}),
+              ...(ctx.providerCredentialEnvironmentNames !== undefined
+                ? {
+                    providerCredentialEnvironmentNames:
+                      ctx.providerCredentialEnvironmentNames,
+                  }
+                : {}),
             });
             evaluatorOutputs.push(
               `[evaluator:${id}] ${formatDeterministicEvaluatorResult(checkResult)}`,

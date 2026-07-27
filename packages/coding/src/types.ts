@@ -1452,6 +1452,62 @@ export interface KodaXManagedWorkBudget {
   lastApprovalBudgetTotal?: number;
 }
 
+export type KodaXShellKind =
+  | 'pwsh'
+  | 'powershell'
+  | 'cmd'
+  | 'bash'
+  | 'zsh';
+
+export type KodaXShellProfileMode =
+  | 'default'
+  | 'none'
+  | 'login'
+  | 'interactive'
+  | 'login-interactive';
+
+/**
+ * Host-owned, JSON-serializable shell execution policy.
+ *
+ * The contract is opt-in. When absent, command execution keeps the legacy
+ * platform-shell/process.env behavior. When present, KodaX resolves a
+ * credential-filtered environment through this shell in the effective cwd,
+ * then executes the command with the same explicit interpreter.
+ */
+export interface KodaXShellExecutionContract {
+  readonly version: 1;
+  readonly shell: {
+    readonly kind: KodaXShellKind;
+    /** Absolute path is recommended; a bare name is resolved from sanitized PATH. */
+    readonly executable?: string;
+    /** Trusted fixed arguments inserted before KodaX's generated command flag. */
+    readonly args?: readonly string[];
+    readonly profile?: KodaXShellProfileMode;
+  };
+  readonly environment?: {
+    /** `filtered` keeps non-sensitive daemon variables; `none` keeps only OS bootstrap variables. */
+    readonly inherit?: 'filtered' | 'none';
+    /** Trusted, non-secret variables added before profile resolution. */
+    readonly set?: Readonly<Record<string, string>>;
+    /** Additional glob-style variable-name denies. Built-in credential denies are immutable. */
+    readonly denyPatterns?: readonly string[];
+    /**
+     * Trusted shell code run after profile loading and before environment
+     * capture. Directory-aware version-manager activation belongs here.
+     */
+    readonly setup?: string;
+    /** Windows-only PATH source. `registry` re-reads current Machine/User PATH. */
+    readonly windowsPath?: 'process' | 'registry';
+  };
+  readonly cache?: {
+    /** Strict environment-cache lifetime. Zero disables caching. */
+    readonly ttlMs?: number;
+    /** Changing this JSON scalar explicitly invalidates an existing cache entry. */
+    readonly refreshToken?: string | number;
+  };
+  readonly probeTimeoutMs?: number;
+}
+
 export interface KodaXContextOptions {
   /** Runtime-internal shared work ledger inherited by every descendant Agent run. */
   managedWorkBudget?: KodaXManagedWorkBudget;
@@ -1508,6 +1564,8 @@ export interface KodaXContextOptions {
    * and shell execution. Defaults to `gitRoot`, then `process.cwd()`.
    */
   executionCwd?: string;
+  /** Optional host-owned shell/environment resolution policy for command tools. */
+  shellExecution?: KodaXShellExecutionContract;
   /** Fail-closed host policy applied to every concrete file a read tool opens. */
   assertReadablePath?: (candidate: string) => void;
   /**
@@ -2221,6 +2279,15 @@ export interface KodaXToolExecutionContext {
   skillScriptRunner?: KodaXSkillScriptRunner;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
+  /** Validated shell execution policy inherited by native child runtimes. */
+  shellExecution?: KodaXShellExecutionContract;
+  /**
+   * Exact credential variable names owned by registered Providers.
+   * Used only to remove non-standard `apiKeyEnv` names from child processes.
+   *
+   * @internal
+   */
+  providerCredentialEnvironmentNames?: readonly string[];
   /** Fail-closed host policy applied to every concrete file a read tool opens. */
   assertReadablePath?: (candidate: string) => void;
   /** Host tool visibility ceiling inherited by child agents. */
@@ -2299,6 +2366,7 @@ export interface KodaXToolExecutionContext {
     readonly compaction?: Readonly<KodaXCompactionOverride>;
     readonly contextDiagnostics?: boolean;
     readonly disablePromptCache?: boolean;
+    readonly shellExecution?: KodaXShellExecutionContract;
   };
   /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */
   parentEvents?: KodaXEvents;

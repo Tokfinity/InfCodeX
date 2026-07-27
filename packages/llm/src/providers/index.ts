@@ -46,12 +46,14 @@ export {
   getRuntimeModelProvider,
   isRuntimeModelProviderName,
   getRuntimeModelProviderNames,
+  getRuntimeModelProviderCredentialEnvironmentNames,
   clearRuntimeModelProviders,
 } from './runtime-registry.js';
 export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
+  getProviderCredentialEnvironmentNames,
   // v0.7.43 SDK model-capability dispatchers (built-in + custom unified).
   resolveProviderModelDescriptors,
   resolveModelCapabilities,

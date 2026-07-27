@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-26_
+_Last Updated: 2026-07-27_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-26_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 214 | High | Resolved | Daemon shell tools freeze startup PATH and expose inherited credentials | v0.7.77 and earlier | v0.7.77 development | 2026-07-26 | 2026-07-27 |
 | 211 | High | Resolved | AMA stable System prompt still embeds the Session scratch path across new Sessions | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 210 | High | Resolved | Runtime diagnostic identity and latest cache query contracts are incomplete | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
 | 209 | High | Resolved | Child cache/context review found diagnostic identity, wire hashing, Workflow leaf, and specialist compatibility gaps | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
@@ -120,6 +121,71 @@ _Last Updated: 2026-07-26_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 214: Daemon shell tools freeze startup PATH and expose inherited credentials
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 and earlier
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-26
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+The built-in `bash` tool always uses `shell: true` and the long-lived daemon's
+startup `process.env`. Hosts cannot select a shell/profile per Session or Run,
+directory-scoped toolchains are not re-resolved in the actual execution
+directory, and model-issued commands inherit provider credentials.
+
+#### Root Cause
+
+The public Runtime contract carries `executionCwd` but has no serializable shell
+execution policy. Tool execution therefore couples the correct working
+directory to a stale, process-global environment and implicit platform shell.
+Child runtimes and permission grants also have no interpreter identity to
+inherit or bind.
+
+#### Resolution
+
+Added a strict, JSON-only Session/Run `shellExecution` contract for pwsh,
+Windows PowerShell, cmd, bash, zsh, and explicit shell paths. Configured command
+execution now sanitizes the daemon environment before profile/setup code runs,
+captures the cwd-specific environment through a random framed payload,
+validates and sanitizes it again, then executes with the same explicit
+interpreter. Unknown or unsafe fields fail validation; an unavailable selected
+shell fails visibly instead of changing command semantics through a fallback.
+Every registered built-in, custom, and runtime Provider's exact `apiKeyEnv` is
+denied even when its name does not match a credential-shaped pattern.
+
+Environment cache identity includes the normalized contract, canonical cwd,
+refresh token, and Session scratch identity, with a strict bounded TTL.
+Windows hosts may re-read Machine/User registry environments, recursively
+expand current persistent variables, and keep `%PATH%` independent from the
+daemon's stale startup environment. Runtime persistence,
+daemon transport, foreground/background command tools, AMA deterministic
+evaluators, native Actor descendants, and legacy/workflow children share the
+contract. Exact-command permission grants are bound to the interpreter
+contract hash, while diagnostics expose only the shell kind and hash. The
+unconfigured command path remains compatible.
+
+The post-implementation review additionally closed explicit-`undefined`
+Session inheritance, PowerShell switch/profile mismatches, pre-probe
+`NODE_OPTIONS`, host deny precedence, cmd prefix takeover, and cmd-only hint
+leakage. Shared in-flight probes now use waiter-counted cancellation: the last
+cancelled waiter terminates the profile process, while a remaining waiter keeps
+the shared resolution alive. Windows CI now executes the focused PowerShell,
+cmd, Registry, and Git Bash contract suite.
+
+#### Files Changed
+
+- `packages/coding/src/shell-execution/`
+- `packages/coding/src/tools/bash.ts`
+- `packages/coding/src/task-engine/deterministic-evaluator.ts`
+- Runtime/daemon settings, permission scope, and child-context propagation
+- Focused shell, evaluator, Runtime, daemon, permission, and child regressions
+- `docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`
+
 
 ### 211: AMA stable System prompt still embeds the Session scratch path across new Sessions
 
@@ -7078,11 +7144,32 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 97 (25 Open, 72 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 98 (25 Open, 73 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-27: Issue 214 review hardening resolved (v0.7.77 development)
+- Denied credentials for all registered Providers, preserved Session shell
+  inheritance through explicit Run `undefined`, rebuilt current Registry
+  variables without stale daemon expansion, and corrected PowerShell argv.
+- Added pre-probe execution-control filtering, deny-precedence coverage,
+  Git Bash hint isolation, waiter-counted probe cancellation, and a targeted
+  Windows CI gate.
+
+### 2026-07-26: Issue 214 initial implementation (v0.7.77 development)
+- Added a strict Session/Run shell contract with cwd-specific two-stage
+  environment resolution, pre/post credential filtering, bounded cache
+  refresh, explicit interpreter execution, child/evaluator propagation, and
+  interpreter-bound permission grants.
+- Preserved the unconfigured legacy path and made configured-shell failures
+  visible instead of silently reinterpreting commands.
+
+### 2026-07-26: Issue 214 added
+- Confirmed daemon shell execution couples per-run cwd to a stale startup
+  environment, implicit interpreter, and unfiltered process credentials.
+
 
 ### 2026-07-26: Issue 211 resolved (v0.7.77 development)
 - Removed Session scratch paths from the AMA stable System prompt and moved

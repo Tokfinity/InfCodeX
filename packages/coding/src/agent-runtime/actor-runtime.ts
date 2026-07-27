@@ -315,6 +315,8 @@ async function executeCodingActorTurn(
           ?? options.context?.contextDiagnostics,
         disablePromptCache: parentConfig?.disablePromptCache
           ?? options.disablePromptCache,
+        shellExecution: parentConfig?.shellExecution
+          ?? options.context?.shellExecution,
         extensionRuntime: parentCtx.extensionRuntime,
         events: parentCtx.parentEvents,
       },

@@ -980,6 +980,12 @@ describe('createKodaXRuntime', () => {
       if (event.type === 'session.settings.updated') settingsEvents.push(event.payload);
       if (event.type === 'config.effective') effectiveConfigs.push(event.payload);
     });
+    const shellExecution = {
+      version: 1 as const,
+      shell: { kind: 'pwsh' as const, profile: 'none' as const },
+      environment: { inherit: 'filtered' as const },
+      cache: { ttlMs: 30_000, refreshToken: 'settings-v1' },
+    };
 
     const settings = await runtime.sessions.updateSettings(session.id, {
       provider: 'settings-provider',
@@ -989,6 +995,7 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      shellExecution,
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
@@ -1003,6 +1010,7 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      shellExecution,
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
@@ -1046,8 +1054,18 @@ describe('createKodaXRuntime', () => {
         triggerPercent: 90,
         triggerTokens: 120_000,
       },
-      context: { executionCwd: path.resolve(tempRoot) },
+      context: { executionCwd: path.resolve(tempRoot), shellExecution },
     });
+
+    capturedOptions = undefined;
+    const inheritedHandle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: 'inherits settings through explicit undefined',
+      options: { context: { shellExecution: undefined } },
+    });
+    await inheritedHandle.result;
+    expect(capturedOptions?.context?.shellExecution).toEqual(shellExecution);
+
     expect(settingsEvents).toHaveLength(1);
     expect(effectiveConfigs[0]).toMatchObject({
       provider: 'settings-provider',
@@ -1057,6 +1075,8 @@ describe('createKodaXRuntime', () => {
       reasoningMode: 'balanced',
       permissionMode: 'accept-edits',
       executionCwd: path.resolve(tempRoot),
+      shellKind: 'pwsh',
+      shellExecutionFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       autoModeClassifierModel: 'mock-provider:classifier-model',
       autoModeTimeoutMs: 20_000,
       autoModeSpeculativeWindowMs: 0,
@@ -1075,6 +1095,7 @@ describe('createKodaXRuntime', () => {
       provider: 'settings-provider',
       model: 'settings-model',
       permissionMode: 'accept-edits',
+      shellExecution,
       autoModeSpeculativeWindowMs: 0,
       compactionTriggerPercent: 90,
       compactionTriggerTokens: 120_000,

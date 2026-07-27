@@ -15,6 +15,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Host-configurable Shell Execution Contract.** Runtime callers can persist a
+  JSON-only `shellExecution` policy per Session or override it per Run,
+  selecting pwsh, Windows PowerShell, cmd, bash, zsh, or an explicit Git Bash
+  path. Configured runs resolve a credential-filtered environment through the
+  selected shell in the effective cwd, cache it by contract/cwd with strict
+  TTL or `refreshToken` invalidation, and execute through that same explicit
+  interpreter. Native child Agents and AMA deterministic evaluators inherit
+  the policy, command grants bind to its hash, and unconfigured callers retain
+  legacy shell behavior.
 - **Pattern-aware adaptive AMA (FEATURE_274).** Ordinary AMA now shares one
   six-pattern problem-solving catalog with Workflow semantics while continuing
   to execute through the existing Runtime-owned Actor/Turn tree. Optional
@@ -37,6 +46,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Hardened the Shell Execution Contract after adversarial review: configured
+  commands now deny credentials for every registered Provider, preserve a
+  Session contract when a Run context contains explicit `undefined`, rebuild
+  Windows Registry environments without stale `%PATH%` or tool-manager
+  variables, reject unsupported PowerShell profile/command switches, remove
+  `NODE_OPTIONS` before probing, honor explicit environment denies, and avoid
+  cmd-only hints under PowerShell or Git Bash. Last-waiter cancellation now
+  terminates an in-flight profile probe without interrupting shared waiters.
+  A targeted Windows CI gate covers the cross-platform shell paths.
 - Completed the Runtime diagnostics query contract for reconnecting hosts.
   Budget, tool-exposure, compaction-skip, and provider-cache diagnostics now
   carry stable logical `contextId` / `parentContextId` identity while retaining

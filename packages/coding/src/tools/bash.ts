@@ -26,6 +26,10 @@ import { filterBashOutputBodies } from './output-filters/registry.js';
 import { shellMemoryMutationDenial } from './memory-mutation-guard.js';
 import { TOOL_RESULT_INCOMPLETE_MARKER } from './tool-result-policy.js';
 import { persistToolOutput } from './truncate.js';
+import {
+  createShellCommandInvocation,
+  resolveShellExecution,
+} from '../shell-execution/resolver.js';
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
 const FOREGROUND_CLOSE_DRAIN_MS = process.platform === 'win32' ? 2_000 : 1_000;
@@ -44,6 +48,10 @@ interface StreamRecovery {
 interface ForegroundOutputRecovery {
   readonly stdout: StreamRecovery;
   readonly stderr: StreamRecovery;
+}
+
+function cancelledCommandResult(command: string): string {
+  return `Command: ${command}\n[Cancelled] Operation cancelled by user`;
 }
 
 function startStreamRecovery(collector: BashOutputCollector): StreamRecovery {
@@ -194,8 +202,11 @@ function decodeCollector(collector: BashOutputCollector): DecodeResult {
  * before the real interpreter sees it. These hints are appended to tool output so
  * the LLM can recognize the pattern instead of retrying the same broken approach.
  */
-function detectWindowsCmdGotchas(command: string): string[] {
-  if (process.platform !== 'win32') return [];
+function detectWindowsCmdGotchas(
+  command: string,
+  usesWindowsCmd: boolean,
+): string[] {
+  if (!usesWindowsCmd) return [];
   const hints: string[] = [];
 
   // Y-1: python/node/ruby/perl -c/-e with an embedded newline in the quoted string.
@@ -232,12 +243,55 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   const capped = userTimeout && userTimeout > KODAX_HARD_TIMEOUT;
   const runInBackground = (input.run_in_background as boolean) ?? false;
   const cwd = resolveExecutionCwd(ctx);
-  const env = ctx.sessionScratchDir
+  const usesWindowsCmd =
+    process.platform === 'win32'
+    && (ctx.shellExecution === undefined || ctx.shellExecution.shell.kind === 'cmd');
+  const legacyEnv = ctx.sessionScratchDir
     ? {
       ...process.env,
       KODAX_SESSION_TMP: ctx.sessionScratchDir,
     }
     : process.env;
+  let commandInvocation:
+    | ReturnType<typeof createShellCommandInvocation>
+    | undefined;
+  if (ctx.shellExecution !== undefined) {
+    if (ctx.abortSignal?.aborted) return cancelledCommandResult(command);
+    try {
+      const resolved = await resolveShellExecution(
+        ctx.shellExecution,
+        cwd,
+        ctx.sessionScratchDir,
+        ctx.providerCredentialEnvironmentNames,
+        ctx.abortSignal,
+      );
+      commandInvocation = createShellCommandInvocation(resolved, command);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return cancelledCommandResult(command);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return `[Error] Command was not started because the configured shell environment could not be resolved: ${message}`;
+    }
+  }
+  const spawnCommand = () => commandInvocation === undefined
+    ? spawn(command, [], {
+        shell: true,
+        windowsHide: true,
+        cwd,
+        env: legacyEnv,
+        detached: process.platform !== 'win32',
+      })
+    : spawn(commandInvocation.executable, [...commandInvocation.args], {
+        shell: false,
+        windowsHide: true,
+        cwd,
+        env: commandInvocation.env,
+        detached: process.platform !== 'win32',
+        ...(commandInvocation.windowsVerbatimArguments === true
+          ? { windowsVerbatimArguments: true }
+          : {}),
+      });
 
   if (runInBackground) {
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -250,14 +304,9 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       return `[Error] Background command was not started because its output file could not be created: ${message}`;
     }
 
-    const proc = spawn(command, [], {
-      shell: true,
-      windowsHide: true,
-      cwd,
-      env,
-      // POSIX background jobs get a process group so cleanup can signal -pid and reap shell descendants.
-      detached: process.platform !== 'win32',
-    });
+    // POSIX background jobs get a process group so cleanup can signal -pid and
+    // reap shell descendants.
+    const proc = spawnCommand();
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash-background',
       command,
@@ -319,13 +368,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   }
 
   return new Promise(resolve => {
-    const proc = spawn(command, [], {
-      shell: true,
-      windowsHide: true,
-      cwd,
-      env,
-      detached: process.platform !== 'win32',
-    });
+    const proc = spawnCommand();
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash',
       command,
@@ -406,7 +449,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         ? `\n${lifecycleWarnings.join('\n')}`
         : '';
       if (reason === 'timeout') {
-        const gotchaHints = detectWindowsCmdGotchas(command);
+        const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
         const gotchaNote = gotchaHints.length > 0 ? `\n${gotchaHints.join('\n')}` : '';
         return `Command: ${command}\n[Timeout] Command interrupted after ${timeout}s\n\nPartial output:\n${partial}${gotchaNote}${warningNote}\n\n[Suggestion] The command took too long. Consider:\n- Is this a watch/dev server? Run in a separate terminal.\n- Can the task be broken into smaller steps?\n- Is there an error causing it to hang?`;
       }
@@ -639,7 +682,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
           // Y-1/Y-2: Append Windows cmd gotcha hints if the command pattern suggests
           // the shell may have silently mangled it. Added last so they're preserved
           // even if the output is truncated (truncateTail keeps the tail).
-          const gotchaHints = detectWindowsCmdGotchas(command);
+          const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
           if (gotchaHints.length > 0) {
             out += `\n${gotchaHints.join('\n')}`;
           }
@@ -675,7 +718,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       // Y-1/Y-2: Same hints on spawn-level errors — a malformed command
       // string (newlines in `-c`, heredoc not understood by cmd) can surface
       // as a spawn error on some platforms.
-      const gotchaHints = detectWindowsCmdGotchas(command);
+      const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
       const gotchaNote = gotchaHints.length > 0 ? `\n${gotchaHints.join('\n')}` : '';
       settle(`Command: ${command}\n[Error] ${error.message}${gotchaNote}`);
     });

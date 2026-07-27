@@ -758,7 +758,15 @@ describe('runtime daemon client proxy', () => {
     observation.close();
     await client.sessions.fork({ sessionId: 'session-1' });
     await client.sessions.getSettings('session-1');
-    await client.sessions.updateSettings('session-1', { model: 'm1' });
+    const shellExecution = {
+      version: 1 as const,
+      shell: { kind: 'pwsh' as const, profile: 'none' as const },
+      cache: { ttlMs: 30_000, refreshToken: 'daemon-test' },
+    };
+    await client.sessions.updateSettings('session-1', {
+      model: 'm1',
+      shellExecution,
+    });
     await client.sessions.appendNotice({ sessionId: 'session-1', content: 'notice' });
     await client.sessions.rewind({ sessionId: 'session-1', selector: 'entry-1' });
     await client.sessions.setActiveEntry({ sessionId: 'session-1', entryId: 'entry-1' });
@@ -856,6 +864,13 @@ describe('runtime daemon client proxy', () => {
       'artifact.delete',
       'daemon.status',
     ]);
+    expect(
+      calls.find((call) => call.method === 'session.settings.updateVersioned')
+        ?.params,
+    ).toMatchObject({
+      sessionId: 'session-1',
+      patch: { model: 'm1', shellExecution },
+    });
   });
 
   it('passes permission response run bindings through the transport', async () => {

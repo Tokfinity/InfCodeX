@@ -199,7 +199,7 @@ export interface ChildExecutorOptions {
   readonly historyStorage?: KodaXSessionStorage;
   readonly parentOptions: Readonly<Partial<
     Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction' | 'disablePromptCache'>
-    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics'>
+    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics' | 'shellExecution'>
   >>;
   readonly parentRole: string;
   readonly parentHarness: string;
@@ -895,6 +895,7 @@ async function createWorkflowChildDigest(
         context: {
           gitRoot: input.scopeCtx.gitRoot,
           executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          shellExecution: input.scopeCtx.shellExecution,
           assertReadablePath: input.scopeCtx.assertReadablePath,
           toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
           skillRegistry: input.scopeCtx.skillRegistry,
@@ -1050,6 +1051,7 @@ async function resolveChildStructuredOutput(input: {
         context: {
           gitRoot: input.scopeCtx.gitRoot,
           executionCwd: input.scopeCtx.executionCwd ?? input.scopeCtx.gitRoot,
+          shellExecution: input.scopeCtx.shellExecution,
           assertReadablePath: input.scopeCtx.assertReadablePath,
           toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
           skillRegistry: input.scopeCtx.skillRegistry,
@@ -1368,6 +1370,7 @@ async function runReadChildBody(
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
+          shellExecution: scope.ctx.shellExecution,
           assertReadablePath: scope.ctx.assertReadablePath,
           toolVisibilityPolicy: scope.ctx.toolVisibilityPolicy,
           skillRegistry: scope.ctx.skillRegistry,
@@ -1652,6 +1655,7 @@ async function runWriteChildBody(
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,
+          shellExecution: childCtx.shellExecution,
           assertReadablePath: childCtx.assertReadablePath,
           toolVisibilityPolicy: childCtx.toolVisibilityPolicy,
           skillRegistry: childCtx.skillRegistry,

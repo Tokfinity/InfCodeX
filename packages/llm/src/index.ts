@@ -178,10 +178,12 @@ export {
   getRuntimeModelProvider,
   isRuntimeModelProviderName,
   getRuntimeModelProviderNames,
+  getRuntimeModelProviderCredentialEnvironmentNames,
   clearRuntimeModelProviders,
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
+  getProviderCredentialEnvironmentNames,
   // v0.7.43 SDK model-capability exposure (built-in + custom, no API key needed).
   getProviderModelDescriptors,
   getModelCapabilities,

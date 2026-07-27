@@ -1110,7 +1110,8 @@ function runtimePermissionMatcherSchema(): RuntimeDaemonJsonSchema {
       objectSchema({
         ...base,
         kind: { enum: ['exact-command'] },
-        shell: { enum: ['cmd', 'posix'] },
+        shell: { enum: ['cmd', 'posix', 'powershell'] },
+        shellContractFingerprint: stringSchema,
         commandFingerprint: stringSchema,
         cwd: stringSchema,
         executable: stringSchema,

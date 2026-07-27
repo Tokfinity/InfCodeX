@@ -32,6 +32,7 @@ import {
 } from './custom-registry.js';
 import {
   getRuntimeModelProvider,
+  getRuntimeModelProviderCredentialEnvironmentNames,
   getRuntimeModelProviderNames,
   isRuntimeModelProviderName,
 } from './runtime-registry.js';
@@ -75,6 +76,30 @@ export function getAvailableProviderNames(): string[] {
   const customNames = getCustomProviderNames();
   // Deduplicate (built-in takes precedence)
   return [...new Set([...builtIn, ...runtimeNames, ...customNames])];
+}
+
+/**
+ * Exact environment-variable names that may carry credentials for any
+ * registered Provider. Shell execution uses the complete set so switching the
+ * active Provider cannot make an inactive Provider's credential visible.
+ *
+ * Runtime Provider factories are evaluated because their public registration
+ * contract does not otherwise expose credential metadata. A failing factory is
+ * intentionally fail-closed for configured shell execution.
+ */
+export function getProviderCredentialEnvironmentNames(): string[] {
+  const names = new Set<string>();
+  for (const snapshot of Object.values(KODAX_PROVIDER_SNAPSHOTS)) {
+    names.add(snapshot.apiKeyEnv);
+  }
+  for (const name of getCustomProviderNames()) {
+    const metadata = getCustomProviderVerifyMetadata(name);
+    if (metadata !== undefined) names.add(metadata.apiKeyEnv);
+  }
+  for (const name of getRuntimeModelProviderCredentialEnvironmentNames()) {
+    names.add(name);
+  }
+  return [...names].sort();
 }
 
 // ============== SDK Model Capability Dispatchers (v0.7.43) ==============

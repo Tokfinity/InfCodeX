@@ -8,6 +8,7 @@ interface RuntimeModelProviderRegistration {
   id: string;
   name: string;
   factory: ModelProviderFactory;
+  credentialEnvironmentName?: string;
 }
 
 const runtimeProviders = new Map<string, RuntimeModelProviderRegistration[]>();
@@ -78,7 +79,10 @@ export function getRuntimeModelProvider(
   name: string,
 ): KodaXBaseProvider | undefined {
   const registration = getActiveRuntimeProviderRegistration(name);
-  return registration ? registration.factory() : undefined;
+  if (registration === undefined) return undefined;
+  const provider = registration.factory();
+  registration.credentialEnvironmentName ??= provider.getApiKeyEnv();
+  return provider;
 }
 
 export function isRuntimeModelProviderName(name: string): boolean {
@@ -88,6 +92,20 @@ export function isRuntimeModelProviderName(name: string): boolean {
 export function getRuntimeModelProviderNames(): string[] {
   return Array.from(runtimeProviders.keys())
     .filter((name) => getActiveRuntimeProviderRegistration(name) !== undefined);
+}
+
+export function getRuntimeModelProviderCredentialEnvironmentNames(): string[] {
+  const names = new Set<string>();
+  for (const registrations of runtimeProviders.values()) {
+    for (const registration of registrations) {
+      if (registration.credentialEnvironmentName === undefined) {
+        const provider = registration.factory();
+        registration.credentialEnvironmentName = provider.getApiKeyEnv();
+      }
+      names.add(registration.credentialEnvironmentName);
+    }
+  }
+  return [...names];
 }
 
 export function clearRuntimeModelProviders(): void {

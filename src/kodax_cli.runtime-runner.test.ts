@@ -138,7 +138,14 @@ describe('interactive daemon runtime bridge', () => {
         storage: { load: async () => null },
         initialMessages: [{ role: 'user', content: 'hello' }],
       },
-      context: { executionCwd: 'C:/workspace' },
+      context: {
+        executionCwd: 'C:/workspace',
+        shellExecution: {
+          version: 1,
+          shell: { kind: 'pwsh', profile: 'none' },
+          environment: { inherit: 'filtered' },
+        },
+      },
       skillDynamicContext: {
         disable: true,
       },
@@ -157,7 +164,14 @@ describe('interactive daemon runtime bridge', () => {
         id: 'session-1',
         initialMessages: [{ role: 'user', content: 'hello' }],
       },
-      context: { executionCwd: 'C:/workspace' },
+      context: {
+        executionCwd: 'C:/workspace',
+        shellExecution: {
+          version: 1,
+          shell: { kind: 'pwsh', profile: 'none' },
+          environment: { inherit: 'filtered' },
+        },
+      },
       events: { workflowCorrelation: { runId: 'workflow-1' } },
       skillDynamicContext: { disable: true },
     });

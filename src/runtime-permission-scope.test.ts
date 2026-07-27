@@ -105,6 +105,42 @@ describe('Runtime permission scope normalization', () => {
     })).toBe(false);
   });
 
+  it('binds exact command grants to the configured interpreter contract', () => {
+    const contractA = 'a'.repeat(64);
+    const contractB = 'b'.repeat(64);
+    const matcher = createRuntimePermissionMatcher({
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: 'C:\\workspace',
+      platform: 'win32',
+      shell: 'powershell',
+      shellContractFingerprint: contractA,
+    });
+
+    expect(matcher).toMatchObject({
+      kind: 'exact-command',
+      shell: 'powershell',
+      shellContractFingerprint: contractA,
+    });
+    expect(runtimePermissionMatcherMatches(matcher, {
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: 'C:\\workspace',
+      platform: 'win32',
+      shell: 'powershell',
+      shellContractFingerprint: contractA,
+    })).toBe(true);
+    expect(runtimePermissionMatcherMatches(matcher, {
+      toolName: 'bash',
+      toolInput: { command: 'npm test' },
+      executionCwd: 'C:\\workspace',
+      platform: 'win32',
+      shell: 'cmd',
+      shellContractFingerprint: contractB,
+    })).toBe(false);
+    expect(parseRuntimePermissionMatcher(matcher)).toEqual(matcher);
+  });
+
   it('normalizes relative file paths against the effective execution cwd', () => {
     const matcher = createRuntimePermissionMatcher({
       toolName: 'edit',

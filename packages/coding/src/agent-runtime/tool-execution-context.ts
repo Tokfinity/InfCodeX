@@ -33,6 +33,7 @@
 import { join } from 'node:path';
 
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { getProviderCredentialEnvironmentNames } from '@kodax-ai/llm';
 
 import type {
   KodaXManagedProtocolPayload,
@@ -157,6 +158,11 @@ export function buildToolExecutionContext(
     // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
     lspService: options.context?.lspService ?? getDefaultLspService(),
     executionCwd,
+    shellExecution: options.context?.shellExecution,
+    providerCredentialEnvironmentNames:
+      options.context?.shellExecution === undefined
+        ? undefined
+        : getProviderCredentialEnvironmentNames(),
     sessionScratchDir,
     extensionRuntime: runtime,
     askUser: events.askUser, // Issue 069
@@ -196,6 +202,9 @@ export function buildToolExecutionContext(
         : {}),
       ...(options.disablePromptCache !== undefined
         ? { disablePromptCache: options.disablePromptCache }
+        : {}),
+      ...(options.context?.shellExecution !== undefined
+        ? { shellExecution: options.context.shellExecution }
         : {}),
     },
     parentEvents: events,

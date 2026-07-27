@@ -28,6 +28,8 @@ import {
   resolveProviderModelDescriptors,
   resolveToolBridgeTarget,
   runManagedTask,
+  normalizeShellExecutionContract,
+  shellExecutionContractFingerprint,
   startKodaX,
   validateCustomProviderConfig,
 } from '@kodax-ai/coding';
@@ -56,6 +58,7 @@ import type {
   KodaXMessage,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
+  KodaXShellExecutionContract,
   KodaXPromptCacheDiagnosticEvent,
   KodaXReasoningMode,
   KodaXResult,
@@ -91,10 +94,11 @@ import {
 } from '@kodax-ai/repl';
 import {
   createRuntimePermissionMatcher,
-  hasDynamicShellExpansion,
+  hasDynamicExpansionForPermissionShell,
   parseRuntimePermissionMatcher,
   runtimePermissionHostPlatform,
   runtimePermissionMatcherMatches,
+  type RuntimeExactCommandPermissionMatcher,
   type RuntimePermissionMatcher,
 } from './runtime-permission-scope.js';
 export type {
@@ -1120,6 +1124,7 @@ export interface RuntimeSessionSettings {
   readonly reasoningMode?: KodaXReasoningMode;
   readonly permissionMode?: string;
   readonly executionCwd?: string;
+  readonly shellExecution?: KodaXShellExecutionContract;
   readonly agentMode?: KodaXOptions['agentMode'];
   readonly autoModeEngine?: 'llm' | 'rules';
   readonly autoModeClassifierModel?: string;
@@ -1139,6 +1144,7 @@ export interface RuntimeSessionSettingsPatch {
   readonly reasoningMode?: KodaXReasoningMode | null;
   readonly permissionMode?: string | null;
   readonly executionCwd?: string | null;
+  readonly shellExecution?: KodaXShellExecutionContract | null;
   readonly agentMode?: KodaXOptions['agentMode'] | null;
   readonly autoModeEngine?: 'llm' | 'rules' | null;
   readonly autoModeClassifierModel?: string | null;
@@ -1437,6 +1443,7 @@ export type RuntimeDaemonContextOptions = Pick<
   | 'memoryIdentity'
   | 'gitRoot'
   | 'executionCwd'
+  | 'shellExecution'
   | 'contextTokenSnapshot'
   | 'projectSnapshot'
   | 'longRunning'
@@ -2354,6 +2361,8 @@ interface RuntimePermissionGrantContext {
   readonly toolInput: Readonly<Record<string, unknown>>;
   readonly projectRoot?: string;
   readonly signals?: readonly ToolCallSignal[];
+  readonly shell?: RuntimeExactCommandPermissionMatcher['shell'];
+  readonly shellContractFingerprint?: string;
 }
 
 interface PendingUserInput {
@@ -4407,6 +4416,14 @@ function createRuntimeRunService(deps: {
           : {}),
         ...(runOptions.context?.executionCwd !== undefined
           ? { executionCwd: runOptions.context.executionCwd }
+          : {}),
+        ...(runOptions.context?.shellExecution !== undefined
+          ? {
+              shellKind: runOptions.context.shellExecution.shell.kind,
+              shellExecutionFingerprint: shellExecutionContractFingerprint(
+                runOptions.context.shellExecution,
+              ),
+            }
           : {}),
       },
       {
@@ -7708,6 +7725,8 @@ function createRuntimePermissionRegistry(
       input.toolName,
       grantContext?.toolInput,
       input.executionCwd,
+      grantContext?.shell,
+      grantContext?.shellContractFingerprint,
     );
     if (grant !== undefined) {
       return grant.persistence === 'session'
@@ -7761,6 +7780,8 @@ function createRuntimePermissionRegistry(
     toolName: string,
     toolInput?: Readonly<Record<string, unknown>>,
     executionCwd?: string,
+    shell?: RuntimeExactCommandPermissionMatcher['shell'],
+    shellContractFingerprint?: string,
   ): RuntimePermissionGrant | undefined {
     const persistent = loadPersistentPermissionGrants().value;
     return [...sessionGrants.values(), ...persistent].find((grant) => {
@@ -7774,12 +7795,19 @@ function createRuntimePermissionRegistry(
         grant.persistence !== 'session'
         && grant.scope.matcher.kind === 'exact-command'
         && typeof toolInput.command === 'string'
-        && hasDynamicShellExpansion(toolInput.command, runtimePermissionHostPlatform())
+        && hasDynamicExpansionForPermissionShell(
+          toolInput.command,
+          shell ?? (runtimePermissionHostPlatform() === 'win32' ? 'cmd' : 'posix'),
+        )
       ) return false;
       return runtimePermissionMatcherMatches(grant.scope.matcher, {
         toolName,
         toolInput,
         executionCwd: executionCwd ?? process.cwd(),
+        ...(shell !== undefined ? { shell } : {}),
+        ...(shellContractFingerprint !== undefined
+          ? { shellContractFingerprint }
+          : {}),
       });
     });
   }
@@ -7911,8 +7939,17 @@ function createRuntimePermissionRegistry(
       toolName: string,
       toolInput?: Readonly<Record<string, unknown>>,
       executionCwd?: string,
+      shell?: RuntimeExactCommandPermissionMatcher['shell'],
+      shellContractFingerprint?: string,
     ): boolean {
-      return findPermissionGrant(sessionId, toolName, toolInput, executionCwd) !== undefined;
+      return findPermissionGrant(
+        sessionId,
+        toolName,
+        toolInput,
+        executionCwd,
+        shell,
+        shellContractFingerprint,
+      ) !== undefined;
     },
     rejectForRun(runId: string, reason: string): void {
       resolveMatching((request) => request.runId === runId, {
@@ -8058,6 +8095,10 @@ function createRuntimePermissionGrantCandidates(
     toolName: request.toolName,
     toolInput: context.toolInput,
     executionCwd,
+    ...(context.shell !== undefined ? { shell: context.shell } : {}),
+    ...(context.shellContractFingerprint !== undefined
+      ? { shellContractFingerprint: context.shellContractFingerprint }
+      : {}),
   });
   if (
     matcher.kind === 'exact-command'
@@ -8129,7 +8170,10 @@ function isPersistentRuntimePermissionSafe(
     const command = typeof context.toolInput.command === 'string'
       ? context.toolInput.command
       : '';
-    if (hasDynamicShellExpansion(command, runtimePermissionHostPlatform())) return false;
+    if (hasDynamicExpansionForPermissionShell(
+      command,
+      context.shell ?? (runtimePermissionHostPlatform() === 'win32' ? 'cmd' : 'posix'),
+    )) return false;
   }
   return true;
 }
@@ -8628,11 +8672,14 @@ function wrapKodaXEvents(input: {
         if (planDecision !== true && planDecision !== undefined)
           return planDecision;
       }
+      const shellPermission = runtimeShellPermissionIdentity(record);
       if (permissions.isGranted(
         meta?.sessionId ?? record.sessionId,
         tool,
         toolInput,
         resolveRuntimeExecutionCwd(record),
+        shellPermission?.shell,
+        shellPermission?.shellContractFingerprint,
       )) {
         return true;
       }
@@ -8660,6 +8707,7 @@ function wrapKodaXEvents(input: {
         executionCwd: resolveRuntimeExecutionCwd(record),
       }, undefined, {
         toolInput,
+        ...(shellPermission ?? {}),
         ...(typeof record.start?.options.context?.gitRoot === 'string'
           ? { projectRoot: record.start.options.context.gitRoot }
           : {}),
@@ -8987,8 +9035,16 @@ function buildEffectiveRuntimeOptions(
       : storedExecutionCwd !== undefined
         ? { executionCwd: path.resolve(storedExecutionCwd) }
         : {}),
+    ...(settings.shellExecution !== undefined
+      ? { shellExecution: settings.shellExecution }
+      : {}),
   };
   const optionContext = options.context;
+  const optionContextWithoutShellExecution = { ...(optionContext ?? {}) };
+  delete optionContextWithoutShellExecution.shellExecution;
+  const requestedShellExecution = optionContext?.shellExecution === undefined
+    ? undefined
+    : normalizeShellExecutionContract(optionContext.shellExecution);
   const requestedGitRoot =
     typeof optionContext?.gitRoot === 'string'
       ? path.resolve(optionContext.gitRoot)
@@ -9029,7 +9085,7 @@ function buildEffectiveRuntimeOptions(
   ];
   const context: KodaXOptions['context'] = {
     ...inheritedContext,
-    ...(optionContext ?? {}),
+    ...optionContextWithoutShellExecution,
     ...(sessionGitRoot !== undefined
       ? { gitRoot: sessionGitRoot }
       : requestedGitRoot !== undefined
@@ -9037,6 +9093,9 @@ function buildEffectiveRuntimeOptions(
         : {}),
     ...(effectiveExecutionCwd !== undefined
       ? { executionCwd: effectiveExecutionCwd }
+      : {}),
+    ...(requestedShellExecution !== undefined
+      ? { shellExecution: requestedShellExecution }
       : {}),
     ...(combinedArtifacts.length > 0
       ? { inputArtifacts: combinedArtifacts }
@@ -9378,6 +9437,7 @@ function applySessionSettingsPatch(
   applyNullableStringPatch(next, 'model', patch.model);
   applyNullableStringPatch(next, 'permissionMode', patch.permissionMode);
   applyNullableStringPatch(next, 'executionCwd', patch.executionCwd, true);
+  applyNullableShellExecutionPatch(next, patch.shellExecution);
   applyNullableStringPatch(
     next,
     'autoModeClassifierModel',
@@ -9425,6 +9485,22 @@ function applyNullableCompactionPercentPatch(
     target,
     'compactionTriggerPercent',
     normalizeCompactionConfig({ triggerPercent: value }).triggerPercent,
+  );
+}
+
+function applyNullableShellExecutionPatch(
+  target: RuntimeSessionSettings,
+  value: KodaXShellExecutionContract | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    deleteMutableSetting(target, 'shellExecution');
+    return;
+  }
+  setMutableSetting(
+    target,
+    'shellExecution',
+    normalizeShellExecutionContract(value),
   );
 }
 
@@ -9605,6 +9681,13 @@ function parseRuntimeSessionSettings(value: unknown): RuntimeSessionSettings {
   setStringIfPresent(settings, 'model', value.model);
   setStringIfPresent(settings, 'permissionMode', value.permissionMode);
   setStringIfPresent(settings, 'executionCwd', value.executionCwd);
+  if (value.shellExecution !== undefined) {
+    setMutableSetting(
+      settings,
+      'shellExecution',
+      normalizeShellExecutionContract(value.shellExecution),
+    );
+  }
   setStringIfPresent(
     settings,
     'autoModeClassifierModel',
@@ -10145,6 +10228,13 @@ function serializeSessionSettings(
     setMutableSetting(result, 'permissionMode', settings.permissionMode);
   if (settings.executionCwd !== undefined)
     setMutableSetting(result, 'executionCwd', settings.executionCwd);
+  if (settings.shellExecution !== undefined) {
+    setMutableSetting(
+      result,
+      'shellExecution',
+      normalizeShellExecutionContract(settings.shellExecution),
+    );
+  }
   if (settings.agentMode !== undefined)
     setMutableSetting(result, 'agentMode', settings.agentMode);
   if (settings.autoModeEngine !== undefined)
@@ -10553,6 +10643,25 @@ function resolveRuntimeExecutionCwd(record: RuntimeRunRecord): string {
       record.start?.options.context?.gitRoot ??
       process.cwd(),
   );
+}
+
+function runtimeShellPermissionIdentity(
+  record: RuntimeRunRecord,
+): Pick<
+  RuntimePermissionGrantContext,
+  'shell' | 'shellContractFingerprint'
+> | undefined {
+  const contract = record.start?.options.context?.shellExecution;
+  if (contract === undefined) return undefined;
+  const kind = contract.shell.kind;
+  return {
+    shell: kind === 'bash' || kind === 'zsh'
+      ? 'posix'
+      : kind === 'cmd'
+        ? 'cmd'
+        : 'powershell',
+    shellContractFingerprint: shellExecutionContractFingerprint(contract),
+  };
 }
 
 function isRuntimeAutoModeGuardrail(

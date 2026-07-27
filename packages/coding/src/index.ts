@@ -130,6 +130,9 @@ export type {
   KodaXSessionOptions,
   KodaXContextTokenSnapshot,
   KodaXContextOptions,
+  KodaXShellExecutionContract,
+  KodaXShellKind,
+  KodaXShellProfileMode,
   KodaXSkillScriptInputFile,
   KodaXSkillScriptOutputFile,
   KodaXSkillScriptRunInput,
@@ -212,6 +215,11 @@ export type {
 } from './types.js';
 
 export { normalizeKodaXAgentMode } from './types.js';
+export {
+  normalizeShellExecutionContract,
+  shellExecutionContractFingerprint,
+} from './shell-execution/contract.js';
+export { clearShellExecutionEnvironmentCache } from './shell-execution/resolver.js';
 
 // ============== Core Errors ==============
 

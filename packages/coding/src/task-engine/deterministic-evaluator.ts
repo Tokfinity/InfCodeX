@@ -30,6 +30,11 @@ import {
   finishBashOutputCollector,
   type BashOutputCollector,
 } from '../tools/bash-output-collector.js';
+import type { KodaXShellExecutionContract } from '../types.js';
+import {
+  createShellCommandInvocation,
+  resolveShellExecution,
+} from '../shell-execution/resolver.js';
 
 export type DeterministicEvaluatorHint = 'build' | 'test' | 'lint';
 
@@ -50,6 +55,12 @@ export interface DeterministicEvaluatorResult {
 export interface RunDeterministicEvaluatorInput {
   readonly hint: DeterministicEvaluatorHint;
   readonly cwd: string;
+  /** Optional host-owned shell policy shared with model-issued command tools. */
+  readonly shellExecution?: KodaXShellExecutionContract;
+  /** Session scratch identity used to isolate resolved environment cache entries. */
+  readonly sessionScratchDir?: string;
+  /** Exact non-standard Provider credential variables to remove. */
+  readonly providerCredentialEnvironmentNames?: readonly string[];
   /** Timeout in milliseconds. Default 90 000 (90s). */
   readonly timeoutMs?: number;
   /**
@@ -124,14 +135,55 @@ export async function runDeterministicEvaluator(
   const command = defaultCommandFor(input);
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
+  let configuredInvocation:
+    | ReturnType<typeof createShellCommandInvocation>
+    | undefined;
+  if (input.shellExecution !== undefined) {
+    try {
+      const resolved = await resolveShellExecution(
+        input.shellExecution,
+        input.cwd,
+        input.sessionScratchDir,
+        input.providerCredentialEnvironmentNames,
+      );
+      configuredInvocation = createShellCommandInvocation(resolved, command);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        hint: input.hint,
+        command,
+        status: 'error',
+        exitCode: undefined,
+        stderrTail:
+          `[deterministic-evaluator] Configured shell environment could not be resolved: ${message}`,
+        stdoutTail: '',
+        durationMs: Date.now() - startedAt,
+      };
+    }
+  }
 
   return new Promise<DeterministicEvaluatorResult>((resolve) => {
-    const proc = spawn(command, {
-      cwd: input.cwd,
-      shell: true,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-    });
+    const proc = configuredInvocation === undefined
+      ? spawn(command, {
+          cwd: input.cwd,
+          shell: true,
+          windowsHide: true,
+          detached: process.platform !== 'win32',
+        })
+      : spawn(
+          configuredInvocation.executable,
+          [...configuredInvocation.args],
+          {
+            cwd: input.cwd,
+            env: configuredInvocation.env,
+            shell: false,
+            windowsHide: true,
+            detached: process.platform !== 'win32',
+            ...(configuredInvocation.windowsVerbatimArguments === true
+              ? { windowsVerbatimArguments: true }
+              : {}),
+          },
+        );
 
     const stdoutCollector = createBashOutputCollector();
     const stderrCollector = createBashOutputCollector();

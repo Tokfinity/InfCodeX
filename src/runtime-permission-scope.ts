@@ -12,7 +12,9 @@ interface RuntimePermissionMatcherBase {
 export interface RuntimeExactCommandPermissionMatcher
   extends RuntimePermissionMatcherBase {
   readonly kind: 'exact-command';
-  readonly shell: 'cmd' | 'posix';
+  readonly shell: 'cmd' | 'posix' | 'powershell';
+  /** Hash of the host-owned interpreter/environment contract, when configured. */
+  readonly shellContractFingerprint?: string;
   /** SHA-256 of the normalized concrete command; raw command text is never persisted. */
   readonly commandFingerprint: string;
   readonly cwd: string;
@@ -44,6 +46,8 @@ export interface RuntimePermissionMatcherInput {
   readonly toolInput: Readonly<Record<string, unknown>>;
   readonly executionCwd: string;
   readonly platform?: RuntimePermissionHostPlatform;
+  readonly shell?: RuntimeExactCommandPermissionMatcher['shell'];
+  readonly shellContractFingerprint?: string;
 }
 
 const FILE_PATH_KEYS = ['path', 'file_path'] as const;
@@ -103,9 +107,11 @@ export function parseRuntimePermissionMatcher(value: unknown): RuntimePermission
     throw new Error('invalid Runtime permission matcher');
   }
   if (value.kind === 'exact-command') {
-    if ((value.shell !== 'cmd' && value.shell !== 'posix')
+    if ((value.shell !== 'cmd' && value.shell !== 'posix' && value.shell !== 'powershell')
       || !isSha256(value.commandFingerprint) || typeof value.cwd !== 'string'
       || typeof value.background !== 'boolean'
+      || (value.shellContractFingerprint !== undefined
+        && !isSha256(value.shellContractFingerprint))
       || (value.executable !== undefined && typeof value.executable !== 'string')
       || (value.argvFingerprint !== undefined && !isSha256(value.argvFingerprint))) {
       throw new Error('invalid Runtime command permission matcher');
@@ -116,6 +122,9 @@ export function parseRuntimePermissionMatcher(value: unknown): RuntimePermission
       toolName: value.toolName,
       fingerprint: value.fingerprint,
       shell: value.shell,
+      ...(value.shellContractFingerprint !== undefined
+        ? { shellContractFingerprint: value.shellContractFingerprint }
+        : {}),
       commandFingerprint: value.commandFingerprint,
       cwd: value.cwd,
       background: value.background,
@@ -129,6 +138,9 @@ export function parseRuntimePermissionMatcher(value: unknown): RuntimePermission
       kind: 'exact-command',
       toolName: matcher.toolName,
       shell: matcher.shell,
+      ...(matcher.shellContractFingerprint !== undefined
+        ? { shellContractFingerprint: matcher.shellContractFingerprint }
+        : {}),
       commandFingerprint: matcher.commandFingerprint,
       cwd: matcher.cwd,
       ...(matcher.executable !== undefined ? { executable: matcher.executable } : {}),
@@ -198,6 +210,16 @@ export function hasDynamicShellExpansion(
     .test(command);
 }
 
+export function hasDynamicExpansionForPermissionShell(
+  command: string,
+  shell: RuntimeExactCommandPermissionMatcher['shell'],
+): boolean {
+  return hasDynamicShellExpansion(
+    command,
+    shell === 'posix' ? 'posix' : 'win32',
+  );
+}
+
 export function runtimePermissionHostPlatform(): RuntimePermissionHostPlatform {
   return process.platform === 'win32' ? 'win32' : 'posix';
 }
@@ -212,19 +234,22 @@ function createExactCommandMatcher(
     : '';
   const cwd = normalizePermissionPath(input.executionCwd, input.executionCwd, platform);
   const background = input.toolInput.run_in_background === true;
-  const tokens = tokenizeShellCommand(command, platform);
+  const shell: RuntimeExactCommandPermissionMatcher['shell'] =
+    input.shell ?? (platform === 'win32' ? 'cmd' : 'posix');
+  const tokens = tokenizeShellCommand(command, shell);
   const executable = safeExecutableMetadata(tokens?.[0], platform);
   const argvFingerprint = tokens && tokens.length > 1
     ? stableFingerprint(tokens.slice(1))
     : undefined;
-  const shell: RuntimeExactCommandPermissionMatcher['shell'] =
-    platform === 'win32' ? 'cmd' : 'posix';
   const commandFingerprint = stableFingerprint(command);
   const canonical = {
     version: 1 as const,
     kind: 'exact-command' as const,
     toolName: input.toolName,
     shell,
+    ...(input.shellContractFingerprint !== undefined
+      ? { shellContractFingerprint: input.shellContractFingerprint }
+      : {}),
     commandFingerprint,
     cwd,
     ...(executable !== undefined ? { executable } : {}),
@@ -285,7 +310,7 @@ function normalizePermissionPath(
 
 function tokenizeShellCommand(
   command: string,
-  platform: RuntimePermissionHostPlatform,
+  shell: RuntimeExactCommandPermissionMatcher['shell'],
 ): readonly string[] | undefined {
   if (command.length === 0 || command.includes('\0') || command.includes('\n')) return undefined;
   const tokens: string[] = [];
@@ -293,7 +318,7 @@ function tokenizeShellCommand(
   let quote: 'single' | 'double' | undefined;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? '';
-    if (platform === 'posix' && char === "'" && quote !== 'double') {
+    if (shell !== 'cmd' && char === "'" && quote !== 'double') {
       quote = quote === 'single' ? undefined : 'single';
       continue;
     }
@@ -301,7 +326,7 @@ function tokenizeShellCommand(
       quote = quote === 'double' ? undefined : 'double';
       continue;
     }
-    const escape = platform === 'win32' ? '^' : '\\';
+    const escape = shell === 'cmd' ? '^' : shell === 'powershell' ? '`' : '\\';
     if (char === escape && quote !== 'single' && index + 1 < command.length) {
       token += command[index + 1] ?? '';
       index += 1;
