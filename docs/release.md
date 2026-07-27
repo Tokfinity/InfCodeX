@@ -130,11 +130,14 @@ publication sends those same audited bytes.
 Final local candidate evidence on 2026-07-27: the clean-install template,
 package build, bundle, declaration, fast/unit/contract/system, packaged
 Electron, and exact tarball audit gates passed. The final audited
-`kodax-ai-kodax-0.7.77.tgz` is 4,142,654 bytes with SHA-256
-`96DEAE691BF0DAE6A8998D6868B7983484EDBAD4ED6CB0D2FFAB2BFE9361F386`.
+`kodax-ai-kodax-0.7.77.tgz` is 4,144,186 bytes with SHA-256
+`E30B447059F1C237B81E5896E51698D3FFD7987A8C5E1CF15F9F2354C846F63C`.
 It was produced by `node scripts/release.mjs --pack-only`, including the
-production build and exact Sidecar archive audit. The final release-evidence
-commit must pass Node 20, Node 22 (including the Unix Runtime socket gate), the
+production build and exact Sidecar archive audit. Archive-level declaration
+inspection confirmed `promptCacheKey`, `promptCacheAffinityHash`, and optional
+cache read/write fields; production bundles retain the Kimi/OpenAI affinity and
+Codex/Gemini cache-usage parser wire fields. The final release-evidence commit
+must pass Node 20, Node 22 (including the Unix Runtime socket gate), the
 dedicated Windows Shell Contract job, and packaged Electron before tagging.
 
 For a focused v0.7.77 rerun:
