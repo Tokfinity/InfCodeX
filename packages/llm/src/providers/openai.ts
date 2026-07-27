@@ -36,7 +36,13 @@ import {
   resolveThinkingBudget,
 } from '../reasoning.js';
 import { stripCacheBoundaries } from '../cache-control.js';
-import { buildImageDataUrl } from './image-serialization.js';
+import {
+  buildImageDataUrlIfAvailable,
+  isImageFileMissing,
+  MISSING_IMAGE_PLACEHOLDER,
+  UNSUPPORTED_TOOL_RESULT_IMAGE_PLACEHOLDER,
+} from './image-serialization.js';
+import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
 
@@ -816,6 +822,11 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         max_completion_tokens:
           streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
         stream: true,
+        ...(this.config.promptCacheAffinity === true
+          && streamOptions?.promptCacheKey
+          && !resolvePromptCacheDisabled()
+          ? { prompt_cache_key: streamOptions.promptCacheKey }
+          : {}),
       };
       if (forcedToolName && shouldForceToolChoice) {
         createParams.tool_choice = {
@@ -1090,6 +1101,11 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         tools: openaiTools,
         max_completion_tokens:
           streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
+        ...(this.config.promptCacheAffinity === true
+          && streamOptions?.promptCacheKey
+          && !resolvePromptCacheDisabled()
+          ? { prompt_cache_key: streamOptions.promptCacheKey }
+          : {}),
       };
       if (forcedToolName && shouldForceToolChoice) {
         createParams.tool_choice = {
@@ -1347,21 +1363,26 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         // do not accept image blocks inline. When the tool_result content
         // is the array form (e.g. `read` on an image path), downgrade:
         // emit text items as-is and replace image items with a textual
-        // placeholder noting the path. This preserves the tool-result
+        // path-free placeholder. This preserves the tool-result
         // contract for text-only OpenAI-compat gateways (DeepSeek, Zhipu
         // text channel, MiniMax, etc.) without rejecting the request.
         let toolContent: string;
         if (typeof block.content === 'string') {
           toolContent = block.content;
         } else {
-          toolContent = block.content
-            .map((item) => {
-              if (item.type === 'text') return item.text;
-              // type === 'image' — provider can't render the image inline;
-              // surface its path so the model knows what was attempted.
-              return `[Image at ${item.path}${item.mediaType ? ` (${item.mediaType})` : ''}] (provider does not support image content in tool_result; if the image was previously visible to you in the conversation, refer to it directly via native vision)`;
-            })
-            .join('\n');
+          const loweredItems: string[] = [];
+          for (const item of block.content) {
+            if (item.type === 'text') {
+              loweredItems.push(item.text);
+              continue;
+            }
+            loweredItems.push(
+              (await isImageFileMissing(item.path))
+                ? MISSING_IMAGE_PLACEHOLDER
+                : UNSUPPORTED_TOOL_RESULT_IMAGE_PLACEHOLDER,
+            );
+          }
+          toolContent = loweredItems.join('\n');
         }
         results.push({
           role: 'tool',
@@ -1389,12 +1410,23 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       });
     }
     for (const block of imageBlocks) {
-      content.push({
-        type: 'image_url',
-        image_url: {
-          url: await buildImageDataUrl(block.path, block.mediaType),
-        },
-      });
+      const dataUrl = await buildImageDataUrlIfAvailable(
+        block.path,
+        block.mediaType,
+      );
+      if (dataUrl === undefined) {
+        content.push({
+          type: 'text',
+          text: MISSING_IMAGE_PLACEHOLDER,
+        });
+      } else {
+        content.push({
+          type: 'image_url',
+          image_url: {
+            url: dataUrl,
+          },
+        });
+      }
     }
 
     results.push({

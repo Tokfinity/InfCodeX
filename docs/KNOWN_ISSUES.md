@@ -14,6 +14,11 @@ _Last Updated: 2026-07-27_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 219 | Medium | Resolved | Daemon start can report healthy while its returned state is still starting | runtime daemon child startup | v0.7.77 development | 2026-07-27 | 2026-07-27 |
+| 218 | High | Resolved | Missing historical image files make every later Provider run fail | image-path history introduction | v0.7.77 development | 2026-07-27 | 2026-07-27 |
+| 217 | High | Resolved | CLI bridge confuses ACP IDs with native CLI resume IDs and shares a default session | CLI bridge introduction | v0.7.77 development | 2026-07-27 | 2026-07-27 |
+| 216 | High | Resolved | Codex CLI and Gemini CLI cache usage is dropped by the CLI event bridge | CLI bridge introduction | v0.7.77 development | 2026-07-27 | 2026-07-27 |
+| 215 | High | Resolved | Managed Provider requests omit stable prompt-cache session affinity | v0.7.77 development and earlier | v0.7.77 development | 2026-07-27 | 2026-07-27 |
 | 214 | High | Resolved | Daemon shell tools freeze startup PATH and expose inherited credentials | v0.7.77 and earlier | v0.7.77 development | 2026-07-26 | 2026-07-27 |
 | 213 | High | Resolved | Published v0.7.77 archive predates AMA request-only managed-context reinjection | v0.7.77 package | v0.7.77 repack | 2026-07-26 | 2026-07-26 |
 | 212 | High | Resolved | v0.7.77 review found child-briefing corruption, lossy interrupt validation, and terminal/schema contract drift | v0.7.77 development | v0.7.77 development | 2026-07-26 | 2026-07-26 |
@@ -123,6 +128,295 @@ _Last Updated: 2026-07-27_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 219: Daemon start can report healthy while its returned state is still starting
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: runtime daemon child startup
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-27
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+The real daemon CLI smoke intermittently returned `health: "healthy"` together
+with `state.status: "starting"`. Hosts could therefore receive a successful
+start result before the durable owner state reached its public ready boundary.
+
+#### Root Cause
+
+`waitForHealthyDaemonStartup()` used endpoint reachability, PID liveness, and
+owner identity as its terminal condition. Those signals can become healthy
+slightly before the daemon atomically publishes `status: "ready"`.
+
+#### Resolution
+
+Startup now keeps polling until the matching healthy owner state is also
+`ready`; only then may it unref its spawned child, return a competing owner, or
+attach to an owner discovered by a concurrent CLI/SDK starter. Waiting is
+bounded and cancellable, never spawns or terminates a competitor, and rejects
+an identity change. Deterministic tests cover owned, competing, and pre-existing
+owners. A real process smoke holds the socket-reachable daemon at `starting`,
+verifies that concurrent CLI start and SDK auto-start remain pending, then
+confirms that both complete only after the same owner publishes `ready`.
+
+#### Files Changed
+
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/process.test.ts`
+- `src/runtime-daemon/host.ts`
+- `src/kodax_cli.ts`
+- `src/kodax_cli.daemon-smoke.test.ts`
+- `docs/test-guides/ISSUE_219_v0.7.77_REGRESSION_GUIDE.md`
+
+#### Validation
+
+- Runtime daemon startup unit tests passed 16/16.
+- The focused real daemon concurrent CLI/SDK readiness smoke passed.
+
+### 218: Missing historical image files make every later Provider run fail
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: image-path history introduction
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-27
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+KodaX persists image content blocks by absolute local path. Provider serializers reopen every
+image in the complete history on each later request. If a host stored an image in temporary
+storage and that file disappeared, every later turn failed with `ENOENT`, including text-only
+follow-ups. Runtime credential scoping could then replace the useful filesystem detail with the
+generic `Provider run failed while using a run-scoped credential` message.
+
+#### Root Cause
+
+The Anthropic-compatible serializer read user and tool-result image paths unconditionally, and
+the OpenAI-compatible serializer unconditionally built a data URL from each user image. Neither
+serializer distinguished a missing historical attachment from other filesystem failures.
+
+#### Resolution
+
+Both Provider families now convert only `ENOENT` and `ENOTDIR` image reads into the path-free
+text marker `[Historical image unavailable: the local attachment file is missing.]`. Existing
+text and tool-result structure remain intact, so the model can continue with the available
+history. OpenAI-compatible tool-result image blocks, which cannot carry inline images, now use
+path-free missing/unsupported markers rather than serializing the absolute local path. Other
+filesystem failures in image-reading branches still propagate unchanged.
+
+#### Files Changed
+
+- `packages/llm/src/providers/image-serialization.ts`
+- `packages/llm/src/providers/anthropic.ts`
+- `packages/llm/src/providers/openai.ts`
+- `packages/llm/src/providers/image-serialization.test.ts`
+- `packages/llm/src/providers/anthropic-message-serialization.test.ts`
+- `packages/llm/src/providers/openai-message-serialization.test.ts`
+- `docs/test-guides/ISSUE_218_v0.7.77_REGRESSION_GUIDE.md`
+
+#### Validation
+
+- Focused Provider and image-serialization tests passed 46/46.
+- The complete root package build passed, including package TypeScript, SDK bundles, Worker
+  sidecars, import guards, and declaration bundles.
+
+### 217: CLI bridge confuses ACP IDs with native CLI resume IDs and shares a default session
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: CLI bridge introduction
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-27
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+Codex CLI and Gemini CLI bridge requests could attempt to resume a generated
+pseudo-ACP UUID on their first prompt. Calls without an explicit transport
+conversation ID also reused one process-global `"default"` ACP session, so
+different KodaX Sessions could inherit the same native CLI history. Native
+non-zero exits were logged but could surface as an empty successful turn.
+
+#### Root Cause
+
+`KodaXAcpProvider` used `streamOptions.sessionId ?? "default"` as its ACP
+session-map key. The pseudo-ACP server generated an independent UUID for
+`session/new`, then forwarded that ACP ID directly as `CLIExecutionOptions`
+`sessionId`. Codex and Gemini interpreted any such value as a native resume
+request even though neither CLI had reported it. The bridge discarded
+`session_start` as routing state, never released one-shot mappings, and the
+shared CLI executor did not inspect the child process exit code.
+
+#### Resolution
+
+The pseudo bridge now treats ACP conversation IDs and native CLI session IDs
+as separate namespaces. A first prompt is always fresh; a later prompt in the
+same explicit ACP conversation resumes only a non-empty ID reported by the
+CLI's `session_start` event. Stateless Provider calls create independent
+one-shot ACP sessions and release their native mapping, while two explicit
+conversation IDs reuse only their own sessions. Non-zero CLI exits reject the
+generator, pseudo-ACP returns a JSON-RPC error, and `AcpClient.prompt()` rejects
+instead of returning normal `end_turn`. Cancellation semantics remain
+unchanged. Concurrent first use shares one connection promise; a failed
+initialization resets for retry. Concurrent prompts for the same explicit
+conversation fail visibly rather than overwriting active output routing, while
+independent stateless calls may still run concurrently. A failed connection or
+explicit disconnect rebuilds the pseudo transport with fresh streams rather
+than reusing a closed `TransformStream`; abort closes the reader/writer
+endpoints actually held by the bridge. Disconnect also closes an in-flight
+handshake immediately, and a transport closure during `session/new` or
+`session/prompt` invalidates the stale client so the next Runtime retry creates
+a new connection. A reported successful `complete` event is retained while the
+executor is drained to termination, so a later non-zero process exit still
+rejects the prompt; a zero-exit stream without any `complete` event also fails
+closed. Default `AbortError` remains user cancellation, while a hard/idle
+timeout carried in `AbortSignal.reason` is propagated through both rejected
+prompts and ACP `stopReason: cancelled` responses so Runtime resilience sees a
+real failure instead of an empty success. Native `AcpClient.prompt()` also
+races the caller signal directly, preserves its exact reason, and consumes the
+late Provider settlement, so a server that ignores its best-effort cancel
+cannot retain the request. `CLIExecutorConfig.timeout` is now a real process
+deadline: stdout iteration and process close both race the deadline, the local
+pipe is released, and one memoized process-tree termination is requested
+before throwing even when the CLI emitted `complete` first.
+
+#### Files Changed
+
+- `packages/llm/src/cli-events/executor.ts`
+- `packages/llm/src/cli-events/acp-client.ts`
+- `packages/llm/src/cli-events/pseudo-acp-server.ts`
+- `packages/llm/src/providers/acp-base.ts`
+- `docs/test-guides/ISSUE_217_v0.7.77_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- first-turn fresh and CLI-native-only resume across two ACP sessions;
+- independent reuse for explicit conversation A/B;
+- concurrent first-use initialization and same-conversation rejection;
+- fresh transport recreation after connect failure and explicit disconnect;
+- pending-handshake cancellation and post-connect transport-death recovery;
+- one-shot session cleanup;
+- held-endpoint abort, missing-`complete` rejection, and post-`complete`
+  generator draining;
+- configured timeout termination after `complete` without process exit;
+- user-cancellation versus hard/idle-timeout Abort reason propagation;
+- native ACP prompt cancellation when the server leaves the prompt unresolved;
+- non-zero exit, normalized error/failed completion, pre-aborted input, and
+  pseudo-ACP/AcpClient error propagation.
+
+### 216: Codex CLI and Gemini CLI cache usage is dropped by the CLI event bridge
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: CLI bridge introduction
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-27
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+Codex CLI terminal events reported `cached_input_tokens` and
+`cache_write_input_tokens`, and Gemini CLI result events reported
+`stats.cached`, but KodaX Runtime cache diagnostics and downstream UI consumers
+showed no cache usage.
+
+#### Root Cause
+
+The provider-specific JSONL parsers discarded the official cache counters while
+converting terminal records into the shared `CLIEvent` usage shape. The shared
+shape did not declare cache-read/write fields, and Gemini's parser manufactured
+zero-valued core usage when required fields were absent. The pseudo-ACP and
+KodaX usage layers already supported cache counters, so the loss happened
+before those layers.
+
+#### Resolution
+
+Extended terminal CLI usage with optional read/write cache counters. Codex
+`turn.completed` now maps both official cache fields; Gemini `result` maps
+`stats.cached` as cache reads and leaves cache writes unreported. Input totals
+remain the upstream totals and are not increased by their cache breakdown.
+Explicit Provider zero is preserved, while absent, negative, non-finite, or
+malformed fields remain omitted. ACP normalization now rejects missing core
+usage instead of manufacturing zeros, and Runtime diagnostics omit unreported
+cache properties so reconnecting hosts can distinguish "reported zero" from
+"not reported."
+
+#### Files Changed
+
+- `packages/llm/src/cli-events/codex-parser.ts`
+- `packages/llm/src/cli-events/gemini-parser.ts`
+- `packages/llm/src/cli-events/types.ts`
+- `packages/llm/src/cli-events/pseudo-acp-server.test.ts`
+- `packages/llm/src/providers/acp-base.ts`
+- `packages/coding/src/agent-runtime/prompt-cache-diagnostics.ts`
+- `docs/test-guides/ISSUE_216_v0.7.77_REGRESSION_GUIDE.md`
+
+### 215: Managed Provider requests omit stable prompt-cache session affinity
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.77 development and earlier
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-27
+- **Resolved**: 2026-07-27
+
+#### Original Problem
+
+Kimi Code requests already carried Anthropic `cache_control` breakpoints, but
+AMA and SA physical requests did not provide a stable logical Session affinity
+key. Real same-Session requests with identical prompt-envelope hashes could
+therefore report zero cache reads until a later request happened to reach the
+same Provider cache route.
+
+#### Root Cause
+
+Runtime maintained stable root/child diagnostic context identities, while the
+Provider stream contract exposed only ACP's conversation `sessionId`. The
+managed adapter never lowered a cache-routing identity to Anthropic-compatible
+`metadata.user_id` or OpenAI `prompt_cache_key`, and fallback and compaction
+requests did not inherit one. Reusing the physical child transcript Session
+would also have made the value unstable across resumed child workers.
+
+#### Resolution
+
+Added a separate opaque `promptCacheKey` request option derived with
+domain-separated SHA-256 from the stable logical context identity. Root
+requests remain stable across runs and restored Sessions; child keys use the
+canonical Agent path, remain stable across physical worker Sessions, and are
+isolated from both their parent and siblings. AMA, SA, retries, max-token
+continuations, non-streaming fallback, and compaction summaries all reuse the
+same key.
+
+Verified built-in Kimi Code lowers the key to Anthropic-compatible
+`metadata.user_id`, while public Kimi and official OpenAI lower it to
+`prompt_cache_key`. Custom compatible Providers must explicitly opt in with
+`promptCacheAffinity: true`; this avoids breaking strict gateways that reject
+unknown request fields. `disablePromptCache: true` omits the affinity field,
+and no raw Session or Agent identity is sent. Diagnostics expose only
+`promptCacheAffinityHash` when the endpoint applies the key, separately from
+the prompt-byte `requestEnvelopeHash`. This establishes stable routing
+conditions but does not promise a cache hit when Provider TTL, sharding, load
+balancing, or endpoint policy intervenes.
+
+The release keeps canonical Agent isolation deliberately. Root and child
+requests currently replace the System prompt and Tool set, so sharing one key
+does not create an identical prefix; it can instead concentrate concurrent
+traffic on one routing key. This trades away possible reuse among same-shaped
+sibling children. A session-wide or prefix-family policy requires controlled
+Provider-specific A/B evidence and is not claimed by this fix.
+
+#### Files Changed
+
+- `packages/llm/src/types.ts`
+- `packages/llm/src/providers/anthropic.ts`
+- `packages/llm/src/providers/openai.ts`
+- `packages/llm/src/providers/registry.ts`
+- `packages/coding/src/agent-runtime/prompt-cache-affinity.ts`
+- AMA/SA request, fallback, retry, child, and compaction call sites
+- `docs/test-guides/ISSUE_215_v0.7.77_REGRESSION_GUIDE.md`
 
 ### 214: Daemon shell tools freeze startup PATH and expose inherited credentials
 
@@ -7265,11 +7559,31 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 100 (25 Open, 75 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 105 (25 Open, 80 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-27: Issue 217 resolved (v0.7.77 development)
+- Separated generated ACP conversation IDs from native Codex/Gemini resume IDs;
+  first turns are fresh and only CLI-reported IDs can be resumed.
+- Removed the global stateless ACP session, released one-shot mappings, and
+  made non-zero CLI exits reject through pseudo-ACP and `AcpClient`.
+- Serialized first connection initialization, rejected overlapping prompts for
+  one explicit conversation, and fail-closed normalized CLI failure events.
+
+### 2026-07-27: Issue 216 resolved (v0.7.77 development)
+- Preserved official Codex CLI cache read/write and Gemini CLI cache-read usage
+  through CLI events, pseudo-ACP, normalized usage, and Runtime diagnostics.
+- Preserved explicit zero while leaving unreported or invalid counters absent;
+  input totals remain upstream totals rather than double-counting cache fields.
+
+### 2026-07-27: Issue 215 resolved (v0.7.77 development)
+- Added hashed logical-context prompt-cache affinity across AMA, SA, retries,
+  fallback, compaction, restored Sessions, and recursive root/child execution.
+- Enabled only verified Kimi Code, public Kimi, official OpenAI, and explicit
+  custom Provider opt-ins; strict compatible gateways remain unchanged.
 
 ### 2026-07-27: Issue 214 review hardening resolved (v0.7.77 development)
 - Denied credentials for all registered Providers, preserved Session shell

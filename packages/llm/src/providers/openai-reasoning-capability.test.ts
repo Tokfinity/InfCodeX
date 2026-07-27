@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KodaXOpenAICompatProvider } from './openai.js';
+import { runWithScopedConfig } from '../run-scoped-config.js';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -171,7 +172,81 @@ describe('openai reasoning capability', () => {
 
   afterEach(() => {
     delete process.env.KODAX_CONFIG_FILE;
+    delete process.env.KODAX_DISABLE_PROMPT_CACHE;
     fs.rmSync(TEST_CONFIG_FILE, { force: true });
+  });
+
+  it('lowers a verified provider cache affinity key to prompt_cache_key for stream and complete', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(createCompletedOpenAIStream())
+      .mockResolvedValueOnce({
+        choices: [{
+          message: { role: 'assistant', content: 'done', tool_calls: [] },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      });
+    const provider = new TestOpenAIProvider(
+      'kimi',
+      'none',
+      { chat: { completions: { create } } },
+      { promptCacheAffinity: true },
+    );
+    const streamOptions = {
+      promptCacheKey: 'c'.repeat(64),
+    };
+
+    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
+    await runWithScopedConfig({ disablePromptCache: false }, async () => {
+      await provider.stream(MESSAGES, TOOLS, 'system', false, streamOptions);
+      await provider.complete(MESSAGES, TOOLS, 'system', false, streamOptions);
+    });
+
+    expect(create.mock.calls[0]?.[0].prompt_cache_key).toBe('c'.repeat(64));
+    expect(create.mock.calls[1]?.[0].prompt_cache_key).toBe('c'.repeat(64));
+  });
+
+  it('omits prompt_cache_key when prompt caching is disabled for the run', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(createCompletedOpenAIStream())
+      .mockResolvedValueOnce({
+        choices: [{
+          message: { role: 'assistant', content: 'done', tool_calls: [] },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      });
+    const provider = new TestOpenAIProvider(
+      'kimi',
+      'none',
+      { chat: { completions: { create } } },
+      { promptCacheAffinity: true },
+    );
+    const streamOptions = { promptCacheKey: 'c'.repeat(64) };
+
+    await runWithScopedConfig({ disablePromptCache: true }, async () => {
+      await provider.stream(MESSAGES, TOOLS, 'system', false, streamOptions);
+      await provider.complete(MESSAGES, TOOLS, 'system', false, streamOptions);
+    });
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('prompt_cache_key');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('prompt_cache_key');
+  });
+
+  it('does not send prompt_cache_key to an unverified OpenAI-compatible endpoint', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider(
+      'custom-openai-compatible',
+      'none',
+      { chat: { completions: { create } } },
+      { baseUrl: 'https://strict-compatible.example.test/v1' },
+    );
+
+    await provider.stream(MESSAGES, TOOLS, 'system', false, {
+      promptCacheKey: 'd'.repeat(64),
+    });
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('prompt_cache_key');
   });
 
   it('sends reasoning_effort for native-effort providers', async () => {

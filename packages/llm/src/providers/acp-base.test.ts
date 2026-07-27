@@ -10,14 +10,17 @@ import type { AcpClientOptions } from '../cli-events/acp-client.js';
 const acpMockState = vi.hoisted(() => ({
   instances: [] as MockAcpClient[],
   nextSessionId: 1,
+  connectImpl: undefined as (() => Promise<void>) | undefined,
   promptImpl: undefined as
     | ((client: MockAcpClient, text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string; reasoningEffort?: string }) => Promise<{
+      stopReason?: 'end_turn' | 'cancelled';
       usage?: {
         inputTokens: number;
         outputTokens: number;
         totalTokens: number;
       };
     } | void> | {
+      stopReason?: 'end_turn' | 'cancelled';
       usage?: {
         inputTokens: number;
         outputTokens: number;
@@ -28,17 +31,40 @@ const acpMockState = vi.hoisted(() => ({
 }));
 
 class MockAcpClient {
-  readonly connect = vi.fn(async () => {});
-  readonly createNewSession = vi.fn(async () => `acp-session-${acpMockState.nextSessionId++}`);
-  readonly disconnect = vi.fn(() => {});
+  private connected = false;
+  private closed = false;
+  readonly connect = vi.fn(async () => {
+    await acpMockState.connectImpl?.();
+    if (this.closed) {
+      throw new MockAcpTransportClosedError();
+    }
+    this.connected = true;
+  });
+  readonly createNewSession = vi.fn(async () => {
+    if (!this.connected) throw new Error('Client not connected');
+    return `acp-session-${acpMockState.nextSessionId++}`;
+  });
+  readonly releaseSession = vi.fn((_sessionId: string) => {});
+  readonly disconnect = vi.fn(() => {
+    this.closed = true;
+    this.connected = false;
+  });
   readonly prompt = vi.fn(async (text: string, sessionId: string, signal?: AbortSignal, options?: { model?: string; reasoningEffort?: string }) => {
     return await acpMockState.promptImpl?.(this, text, sessionId, signal, options);
   });
 
   constructor(
-    readonly options: { onSessionUpdate?: (notification: unknown) => void },
+    readonly options: AcpClientOptions,
   ) {
     acpMockState.instances.push(this);
+  }
+
+  isConnectionOpen(): boolean {
+    return this.connected;
+  }
+
+  closeTransport(): void {
+    this.connected = false;
   }
 
   emit(update: unknown, sessionId = 'acp-session-1'): void {
@@ -46,8 +72,16 @@ class MockAcpClient {
   }
 }
 
+class MockAcpTransportClosedError extends Error {
+  constructor() {
+    super('ACP transport closed before the request completed');
+    this.name = 'AcpTransportClosedError';
+  }
+}
+
 vi.mock('../cli-events/acp-client.js', () => ({
   AcpClient: MockAcpClient,
+  AcpTransportClosedError: MockAcpTransportClosedError,
 }));
 
 const { KodaXAcpProvider } = await import('./acp-base.js');
@@ -76,12 +110,16 @@ class TestAcpProvider extends KodaXAcpProvider {
 
   protected readonly acpClientOptions: AcpClientOptions;
 
-  constructor(executor?: AcpClientOptions['executor']) {
+  constructor(
+    executor?: AcpClientOptions['executor'],
+    recreate?: AcpClientOptions['recreate'],
+  ) {
     super();
     this.acpClientOptions = {
       inputStream: new ReadableStream<Uint8Array>(),
       outputStream: new WritableStream<Uint8Array>(),
       executor,
+      recreate,
     };
   }
 }
@@ -90,6 +128,7 @@ describe('KodaXAcpProvider', () => {
   beforeEach(() => {
     acpMockState.instances.length = 0;
     acpMockState.nextSessionId = 1;
+    acpMockState.connectImpl = undefined;
     acpMockState.promptImpl = undefined;
   });
 
@@ -166,6 +205,203 @@ describe('KodaXAcpProvider', () => {
     expect(firstClient.prompt).toHaveBeenCalledTimes(2);
   });
 
+  it('creates a fresh ACP session for each stateless call without a conversation id', async () => {
+    const provider = new TestAcpProvider();
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'latest prompt' }];
+
+    await provider.stream(messages, [], 'system');
+    await provider.stream(messages, [], 'system');
+
+    const client = acpMockState.instances[0]!;
+    expect(client.createNewSession).toHaveBeenCalledTimes(2);
+    expect(client.prompt.mock.calls.map((call) => call[1])).toEqual([
+      'acp-session-1',
+      'acp-session-2',
+    ]);
+    expect(client.releaseSession.mock.calls.map((call) => call[0])).toEqual([
+      'acp-session-1',
+      'acp-session-2',
+    ]);
+  });
+
+  it('isolates and independently reuses two explicit conversation ids', async () => {
+    const provider = new TestAcpProvider();
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'latest prompt' }];
+
+    await provider.stream(messages, [], 'system', undefined, { sessionId: 'thread-a' });
+    await provider.stream(messages, [], 'system', undefined, { sessionId: 'thread-b' });
+    await provider.stream(messages, [], 'system', undefined, { sessionId: 'thread-a' });
+    await provider.stream(messages, [], 'system', undefined, { sessionId: 'thread-b' });
+
+    const client = acpMockState.instances[0]!;
+    expect(client.createNewSession).toHaveBeenCalledTimes(2);
+    expect(client.prompt.mock.calls.map((call) => call[1])).toEqual([
+      'acp-session-1',
+      'acp-session-2',
+      'acp-session-1',
+      'acp-session-2',
+    ]);
+    expect(client.releaseSession).not.toHaveBeenCalled();
+  });
+
+  it('shares one in-flight client connection across concurrent stateless calls', async () => {
+    let releaseConnect: (() => void) | undefined;
+    acpMockState.connectImpl = () => new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const provider = new TestAcpProvider();
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'latest prompt' }];
+
+    const first = provider.stream(messages, [], 'system');
+    const second = provider.stream(messages, [], 'system');
+    await vi.waitFor(() => expect(acpMockState.instances).toHaveLength(1));
+    expect(acpMockState.instances[0]!.connect).toHaveBeenCalledTimes(1);
+
+    releaseConnect?.();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+
+    const client = acpMockState.instances[0]!;
+    expect(client.createNewSession).toHaveBeenCalledTimes(2);
+    expect(client.prompt.mock.calls.map((call) => call[1]).sort()).toEqual([
+      'acp-session-1',
+      'acp-session-2',
+    ]);
+  });
+
+  it('recreates a closed transport before retrying a failed connection', async () => {
+    let connectAttempts = 0;
+    acpMockState.connectImpl = async () => {
+      connectAttempts += 1;
+      if (connectAttempts === 1) {
+        throw new Error('transport handshake failed');
+      }
+    };
+    const recreate = vi.fn((): AcpClientOptions => ({
+      inputStream: new ReadableStream<Uint8Array>(),
+      outputStream: new WritableStream<Uint8Array>(),
+    }));
+    const provider = new TestAcpProvider(undefined, recreate);
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'retry prompt' }];
+
+    await expect(provider.stream(messages, [], 'system')).rejects.toThrow(
+      /transport handshake failed/i,
+    );
+    await expect(provider.stream(messages, [], 'system')).resolves.toBeDefined();
+
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances).toHaveLength(2);
+    expect(acpMockState.instances[0]!.disconnect).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances[1]!.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('recreates a closed transport after an explicit disconnect', async () => {
+    const recreate = vi.fn((): AcpClientOptions => ({
+      inputStream: new ReadableStream<Uint8Array>(),
+      outputStream: new WritableStream<Uint8Array>(),
+    }));
+    const provider = new TestAcpProvider(undefined, recreate);
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'reconnect prompt' }];
+
+    await provider.stream(messages, [], 'system');
+    provider.disconnect();
+    await provider.stream(messages, [], 'system');
+
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances).toHaveLength(2);
+    expect(acpMockState.instances[0]!.disconnect).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances[1]!.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes a client whose connection is still pending before reconnecting', async () => {
+    let releaseConnect: (() => void) | undefined;
+    acpMockState.connectImpl = () => new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const recreate = vi.fn((): AcpClientOptions => ({
+      inputStream: new ReadableStream<Uint8Array>(),
+      outputStream: new WritableStream<Uint8Array>(),
+    }));
+    const provider = new TestAcpProvider(undefined, recreate);
+    const pending = provider.stream(
+      [{ role: 'user', content: 'pending handshake' }],
+      [],
+      'system',
+    );
+
+    await vi.waitFor(() => expect(acpMockState.instances).toHaveLength(1));
+    provider.disconnect();
+    expect(acpMockState.instances[0]!.disconnect).toHaveBeenCalledTimes(1);
+
+    releaseConnect?.();
+    await expect(pending).rejects.toBeInstanceOf(MockAcpTransportClosedError);
+    acpMockState.connectImpl = undefined;
+    await expect(provider.stream(
+      [{ role: 'user', content: 'fresh connection' }],
+      [],
+      'system',
+    )).resolves.toBeDefined();
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances).toHaveLength(2);
+  });
+
+  it('invalidates a connected transport after closure so the next retry reconnects', async () => {
+    const recreate = vi.fn((): AcpClientOptions => ({
+      inputStream: new ReadableStream<Uint8Array>(),
+      outputStream: new WritableStream<Uint8Array>(),
+    }));
+    const provider = new TestAcpProvider(undefined, recreate);
+    let first = true;
+    acpMockState.promptImpl = async (client) => {
+      if (first) {
+        first = false;
+        client.closeTransport();
+        throw new MockAcpTransportClosedError();
+      }
+    };
+
+    await expect(provider.stream(
+      [{ role: 'user', content: 'transport dies' }],
+      [],
+      'system',
+      undefined,
+      { sessionId: 'conversation-a' },
+    )).rejects.toBeInstanceOf(MockAcpTransportClosedError);
+    await expect(provider.stream(
+      [{ role: 'user', content: 'runtime retry' }],
+      [],
+      'system',
+      undefined,
+      { sessionId: 'conversation-a' },
+    )).resolves.toBeDefined();
+
+    expect(recreate).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances).toHaveLength(2);
+    expect(acpMockState.instances[0]!.disconnect).toHaveBeenCalledTimes(1);
+    expect(acpMockState.instances[1]!.createNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects concurrent prompts for the same explicit conversation', async () => {
+    let releasePrompt: (() => void) | undefined;
+    acpMockState.promptImpl = async () => await new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const provider = new TestAcpProvider();
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'latest prompt' }];
+
+    const first = provider.stream(messages, [], 'system', undefined, {
+      sessionId: 'thread-shared',
+    });
+    await vi.waitFor(() => {
+      expect(acpMockState.instances[0]?.prompt).toHaveBeenCalledTimes(1);
+    });
+    await expect(provider.stream(messages, [], 'system', undefined, {
+      sessionId: 'thread-shared',
+    })).rejects.toThrow(/already has an active prompt/i);
+
+    releasePrompt?.();
+    await expect(first).resolves.toBeDefined();
+  });
+
   it('merges an ephemeral suffix into the latest ACP prompt copy', async () => {
     const provider = new TestAcpProvider();
     acpMockState.promptImpl = async (_client, text) => {
@@ -204,6 +440,54 @@ describe('KodaXAcpProvider', () => {
       outputTokens: 15,
       totalTokens: 105,
     });
+  });
+
+  it('preserves reported cache zeros and omits unreported ACP cache fields', async () => {
+    const provider = new TestAcpProvider();
+    acpMockState.promptImpl = async () => ({
+      usage: {
+        inputTokens: 90,
+        outputTokens: 15,
+        totalTokens: 105,
+        cachedReadTokens: 0,
+        cachedWriteTokens: 0,
+      },
+    });
+
+    const reported = await provider.stream(
+      [{ role: 'user', content: 'reported zero' }],
+      [] as KodaXToolDefinition[],
+      'system',
+    );
+    expect(reported.usage).toMatchObject({
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+    });
+
+    acpMockState.promptImpl = async () => ({
+      usage: { inputTokens: 90, outputTokens: 15, totalTokens: 105 },
+    });
+    const unreported = await provider.stream(
+      [{ role: 'user', content: 'not reported' }],
+      [] as KodaXToolDefinition[],
+      'system',
+    );
+    expect(unreported.usage).not.toHaveProperty('cachedReadTokens');
+    expect(unreported.usage).not.toHaveProperty('cachedWriteTokens');
+  });
+
+  it('rejects malformed ACP core usage instead of manufacturing zero tokens', async () => {
+    const provider = new TestAcpProvider();
+    acpMockState.promptImpl = async () => ({
+      usage: { inputTokens: 90, outputTokens: 15 },
+    });
+
+    const result = await provider.stream(
+      [{ role: 'user', content: 'malformed usage' }],
+      [] as KodaXToolDefinition[],
+      'system',
+    );
+    expect(result.usage).toBeUndefined();
   });
 
   it('forwards model overrides into ACP prompt requests', async () => {
@@ -282,6 +566,8 @@ describe('KodaXAcpProvider', () => {
 
   it('treats AbortError as a cancelled stream and resets cached state on disconnect', async () => {
     const provider = new TestAcpProvider();
+    const controller = new AbortController();
+    controller.abort();
     acpMockState.promptImpl = async () => {
       const error = new Error('aborted');
       error.name = 'AbortError';
@@ -295,6 +581,7 @@ describe('KodaXAcpProvider', () => {
         'system',
         undefined,
         { sessionId: 'thread-1' },
+        controller.signal,
       ),
     ).resolves.toEqual({
       textBlocks: [],
@@ -317,5 +604,45 @@ describe('KodaXAcpProvider', () => {
 
     expect(acpMockState.instances).toHaveLength(2);
     expect(acpMockState.instances[1]!.createNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a hard-timeout abort when the prompt rejects after transport closure', async () => {
+    const provider = new TestAcpProvider();
+    const controller = new AbortController();
+    const timeoutError = new Error('API Hard Timeout after 120000ms');
+    controller.abort(timeoutError);
+    acpMockState.promptImpl = async () => {
+      throw new MockAcpTransportClosedError();
+    };
+
+    await expect(
+      provider.stream(
+        [{ role: 'user', content: 'time out' }],
+        [] as KodaXToolDefinition[],
+        'system',
+        undefined,
+        { sessionId: 'thread-timeout-reject' },
+        controller.signal,
+      ),
+    ).rejects.toBe(timeoutError);
+  });
+
+  it('propagates a hard-timeout abort when ACP resolves with cancelled', async () => {
+    const provider = new TestAcpProvider();
+    const controller = new AbortController();
+    const timeoutError = new Error('API Hard Timeout after 120000ms');
+    controller.abort(timeoutError);
+    acpMockState.promptImpl = async () => ({ stopReason: 'cancelled' });
+
+    await expect(
+      provider.stream(
+        [{ role: 'user', content: 'time out' }],
+        [] as KodaXToolDefinition[],
+        'system',
+        undefined,
+        { sessionId: 'thread-timeout-response' },
+        controller.signal,
+      ),
+    ).rejects.toBe(timeoutError);
   });
 });

@@ -128,16 +128,37 @@ describe('CodexCLIExecutor', () => {
     });
 
     expect(
-      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":4}}'),
+      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":2,"cache_write_input_tokens":3,"output_tokens":4}}'),
     ).toEqual({
       type: 'complete',
       timestamp: 1234,
       status: 'success',
-      usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 4,
+        totalTokens: 14,
+        cachedReadTokens: 2,
+        cachedWriteTokens: 3,
+      },
       raw: {
         type: 'turn.completed',
-        usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 4 },
+        usage: {
+          input_tokens: 10,
+          cached_input_tokens: 2,
+          cache_write_input_tokens: 3,
+          output_tokens: 4,
+        },
       },
+    });
+
+    expect(
+      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":4}}'),
+    ).not.toHaveProperty('usage.cachedReadTokens');
+
+    expect(
+      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":4}}'),
+    ).toMatchObject({
+      usage: { cachedReadTokens: 0, cachedWriteTokens: 0 },
     });
 
     expect(
@@ -149,6 +170,17 @@ describe('CodexCLIExecutor', () => {
       message: 'boom',
       raw: { type: 'turn.failed', message: 'boom' },
     });
+  });
+
+  it('omits malformed usage and ignores invalid optional cache counters', () => {
+    const executor = new ExposedCodexCLIExecutor();
+
+    expect(
+      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10}}'),
+    ).toMatchObject({ type: 'complete', usage: undefined });
+    expect(
+      executor.parseLineForTest('{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":4,"cached_input_tokens":-1,"cache_write_input_tokens":null}}'),
+    ).not.toHaveProperty('usage.cachedReadTokens');
   });
 
   it('returns null for non-JSON and unsupported records', () => {

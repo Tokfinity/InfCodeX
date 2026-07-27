@@ -229,6 +229,7 @@ export { classifyStopReason, isCleanStop } from './stop-reason.js';
 export {
   runWithScopedConfig,
   getRunScopedConfig,
+  resolvePromptCacheDisabled,
   resolveWorkflowMaxConcurrency,
   WORKFLOW_MAX_CONCURRENCY_DEFAULT,
   WORKFLOW_MAX_CONCURRENCY_ABSOLUTE,

@@ -97,11 +97,21 @@ describe('GeminiCLIExecutor', () => {
     });
 
     expect(
-      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}'),
+      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3,"total_tokens":10,"cached":5}}'),
     ).toMatchObject({
       type: 'complete',
       status: 'success',
-      usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+      usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, cachedReadTokens: 5 },
+    });
+
+    expect(
+      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}'),
+    ).not.toHaveProperty('usage.cachedReadTokens');
+
+    expect(
+      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3,"total_tokens":10,"cached":0}}'),
+    ).toMatchObject({
+      usage: { cachedReadTokens: 0 },
     });
 
     expect(
@@ -111,6 +121,17 @@ describe('GeminiCLIExecutor', () => {
       errorType: 'error',
       message: 'boom',
     });
+  });
+
+  it('omits malformed usage and ignores invalid optional cache counters', () => {
+    const executor = new ExposedGeminiCLIExecutor();
+
+    expect(
+      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3}}'),
+    ).toMatchObject({ type: 'complete', usage: undefined });
+    expect(
+      executor.parseLineForTest('{"type":"result","status":"success","stats":{"input_tokens":7,"output_tokens":3,"total_tokens":10,"cached":-1}}'),
+    ).not.toHaveProperty('usage.cachedReadTokens');
   });
 
   it('returns null for non-JSON and unsupported records', () => {

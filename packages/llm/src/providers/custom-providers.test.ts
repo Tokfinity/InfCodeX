@@ -361,6 +361,13 @@ describe('custom providers', () => {
         userAgentMode: 'official' as KodaXCustomProviderConfig['userAgentMode'],
       }),
     ).toThrowError(/unknown useragentmode/i);
+
+    expect(() =>
+      createCustomProvider({
+        ...cloneConfig(OPENAI_CUSTOM),
+        promptCacheAffinity: 'yes' as unknown as boolean,
+      }),
+    ).toThrowError(/promptcacheaffinity must be a boolean/i);
   });
 
   it('tracks registered custom providers without instantiating them', () => {

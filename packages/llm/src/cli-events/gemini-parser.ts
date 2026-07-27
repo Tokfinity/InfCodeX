@@ -23,6 +23,31 @@ interface GeminiRawEvent {
         total_tokens?: number;
         input_tokens?: number;
         output_tokens?: number;
+        cached?: number;
+    };
+}
+
+function finiteNonNegative(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeGeminiUsage(
+    stats: GeminiRawEvent['stats'],
+): Extract<CLIEvent, { type: 'complete' }>['usage'] {
+    if (!stats
+        || !finiteNonNegative(stats.input_tokens)
+        || !finiteNonNegative(stats.output_tokens)
+        || !finiteNonNegative(stats.total_tokens)) {
+        return undefined;
+    }
+
+    return {
+        inputTokens: stats.input_tokens,
+        outputTokens: stats.output_tokens,
+        totalTokens: stats.total_tokens,
+        ...(finiteNonNegative(stats.cached)
+            ? { cachedReadTokens: stats.cached }
+            : {}),
     };
 }
 
@@ -127,11 +152,7 @@ export class GeminiCLIExecutor extends CLIExecutor {
                     type: 'complete',
                     timestamp,
                     status: raw.status === 'success' ? 'success' : 'failed',
-                    usage: raw.stats ? {
-                        inputTokens: raw.stats.input_tokens ?? 0,
-                        outputTokens: raw.stats.output_tokens ?? 0,
-                        totalTokens: raw.stats.total_tokens ?? 0,
-                    } : undefined,
+                    usage: normalizeGeminiUsage(raw.stats),
                     raw,
                 };
 

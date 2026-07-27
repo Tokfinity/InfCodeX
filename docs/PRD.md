@@ -1,8 +1,8 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-26
+> Last updated: 2026-07-27
 >
-> Current implementation baseline: `v0.7.77` release candidate
+> Current implementation baseline: `v0.7.77` release-ready candidate
 > (`@kodax-ai/kodax@0.7.77` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
@@ -284,6 +284,26 @@ transcript. This includes messages produced during the active Run. Persistence
 failure may retain more live memory but must not leave a summary or
 `[compacted]` placeholder as the only copy. Child-context compaction must not
 mutate root Session history.
+
+Provider prompt-cache affinity must follow the stable logical Runtime context,
+not a physical child transcript Session or one transport attempt. Root
+affinity remains stable across Runs and resume; each canonical child Agent path
+is isolated. Retry, fallback, continuation, and summary requests reuse that
+identity. The wire value must be opaque, disabled with prompt caching, and
+lowered only for endpoints known or explicitly configured to accept the
+protocol field. Cache usage continues to come only from Provider responses;
+stable affinity does not guarantee a hit across TTL, routing, or cache shards.
+CLI bridge terminal usage must preserve official cache-read/write fields
+without estimation or adding them to upstream input totals. An explicit
+Provider-reported zero remains present; an unreported or invalid field remains
+absent through inline Runtime, daemon transport, persistence, and reconnect.
+CLI bridges must not treat a generated ACP conversation ID as a native CLI
+resume ID. A fresh turn starts without resume; subsequent resume uses only a
+native ID reported by that CLI. Calls without an explicit conversation ID
+cannot reuse global transport state, and non-zero CLI exits cannot be reported
+as an empty successful turn. Failed handshakes and explicit disconnects must
+recreate in-memory transport streams, and a terminal success event cannot be
+returned before the backing executor's final exit status is known.
 
 When a later query depends on a detail omitted from the active checkpoint, an
 Agent backed by durable Session storage must be able to search its own

@@ -76,7 +76,7 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.77 release-candidate verification
+## v0.7.77 release-ready candidate verification
 
 Release state: the root package, all four workspace packages, and every
 `package-lock.json` workspace entry are version `0.7.77`. The candidate adds
@@ -85,10 +85,13 @@ memory intervention, the public 1M `kimi-k3` route, prompt-cache diagnostics,
 Runtime interrupt/default-model reliability fixes, and the final child-runtime
 cache/context identity and Actor capability hardening. Release hardening also
 adds the host-configurable Shell Execution Contract, compaction-safe
-request-only managed context, and terminal/schema/memory integrity fixes.
+request-only managed context, stable logical-context Provider cache affinity,
+official Codex/Gemini CLI cache-usage preservation, ACP/native-CLI session
+isolation with restartable pseudo transports and fail-closed process exits, and
+terminal/schema/memory integrity fixes.
 
-The candidate is not yet a release. Before tagging, all of the following must
-be true:
+The candidate is not yet tagged. Its feature/evaluation gates are complete;
+before tagging, all of the following must be true:
 
 1. the deterministic local gate and exact tarball audit pass from a clean
    install;
@@ -97,11 +100,13 @@ be true:
    and packaged Electron on Windows;
 3. the `docs/features` submodule points at the reviewed v0.7.77 design commit
    and both repositories are clean;
-4. the preregistered F274/F275 paid pilot is run only after explicit owner
+4. the preregistered F274/F275 paid evaluation is run only after explicit owner
    authorization and a frozen pre-call manifest, the main-session review is
-   recorded, and the owner makes the joint ship decision.
+   recorded, and the owner makes the joint ship decision. This gate completed
+   on 2026-07-27 with a joint `SHIP` decision.
 
-No task-effect improvement may be claimed from deterministic tests alone.
+No task-effect improvement is claimed from deterministic tests or the bounded
+release pilots.
 
 Run the same deterministic shape as GitHub CI, followed by the exact package
 inspection:
@@ -124,15 +129,13 @@ publication sends those same audited bytes.
 
 Final local candidate evidence on 2026-07-27: the clean-install template,
 package build, bundle, declaration, fast/unit/contract/system, packaged
-Electron, and exact tarball audit gates passed. The audited
-`kodax-ai-kodax-0.7.77.tgz` is 4,130,893 bytes with SHA-256
-`693D19B1BBDAF68A9695F0DE1115D3631D12F2A3ACCE16F91F1602C77439D23A`.
-Candidate commit `9ff9a944` passed
-[GitHub CI run 30231771153](https://github.com/icetomoyo/KodaX/actions/runs/30231771153)
-on 2026-07-27: Node 20, Node 22 (including the Unix Runtime socket gate), the
-dedicated Windows Shell Contract job, and packaged Electron all succeeded. The
-final release-evidence and CI-hardening commit must pass the same matrix before
-tagging.
+Electron, and exact tarball audit gates passed. The final audited
+`kodax-ai-kodax-0.7.77.tgz` is 4,142,654 bytes with SHA-256
+`96DEAE691BF0DAE6A8998D6868B7983484EDBAD4ED6CB0D2FFAB2BFE9361F386`.
+It was produced by `node scripts/release.mjs --pack-only`, including the
+production build and exact Sidecar archive audit. The final release-evidence
+commit must pass Node 20, Node 22 (including the Unix Runtime socket gate), the
+dedicated Windows Shell Contract job, and packaged Electron before tagging.
 
 For a focused v0.7.77 rerun:
 
@@ -152,28 +155,68 @@ npx vitest run \
   packages/coding/src/shell-execution/contract.test.ts \
   packages/coding/src/shell-execution/environment.test.ts \
   packages/coding/src/shell-execution/resolver.test.ts \
+  packages/coding/src/agent-runtime/prompt-cache-affinity.test.ts \
+  packages/coding/src/agent-runtime/recursive-actor-integration.test.ts \
+  packages/coding/src/agent-runtime/__contract-tests__/cap-071-non-streaming-fallback.contract.test.ts \
   packages/coding/src/agent-runtime/tool-execution-context.test.ts \
   packages/coding/src/task-engine/runner-driven.compaction-context.test.ts \
+  packages/coding/src/task-engine/_internal/managed-task/llm-adapter.cache-affinity.test.ts \
   packages/coding/src/tools/bash.test.ts \
   packages/coding/src/workflows/structured-output.test.ts \
   packages/coding/src/self-knowledge/registry.test.ts \
   packages/coding/src/tools/manual.test.ts \
+  packages/llm/src/providers/anthropic-message-serialization.test.ts \
+  packages/llm/src/providers/openai-reasoning-capability.test.ts \
+  packages/llm/src/providers/image-serialization.test.ts \
+  packages/llm/src/cli-events/codex-parser.test.ts \
+  packages/llm/src/cli-events/gemini-parser.test.ts \
+  packages/llm/src/cli-events/executor.test.ts \
+  packages/llm/src/cli-events/acp-client.test.ts \
+  packages/llm/src/cli-events/pseudo-acp-server.test.ts \
+  packages/llm/src/providers/acp-base.test.ts \
   packages/llm/src/providers/runtime-registry.test.ts \
+  src/runtime-daemon/process.test.ts \
   src/runtime-permission-scope.test.ts \
   src/sdk-runtime.test.ts
+```
+
+The real concurrent-owner readiness boundary is covered separately:
+
+```bash
+npx vitest run src/kodax_cli.daemon-smoke.test.ts \
+  -t "does not become ready before initial A2A reconciliation completes"
 ```
 
 The focused human/host contracts are
 [`ISSUE_212_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_212_v0.7.77_REGRESSION_GUIDE.md),
 [`ISSUE_213_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_213_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_215_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_215_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_216_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_216_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_217_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_217_v0.7.77_REGRESSION_GUIDE.md),
+[`ISSUE_218_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_218_v0.7.77_REGRESSION_GUIDE.md),
 and
-[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
+[`ISSUE_219_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_219_v0.7.77_REGRESSION_GUIDE.md).
 
-The paid experiment declarations are contracts, not drivers. Their current
-combined ceilings reach hundreds of provider calls and require explicit
-authorization; do not infer permission from available environment keys. Raw
-outputs and the blinded main-session review belong under the OS temp directory
-specified by `benchmark/EVAL_GUIDELINES.md`, never in the repository.
+The paid runners require explicit authorization in addition to available
+credentials and persist resumable raw cells outside the repository. The frozen
+release runs completed against clean commit
+`25d5521e3eadc20ff1da2bd69d171736724bbcba`:
+
+- F274 `f274-v0.7.77.6`: 96 Layer 2 calls and 40 Layer 3 calls, 820,432 tokens,
+  estimated `$0.02122291`; blinded recommendation `recommend-ship`.
+- F275 `f275-v0.7.77.3`: 16 pilot calls, 7,113 tokens, estimated
+  `$0.00022152`; blinded recommendation `recommend-ship`.
+- Joint decision: `SHIP` deterministic F274/F275 behavior. F275 semantic
+  selection remains experimental/host opt-in; the 144-call validation is not
+  run because v0.7.77 makes no semantic default-on or task-effect claim.
+
+Raw outputs and blinded reviews remain under the OS temp directory specified
+by `benchmark/EVAL_GUIDELINES.md`, never in the repository.
+The immutable review bindings and post-review count corrections are recorded
+in `%TEMP%/kodax-eval-dumps/v0.7.77-review-integrity-addendum.json` (SHA-256
+`7600C403CAF159B65528FDFCA01FF51ACFA33F3B806A47BDD00F072957E0EBF9`);
+the original blinded review files were not rewritten.
 
 With the relevant live credentials configured, the provider and cache probes
 are optional operator checks:

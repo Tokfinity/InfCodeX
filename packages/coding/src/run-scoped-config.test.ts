@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getRunScopedConfig,
   runWithScopedConfig,
+  resolvePromptCacheDisabled,
   resolveWorkflowMaxConcurrency,
   WORKFLOW_MAX_CONCURRENCY_DEFAULT,
 } from '@kodax-ai/llm';
@@ -82,6 +83,35 @@ describe('deriveRunScopedConfig (KodaXOptions → run-scoped config)', () => {
     // Only fields the caller set may enter the ALS store; an empty object leaves
     // every reader on process.env — the single-session CLI / config.json path.
     expect(deriveRunScopedConfig({} as KodaXOptions)).toEqual({});
+  });
+});
+
+describe('resolvePromptCacheDisabled (SDK > run scope > env)', () => {
+  function withPromptCacheEnv(value: string | undefined, fn: () => void): void {
+    const saved = process.env.KODAX_DISABLE_PROMPT_CACHE;
+    try {
+      if (value === undefined) delete process.env.KODAX_DISABLE_PROMPT_CACHE;
+      else process.env.KODAX_DISABLE_PROMPT_CACHE = value;
+      fn();
+    } finally {
+      if (saved === undefined) delete process.env.KODAX_DISABLE_PROMPT_CACHE;
+      else process.env.KODAX_DISABLE_PROMPT_CACHE = saved;
+    }
+  }
+
+  it('uses the env bridge only when no explicit or scoped value exists', () => {
+    withPromptCacheEnv('1', () => expect(resolvePromptCacheDisabled()).toBe(true));
+    withPromptCacheEnv(undefined, () => expect(resolvePromptCacheDisabled()).toBe(false));
+  });
+
+  it('lets explicit and run-scoped false re-enable caching over the env bridge', () => {
+    withPromptCacheEnv('1', () => {
+      expect(resolvePromptCacheDisabled(false)).toBe(false);
+      expect(runWithScopedConfig(
+        { disablePromptCache: false },
+        () => resolvePromptCacheDisabled(),
+      )).toBe(false);
+    });
   });
 });
 

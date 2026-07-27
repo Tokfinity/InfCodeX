@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import type Anthropic from '@anthropic-ai/sdk';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
+import { runWithScopedConfig } from '../run-scoped-config.js';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -61,11 +63,30 @@ class TestAnthropicProvider extends KodaXAnthropicCompatProvider {
     apiKeyEnv: 'TEST_API_KEY',
     model: 'test-model',
     supportsThinking: false,
+    promptCacheAffinity: true,
   };
 
   constructor(client: unknown) {
     super();
     this.client = client as any;
+  }
+
+  protected override getApiKey(): string {
+    return 'test-key';
+  }
+}
+
+class UnverifiedAnthropicCompatProvider extends KodaXAnthropicCompatProvider {
+  readonly name = 'unverified-anthropic-compat';
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'TEST_API_KEY',
+    model: 'test-model',
+    supportsThinking: false,
+  };
+
+  constructor(client: unknown) {
+    super();
+    this.client = client as Anthropic;
   }
 
   protected override getApiKey(): string {
@@ -90,12 +111,99 @@ class TestArkCodingProvider extends TestAnthropicProvider {
 describe('anthropic message serialization', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    delete process.env.KODAX_DISABLE_PROMPT_CACHE;
     while (tempDirs.length > 0) {
       const dir = tempDirs.pop();
       if (dir) {
         await rm(dir, { recursive: true, force: true });
       }
     }
+  });
+
+  it('lowers a provider cache affinity key to metadata.user_id for stream and complete', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(createCompletedAnthropicStream())
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'done' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 2, output_tokens: 1 },
+      });
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const streamOptions = {
+      promptCacheKey: 'a'.repeat(64),
+    };
+
+    process.env.KODAX_DISABLE_PROMPT_CACHE = '1';
+    await runWithScopedConfig({ disablePromptCache: false }, async () => {
+      await provider.stream(
+        [{ role: 'user', content: 'stream request' }],
+        TOOLS,
+        'system',
+        false,
+        streamOptions,
+      );
+      await provider.complete(
+        [{ role: 'user', content: 'complete request' }],
+        TOOLS,
+        'system',
+        false,
+        streamOptions,
+      );
+    });
+
+    expect(create.mock.calls[0]?.[0].metadata).toEqual({
+      user_id: 'a'.repeat(64),
+    });
+    expect(create.mock.calls[1]?.[0].metadata).toEqual({
+      user_id: 'a'.repeat(64),
+    });
+  });
+
+  it('omits metadata.user_id when prompt caching is disabled for the run', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce(createCompletedAnthropicStream())
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: 'done' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 2, output_tokens: 1 },
+      });
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const streamOptions = { promptCacheKey: 'a'.repeat(64) };
+
+    await runWithScopedConfig({ disablePromptCache: true }, async () => {
+      await provider.stream(
+        [{ role: 'user', content: 'stream request' }],
+        TOOLS,
+        'system',
+        false,
+        streamOptions,
+      );
+      await provider.complete(
+        [{ role: 'user', content: 'complete request' }],
+        TOOLS,
+        'system',
+        false,
+        streamOptions,
+      );
+    });
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('metadata');
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('metadata');
+  });
+
+  it('does not send metadata.user_id to an unverified Anthropic-compatible endpoint', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new UnverifiedAnthropicCompatProvider({ messages: { create } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'request' }],
+      TOOLS,
+      'system',
+      false,
+      { promptCacheKey: 'b'.repeat(64) },
+    );
+
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('metadata');
   });
 
   it('places an ephemeral suffix after the cache-marked original request', async () => {
@@ -220,6 +328,45 @@ describe('anthropic message serialization', () => {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: expectedBase64 },
     });
+  });
+
+  it('replaces missing historical images in user and tool-result content', async () => {
+    const cwd = await createTempDir('kodax-anthropic-missing-image-');
+    const missingImagePath = path.join(cwd, 'deleted.png');
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_missing', name: 'read', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool_missing',
+            content: [{ type: 'image', path: missingImagePath, mediaType: 'image/png' }],
+          },
+          { type: 'image', path: missingImagePath, mediaType: 'image/png' },
+        ],
+      },
+    ];
+
+    await provider.stream(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const userMsg = kwargs.messages.find((message: { role: string }) => message.role === 'user');
+    const placeholder = {
+      type: 'text',
+      text: '[Historical image unavailable: the local attachment file is missing.]',
+    };
+    const toolResult = userMsg.content.find(
+      (block: { type: string }) => block.type === 'tool_result',
+    );
+    expect(toolResult.content).toEqual([placeholder]);
+    expect(userMsg.content).toContainEqual(expect.objectContaining(placeholder));
+    expect(JSON.stringify(userMsg.content)).not.toContain(missingImagePath);
   });
 
   it('preserves inline system summaries and tool_result error flags', async () => {

@@ -30,6 +30,7 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
   public toolBatches: KodaXToolDefinition[][] = [];
   public reasoningRequests: Array<boolean | KodaXReasoningRequest | undefined> = [];
   public ephemeralSuffixes: Array<string | undefined> = [];
+  public promptCacheKeys: Array<string | undefined> = [];
 
   async stream(
     messages: KodaXMessage[],
@@ -50,6 +51,7 @@ class RecordingSummaryProvider extends KodaXBaseProvider {
     this.toolBatches.push(tools);
     this.reasoningRequests.push(thinking);
     this.ephemeralSuffixes.push(streamOptions?.ephemeralSuffix?.content);
+    this.promptCacheKeys.push(streamOptions?.promptCacheKey);
 
     return {
       textBlocks: [{ type: 'text', text: '## Goal\nContinue safely.' }],
@@ -199,6 +201,8 @@ describe('buildCompactionPromptSnapshot', () => {
         protectedTailMessageCount: 1,
         observer: { onRequest, onResponse },
       },
+      undefined,
+      { promptCacheKey: 'e'.repeat(64) },
     );
 
     expect(provider.messageBatches[0]).toEqual(messages);
@@ -206,6 +210,7 @@ describe('buildCompactionPromptSnapshot', () => {
     expect(provider.systems[0]).toBe('MAIN SYSTEM');
     expect(provider.reasoningRequests[0]).toEqual(reasoning);
     expect(provider.ephemeralSuffixes[0]).toContain('TEXT ONLY');
+    expect(provider.promptCacheKeys[0]).toBe('e'.repeat(64));
     expect(provider.ephemeralSuffixes[0]).toContain('final 1 message');
     expect(provider.ephemeralSuffixes[0]).not.toContain('<conversation>');
     expect(onRequest).toHaveBeenCalledWith(expect.objectContaining({
@@ -213,6 +218,7 @@ describe('buildCompactionPromptSnapshot', () => {
       tools,
       system: 'MAIN SYSTEM',
       reasoning,
+      promptCacheKey: 'e'.repeat(64),
       ephemeralSuffix: expect.objectContaining({ content: expect.stringContaining('TEXT ONLY') }),
     }));
     expect(onResponse).toHaveBeenCalledWith(

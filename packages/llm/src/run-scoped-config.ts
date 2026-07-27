@@ -67,3 +67,16 @@ export function runWithScopedConfig<T>(config: KodaXRunScopedConfig, fn: () => T
 export function getRunScopedConfig(): KodaXRunScopedConfig | undefined {
   return store.getStore();
 }
+
+/**
+ * Resolve the effective prompt-cache disable switch without letting the
+ * process-wide env override an explicit per-run choice. Callers that already
+ * hold the public SDK option should pass it; provider code can omit it and
+ * read the active AsyncLocalStorage scope instead.
+ */
+export function resolvePromptCacheDisabled(explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  const scoped = getRunScopedConfig()?.disablePromptCache;
+  if (scoped !== undefined) return scoped;
+  return process.env.KODAX_DISABLE_PROMPT_CACHE === '1';
+}

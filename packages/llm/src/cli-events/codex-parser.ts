@@ -18,12 +18,39 @@ interface CodexRawEvent {
         arguments?: string;
     };
     usage?: {
-        input_tokens: number;
-        cached_input_tokens: number;
-        output_tokens: number;
+        input_tokens?: number;
+        cached_input_tokens?: number;
+        cache_write_input_tokens?: number;
+        output_tokens?: number;
     };
     message?: string;
     response?: unknown;
+}
+
+function finiteNonNegative(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeCodexUsage(
+    usage: CodexRawEvent['usage'],
+): Extract<CLIEvent, { type: 'complete' }>['usage'] {
+    if (!usage
+        || !finiteNonNegative(usage.input_tokens)
+        || !finiteNonNegative(usage.output_tokens)) {
+        return undefined;
+    }
+
+    return {
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        totalTokens: usage.input_tokens + usage.output_tokens,
+        ...(finiteNonNegative(usage.cached_input_tokens)
+            ? { cachedReadTokens: usage.cached_input_tokens }
+            : {}),
+        ...(finiteNonNegative(usage.cache_write_input_tokens)
+            ? { cachedWriteTokens: usage.cache_write_input_tokens }
+            : {}),
+    };
 }
 
 function buildReasoningEffortArgs(effort: string | undefined): string[] {
@@ -126,11 +153,7 @@ export class CodexCLIExecutor extends CLIExecutor {
                     type: 'complete',
                     timestamp,
                     status: 'success',
-                    usage: raw.usage ? {
-                        inputTokens: raw.usage.input_tokens,
-                        outputTokens: raw.usage.output_tokens,
-                        totalTokens: raw.usage.input_tokens + raw.usage.output_tokens,
-                    } : undefined,
+                    usage: normalizeCodexUsage(raw.usage),
                     raw,
                 };
 

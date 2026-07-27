@@ -216,6 +216,7 @@ class KimiCodeProvider extends KodaXAnthropicCompatProvider {
     // K3 plus K2.7 Code Standard / HighSpeed. Keep the Anthropic-compatible
     // path for native tool_use and preserved-thinking history fidelity.
     baseUrl: 'https://api.kimi.com/coding/',
+    promptCacheAffinity: true,
   });
 }
 
@@ -268,7 +269,9 @@ class ArkCodingProvider extends KodaXAnthropicCompatProvider {
 
 class OpenAIProvider extends KodaXOpenAICompatProvider {
   readonly name = 'openai';
-  protected readonly config: KodaXProviderConfig = buildProviderConfig('openai');
+  protected readonly config: KodaXProviderConfig = buildProviderConfig('openai', {
+    promptCacheAffinity: true,
+  });
 }
 
 class DeepSeekProvider extends KodaXOpenAICompatProvider {
@@ -288,6 +291,7 @@ class KimiProvider extends KodaXOpenAICompatProvider {
   readonly name = 'kimi';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('kimi', {
     baseUrl: 'https://api.moonshot.cn/v1',
+    promptCacheAffinity: true,
     // Same OpenAI-compat reasoning_content convention as DeepSeek V4.
     // Verified against K2.7 Code multi-turn tool use on 2026-07-16:
     // preserved thinking requires reasoning_content to remain in history.

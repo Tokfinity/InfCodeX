@@ -236,6 +236,13 @@ Keep `replayReasoningContent` unset or `false` for OpenAI proper and gateways th
 }
 ```
 
+If a custom endpoint is confirmed to support cache-affinity routing, set
+`"promptCacheAffinity": true`. Anthropic-compatible requests then receive the
+opaque logical-context key as `metadata.user_id`; OpenAI-compatible requests
+receive `prompt_cache_key`. The default is `false` because some strict
+compatible gateways reject unknown request fields. Do not enable it solely
+because an endpoint claims protocol compatibility.
+
 Sidecar verifier judge calls use provider-level forced tool choice when supported. If a compatible endpoint rejects the `tool_choice` parameter, KodaX retries that verifier request once without forced tool choice and still fails open rather than blocking the main Worker.
 
 #### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
@@ -405,7 +412,7 @@ for K2.7 Code, alongside `kimi-for-coding-highspeed` and the 1M `k3` tier. K3
 supports `low` / `high` / `max` reasoning with `high` as default; the 256K
 route supports image input but not video input.
 
-**v0.7.77 release candidate:** AMA now chooses and composes six named
+**v0.7.77 release-ready candidate:** AMA now chooses and composes six named
 problem-solving patterns through the existing Actor control plane instead of
 using a fixed topology or hidden Workflow. Optional strategy metadata becomes
 a bounded, fact-only `PatternTrace`; the existing Sidecar remains the only
@@ -416,7 +423,12 @@ request. The default path adds no selector model call; SDK hosts may opt into
 `memoryRecallRunner` in process. Public `kimi` also gains the 1M `kimi-k3`
 route while retaining K2.7 Code as its default. See the
 [v0.7.77 design](docs/features/v0.7.77.md) and
-[release checklist](docs/release.md#v0777-release-candidate-verification).
+[release checklist](docs/release.md#v0777-release-ready-candidate-verification).
+The frozen F274/F275 paid evaluation completed with `recommend-ship` from the
+final F274 Layer 2/Layer 3 reviews and the F275 pilot review, followed by a
+joint `SHIP` decision for the deterministic contracts. Semantic memory
+selection remains experimental and host opt-in; no task-quality, token, or
+latency improvement is claimed.
 
 The same candidate adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
@@ -429,6 +441,27 @@ before profile/setup code and again before the command starts. When
 `shellExecution` is absent, established command behavior is unchanged. See
 [SDK Embedder Guide section 28](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
 and the [Issue 214 regression guide](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
+
+Kimi Code requests also receive a stable, opaque prompt-cache affinity key
+derived from the logical Runtime context. It is reused across Runs, retries,
+fallback, resume, and compaction; recursive child Agents receive distinct keys
+based on their canonical Agent path rather than their temporary transcript
+Session. Public Kimi and official OpenAI use the corresponding
+`prompt_cache_key` field, while other compatible gateways remain opt-in because
+some reject unknown request fields. This improves routing stability but cannot
+override Provider TTL or cache sharding. See the
+[Issue 215 regression guide](docs/test-guides/ISSUE_215_v0.7.77_REGRESSION_GUIDE.md).
+Codex CLI cache reads/writes and Gemini CLI cache reads now flow through the
+CLI bridge and Runtime diagnostics without estimation. A reported `0` remains
+distinct from an unreported field; see the
+[Issue 216 regression guide](docs/test-guides/ISSUE_216_v0.7.77_REGRESSION_GUIDE.md).
+The bridge also starts the first native CLI turn fresh, resumes only a native
+session ID reported by that CLI, creates fresh ACP sessions for stateless
+calls, recreates a closed pseudo transport, and validates the process exit even
+after a terminal CLI event. User cancellation stays quiet, while hard/idle
+timeout aborts remain failures eligible for Runtime recovery, and a CLI that
+reports success but never exits is terminated at its configured deadline; see the
+[Issue 217 regression guide](docs/test-guides/ISSUE_217_v0.7.77_REGRESSION_GUIDE.md).
 
 One daemon owns many sessions. Different sessions may run concurrently; starts
 within the same session are queued so that only one run is active for that

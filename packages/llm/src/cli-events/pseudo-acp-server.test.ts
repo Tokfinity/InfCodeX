@@ -91,6 +91,8 @@ describe('createPseudoAcpServer', () => {
           inputTokens: 120,
           outputTokens: 30,
           totalTokens: 150,
+          cachedReadTokens: 40,
+          cachedWriteTokens: 5,
         },
         raw: null,
       };
@@ -157,6 +159,8 @@ describe('createPseudoAcpServer', () => {
             inputTokens: 120,
             outputTokens: 30,
             totalTokens: 150,
+            cachedReadTokens: 40,
+            cachedWriteTokens: 5,
           },
         },
       });
@@ -235,6 +239,138 @@ describe('createPseudoAcpServer', () => {
       server.abort();
       reader.releaseLock();
       writer.releaseLock();
+    }
+  });
+
+  it('uses a CLI-native session id only after the first prompt reports one', async () => {
+    const seenSessionIds: Array<string | undefined> = [];
+    let nativeSessionCounter = 0;
+    const executor = new TestExecutor(async function* (options) {
+      seenSessionIds.push(options.sessionId);
+      const nativeSessionId = options.sessionId ?? `native-session-${++nativeSessionCounter}`;
+      yield {
+        type: 'session_start',
+        timestamp: Date.now(),
+        sessionId: nativeSessionId,
+        model: 'test-model',
+        raw: null,
+      };
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+    });
+
+    const server = createPseudoAcpServer(executor);
+    const writer = server.outputStream.getWriter();
+    const reader = server.inputStream.getReader();
+    const decoder = new TextDecoder();
+
+    const prompt = async (id: number, sessionId: string): Promise<void> => {
+      await writeJson(writer, {
+        jsonrpc: '2.0',
+        id,
+        method: 'session/prompt',
+        params: {
+          sessionId,
+          prompt: [{ type: 'text', text: `prompt-${id}` }],
+        },
+      });
+      await readJsonLine(reader, decoder);
+    };
+
+    try {
+      await writeJson(writer, {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2026-01-01' },
+      });
+      await readJsonLine(reader, decoder);
+
+      await writeJson(writer, {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'session/new',
+        params: {},
+      });
+      const first = await readJsonLine(reader, decoder);
+      await prompt(3, first.result.sessionId);
+      await prompt(4, first.result.sessionId);
+
+      await writeJson(writer, {
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'session/new',
+        params: {},
+      });
+      const second = await readJsonLine(reader, decoder);
+      await prompt(6, second.result.sessionId);
+      await prompt(7, second.result.sessionId);
+      server.releaseSession(first.result.sessionId);
+      await prompt(8, first.result.sessionId);
+
+      expect(seenSessionIds).toEqual([
+        undefined,
+        'native-session-1',
+        undefined,
+        'native-session-2',
+        undefined,
+      ]);
+    } finally {
+      server.abort();
+      reader.releaseLock();
+      writer.releaseLock();
+    }
+  });
+
+  it('closes the held server endpoints when aborted', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const writer = server.outputStream.getWriter();
+    const reader = server.inputStream.getReader();
+    const pendingRead = reader.read();
+
+    try {
+      server.abort();
+
+      await expect(pendingRead).rejects.toBeUndefined();
+      await expect(writer.write(new Uint8Array([1]))).rejects.toBeUndefined();
+    } finally {
+      reader.releaseLock();
+      writer.releaseLock();
+    }
+  });
+
+  it('recreates distinct in-memory streams for a replacement connection', () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+    });
+    const first = createPseudoAcpServer(executor);
+    const replacement = first.recreate();
+
+    try {
+      expect(replacement).not.toBe(first);
+      expect(replacement.inputStream).not.toBe(first.inputStream);
+      expect(replacement.outputStream).not.toBe(first.outputStream);
+      expect(replacement.executor).toBe(executor);
+    } finally {
+      first.abort();
+      replacement.abort();
     }
   });
 });

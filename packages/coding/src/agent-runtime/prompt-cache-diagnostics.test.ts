@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import { getProvider } from '@kodax-ai/llm';
+import { getProvider, runWithScopedConfig } from '@kodax-ai/llm';
 
 import type { KodaXPromptCacheDiagnosticEvent } from '../types.js';
 import {
@@ -90,6 +90,99 @@ describe('prompt-cache diagnostics', () => {
     expect(first?.requestEnvelopeHash).not.toBe(second?.requestEnvelopeHash);
     expect(JSON.stringify(emitted)).not.toContain('first reminder');
     expect(JSON.stringify(emitted)).not.toContain('second reminder');
+  });
+
+  it('reports applied affinity as a separate hash without changing the prompt envelope hash', () => {
+    const affinityProvider = getProvider('kimi-code');
+    expect(affinityProvider).toBeDefined();
+    const events = { onPromptCacheDiagnostics: vi.fn() };
+    const base = {
+      events,
+      enabled: true,
+      provider: affinityProvider!,
+      providerName: 'kimi-code',
+      model: 'kimi-for-coding',
+      reasoning: undefined,
+      disablePromptCache: false,
+      system: 'stable system',
+      tools: [],
+      messages,
+      attempt: 1,
+    };
+
+    const first = emitPromptCacheDiagnosticRequest({
+      ...base,
+      promptCacheKey: 'opaque-affinity-a',
+    });
+    const second = emitPromptCacheDiagnosticRequest({
+      ...base,
+      promptCacheKey: 'opaque-affinity-b',
+    });
+
+    expect(first?.promptCacheAffinityHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(second?.promptCacheAffinityHash).not.toBe(first?.promptCacheAffinityHash);
+    expect(second?.requestEnvelopeHash).toBe(first?.requestEnvelopeHash);
+    expect(JSON.stringify([first, second])).not.toContain('opaque-affinity');
+  });
+
+  it('omits the affinity hash when prompt caching is disabled for the run', () => {
+    const affinityProvider = getProvider('kimi-code');
+    expect(affinityProvider).toBeDefined();
+
+    const event = runWithScopedConfig({ disablePromptCache: true }, () =>
+      emitPromptCacheDiagnosticRequest({
+        events: { onPromptCacheDiagnostics: vi.fn() },
+        enabled: true,
+        provider: affinityProvider!,
+        providerName: 'kimi-code',
+        model: 'kimi-for-coding',
+        reasoning: undefined,
+        disablePromptCache: undefined,
+        system: 'stable system',
+        tools: [],
+        messages,
+        attempt: 1,
+        promptCacheKey: 'opaque-disabled-affinity',
+      }));
+
+    expect(event?.kodaxPromptCacheEnabled).toBe(false);
+    expect(event).not.toHaveProperty('promptCacheAffinityHash');
+  });
+
+  it('preserves Provider-reported cache zero and omits unreported response fields', () => {
+    const emitted: KodaXPromptCacheDiagnosticEvent[] = [];
+    const events = {
+      onPromptCacheDiagnostics: (event: KodaXPromptCacheDiagnosticEvent) => emitted.push(event),
+    };
+    const request = emitPromptCacheDiagnosticRequest({
+      events,
+      enabled: true,
+      provider,
+      providerName: 'test-provider',
+      model: 'test-model',
+      reasoning: undefined,
+      disablePromptCache: false,
+      system: 'stable system',
+      tools: [],
+      messages,
+      attempt: 1,
+    });
+
+    emitPromptCacheDiagnosticResponse(events, request, {
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+      cachedReadTokens: 0,
+    });
+    emitPromptCacheDiagnosticResponse(events, request, {
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+    });
+
+    expect(emitted[1]).toMatchObject({ phase: 'response', cachedReadTokens: 0 });
+    expect(emitted[2]).not.toHaveProperty('cachedReadTokens');
+    expect(emitted[2]).not.toHaveProperty('cachedWriteTokens');
   });
 
   it('observes compaction provider calls including their ephemeral suffix and official usage', () => {

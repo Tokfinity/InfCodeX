@@ -8,10 +8,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.7.77] - 2026-07-27
 
-> Release candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,
-> GitHub Release, and npm publication are not created yet. F274/F275 paid
-> evaluation and the joint owner ship decision remain explicit pre-release
-> gates; no unmeasured task-effect improvement is claimed.
+> Release-ready candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,
+> GitHub Release, and npm publication are not created yet. Frozen F274/F275
+> paid evaluation completed with a joint owner `SHIP` decision; no unmeasured
+> task-effect, token, or latency improvement is claimed.
 
 ### Added
 
@@ -46,6 +46,44 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Daemon startup now waits for the matching healthy owner state to publish
+  `status: ready` before returning, unrefing its child, or attaching a
+  concurrent CLI/SDK starter. Owned, competing, and pre-existing-owner paths
+  share the same bounded, cancellable identity fence, preventing successful
+  starts or SDK connections from observing a stale `starting` state.
+- Missing local files referenced by historical image blocks no longer poison every later
+  Provider request. Anthropic-compatible user/tool-result images and OpenAI-compatible user
+  images now degrade only `ENOENT`/`ENOTDIR` to a path-free text marker; unrelated filesystem
+  errors remain visible. OpenAI-compatible tool-result image blocks also use path-free
+  missing/unsupported markers instead of serializing absolute local paths.
+- Added stable, opaque Provider prompt-cache affinity for Kimi Code and other
+  verified endpoints. AMA/SA root requests reuse one logical-context key across
+  runs, retries, fallback, resume, and compaction; child Agents use stable
+  canonical-path keys isolated from their parent and physical worker Sessions.
+  Kimi Code lowers it to Anthropic-compatible `metadata.user_id`, public Kimi
+  and official OpenAI use `prompt_cache_key`, strict compatible gateways remain
+  opt-in, and the effective SDK/run-scoped/env `disablePromptCache` policy
+  removes all cache-routing metadata. Cache diagnostics expose only a separate
+  hash of an affinity key actually supported by the configured wire, never the
+  key or logical identity itself.
+- Preserved official CLI cache usage end to end. Codex CLI
+  `cached_input_tokens` / `cache_write_input_tokens` and Gemini CLI
+  `stats.cached` now survive the JSONL parser, pseudo-ACP, normalized Provider
+  usage, and Runtime diagnostics. Explicit Provider zero remains `0`; missing
+  or invalid fields remain absent, and input totals are never recomputed by
+  adding cache breakdowns. The bridge now also keeps generated ACP IDs separate
+  from native Codex/Gemini session IDs: first prompts start fresh, only
+  CLI-reported native IDs may be resumed, stateless calls cannot share a
+  process-global session, failed/disconnected pseudo transports are recreated,
+  pending handshakes and later transport deaths are invalidated for reconnect,
+  and missing or non-zero-exit CLI completion fails visibly even when a
+  successful completion event was reported earlier. Default aborts remain
+  user cancellation, while hard/idle timeout abort reasons propagate into the
+  normal retry and failure path instead of becoming an empty success. The
+  configured CLI executor timeout is now enforced through process-tree
+  termination, including after a CLI reports success but never exits; native
+  ACP prompts also stop waiting at the caller deadline even if a server ignores
+  the best-effort cancel request.
 - Hardened the Shell Execution Contract after adversarial review: configured
   commands now deny credentials for every registered Provider, preserve a
   Session contract when a Run context contains explicit `undefined`, rebuild
@@ -171,8 +209,17 @@ All notable changes to this project will be documented in this file.
   Runtime interrupt, structured-output, real auto-compaction, and
   cross-platform Shell Execution Contract regressions. A dedicated Windows CI
   job exercises pwsh, Windows PowerShell, cmd, Registry environment refresh,
-  and Git Bash behavior. External model generation remains blocked by the
-  preregistered contracts until the owner authorizes the frozen paid pilot.
+  and Git Bash behavior.
+- Completed the owner-authorized frozen paid gate against clean commit
+  `25d5521e`: F274 revision `f274-v0.7.77.6` used 96 Layer 2 calls plus 40
+  Layer 3 calls, kept candidate simple tasks solo in 6/6 cells, produced zero
+  accidental Workflow activation, and received blinded `recommend-ship`
+  reviews; F275 revision `f275-v0.7.77.3` completed its 16-call pilot with B/C
+  compatibility preservation at 4/4 versus control 1/2 and exact-empty
+  selector output in all 4/4 selector calls (including 2/2 negative controls).
+  The joint decision is `SHIP`. F275 semantic selection remains experimental
+  and host opt-in, and the 144-call task-effect/default-on validation was
+  intentionally not run.
 
 ## [0.7.76] - 2026-07-25
 

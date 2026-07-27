@@ -28,6 +28,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
   public systems: string[] = [];
   public modelOverrides: Array<string | undefined> = [];
   public ephemeralSuffixes: Array<string | undefined> = [];
+  public promptCacheKeys: Array<string | undefined> = [];
   public callCount = 0;
 
   constructor(
@@ -80,6 +81,7 @@ class FakeSummaryProvider extends KodaXBaseProvider {
     this.systems.push(system);
     this.modelOverrides.push(streamOptions?.modelOverride);
     this.ephemeralSuffixes.push(streamOptions?.ephemeralSuffix?.content);
+    this.promptCacheKeys.push(streamOptions?.promptCacheKey);
 
     let summaryText = typeof this.summaryText === 'string'
       ? this.summaryText
@@ -400,6 +402,44 @@ describe('compaction', () => {
     const messages = buildLongConversation(3, 30000);
     await expect(compact(messages, config, provider, contextWindow)).rejects.toThrow('summary failed');
     expect(messages).toEqual(buildLongConversation(3, 30000));
+  });
+
+  it('keeps routing affinity on every map/reduce summary request', { timeout: 15_000 }, async () => {
+    const provider = new FakeSummaryProvider(undefined, undefined, true);
+    const promptCacheKey = 'f'.repeat(64);
+    const messages = buildLongConversation(3, 30_000).map((message, index) =>
+      index % 2 === 0
+        ? { ...message, content: `question-${index / 2 + 1}` }
+        : message);
+
+    const result = await compact(
+      messages,
+      {
+        enabled: true,
+        triggerPercent: 10,
+        protectionPercent: 0,
+        rollingSummaryPercent: 20,
+      },
+      provider,
+      60_000,
+      undefined,
+      'MAIN SYSTEM',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      0,
+      { tools: [] },
+      undefined,
+      { promptCacheKey },
+    );
+
+    expect(result.compacted).toBe(true);
+    expect(provider.callCount).toBeGreaterThan(1);
+    expect(provider.promptCacheKeys).toHaveLength(provider.callCount);
+    expect(provider.promptCacheKeys.every((key) => key === promptCacheKey)).toBe(true);
+    expect(provider.ephemeralSuffixes.every((suffix) => suffix === undefined)).toBe(true);
   });
 
   it('does not consume a chunk when its summary is empty-like', async () => {

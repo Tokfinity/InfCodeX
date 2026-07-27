@@ -14,6 +14,7 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('@agentclientprotocol/sdk', () => ({
   ClientSideConnection: class {
+    readonly signal = new AbortController().signal;
     initialize = initializeMock;
   },
   PROTOCOL_VERSION: 1,

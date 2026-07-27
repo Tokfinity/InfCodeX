@@ -1448,7 +1448,7 @@ describe('runtime daemon dispatcher', () => {
         contextKind: 'root',
         requestId: 'cache-root',
         phase: 'response',
-        cachedReadTokens: 70,
+        cachedReadTokens: 0,
       },
     });
     runtime.emit({
@@ -1500,6 +1500,20 @@ describe('runtime daemon dispatcher', () => {
         requestId: 'cache-unrelated-session',
         phase: 'response',
         cachedReadTokens: 999,
+      },
+    });
+    runtime.emit({
+      id: 'evt-cache-unreported',
+      seq: 111,
+      time: '2026-07-09T00:00:09.000Z',
+      sessionId: 'session-unreported',
+      runId: 'run-unreported',
+      type: 'provider.cache.diagnostics',
+      payload: {
+        contextId: 'session-unreported',
+        contextKind: 'root',
+        requestId: 'cache-unreported',
+        phase: 'response',
       },
     });
 
@@ -1560,6 +1574,11 @@ describe('runtime daemon dispatcher', () => {
         agentId: '/root/reviewer',
       },
     ));
+    const unreportedRootCache = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-unreported-root-cache',
+      'provider.cache.diagnostics.get',
+      { sessionId: 'session-unreported' },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(budget)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(exposure)).toBe(true);
@@ -1569,6 +1588,7 @@ describe('runtime daemon dispatcher', () => {
     expect(isRuntimeDaemonSuccessResponse(childCache)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(unrelatedChildCache)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(unknownChildCache)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(unreportedRootCache)).toBe(true);
     if (isRuntimeDaemonSuccessResponse(budget)) {
       expect(budget.result).toEqual({ usedTokens: 80 });
     }
@@ -1590,7 +1610,7 @@ describe('runtime daemon dispatcher', () => {
       expect(rootCache.result).toMatchObject({
         contextId: 'session-1',
         requestId: 'cache-root',
-        cachedReadTokens: 70,
+        cachedReadTokens: 0,
       });
     }
     if (isRuntimeDaemonSuccessResponse(childCache)) {
@@ -1610,6 +1630,13 @@ describe('runtime daemon dispatcher', () => {
     }
     if (isRuntimeDaemonSuccessResponse(unknownChildCache)) {
       expect(unknownChildCache.result).toBeNull();
+    }
+    if (isRuntimeDaemonSuccessResponse(unreportedRootCache)) {
+      expect(unreportedRootCache.result).toMatchObject({
+        contextId: 'session-unreported',
+        requestId: 'cache-unreported',
+      });
+      expect(unreportedRootCache.result).not.toHaveProperty('cachedReadTokens');
     }
   });
 

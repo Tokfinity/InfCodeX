@@ -12,7 +12,7 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.76` (Git tag / GitHub Release; npm publication remains manual) |
-| Current package version | `@kodax-ai/kodax@0.7.77` release candidate (untagged; paid pilot and joint ship decision pending) |
+| Current package version | `@kodax-ai/kodax@0.7.77` release-ready candidate (untagged; joint decision `SHIP`) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `62` |
 | InProgress | `3` |
@@ -27,7 +27,7 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.76 remains the current Git/GitHub release. |
-| InProgress | 3 | `274, 275, 225` | `274` and `275` have a clean v0.7.77 candidate CI/full-suite record and await authorized paid evaluation plus the joint release decision; `225` remains the bounded v0.7.100 cleanup. |
+| InProgress | 3 | `274, 275, 225` | `274` and `275` are release-ready after paid evaluation and a joint `SHIP` decision; they move to Completed only after v0.7.77 is actually released. `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 3 | `263, 264, 265` | `v0.7.78` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -380,9 +380,9 @@
 > timing-ineffective semantic prefetch with sparse post-event intervention,
 > while F228 remains the sole durable memory authority. Core primitives are
 > landed, including source-aware candidate admission, trigger-aware pinning,
-> and run-loop ordering regression. F274 engineering and zero-call experiment
-> contracts are also landed. Paid semantic/task-effect pilots and the joint
-> F274/F275 release decision remain open; no task-effect improvement is claimed.
+> and run-loop ordering regression. F274 engineering and frozen experiment
+> contracts are also landed. The paid release evaluation completed with a
+> joint `SHIP` decision; no task-effect improvement is claimed.
 
 ---
 
@@ -396,7 +396,7 @@
 
 ---
 
-## v0.7.77 Release Candidate Record
+## v0.7.77 Release-Ready Candidate Record
 
 `@kodax-ai/kodax@0.7.77` contains the engineering-complete F274/F275
 implementation. F274 gives AMA one shared six-pattern adaptive playbook,
@@ -412,17 +412,26 @@ default-model resolution before Auto preflight, default-model catalog
 deduplication, active-run interrupt finalization hardening, the final
 child-runtime cache/context identity and Actor capability fixes, a
 host-configurable Shell Execution Contract, compaction-safe request-only
-managed context, and terminal/schema/memory integrity hardening. Package
+managed context, stable root/child Provider cache affinity across physical
+requests and resume, official Codex/Gemini CLI cache-usage preservation,
+ACP/native-CLI session isolation with fail-closed process exits, and
+terminal/schema/memory integrity hardening. Package
 metadata is synchronized at `0.7.77`; the final candidate must pass Node 20/22,
 Unix Runtime socket, Windows Shell Contract, and packaged Electron CI before
-tagging. Candidate commit `9ff9a944` passed that complete matrix in
-[CI run 30231771153](https://github.com/icetomoyo/KodaX/actions/runs/30231771153)
-on 2026-07-27; the final release-evidence and CI-hardening commit must pass it
-again.
-The Git tag, GitHub Release, and npm publication do not exist yet.
-Deterministic tests cannot close the remaining preregistered paid pilot or
-joint owner ship decision, and no task-effect improvement is claimed before
-those gates.
+tagging. The final release-evidence commit is required to pass that complete
+matrix before any tag, GitHub Release, or npm publication.
+The frozen F274 `f274-v0.7.77.6` Layer 2/3 evaluation and F275
+`f275-v0.7.77.3` pilot completed against clean commit `25d5521e`; the three
+final blinded stage reviews recorded `recommend-ship`, and the joint owner
+decision is `SHIP`. F274's budgeted production playbook plus
+`quality_strategy` delta is
+2,985 bytes (2,425 prompt bytes plus 560 `spawn_agent`/`followup_task`
+tool-schema bytes), candidate simple tasks stayed solo
+in 6/6 cells, and accidental Workflow activation was zero. F275 deterministic
+B/C preserved the post-compaction compatibility constraint in 4/4 cells while
+all four selector calls remained silent. The semantic selector remains experimental
+and host opt-in; no task-effect/default-on, token, or latency improvement is
+claimed. The Git tag, GitHub Release, and npm publication do not exist yet.
 
 ---
 

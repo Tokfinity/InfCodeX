@@ -1178,8 +1178,8 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
       endpoint: 'https://example.test',
       endpointPathHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       cachedReadTokens: 19_328,
-      cachedWriteTokens: undefined,
     }));
+    expect(cacheDiagnostics[1]).not.toHaveProperty('cachedWriteTokens');
     expect(JSON.stringify({ snapshots, cacheDiagnostics })).not.toContain(secretPrompt);
     expect(JSON.stringify({ snapshots, cacheDiagnostics })).not.toContain(volatileSuffix);
     expect(JSON.stringify(cacheDiagnostics)).not.toContain('tenant-secret');
@@ -1359,6 +1359,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     const cacheDiagnostics: KodaXPromptCacheDiagnosticEvent[] = [];
     let streamCalls = 0;
     let completeCalls = 0;
+    const promptCacheKeys: Array<string | undefined> = [];
 
     class Scripted extends KodaXBaseProviderRef {
       readonly name = ESCALATION_PROVIDER_NAME;
@@ -1383,8 +1384,15 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
         },
       };
 
-      async stream(): Promise<KodaXStreamResult> {
+      async stream(
+        _messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
         streamCalls += 1;
+        promptCacheKeys.push(streamOptions?.promptCacheKey);
         throw new Error('zhipu-coding API error: terminated');
       }
 
@@ -1392,8 +1400,15 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
         return true;
       }
 
-      override async complete(): Promise<KodaXStreamResult> {
+      override async complete(
+        _messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
         completeCalls += 1;
+        promptCacheKeys.push(streamOptions?.promptCacheKey);
         return {
           textBlocks: [{ type: 'text', text: 'fallback done' }],
           toolBlocks: [],
@@ -1413,6 +1428,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
     const adapter = buildRunnerLlmAdapter({
       ...makeAdapterOptions(),
+      session: { id: 'managed-fallback-cache-affinity' },
       context: {
         ...makeOptions().context,
         contextDiagnostics: true,
@@ -1431,6 +1447,8 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(result.text).toBe('fallback done');
     expect(streamCalls).toBe(2);
     expect(completeCalls).toBe(1);
+    expect(new Set(promptCacheKeys).size).toBe(1);
+    expect(promptCacheKeys[0]).toMatch(/^[a-f0-9]{64}$/);
     expect(snapshots).toHaveLength(3);
     expect(cacheDiagnostics.map((event) => `${event.transport}:${event.phase}`)).toEqual([
       'stream:request',

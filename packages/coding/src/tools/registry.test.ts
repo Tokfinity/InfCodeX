@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { renderAmaPatternPlaybook } from '../orchestration/pattern-catalog.js';
 import {
   executeTool,
   getAllRegisteredTools,
@@ -21,6 +22,42 @@ const TEST_CONTEXT: KodaXToolExecutionContext = {
 };
 
 describe('tool registry', () => {
+  it('F274: keeps the budgeted playbook and quality-strategy bytes within budget', () => {
+    const schemaDeltas = ['spawn_agent', 'followup_task'].map((name) => {
+      const definition = getToolDefinition(name);
+      if (definition === undefined) throw new Error(`${name} tool definition is missing`);
+      const baselineSchema = structuredClone(definition.input_schema) as {
+        readonly type: string;
+        readonly properties: Readonly<Record<string, unknown>>;
+        readonly required?: readonly string[];
+      };
+      const {
+        quality_strategy: qualityStrategySchema,
+        ...baselineProperties
+      } = baselineSchema.properties;
+      expect(qualityStrategySchema, `${name}.quality_strategy`).toBeDefined();
+      return Buffer.byteLength(JSON.stringify(definition.input_schema), 'utf8')
+        - Buffer.byteLength(JSON.stringify({
+          ...baselineSchema,
+          properties: baselineProperties,
+        }), 'utf8');
+    });
+    const promptDelta = Buffer.byteLength(
+      `\n\n${renderAmaPatternPlaybook()}`,
+      'utf8',
+    );
+    const toolSchemaDelta = schemaDeltas.reduce((total, delta) => total + delta, 0);
+    const staticInputDelta = promptDelta + toolSchemaDelta;
+
+    expect({ promptDelta, schemaDeltas, toolSchemaDelta, staticInputDelta }).toEqual({
+      promptDelta: 2_425,
+      schemaDeltas: [376, 184],
+      toolSchemaDelta: 560,
+      staticInputDelta: 2_985,
+    });
+    expect(staticInputDelta).toBeLessThanOrEqual(3_000);
+  });
+
   it('FEATURE_075: exit_plan_mode plan description enforces structural length budget', () => {
     // LLM-first defense against oversized plans that blow past terminal
     // height. Scroll in the approval dialog is the mechanical fallback.

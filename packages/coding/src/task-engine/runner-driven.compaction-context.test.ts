@@ -43,6 +43,7 @@ interface PhysicalRequest {
   readonly messages: readonly KodaXMessage[];
   readonly system: string;
   readonly suffix: KodaXEphemeralSuffix | undefined;
+  readonly promptCacheKey: string | undefined;
 }
 
 let workspaceRoot: string;
@@ -165,6 +166,7 @@ function registerScriptedProvider(
         messages: [...messages],
         system,
         suffix: options?.ephemeralSuffix,
+        promptCacheKey: options?.promptCacheKey,
       });
       if (streamCall === 1) {
         return {
@@ -207,6 +209,7 @@ function registerScriptedProvider(
 
 function makeOptions(
   snapshots: RuntimeContextBudgetSnapshot[],
+  includeHostSession = true,
 ): KodaXOptions {
   return {
     provider: PROVIDER_NAME,
@@ -215,9 +218,9 @@ function makeOptions(
       contextWindow: 200_000,
       triggerPercent: 60,
     },
-    session: {
-      id: `compaction-context-${Math.random().toString(36).slice(2, 8)}`,
-    },
+    ...(includeHostSession
+      ? { session: { id: `compaction-context-${Math.random().toString(36).slice(2, 8)}` } }
+      : {}),
     context: {
       gitRoot: process.cwd(),
       executionCwd: process.cwd(),
@@ -275,6 +278,9 @@ describe.each([
       JSON.stringify(request).includes(SKILLS_ADDENDUM_SENTINEL)
     ));
     expect(managedWorkerRequests).toHaveLength(2);
+    expect(managedWorkerRequests[0]?.promptCacheKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(managedWorkerRequests[1]?.promptCacheKey)
+      .toBe(managedWorkerRequests[0]?.promptCacheKey);
 
     for (const request of managedWorkerRequests) {
       const physicalRequest = JSON.stringify({
@@ -313,3 +319,30 @@ describe.each([
     }
   }, 30_000);
 });
+
+it('creates one stable run-local affinity identity when the SDK host omits session config', async () => {
+  const requests: PhysicalRequest[] = [];
+  const timeline: string[] = [];
+  registerScriptedProvider(true, requests, timeline);
+  compactMock.mockImplementation(async (messages: KodaXMessage[]) => {
+    timeline.push('compact');
+    return compactedResult(messages);
+  });
+  const prompt = 'Inspect the README without a host Session, then report completion.';
+
+  const result = await runManagedTaskViaRunner(
+    makeOptions([], false),
+    prompt,
+    undefined,
+    makePlan(prompt),
+  );
+
+  expect(result.success).toBe(true);
+  const managedWorkerRequests = requests.filter((request) => (
+    JSON.stringify(request).includes(SKILLS_ADDENDUM_SENTINEL)
+  ));
+  expect(managedWorkerRequests.length).toBeGreaterThanOrEqual(2);
+  const affinityKeys = managedWorkerRequests.map((request) => request.promptCacheKey);
+  expect(affinityKeys.every((key) => /^[a-f0-9]{64}$/.test(key ?? ''))).toBe(true);
+  expect(new Set(affinityKeys).size).toBe(1);
+}, 30_000);

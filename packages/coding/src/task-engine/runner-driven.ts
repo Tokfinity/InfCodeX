@@ -645,6 +645,10 @@ export async function runManagedTaskViaRunner(
   const liveEvents = withLiveTurnAttribution(durableEvents, liveTurnScopeRef);
   const optionsWithSessionId: KodaXOptions = {
     ...baseOptionsWithSessionId,
+    context: {
+      ...(baseOptionsWithSessionId.context ?? {}),
+      contextIdentitySessionId,
+    },
     events: liveEvents,
   };
   emitSessionStart(liveEvents, { provider: providerName, sessionId: initialSessionId });

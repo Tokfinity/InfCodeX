@@ -309,6 +309,11 @@ export abstract class KodaXBaseProvider {
     return false;
   }
 
+  /** Whether this configured transport lowers `promptCacheKey` onto its wire. */
+  usesPromptCacheAffinity(): boolean {
+    return this.config.promptCacheAffinity === true;
+  }
+
   supportsNonStreamingFallback(): boolean {
     return false;
   }

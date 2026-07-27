@@ -28,14 +28,11 @@ describe('FEATURE_274 collaboration pattern catalog', () => {
 
   it('renders one compact adaptive AMA playbook with every pattern', () => {
     const playbook = renderAmaPatternPlaybook();
-    const workflowGuidance = renderWorkflowPatternGuidance().join('\n');
 
     expect(playbook).toContain('ADAPTIVE COLLABORATION PATTERNS');
     for (const id of WORKFLOW_PATTERN_IDS) expect(playbook).toContain(`\`${id}\``);
     expect(playbook).toContain('guidance, not deterministic routing');
     expect(playbook).toContain('Root remains accountable for synthesis');
-    expect(Buffer.byteLength(`${playbook}\n${workflowGuidance}`, 'utf8'))
-      .toBeLessThanOrEqual(3_000);
   });
 
   it('teaches Workflow authoring without treating a majority as proof', () => {

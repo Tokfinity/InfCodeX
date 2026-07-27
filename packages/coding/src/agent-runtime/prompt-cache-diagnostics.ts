@@ -15,6 +15,7 @@ import {
   KodaXAnthropicCompatProvider,
   KodaXAcpProvider,
   KodaXOpenAICompatProvider,
+  resolvePromptCacheDisabled,
 } from '@kodax-ai/llm';
 import type {
   CompactionProviderObserver,
@@ -513,6 +514,7 @@ export interface PromptCacheDiagnosticRequestInput {
   readonly tools: readonly KodaXToolDefinition[];
   readonly messages: readonly KodaXMessage[];
   readonly ephemeralSuffix?: KodaXEphemeralSuffix;
+  readonly promptCacheKey?: string;
   readonly attempt: number;
   readonly transport?: 'stream' | 'complete';
 }
@@ -555,6 +557,7 @@ export function createCompactionPromptCacheObserver(
         tools: request.tools,
         messages: request.messages,
         ...(request.ephemeralSuffix ? { ephemeralSuffix: request.ephemeralSuffix } : {}),
+        ...(request.promptCacheKey ? { promptCacheKey: request.promptCacheKey } : {}),
         attempt: 1,
       });
       if (event) pending.set(request, event);
@@ -593,6 +596,13 @@ export function emitPromptCacheDiagnosticRequest(
     const ephemeralSuffixHash = input.ephemeralSuffix?.content
       ? hashPromptCacheValue(input.ephemeralSuffix.content)
       : undefined;
+    const promptCacheDisabled = resolvePromptCacheDisabled(input.disablePromptCache);
+    const promptCacheAffinityHash = input.promptCacheKey
+      && !promptCacheDisabled
+      && typeof input.provider.usesPromptCacheAffinity === 'function'
+      && input.provider.usesPromptCacheAffinity()
+      ? hashPromptCacheValue(input.promptCacheKey)
+      : undefined;
     event = {
       phase: 'request',
       transport: input.transport ?? 'stream',
@@ -609,11 +619,7 @@ export function emitPromptCacheDiagnosticRequest(
       wireModel: input.provider.getWireModel(input.model),
       reasoningHash: hashPromptCacheValue(input.reasoning ?? null),
       maxOutputTokens: input.provider.getEffectiveMaxOutputTokens(input.model),
-      kodaxPromptCacheEnabled: input.disablePromptCache === true
-        ? false
-        : input.disablePromptCache === false
-          ? true
-          : process.env.KODAX_DISABLE_PROMPT_CACHE !== '1',
+      kodaxPromptCacheEnabled: !promptCacheDisabled,
       endpoint: endpointIdentity?.origin,
       endpointPathHash: endpointIdentity?.pathHash,
       attempt: input.attempt,
@@ -634,6 +640,9 @@ export function emitPromptCacheDiagnosticRequest(
       }),
       ...(ephemeralSuffixHash !== undefined
         ? { ephemeralSuffixHash }
+        : {}),
+      ...(promptCacheAffinityHash !== undefined
+        ? { promptCacheAffinityHash }
         : {}),
       messageCount: diagnosticEnvelope.messages.length,
       toolCount: input.tools.length,
@@ -666,10 +675,14 @@ export function emitPromptCacheDiagnosticResponse(
       ...request,
       phase: 'response',
       completedAt: new Date().toISOString(),
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      cachedReadTokens: usage?.cachedReadTokens,
-      cachedWriteTokens: usage?.cachedWriteTokens,
+      ...(usage?.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+      ...(usage?.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+      ...(usage?.cachedReadTokens !== undefined
+        ? { cachedReadTokens: usage.cachedReadTokens }
+        : {}),
+      ...(usage?.cachedWriteTokens !== undefined
+        ? { cachedWriteTokens: usage.cachedWriteTokens }
+        : {}),
     };
     events.onPromptCacheDiagnostics(event);
   } catch (error) {

@@ -113,6 +113,8 @@ export interface TryIntelligentCompactInput {
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
   readonly emitCompactionDiagnostics?: boolean;
   readonly disablePromptCache?: boolean;
+  /** Opaque Provider cache-routing key inherited from the logical context. */
+  readonly promptCacheKey?: string;
   /** Defaults to {@link COMPACT_CIRCUIT_BREAKER_LIMIT}; tests may override. */
   readonly circuitBreakerLimit?: number;
 }
@@ -189,6 +191,22 @@ export async function tryIntelligentCompact(
 
   input.events.onCompactStart?.();
   try {
+    const compactionObserver = input.emitCompactionDiagnostics === true
+      ? createCompactionPromptCacheObserver({
+          events: input.events,
+          enabled: true,
+          provider: input.provider,
+          providerName: input.provider.name,
+          ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+          ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+          ...(input.parentContextId !== undefined
+            ? { parentContextId: input.parentContextId }
+            : {}),
+          ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+          model: input.model ?? input.provider.getModel(),
+          disablePromptCache: input.disablePromptCache,
+        })
+      : undefined;
     const result = await intelligentCompact(
       input.messages,
       input.compactionConfig,
@@ -206,21 +224,11 @@ export async function tryIntelligentCompact(
         ? {
             tools: input.toolDefinitions,
             reasoning: input.reasoning,
-            observer: createCompactionPromptCacheObserver({
-              events: input.events,
-              enabled: input.emitCompactionDiagnostics === true,
-              provider: input.provider,
-              providerName: input.provider.name,
-              ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
-              ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
-              ...(input.parentContextId !== undefined
-                ? { parentContextId: input.parentContextId }
-                : {}),
-              ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
-              model: input.model ?? input.provider.getModel(),
-              disablePromptCache: input.disablePromptCache,
-            }),
           }
+        : undefined,
+      compactionObserver,
+      input.promptCacheKey !== undefined
+        ? { promptCacheKey: input.promptCacheKey }
         : undefined,
     );
 
@@ -567,6 +575,8 @@ export interface CompactionLifecycleInput {
   readonly compactionAntiThrashConfig?: CompactionAntiThrashConfig;
   readonly emitCompactionDiagnostics?: boolean;
   readonly disablePromptCache?: boolean;
+  /** Opaque Provider cache-routing key inherited from the logical context. */
+  readonly promptCacheKey?: string;
   readonly circuitBreakerLimit?: number;
 }
 
@@ -622,6 +632,7 @@ export async function runCompactionLifecycle(
     compactionAntiThrashConfig: input.compactionAntiThrashConfig,
     emitCompactionDiagnostics: input.emitCompactionDiagnostics,
     disablePromptCache: input.disablePromptCache,
+    promptCacheKey: input.promptCacheKey,
     circuitBreakerLimit: input.circuitBreakerLimit,
   });
   const degradationPhase = applyGracefulDegradationGate({

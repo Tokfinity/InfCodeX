@@ -3,17 +3,21 @@ import { randomUUID } from 'node:crypto';
 import type { CLIExecutor } from './executor.js';
 import type { CLIEvent } from './types.js';
 
+export interface PseudoAcpServerTransport {
+    inputStream: ReadableStream<Uint8Array>;
+    outputStream: WritableStream<Uint8Array>;
+    abort: () => void;
+    releaseSession: (sessionId: string) => void;
+    recreate: () => PseudoAcpServerTransport;
+    executor: CLIExecutor;
+}
+
 /**
  * Create an in-memory pseudo ACP server backed by a CLI executor.
  * It accepts ACP JSON-RPC requests, forwards prompts into the executor, and
  * converts emitted CLI events back into ACP session updates.
  */
-export function createPseudoAcpServer(executor: CLIExecutor): {
-    inputStream: ReadableStream<Uint8Array>;
-    outputStream: WritableStream<Uint8Array>;
-    abort: () => void;
-    executor: CLIExecutor;
-} {
+export function createPseudoAcpServer(executor: CLIExecutor): PseudoAcpServerTransport {
     type PromptCompletion = Promise<{
         stopReason: 'end_turn' | 'cancelled';
         usage?: Extract<CLIEvent, { type: 'complete' }>['usage'];
@@ -35,6 +39,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
     let currentSessionId = randomUUID();
     const abortController = new AbortController();
     const activePrompts = new Map<string, AbortController>();
+    const nativeSessionIds = new Map<string, string>();
 
     // Background loop that reads JSON-RPC requests from the client side.
     (async () => {
@@ -111,14 +116,25 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                 abortController.signal.removeEventListener('abort', onGlobalAbort);
             });
 
-            const promptResult = await promptCompletion;
-            await sendMsg({
-                jsonrpc: '2.0',
-                id: req.id,
-                result: promptResult.usage
-                    ? { stopReason: promptResult.stopReason, usage: promptResult.usage }
-                    : { stopReason: promptResult.stopReason },
-            });
+            try {
+                const promptResult = await promptCompletion;
+                await sendMsg({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: promptResult.usage
+                        ? { stopReason: promptResult.stopReason, usage: promptResult.usage }
+                        : { stopReason: promptResult.stopReason },
+                });
+            } catch (error) {
+                await sendMsg({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    error: {
+                        code: -32000,
+                        message: error instanceof Error ? error.message : String(error),
+                    },
+                });
+            }
         } else if (req.method === 'session/cancel' || req.method === 'chat/cancel') {
             const controller = activePrompts.get(req.params.sessionId);
             if (controller) {
@@ -149,17 +165,28 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
         signal: AbortSignal,
     ): Promise<{ stopReason: 'end_turn' | 'cancelled'; usage?: Extract<CLIEvent, { type: 'complete' }>['usage'] }> => {
         const text = promptBlocks.find((b: any) => b.type === 'text')?.text ?? '';
+        let completionUsage: Extract<CLIEvent, { type: 'complete' }>['usage'];
+        let sawComplete = false;
 
         try {
             const events = executor.execute({
                 prompt: text,
                 model,
                 reasoningEffort,
-                sessionId: sessionId === 'default' ? undefined : sessionId,
+                sessionId: nativeSessionIds.get(sessionId),
                 signal
             });
 
             for await (const cliEvent of events) {
+                if (cliEvent.type === 'error') {
+                    throw new Error(cliEvent.message);
+                }
+                if (cliEvent.type === 'complete' && cliEvent.status === 'failed') {
+                    throw new Error('Provider CLI reported a failed completion');
+                }
+                if (cliEvent.type === 'session_start' && cliEvent.sessionId) {
+                    nativeSessionIds.set(sessionId, cliEvent.sessionId);
+                }
                 const acpUpdate = mapToAcpNotification(cliEvent);
                 if (acpUpdate) {
                     await sendMsg({
@@ -173,34 +200,24 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                 }
 
                 if (cliEvent.type === 'complete') {
-                    return {
-                        stopReason: signal.aborted ? 'cancelled' : 'end_turn',
-                        usage: cliEvent.usage,
-                    };
+                    sawComplete = true;
+                    completionUsage = cliEvent.usage;
                 }
             }
 
+            if (!signal.aborted && !sawComplete) {
+                throw new Error('Provider CLI ended without a completion event');
+            }
             return {
                 stopReason: signal.aborted ? 'cancelled' : 'end_turn',
+                ...(completionUsage !== undefined ? { usage: completionUsage } : {}),
             };
         } catch (err) {
             if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
                 return { stopReason: 'cancelled' };
             }
 
-            console.error('[PseudoAcpServer] Error executing prompt:', err);
-            await sendMsg({
-                jsonrpc: '2.0',
-                method: 'session/update',
-                params: {
-                    sessionId,
-                    update: {
-                        sessionUpdate: 'agent_message_chunk',
-                        content: { type: 'text', text: `\n[Fatal Error: ${err}]\n` }
-                    }
-                }
-            });
-            return { stopReason: 'end_turn' };
+            throw err;
         }
     };
 
@@ -246,9 +263,15 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
         outputStream: reqStream.writable,
         abort: () => {
             abortController.abort();
-            reqStream.readable.cancel().catch(() => { });
-            resStream.writable.abort().catch(() => { });
+            activePrompts.clear();
+            nativeSessionIds.clear();
+            void serverReader.cancel().catch(() => { });
+            void serverWriter.abort().catch(() => { });
         },
+        releaseSession: (sessionId: string) => {
+            nativeSessionIds.delete(sessionId);
+        },
+        recreate: () => createPseudoAcpServer(executor),
         executor
     };
 }

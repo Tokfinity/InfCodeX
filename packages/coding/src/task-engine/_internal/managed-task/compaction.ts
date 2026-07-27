@@ -17,7 +17,11 @@ import {
   type CompactionResult,
   type CompactionUpdate,
 } from '@kodax-ai/agent';
-import type { KodaXReasoningRequest, KodaXToolDefinition } from '@kodax-ai/llm';
+import {
+  resolvePromptCacheDisabled,
+  type KodaXReasoningRequest,
+  type KodaXToolDefinition,
+} from '@kodax-ai/llm';
 
 import { resolveProvider } from '../../../providers/index.js';
 import { loadCompactionConfig } from '../../../compaction-config.js';
@@ -34,6 +38,7 @@ import { countTokens, estimateTokens } from '../../../tokenizer.js';
 import { resolveContextTokenCount } from '../../../token-accounting.js';
 import { estimateToolSchemaTokens } from '../../../agent-runtime/context-budget.js';
 import { createCompactionPromptCacheObserver } from '../../../agent-runtime/prompt-cache-diagnostics.js';
+import { derivePromptCacheAffinityKey } from '../../../agent-runtime/prompt-cache-affinity.js';
 
 const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;
 
@@ -231,13 +236,14 @@ export async function buildManagedTaskCompactionHook(
     ?? options.session?.id;
   const diagnosticAgentId = options.context?.currentAgentId;
   const diagnosticParentAgentId = options.context?.parentAgentId;
+  const diagnosticContextId = diagnosticSessionId === undefined
+    ? undefined
+    : diagnosticAgentId === undefined
+      ? diagnosticSessionId
+      : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`;
   const diagnosticContextIdentity = {
-    ...(diagnosticSessionId !== undefined
-      ? {
-          contextId: diagnosticAgentId === undefined
-            ? diagnosticSessionId
-            : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`,
-        }
+    ...(diagnosticContextId !== undefined
+      ? { contextId: diagnosticContextId }
       : {}),
     contextKind: diagnosticAgentId === undefined ? 'root' as const : 'child' as const,
     ...(diagnosticSessionId !== undefined && diagnosticAgentId !== undefined
@@ -250,6 +256,12 @@ export async function buildManagedTaskCompactionHook(
       : {}),
     ...(diagnosticAgentId !== undefined ? { agentId: diagnosticAgentId } : {}),
   };
+  const promptCacheKey = resolvePromptCacheDisabled(options.disablePromptCache)
+    ? undefined
+    : derivePromptCacheAffinityKey({
+        logicalSessionId: diagnosticSessionId,
+        ...(diagnosticAgentId !== undefined ? { agentId: diagnosticAgentId } : {}),
+      });
   let consecutiveFailures = 0;
 
   return async (transcript) => {
@@ -286,20 +298,22 @@ export async function buildManagedTaskCompactionHook(
       const systemPrompt = typeof immutableSystem?.content === 'string'
         ? immutableSystem.content
         : undefined;
+      const compactionObserver = options.context?.contextDiagnostics === true
+        ? createCompactionPromptCacheObserver({
+            events,
+            enabled: true,
+            provider,
+            providerName: provider.name,
+            ...diagnosticContextIdentity,
+            model: activeModel ?? provider.getModel(),
+            disablePromptCache: options.disablePromptCache,
+          })
+        : undefined;
       const cacheContext = systemPrompt !== undefined
         && hookOptions.activeToolDefinitions !== undefined
         ? {
             tools: hookOptions.activeToolDefinitions,
             reasoning: hookOptions.reasoning,
-            observer: createCompactionPromptCacheObserver({
-              events,
-              enabled: options.context?.contextDiagnostics === true,
-              provider,
-              providerName: provider.name,
-              ...diagnosticContextIdentity,
-              model: activeModel ?? provider.getModel(),
-              disablePromptCache: options.disablePromptCache,
-            }),
           }
         : undefined;
       const result = await intelligentCompact(
@@ -316,6 +330,8 @@ export async function buildManagedTaskCompactionHook(
         false,
         reservedResponseTokens,
         cacheContext,
+        compactionObserver,
+        promptCacheKey !== undefined ? { promptCacheKey } : undefined,
       );
       if (!result.compacted) {
         if (hardPressure) {

@@ -9,6 +9,7 @@ import {
   createRuntimeDaemonServeEnvironment,
   daemonServeExecArgv,
   waitForHealthyDaemonStartup,
+  waitForReadyRuntimeDaemonOwner,
   type RuntimeDaemonStartupProcess,
 } from './process.js';
 import {
@@ -187,6 +188,91 @@ describe('runtime daemon child startup', () => {
     expect(child.terminate).not.toHaveBeenCalled();
   });
 
+  it('waits for ready state after the endpoint first becomes reachable', async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 778,
+      exit: new Promise(() => undefined),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => undefined),
+    };
+    let healthChecks = 0;
+    const startingThenReady = async () => {
+      healthChecks += 1;
+      const observation = await healthy(778)();
+      return healthChecks === 1
+        ? { ...observation, state: { ...observation.state, status: 'starting' as const } }
+        : observation;
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 1_000,
+      pollIntervalMs: 1,
+    }, child, startingThenReady)).resolves.toMatchObject({
+      state: { pid: 778, status: 'ready' },
+    });
+    expect(healthChecks).toBe(2);
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(child.terminate).not.toHaveBeenCalled();
+  });
+
+  it('waits for an existing healthy owner to publish ready without spawning a competitor', async () => {
+    let healthChecks = 0;
+    const starting = await healthy(779)();
+    const observe = async () => {
+      healthChecks += 1;
+      return healthChecks === 1
+        ? { ...starting, state: { ...starting.state, status: 'starting' as const } }
+        : healthy(779)();
+    };
+
+    await expect(waitForReadyRuntimeDaemonOwner(paths, {
+      startupTimeoutMs: 1_000,
+      pollIntervalMs: 1,
+    }, await observe(), observe)).resolves.toMatchObject({
+      state: { pid: 779, status: 'ready' },
+    });
+    expect(healthChecks).toBe(2);
+  });
+
+  it('bounds and cancels waiting for an existing non-ready owner without terminating it', async () => {
+    const starting = await healthy(780)();
+    const initial = {
+      ...starting,
+      state: { ...starting.state, status: 'starting' as const },
+    };
+    const observe = vi.fn(async () => initial);
+
+    await expect(waitForReadyRuntimeDaemonOwner(paths, {
+      startupTimeoutMs: 0,
+    }, initial, observe)).rejects.toThrow(/timed out waiting/i);
+    expect(observe).not.toHaveBeenCalled();
+
+    const controller = new AbortController();
+    const cancelled = waitForReadyRuntimeDaemonOwner(paths, {
+      startupTimeoutMs: 60_000,
+      pollIntervalMs: 1_000,
+      startupSignal: controller.signal,
+    }, initial, observe);
+    controller.abort();
+    await expect(cancelled).rejects.toThrow(/startup cancelled/i);
+  });
+
+  it('rejects a self-consistent replacement owner while waiting for the initial owner', async () => {
+    const initialOwner = await healthy(781)();
+    const initial = {
+      ...initialOwner,
+      state: { ...initialOwner.state, status: 'starting' as const },
+    };
+
+    await expect(waitForReadyRuntimeDaemonOwner(paths, {
+      startupTimeoutMs: 1_000,
+      pollIntervalMs: 1,
+    }, initial, healthy(782))).rejects.toMatchObject({
+      reason: 'identity_mismatch',
+      message: expect.stringMatching(/owner identity changed/i),
+    });
+  });
+
   it('reclaims its spawned child when another daemon wins the startup race', async () => {
     const child: RuntimeDaemonStartupProcess = {
       pid: 888,
@@ -195,8 +281,21 @@ describe('runtime daemon child startup', () => {
       terminate: vi.fn(async () => undefined),
     };
 
-    await expect(waitForHealthyDaemonStartup(paths, {}, child, healthy(999)))
+    let healthChecks = 0;
+    const competingOwner = async () => {
+      healthChecks += 1;
+      const observation = await healthy(999)();
+      return healthChecks === 1
+        ? { ...observation, state: { ...observation.state, status: 'starting' as const } }
+        : observation;
+    };
+
+    await expect(waitForHealthyDaemonStartup(paths, {
+      startupTimeoutMs: 1_000,
+      pollIntervalMs: 1,
+    }, child, competingOwner))
       .resolves.toMatchObject({ state: { pid: 999 } });
+    expect(healthChecks).toBe(2);
     expect(child.terminate).toHaveBeenCalledOnce();
     expect(child.unref).not.toHaveBeenCalled();
   });

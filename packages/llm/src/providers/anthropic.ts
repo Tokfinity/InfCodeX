@@ -37,8 +37,12 @@ import {
   isCacheBoundary,
   lowerCacheBoundaries,
 } from '../cache-control.js';
-import { readImageFileAsBase64, resolveImageMediaType } from './image-serialization.js';
-import { getRunScopedConfig } from '../run-scoped-config.js';
+import {
+  MISSING_IMAGE_PLACEHOLDER,
+  readImageFileAsBase64IfAvailable,
+  resolveImageMediaType,
+} from './image-serialization.js';
+import { resolvePromptCacheDisabled } from '../run-scoped-config.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
 const KODAX_ANTHROPIC_EFFORT_BETA_HEADER = 'effort-2025-11-24';
@@ -484,18 +488,11 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
    * startup (e.g. bridged from `config.json`). A plain `||` would let the env
    * win in that re-enable case, breaking the documented SDK > env precedence.
    */
-  private isPromptCacheDisabled(): boolean {
-    const scoped = getRunScopedConfig()?.disablePromptCache;
-    if (scoped === true) return true;
-    if (scoped === false) return false;
-    return process.env.KODAX_DISABLE_PROMPT_CACHE === '1';
-  }
-
   protected applyCacheControlToSystem(
     systemText: string,
   ): string | Anthropic.Messages.TextBlockParam[] {
     if (!systemText.trim()) return systemText;
-    if (this.isPromptCacheDisabled()) return systemText;
+    if (resolvePromptCacheDisabled()) return systemText;
     const blocks = insertCacheBoundary(
       [{ type: 'text', text: systemText }],
       'system',
@@ -518,7 +515,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     tools: KodaXToolDefinition[],
   ): Anthropic.Messages.Tool[] {
     if (tools.length === 0) return tools as Anthropic.Messages.Tool[];
-    if (this.isPromptCacheDisabled()) {
+    if (resolvePromptCacheDisabled()) {
       return tools as Anthropic.Messages.Tool[];
     }
     const out = tools.slice() as Anthropic.Messages.Tool[];
@@ -554,7 +551,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     messages: Anthropic.Messages.MessageParam[],
   ): Anthropic.Messages.MessageParam[] {
     if (messages.length === 0) return messages;
-    if (this.isPromptCacheDisabled()) return messages;
+    if (resolvePromptCacheDisabled()) return messages;
 
     let targetIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -658,6 +655,11 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           messages: convertedMessages,
           tools: this.applyCacheControlToTools(tools),
           stream: true,
+          ...(this.config.promptCacheAffinity === true
+            && streamOptions?.promptCacheKey
+            && !resolvePromptCacheDisabled()
+            ? { metadata: { user_id: streamOptions.promptCacheKey } }
+            : {}),
         };
         if (streamOptions?.forcedToolName && shouldForceToolChoice) {
           kwargs.tool_choice = {
@@ -1101,6 +1103,11 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           system: this.applyCacheControlToSystem(this.buildSystemPrompt(system, messages)),
           messages: convertedMessages,
           tools: this.applyCacheControlToTools(tools),
+          ...(this.config.promptCacheAffinity === true
+            && streamOptions?.promptCacheKey
+            && !resolvePromptCacheDisabled()
+            ? { metadata: { user_id: streamOptions.promptCacheKey } }
+            : {}),
         };
         if (streamOptions?.forcedToolName && shouldForceToolChoice) {
           kwargs.tool_choice = {
@@ -1382,14 +1389,21 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               if (item.type === 'text') {
                 items.push({ type: 'text', text: item.text });
               } else if (item.type === 'image') {
-                items.push({
-                  type: 'image',
-                  source: {
-                    type: 'base64',
-                    media_type: resolveImageMediaType(item.path, item.mediaType),
-                    data: await readImageFileAsBase64(item.path),
-                  },
-                } as Anthropic.Messages.ImageBlockParam);
+                const encoded = await readImageFileAsBase64IfAvailable(
+                  item.path,
+                );
+                if (encoded === undefined) {
+                  items.push({ type: 'text', text: MISSING_IMAGE_PLACEHOLDER });
+                } else {
+                  items.push({
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: resolveImageMediaType(item.path, item.mediaType),
+                      data: encoded,
+                    },
+                  } as Anthropic.Messages.ImageBlockParam);
+                }
               }
             }
             serializedContent = items;
@@ -1415,14 +1429,21 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         if (b.type === 'text') {
           content.push({ type: 'text', text: b.text });
         } else if (b.type === 'image' && m.role === 'user') {
-          content.push({
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: resolveImageMediaType(b.path, b.mediaType),
-              data: await readImageFileAsBase64(b.path),
-            },
-          } as any);
+          const encoded = await readImageFileAsBase64IfAvailable(
+            b.path,
+          );
+          if (encoded === undefined) {
+            content.push({ type: 'text', text: MISSING_IMAGE_PLACEHOLDER });
+          } else {
+            content.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: resolveImageMediaType(b.path, b.mediaType),
+                data: encoded,
+              },
+            } as Anthropic.Messages.ImageBlockParam);
+          }
         }
       }
 

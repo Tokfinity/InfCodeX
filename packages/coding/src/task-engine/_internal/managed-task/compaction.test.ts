@@ -146,6 +146,23 @@ describe('managed history compaction', () => {
     expect(result).toEqual(compactedResult(messages).messages);
   });
 
+  it('does not resolve diagnostics-only model metadata when diagnostics are disabled', async () => {
+    const messages = makeMessages();
+    const capacity = {
+      ...resolvedCapacity(100),
+      activeModel: undefined,
+    };
+    const getModel = vi.spyOn(capacity.provider, 'getModel');
+    compactMock.mockResolvedValue(compactedResult(messages));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: capacity,
+      contextTokenSnapshotRef: { current: snapshot(88_000, messages) },
+    });
+
+    await hook?.(messages);
+    expect(getModel).not.toHaveBeenCalled();
+  });
+
   it('keeps Runner\'s immutable Worker system prompt outside semantic compaction', async () => {
     const immutableSystem: KodaXMessage = {
       role: 'system',

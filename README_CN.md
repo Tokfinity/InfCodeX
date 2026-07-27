@@ -107,7 +107,7 @@ daemon Runtime 边界保留结构化 blocked 原因。
 可选模型，同时保留 `kimi-for-coding-highspeed` 与 1M `k3` tier。K3 支持
 `low` / `high` / `max` 思考强度，默认 `high`；256K 路由支持图片但不支持视频输入。
 
-**v0.7.77 发布候选版**：AMA 现在通过现有 Actor 控制面按需组合六种具名问题解决
+**v0.7.77 发布就绪候选版**：AMA 现在通过现有 Actor 控制面按需组合六种具名问题解决
 模式，不引入固定拓扑或隐藏 Workflow。可选策略元数据会形成有界、仅记录事实的
 `PatternTrace`，现有 Sidecar 仍是唯一的终态答案质量裁决者。治理式记忆可在工具
 失败、验证失败或已提交 compact 之后稀疏触发，在下一次 Action-LLM 请求前注入最多
@@ -115,7 +115,10 @@ daemon Runtime 边界保留结构化 blocked 原因。
 进程内显式注入 `memoryRecallRunner`。公开 `kimi` provider 同时新增 1M
 `kimi-k3` 路由，并继续以 K2.7 Code 为默认。详见
 [v0.7.77 设计](docs/features/v0.7.77.md)与
-[发布检查清单](docs/release.md#v0777-release-candidate-verification)。
+[发布检查清单](docs/release.md#v0777-release-ready-candidate-verification)。
+冻结的 F274/F275 付费评测已完成；F274 最终 Layer 2/Layer 3 与 F275 pilot 盲审均
+为 `recommend-ship`，随后形成发布确定性契约的联合 `SHIP` 决策。语义记忆选择仍为
+实验性、宿主显式启用能力；本版本不宣称任务质量、token 或延迟改善。
 
 同一候选版还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
@@ -125,6 +128,24 @@ daemon Runtime 边界保留结构化 blocked 原因。
 过滤。没有配置 `shellExecution` 的调用保持原有命令行为。详见
 [SDK Embedder Guide 第 28 节](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
 与 [Issue 214 回归指南](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)。
+
+Kimi Code 请求现在还会携带由 Runtime 逻辑上下文派生的稳定、不透明 Prompt Cache
+affinity key。它会在跨 Run、重试、fallback、恢复与压缩时复用；递归子 Agent 则按
+规范 Agent 路径获得与 root 和临时 transcript Session 隔离的 key。公开 Kimi 与
+官方 OpenAI 使用对应的 `prompt_cache_key`；其他兼容网关保持显式 opt-in，因为
+部分严格端点会拒绝未知字段。该能力提高缓存路由稳定性，但不能绕过 Provider TTL
+或缓存分片。详见
+[Issue 215 回归指南](docs/test-guides/ISSUE_215_v0.7.77_REGRESSION_GUIDE.md)。
+Codex CLI 的缓存读取/写入与 Gemini CLI 的缓存读取现在会原样贯穿 CLI bridge
+和 Runtime diagnostics，不做估算；Provider 明确报告的 `0` 与未报告字段保持
+可区分。详见
+[Issue 216 回归指南](docs/test-guides/ISSUE_216_v0.7.77_REGRESSION_GUIDE.md)。
+CLI bridge 还会让首个原生 CLI turn 以 fresh 模式启动，只恢复 CLI 自己报告的
+原生 session ID；无 conversation ID 的 stateless 调用每次创建独立 ACP Session，
+非零 CLI 退出会显式失败。用户主动取消保持安静，hard/idle timeout 的 Abort 则会
+作为失败进入 Runtime 恢复路径，不再伪装成空成功；已经报告成功但迟迟不退出的
+CLI 也会在配置的 deadline 被终止。详见
+[Issue 217 回归指南](docs/test-guides/ISSUE_217_v0.7.77_REGRESSION_GUIDE.md)。
 
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
@@ -374,6 +395,12 @@ import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-
   ]
 }
 ```
+
+如果已确认自定义端点支持缓存 affinity 路由，可以设置
+`"promptCacheAffinity": true`。Anthropic-compatible 请求会把不透明逻辑上下文
+key 写入 `metadata.user_id`，OpenAI-compatible 请求写入 `prompt_cache_key`。
+默认值为 `false`，因为部分严格兼容网关会拒绝未知请求字段；不要只因端点宣称协议
+兼容就开启。
 
 Sidecar verifier 的结构化裁决请求会优先使用 provider 级 `tool_choice` 强制工具调用；如果某个兼容端点明确拒绝 `tool_choice` 参数，KodaX 会对该 verifier 请求自动重试一次“不强制但仍带 tools”的兼容模式，并保持 fail-open，不会阻塞主 Worker。
 

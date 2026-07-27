@@ -35,6 +35,8 @@ interface WireCall {
   readonly actor: 'parent' | 'grandchild';
   readonly transcript: string;
   readonly toolNames: readonly string[];
+  readonly promptCacheKey?: string;
+  readonly transportSessionId?: string;
 }
 
 let releaseGrandchild: (() => void) | undefined;
@@ -60,7 +62,7 @@ class RecursiveActorProvider extends KodaXBaseProvider {
     tools: KodaXToolDefinition[],
     _system: string,
     _reasoning?: boolean | KodaXReasoningRequest,
-    _streamOptions?: KodaXProviderStreamOptions,
+    streamOptions?: KodaXProviderStreamOptions,
     _signal?: AbortSignal,
   ): Promise<KodaXStreamResult> {
     const transcript = JSON.stringify(messages);
@@ -72,6 +74,8 @@ class RecursiveActorProvider extends KodaXBaseProvider {
       actor,
       transcript,
       toolNames: tools.map((tool) => tool.name),
+      promptCacheKey: streamOptions?.promptCacheKey,
+      transportSessionId: streamOptions?.sessionId,
     });
 
     if (actor === 'grandchild') {
@@ -212,6 +216,13 @@ describe('recursive Runtime Actor integration', { timeout: 30_000 }, () => {
     expect(parentCalls[0]?.toolNames).toContain('wait_agent');
     expect(parentCalls[0]?.toolNames).toContain('agent_output');
     expect(grandchildCalls).toHaveLength(1);
+    expect(new Set(parentCalls.map((call) => call.promptCacheKey)).size).toBe(1);
+    expect(parentCalls[0]?.promptCacheKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(grandchildCalls[0]?.promptCacheKey).toMatch(/^[a-f0-9]{64}$/);
+    expect(grandchildCalls[0]?.promptCacheKey).not.toBe(parentCalls[0]?.promptCacheKey);
+    expect([...parentCalls, ...grandchildCalls].every(
+      (call) => call.transportSessionId === undefined,
+    )).toBe(true);
     expect(root.list().actors.map((actor) => actor.path)).toContain(
       '/root/parent/grandchild',
     );
@@ -250,5 +261,11 @@ describe('recursive Runtime Actor integration', { timeout: 30_000 }, () => {
       new Set([parentBudget?.contextId]),
     );
     expect(new Set(parentBudgets.map((budget) => budget.sessionId)).size).toBeGreaterThan(1);
+    const resumedParentCalls = RecursiveActorProvider.calls.filter(
+      (call) => call.actor === 'parent',
+    );
+    expect(new Set(resumedParentCalls.map((call) => call.promptCacheKey))).toEqual(
+      new Set([parentCalls[0]?.promptCacheKey]),
+    );
   });
 });

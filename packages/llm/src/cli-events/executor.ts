@@ -50,27 +50,135 @@ export abstract class CLIExecutor {
             stderrOutput += chunk.toString();
         });
 
-        // Forward abort requests to the child process.
-        let exited = false;
-        const abortHandler = () => {
-            if (!exited) {
-                void killChildProcessTree(child);
+        // Forward caller cancellation and the executor's own timeout to the
+        // child through one signal so stdout parsing and process cleanup agree.
+        const executionController = new AbortController();
+        const abortMarker = {};
+        let resolveAbort: (() => void) | undefined;
+        const abortReached = new Promise<typeof abortMarker>((resolve) => {
+            resolveAbort = () => resolve(abortMarker);
+        });
+        const forwardExternalAbort = () => {
+            if (executionController.signal.aborted) return;
+            const reason = options.signal?.reason;
+            if (reason === undefined) {
+                executionController.abort();
+            } else {
+                executionController.abort(reason);
             }
         };
-        options.signal?.addEventListener('abort', abortHandler);
+        options.signal?.addEventListener('abort', forwardExternalAbort);
+        if (options.signal?.aborted) {
+            forwardExternalAbort();
+        }
+
+        let exited = false;
+        let terminationPromise: Promise<void> | undefined;
+        const terminateChild = (): Promise<void> => {
+            if (!terminationPromise) {
+                terminationPromise = killChildProcessTree(child);
+                void terminationPromise.catch(() => undefined);
+            }
+            return terminationPromise;
+        };
+        const abortHandler = () => {
+            resolveAbort?.();
+            if (!exited) {
+                void terminateChild();
+                // A provider may keep its stdout pipe open even after process
+                // termination was requested. Interrupt the async iterator so
+                // timeout and caller cancellation can reject immediately.
+                child.stdout?.destroy();
+            }
+        };
+        executionController.signal.addEventListener('abort', abortHandler);
+        if (executionController.signal.aborted) {
+            abortHandler();
+        }
         child.on('exit', () => { exited = true; });
+
+        let timedOut = false;
+        let timeoutError: Error | undefined;
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const timeoutMs = this.config.timeout;
+        if (
+            timeoutMs !== undefined
+            && Number.isFinite(timeoutMs)
+            && timeoutMs > 0
+            && !executionController.signal.aborted
+        ) {
+            timeoutHandle = setTimeout(() => {
+                if (executionController.signal.aborted) return;
+                timedOut = true;
+                timeoutError = new Error(`Provider CLI timed out after ${timeoutMs}ms`);
+                executionController.abort(timeoutError);
+            }, timeoutMs);
+            timeoutHandle.unref?.();
+        }
+        const waitForExecution = async <T>(operation: Promise<T>): Promise<T> => {
+            const result = await Promise.race([operation, abortReached]);
+            if (result === abortMarker) {
+                throw executionController.signal.reason
+                    ?? timeoutError
+                    ?? new Error('Provider CLI execution aborted');
+            }
+            return result as T;
+        };
+
+        const exitResult = new Promise<{
+            code: number | null;
+            signal: NodeJS.Signals | null;
+        }>((resolve, reject) => {
+            child.once('error', reject);
+            child.once('close', (code, signal) => resolve({ code, signal }));
+        });
 
         try {
             // Parse JSONL output from stdout.
-            yield* this.parseOutputStream(child.stdout!, options.signal);
-
-            if (stderrOutput.trim()) {
-                console.error(`[CLIExecutor] stderr: ${stderrOutput.trim()}`);
+            const eventIterator = this
+                .parseOutputStream(child.stdout!, executionController.signal)
+                [Symbol.asyncIterator]();
+            while (true) {
+                const next = await waitForExecution(eventIterator.next());
+                if (next.done) break;
+                yield next.value;
             }
+
+            if (executionController.signal.aborted) {
+                throw executionController.signal.reason;
+            }
+            const exit = await waitForExecution(exitResult);
+            if (timedOut) {
+                throw timeoutError ?? executionController.signal.reason;
+            }
+            const stderr = stderrOutput.trim();
+            if (!options.signal?.aborted && exit.code !== 0) {
+                const exitLabel = exit.code === null
+                    ? `signal ${exit.signal ?? 'unknown'}`
+                    : `code ${exit.code}`;
+                throw new Error(
+                    `Provider CLI exited with ${exitLabel}${stderr ? `: ${stderr}` : ''}`,
+                );
+            }
+            if (stderr) {
+                console.error(`[CLIExecutor] stderr: ${stderr}`);
+            }
+        } catch (error) {
+            // If stdout parsing failed before the child emitted its own error,
+            // observe that secondary promise so it cannot become unhandled.
+            void exitResult.catch(() => undefined);
+            if (executionController.signal.aborted) {
+                throw executionController.signal.reason;
+            }
+            throw error;
         } finally {
-            options.signal?.removeEventListener('abort', abortHandler);
+            if (timeoutHandle) {
+                clearTimeout(timeoutHandle);
+            }
+            options.signal?.removeEventListener('abort', forwardExternalAbort);
+            executionController.signal.removeEventListener('abort', abortHandler);
             if (!exited) {
-                await killChildProcessTree(child);
+                await terminateChild();
             }
         }
     }

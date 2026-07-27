@@ -22,7 +22,10 @@ import {
   tryAcquireRuntimeDaemonLock,
   writeRuntimeDaemonState,
 } from './runtime-daemon/state.js';
-import { isRuntimeDaemonPidAlive } from './runtime-daemon/lifecycle.js';
+import {
+  isRuntimeDaemonPidAlive,
+  observeRuntimeDaemonHealth,
+} from './runtime-daemon/lifecycle.js';
 
 const tempRoots: string[] = [];
 const DEFAULT_NODE_PROCESS_TIMEOUT_MS = 90_000;
@@ -108,6 +111,7 @@ describe('daemon CLI smoke', () => {
     const profile = `a2a-fence-${process.pid}-${Date.now()}`;
     let releaseCard: (() => void) | undefined;
     let observeCardRequest: (() => void) | undefined;
+    let cardPort: number | undefined;
     const cardRequest = new Promise<void>((resolve) => { observeCardRequest = resolve; });
     const cardRelease = new Promise<void>((resolve) => { releaseCard = resolve; });
     const cardServer = createServer(async (request, response) => {
@@ -117,15 +121,14 @@ describe('daemon CLI smoke', () => {
       }
       observeCardRequest?.();
       await cardRelease;
-      const address = cardServer.address();
-      if (address === null || typeof address === 'string') throw new Error('Card server address is unavailable.');
+      if (cardPort === undefined) throw new Error('Card server port is unavailable.');
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({
         name: 'Startup Fence Agent',
         description: 'Delayed Agent Card used to verify daemon readiness fencing.',
         version: '1.0.0',
         supportedInterfaces: [{
-          url: `http://127.0.0.1:${address.port}/a2a`,
+          url: `http://127.0.0.1:${cardPort}/a2a`,
           protocolBinding: 'JSONRPC',
           protocolVersion: '1.0',
         }],
@@ -142,6 +145,7 @@ describe('daemon CLI smoke', () => {
     try {
       const address = cardServer.address();
       if (address === null || typeof address === 'string') throw new Error('Card server address is unavailable.');
+      cardPort = address.port;
       const configDir = path.join(homeDir, '.kodax', 'integrations');
       fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(path.join(configDir, 'a2a.json'), JSON.stringify({
@@ -155,36 +159,57 @@ describe('daemon CLI smoke', () => {
         },
       }), 'utf8');
 
+      const daemonEnv = { KODAX_INTERNAL_DAEMON_TEST_READY_DELAY_MS: '1000' };
       const start = runDaemonCommand([
         'start', '--home', homeDir, '--profile', profile,
         '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
-      ]);
+      ], daemonEnv);
       await Promise.race([
         cardRequest,
         start.then(() => {
           throw new Error('Daemon start completed before initial A2A discovery began.');
         }),
       ]);
+      releaseCard?.();
       const paths = resolveRuntimeDaemonPaths(homeDir, profile);
-      const state = fs.existsSync(paths.stateFile)
-        ? JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as {
-            readonly status?: string;
-            readonly configHome?: string;
-          }
-        : undefined;
-      expect(state?.status).not.toBe('ready');
+      await waitForHealthyDaemonStatus(paths, 'starting');
+
+      const concurrentStart = runDaemonCommand([
+        'start', '--home', homeDir, '--profile', profile,
+        '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+      ]);
+      const runtimePromise = connectKodaXRuntime({
+        homeDir,
+        profile,
+        autoStart: true,
+        daemonStartupTimeoutMs: 30_000,
+        requirements: { externalAgentAdmin: 1, a2aConfigReconciler: 1 },
+      });
+      let concurrentStartSettled = false;
+      let runtimeSettled = false;
+      void concurrentStart.then(
+        () => { concurrentStartSettled = true; },
+        () => { concurrentStartSettled = true; },
+      );
+      void runtimePromise.then(
+        () => { runtimeSettled = true; },
+        () => { runtimeSettled = true; },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(concurrentStartSettled).toBe(false);
+      expect(runtimeSettled).toBe(false);
 
       releaseCard?.();
       await expect(start).resolves.toMatchObject({ started: true, health: 'healthy' });
+      await expect(concurrentStart).resolves.toMatchObject({
+        started: false,
+        reason: 'already_running',
+        state: { status: 'ready' },
+      });
       expect(JSON.parse(fs.readFileSync(paths.stateFile, 'utf8'))).toMatchObject({
         configHome: path.resolve(homeDir, '.kodax'),
       });
-      const runtime = await connectKodaXRuntime({
-        homeDir,
-        profile,
-        autoStart: false,
-        requirements: { externalAgentAdmin: 1, a2aConfigReconciler: 1 },
-      });
+      const runtime = await runtimePromise;
       try {
         expect(runtime.capabilities).toMatchObject({
           a2aConfigReconciler: { version: 1 },
@@ -195,6 +220,11 @@ describe('daemon CLI smoke', () => {
       } finally {
         await runtime.close();
       }
+      await expect(runDaemonCommand([
+        'stop', '--home', homeDir, '--profile', profile,
+        '--timeout-ms', '30000', '--json',
+      ])).resolves.toMatchObject({ stopped: true, health: 'missing' });
+      await waitForDaemonState(profile, homeDir, false);
     } finally {
       releaseCard?.();
       await new Promise<void>((resolve, reject) => {
@@ -1045,6 +1075,24 @@ async function waitForDaemonState(
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Timed out waiting for daemon state present=${present}.`);
+}
+
+async function waitForHealthyDaemonStatus(
+  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
+  expected: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const observation = await observeRuntimeDaemonHealth(paths);
+    if (
+      observation.endpointReachable
+      && observation.identityMatches
+      && observation.state?.status === expected
+    ) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for healthy daemon status=${expected}.`);
 }
 
 async function waitForDaemonPidExit(pid: number, timeoutMs: number): Promise<void> {

@@ -281,12 +281,50 @@ describe('openai message serialization', () => {
     });
   });
 
+  it('replaces a missing historical image with a path-free text placeholder', async () => {
+    const cwd = await createTempDir('kodax-openai-missing-image-');
+    const missingImagePath = path.join(cwd, 'deleted.png');
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'done', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const provider = new TestOpenAIProvider({
+      chat: {
+        completions: { create },
+      },
+    });
+
+    await provider.complete(
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Continue without the old screenshot.' },
+            { type: 'image', path: missingImagePath, mediaType: 'image/png' },
+          ],
+        },
+      ],
+      TOOLS,
+      'Base system prompt',
+    );
+
+    const content = create.mock.calls[0]?.[0].messages[1]?.content;
+    expect(content).toEqual([
+      { type: 'text', text: 'Continue without the old screenshot.' },
+      {
+        type: 'text',
+        text: '[Historical image unavailable: the local attachment file is missing.]',
+      },
+    ]);
+    expect(JSON.stringify(content)).not.toContain(missingImagePath);
+  });
+
   // 2026-05-20 — claudecode parity for read-on-image. KodaX `read` now
   // returns an array-form tool_result for image paths (text + image
   // items). OpenAI Chat Completions tool messages take `content: string`
   // and don't accept image blocks inline, so the OpenAI-compat serializer
   // downgrades: text items pass through, image items become a textual
-  // placeholder noting the path. This keeps the tool-result envelope
+  // path-free placeholder. This keeps the tool-result envelope
   // valid for DeepSeek / Zhipu / MiniMax / Qwen text channels.
   it('downgrades multimodal tool_result to text placeholder (no image_url inside tool message)', async () => {
     const cwd = await createTempDir('kodax-openai-toolresult-image-');
@@ -309,7 +347,7 @@ describe('openai message serialization', () => {
             type: 'tool_result',
             tool_use_id: 'tool_42',
             content: [
-              { type: 'text', text: `[Read image: ${imagePath}]` },
+              { type: 'text', text: '[Read image metadata]' },
               { type: 'image', path: imagePath, mediaType: 'image/png' },
             ],
           },
@@ -324,13 +362,59 @@ describe('openai message serialization', () => {
     expect(toolMsg).toBeDefined();
     expect(typeof toolMsg.content).toBe('string');
     // Text item passed through verbatim
-    expect(toolMsg.content).toContain(`[Read image: ${imagePath}]`);
-    // Image item lowered to a textual placeholder mentioning the path and mime
-    expect(toolMsg.content).toContain(`[Image at ${imagePath}`);
-    expect(toolMsg.content).toContain('image/png');
-    expect(toolMsg.content).toContain('does not support image content in tool_result');
+    expect(toolMsg.content).toContain('[Read image metadata]');
+    // Image item lowered without disclosing its local path.
+    expect(toolMsg.content).toContain(
+      '[Image content omitted: this provider does not support inline images in tool results.]',
+    );
+    expect(toolMsg.content).not.toContain(imagePath);
     // No image_url block sneaked in (OpenAI rejects images inside tool messages)
     expect(toolMsg.content).not.toContain('image_url');
+  });
+
+  it('marks missing tool-result images without disclosing their local paths', async () => {
+    const cwd = await createTempDir('kodax-openai-missing-toolresult-image-');
+    const missingImagePath = path.join(cwd, 'deleted.png');
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+
+    await provider.complete(
+      [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'tool_missing', name: 'read', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool_missing',
+              content: [
+                { type: 'image', path: missingImagePath, mediaType: 'image/png' },
+                { type: 'image', path: missingImagePath, mediaType: 'image/png' },
+              ],
+            },
+          ],
+        },
+      ],
+      TOOLS,
+      'sys',
+    );
+
+    const toolMsg = create.mock.calls[0]?.[0].messages.find(
+      (message: { role: string }) => message.role === 'tool',
+    );
+    expect(toolMsg.content).toBe(
+      [
+        '[Historical image unavailable: the local attachment file is missing.]',
+        '[Historical image unavailable: the local attachment file is missing.]',
+      ].join('\n'),
+    );
+    expect(toolMsg.content).not.toContain(missingImagePath);
   });
 
   it('keeps tool-result recovery metadata local instead of serializing it to the wire', async () => {

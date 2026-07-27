@@ -46,6 +46,7 @@ import {
   createRuntimePermissionMatcher,
   runtimePermissionHostPlatform,
 } from './runtime-permission-scope.js';
+import { derivePromptCacheAffinityKey } from '../packages/coding/src/agent-runtime/prompt-cache-affinity.js';
 
 const codingMock = vi.hoisted(() => ({
   runManagedTask: vi.fn(),
@@ -4294,6 +4295,70 @@ describe('createKodaXRuntime', () => {
     await runtime.close();
   });
 
+  it('keeps managed prompt-cache affinity stable after Runtime reconnect without crossing Sessions', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const sessionsDir = path.join(tempRoot, 'affinity-sessions');
+    const capturedOptions: KodaXOptions[] = [];
+    codingMock.runManagedTask.mockImplementation(async (options: KodaXOptions) => {
+      capturedOptions.push(options);
+      return {
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId: options.session?.id,
+      };
+    });
+
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: 'mock-provider',
+    });
+    const firstSession = await runtime.sessions.create({ title: 'Affinity Resume A' });
+    const secondSession = await runtime.sessions.create({ title: 'Affinity Resume B' });
+    await (await runtime.runs.start({
+      sessionId: firstSession.id,
+      prompt: 'first',
+      mode: 'managed_task',
+    })).result;
+    await (await runtime.runs.start({
+      sessionId: secondSession.id,
+      prompt: 'second',
+      mode: 'managed_task',
+    })).result;
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: 'mock-provider',
+    });
+    await (await recreated.runs.start({
+      sessionId: firstSession.id,
+      prompt: 'resumed',
+      mode: 'managed_task',
+    })).result;
+    await recreated.close();
+
+    const affinityKeys = capturedOptions.map((options) => (
+      derivePromptCacheAffinityKey({
+        logicalSessionId:
+          options.context?.contextIdentitySessionId ?? options.session?.id,
+        ...(options.context?.currentAgentId !== undefined
+          ? { agentId: options.context.currentAgentId }
+          : {}),
+      })
+    ));
+    expect(capturedOptions.map((options) => options.session?.id)).toEqual([
+      firstSession.id,
+      secondSession.id,
+      firstSession.id,
+    ]);
+    expect(affinityKeys[0]).toMatch(/^[a-f0-9]{64}$/);
+    expect(affinityKeys[2]).toBe(affinityKeys[0]);
+    expect(affinityKeys[1]).not.toBe(affinityKeys[0]);
+  });
+
   it('retains the latest managed_task context budget and cache diagnostics', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
     const runtime = await createKodaXRuntime({
@@ -4332,7 +4397,7 @@ describe('createKodaXRuntime', () => {
       options.events?.onPromptCacheDiagnostics?.({
         phase: 'response',
         transport: 'stream',
-        requestId: 'managed-cache-request',
+        requestId: 'managed-cache-zero',
         requestedAt: '2026-07-26T00:00:00.000Z',
         completedAt: '2026-07-26T00:00:01.000Z',
         provider: 'mock-provider',
@@ -4347,7 +4412,26 @@ describe('createKodaXRuntime', () => {
         requestEnvelopeHash: 'e'.repeat(64),
         messageCount: 3,
         toolCount: 4,
-        cachedReadTokens: 80,
+        cachedReadTokens: 0,
+      });
+      options.events?.onPromptCacheDiagnostics?.({
+        phase: 'response',
+        transport: 'stream',
+        requestId: 'managed-cache-unreported',
+        requestedAt: '2026-07-26T00:00:02.000Z',
+        completedAt: '2026-07-26T00:00:03.000Z',
+        provider: 'mock-provider',
+        model: 'mock-model',
+        wireModel: 'wire-model',
+        attempt: 1,
+        systemPromptHash: 'a'.repeat(64),
+        toolSchemaHash: 'b'.repeat(64),
+        messagePrefixHash: 'c'.repeat(64),
+        messagePrefixCount: 2,
+        requestMessagesHash: 'd'.repeat(64),
+        requestEnvelopeHash: 'e'.repeat(64),
+        messageCount: 3,
+        toolCount: 4,
       });
       return {
         success: true,
@@ -4381,17 +4465,18 @@ describe('createKodaXRuntime', () => {
     expect(latestCache).toMatchObject({
       contextId: session.id,
       contextKind: 'root',
-      requestId: 'managed-cache-request',
-      cachedReadTokens: 80,
+      requestId: 'managed-cache-unreported',
     });
-    expect(cacheEvents).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          requestId: 'managed-cache-request',
-          cachedReadTokens: 80,
-        }),
-      }),
-    ]);
+    expect(latestCache).not.toHaveProperty('cachedReadTokens');
+    expect(cacheEvents).toHaveLength(2);
+    expect(cacheEvents[0]?.payload).toMatchObject({
+      requestId: 'managed-cache-zero',
+      cachedReadTokens: 0,
+    });
+    expect(cacheEvents[1]?.payload).toMatchObject({
+      requestId: 'managed-cache-unreported',
+    });
+    expect(cacheEvents[1]?.payload).not.toHaveProperty('cachedReadTokens');
 
     await runtime.close();
 
@@ -4405,9 +4490,11 @@ describe('createKodaXRuntime', () => {
     })).resolves.toMatchObject({
       contextId: session.id,
       contextKind: 'root',
-      requestId: 'managed-cache-request',
-      cachedReadTokens: 80,
+      requestId: 'managed-cache-unreported',
     });
+    const reconnectedLatest = await reconnectedRuntime.diagnostics
+      .latestProviderCacheDiagnostic({ sessionId: session.id });
+    expect(reconnectedLatest).not.toHaveProperty('cachedReadTokens');
     await reconnectedRuntime.close();
   });
 

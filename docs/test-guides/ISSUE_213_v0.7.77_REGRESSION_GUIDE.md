@@ -47,3 +47,11 @@ Record the generated `kodax-ai-kodax-0.7.77.tgz` SHA-256. Inspect the packed
 Runtime/SDK entry points and confirm the native ephemeral-suffix capability,
 legacy request-only lowering, Shell Execution Contract exports, and managed
 context reinjection are present in the exact archive supplied to consumers.
+
+The final 2026-07-27 candidate passed that audit:
+
+- archive size: `4,133,721` bytes;
+- SHA-256:
+  `F9A7AE2CD6E30D0097AB4B3586057D1E671F350064691A8AB77355EAC0FF49D2`;
+- the production build and Sidecar archive audit completed successfully before
+  the development manifest was restored byte-for-byte.

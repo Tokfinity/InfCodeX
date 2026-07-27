@@ -72,3 +72,25 @@ but neither starts Agents nor treats stage completion as correctness.
 All Runtime checks remain structural and provenance-based. Root owns synthesis,
 the Sidecar owns terminal judgment, old sessions receive no fabricated trace,
 and optional/unsupported paths degrade honestly.
+
+## Paid Release Result (2026-07-27)
+
+Frozen revision `f274-v0.7.77.6` ran against clean commit
+`25d5521e3eadc20ff1da2bd69d171736724bbcba`.
+
+- Layer 2: 96 calls, 731,737 tokens, estimated `$0.020707485`; candidate
+  diagnostic mechanical passes 22/48 versus baseline 12/48.
+- Layer 3: 40 calls, 88,695 tokens, estimated `$0.000515425`; candidate exact
+  passes 12/20 versus baseline 5/20. All 16/16 unsafe paired first-round cells
+  were revised; on the complete-positive case, candidate accepted 2/4 versus
+  baseline 3/4.
+- Candidate simple tasks stayed solo in 6/6 cells; accidental Workflow
+  activation was zero; the budgeted production playbook plus
+  `quality_strategy` delta was 2,985 bytes (2,425 prompt bytes plus 560 schema
+  bytes across `spawn_agent` and `followup_task`).
+- Main-session paired review was completed before reveal and recorded
+  `recommend-ship`.
+
+The measured conclusion is limited to non-regressing deterministic strategy
+provenance, validation, bounded `PatternTrace`, and Sidecar context alignment.
+It is not a task-quality, token, latency, or fixed-topology claim.

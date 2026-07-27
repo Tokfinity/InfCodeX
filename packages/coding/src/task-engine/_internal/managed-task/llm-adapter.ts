@@ -30,7 +30,11 @@ import type {
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
-import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS, KodaXProviderError } from '@kodax-ai/llm';
+import {
+  KODAX_ESCALATED_MAX_OUTPUT_TOKENS,
+  KodaXProviderError,
+  resolvePromptCacheDisabled,
+} from '@kodax-ai/llm';
 import {
   attachRunnerRecoveryTranscript,
   buildAssistantMessageFromLlmResult,
@@ -100,6 +104,7 @@ import {
   hashProviderVisibleMessages,
   normalizeDiagnosticEnvelope,
 } from '../../../agent-runtime/prompt-cache-diagnostics.js';
+import { derivePromptCacheAffinityKey } from '../../../agent-runtime/prompt-cache-affinity.js';
 import {
   MANAGED_CONTROL_PLANE_MARKERS,
   sanitizeManagedStreamingText,
@@ -459,13 +464,14 @@ export function buildRunnerLlmAdapter(
         ?? options.session?.id;
       const diagnosticAgentId = options.context?.currentAgentId;
       const diagnosticParentAgentId = options.context?.parentAgentId;
+      const diagnosticContextId = diagnosticSessionId === undefined
+        ? undefined
+        : diagnosticAgentId === undefined
+          ? diagnosticSessionId
+          : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`;
       const diagnosticContextIdentity = {
-        ...(diagnosticSessionId !== undefined
-          ? {
-              contextId: diagnosticAgentId === undefined
-                ? diagnosticSessionId
-                : `${diagnosticSessionId}/agent/${encodeURIComponent(diagnosticAgentId)}`,
-            }
+        ...(diagnosticContextId !== undefined
+          ? { contextId: diagnosticContextId }
           : {}),
         contextKind: diagnosticAgentId !== undefined
           ? 'child' as const
@@ -482,6 +488,12 @@ export function buildRunnerLlmAdapter(
           ? { agentId: diagnosticAgentId }
           : {}),
       };
+      const promptCacheKey = resolvePromptCacheDisabled(options.disablePromptCache)
+        ? undefined
+        : derivePromptCacheAffinityKey({
+            logicalSessionId: diagnosticSessionId,
+            ...(diagnosticAgentId !== undefined ? { agentId: diagnosticAgentId } : {}),
+          });
       const emitContextBudgetSnapshot = (
         providerMessages: readonly KodaXMessage[],
       ): void => {
@@ -560,6 +572,7 @@ export function buildRunnerLlmAdapter(
           tools: wireTools,
           messages: providerMessages,
           ...(ephemeralSuffix !== undefined ? { ephemeralSuffix } : {}),
+          ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
           attempt,
           transport,
         });
@@ -680,6 +693,7 @@ export function buildRunnerLlmAdapter(
         // coordinator inspects these markers to decide whether a failure
         // happened before the first delta, mid-stream, post-tool, etc.
         const streamOptions = {
+          promptCacheKey,
           modelOverride: activeModel,
           ephemeralSuffix: nativeEphemeralSuffix,
           onTextDelta: (text: string) => {
@@ -890,6 +904,7 @@ export function buildRunnerLlmAdapter(
                 system,
                 providerReasoning,
                 {
+                  promptCacheKey,
                   modelOverride: activeModel,
                   ephemeralSuffix: nativeEphemeralSuffix,
                   onTextDelta: (text: string) => {
@@ -1048,6 +1063,7 @@ export function buildRunnerLlmAdapter(
             system,
             providerReasoning,
             {
+              promptCacheKey,
               modelOverride: activeModel,
               ephemeralSuffix: nativeEphemeralSuffix,
               onTextDelta: (text: string) => {

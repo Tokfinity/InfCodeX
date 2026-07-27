@@ -110,7 +110,15 @@ export async function acquireRuntimeDaemonProcessLease(
   const initial = await observeRuntimeDaemonHealth(paths, options.healthCheck);
   const initialHealth = classifyRuntimeDaemonHealth(initial);
   if (initialHealth === 'healthy' && initial.state) {
-    return connectProcessLease(paths, runtimeDaemonEndpointFromState(initial.state), false, options);
+    const observation = initial.state.status === 'ready'
+      ? { ...initial, state: initial.state }
+      : await waitForReadyRuntimeDaemonOwner(paths, options, initial);
+    return connectProcessLease(
+      paths,
+      runtimeDaemonEndpointFromState(observation.state),
+      false,
+      options,
+    );
   }
   if (initialHealth === 'unhealthy' || initialHealth === 'mismatch') {
     throw new Error(`Runtime daemon is ${initialHealth}; refusing to start a competing owner.`);
@@ -168,7 +176,10 @@ export async function waitForHealthyDaemonStartup(
     while (true) {
       const observation = await observeStartupHealth(paths, options, child, observe);
       const health = classifyRuntimeDaemonHealth(observation);
-      if (health === 'healthy' && observation.state) {
+      if (
+        health === 'healthy'
+        && observation.state?.status === 'ready'
+      ) {
         if (observation.state.pid === child.pid) child.unref();
         else await child.terminate();
         return { ...observation, state: observation.state };
@@ -198,6 +209,59 @@ export async function waitForHealthyDaemonStartup(
       );
     }
     throw error;
+  }
+}
+
+export async function waitForReadyRuntimeDaemonOwner(
+  paths: RuntimeDaemonPaths,
+  options: RuntimeDaemonProcessLeaseOptions,
+  initial: RuntimeDaemonHealthObservation,
+  observe: RuntimeDaemonHealthObserver = observeRuntimeDaemonHealth,
+): Promise<RuntimeDaemonHealthObservation & { readonly state: NonNullable<RuntimeDaemonHealthObservation['state']> }> {
+  const deadline = Date.now() + (options.startupTimeoutMs ?? 60_000);
+  const expectedOwner = initial.state;
+  if (expectedOwner === undefined) {
+    throw new RuntimeDaemonStartupError(
+      'Runtime daemon owner state disappeared before it reached ready.',
+      'identity_mismatch',
+    );
+  }
+  let observation = initial;
+  while (true) {
+    const health = classifyRuntimeDaemonHealth(observation);
+    if (
+      observation.state !== undefined
+      && (
+        observation.state.runtimeId !== expectedOwner.runtimeId
+        || observation.state.pid !== expectedOwner.pid
+        || observation.state.profile !== expectedOwner.profile
+        || observation.state.endpoint !== expectedOwner.endpoint
+      )
+    ) {
+      throw new RuntimeDaemonStartupError(
+        'Runtime daemon owner identity changed before it reached ready.',
+        'identity_mismatch',
+      );
+    }
+    if (health === 'healthy' && observation.state?.status === 'ready') {
+      return { ...observation, state: observation.state };
+    }
+    if (health === 'mismatch') {
+      throw new RuntimeDaemonStartupError(
+        'Runtime daemon endpoint identity does not match its persisted owner state.',
+        'identity_mismatch',
+      );
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw runtimeDaemonStartupTimeout(paths);
+    await raceRuntimeDaemonStartupStep(
+      delay(Math.min(Math.max(1, options.pollIntervalMs ?? 100), remainingMs)),
+      options.startupSignal,
+    );
+    observation = await raceRuntimeDaemonStartupStep(
+      observe(paths, options.healthCheck),
+      options.startupSignal,
+    );
   }
 }
 

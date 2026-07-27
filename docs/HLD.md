@@ -1,8 +1,8 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-26
+> Last updated: 2026-07-27
 >
-> Current implementation baseline: `v0.7.77` release candidate
+> Current implementation baseline: `v0.7.77` release-ready candidate
 > (`@kodax-ai/kodax@0.7.77` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
@@ -206,6 +206,11 @@ answer. Sidecar Verifier is out-of-band and only judges termination quality.
 - OpenAI- and Anthropic-compatible protocols,
 - CLI bridge providers for Gemini CLI and Codex CLI,
 - stream normalization,
+- lossless Provider-reported cache usage, including explicit-zero versus
+  unreported semantics across CLI/ACP/Runtime boundaries,
+- isolated ACP/native-CLI session namespaces with fresh stateless calls,
+  native-ID-only resume, restartable pseudo transports, and process-exit
+  validation after the terminal CLI event,
 - effort-first reasoning and request-timeout config normalization,
 - capability metadata and provider policy gates,
 - side-query support for verifier and other out-of-band LLM calls.
@@ -222,6 +227,14 @@ Provider-specific logic belongs at the provider boundary: request shape,
 reasoning parameters, token caps, image support, forced tool choice support,
 retry behavior, and stream watchdogs. Prompt prose should not fork by provider
 family.
+
+Main Runtime requests keep transport conversation identity independent from an
+opaque `promptCacheKey` used only for explicitly supported cache-routing
+fields. Coding derives the latter from the stable root/child context identity,
+so retries, fallback, resume, and compaction reuse it without exposing Session
+or Agent names or changing ACP conversation mapping. Kimi Code lowers it to
+Anthropic-compatible `metadata.user_id`; public Kimi and official OpenAI lower
+it to `prompt_cache_key`. Unverified compatible endpoints remain unchanged.
 
 ## 5. Coding Runtime
 

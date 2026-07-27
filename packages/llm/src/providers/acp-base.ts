@@ -1,5 +1,9 @@
 import { KodaXBaseProvider } from './base.js';
-import { AcpClient, AcpClientOptions } from '../cli-events/acp-client.js';
+import {
+    AcpClient,
+    AcpTransportClosedError,
+    type AcpClientOptions,
+} from '../cli-events/acp-client.js';
 import {
     CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
     cloneCapabilityProfile,
@@ -32,28 +36,41 @@ function normalizeAcpUsage(usage: unknown): KodaXTokenUsage | undefined {
 
   const usageRecord = usage as Record<string, unknown>;
 
-  const inputTokens = typeof usageRecord.inputTokens === 'number' ? usageRecord.inputTokens : 0;
-  const outputTokens = typeof usageRecord.outputTokens === 'number' ? usageRecord.outputTokens : 0;
-  const totalTokens = typeof usageRecord.totalTokens === 'number' ? usageRecord.totalTokens : inputTokens + outputTokens;
+  const inputTokens = usageRecord.inputTokens;
+  const outputTokens = usageRecord.outputTokens;
+  const totalTokens = usageRecord.totalTokens;
 
-    if ([inputTokens, outputTokens, totalTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+    if ([inputTokens, outputTokens, totalTokens].some(
+        (value) => typeof value !== 'number' || !Number.isFinite(value) || value < 0,
+    )) {
         return undefined;
     }
 
-    if (totalTokens < inputTokens || totalTokens < outputTokens) {
+    // The guard above narrows values at runtime; keep the strongly typed
+    // projection explicit because usage arrived from an untrusted ACP peer.
+    const normalizedInput = inputTokens as number;
+    const normalizedOutput = outputTokens as number;
+    const normalizedTotal = totalTokens as number;
+
+    if (normalizedTotal < normalizedInput || normalizedTotal < normalizedOutput) {
         return undefined;
     }
+
+    const optionalToken = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value >= 0
+            ? value
+            : undefined;
+    const cachedReadTokens = optionalToken(usageRecord.cachedReadTokens);
+    const cachedWriteTokens = optionalToken(usageRecord.cachedWriteTokens);
+    const thoughtTokens = optionalToken(usageRecord.thoughtTokens);
 
     return {
-        inputTokens,
-        outputTokens,
-        totalTokens,
-        cachedReadTokens:
-            typeof usageRecord.cachedReadTokens === 'number' ? usageRecord.cachedReadTokens : undefined,
-        cachedWriteTokens:
-            typeof usageRecord.cachedWriteTokens === 'number' ? usageRecord.cachedWriteTokens : undefined,
-        thoughtTokens:
-            typeof usageRecord.thoughtTokens === 'number' ? usageRecord.thoughtTokens : undefined,
+        inputTokens: normalizedInput,
+        outputTokens: normalizedOutput,
+        totalTokens: normalizedTotal,
+        ...(cachedReadTokens !== undefined ? { cachedReadTokens } : {}),
+        ...(cachedWriteTokens !== undefined ? { cachedWriteTokens } : {}),
+        ...(thoughtTokens !== undefined ? { thoughtTokens } : {}),
     };
 }
 
@@ -69,6 +86,17 @@ function selectAcpReasoningEffort(
     return reasoning.effort;
 }
 
+function nonCancellationAbortReason(signal: AbortSignal | undefined): unknown {
+    if (!signal?.aborted) {
+        return undefined;
+    }
+    const reason = signal.reason;
+    if (reason === undefined || (reason instanceof Error && reason.name === 'AbortError')) {
+        return undefined;
+    }
+    return reason;
+}
+
 /**
  * Shared base class for ACP-backed providers.
  * It can connect either to a native ACP server process or to our in-memory
@@ -77,8 +105,67 @@ function selectAcpReasoningEffort(
 export abstract class KodaXAcpProvider extends KodaXBaseProvider {
     protected abstract readonly acpClientOptions: AcpClientOptions;
     private _client: AcpClient | null = null;
+    private _clientConnectPromise: Promise<AcpClient> | null = null;
+    private _connectingClient: AcpClient | null = null;
+    private _clientGeneration = 0;
     private _sessionMap = new Map<string, string>();
     private _activeStreams = new Map<string, ActiveStreamContext>();
+    private _activeConversationIds = new Set<string>();
+
+    private async ensureClient(
+        onSessionUpdate: NonNullable<AcpClientOptions['onSessionUpdate']>,
+    ): Promise<AcpClient> {
+        if (this._client?.isConnectionOpen()) return this._client;
+        if (this._client) {
+            this.invalidateClient(this._client);
+        }
+        if (!this._clientConnectPromise) {
+            const baseOptions = this._clientGeneration === 0
+                ? this.acpClientOptions
+                : this.acpClientOptions.recreate?.() ?? this.acpClientOptions;
+            this._clientGeneration += 1;
+            const options: AcpClientOptions = {
+                ...baseOptions,
+                onSessionUpdate,
+            };
+            const client = new AcpClient(options);
+            this._connectingClient = client;
+            let connection: Promise<AcpClient>;
+            connection = client.connect()
+                .then(() => {
+                    if (
+                        this._clientConnectPromise !== connection
+                        || this._connectingClient !== client
+                    ) {
+                        throw new Error('ACP client initialization was cancelled');
+                    }
+                    this._connectingClient = null;
+                    this._client = client;
+                    return client;
+                })
+                .catch((error: unknown) => {
+                    if (this._connectingClient === client) {
+                        this._connectingClient = null;
+                        client.disconnect();
+                    }
+                    throw error;
+                })
+                .finally(() => {
+                    if (this._clientConnectPromise === connection) {
+                        this._clientConnectPromise = null;
+                    }
+                });
+            this._clientConnectPromise = connection;
+        }
+        return await this._clientConnectPromise;
+    }
+
+    private invalidateClient(client: AcpClient): void {
+        if (this._client !== client) return;
+        this._client = null;
+        this._sessionMap.clear();
+        client.disconnect();
+    }
 
     override supportsEphemeralSuffix(): boolean {
         return true;
@@ -234,9 +321,7 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         const promptText = this.getDiagnosticPromptText(messages, ephemeralSuffix);
 
         // Build client event hooks once and route updates into the active stream.
-        const options: AcpClientOptions = {
-            ...this.acpClientOptions,
-            onSessionUpdate: (notification: any) => {
+        const onSessionUpdate: NonNullable<AcpClientOptions['onSessionUpdate']> = (notification) => {
                 const update = notification.update;
                 const sessionId = notification.sessionId;
                 if (!('sessionUpdate' in update)) return;
@@ -255,9 +340,10 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
 
                     case 'tool_call': {
                         let toolArgs = '{}';
+                        const updateRecord = update as unknown as Record<string, unknown>;
                         const rawArgs =
-                            (update as any).arguments ??
-                            (update as any).parameters;
+                            updateRecord.arguments ??
+                            updateRecord.parameters;
                         if (rawArgs) {
                             toolArgs = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs);
                         }
@@ -277,71 +363,110 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
                         }
                         break;
                 }
-            }
-        };
+            };
 
-        const kodaxSessionId = streamOptions?.sessionId ?? 'default';
+        const kodaxSessionId = streamOptions?.sessionId;
 
-        if (!this._client) {
-            this._client = new AcpClient(options);
-            await this._client.connect();
+        const client = await this.ensureClient(onSessionUpdate);
+        if (kodaxSessionId && this._activeConversationIds.has(kodaxSessionId)) {
+            throw new Error(`ACP conversation "${kodaxSessionId}" already has an active prompt`);
         }
-
-        let acpSessionId = this._sessionMap.get(kodaxSessionId);
-        if (!acpSessionId) {
-            acpSessionId = await this._client.createNewSession();
-            this._sessionMap.set(kodaxSessionId, acpSessionId);
+        if (kodaxSessionId) {
+            this._activeConversationIds.add(kodaxSessionId);
         }
-
-        const localOutput = { text: '' };
-        this._activeStreams.set(acpSessionId, {
-            streamOptions,
-            output: localOutput
-        });
-
-        let promptResponse: Awaited<ReturnType<AcpClient['prompt']>> | undefined;
 
         try {
-            promptResponse = await this._client.prompt(
-                promptText,
-                acpSessionId,
-                signal,
-                {
-                    model: streamOptions?.modelOverride,
-                    reasoningEffort,
-                },
-            );
-        } catch (err) {
-            if (err instanceof Error && err.name === 'AbortError') {
-                // User cancellation is expected.
-            } else {
-                throw err;
+            let acpSessionId = kodaxSessionId
+                ? this._sessionMap.get(kodaxSessionId)
+                : undefined;
+            if (!acpSessionId) {
+                acpSessionId = await client.createNewSession();
+                if (kodaxSessionId) {
+                    this._sessionMap.set(kodaxSessionId, acpSessionId);
+                }
             }
+
+            const localOutput = { text: '' };
+            this._activeStreams.set(acpSessionId, {
+                streamOptions,
+                output: localOutput
+            });
+
+            let promptResponse: Awaited<ReturnType<AcpClient['prompt']>> | undefined;
+
+            try {
+                promptResponse = await client.prompt(
+                    promptText,
+                    acpSessionId,
+                    signal,
+                    {
+                        model: streamOptions?.modelOverride,
+                        reasoningEffort,
+                    },
+                );
+            } catch (err) {
+                if (err instanceof AcpTransportClosedError) {
+                    this.invalidateClient(client);
+                }
+                const abortReason = nonCancellationAbortReason(signal);
+                if (abortReason !== undefined) {
+                    throw abortReason;
+                }
+                if (signal?.aborted || (err instanceof Error && err.name === 'AbortError')) {
+                    // User cancellation is expected.
+                } else {
+                    throw err;
+                }
+            } finally {
+                this._activeStreams.delete(acpSessionId);
+                if (!kodaxSessionId) {
+                    client.releaseSession(acpSessionId);
+                }
+            }
+
+            if (promptResponse?.stopReason === 'cancelled') {
+                const abortReason = nonCancellationAbortReason(signal);
+                if (abortReason !== undefined) {
+                    throw abortReason;
+                }
+            }
+
+            if (localOutput.text) {
+                textBlocks.push({ type: 'text', text: localOutput.text });
+            }
+
+            return {
+                textBlocks,
+                toolBlocks,
+                thinkingBlocks: [],
+                usage: normalizeAcpUsage(promptResponse?.usage),
+            };
+        } catch (error) {
+            if (error instanceof AcpTransportClosedError) {
+                this.invalidateClient(client);
+            }
+            throw error;
         } finally {
-            this._activeStreams.delete(acpSessionId);
+            if (kodaxSessionId) {
+                this._activeConversationIds.delete(kodaxSessionId);
+            }
         }
-
-        if (localOutput.text) {
-            textBlocks.push({ type: 'text', text: localOutput.text });
-        }
-
-        return {
-            textBlocks,
-            toolBlocks,
-            thinkingBlocks: [],
-            usage: normalizeAcpUsage(promptResponse?.usage),
-        };
     }
 
     /**
      * Manually close and clear the ACP connection maintained by this provider.
      */
     disconnect(): void {
+        this._clientConnectPromise = null;
+        const connectingClient = this._connectingClient;
+        this._connectingClient = null;
+        connectingClient?.disconnect();
         if (this._client) {
             this._client.disconnect();
             this._client = null;
         }
         this._activeStreams.clear();
+        this._activeConversationIds.clear();
         this._sessionMap.clear();
     }
 }

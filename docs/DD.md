@@ -1,8 +1,8 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-26
+> Last updated: 2026-07-27
 >
-> Current release baseline: `v0.7.77` release candidate
+> Current release baseline: `v0.7.77` release-ready candidate
 > (`@kodax-ai/kodax@0.7.77`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
@@ -20,7 +20,7 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.77`. The release candidate
+The root workspace package is `@kodax-ai/kodax@0.7.77`. The release-ready candidate
 adds pattern-aware adaptive AMA and governed event-triggered memory
 intervention, closes active-run interrupt finalization races, and adds public
 Kimi K3 without changing the Kimi Code `k3-256k` default established in
@@ -312,6 +312,47 @@ serializers carry K3 reasoning through `thinking.effort`, default omitted
 effort to `high`, and preserve explicit disable semantics. Media capability
 metadata keeps `k3-256k` image-capable and video-unsupported. Public Kimi and
 Kimi For Coding credentials remain separate.
+
+`KodaXProviderStreamOptions.promptCacheKey` is separate from the transport
+`sessionId`. Coding derives a domain-separated SHA-256 value from the stable
+logical context ID: the root uses its resumable Session identity and a child
+uses `${root}/agent/${encodeURIComponent(canonicalAgentId)}`. AMA, SA, retry,
+max-token continuation, non-streaming fallback, and compaction reuse the same
+value. `disablePromptCache` omits it. Anthropic- and OpenAI-compatible
+serializers emit the protocol field only when `promptCacheAffinity` is enabled;
+built-in Kimi Code, public Kimi, and official OpenAI are verified opt-ins, while
+custom gateways default off. `provider.cache.diagnostics` reports a separate
+`promptCacheAffinityHash` only when the configured Provider applies the key;
+the hash does not enter `requestEnvelopeHash` because routing metadata does not
+change prompt bytes.
+
+Codex CLI `turn.completed` usage maps `cached_input_tokens` and
+`cache_write_input_tokens`; Gemini CLI `result.stats.cached` maps cache reads.
+The shared CLI event and pseudo-ACP path preserve those optional counters
+without adding them to input totals. Parsers retain explicit zero, omit invalid
+or absent counters, and reject malformed required core usage instead of
+manufacturing all-zero records. Runtime realtime/latest diagnostics preserve
+the same property-presence contract through JSON persistence and daemon
+transport.
+
+ACP conversation IDs and native CLI resume IDs are distinct namespaces. The
+pseudo-ACP bridge starts a new ACP conversation with no CLI resume argument,
+binds that ACP ID only after a `session_start` event reports a non-empty native
+ID, and uses the native ID on later prompts in that same explicit
+conversation. `KodaXAcpProvider` caches ACP sessions only for an explicit
+transport `sessionId`; stateless calls create and release a fresh ACP session
+and cannot share a process-global default. A non-zero CLI process exit rejects
+the ACP prompt instead of becoming an empty successful completion. Provider
+singletons share one in-flight connection promise and clear it after failure;
+overlapping prompts for one explicit conversation are rejected before they can
+replace active stream routing. Normalized CLI error/failed-completion events
+and pre-aborted requests fail closed. Reconnects obtain a newly constructed
+pseudo transport rather than reusing closed streams, abort operates through
+the bridge-held reader/writer endpoints, and disconnect closes a pending
+handshake immediately. A transport closure invalidates the connected client
+and its ACP-session map before retry. A successful completion event is not
+returned until the CLI generator has been exhausted and its process exit
+validated; normal exhaustion without a completion event is rejected.
 
 Custom provider design must remain data-driven: protocol, base URL, API key env
 var, default model, reasoning preset/profile, multimodal support, forced tool

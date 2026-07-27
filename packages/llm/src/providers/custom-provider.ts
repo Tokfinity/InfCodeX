@@ -293,6 +293,15 @@ export function validateCustomProviderConfig(
   // FEATURE_216 v0.7.45 — Validate explicit verifyStrategy. Also guard
   // against the most common misconfiguration: 'count-tokens' on openai
   // protocol (openai-compat servers do not implement count_tokens).
+  if (
+    custom.promptCacheAffinity !== undefined
+    && typeof custom.promptCacheAffinity !== 'boolean'
+  ) {
+    throw new Error(
+      `Custom provider "${custom.name}": promptCacheAffinity must be a boolean.`,
+    );
+  }
+
   if (custom.verifyStrategy !== undefined) {
     if (!VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES.has(custom.verifyStrategy)) {
       throw new Error(
@@ -351,6 +360,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     contextWindow: custom.contextWindow,
     maxOutputTokens: custom.maxOutputTokens,
     thinkingBudgetCap: custom.thinkingBudgetCap,
+    promptCacheAffinity: custom.promptCacheAffinity ?? false,
     // Provider-level defaults for the three two-layer cascade fields.
     // false / undefined match the legacy implicit defaults so existing
     // custom providers see zero behavior change. Per-model entries in

@@ -110,6 +110,10 @@ export async function startRuntimeDaemonHost(
         }),
       }),
     });
+    const internalReadyDelayMs = process.env.KODAX_INTERNAL_DAEMON_TEST_READY_DELAY_MS;
+    if (internalReadyDelayMs !== undefined) {
+      await delayInternalDaemonReadyForTest(internalReadyDelayMs);
+    }
     ready = createHostState(options, 'ready');
     writeRuntimeDaemonState(options.paths, ready);
     appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon ready.', {
@@ -324,6 +328,15 @@ function createHostState(
     status,
     configHome: options.paths.configHome,
   };
+}
+
+async function delayInternalDaemonReadyForTest(rawDelayMs: string | undefined): Promise<void> {
+  if (rawDelayMs === undefined) return;
+  const delayMs = Number(rawDelayMs);
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return;
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, Math.min(delayMs, 30_000));
+  });
 }
 
 function normalizeHostError(error: unknown): Error {

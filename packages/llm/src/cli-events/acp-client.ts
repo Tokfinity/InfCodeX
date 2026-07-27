@@ -26,8 +26,19 @@ export interface AcpClientOptions {
     onSessionUpdate?: (update: SessionNotification) => void;
     /** Cleanup hook used by the in-memory pseudo server transport. */
     abort?: () => void;
+    /** Release pseudo-server state for a completed one-shot ACP session. */
+    releaseSession?: (sessionId: string) => void;
+    /** Create a fresh equivalent transport after the current one is closed. */
+    recreate?: () => AcpClientOptions;
     /** Optional executor exposed for install checks in higher layers. */
     executor?: import('./executor.js').CLIExecutor;
+}
+
+export class AcpTransportClosedError extends Error {
+    constructor() {
+        super('ACP transport closed before the request completed');
+        this.name = 'AcpTransportClosedError';
+    }
 }
 
 export class AcpClient {
@@ -86,20 +97,22 @@ export class AcpClient {
             stream
         );
 
-        await this.client.initialize({
+        if (this.client.signal.aborted) throw new AcpTransportClosedError();
+        await this.awaitWhileConnected(this.client.initialize({
             protocolVersion: PROTOCOL_VERSION,
             clientCapabilities: {},
             clientInfo: { name: 'kodax-ai-acp-client', version: '1.0.0' }
-        });
+        }));
     }
 
     async createNewSession(): Promise<string> {
         if (!this.client) throw new Error('Client not connected');
+        if (this.client.signal.aborted) throw new AcpTransportClosedError();
 
-        const session = await this.client.newSession({
+        const session = await this.awaitWhileConnected(this.client.newSession({
             cwd: this.options.cwd ?? process.cwd(),
             mcpServers: []
-        });
+        }));
 
         return session.sessionId;
     }
@@ -111,6 +124,8 @@ export class AcpClient {
         options?: { model?: string; reasoningEffort?: string },
     ): Promise<PromptResponse> {
         if (!this.client) throw new Error('Client not connected');
+        signal?.throwIfAborted();
+        if (this.client.signal.aborted) throw new AcpTransportClosedError();
 
         const request: {
             sessionId: string;
@@ -134,16 +149,31 @@ export class AcpClient {
         }).prompt(request);
 
         if (signal) {
+            let rejectForAbort: ((reason: unknown) => void) | undefined;
+            const aborted = new Promise<never>((_resolve, reject) => {
+                rejectForAbort = reject;
+            });
             const onAbort = () => {
                 this.client?.cancel({ sessionId }).catch(() => { });
+                const fallback = new Error('ACP prompt aborted');
+                fallback.name = 'AbortError';
+                rejectForAbort?.(signal.reason ?? fallback);
             };
-            signal.addEventListener('abort', onAbort);
-            responsePromise = responsePromise.finally(() => {
+            signal.addEventListener('abort', onAbort, { once: true });
+            responsePromise = Promise.race([responsePromise, aborted]).finally(() => {
                 signal.removeEventListener('abort', onAbort);
             });
         }
 
-        return await responsePromise;
+        return await this.awaitWhileConnected(responsePromise);
+    }
+
+    isConnectionOpen(): boolean {
+        return this.client !== null && !this.client.signal.aborted;
+    }
+
+    releaseSession(sessionId: string): void {
+        this.options.releaseSession?.(sessionId);
     }
 
     disconnect(): void {
@@ -154,5 +184,26 @@ export class AcpClient {
         try { (this.client as any)?.close?.(); } catch { }
         this.client = null;
         this.agentProcess = null;
+    }
+
+    private async awaitWhileConnected<T>(operation: Promise<T>): Promise<T> {
+        const client = this.client;
+        if (!client || client.signal.aborted) {
+            void operation.catch(() => undefined);
+            throw new AcpTransportClosedError();
+        }
+
+        let onClosed: (() => void) | undefined;
+        const closed = new Promise<never>((_resolve, reject) => {
+            onClosed = () => reject(new AcpTransportClosedError());
+            client.signal.addEventListener('abort', onClosed, { once: true });
+        });
+        try {
+            return await Promise.race([operation, closed]);
+        } finally {
+            if (onClosed) {
+                client.signal.removeEventListener('abort', onClosed);
+            }
+        }
     }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { AcpClient } from './acp-client.js';
+import { AcpClient, AcpTransportClosedError } from './acp-client.js';
 import { createPseudoAcpServer } from './pseudo-acp-server.js';
 import { CLIExecutor } from './executor.js';
 import type { CLIEvent, CLIExecutionOptions } from './types.js';
@@ -55,7 +55,14 @@ describe('AcpClient', () => {
     const updates: any[] = [];
     const executor = new TestExecutor(async function* (options) {
       expect(options.prompt).toBe('hello from client');
-      expect(options.sessionId).toBeTruthy();
+      expect(options.sessionId).toBeUndefined();
+      yield {
+        type: 'session_start',
+        timestamp: Date.now(),
+        sessionId: 'native-cli-session',
+        model: 'test-model',
+        raw: null,
+      };
       yield {
         type: 'message',
         timestamp: Date.now(),
@@ -97,4 +104,224 @@ describe('AcpClient', () => {
       client.disconnect();
     }
   });
+
+  it('rejects a backing CLI failure instead of returning a normal end turn', async () => {
+    const executor = new TestExecutor(async function* () {
+      throw new Error('native CLI exited with code 2');
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+
+      await expect(client.prompt('failing prompt', sessionId)).rejects.toThrow(
+        /native CLI exited with code 2/i,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('rejects normalized CLI error events even when the process exits normally', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'error',
+        timestamp: Date.now(),
+        errorType: 'provider_error',
+        message: 'upstream rejected the request',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+
+      await expect(client.prompt('failing prompt', sessionId)).rejects.toThrow(
+        /upstream rejected the request/i,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('rejects a failed CLI completion instead of returning normal end turn', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'failed',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+
+      await expect(client.prompt('failed completion', sessionId)).rejects.toThrow(
+        /reported a failed completion/i,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('keeps draining the CLI after completion and rejects a trailing process failure', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+      throw new Error('native CLI exited with code 7 after completion');
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+
+      await expect(client.prompt('trailing failure', sessionId)).rejects.toThrow(
+        /native CLI exited with code 7 after completion/i,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('rejects a zero-exit CLI stream that never emits a completion event', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'message',
+        timestamp: Date.now(),
+        role: 'assistant',
+        content: 'partial output without a terminal event',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+      await expect(client.prompt('missing completion', sessionId)).rejects.toThrow(
+        /without a completion event/i,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('rejects promptly when the underlying transport closes mid-session', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+
+    await client.connect();
+    const sessionId = await client.createNewSession();
+    server.abort();
+    await waitFor(() => !client.isConnectionOpen());
+    await expect(client.prompt('closed transport', sessionId)).rejects.toBeInstanceOf(
+      AcpTransportClosedError,
+    );
+    client.disconnect();
+  });
+
+  it('rejects a prompt whose signal was already aborted before dispatch', async () => {
+    const executor = new TestExecutor(async function* () {
+      yield {
+        type: 'complete',
+        timestamp: Date.now(),
+        status: 'success',
+        raw: null,
+      };
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+
+      await expect(client.prompt('cancelled prompt', sessionId, controller.signal))
+        .rejects.toMatchObject({ name: 'AbortError' });
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('rejects an in-flight prompt even when the ACP server ignores cancellation', async () => {
+    const executor = new TestExecutor(async function* () {
+      await new Promise<void>(() => {
+        // Deliberately ignore the prompt AbortSignal.
+      });
+    });
+    const server = createPseudoAcpServer(executor);
+    const client = new AcpClient({
+      inputStream: server.inputStream,
+      outputStream: server.outputStream,
+      abort: server.abort,
+    });
+    const controller = new AbortController();
+    const timeoutError = new Error('API Hard Timeout after 120000ms');
+
+    try {
+      await client.connect();
+      const sessionId = await client.createNewSession();
+      const pending = client.prompt('hung prompt', sessionId, controller.signal);
+      const rejection = expect(pending).rejects.toBe(timeoutError);
+      controller.abort(timeoutError);
+
+      await rejection;
+    } finally {
+      client.disconnect();
+    }
+  }, 1_000);
 });

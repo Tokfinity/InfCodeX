@@ -54,6 +54,7 @@ export type {
   CompactionCacheContext,
   CompactionProviderObserver,
   CompactionProviderRequest,
+  CompactionProviderRouting,
   KodaXCompactionPromptVariant,
   KodaXCompactionPromptSection,
   KodaXCompactionPromptSnapshot,

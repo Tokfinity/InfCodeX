@@ -700,6 +700,14 @@ export interface KodaXCustomProviderConfig {
   maxOutputTokens?: number;
   thinkingBudgetCap?: number;
   /**
+   * Opt in only when this exact endpoint is known to accept the protocol's
+   * cache-affinity field. Anthropic-compatible providers lower it to
+   * `metadata.user_id`; OpenAI-compatible providers lower it to
+   * `prompt_cache_key`. Disabled by default because strict compatibility
+   * gateways may reject unknown request fields.
+   */
+  promptCacheAffinity?: boolean;
+  /**
    * Provider-level default for OpenAI-compat `reasoning_content` echo.
    * Required by DeepSeek V4 thinking mode (replay 400s without it).
    * Defaults to false — must stay false for OpenAI proper or any gateway
@@ -750,6 +758,8 @@ export interface KodaXProviderConfig {
   maxOutputTokens?: number;
   /** Provider thinking budget 上限 */
   thinkingBudgetCap?: number;
+  /** Whether this verified endpoint accepts the protocol cache-affinity field. */
+  promptCacheAffinity?: boolean;
   /** Provider 默认 thinking budget 映射 */
   defaultThinkingBudgets?: Partial<KodaXThinkingBudgetMap>;
   /** 按任务类型覆盖默认 budget */
@@ -808,6 +818,11 @@ export interface KodaXProviderConfig {
 export interface KodaXProviderStreamOptions {
   /** Request-only tail context. Providers must not mutate persisted messages. */
   ephemeralSuffix?: KodaXEphemeralSuffix;
+  /**
+   * Opaque stable logical-context key used only for Provider cache routing.
+   * Protocol adapters lower it only when their endpoint explicitly opts in.
+   */
+  promptCacheKey?: string;
   onTextDelta?: (text: string) => void;
   onThinkingDelta?: (text: string) => void;
   onThinkingEnd?: (thinking: string) => void;

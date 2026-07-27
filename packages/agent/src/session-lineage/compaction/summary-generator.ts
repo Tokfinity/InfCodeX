@@ -229,6 +229,8 @@ export interface KodaXCompactionPromptSnapshot {
 export interface CompactionCacheContext {
   readonly tools: readonly KodaXToolDefinition[];
   readonly reasoning?: boolean | KodaXReasoningRequest;
+  /** Opaque Provider cache-routing key inherited from the logical context. */
+  readonly promptCacheKey?: string;
   /** Raw tail already present in the cached prefix but excluded from this summary. */
   readonly protectedTailMessageCount?: number;
   /** Optional diagnostics observer; failures never affect the compaction request. */
@@ -242,6 +244,7 @@ export interface CompactionProviderRequest {
   readonly reasoning?: boolean | KodaXReasoningRequest;
   readonly modelOverride?: string;
   readonly ephemeralSuffix?: KodaXEphemeralSuffix;
+  readonly promptCacheKey?: string;
 }
 
 export interface CompactionProviderObserver {
@@ -250,6 +253,11 @@ export interface CompactionProviderObserver {
     request: CompactionProviderRequest,
     usage: KodaXTokenUsage | undefined,
   ) => void;
+}
+
+/** Routing-only metadata applied to every physical summary request. */
+export interface CompactionProviderRouting {
+  readonly promptCacheKey?: string;
 }
 
 export function buildCompactionCacheInstruction(
@@ -451,6 +459,7 @@ export async function generateSummary(
   modelOverride?: string,
   cacheContext?: CompactionCacheContext,
   observer?: CompactionProviderObserver,
+  routing?: CompactionProviderRouting,
 ): Promise<string> {
   const promptSnapshot = buildCompactionPromptSnapshot({
     messages,
@@ -466,6 +475,7 @@ export async function generateSummary(
     promptSnapshot,
     cacheContext?.protectedTailMessageCount,
   );
+  const promptCacheKey = routing?.promptCacheKey ?? cacheContext?.promptCacheKey;
   const request: CompactionProviderRequest = cacheContext
     ? {
         messages,
@@ -473,6 +483,9 @@ export async function generateSummary(
         system: promptSnapshot.systemPrompt,
         reasoning: cacheContext.reasoning,
         ...(modelOverride ? { modelOverride } : {}),
+        ...(promptCacheKey
+          ? { promptCacheKey }
+          : {}),
         ephemeralSuffix: { content: cacheInstruction },
       }
     : {
@@ -481,6 +494,7 @@ export async function generateSummary(
         system: promptSnapshot.systemPrompt,
         reasoning: false,
         ...(modelOverride ? { modelOverride } : {}),
+        ...(promptCacheKey ? { promptCacheKey } : {}),
       };
   try {
     (cacheContext?.observer ?? observer)?.onRequest?.(request);
@@ -492,10 +506,11 @@ export async function generateSummary(
     [...request.tools],
     request.system,
     request.reasoning,
-    request.modelOverride || request.ephemeralSuffix
+    request.modelOverride || request.ephemeralSuffix || request.promptCacheKey
       ? {
           ...(request.modelOverride ? { modelOverride: request.modelOverride } : {}),
           ...(request.ephemeralSuffix ? { ephemeralSuffix: request.ephemeralSuffix } : {}),
+          ...(request.promptCacheKey ? { promptCacheKey: request.promptCacheKey } : {}),
         }
       : undefined,
     undefined,

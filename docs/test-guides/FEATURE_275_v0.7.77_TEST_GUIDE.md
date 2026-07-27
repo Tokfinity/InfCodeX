@@ -2,7 +2,8 @@
 
 > Feature: Governed Event-Triggered Memory Intervention
 >
-> Status: Engineering verification ready; semantic effect validation pending
+> Status: Release pilot complete; deterministic governance ready to ship,
+> semantic selector remains experimental and host opt-in
 >
 > Date: 2026-07-25
 
@@ -173,3 +174,20 @@ Do not mark the semantic selector generally effective from this guide. That
 claim requires the authorized preregistered pilot and pre-call-frozen
 validation in
 `docs/features/v0.7.77.md`.
+
+### Frozen release result (2026-07-27)
+
+- Commit: `25d5521e3eadc20ff1da2bd69d171736724bbcba`.
+- Revision: `f275-v0.7.77.3`.
+- Providers: `ark/v4flash` and `zhipu/glm52`.
+- Physical calls: 16; tokens: 7,113; estimated spend: `$0.00022152`.
+- Deterministic B/C post-compaction compatibility preservation: 4/4; control:
+  1/2.
+- Negative-control actions: 6/6 used current `package.json`; all 4/4 semantic
+  selector calls returned an exact empty selection, including 2/2 negative
+  controls.
+- Blinded main-session recommendation: `recommend-ship`.
+
+Release decision: ship deterministic governed intervention. Keep semantic
+selection experimental and host opt-in. The 144-call validation is intentionally
+not run because v0.7.77 makes no semantic default-on or task-effect claim.

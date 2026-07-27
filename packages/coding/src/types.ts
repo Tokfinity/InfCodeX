@@ -408,6 +408,8 @@ export interface KodaXPromptCacheDiagnosticEvent {
   readonly requestEnvelopeHash: string;
   /** Hash of provider-visible ephemeral request suffixes, when present. */
   readonly ephemeralSuffixHash?: string;
+  /** Hash of the opaque affinity key when this Provider applies it on wire. */
+  readonly promptCacheAffinityHash?: string;
   readonly messageCount: number;
   readonly toolCount: number;
   /** Provider-reported usage only. Missing fields remain undefined. */

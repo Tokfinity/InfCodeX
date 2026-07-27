@@ -67,6 +67,7 @@ function makeInput(provider: KodaXBaseProvider, clearStreamTimers = vi.fn()): Pa
     effectiveProviderReasoning: false,
     callerAbortSignal: undefined,
     modelOverride: undefined,
+    promptCacheKey: 'f'.repeat(64),
     hardTimeoutMs: 600_000,
     boundarySession: new BoundaryTrackerSession(),
     emitActiveExtensionEvent: vi.fn().mockResolvedValue(undefined) as unknown as ExtensionEventEmitter,
@@ -96,6 +97,8 @@ describe('CAP-071: executeNonStreamingFallback — success path', () => {
     expect(handlerArg.onTextDelta).toBeDefined();
     expect(handlerArg.onThinkingDelta).toBeDefined();
     expect(handlerArg.onThinkingEnd).toBeDefined();
+    expect(handlerArg.promptCacheKey).toBe('f'.repeat(64));
+    expect(handlerArg.sessionId).toBeUndefined();
     // Streaming-only handlers MUST be absent in fallback callbacks:
     expect(handlerArg.onRateLimit).toBeUndefined();
     expect(handlerArg.onHeartbeat).toBeUndefined();

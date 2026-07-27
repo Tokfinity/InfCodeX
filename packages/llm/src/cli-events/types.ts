@@ -71,6 +71,8 @@ export interface CLICompleteEvent {
         inputTokens: number;
         outputTokens: number;
         totalTokens: number;
+        cachedReadTokens?: number;
+        cachedWriteTokens?: number;
     };
     raw: unknown;
 }

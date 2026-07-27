@@ -32,6 +32,7 @@ import {
   getSummary,
   formatCostReport,
   mapLegacyReasoningModeToEffortIntent,
+  resolvePromptCacheDisabled,
   type CostTracker,
 } from '@kodax-ai/llm';
 import path from 'path';
@@ -208,6 +209,7 @@ import {
   emitPromptCacheDiagnosticRequest,
   emitPromptCacheDiagnosticResponse,
 } from './prompt-cache-diagnostics.js';
+import { derivePromptCacheAffinityKey } from './prompt-cache-affinity.js';
 import {
   applyToolExposurePlan,
   hasPortableToolBridge,
@@ -1303,6 +1305,12 @@ export async function runSubstrate(
           ? { agentId: diagnosticScope.agentId }
           : {}),
       };
+      const promptCacheKey = resolvePromptCacheDisabled(options.disablePromptCache)
+        ? undefined
+        : derivePromptCacheAffinityKey({
+            logicalSessionId: contextIdentitySessionId,
+            ...(currentAgentId !== undefined ? { agentId: currentAgentId } : {}),
+          });
       const planningBudgetSnapshotBase = createRuntimeContextBudgetSnapshot({
         sessionId,
         turnId: liveTurnScopeRef.current.turnId,
@@ -1380,6 +1388,7 @@ export async function runSubstrate(
         compactionAntiThrash: turnState.compactAntiThrash,
         emitCompactionDiagnostics: options.context?.contextDiagnostics === true,
         disablePromptCache: options.disablePromptCache,
+        promptCacheKey,
       });
       messages = compactionLifecycle.messages;
       providerMessages = messages;
@@ -1587,6 +1596,7 @@ export async function runSubstrate(
             tools: activeToolDefinitions,
             messages: providerMessages,
             ...(memorySuffix !== undefined ? { ephemeralSuffix: memorySuffix } : {}),
+            ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
             attempt,
           });
           result = await streamProvider.stream(
@@ -1596,6 +1606,7 @@ export async function runSubstrate(
             effectiveProviderReasoning,
             {
               ...streamCallbacks,
+              promptCacheKey,
               onRetryAfter: wrappedRetryAfter,
               modelOverride: turnState.currentModelOverride,
               ephemeralSuffix: memorySuffix,
@@ -1652,6 +1663,7 @@ export async function runSubstrate(
               tools: activeToolDefinitions,
               messages: providerMessages,
               ...(memorySuffix !== undefined ? { ephemeralSuffix: memorySuffix } : {}),
+              ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
               attempt,
               transport: 'complete',
             });
@@ -1663,6 +1675,7 @@ export async function runSubstrate(
               effectiveSystemPrompt,
               effectiveProviderReasoning,
               callerAbortSignal: options.abortSignal,
+              promptCacheKey,
               modelOverride: turnState.currentModelOverride,
               ephemeralSuffix: memorySuffix,
               hardTimeoutMs: API_HARD_TIMEOUT_MS,

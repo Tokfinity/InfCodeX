@@ -70,6 +70,7 @@ import {
   RuntimeDaemonStartupError,
   spawnRuntimeDaemonServeProcess,
   waitForHealthyDaemonStartup,
+  waitForReadyRuntimeDaemonOwner,
 } from './runtime-daemon/process.js';
 import { runDoctor } from './kodax_doctor.js';
 import {
@@ -1160,12 +1161,28 @@ async function getDaemonStartResult(input: {
   const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
   const before = await observeRuntimeDaemonHealth(paths);
   const beforeHealth = classifyRuntimeDaemonHealth(before);
-  if (beforeHealth === 'healthy') {
+  if (beforeHealth === 'healthy' && before.state?.status === 'ready') {
     return {
       started: false,
       reason: 'already_running',
-      state: before.state ?? null,
+      state: before.state,
     };
+  }
+  if (beforeHealth === 'healthy' && before.state) {
+    const cancellation = createDaemonStartupCancellation();
+    try {
+      const ready = await waitForReadyRuntimeDaemonOwner(paths, {
+        startupTimeoutMs: input.timeoutMs,
+        startupSignal: cancellation.signal,
+      }, before);
+      return {
+        started: false,
+        reason: 'already_running',
+        state: ready.state,
+      };
+    } finally {
+      cancellation.close();
+    }
   }
   if (beforeHealth === 'unhealthy' || beforeHealth === 'mismatch') {
     return {

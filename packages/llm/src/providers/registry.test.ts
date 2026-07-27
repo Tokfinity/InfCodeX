@@ -291,6 +291,24 @@ describe('provider registry', () => {
     expect(flagOf('openai')).toBeUndefined();
   });
 
+  it('enables cache-affinity fields only for verified built-in endpoints', () => {
+    vi.stubEnv('KIMI_CODE_API_KEY', 'test-key');
+    vi.stubEnv('KIMI_API_KEY', 'test-key');
+    vi.stubEnv('OPENAI_API_KEY', 'test-key');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key');
+
+    type ConfigCarrier = { config: { promptCacheAffinity?: boolean } };
+    const flagOf = (name: string): boolean | undefined =>
+      (getProvider(name) as unknown as ConfigCarrier).config.promptCacheAffinity;
+
+    expect(flagOf('kimi-code')).toBe(true);
+    expect(flagOf('kimi')).toBe(true);
+    expect(flagOf('openai')).toBe(true);
+    expect(flagOf('anthropic')).toBeUndefined();
+    expect(flagOf('deepseek')).toBeUndefined();
+  });
+
   // FEATURE_098: per-model context window override where the model
   // really diverges from the provider default. Tests guard the data,
   // not the lookup mechanism (already covered in base.test.ts).

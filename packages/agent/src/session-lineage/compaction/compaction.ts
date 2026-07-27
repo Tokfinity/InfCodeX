@@ -16,7 +16,11 @@ import {
   extractCompactMemorySeed,
   generateSummary,
 } from './summary-generator.js';
-import type { CompactionCacheContext } from './summary-generator.js';
+import type {
+  CompactionCacheContext,
+  CompactionProviderObserver,
+  CompactionProviderRouting,
+} from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';
 import { preserveToolResultRecovery } from './result-extractors.js';
 import {
@@ -263,6 +267,8 @@ export async function compact(
   force: boolean = false,
   reservedResponseTokens = 0,
   cacheContext?: CompactionCacheContext,
+  observer?: CompactionProviderObserver,
+  routing?: CompactionProviderRouting,
 ): Promise<CompactionResult> {
   const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
   const estimatedTranscriptTokensBefore = estimateTokens(messages);
@@ -377,7 +383,8 @@ export async function compact(
     messages: toProcess,
     cacheMessages: effectiveCacheContext ? messages : undefined,
     cacheContext: effectiveCacheContext,
-    observer: cacheContext?.observer,
+    observer: observer ?? cacheContext?.observer,
+    routing,
     provider,
     customInstructions,
     systemPrompt,
@@ -446,6 +453,7 @@ interface CompletePrefixSummaryInput {
   readonly cacheMessages?: KodaXMessage[];
   readonly cacheContext?: CompactionCacheContext;
   readonly observer?: CompactionCacheContext['observer'];
+  readonly routing?: CompactionProviderRouting;
   readonly provider: KodaXBaseProvider;
   readonly customInstructions?: string;
   readonly systemPrompt?: string;
@@ -497,6 +505,7 @@ async function summarizeCompletePrefix(
       input.modelOverride,
       input.cacheContext,
       input.observer,
+      input.routing,
     );
     assertUsableSummary(summary, input.previousSummary);
     return { summary, strategy: 'full_prefix' };
@@ -526,6 +535,7 @@ async function summarizeCompletePrefix(
       input.modelOverride,
       undefined,
       input.observer,
+      input.routing,
     );
     assertUsableSummary(summary, input.previousSummary);
     return { summary, strategy: 'full_prefix' };
@@ -580,6 +590,7 @@ async function summarizeCompletePrefix(
       input.modelOverride,
       undefined,
       input.observer,
+      input.routing,
     );
     assertUsableSummary(summary);
     mappedSummaries.push(summary);
@@ -604,6 +615,7 @@ async function summarizeCompletePrefix(
     input.modelOverride,
     undefined,
     input.observer,
+    input.routing,
   );
   assertUsableSummary(reduced, input.previousSummary);
   return { summary: reduced, strategy: 'map_reduce' };

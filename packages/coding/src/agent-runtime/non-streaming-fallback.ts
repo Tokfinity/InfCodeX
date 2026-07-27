@@ -66,6 +66,8 @@ export interface NonStreamingFallbackInput {
   readonly effectiveSystemPrompt: string;
   readonly effectiveProviderReasoning: boolean | KodaXReasoningRequest;
   readonly callerAbortSignal: AbortSignal | undefined;
+  /** Opaque logical-context hash used only by opted-in Provider cache routing. */
+  readonly promptCacheKey?: string;
   readonly modelOverride: string | undefined;
   readonly ephemeralSuffix?: KodaXEphemeralSuffix;
   readonly hardTimeoutMs: number;
@@ -118,6 +120,7 @@ export async function executeNonStreamingFallback(
       input.effectiveSystemPrompt,
       input.effectiveProviderReasoning,
       {
+        promptCacheKey: input.promptCacheKey,
         onTextDelta: (text: string) => {
           input.boundarySession.markTextDelta(text);
           void input.emitActiveExtensionEvent('text:delta', { text });
