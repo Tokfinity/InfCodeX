@@ -17,6 +17,7 @@ export interface MemoryEvidenceRef {
   readonly ref: string;
   readonly requestedGrade: MemoryEvidenceGrade;
   readonly source: 'user' | 'host' | 'tool' | 'environment' | 'agent';
+  readonly verdict?: 'passed' | 'failed' | 'inconclusive';
   readonly observedAt: string;
 }
 
@@ -146,6 +147,8 @@ export type MemoryAgentTraceEvent =
 export interface MemorySessionInput {
   readonly identity: MemoryContextIdentity;
   readonly objective: string;
+  /** Stable caller-owned identity for this root episode. */
+  readonly episodeId?: string;
 }
 
 export interface MemoryEpisodeOutcome {

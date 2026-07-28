@@ -333,6 +333,11 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
     expect(entry.metadata?.tail).toContain('123 passed');
     expect(entry.metadata?.cancelled).toBeUndefined();
     expect(entry.metadata?.timeout).toBeUndefined();
+    expect(entry.metadata).toMatchObject({
+      checkVerdict: 'passed',
+      checkEvidenceSource: 'tool',
+      checkVerified: true,
+    });
   });
 
   it('bash ledger entry captures non-zero exit code (failure)', () => {
@@ -347,6 +352,31 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
     const entry = ledger[0]!;
     expect(entry.metadata?.exitCode).toBe(1);
     expect(entry.metadata?.tail).toContain('ESLint found 3 problems');
+    expect(entry.metadata).toMatchObject({
+      checkVerdict: 'failed',
+      checkEvidenceSource: 'tool',
+      checkVerified: true,
+    });
+  });
+
+  it('does not mark chained, cancelled or ordinary commands as verified checks', () => {
+    const ledger = extractArtifactLedger([
+      ...buildToolPair({
+        toolUseId: 'tool_use_chained',
+        toolName: 'bash',
+        input: { command: 'npm test; echo done' },
+        resultContent: 'Command: npm test; echo done\nExit: 0\ndone',
+      }),
+      ...buildToolPair({
+        toolUseId: 'tool_use_ordinary',
+        toolName: 'bash',
+        input: { command: 'node script.js' },
+        resultContent: 'Command: node script.js\nExit: 0\ndone',
+      }),
+    ]);
+
+    expect(ledger).toHaveLength(2);
+    expect(ledger.every((entry) => entry.metadata?.checkVerified === undefined)).toBe(true);
   });
 
   it('bash ledger entry flags cancelled commands', () => {

@@ -33,12 +33,15 @@ export type LearningAction =
   | 'promote';
 
 export interface LearnedCapabilitySource {
-  readonly kind: 'learning_controller' | 'f224_proposal';
+  readonly kind:
+    | 'learning_controller'
+    | 'f224_proposal'
+    | 'skill_learning_loop'
+    | 'legacy_manual';
   readonly proposalId?: string;
 }
 
-export interface LearnedCapabilityRecord {
-  readonly schemaVersion: 1;
+interface LearnedCapabilityRecordBase {
   readonly capabilityId: string;
   readonly displayName: string;
   readonly slug: string;
@@ -55,6 +58,70 @@ export interface LearnedCapabilityRecord {
   readonly previousLifecycle?: LearnedCapabilityLifecycle;
   readonly diagnostics?: readonly string[];
 }
+
+export interface LearnedCapabilityRecordV1 extends LearnedCapabilityRecordBase {
+  readonly schemaVersion: 1;
+}
+
+export interface LearnedCapabilityScope {
+  readonly configHomeHash: string;
+  readonly tenantHash: string;
+  readonly projectHash: string;
+}
+
+export interface LearnedCapabilityArtifact {
+  readonly kind: 'skill_markdown';
+  readonly relativePath: string;
+  readonly fingerprint: string;
+  readonly contentRevision: number;
+}
+
+export interface LearnedCapabilityProvenance {
+  readonly jobId: string;
+  readonly inputHash: string;
+  readonly decisionId: string;
+  readonly actionId: string;
+}
+
+export interface LearnedCapabilityCanaryBinding {
+  readonly bindingId: string;
+  readonly ownerSessionRef: string;
+  readonly expiresAt: string;
+}
+
+export interface LearnedCapabilityCanaryInvocation {
+  readonly invocationId: string;
+  readonly bindingId: string;
+  /** Durable usage-ledger identity for recovery after the binding expires. */
+  readonly usageSessionHash?: string;
+  readonly artifactRevision?: number;
+  readonly artifactFingerprint?: string;
+  readonly status: 'pending' | 'verified_success' | 'credible_negative' | 'inconclusive';
+  readonly evidenceRefs: readonly string[];
+  readonly invokedAt: string;
+  readonly completedAt?: string;
+}
+
+export interface LearnedCapabilityCanary {
+  readonly maxInvocations: 3;
+  readonly invocationCount: number;
+  readonly verifiedSuccesses: number;
+  readonly credibleNegatives: number;
+  readonly binding?: LearnedCapabilityCanaryBinding;
+  readonly invocations: readonly LearnedCapabilityCanaryInvocation[];
+}
+
+export interface LearnedCapabilityRecordV2 extends LearnedCapabilityRecordBase {
+  readonly schemaVersion: 2;
+  readonly carrier: 'skill';
+  readonly scope: LearnedCapabilityScope;
+  readonly artifact: LearnedCapabilityArtifact;
+  readonly previousGoodArtifact?: LearnedCapabilityArtifact;
+  readonly provenance: LearnedCapabilityProvenance;
+  readonly canary: LearnedCapabilityCanary;
+}
+
+export type LearnedCapabilityRecord = LearnedCapabilityRecordV1 | LearnedCapabilityRecordV2;
 
 export interface LearningEvent {
   readonly schemaVersion: 1;
@@ -111,6 +178,12 @@ export interface LearningSubscribeOptions {
   readonly afterRevision?: number;
 }
 
+export interface LearningExplicitUserAuthority {
+  readonly authority: 'explicit_user';
+  readonly expectedRevision: number;
+  readonly expectedFingerprint?: string;
+}
+
 export interface LearningActionDriver {
   readonly carrier: LearnedCapabilityCarrier;
   readonly actions: readonly LearningAction[];
@@ -144,7 +217,7 @@ const TRANSITIONS: Readonly<Record<LearnedCapabilityLifecycle, readonly LearnedC
   drafting: ['ready', 'archived', 'rejected'],
   ready: ['testing', 'active_learned', 'promoted_user', 'archived', 'rejected', 'quarantined'],
   testing: ['active_learned', 'quarantined', 'archived'],
-  active_learned: ['quarantined', 'archived', 'promoted_user'],
+  active_learned: ['testing', 'quarantined', 'archived', 'promoted_user'],
   promoted_user: [],
   quarantined: ['ready', 'testing', 'active_learned', 'archived', 'rejected'],
   archived: ['ready', 'active_learned', 'rejected'],

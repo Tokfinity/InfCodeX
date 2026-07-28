@@ -602,7 +602,14 @@ describe('FEATURE_260 MemoryAgent', () => {
       },
       now: () => '2026-07-12T01:00:00.000Z',
     }).startSession({ identity, objective: 'Ship memory agent' });
-    session.observe(constraint({ kind: 'outcome', summary: 'Tests passed.' }));
+    session.observe(constraint({
+      kind: 'outcome',
+      summary: 'Tests passed.',
+      actionSignature: 'bash:verify:release',
+      metadata: {
+        reusableLesson: 'Run the complete release checks and require a passing result.',
+      },
+    }));
 
     await session.complete({
       status: 'succeeded',
@@ -621,6 +628,8 @@ describe('FEATURE_260 MemoryAgent', () => {
       sessionId: identity.sessionId,
       sequence: 1,
       objective: 'Ship memory agent',
+      actionSignature: 'bash:verify:release',
+      lesson: 'Run the complete release checks and require a passing result.',
       outcome: 'succeeded',
       summary: 'Implemented scoped recall.',
       evidenceRefs: ['tool:test-1'],
@@ -995,6 +1004,42 @@ describe('FEATURE_260 MemoryAgent', () => {
     expect(digests[0]?.evidence).toMatchObject([
       { ref: 'environment:check', grade: 'verified' },
       { ref: 'agent:self-claim', grade: 'inferred' },
+    ]);
+  });
+
+  it('keeps identical outcomes from later root episodes distinct in one Session', async () => {
+    const persisted: PersistedOutcomeDigest[] = [];
+    const agent = createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest: async (digest) => {
+        persisted.push(digest);
+      },
+    });
+    const outcome = {
+      status: 'succeeded' as const,
+      summary: 'The same verifier completed.',
+      evidence: [],
+    };
+
+    const first = await agent.startSession({
+      identity,
+      objective: 'Repeat verification',
+      episodeId: 'root-turn-1',
+    });
+    await first.complete(outcome);
+    const second = await agent.startSession({
+      identity,
+      objective: 'Repeat verification',
+      episodeId: 'root-turn-2',
+    });
+    await second.complete(outcome);
+
+    expect(persisted).toHaveLength(2);
+    expect(new Set(persisted.map((digest) => digest.id)).size).toBe(2);
+    expect(new Set(persisted.map((digest) => digest.reviewKey)).size).toBe(2);
+    expect(persisted.map((digest) => digest.episodeId)).toEqual([
+      'root-turn-1',
+      'root-turn-2',
     ]);
   });
 

@@ -126,6 +126,7 @@ function isGovernedSkillSource(value: unknown): value is GovernedSkillSource {
     || value === 'user'
     || value === 'plugin'
     || value === 'builtin'
+    || value === 'learned'
     || value === 'external';
 }
 

@@ -1262,6 +1262,27 @@ describe('skill usage and trust ledgers', () => {
     expect(result.warnings.join('\n')).toContain('not valid JSON');
   });
 
+  it('round-trips the learned source in persisted usage telemetry', async () => {
+    const root = await createTempDir('kodax-learning-ledger-learned-');
+    const usagePath = join(root, 'usage.json');
+
+    await recordSkillUsage(usagePath, {
+      skillName: 'verify-release',
+      source: 'learned',
+      event: 'invoke',
+      now: () => '2026-07-27T00:00:00.000Z',
+    });
+
+    expect(await readSkillUsageLedger(usagePath)).toMatchObject({
+      warnings: [],
+      records: [{
+        skillName: 'verify-release',
+        source: 'learned',
+        invokes: 1,
+      }],
+    });
+  });
+
   it('allows trust lifecycle only for background-created project or user skills', async () => {
     const root = await createTempDir('kodax-learning-trust-');
     const trustPath = join(root, 'trust.json');

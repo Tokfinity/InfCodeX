@@ -135,6 +135,7 @@ export interface MemoryApproval {
   readonly expectedFingerprints: Readonly<Record<string, string>>;
   readonly policyId?: string;
   readonly policyReason?: string;
+  readonly revalidateAuthority?: () => Promise<void>;
 }
 
 export interface MemoryApplyResult {
@@ -365,7 +366,22 @@ export interface MemoryController {
   maybeRunAutoCurator(input?: MemoryAutoCuratorInput): Promise<MemoryAutoCuratorResult>;
   buildMemoryPack(input: MemoryPackInput): Promise<MemoryPack>;
   reviewMemoryFeedback(input: MemoryReviewInput): Promise<MemoryReviewPlan>;
+  prepareEpisodeReview?(digest: KodaXMemoryOutcomeDigest): Promise<MemoryReviewModelInput>;
+  applyReviewedEpisode?(
+    plan: MemoryReviewPlan,
+    digest: KodaXMemoryOutcomeDigest,
+    signal?: AbortSignal,
+    revalidateAuthority?: () => Promise<void>,
+  ): Promise<MemoryEpisodeReviewResult>;
   persistReviewPlan(plan: MemoryReviewPlan): Promise<readonly string[]>;
+  /**
+   * Resolves which episode-review proposals were actually auto-applied by the
+   * governed host policy. Used to keep durable receipts complete while user
+   * notices remain truthful.
+   */
+  listHostAppliedEpisodeProposalIds?(
+    proposalIds: readonly string[],
+  ): Promise<readonly string[]>;
   reviewEpisode(
     digest: KodaXMemoryOutcomeDigest,
     signal?: AbortSignal,

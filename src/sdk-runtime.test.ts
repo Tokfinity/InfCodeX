@@ -149,6 +149,14 @@ describe('createKodaXRuntime', () => {
       isolation: 'worker',
       workerThreadId: expect.any(Number),
     });
+    expect(runtime.capabilities.skillLearningLoop).toEqual({
+      version: 1,
+      activation: 'project_scoped_canary',
+      immutableDecisions: true,
+      recordGatedDiscovery: true,
+      exactUseAttribution: true,
+      rollback: true,
+    });
     const session = await runtime.sessions.create({ title: 'Worker Session' });
     await expect(runtime.sessions.list()).resolves.toEqual([
       expect.objectContaining({ id: session.id, title: 'Worker Session' }),
@@ -704,6 +712,55 @@ describe('createKodaXRuntime', () => {
     } finally {
       await daemon.close();
       await shutdownRuntimeDaemon(daemonHome, daemonProfile);
+    }
+  });
+
+  it('keeps embedded run memory ownership on the Runtime config home', async () => {
+    const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
+    const ownerHome = path.join(tempRoot, 'embedded-owner');
+    const runtime = await createKodaXRuntime({
+      homeDir: ownerHome,
+      defaultProvider: 'mock-provider',
+    });
+    const session = await runtime.sessions.create({
+      title: 'Owner Identity Boundary',
+      projectPath: ownerHome,
+    });
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions): RunningSession => (
+      fakeRunningSession(options, Promise.resolve({
+        success: true,
+        lastText: 'done',
+        messages: [],
+        sessionId: session.id,
+      }))
+    ));
+
+    try {
+      const attackerConfigHome = path.join(tempRoot, 'attacker-home');
+      const handle = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: 'keep owner identity',
+        options: {
+          context: {
+            configHome: attackerConfigHome,
+            memoryIdentity: {
+              configHome: attackerConfigHome,
+              tenantId: 'attacker-tenant',
+              workspaceId: 'attacker-workspace',
+              agentId: 'attacker-agent',
+              projectId: 'attacker-project',
+              sessionId: session.id,
+            },
+          },
+        },
+      });
+      await handle.result;
+
+      const runOptions = codingMock.startKodaX.mock.calls[0]?.[0];
+      expect(runOptions?.context?.configHome).toBe(path.join(ownerHome, '.kodax'));
+      expect(runOptions?.context?.memoryIdentity).toBeUndefined();
+    } finally {
+      await runtime.close();
     }
   });
 
@@ -1829,7 +1886,11 @@ describe('createKodaXRuntime', () => {
 
   it('exposes rewind and setActiveEntry session operations through runtime events', async () => {
     const { createKodaXRuntime } = await import('@kodax-ai/kodax/runtime');
-    const { createSessionLineage } = await import('@kodax-ai/agent');
+    const {
+      createSessionLineage,
+      listPendingEpisodeReviews,
+      persistPendingEpisodeReview,
+    } = await import('@kodax-ai/agent');
     const { createSessionManager } = await import('@kodax-ai/repl');
     const sessionId = 'runtime-history-session';
     const manager = createSessionManager({ sessionsDir: tempRoot });
@@ -1855,7 +1916,35 @@ describe('createKodaXRuntime', () => {
       scope: 'user',
     });
 
-    const runtime = await createKodaXRuntime({ sessionsDir: tempRoot });
+    const configHome = path.join(tempRoot, '.kodax');
+    const reviewIdentity = {
+      configHome,
+      tenantId: 'tenant-runtime-test',
+      workspaceId: tempRoot,
+      agentId: 'kodax-coding',
+      projectId: 'project-runtime-test',
+      sessionId,
+    };
+    const pendingDigest = {
+      id: 'runtime-rewind-digest-1',
+      reviewKey: 'runtime-rewind-review-1',
+      sessionId,
+      branchId: sessionId,
+      sequence: 2,
+      objective: 'Verify Runtime rewind fencing',
+      approach: 'Run a verified check',
+      outcome: 'succeeded' as const,
+      summary: 'Verification passed',
+      evidenceRefs: ['artifact:check-1'],
+      visibility: 'prompt_safe' as const,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    await persistPendingEpisodeReview(reviewIdentity, pendingDigest);
+
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: tempRoot,
+    });
     const seen: string[] = [];
     runtime.events.subscribe({ sessionId }, (event) => {
       seen.push(event.type);
@@ -1872,6 +1961,17 @@ describe('createKodaXRuntime', () => {
       'first reply',
       'second',
     ]);
+    expect(await listPendingEpisodeReviews({
+      configHome,
+      tenantId: reviewIdentity.tenantId,
+    })).toEqual([]);
+
+    await persistPendingEpisodeReview(reviewIdentity, {
+      ...pendingDigest,
+      id: 'runtime-rewind-digest-2',
+      reviewKey: 'runtime-rewind-review-2',
+      createdAt: '2026-07-27T00:01:00.000Z',
+    });
 
     const active = await runtime.sessions.setActiveEntry({
       sessionId,
@@ -1880,6 +1980,10 @@ describe('createKodaXRuntime', () => {
     const afterSetActive = await manager.loadSession(sessionId);
     expect(active?.id).toBe(sessionId);
     expect(afterSetActive?.messages.map((message) => message.content)).toEqual(['first']);
+    expect(await listPendingEpisodeReviews({
+      configHome,
+      tenantId: reviewIdentity.tenantId,
+    })).toEqual([]);
     expect(seen).toEqual(['session.rewound', 'session.active_entry.updated']);
 
     await runtime.close();
@@ -4293,6 +4397,50 @@ describe('createKodaXRuntime', () => {
     });
 
     await runtime.close();
+  });
+
+  it('advertises and negotiates the complete Skill Learning Loop contract inline', async () => {
+    const { createKodaXRuntime } = await import('./sdk-runtime.js');
+    const runtime = await createKodaXRuntime({
+      mode: 'embedded',
+      homeDir: tempRoot,
+      requirements: { skillLearningLoop: 1 },
+    });
+
+    expect(runtime.capabilities.skillLearningLoop).toEqual({
+      version: 1,
+      activation: 'project_scoped_canary',
+      immutableDecisions: true,
+      recordGatedDiscovery: true,
+      exactUseAttribution: true,
+      rollback: true,
+    });
+    await runtime.close();
+  });
+
+  it('fails closed when a connected Runtime lacks the complete Skill Learning Loop', async () => {
+    const { connectKodaXRuntime } = await import('./sdk-runtime.js');
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== 'initialize') return null;
+        return {
+          identity: {
+            runtimeId: 'daemon-with-learning-center-only',
+            mode: 'daemon',
+            profile: 'default',
+            startedAt: '2026-07-27T00:00:00.000Z',
+            version: '0.7.77',
+          },
+          capabilities: { learningCenter: { version: 1 } },
+        };
+      },
+      subscribe() { return { close() {} }; },
+    };
+
+    await expect(connectKodaXRuntime({
+      transport,
+      requirements: { skillLearningLoop: 1 },
+    })).rejects.toThrow(/does not support.*skillLearningLoop/i);
   });
 
   it('keeps managed prompt-cache affinity stable after Runtime reconnect without crossing Sessions', async () => {

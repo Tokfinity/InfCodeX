@@ -6,26 +6,41 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   appendMemoryOutcomeDigest,
+  createMemoryControlPlane,
   createSessionLineage,
+  LearnedAreaStore,
+  listPendingEpisodeReviews,
+  persistPendingEpisodeReview,
+  resolveProjectLearnedAreaRoot,
   resolveMemoryRoot,
   resolveScopedMemoryRoot,
   setAgentConfigHome,
+  type KodaXMemoryOutcomeDigest,
+  type KodaXSessionData,
+  type MemoryContextIdentity,
   type MemoryReviewModelInput,
   type MemoryReviewPlan,
   type PendingEpisodeReview,
 } from '@kodax-ai/agent';
+import { createMemoryAgent } from '@kodax-ai/agent/experimental-memory';
 
 import type { KodaXOptions } from './types.js';
 import {
   canonicalMemoryProjectId,
+  appliedMemoryReviewSummaries,
   detectMemoryReviewTrigger,
   deriveCodingMemoryIdentity,
+  drainCodingMemoryReviewInbox,
   maybeReviewMemoryFeedbackFromPrompt,
   maybeRunMemoryMaintenanceWindow,
   persistMemoryOutcomeToSession,
   persistMemoryReviewReceiptToSession,
   revalidatePendingEpisodeReview,
 } from './memory-runtime.js';
+import {
+  buildToolMemoryObservations,
+  codingMemorySourcePolicy,
+} from './memory/coding-observations.js';
 
 async function createTempDir(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -408,5 +423,779 @@ describe('memory runtime hooks', () => {
         summary: 'rewound',
       }],
     }), pending)).resolves.toBe('discard');
+  });
+
+  it('keeps durable receipt state idempotent while retrying event delivery at least once', async () => {
+    let data: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'test' }],
+      title: 'test',
+      gitRoot: '.',
+    };
+    const emitted: string[] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        storage: {
+          save: async (_id, next) => { data = next; },
+          load: async () => data,
+        },
+      },
+      events: {
+        onMemoryReviewReceipt: (receipt) => emitted.push(receipt.reviewKey),
+      },
+    };
+    const receipt = {
+      jobId: 'job-1',
+      reviewKey: 'review-1',
+      proposalIds: ['proposal-1'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+    };
+
+    await expect(persistMemoryReviewReceiptToSession(options, 'session-1', receipt))
+      .resolves.toBeUndefined();
+    await expect(persistMemoryReviewReceiptToSession(options, 'session-1', receipt))
+      .resolves.toBeUndefined();
+
+    expect(emitted).toEqual(['review-1', 'review-1']);
+    expect(data.lineage?.entries.filter((entry) => entry.type === 'memory_review_receipt'))
+      .toHaveLength(1);
+  });
+
+  it('durably commits the receipt and notice before retrying a failed host callback', async () => {
+    let data: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'test' }],
+      title: 'test',
+      gitRoot: '.',
+    };
+    let receiptAttempts = 0;
+    const notices: string[] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        persistedByHost: true,
+        storage: {
+          save: async (_id, next) => { data = next; },
+          load: async () => data,
+          mutateLineage: async (_id, mutation) => {
+            const lineage = data.lineage ?? createSessionLineage(data.messages);
+            const nextLineage = mutation(lineage);
+            if (nextLineage !== lineage) data = { ...data, lineage: nextLineage };
+            return true;
+          },
+        },
+      },
+      events: {
+        onMemoryReviewReceipt: () => {
+          receiptAttempts += 1;
+          if (receiptAttempts === 1) throw new Error('simulated host callback crash');
+        },
+        onMemoryNotice: (notice) => notices.push(notice.episodeId),
+      },
+    };
+    const receipt = {
+      jobId: 'job-crash',
+      reviewKey: 'review-crash',
+      proposalIds: ['proposal-crash'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+      notice: {
+        episodeId: 'episode-crash',
+        summaries: ['Applied durable update'],
+        proposalIds: ['proposal-crash'],
+      },
+    };
+
+    await expect(persistMemoryReviewReceiptToSession(options, 'session-1', receipt))
+      .rejects.toThrow('simulated host callback crash');
+    expect(data.lineage?.entries.filter((entry) => entry.type === 'memory_review_receipt'))
+      .toHaveLength(1);
+    expect(data.lineage?.entries.filter((entry) => entry.type === 'client_notice'))
+      .toHaveLength(1);
+
+    await expect(persistMemoryReviewReceiptToSession(options, 'session-1', receipt))
+      .resolves.toBeUndefined();
+    expect(receiptAttempts).toBe(2);
+    expect(notices).toEqual(['episode-crash']);
+    expect(data.lineage?.entries.filter((entry) => entry.type === 'memory_review_receipt'))
+      .toHaveLength(1);
+    expect(data.lineage?.entries.filter((entry) => entry.type === 'client_notice'))
+      .toHaveLength(1);
+  });
+
+  it('persists a fenced outcome before notifying a host-persisted session', async () => {
+    let data: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'test' }],
+      title: 'test',
+      gitRoot: '.',
+    };
+    const emitted: string[] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        persistedByHost: true,
+        storage: {
+          save: async (_id, next) => { data = next; },
+          load: async () => data,
+          mutateLineage: async (_id, mutation) => {
+            const lineage = data.lineage ?? createSessionLineage(data.messages);
+            const nextLineage = mutation(lineage);
+            if (nextLineage !== lineage) data = { ...data, lineage: nextLineage };
+            return true;
+          },
+        },
+      },
+      events: {
+        onMemoryOutcomeDigest: (digest) => emitted.push(digest.id),
+      },
+    };
+    const digest = {
+      id: 'digest-host',
+      reviewKey: 'review-host',
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      sequence: 1,
+      objective: 'Test',
+      approach: 'Run test',
+      outcome: 'succeeded' as const,
+      summary: 'Passed',
+      evidenceRefs: ['tool:test'],
+      visibility: 'prompt_safe' as const,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+
+    await persistMemoryOutcomeToSession(options, 'session-1', digest, { jobId: 'job-host' });
+
+    expect(data.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'memory_outcome_digest',
+      jobId: 'job-host',
+    }));
+    expect(emitted).toEqual(['digest-host']);
+  });
+
+  it('fails closed when host-owned storage cannot atomically persist the outcome', async () => {
+    const emitted: string[] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        persistedByHost: true,
+        storage: {
+          save: async () => { throw new Error('read-only host storage'); },
+          load: async () => ({
+            messages: [{ role: 'user', content: 'test' }],
+            title: 'test',
+            gitRoot: '.',
+          }),
+        },
+      },
+      events: {
+        onMemoryOutcomeDigest: (digest) => emitted.push(digest.id),
+      },
+    };
+    const digest = {
+      id: 'digest-event-only',
+      reviewKey: 'review-event-only',
+      sessionId: 'session-1',
+      branchId: 'session-1',
+      sequence: 1,
+      objective: 'Test',
+      approach: 'Run test',
+      outcome: 'succeeded' as const,
+      summary: 'Passed',
+      evidenceRefs: ['tool:test'],
+      visibility: 'prompt_safe' as const,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+
+    await expect(persistMemoryOutcomeToSession(options, 'session-1', digest))
+      .rejects.toThrow('atomic lineage mutation');
+    expect(emitted).toEqual([]);
+  });
+
+  it('fails closed without events when the atomic mutation cannot find the owner session', async () => {
+    const outcomes: string[] = [];
+    const receipts: string[] = [];
+    const notices: string[] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        persistedByHost: true,
+        storage: {
+          save: async () => undefined,
+          load: async () => null,
+          mutateLineage: async () => false,
+        },
+      },
+      events: {
+        onMemoryOutcomeDigest: (digest) => outcomes.push(digest.id),
+        onMemoryReviewReceipt: (receipt) => receipts.push(receipt.reviewKey),
+        onMemoryNotice: (notice) => notices.push(notice.episodeId),
+      },
+    };
+    const digest = {
+      id: 'digest-missing-owner',
+      reviewKey: 'review-missing-owner',
+      sessionId: 'missing-owner',
+      branchId: 'missing-owner',
+      sequence: 1,
+      objective: 'Test missing owner',
+      approach: 'Persist atomically',
+      outcome: 'succeeded' as const,
+      summary: 'Passed',
+      evidenceRefs: ['tool:test'],
+      visibility: 'prompt_safe' as const,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+
+    await expect(persistMemoryOutcomeToSession(options, 'missing-owner', digest))
+      .rejects.toThrow('owner session was not found');
+    await expect(persistMemoryReviewReceiptToSession(options, 'missing-owner', {
+      reviewKey: digest.reviewKey,
+      proposalIds: ['proposal-missing-owner'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+      notice: {
+        episodeId: 'episode-missing-owner',
+        summaries: ['Should not be emitted'],
+        proposalIds: ['proposal-missing-owner'],
+      },
+    })).rejects.toThrow('owner session was not found');
+
+    expect({ outcomes, receipts, notices }).toEqual({
+      outcomes: [],
+      receipts: [],
+      notices: [],
+    });
+  });
+
+  it('filters legacy Memory notices to exactly applied proposal summaries', () => {
+    expect(appliedMemoryReviewSummaries({
+      plan: {
+        trigger: 'episode_outcome',
+        createdAt: '2026-07-27T00:00:00.000Z',
+        sourceRefs: [],
+        candidateRefs: [],
+        actions: [
+          {
+            action: 'write_memdir',
+            targetRefIds: [],
+            summary: 'Applied summary',
+            rationale: 'Verified.',
+            confidence: 'high',
+            risk: 'low',
+            requiresApproval: true,
+            proposedBody: 'Applied body.',
+          },
+          {
+            action: 'write_memdir',
+            targetRefIds: [],
+            summary: 'Pending summary',
+            rationale: 'Risky.',
+            confidence: 'high',
+            risk: 'high',
+            requiresApproval: true,
+            proposedBody: 'Pending body.',
+          },
+        ],
+        warnings: [],
+      },
+      proposalIds: ['proposal-applied', 'proposal-pending'],
+      appliedProposalIds: ['proposal-applied'],
+      decisions: [
+        { actionIndex: 0, kind: 'create', reason: 'new', proposalId: 'proposal-applied' },
+        { actionIndex: 1, kind: 'create', reason: 'new', proposalId: 'proposal-pending' },
+      ],
+      warnings: [],
+    })).toEqual(['Applied summary']);
+  });
+
+  it('fails closed when a v2 review job has no exact lineage digest', async () => {
+    const digest = {
+      id: 'digest-v2-missing',
+      reviewKey: 'review-v2-missing',
+      sessionId: 'session-v2',
+      branchId: 'session-v2',
+      sequence: 1,
+      objective: 'Test',
+      approach: 'Run test',
+      outcome: 'succeeded' as const,
+      summary: 'Passed',
+      evidenceRefs: ['tool:test'],
+      visibility: 'prompt_safe' as const,
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    const pending: PendingEpisodeReview = {
+      version: 2,
+      jobId: 'job-v2-missing',
+      reviewKey: digest.reviewKey,
+      digest,
+      ownerSessionRef: digest.sessionId,
+      ownerAgentHash: 'agent-hash',
+      branchId: digest.branchId,
+      branchEpoch: 0,
+      authorityCeiling: 'memory_and_project_skill',
+      createdAt: digest.createdAt,
+    };
+    const lineage = createSessionLineage([{ role: 'user', content: 'test' }]);
+    const storage = {
+      save: async () => undefined,
+      load: async () => ({
+        messages: [{ role: 'user' as const, content: 'test' }],
+        title: 'test',
+        gitRoot: '.',
+        lineage,
+      }),
+    };
+
+    await expect(revalidatePendingEpisodeReview(storage, pending)).resolves.toBe('discard');
+  });
+
+  it('persists a delayed receipt to its owner session instead of the active host session', async () => {
+    const owner = {
+      messages: [{ role: 'user' as const, content: 'owner' }],
+      title: 'owner',
+      gitRoot: '.',
+    };
+    const active = {
+      messages: [{ role: 'user' as const, content: 'active' }],
+      title: 'active',
+      gitRoot: '.',
+    };
+    const sessions = new Map<string, KodaXSessionData>([
+      ['owner-session', owner],
+      ['active-session', active],
+    ]);
+    const emitted: Array<{
+      readonly sessionId?: string;
+      readonly reviewKey: string;
+    }> = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        id: 'active-session',
+        storage: {
+          save: async (id, data) => {
+            sessions.set(id, data);
+          },
+          load: async (id) => sessions.get(id) ?? null,
+        },
+      },
+      events: {
+        onMemoryReviewReceipt: (receipt) => emitted.push(receipt),
+      },
+    };
+
+    await persistMemoryReviewReceiptToSession(options, 'owner-session', {
+      reviewKey: 'review-owner',
+      proposalIds: ['proposal-owner'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+    });
+
+    expect(emitted).toEqual([{
+      sessionId: 'owner-session',
+      reviewKey: 'review-owner',
+      proposalIds: ['proposal-owner'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+    }]);
+    expect(sessions.get('owner-session')?.lineage?.entries.at(-1)).toMatchObject({
+      type: 'memory_review_receipt',
+      reviewKey: 'review-owner',
+    });
+    expect(sessions.get('active-session')?.lineage).toBeUndefined();
+  });
+
+  it('uses atomic lineage mutation for a delayed foreign-owner receipt when available', async () => {
+    let owner: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'owner' }],
+      title: 'owner',
+      gitRoot: '.',
+    };
+    let loads = 0;
+    let saves = 0;
+    let mutations = 0;
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      session: {
+        id: 'active-session',
+        persistedByHost: true,
+        storage: {
+          save: async () => { saves += 1; },
+          load: async () => {
+            loads += 1;
+            return owner;
+          },
+          mutateLineage: async (id, mutation) => {
+            expect(id).toBe('owner-session');
+            mutations += 1;
+            const lineage = owner.lineage ?? createSessionLineage(owner.messages);
+            owner = { ...owner, lineage: mutation(lineage) };
+            return true;
+          },
+        },
+      },
+    };
+
+    await persistMemoryReviewReceiptToSession(options, 'owner-session', {
+      reviewKey: 'review-owner-atomic',
+      proposalIds: ['proposal-owner-atomic'],
+      completedAt: '2026-07-27T00:01:00.000Z',
+    });
+
+    expect({ loads, saves, mutations }).toEqual({ loads: 0, saves: 0, mutations: 1 });
+    expect(owner.lineage?.entries.at(-1)).toMatchObject({
+      type: 'memory_review_receipt',
+      reviewKey: 'review-owner-atomic',
+    });
+  });
+
+  it('commits one fenced unified review into Memory and a project canary Skill', async () => {
+    const cwd = await createTempDir('kodax-memory-runtime-unified-');
+    const home = await createTempDir('kodax-memory-runtime-unified-home-');
+    cleanupDirs.push(cwd, home);
+    setAgentConfigHome(home);
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-a',
+    };
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-unified-1',
+      reviewKey: 'review-unified-1',
+      sessionId: identity.sessionId,
+      branchId: identity.sessionId,
+      sequence: 1,
+      objective: 'Verify a release candidate',
+      approach: 'Run the complete release checks',
+      outcome: 'succeeded',
+      summary: 'Please preserve this verified release method as a skill.',
+      evidenceRefs: ['check:release'],
+      evidence: [{
+        ref: 'check:release',
+        grade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-27T00:00:00.000Z',
+      }],
+      actionSignature: 'release:verify',
+      lesson: 'Run the complete release checks before publishing.',
+      preconditions: 'A release candidate is ready.',
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    const pending = await persistPendingEpisodeReview(identity, digest);
+    expect(pending.entry.version).toBe(2);
+    const pendingJobId = pending.entry.version === 2
+      ? pending.entry.jobId
+      : undefined;
+    let sessionData: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'Verify release' }],
+      title: 'release',
+      gitRoot: cwd,
+      lineage: appendMemoryOutcomeDigest(
+        createSessionLineage([{ role: 'user', content: 'Verify release' }]),
+        digest,
+        pendingJobId,
+      ),
+    };
+    let fullSaves = 0;
+    let lineageMutations = 0;
+    const storage = {
+      save: async (id: string, data: KodaXSessionData) => {
+        fullSaves += 1;
+        if (id === identity.sessionId) sessionData = data;
+      },
+      load: async (id: string) => id === identity.sessionId ? sessionData : null,
+      mutateLineage: async (id: string, mutation: (
+        lineage: import('@kodax-ai/agent').KodaXSessionLineage,
+      ) => import('@kodax-ai/agent').KodaXSessionLineage) => {
+        if (id !== identity.sessionId) return false;
+        lineageMutations += 1;
+        const lineage = sessionData.lineage ?? createSessionLineage(sessionData.messages);
+        const nextLineage = mutation(lineage);
+        if (nextLineage !== lineage) sessionData = { ...sessionData, lineage: nextLineage };
+        return true;
+      },
+      list: async () => [{
+        id: identity.sessionId,
+        title: sessionData.title,
+        msgCount: sessionData.messages.length,
+      }],
+    };
+    let reviewedInput: import('@kodax-ai/agent').UnifiedLearningReviewModelInput | undefined;
+    const notices: Array<{
+      readonly summaries: readonly string[];
+      readonly proposalIds: readonly string[];
+    }> = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      context: { executionCwd: cwd, configHome: home },
+      session: { id: identity.sessionId, persistedByHost: true, storage },
+      learningReviewer: async (input) => {
+        reviewedInput = input;
+        return {
+          memoryPlan: {
+            trigger: input.memory.trigger,
+            createdAt: '2026-07-27T00:01:00.000Z',
+            sourceRefs: input.memory.sourceRefs,
+            candidateRefs: input.memory.candidateRefs,
+            actions: [{
+              action: 'write_memdir',
+              targetRefIds: [],
+              summary: 'Apply verified release memory',
+              rationale: 'The release evidence passed.',
+              confidence: 'high',
+              risk: 'low',
+              requiresApproval: true,
+              proposedBody: 'Run the complete release checks before publishing.',
+            }, {
+              action: 'write_memdir',
+              targetRefIds: [],
+              summary: 'Keep risky release memory pending',
+              rationale: 'This broader claim needs approval.',
+              confidence: 'high',
+              risk: 'high',
+              requiresApproval: true,
+              proposedBody: 'Assume every release check is interchangeable.',
+            }],
+            warnings: [],
+          },
+          capabilityDecision: {
+            disposition: 'project_canary',
+            reasonCodes: ['explicit_preserve_as_skill'],
+            requestedScope: 'project',
+            semanticDisposition: 'allow',
+            operation: 'create',
+            spec: {
+              name: 'verify-release',
+              description: 'Use when validating a release candidate before publishing.',
+              purpose: 'Validate a release candidate with reproducible evidence.',
+              triggers: ['A release candidate needs a final verification pass.'],
+              steps: ['Run the complete release checks.'],
+              verification: ['Require passing tests and an explicit version check.'],
+              pitfalls: ['Do not infer success from incomplete output.'],
+            },
+          },
+        };
+      },
+      events: {
+        onMemoryNotice: (notice) => notices.push({
+          summaries: notice.summaries,
+          proposalIds: notice.proposalIds,
+        }),
+      },
+    };
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      projectDocs: [],
+      discoverSkills: false,
+    });
+
+    const result = await drainCodingMemoryReviewInbox(
+      options,
+      identity,
+      controller,
+      '',
+    );
+
+    expect(result).toMatchObject({ reviewed: 1, failed: 0 });
+    expect({ fullSaves, lineageMutations }).toEqual({ fullSaves: 0, lineageMutations: 1 });
+    expect(reviewedInput?.evidence.qualification).toMatchObject({
+      reusableMethodEvidence: true,
+      explicitSkillPreservation: true,
+      independentEpisodeCount: 1,
+      verifiedOutcome: true,
+    });
+    const store = new LearnedAreaStore(resolveProjectLearnedAreaRoot(home, {
+      tenantId: identity.tenantId,
+      projectId: identity.projectId,
+    }));
+    await store.initialize();
+    expect(await store.listCapabilities()).toMatchObject([{
+      schemaVersion: 2,
+      slug: 'verify-release',
+      lifecycle: 'testing',
+      canary: { maxInvocations: 3, invocationCount: 0 },
+    }]);
+    expect(sessionData.lineage?.entries.find((entry) => entry.type === 'memory_review_receipt'))
+      .toMatchObject({
+      proposalIds: [expect.any(String), expect.any(String)],
+    });
+    expect(sessionData.lineage?.entries.at(-1)).toMatchObject({
+      type: 'client_notice',
+      payload: { episodeId: digest.id },
+    });
+    expect(notices).toEqual([{
+      summaries: [expect.not.stringContaining('pending')],
+      proposalIds: [expect.any(String)],
+    }]);
+    await expect(listPendingEpisodeReviews({
+      configHome: home,
+      tenantId: identity.tenantId,
+    })).resolves.toEqual([]);
+  });
+
+  it('does not report Memory updated for a proposal that remains pending approval', async () => {
+    const cwd = await createTempDir('kodax-memory-runtime-pending-');
+    const home = await createTempDir('kodax-memory-runtime-pending-home-');
+    cleanupDirs.push(cwd, home);
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-pending',
+      agentId: 'agent-pending',
+      projectId: 'project-pending',
+      sessionId: 'session-pending',
+    };
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-pending-1',
+      reviewKey: 'review-pending-1',
+      sessionId: identity.sessionId,
+      branchId: identity.sessionId,
+      sequence: 1,
+      objective: 'Try an unverified procedure',
+      approach: 'Rely on an agent assertion',
+      outcome: 'succeeded',
+      summary: 'The agent asserted that this procedure works.',
+      evidenceRefs: ['agent:self-claim'],
+      evidence: [{
+        ref: 'agent:self-claim',
+        grade: 'inferred',
+        source: 'agent',
+        observedAt: '2026-07-27T00:00:00.000Z',
+      }],
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    const pending = await persistPendingEpisodeReview(identity, digest);
+    if (pending.entry.version !== 2) throw new Error('expected v2 review job');
+    let sessionData: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'Try procedure' }],
+      title: 'pending memory',
+      gitRoot: cwd,
+      lineage: appendMemoryOutcomeDigest(
+        createSessionLineage([{ role: 'user', content: 'Try procedure' }]),
+        digest,
+        pending.entry.jobId,
+      ),
+    };
+    const notices: string[][] = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      context: { executionCwd: cwd, configHome: home },
+      session: {
+        storage: {
+          save: async (id, data) => {
+            if (id === identity.sessionId) sessionData = data;
+          },
+          load: async (id) => id === identity.sessionId ? sessionData : null,
+        },
+      },
+      events: {
+        onMemoryNotice: (notice) => notices.push([...notice.proposalIds]),
+      },
+      learningReviewer: async (input) => ({
+        memoryPlan: {
+          trigger: input.memory.trigger,
+          createdAt: '2026-07-27T00:01:00.000Z',
+          sourceRefs: input.memory.sourceRefs,
+          candidateRefs: input.memory.candidateRefs,
+          actions: [{
+            action: 'write_memdir',
+            targetRefIds: [],
+            summary: 'Keep the asserted procedure for approval',
+            rationale: 'The evidence is not independently verified.',
+            confidence: 'high',
+            risk: 'low',
+            requiresApproval: true,
+            proposedBody: 'Use the asserted procedure only after independent approval.',
+          }],
+          warnings: [],
+        },
+      }),
+    };
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      projectDocs: [],
+      discoverSkills: false,
+    });
+
+    await expect(drainCodingMemoryReviewInbox(options, identity, controller, ''))
+      .resolves.toMatchObject({ reviewed: 1, failed: 0 });
+    expect(notices).toEqual([]);
+    expect(sessionData.lineage?.entries.at(-1)).toMatchObject({
+      type: 'memory_review_receipt',
+      proposalIds: [expect.stringMatching(/^memory-review-/)],
+      status: 'completed',
+    });
+  });
+
+  it('produces canary-qualifying evidence from the real verification observation pipeline', async () => {
+    const cwd = await createTempDir('kodax-memory-runtime-real-evidence-');
+    const home = await createTempDir('kodax-memory-runtime-real-evidence-home-');
+    cleanupDirs.push(cwd, home);
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-real',
+      agentId: 'agent-real',
+      projectId: 'project-real',
+      sessionId: 'session-real',
+    };
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      projectDocs: [],
+      discoverSkills: false,
+    });
+    const digests: KodaXMemoryOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller,
+      sourcePolicy: codingMemorySourcePolicy,
+      persistOutcomeDigest: async (digest) => {
+        digests.push(digest);
+      },
+    }).startSession({
+      identity,
+      objective: 'Please preserve the verified release procedure as a Skill.',
+    });
+    const observations = buildToolMemoryObservations({
+      toolBlocks: [{
+        type: 'tool_use',
+        id: 'check-release',
+        name: 'bash',
+        input: { command: 'npm test' },
+      }],
+      toolResults: [{
+        type: 'tool_result',
+        tool_use_id: 'check-release',
+        content: 'Tests: 42 passed',
+      }],
+      startSequence: 0,
+      observedAt: '2026-07-27T00:00:00.000Z',
+      decisionActionSignature: 'task:verify-release',
+    });
+    session.observe(observations[0]!);
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'Please preserve this verified release procedure as a Skill.',
+      evidence: [{
+        ref: 'artifact:release-check',
+        requestedGrade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-27T00:00:01.000Z',
+      }],
+    });
+
+    expect(digests).toMatchObject([{
+      outcome: 'succeeded',
+      actionSignature: expect.stringMatching(/^bash:verify:[a-f0-9]{16}$/),
+      lesson: 'Run `npm test` and require a successful verifier result.',
+      evidence: [{
+        ref: 'artifact:release-check',
+        grade: 'verified',
+        verdict: 'passed',
+      }],
+    }]);
   });
 });

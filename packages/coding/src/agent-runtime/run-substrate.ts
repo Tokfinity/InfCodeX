@@ -53,7 +53,7 @@ import { generateSessionId, extractTitleFromMessages } from '../session.js';
 import { normalizeLoadedSessionMessages } from '../task-engine/_internal/round-boundary.js';
 import {
   createMemoryControlPlane,
-  completeEpisodeReview,
+  captureEpisodeReviewBranchEpoch,
   persistPendingEpisodeReview,
   registerActiveRootQueueRoute,
   type CompactionConfig,
@@ -148,12 +148,17 @@ import {
   detectMemoryReviewTrigger,
   drainCodingMemoryReviewInbox,
   persistMemoryOutcomeToSession,
-  persistMemoryReviewReceiptToSession,
 } from '../memory-runtime.js';
+import { prepareCodingLearnedSkillBinding } from '../learned-skill-runtime.js';
+import { createProductionLearningReviewer } from '../learning-reviewer.js';
 import {
   buildCodingMemoryContext,
   type CodingMemoryContext,
 } from '../memory/coding-context.js';
+import {
+  collectVerifiedCheckFacts,
+  resolveLearnedSkillCanaryOutcome,
+} from '../memory/verified-checks.js';
 import { recordMemoryDecisionReceipt } from '../memory/decision-trace.js';
 import {
   MEMORY_EVIDENCE_TOKEN_RESERVE,
@@ -495,6 +500,12 @@ function withCompletionEventOnce(events: KodaXEvents): KodaXEvents {
  */
 const MAX_INTERRUPT_CONTINUATION_ITERATIONS = 8;
 
+export function shouldInstallProductionLearningReviewer(
+  options: Pick<KodaXOptions, 'learningReviewer' | 'memoryReviewer'>,
+): boolean {
+  return options.learningReviewer === undefined && options.memoryReviewer === undefined;
+}
+
 export async function runSubstrate(
   options: KodaXOptions,
   prompt: string,
@@ -571,6 +582,17 @@ export async function runSubstrate(
   // window.
   const initialProvider = resolveProvider(turnState.currentProviderName);
   assertProviderConfigured(initialProvider, turnState.currentProviderName);
+  if (shouldInstallProductionLearningReviewer(options)) {
+    options = {
+      ...options,
+      learningReviewer: createProductionLearningReviewer({
+        provider: initialProvider,
+        ...(turnState.currentModelOverride === undefined
+          ? {}
+          : { model: turnState.currentModelOverride }),
+      }),
+    };
+  }
   const initialContextWindow =
     initialProvider.getEffectiveContextWindow?.(turnState.currentModelOverride)
     ?? initialProvider.getContextWindow();
@@ -625,8 +647,14 @@ export async function runSubstrate(
   events = withCompletionEventOnce(events);
   const memoryIdentity = options.context?.memoryIdentity
     ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
+  const learnedSkillBinding = await prepareCodingLearnedSkillBinding(
+    options,
+    memoryIdentity,
+    sessionId,
+  );
   let memoryController: MemoryController | undefined;
   let memoryPack: MemoryPack | undefined;
+  let memoryBranchEpoch: number | undefined;
   if (options.context?.currentAgentId === undefined) {
     try {
       memoryController = createMemoryControlPlane({
@@ -655,6 +683,19 @@ export async function runSubstrate(
         });
         events.onMemoryReview?.(plan);
       }
+      void drainCodingMemoryReviewInbox(
+        options,
+        memoryIdentity,
+        memoryController,
+        sessionId,
+      ).catch((error: unknown) => {
+        emitResilienceDebug('[memory:review-inbox:startup-drain-error]', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      if (options.session?.storage !== undefined) {
+        memoryBranchEpoch = await captureEpisodeReviewBranchEpoch(memoryIdentity);
+      }
     } catch (error) {
       emitResilienceDebug('[memory:session-start:error]', {
         error: error instanceof Error ? error.message : String(error),
@@ -667,6 +708,7 @@ export async function runSubstrate(
     context: {
       ...options.context,
       memoryIdentity,
+      ...learnedSkillBinding?.context,
       ...(memoryPack !== undefined ? { memoryPack } : {}),
     },
   };
@@ -858,19 +900,27 @@ export async function runSubstrate(
         }
       : result;
     if (memorySession !== undefined) {
-      const checks = finalized.artifactLedger?.filter((entry) => entry.kind === 'check_result') ?? [];
+      const checks = collectVerifiedCheckFacts(finalized.artifactLedger ?? []);
       try {
-        await memorySession.complete(checks.length === 0
+        await memorySession.complete(finalized.interrupted
           ? { status: 'cancelled', summary: finalized.lastText, evidence: [] }
           : {
               status: finalized.success ? 'succeeded' : 'failed',
               summary: finalized.lastText,
-              evidence: checks.map((entry) => ({
-                ref: `artifact:${entry.id}`,
-                requestedGrade: 'verified' as const,
-                source: 'environment' as const,
-                observedAt: entry.timestamp,
-              })),
+              evidence: checks.length > 0
+                ? checks.map((check) => ({
+                    ref: check.ref,
+                    requestedGrade: 'verified' as const,
+                    source: check.source,
+                    verdict: check.verdict,
+                    observedAt: check.observedAt,
+                  }))
+                : [{
+                    ref: `host:run-terminal:${sessionId}`,
+                    requestedGrade: 'observed' as const,
+                    source: 'host' as const,
+                    observedAt: new Date().toISOString(),
+                  }],
             });
         await memorySession.close();
       } catch (error) {
@@ -879,19 +929,40 @@ export async function runSubstrate(
         });
       }
     }
-    if (memoryController !== undefined) {
+    if (options.context?.completeLearnedSkillOutcomes !== undefined) {
+      const checks = collectVerifiedCheckFacts(finalized.artifactLedger ?? []);
       try {
-        await drainCodingMemoryReviewInbox(
-          options,
-          memoryIdentity,
-          memoryController,
+        await options.context.completeLearnedSkillOutcomes({
           sessionId,
-        );
+          outcome: resolveLearnedSkillCanaryOutcome(finalized.success, checks),
+          evidenceRefs: checks.length > 0
+            ? checks.map((check) => check.ref)
+            : [`host:run-terminal:${sessionId}`],
+        });
       } catch (error) {
-        emitResilienceDebug('[memory:review-inbox:drain-error]', {
+        emitResilienceDebug('[learning:skill-outcome:error]', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+    try {
+      await learnedSkillBinding?.release();
+    } catch (error) {
+      emitResilienceDebug('[learning:skill-binding-release:error]', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (memoryController !== undefined) {
+      void drainCodingMemoryReviewInbox(
+          options,
+          memoryIdentity,
+          memoryController,
+          '',
+        ).catch((error: unknown) => {
+        emitResilienceDebug('[memory:review-inbox:drain-error]', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
     return finalized;
   };
@@ -987,31 +1058,52 @@ export async function runSubstrate(
         ? { recallRunner: options.memoryRecallRunner }
         : {}),
       persistOutcomeDigest: async (digest) => {
-        await persistPendingEpisodeReview(memoryIdentity, digest);
+        if (digest.visibility === 'prompt_safe'
+          && options.session?.storage !== undefined
+          && memoryBranchEpoch !== undefined) {
+          await persistPendingEpisodeReview(memoryIdentity, digest, {
+            expectedBranchEpoch: memoryBranchEpoch,
+            persistOwner: async (entry) => persistMemoryOutcomeToSession(
+              options,
+              sessionId,
+              digest,
+              { jobId: entry.jobId },
+            ),
+          });
+          return;
+        }
         await persistMemoryOutcomeToSession(options, sessionId, digest);
       },
-      reviewEpisode: async (digest, signal) => {
-        if (memoryController === undefined) return;
-        const review = await memoryController.reviewEpisode(digest, signal);
-        if (signal.aborted) return;
-        const completedAt = new Date().toISOString();
-        await completeEpisodeReview(memoryIdentity, digest.reviewKey, review.proposalIds);
-        await persistMemoryReviewReceiptToSession(options, sessionId, {
-          reviewKey: digest.reviewKey,
-          proposalIds: review.proposalIds,
-          completedAt,
-        });
-        if (review.appliedProposalIds.length > 0) {
-          events.onMemoryNotice?.({
-            episodeId: digest.id,
-            summaries: review.plan.actions
-              .filter((action) => review.appliedProposalIds.some((id) => id.includes('memory-review-')))
-              .map((action) => action.summary)
-              .slice(0, 3),
-            proposalIds: review.appliedProposalIds,
-          });
-        }
-      },
+      ...(options.session?.storage === undefined && options.memoryReviewer !== undefined
+        ? {
+            reviewEpisode: async (digest, signal) => {
+              if (memoryController === undefined) return;
+              const review = await memoryController.reviewEpisode(digest, signal);
+              if (signal.aborted) return;
+              events.onMemoryReviewReceipt?.({
+                sessionId,
+                reviewKey: digest.reviewKey,
+                proposalIds: review.proposalIds,
+                completedAt: new Date().toISOString(),
+              });
+              if (review.appliedProposalIds.length > 0) {
+                events.onMemoryNotice?.({
+                  sessionId,
+                  episodeId: digest.id,
+                  summaries: review.decisions
+                    .filter((decision) => (
+                      decision.proposalId !== undefined
+                      && review.appliedProposalIds.includes(decision.proposalId)
+                    ))
+                    .map((decision) => review.plan.actions[decision.actionIndex]?.summary)
+                    .filter((summary): summary is string => summary !== undefined)
+                    .slice(0, 3),
+                  proposalIds: review.appliedProposalIds,
+                });
+              }
+            },
+          }
+        : {}),
       onTrace: (event) => {
         if (event.type === 'memory.decision') {
           recordMemoryDecisionReceipt(event.receipt);
@@ -1029,7 +1121,11 @@ export async function runSubstrate(
           detail: event.detail ?? null,
         });
       },
-    }).startSession({ identity: memoryIdentity, objective: prompt });
+    }).startSession({
+      identity: memoryIdentity,
+      objective: prompt,
+      episodeId: options.context?.learnedSkillBindingId ?? liveTurnScopeRef.current.turnId,
+    });
     if (memoryRecallToolAllowed) {
       runtimeSessionState.activeTools = activateMemoryRecallTool(
         runtimeSessionState.activeTools,

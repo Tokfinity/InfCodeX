@@ -1363,14 +1363,23 @@ Keyboard Shortcuts:
         },
         events: {
           ...currentOptions.events,
-          onMemoryOutcomeDigest: (digest) => {
+          onMemoryOutcomeDigest: (digest, metadata) => {
+            if (digest.sessionId !== context.sessionId) {
+              currentOptions.events?.onMemoryOutcomeDigest?.(digest, metadata);
+              return;
+            }
             context.lineage = appendMemoryOutcomeDigest(
               context.lineage ?? createSessionLineage(context.messages),
               digest,
+              metadata?.jobId,
             );
-            currentOptions.events?.onMemoryOutcomeDigest?.(digest);
+            currentOptions.events?.onMemoryOutcomeDigest?.(digest, metadata);
           },
           onMemoryReviewReceipt: (receipt) => {
+            if (receipt.sessionId !== undefined && receipt.sessionId !== context.sessionId) {
+              currentOptions.events?.onMemoryReviewReceipt?.(receipt);
+              return;
+            }
             context.lineage = appendMemoryReviewReceipt(
               context.lineage ?? createSessionLineage(context.messages),
               receipt,
@@ -1378,11 +1387,19 @@ Keyboard Shortcuts:
             currentOptions.events?.onMemoryReviewReceipt?.(receipt);
           },
           onMemoryNotice: (notice) => {
-            context.lineage = appendMemoryClientNotice(
-              context.lineage ?? createSessionLineage(context.messages),
+            if (notice.sessionId !== undefined && notice.sessionId !== context.sessionId) {
+              currentOptions.events?.onMemoryNotice?.(notice);
+              return;
+            }
+            const lineage = context.lineage ?? createSessionLineage(context.messages);
+            const nextLineage = appendMemoryClientNotice(
+              lineage,
               { ...notice, createdAt: new Date().toISOString() },
             );
-            console.log(chalk.dim(`\n[memory] ${notice.summaries.slice(0, 3).join('; ')}`));
+            context.lineage = nextLineage;
+            if (nextLineage !== lineage) {
+              console.log(chalk.dim(`\n[memory] ${notice.summaries.slice(0, 3).join('; ')}`));
+            }
             currentOptions.events?.onMemoryNotice?.(notice);
           },
           // FEATURE_074: exit_plan_mode tool callback. Three-state return:

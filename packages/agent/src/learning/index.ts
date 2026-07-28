@@ -107,8 +107,16 @@ export {
 
 export type {
   LearnedCapabilityCarrier,
+  LearnedCapabilityArtifact,
+  LearnedCapabilityCanary,
+  LearnedCapabilityCanaryBinding,
+  LearnedCapabilityCanaryInvocation,
   LearnedCapabilityLifecycle,
+  LearnedCapabilityProvenance,
   LearnedCapabilityRecord,
+  LearnedCapabilityRecordV1,
+  LearnedCapabilityRecordV2,
+  LearnedCapabilityScope,
   LearnedCapabilitySource,
   LearningAction,
   LearningActionDriver,
@@ -116,6 +124,7 @@ export type {
   LearningClientEventState,
   LearningClientRecord,
   LearningEvent,
+  LearningExplicitUserAuthority,
   LearningEventKind,
   LearningNotificationState,
   LearningPage,
@@ -151,3 +160,51 @@ export {
   getLearnedExtensionToolName,
   isLearnedExtensionCommandAllowed,
 } from './extension-policy.js';
+export type {
+  CreateLearnedSkillRecordInput,
+  CommitLearnedSkillRevisionInput,
+  DeclarativeSkillSpec,
+  LearnedSkillBindingAdmission,
+  LearnedSkillCanaryOutcome,
+  LearnedSkillInvocationAdmission,
+  StagedLearnedSkillArtifact,
+} from './learned-skill.js';
+
+export {
+  createLearnedSkillActionDriver,
+  type CreateLearnedSkillActionDriverOptions,
+} from './learned-skill-driver.js';
+export {
+  migrateLegacyLearnedSkillsForProject,
+  type LegacyLearnedSkillMigrationResult,
+} from './legacy-learned-skill-migration.js';
+export type {
+  ExactInvokedSkillSnapshot,
+  LearnedSkillInvokedReceipt,
+  LearnedSkillOfferedReceipt,
+  LearnedSkillOutcomeReceipt,
+  LearnedSkillUsageReceipt,
+} from './learned-skill-usage.js';
+export {
+  admitAndRecordLearnedSkillInvocation,
+  completeLearnedSkillSessionOutcomes,
+  exactInvokedSkillSnapshotForSession,
+  listLearnedSkillUsageReceipts,
+  reconcileLearnedSkillBindingOutcomes,
+  recordLearnedSkillOffered,
+} from './learned-skill-usage.js';
+export {
+  admitLearnedSkillBinding,
+  completeLearnedSkillOutcome,
+  commitLearnedSkillRevision,
+  createLearnedCapabilityScope,
+  createLearnedSkillRecord,
+  invokeLearnedSkillCanary,
+  isLearnedCapabilityRecordV2,
+  quarantineLearnedSkillRevision,
+  releaseLearnedSkillBinding,
+  renderDeclarativeSkill,
+  resolveProjectLearnedAreaRoot,
+  stageLearnedSkillRevision,
+  validateDeclarativeSkillSpec,
+} from './learned-skill.js';

@@ -5,6 +5,7 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import chalk from 'chalk';
 import type {
   KodaXExtensionSessionRecord,
@@ -32,8 +33,11 @@ import {
   generateSessionId,
   getSessionLineagePath,
   getSessionMessagesFromLineage,
+  getActiveMemoryOutcomeReviewIds,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
+  withPendingEpisodeReviewSessionFence,
+  withKodaXFileLock,
 } from '@kodax-ai/agent';
 import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-storage.js';
 // `KODAX_SESSIONS_DIR` is a module-load-time-frozen constant (see
@@ -45,7 +49,7 @@ import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-stor
 // BEFORE importing `@kodax-ai/repl`. SDK consumers that want a
 // per-instance override should pass `{ sessionsDir }` to
 // `createSessionManager()` instead.
-import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
+import { getGitRoot, KODAX_DIR, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
 import { deriveProjectKeyFromData, type ProjectIdentity } from './project-key.js';
 import { ensureLayoutMigrated } from './session-migration.js';
@@ -90,6 +94,7 @@ interface PersistedArchivedEntryLine {
 }
 
 const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const;
+const SESSION_WRITE_LOCK_TIMEOUT_MS = 60_000;
 let sessionTempSequence = 0;
 
 async function replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
@@ -261,6 +266,21 @@ function isKodaXSessionEntry(value: unknown): value is KodaXSessionEntry {
         && (entry.payload === undefined || isKodaXJsonValue(entry.payload));
     case 'goal':
       return typeof entry.event === 'string';
+    case 'memory_outcome_digest':
+      return isRecord(entry.digest)
+        && typeof entry.digest.id === 'string'
+        && typeof entry.digest.reviewKey === 'string'
+        && typeof entry.digest.sessionId === 'string'
+        && typeof entry.digest.branchId === 'string'
+        && Number.isSafeInteger(entry.digest.sequence)
+        && (entry.jobId === undefined || typeof entry.jobId === 'string');
+    case 'memory_review_receipt':
+      return typeof entry.reviewKey === 'string'
+        && Array.isArray(entry.proposalIds)
+        && entry.proposalIds.every((id) => typeof id === 'string')
+        && (entry.status === 'completed' || entry.status === 'no_action')
+        && typeof entry.completedAt === 'string'
+        && (entry.jobId === undefined || typeof entry.jobId === 'string');
     default:
       return false;
   }
@@ -308,7 +328,10 @@ function reconcileCompactionLineage(
   persistedMain: KodaXSessionLineage | undefined,
   archivedEntries: readonly KodaXSessionEntry[],
 ): KodaXSessionLineage {
-  const activeIds = new Set(getSessionLineagePath(incoming).map((entry) => entry.id));
+  const authoritative = persistedTopologySupersedesIncoming(incoming, persistedMain)
+    ? mergeContextSilentLineageEntries(persistedMain!, incoming)
+    : incoming;
+  const activeIds = new Set(getSessionLineagePath(authoritative).map((entry) => entry.id));
   const archivedById = new Map(archivedEntries.map((entry) => [entry.id, entry]));
   const exactById = new Map<string, KodaXSessionEntry>();
   for (const entry of archivedEntries) {
@@ -320,7 +343,7 @@ function reconcileCompactionLineage(
 
   const entries: KodaXSessionEntry[] = [];
   const seen = new Set<string>();
-  for (const entry of incoming.entries) {
+  for (const entry of authoritative.entries) {
     if (archivedById.has(entry.id) && !activeIds.has(entry.id)) continue;
     const exact = isCompactedPlaceholder(entry) ? exactById.get(entry.id) : undefined;
     const reconciled = exact?.type === 'message' && entry.type === 'message'
@@ -333,9 +356,54 @@ function reconcileCompactionLineage(
   // Archive markers are storage-owned topology hints. The live host keeps the
   // unslimmed lineage in memory, so its next snapshot legitimately omits them.
   for (const entry of persistedMain?.entries ?? []) {
-    if (entry.type === 'archive_marker' && !seen.has(entry.id)) entries.push(entry);
+    if ((entry.type === 'archive_marker'
+      || entry.type === 'memory_outcome_digest'
+      || entry.type === 'memory_review_receipt'
+      || entry.type === 'client_notice')
+      && !seen.has(entry.id)) {
+      entries.push(entry);
+      seen.add(entry.id);
+    }
   }
-  return { ...incoming, entries };
+  return { ...authoritative, entries };
+}
+
+function persistedTopologySupersedesIncoming(
+  incoming: KodaXSessionLineage,
+  persisted: KodaXSessionLineage | undefined,
+): boolean {
+  if (persisted === undefined) return false;
+  const incomingIds = new Set(incoming.entries.map((entry) => entry.id));
+  return persisted.entries.some((entry) =>
+    isTopologyEntry(entry) && !incomingIds.has(entry.id));
+}
+
+function isTopologyEntry(entry: KodaXSessionEntry): boolean {
+  return entry.type === 'compaction' || entry.type === 'rewind_marker';
+}
+
+function mergeContextSilentLineageEntries(
+  persisted: KodaXSessionLineage,
+  incoming: KodaXSessionLineage,
+): KodaXSessionLineage {
+  const entries = [...persisted.entries];
+  const seen = new Set(entries.map((entry) => entry.id));
+  for (const entry of incoming.entries) {
+    if (!seen.has(entry.id) && isContextSilentLineageEntry(entry)) {
+      entries.push(entry);
+      seen.add(entry.id);
+    }
+  }
+  return { ...persisted, entries };
+}
+
+function isContextSilentLineageEntry(entry: KodaXSessionEntry): boolean {
+  return entry.type === 'archive_marker'
+    || entry.type === 'label'
+    || entry.type === 'goal'
+    || entry.type === 'client_notice'
+    || entry.type === 'memory_outcome_digest'
+    || entry.type === 'memory_review_receipt';
 }
 
 function isKodaXSessionArtifactLedgerEntry(
@@ -711,6 +779,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // to let SDK consumers point at an isolated sessions root without
   // mutating the agent-config-home singleton.
   private readonly sessionsDir: string;
+  private readonly configHome: string;
 
   /**
    * v0.7.46 — optional explicit project cwd for in-process embedders
@@ -737,10 +806,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   constructor(opts?: {
     sessionsDir?: string;
+    configHome?: string;
     cwd?: string;
     emitMismatchWarnings?: boolean;
   }) {
     this.sessionsDir = path.resolve(opts?.sessionsDir ?? KODAX_SESSIONS_DIR);
+    this.configHome = path.resolve(opts?.configHome ?? KODAX_DIR);
     this.hostCwd = opts?.cwd;
     this.emitMismatchWarnings = opts?.emitMismatchWarnings ?? false;
   }
@@ -758,9 +829,19 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   private serializedWrite(id: string, fn: () => Promise<void>): Promise<void> {
     const prev = this.writeQueues.get(id) ?? Promise.resolve();
-    const next = prev.then(fn, () => fn());
+    const locked = (): Promise<void> => withKodaXFileLock(
+      this.sessionWriteLockPath(id),
+      fn,
+      SESSION_WRITE_LOCK_TIMEOUT_MS,
+    );
+    const next = prev.then(locked, locked);
     this.writeQueues.set(id, next);
     return next;
+  }
+
+  private sessionWriteLockPath(id: string): string {
+    const key = createHash('sha256').update(id, 'utf8').digest('hex');
+    return path.join(this.sessionsDir, '.write-locks', `${key}.lock`);
   }
 
   // ── Append watermarks ──
@@ -1297,6 +1378,26 @@ export class FileSessionStorage implements KodaXSessionStorage {
     });
   }
 
+  async mutateLineage(
+    id: string,
+    mutation: (lineage: KodaXSessionLineage) => KodaXSessionLineage,
+  ): Promise<boolean> {
+    let found = false;
+    await this.serializedWrite(id, async () => {
+      const existing = await this.readSession(id);
+      if (existing === null) return;
+      found = true;
+      const lineage = existing.data.lineage ?? createSessionLineage(existing.data.messages);
+      const nextLineage = mutation(lineage);
+      if (nextLineage === lineage) return;
+      await this.mergeAndWriteInternal(id, {
+        ...existing.data,
+        lineage: nextLineage,
+      });
+    });
+    return found;
+  }
+
   /** F270/F269 owner mutation: CAS-update only the Actor section of a session snapshot. */
   async saveActorSnapshot(
     id: string,
@@ -1429,50 +1530,58 @@ export class FileSessionStorage implements KodaXSessionStorage {
     options?: { summarizeCurrentBranch?: boolean },
   ): Promise<SessionData | null> {
     let result: SessionData | null = null;
-    await this.serializedWrite(id, async () => {
-      const resolved = await this.readSession(id);
-      if (!resolved?.data.lineage) return;
+    await withPendingEpisodeReviewSessionFence(
+      { configHome: this.configHome, sessionId: id },
+      async (fence) => this.serializedWrite(id, async () => {
+        const resolved = await this.readSession(id);
+        if (!resolved?.data.lineage) return;
 
-      const lineage = setSessionLineageActiveEntry(
-        resolved.data.lineage,
-        selector,
-        options,
-      );
-      if (!lineage) return;
+        const lineage = setSessionLineageActiveEntry(
+          resolved.data.lineage,
+          selector,
+          options,
+        );
+        if (!lineage) return;
+        await fence(getActiveMemoryOutcomeReviewIds(lineage));
 
-      const nextData: SessionData = {
-        ...resolved.data,
-        messages: getSessionMessagesFromLineage(lineage),
-        lineage,
-      };
-      await this.writeSessionInternal(id, nextData, resolved.createdAt);
-      this.syncAppendState(id, nextData);
-      result = nextData;
-    });
+        const nextData: SessionData = {
+          ...resolved.data,
+          messages: getSessionMessagesFromLineage(lineage),
+          lineage,
+        };
+        await this.writeSessionInternal(id, nextData, resolved.createdAt);
+        this.syncAppendState(id, nextData);
+        result = nextData;
+      }),
+    );
     return result;
   }
 
   async rewind(id: string, selector?: string): Promise<SessionData | null> {
     let result: SessionData | null = null;
-    await this.serializedWrite(id, async () => {
-      const resolved = await this.readSession(id);
-      if (!resolved?.data.lineage) return;
+    await withPendingEpisodeReviewSessionFence(
+      { configHome: this.configHome, sessionId: id },
+      async (fence) => this.serializedWrite(id, async () => {
+        const resolved = await this.readSession(id);
+        if (!resolved?.data.lineage) return;
 
-      const targetId = selector ?? findPreviousUserEntryId(resolved.data.lineage);
-      if (!targetId) return;
+        const targetId = selector ?? findPreviousUserEntryId(resolved.data.lineage);
+        if (!targetId) return;
 
-      const lineage = rewindSessionLineage(resolved.data.lineage, targetId);
-      if (!lineage) return;
+        const lineage = rewindSessionLineage(resolved.data.lineage, targetId);
+        if (!lineage) return;
+        await fence(getActiveMemoryOutcomeReviewIds(lineage));
 
-      const nextData: SessionData = {
-        ...resolved.data,
-        messages: getSessionMessagesFromLineage(lineage),
-        lineage,
-      };
-      await this.writeSessionInternal(id, nextData, resolved.createdAt);
-      this.syncAppendState(id, nextData);
-      result = nextData;
-    });
+        const nextData: SessionData = {
+          ...resolved.data,
+          messages: getSessionMessagesFromLineage(lineage),
+          lineage,
+        };
+        await this.writeSessionInternal(id, nextData, resolved.createdAt);
+        this.syncAppendState(id, nextData);
+        result = nextData;
+      }),
+    );
     return result;
   }
 

@@ -149,6 +149,19 @@ function parseCommandTarget(command: string): { action: string; target: string }
   return { action, target };
 }
 
+const VERIFICATION_COMMANDS = [
+  /^(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:test|lint|typecheck|check|build))(?=$|\s)/i,
+  /^(?:npm|pnpm)\s+exec\s+(?:vitest|tsc)(?=$|\s)/i,
+  /^(?:npx\s+)?(?:vitest|tsc)(?=$|\s)/i,
+  /^(?:pytest|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)(?=$|\s)/i,
+] as const;
+
+function isVerificationCommand(command: string): boolean {
+  const normalized = compactWhitespace(command);
+  if (/[\r\n;&|><`]|\$\(/u.test(command)) return false;
+  return VERIFICATION_COMMANDS.some((pattern) => pattern.test(normalized));
+}
+
 function toLedgerMetadata(
   input: Record<string, unknown>,
   keys: string[],
@@ -433,6 +446,15 @@ function buildArtifactEntry(
         // erase the configured value or surface a numeric flag).
         if (extracted.timeout) metadata.timedOut = true;
         if (extracted.captureCapped) metadata.captureCapped = true;
+        if (Number.isSafeInteger(extracted.exitCode)
+          && !result?.isError
+          && !extracted.cancelled
+          && !extracted.timeout
+          && isVerificationCommand(command)) {
+          metadata.checkVerdict = extracted.exitCode === 0 ? 'passed' : 'failed';
+          metadata.checkEvidenceSource = 'tool';
+          metadata.checkVerified = true;
+        }
       }
     }
     return createLedgerEntry(

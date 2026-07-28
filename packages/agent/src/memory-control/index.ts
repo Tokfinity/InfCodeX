@@ -54,16 +54,62 @@ export {
 } from './prompt-safety.js';
 
 export {
+  claimEpisodeReview,
+  captureEpisodeReviewBranchEpoch,
+  commitEpisodeReviewAction,
+  commitEpisodeReviewDecision,
+  completeFencedEpisodeReview,
   completeEpisodeReview,
+  deferEpisodeReview,
+  discardFencedEpisodeReview,
   drainPendingEpisodeReviews,
+  failEpisodeReviewApply,
+  failEpisodeReviewAttempt,
+  fencePendingEpisodeReviewsForSession,
+  freezeEpisodeReviewInput,
+  inspectEpisodeReviewJob,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
   rewindPendingEpisodeReviews,
+  rewindPendingEpisodeReviewsForSession,
+  withEpisodeReviewClaimAuthority,
+  withPendingEpisodeReviewSessionFence,
 } from './review-inbox.js';
 export type {
   EpisodeReviewDrainEligibility,
   EpisodeReviewDrainOptions,
   EpisodeReviewDrainResult,
+  EpisodeReviewActionInput,
+  EpisodeReviewActionReceipt,
+  EpisodeReviewClaim,
+  EpisodeReviewDecision,
+  EpisodeReviewDecisionInput,
+  EpisodeReviewFailureKind,
+  EpisodeReviewInputCheckpoint,
+  EpisodeReviewInputSpec,
+  EpisodeReviewJobSnapshot,
+  EpisodeReviewJobState,
+  EpisodeReviewJobStatus,
   EpisodeReviewReceipt,
   PendingEpisodeReview,
+  PendingEpisodeReviewV1,
+  PendingEpisodeReviewV2,
 } from './review-inbox.js';
+export { EpisodeReviewFailure } from './review-inbox.js';
+export { EpisodeReviewBranchChangedError } from './review-inbox.js';
+export type {
+  ExactInvokedSkillSnapshot,
+  LearnedSkillDecisionDisposition,
+  LearningReviewEvidencePacket,
+  LearningReviewQualification,
+  LearningReviewVerifierFact,
+  NormalizedLearnedSkillDecision,
+  UnifiedLearningReviewModelInput,
+  UnifiedLearningReviewResult,
+  UnifiedLearningReviewRunner,
+} from './unified-review.js';
+export {
+  isUnifiedLearningReviewModelInput,
+  normalizeUnifiedLearningReview,
+  sanitizeUnifiedLearningReviewInput,
+} from './unified-review.js';

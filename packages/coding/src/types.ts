@@ -88,6 +88,7 @@ import type {
   KodaXSessionWorkspaceKind,
   MemoryReviewPlan,
   MemoryReviewRunner,
+  UnifiedLearningReviewRunner,
   MemoryContextIdentity,
   MemoryPack,
   SessionErrorMetadata,
@@ -709,12 +710,18 @@ export interface KodaXEvents {
   /** Semantic memory review plan produced from explicit user feedback. */
   onMemoryReview?: (plan: MemoryReviewPlan) => void;
   onMemoryNotice?: (notice: {
+    readonly sessionId?: string;
     readonly episodeId: string;
     readonly summaries: readonly string[];
     readonly proposalIds: readonly string[];
   }) => void;
-  onMemoryOutcomeDigest?: (digest: KodaXMemoryOutcomeDigest) => void;
+  onMemoryOutcomeDigest?: (
+    digest: KodaXMemoryOutcomeDigest,
+    metadata?: { readonly jobId?: string },
+  ) => void;
   onMemoryReviewReceipt?: (receipt: {
+    readonly sessionId?: string;
+    readonly jobId?: string;
     readonly reviewKey: string;
     readonly proposalIds: readonly string[];
     readonly completedAt: string;
@@ -774,7 +781,10 @@ export interface KodaXSessionOptions {
    * NOT also snapshot the session: `saveSessionSnapshot` early-returns so
    * the runner's flat full-rewrite `storage.save` can never race / clobber
    * the host's richer incremental writes (which regressed `activeEntryId`
-   * to the first round on resume).
+   * to the first round on resume). Context-silent protocol facts may use the
+   * host's optional atomic `storage.mutateLineage`; this never writes a stale
+   * full session snapshot. A host using F263 durable Memory review facts must
+   * provide that capability; those writes fail closed when it is absent.
    *
    * `storage` is still consulted for LOAD (resume / `resolveInitialMessages`
    * tier 2). When absent (print CLI, ACP, SDK headless), the runner remains
@@ -1511,6 +1521,8 @@ export interface KodaXShellExecutionContract {
 }
 
 export interface KodaXContextOptions {
+  /** Runtime-owner config home used by Memory, review inbox, and Learned Area routing. */
+  configHome?: string;
   /** Runtime-internal shared work ledger inherited by every descendant Agent run. */
   managedWorkBudget?: KodaXManagedWorkBudget;
   /** FEATURE_260 runtime-owned identity used for scoped memory reads. */
@@ -1608,6 +1620,28 @@ export interface KodaXContextOptions {
   skillsPrompt?: string;
   /** Optional run-scoped registry used to pin and restrict Skill invocation. */
   skillRegistry?: ISkillRegistry;
+  /** Runtime-owned complete formal-name inventory used to prevent learned Skill shadowing. */
+  protectedFormalSkillNames?: readonly string[];
+  /**
+   * Opaque root-run binding used to correlate learned Skill usage with the
+   * exact Memory episode produced by that run.
+   *
+   * @internal
+   */
+  learnedSkillBindingId?: string;
+  /** Runtime-owner admission for exact learned Skill revisions. */
+  admitLearnedSkillInvocation?: (input: {
+    readonly sessionId: string;
+    readonly capabilityId: string;
+    readonly revision: number;
+    readonly fingerprint: string;
+  }) => Promise<{ readonly invocationId: string }>;
+  /** Runtime-owner outcome correlation for learned Skill canaries. */
+  completeLearnedSkillOutcomes?: (input: {
+    readonly sessionId: string;
+    readonly outcome: 'verified_success' | 'credible_negative' | 'inconclusive';
+    readonly evidenceRefs: readonly string[];
+  }) => Promise<void>;
   /** Remote-runtime broker for explicitly admitted, OS-sandboxed Skill scripts. */
   skillScriptRunner?: KodaXSkillScriptRunner;
   rawUserInput?: string;
@@ -1806,6 +1840,8 @@ export interface KodaXOptions {
   context?: KodaXContextOptions;
   events?: KodaXEvents;
   memoryReviewer?: MemoryReviewRunner;
+  /** One-call F263 reviewer. When present it replaces the memory-only reviewer for episode jobs. */
+  learningReviewer?: UnifiedLearningReviewRunner;
   /** Optional host-owned semantic selector for sparse governed memory interventions. */
   memoryRecallRunner?: MemoryRecallRunner;
   extensionRuntime?: ExtensionRuntimeContract;
@@ -2277,6 +2313,8 @@ export interface KodaXToolExecutionContext {
   skillDynamicContext?: KodaXSkillDynamicContextPolicy;
   /** Runtime-bound Skill registry; avoids process-global cross-session drift. */
   skillRegistry?: ISkillRegistry;
+  /** Runtime-owner admission for exact learned Skill revisions. */
+  admitLearnedSkillInvocation?: KodaXContextOptions['admitLearnedSkillInvocation'];
   /** Present only when the host admitted exact Skill scripts for this run. */
   skillScriptRunner?: KodaXSkillScriptRunner;
   /** Working directory used to resolve relative paths and execute shell commands. */

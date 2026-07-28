@@ -1406,6 +1406,17 @@ async function bindTrustedRunInput(input: {
       ? hostToolRuntime
       : mergeExtensionRuntimeContracts(hostToolRuntime, activeRuntime);
   const transportOptions = optionalRecord(input.params.options) ?? {};
+  const transportContext = optionalRecord(transportOptions.context);
+  const safeTransportOptions = transportContext === undefined
+    ? transportOptions
+    : {
+        ...transportOptions,
+        context: Object.fromEntries(
+          Object.entries(transportContext).filter(([key]) => (
+            key !== 'configHome' && key !== 'memoryIdentity'
+          )),
+        ),
+      };
   return {
     ...input.params,
     sessionId: input.sessionId,
@@ -1420,8 +1431,13 @@ async function bindTrustedRunInput(input: {
     ...(credentialBinding !== undefined
       ? { providerCredentialProvider: requireStringField(credentialBinding, 'provider') }
       : {}),
-    ...(extensionRuntime !== undefined
-      ? { options: { ...transportOptions, extensionRuntime } }
+    ...(input.params.options !== undefined || extensionRuntime !== undefined
+      ? {
+          options: {
+            ...safeTransportOptions,
+            ...(extensionRuntime === undefined ? {} : { extensionRuntime }),
+          },
+        }
       : {}),
   };
 }
@@ -1581,6 +1597,14 @@ function runtimeDaemonCapabilities(
       citedEntries: true,
     },
     learningCenter: { version: 1 },
+    skillLearningLoop: {
+      version: 1,
+      activation: 'project_scoped_canary',
+      immutableDecisions: true,
+      recordGatedDiscovery: true,
+      exactUseAttribution: true,
+      rollback: true,
+    },
     askUserTransport: { version: 1 },
     permissionCas: { version: 1 },
     providerCredentialBroker: {

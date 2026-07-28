@@ -31,6 +31,7 @@ export {
   appendMemoryOutcomeDigest,
   appendMemoryReviewReceipt,
   appendMemoryClientNotice,
+  getActiveMemoryOutcomeReviewIds,
 } from './memory-outcomes.js';
 
 export {

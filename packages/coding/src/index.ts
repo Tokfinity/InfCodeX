@@ -77,6 +77,18 @@ export {
   KodaXRateLimitError,
 } from '@kodax-ai/llm';
 
+export {
+  canonicalMemoryProjectId,
+} from './memory-runtime.js';
+export {
+  createProductionLearningReviewer,
+  LEARNING_REVIEW_SYSTEM_PROMPT,
+  LEARNING_REVIEW_TOOL,
+  LEARNING_REVIEW_PROMPT_SHA256,
+  LEARNING_REVIEW_SCHEMA_SHA256,
+  type CreateProductionLearningReviewerOptions,
+} from './learning-reviewer.js';
+
 // ============== Core Types ==============
 
 export type {

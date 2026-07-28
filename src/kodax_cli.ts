@@ -715,6 +715,7 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
     extensionRuntime: _extensionRuntime,
     sessionControl: _sessionControl,
     memoryReviewer: _memoryReviewer,
+    learningReviewer: _learningReviewer,
     memoryRecallRunner: _memoryRecallRunner,
     guardrails: _guardrails,
     skillDynamicContext,
@@ -722,6 +723,8 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
   } = options;
   const { storage: _storage, ...wireSession } = session ?? {};
   const {
+    configHome: _configHome,
+    memoryIdentity: _memoryIdentity,
     agentScope: _agentScope,
     mutationTracker: _mutationTracker,
     toolVisibilityPolicy: _toolVisibilityPolicy,

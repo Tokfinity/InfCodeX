@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import type {
   LearnedCapabilityRecord,
@@ -76,17 +76,80 @@ function isFileError(error: unknown, code: string): boolean {
 
 function assertCapability(value: unknown, filePath: string): LearnedCapabilityRecord {
   if (!isRecord(value)
-    || value.schemaVersion !== 1
+    || (value.schemaVersion !== 1 && value.schemaVersion !== 2)
     || typeof value.capabilityId !== 'string'
     || typeof value.displayName !== 'string'
     || typeof value.slug !== 'string'
     || typeof value.revision !== 'number'
     || typeof value.createdAt !== 'string'
     || typeof value.updatedAt !== 'string'
-    || !isRecord(value.source)) {
+    || !isRecord(value.source)
+    || (value.schemaVersion === 2 && !isValidV2Capability(value))) {
     throw new LearningCapabilityError('store_integrity_error', `invalid capability record in ${filePath}`);
   }
   return value as unknown as LearnedCapabilityRecord;
+}
+
+function isValidV2Capability(value: Record<string, unknown>): boolean {
+  if (value.carrier !== 'skill'
+    || !isRecord(value.scope)
+    || !isRecord(value.artifact)
+    || !isRecord(value.provenance)
+    || !isRecord(value.canary)) return false;
+  const scope = value.scope;
+  const artifact = value.artifact;
+  const provenance = value.provenance;
+  const canary = value.canary;
+  return [scope.configHomeHash, scope.tenantHash, scope.projectHash]
+    .every((item) => typeof item === 'string' && /^[a-f0-9]{64}$/.test(item))
+    && artifact.kind === 'skill_markdown'
+    && typeof artifact.relativePath === 'string'
+    && typeof artifact.fingerprint === 'string'
+    && /^[a-f0-9]{64}$/.test(artifact.fingerprint)
+    && Number.isSafeInteger(artifact.contentRevision)
+    && ['jobId', 'inputHash', 'decisionId', 'actionId']
+      .every((key) => typeof provenance[key] === 'string')
+    && canary.maxInvocations === 3
+    && Number.isSafeInteger(canary.invocationCount)
+    && Number.isSafeInteger(canary.verifiedSuccesses)
+    && Number.isSafeInteger(canary.credibleNegatives)
+    && (canary.binding === undefined || isValidCanaryBinding(canary.binding))
+    && Array.isArray(canary.invocations)
+    && canary.invocations.every(isValidCanaryInvocation);
+}
+
+function isValidCanaryBinding(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.bindingId === 'string'
+    && typeof value.ownerSessionRef === 'string'
+    && isValidTimestamp(value.expiresAt);
+}
+
+function isValidCanaryInvocation(value: unknown): boolean {
+  if (!isRecord(value)
+    || typeof value.invocationId !== 'string'
+    || typeof value.bindingId !== 'string'
+    || !['pending', 'verified_success', 'credible_negative', 'inconclusive']
+      .includes(String(value.status))
+    || !Array.isArray(value.evidenceRefs)
+    || !value.evidenceRefs.every((ref) => typeof ref === 'string')
+    || !isValidTimestamp(value.invokedAt)
+    || (value.usageSessionHash !== undefined
+      && (typeof value.usageSessionHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(value.usageSessionHash)))
+    || (value.artifactRevision !== undefined && !Number.isSafeInteger(value.artifactRevision))
+    || (value.artifactFingerprint !== undefined
+      && (typeof value.artifactFingerprint !== 'string'
+        || !/^[a-f0-9]{64}$/.test(value.artifactFingerprint)))) {
+    return false;
+  }
+  return value.status === 'pending'
+    ? value.completedAt === undefined
+    : isValidTimestamp(value.completedAt);
+}
+
+function isValidTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
 function assertEvent(value: unknown, filePath: string): LearningEvent {
@@ -127,9 +190,16 @@ async function listJsonFiles(dirPath: string): Promise<readonly string[]> {
 
 export class LearnedAreaStore {
   readonly paths: LearnedAreaPaths;
+  readonly #globalRoot: string;
 
   constructor(rootDir: string) {
-    this.paths = resolveLearnedAreaPaths(rootDir);
+    const normalizedRoot = resolve(rootDir);
+    this.#globalRoot = globalLearnedAreaRoot(normalizedRoot);
+    this.paths = {
+      ...resolveLearnedAreaPaths(normalizedRoot),
+      events: join(this.#globalRoot, 'events'),
+      clients: join(this.#globalRoot, 'clients'),
+    };
   }
 
   async initialize(): Promise<void> {
@@ -143,18 +213,45 @@ export class LearnedAreaStore {
     assertSafeFileKey(capabilityId, 'capabilityId');
     const filePath = join(this.paths.capabilities, `${capabilityId}.json`);
     const value = await readJson(filePath);
-    return value === undefined ? undefined : assertCapability(value, filePath);
+    if (value !== undefined) return assertCapability(value, filePath);
+    if (this.#globalRoot !== this.paths.root) return undefined;
+    const matches = await projectCapabilityFiles(this.#globalRoot, capabilityId);
+    if (matches.length > 1) {
+      throw new LearningCapabilityError(
+        'store_integrity_error',
+        `duplicate project capabilityId: ${capabilityId}`,
+      );
+    }
+    const projectFile = matches[0];
+    return projectFile === undefined
+      ? undefined
+      : assertCapability(await readJson(projectFile), projectFile);
   }
 
   async listCapabilities(): Promise<readonly LearnedCapabilityRecord[]> {
-    return Promise.all((await listJsonFiles(this.paths.capabilities)).map(async (filePath) => {
+    const direct = await listJsonFiles(this.paths.capabilities);
+    const project = this.#globalRoot === this.paths.root
+      ? await projectCapabilityFiles(this.#globalRoot)
+      : [];
+    return Promise.all([...direct, ...project].map(async (filePath) => {
       return assertCapability(await readJson(filePath), filePath);
     }));
   }
 
   async writeCapability(record: LearnedCapabilityRecord): Promise<void> {
     assertSafeFileKey(record.capabilityId, 'capabilityId');
-    await writeJsonAtomic(join(this.paths.capabilities, `${record.capabilityId}.json`), record);
+    const capabilities = this.#globalRoot === this.paths.root && record.schemaVersion === 2
+      ? join(
+          this.#globalRoot,
+          'projects',
+          record.scope.tenantHash,
+          record.scope.projectHash,
+          'capabilities',
+        )
+      : this.paths.capabilities;
+    const filePath = join(capabilities, `${record.capabilityId}.json`);
+    assertCapability(record, filePath);
+    await writeJsonAtomic(filePath, record);
   }
 
   async writeEvent(event: LearningEvent): Promise<void> {
@@ -184,7 +281,7 @@ export class LearnedAreaStore {
   }
 
   withOwnerMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return withLearningFileLock(join(this.paths.root, '.owner.lock'), operation);
+    return withLearningFileLock(join(this.#globalRoot, '.owner.lock'), operation);
   }
 
   withClientMutation<T>(identity: string, operation: () => Promise<T>): Promise<T> {
@@ -200,6 +297,51 @@ export class LearnedAreaStore {
     const event = eventFromCapability(record, (events.at(-1)?.sequence ?? 0) + 1);
     await this.writeEvent(event);
     return event;
+  }
+}
+
+function globalLearnedAreaRoot(rootDir: string): string {
+  const projectHash = basename(rootDir);
+  const tenantRoot = dirname(rootDir);
+  const tenantHash = basename(tenantRoot);
+  const projectsRoot = dirname(tenantRoot);
+  if (/^[a-f0-9]{64}$/.test(projectHash)
+    && /^[a-f0-9]{64}$/.test(tenantHash)
+    && basename(projectsRoot) === 'projects') {
+    return dirname(projectsRoot);
+  }
+  return rootDir;
+}
+
+async function projectCapabilityFiles(
+  globalRoot: string,
+  capabilityId?: string,
+): Promise<readonly string[]> {
+  const projectsRoot = join(globalRoot, 'projects');
+  const files: string[] = [];
+  for (const tenant of await listDirectories(projectsRoot)) {
+    for (const project of await listDirectories(join(projectsRoot, tenant))) {
+      const capabilities = join(projectsRoot, tenant, project, 'capabilities');
+      if (capabilityId !== undefined) {
+        const candidate = join(capabilities, `${capabilityId}.json`);
+        if (await readJson(candidate) !== undefined) files.push(candidate);
+      } else {
+        files.push(...await listJsonFiles(capabilities));
+      }
+    }
+  }
+  return files.sort();
+}
+
+async function listDirectories(dirPath: string): Promise<readonly string[]> {
+  try {
+    return (await readdir(dirPath, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && /^[a-f0-9]{64}$/.test(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return [];
+    throw error;
   }
 }
 

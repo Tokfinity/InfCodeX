@@ -1,13 +1,28 @@
 import os from 'os';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'fs';
 import fsPromises from 'fs/promises';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  appendMemoryClientNotice,
+  appendMemoryOutcomeDigest,
+  appendMemoryReviewReceipt,
   applySessionCompaction,
   createSessionLineage,
+  drainPendingEpisodeReviews,
   evictOldIslandMessageContent,
+  getSessionLineagePath,
+  hashMemoryIdentityComponent,
+  listPendingEpisodeReviews,
+  persistPendingEpisodeReview,
+  withKodaXFileLock,
+  withPendingEpisodeReviewSessionFence,
+} from '@kodax-ai/agent';
+import type {
+  KodaXMemoryOutcomeDigest,
+  KodaXSessionLineage,
 } from '@kodax-ai/agent';
 
 // 'C:/...' is absolute on win32 but RELATIVE on POSIX, so path.resolve() would
@@ -955,6 +970,582 @@ describe('FileSessionStorage', () => {
     // extensionState is in the meta line (first save), meta_update doesn't overwrite it
     expect(loaded2?.extensionState).toEqual({ 'ext:sample': { phase: 'active', visits: 5 } });
   });
+
+  it('fences review jobs against the exact branch on setActiveEntry and rewind', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const configHome = path.join(tempHome, '.kodax');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome,
+    });
+    const sessionId = 'session-review-fence';
+    const reviewIdentity = {
+      configHome,
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId,
+    } as const;
+    const makeDigest = (
+      id: string,
+      reviewKey: string,
+      sequence: number,
+    ): KodaXMemoryOutcomeDigest => ({
+      id,
+      reviewKey,
+      sessionId,
+      branchId: sessionId,
+      sequence,
+      objective: 'branch fence',
+      approach: 'review',
+      outcome: 'succeeded',
+      summary: id,
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: `2026-07-27T00:00:0${sequence}.000Z`,
+    });
+    const digestA = makeDigest('digest-a', 'review-a', 9);
+    const digestB = makeDigest('digest-b', 'review-b', 1);
+    const jobA = await persistPendingEpisodeReview(reviewIdentity, digestA);
+    const jobB = await persistPendingEpisodeReview(reviewIdentity, digestB);
+    const lineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: 'branch-b',
+      entries: [
+        {
+          type: 'message',
+          id: 'root',
+          logicalId: 'root',
+          parentId: null,
+          timestamp: '2026-07-27T00:00:00.000Z',
+          message: { role: 'user', content: 'root' },
+        },
+        {
+          type: 'message',
+          id: 'branch-a',
+          logicalId: 'branch-a',
+          parentId: 'root',
+          timestamp: '2026-07-27T00:00:01.000Z',
+          message: { role: 'user', content: 'a' },
+        },
+        {
+          type: 'memory_outcome_digest',
+          id: 'lineage-digest-a',
+          logicalId: 'lineage-digest-a',
+          parentId: 'branch-a',
+          timestamp: digestA.createdAt,
+          jobId: jobA.entry.jobId,
+          digest: digestA,
+        },
+        {
+          type: 'message',
+          id: 'branch-b',
+          logicalId: 'branch-b',
+          parentId: 'root',
+          timestamp: '2026-07-27T00:00:02.000Z',
+          message: { role: 'user', content: 'b' },
+        },
+        {
+          type: 'memory_outcome_digest',
+          id: 'lineage-digest-b',
+          logicalId: 'lineage-digest-b',
+          parentId: 'branch-b',
+          timestamp: digestB.createdAt,
+          jobId: jobB.entry.jobId,
+          digest: digestB,
+        },
+      ],
+    };
+    await storage.save(sessionId, {
+      messages: [
+        { role: 'user', content: 'root' },
+        { role: 'user', content: 'b' },
+      ],
+      lineage,
+    });
+
+    await storage.setActiveEntry(sessionId, 'branch-a');
+    expect(await listPendingEpisodeReviews({
+      configHome,
+      tenantId: reviewIdentity.tenantId,
+    })).toMatchObject([{ jobId: jobA.entry.jobId }]);
+
+    await storage.rewind(sessionId, 'root');
+    expect(await listPendingEpisodeReviews({
+      configHome,
+      tenantId: reviewIdentity.tenantId,
+    })).toEqual([]);
+  });
+
+  it('atomically preserves a memory digest across a stale host snapshot save', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome: path.join(tempHome, '.kodax'),
+    });
+    const sessionId = 'session-memory-atomic-lineage';
+    const initialMessages = [{ role: 'user' as const, content: 'before review' }];
+    await storage.save(sessionId, {
+      messages: initialMessages,
+      title: 'atomic lineage',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(initialMessages),
+    });
+    const stale = await storage.load(sessionId);
+    if (stale?.lineage === undefined) throw new Error('expected stale host lineage');
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-atomic-lineage',
+      reviewKey: 'review-atomic-lineage',
+      sessionId,
+      branchId: sessionId,
+      sequence: 1,
+      objective: 'preserve a fenced outcome',
+      approach: 'mutate latest lineage',
+      outcome: 'succeeded',
+      summary: 'outcome persisted',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+
+    await storage.mutateLineage(sessionId, (lineage) => {
+      const withDigest = appendMemoryOutcomeDigest(lineage, digest, 'job-atomic-lineage');
+      const withReceipt = appendMemoryReviewReceipt(withDigest, {
+        jobId: 'job-atomic-lineage',
+        reviewKey: digest.reviewKey,
+        proposalIds: ['proposal-atomic-lineage'],
+        completedAt: '2026-07-27T00:01:00.000Z',
+      });
+      return appendMemoryClientNotice(withReceipt, {
+        episodeId: digest.id,
+        summaries: ['durable update'],
+        proposalIds: ['proposal-atomic-lineage'],
+        createdAt: '2026-07-27T00:01:00.000Z',
+      });
+    });
+    const nextMessages = [
+      ...initialMessages,
+      { role: 'assistant' as const, content: 'new host state' },
+    ];
+    await storage.save(sessionId, {
+      ...stale,
+      messages: nextMessages,
+      lineage: createSessionLineage(nextMessages, stale.lineage),
+    });
+
+    const loaded = await storage.load(sessionId);
+    expect(loaded?.messages).toEqual(nextMessages);
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'memory_outcome_digest',
+      jobId: 'job-atomic-lineage',
+    }));
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'memory_review_receipt',
+      jobId: 'job-atomic-lineage',
+    }));
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'client_notice',
+      payload: { episodeId: digest.id, proposalIds: ['proposal-atomic-lineage'] },
+    }));
+  });
+
+  it('does not let a pre-rewind host snapshot restore the retired branch', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome: path.join(tempHome, '.kodax'),
+    });
+    const sessionId = 'session-stale-after-rewind';
+    const messages = [
+      { role: 'user' as const, content: 'first question' },
+      { role: 'assistant' as const, content: 'first answer' },
+      { role: 'user' as const, content: 'retired question' },
+      { role: 'assistant' as const, content: 'retired answer' },
+    ];
+    await storage.save(sessionId, {
+      messages,
+      title: 'rewind topology',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    });
+    const stale = await storage.load(sessionId);
+    const target = stale?.lineage?.entries.find((entry) => entry.type === 'message')?.id;
+    if (stale === null || target === undefined) throw new Error('expected stale rewind snapshot');
+
+    await storage.rewind(sessionId, target);
+    await storage.save(sessionId, stale);
+
+    const loaded = await storage.load(sessionId);
+    expect(loaded?.messages).toEqual([{ role: 'user', content: 'first question' }]);
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'rewind_marker',
+      targetId: target,
+    }));
+  });
+
+  it('does not let a pre-compaction host snapshot restore compacted context', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome: path.join(tempHome, '.kodax'),
+    });
+    const sessionId = 'session-stale-after-compaction';
+    const messages = [
+      { role: 'user' as const, content: 'old question' },
+      { role: 'assistant' as const, content: 'old answer' },
+    ];
+    const initial = createSessionLineage(messages);
+    await storage.save(sessionId, {
+      messages,
+      title: 'compaction topology',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: initial,
+    });
+    const stale = await storage.load(sessionId);
+    if (stale === null) throw new Error('expected stale compaction snapshot');
+    const keptMessages = [{ role: 'user' as const, content: 'kept context' }];
+    const compacted = applySessionCompaction(initial, keptMessages, {
+      summary: 'old work',
+      reason: 'automatic_compaction',
+    });
+    await storage.save(sessionId, {
+      ...stale,
+      messages: keptMessages,
+      lineage: compacted,
+    });
+
+    await storage.save(sessionId, stale);
+
+    const loaded = await storage.load(sessionId);
+    expect(loaded?.messages).toEqual(keptMessages);
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'compaction',
+      summary: 'old work',
+    }));
+  });
+
+  it('rejects a stale compaction that did not inherit the persisted rewind', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome: path.join(tempHome, '.kodax'),
+    });
+    const sessionId = 'session-stale-compaction-after-rewind';
+    const messages = [
+      { role: 'user' as const, content: 'first question' },
+      { role: 'assistant' as const, content: 'first answer' },
+      { role: 'user' as const, content: 'retired question' },
+      { role: 'assistant' as const, content: 'retired answer' },
+    ];
+    const initial = createSessionLineage(messages);
+    await storage.save(sessionId, {
+      messages,
+      title: 'conflicting topology',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: initial,
+    });
+    const stale = await storage.load(sessionId);
+    const target = stale?.lineage?.entries.find((entry) => entry.type === 'message')?.id;
+    if (stale?.lineage === undefined || target === undefined) {
+      throw new Error('expected stale topology snapshot');
+    }
+    await storage.rewind(sessionId, target);
+    const staleMessages = [{ role: 'user' as const, content: 'stale compacted branch' }];
+    const staleCompaction = applySessionCompaction(stale.lineage, staleMessages, {
+      summary: 'stale branch',
+      reason: 'automatic_compaction',
+    });
+
+    await storage.save(sessionId, {
+      ...stale,
+      messages: staleMessages,
+      lineage: staleCompaction,
+    });
+
+    const loaded = await storage.load(sessionId);
+    expect(loaded?.messages).toEqual([{ role: 'user', content: 'first question' }]);
+    expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+      type: 'rewind_marker',
+      targetId: target,
+    }));
+    expect(loaded?.lineage?.entries).not.toContainEqual(expect.objectContaining({
+      type: 'compaction',
+      summary: 'stale branch',
+    }));
+  });
+
+  it('serializes full saves and lineage mutations across storage instances', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const host = new FileSessionStorage({ sessionsDir });
+    const reviewer = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-cross-instance-mutation';
+    const initialMessages = [{ role: 'user' as const, content: 'base turn' }];
+    await host.save(sessionId, {
+      messages: initialMessages,
+      title: 'cross-instance owner',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(initialMessages),
+    });
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    let releaseHostRename!: () => void;
+    const hostRenameReleased = new Promise<void>((resolve) => {
+      releaseHostRename = resolve;
+    });
+    let signalHostRename!: () => void;
+    const hostRenameReached = new Promise<void>((resolve) => {
+      signalHostRename = resolve;
+    });
+    let blocked = false;
+    const rename = vi.spyOn(fsPromises, 'rename');
+    rename.mockImplementation(async (oldPath, newPath) => {
+      if (!blocked && String(newPath).endsWith(`${sessionId}.jsonl`)) {
+        blocked = true;
+        signalHostRename();
+        await hostRenameReleased;
+      }
+      await originalRename(oldPath, newPath);
+    });
+    try {
+      const nextMessages = [
+        ...initialMessages,
+        { role: 'assistant' as const, content: 'new owner turn' },
+      ];
+      const hostSave = host.save(sessionId, {
+        messages: nextMessages,
+        title: 'cross-instance owner',
+        gitRoot: KODAX_REPO_ROOT,
+        lineage: createSessionLineage(nextMessages),
+      });
+      await hostRenameReached;
+      const receiptMutation = reviewer.mutateLineage(sessionId, (lineage) => (
+        appendMemoryReviewReceipt(lineage, {
+          jobId: 'job-cross-instance',
+          reviewKey: 'review-cross-instance',
+          proposalIds: ['proposal-cross-instance'],
+          completedAt: '2026-07-27T00:01:00.000Z',
+        })
+      ));
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      releaseHostRename();
+      await Promise.all([hostSave, receiptMutation]);
+
+      const loaded = await host.load(sessionId);
+      expect(loaded?.messages).toEqual(nextMessages);
+      expect(loaded?.lineage?.entries).toContainEqual(expect.objectContaining({
+        type: 'memory_review_receipt',
+        jobId: 'job-cross-instance',
+      }));
+    } finally {
+      releaseHostRename();
+      rename.mockRestore();
+    }
+  });
+
+  it('waits for a live session writer held longer than the learning lock timeout', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-long-cross-instance-writer';
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    let markLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      markLockHeld = resolve;
+    });
+    const holder = withKodaXFileLock(lockPath, async () => {
+      markLockHeld();
+      await new Promise<void>((resolve) => setTimeout(resolve, 5_600));
+    });
+    await lockHeld;
+
+    const messages = [{ role: 'user' as const, content: 'wait for the live writer' }];
+    await expect(storage.save(sessionId, {
+      messages,
+      title: 'long writer',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    })).resolves.toBeUndefined();
+    await holder;
+
+    expect((await storage.load(sessionId))?.messages).toEqual(messages);
+  });
+
+  it('keeps the outer review fence live while a branch mutation waits on a long session writer', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const configHome = path.join(tempHome, '.kodax');
+    const storage = new FileSessionStorage({ sessionsDir, configHome });
+    const sessionId = 'session-long-writer-branch-fence';
+    const identity = {
+      configHome,
+      tenantId: 'tenant-long-writer-branch-fence',
+      agentId: 'agent-long-writer-branch-fence',
+      projectId: 'project-long-writer-branch-fence',
+      sessionId,
+    };
+    const messages = [
+      { role: 'user' as const, content: 'root turn' },
+      { role: 'assistant' as const, content: 'branch turn' },
+    ];
+    const lineage = createSessionLineage(messages);
+    const targetId = lineage.entries[0]?.id;
+    if (targetId === undefined) throw new Error('expected branch target');
+    await storage.save(sessionId, {
+      messages,
+      title: 'long writer branch fence',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage,
+    });
+    await persistPendingEpisodeReview(identity, {
+      id: 'digest-long-writer-branch-fence',
+      reviewKey: 'review-long-writer-branch-fence',
+      sessionId,
+      branchId: sessionId,
+      sequence: 1,
+      objective: 'preserve branch authority',
+      approach: 'wait through session contention',
+      outcome: 'succeeded',
+      summary: 'review is pending',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    });
+
+    const sessionLockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const sessionLockPath = path.join(
+      sessionsDir,
+      '.write-locks',
+      `${sessionLockKey}.lock`,
+    );
+    let markSessionLockHeld!: () => void;
+    const sessionLockHeld = new Promise<void>((resolve) => {
+      markSessionLockHeld = resolve;
+    });
+    const holder = withKodaXFileLock(sessionLockPath, async () => {
+      markSessionLockHeld();
+      await new Promise<void>((resolve) => setTimeout(resolve, 6_500));
+    });
+    await sessionLockHeld;
+
+    const branchChange = storage.setActiveEntry(sessionId, targetId);
+    const branchLockPath = path.join(
+      configHome,
+      'memory-review-inbox',
+      hashMemoryIdentityComponent('tenant', identity.tenantId),
+      hashMemoryIdentityComponent('session', sessionId),
+      '.branch-authority.lock',
+    );
+    const branchLockDeadline = Date.now() + 2_000;
+    while (!existsSync(branchLockPath) && Date.now() < branchLockDeadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    expect(existsSync(branchLockPath)).toBe(true);
+
+    const completionFence = withPendingEpisodeReviewSessionFence(
+      { configHome, sessionId },
+      async () => 'completed',
+    );
+    const results = await Promise.allSettled([branchChange, completionFence]);
+    await holder;
+
+    expect(results).toEqual([
+      expect.objectContaining({ status: 'fulfilled' }),
+      { status: 'fulfilled', value: 'completed' },
+    ]);
+  });
+
+  it('serializes review completion before a concurrent branch change without timing out or attaching the receipt to the new branch', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const configHome = path.join(tempHome, '.kodax');
+    const storage = new FileSessionStorage({
+      sessionsDir: testSessionsDir(),
+      configHome,
+    });
+    const sessionId = 'session-review-completion-race';
+    const identity = {
+      configHome,
+      tenantId: 'tenant-review-completion-race',
+      agentId: 'agent-review-completion-race',
+      projectId: 'project-review-completion-race',
+      sessionId,
+    };
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-review-completion-race',
+      reviewKey: 'review-completion-race',
+      sessionId,
+      branchId: sessionId,
+      sequence: 1,
+      objective: 'complete a delayed review',
+      approach: 'persist its owner-session receipt',
+      outcome: 'succeeded',
+      summary: 'review completed',
+      evidenceRefs: [],
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    const pending = await persistPendingEpisodeReview(identity, digest);
+    const messages = [
+      { role: 'user' as const, content: 'root' },
+      { role: 'assistant' as const, content: 'old branch' },
+    ];
+    const initialLineage = createSessionLineage(messages);
+    const targetEntryId = initialLineage.entries[0]?.id;
+    if (targetEntryId === undefined) throw new Error('expected branch target');
+    await storage.save(sessionId, {
+      messages,
+      title: 'completion race',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: appendMemoryOutcomeDigest(initialLineage, digest, pending.entry.jobId),
+    });
+
+    let markCompletionStarted!: () => void;
+    const completionStarted = new Promise<void>((resolve) => {
+      markCompletionStarted = resolve;
+    });
+    let releaseCompletion!: () => void;
+    const completionRelease = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const drain = drainPendingEpisodeReviews(identity, {
+      revalidate: async () => 'eligible',
+      review: async () => [],
+      onV2Completed: async (entry, _decision, proposalIds) => {
+        markCompletionStarted();
+        await completionRelease;
+        const owner = await storage.load(sessionId);
+        if (owner?.lineage === undefined) throw new Error('expected owner lineage');
+        await storage.save(sessionId, {
+          ...owner,
+          lineage: appendMemoryReviewReceipt(owner.lineage, {
+            jobId: entry.jobId,
+            reviewKey: entry.reviewKey,
+            proposalIds,
+            completedAt: '2026-07-27T00:01:00.000Z',
+          }),
+        });
+      },
+    });
+    await completionStarted;
+    const branchChange = storage.setActiveEntry(sessionId, targetEntryId);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    releaseCompletion();
+
+    await expect(Promise.all([drain, branchChange])).resolves.toMatchObject([
+      { reviewed: 1, failed: 0 },
+      { lineage: { activeEntryId: targetEntryId } },
+    ]);
+    const loaded = await storage.load(sessionId);
+    const receipt = loaded?.lineage?.entries.find((entry) =>
+      entry.type === 'memory_review_receipt' && entry.jobId === pending.entry.jobId);
+    const activePathIds = new Set(
+      loaded?.lineage === undefined
+        ? []
+        : getSessionLineagePath(loaded.lineage).map((entry) => entry.id),
+    );
+    expect(receipt).toBeDefined();
+    expect(receipt?.parentId === null || activePathIds.has(receipt?.parentId ?? '')).toBe(false);
+  }, 10_000);
 
   it('archives exact pre-compaction messages before accepting an evicted snapshot', async () => {
     const { FileSessionStorage } = await import('./storage.js');

@@ -128,6 +128,8 @@ export interface InvokeLlmJudgeOptions<TVerdict> {
   readonly abortSignal?: AbortSignal;
   /** Short structured-call output cap. Default 1024. */
   readonly maxOutputTokens?: number;
+  /** Optional logical cache domain owned by the caller. */
+  readonly promptCacheKey?: string;
 }
 
 /**
@@ -165,6 +167,9 @@ export async function invokeLlmJudge<TVerdict>(
           ...(options.model ? { modelOverride: options.model } : {}),
           forcedToolName: options.reportToolName,
           maxOutputTokensOverride: maxOutputTokens,
+          ...(options.promptCacheKey === undefined
+            ? {}
+            : { promptCacheKey: options.promptCacheKey }),
           signal: streamSignal,
         },
         streamSignal,

@@ -62,6 +62,22 @@ describe('runtime.learning inline facade', () => {
     await second.getSnapshot();
   });
 
+  it('accepts capabilityId as the exact target for public user actions', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-id-'));
+    tempDirs.push(homeDir);
+    await seedReadyCapability(homeDir);
+    const owner = createRuntimeLearningOwner({
+      rootDir: join(homeDir, '.kodax', 'learned'),
+      defaultClientIdentity: 'default-client',
+    });
+
+    expect((await owner.get('lc_runtime_test')).slug).toBe('runtime-test-skill');
+    await owner.disable('lc_runtime_test');
+    expect(await owner.get('lc_runtime_test')).toMatchObject({
+      lifecycle: 'archived',
+    });
+  });
+
   it('cancels a lazy subscription before initialization installs an active iterator', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'kodax-runtime-learning-cancel-'));
     tempDirs.push(homeDir);

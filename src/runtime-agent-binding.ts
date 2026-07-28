@@ -5,7 +5,19 @@ import path from 'node:path';
 
 import {
   SkillRegistry,
+  LearnedAreaStore,
+  admitAndRecordLearnedSkillInvocation,
+  admitLearnedSkillBinding,
+  completeLearnedSkillSessionOutcomes,
+  createLearnedCapabilityScope,
+  emitKodaXDiagnostic,
   getDefaultSkillPaths,
+  migrateLegacyLearnedSkillsForProject,
+  recordLearnedSkillOffered,
+  reconcileLearnedSkillBindingOutcomes,
+  releaseLearnedSkillBinding,
+  resolveProjectLearnedAreaRoot,
+  tryGitRemote,
   type AgentDispatchContext,
   type Agent,
   type ISkillRegistry,
@@ -17,8 +29,10 @@ import {
 } from '@kodax-ai/agent';
 import {
   getAllRegisteredTools,
+  canonicalMemoryProjectId,
   loadMarkdownAgentScope,
   type KodaXAgentScope,
+  type KodaXContextOptions,
   type KodaXSkillScriptRunner,
   type LoadedMarkdownAgent,
   type RuntimeRemoteToolContract,
@@ -176,6 +190,11 @@ interface BindingResources {
   readonly effectiveSkills: readonly RuntimeEffectiveSkillRef[];
   readonly skillSetRevision: string;
   readonly skillRegistry: ISkillRegistry;
+  readonly protectedFormalSkillNames: readonly string[];
+  readonly learnedSkills?: {
+    readonly store: LearnedAreaStore;
+    readonly testingCapabilityIds: readonly string[];
+  };
   readonly skillScriptRunner?: KodaXSkillScriptRunner;
   readonly remoteContracts: ReadonlyMap<string, RuntimeRemoteToolContract>;
   readonly toolRegistrations: ReadonlyMap<string, string>;
@@ -332,10 +351,10 @@ async function skillRevision(skill: Skill): Promise<string> {
 }
 
 class PinnedSkillRegistry implements ISkillRegistry {
-  readonly #delegate: SkillRegistry;
+  readonly #delegate: ISkillRegistry;
   readonly #metadata: ReadonlyMap<string, SkillMetadata>;
 
-  constructor(delegate: SkillRegistry, metadata: readonly SkillMetadata[]) {
+  constructor(delegate: ISkillRegistry, metadata: readonly SkillMetadata[]) {
     this.#delegate = delegate;
     this.#metadata = new Map(metadata.map((item) => [item.name, item]));
   }
@@ -360,20 +379,71 @@ class PinnedSkillRegistry implements ISkillRegistry {
   }
 }
 
+class CompositeSkillRegistry implements ISkillRegistry {
+  constructor(
+    private readonly formal: ISkillRegistry,
+    private readonly learned: ISkillRegistry,
+  ) {}
+
+  get skills(): ReadonlyMap<string, SkillMetadata> {
+    return new Map(this.list().map((skill) => [skill.name, skill]));
+  }
+  get size(): number { return this.list().length; }
+  async discover(): Promise<void> {}
+  get(name: string): SkillMetadata | undefined {
+    return this.formal.get(name) ?? this.learned.get(name);
+  }
+  has(name: string): boolean { return this.formal.has(name) || this.learned.has(name); }
+  list(): SkillMetadata[] {
+    const combined = new Map(this.learned.list().map((skill) => [skill.name, skill]));
+    for (const skill of this.formal.list()) combined.set(skill.name, skill);
+    return [...combined.values()];
+  }
+  listUserInvocable(): SkillMetadata[] {
+    return this.list().filter((skill) => skill.userInvocable);
+  }
+  loadFull(name: string): Promise<Skill> {
+    return this.formal.has(name) ? this.formal.loadFull(name) : this.learned.loadFull(name);
+  }
+  invoke(name: string, args: string, context: SkillContext): Promise<SkillResult> {
+    return this.formal.has(name)
+      ? this.formal.invoke(name, args, context)
+      : this.learned.invoke(name, args, context);
+  }
+  async reload(): Promise<void> {
+    throw new Error('A bound Skill registry is immutable; create a new Runtime binding.');
+  }
+}
+
 async function resolveSkills(input: {
   readonly configHome: string;
   readonly workspace: RuntimeWorkspaceBinding;
   readonly selection?: readonly string[];
+  readonly bindingId?: string;
+  readonly ownerSessionRef?: string;
 }): Promise<{
   readonly registry: ISkillRegistry;
   readonly refs: readonly RuntimeEffectiveSkillRef[];
   readonly revision: string;
+  readonly protectedFormalSkillNames: readonly string[];
+  readonly learnedSkills?: {
+    readonly store: LearnedAreaStore;
+    readonly testingCapabilityIds: readonly string[];
+  };
 }> {
   const projectRoot = input.workspace.mode === 'fixed' ? input.workspace.root : undefined;
   const defaults = getDefaultSkillPaths(projectRoot);
   const standardUserSkillPaths = defaults.userPaths.filter((skillPath) => (
     path.basename(path.dirname(skillPath)) === '.agents'
   ));
+  const learned = projectRoot === undefined
+    ? undefined
+    : await tryPrepareProjectLearnedSkills({
+        configHome: input.configHome,
+        projectRoot,
+        ...(input.bindingId === undefined ? {} : { bindingId: input.bindingId }),
+        ...(input.ownerSessionRef === undefined ? {} : { ownerSessionRef: input.ownerSessionRef }),
+      });
   const registry = new SkillRegistry(projectRoot, {
     projectPaths: input.workspace.mode === 'managed' ? [] : defaults.projectPaths,
     userPaths: [
@@ -382,27 +452,149 @@ async function resolveSkills(input: {
     ],
     pluginPaths: defaults.pluginPaths,
     builtinPath: defaults.builtinPath,
+    ...(learned === undefined ? {} : { learnedArea: learned.discovery }),
   });
-  await registry.discover();
-  const all = registry.list();
-  const wildcard = input.selection === undefined || input.selection.includes('*');
-  const selected = wildcard
-    ? all.filter((skill) => skill.source !== 'project' && !skill.disableModelInvocation)
-    : input.selection.map((name) => {
-        const skill = registry.get(name);
-        if (!skill) throw new Error(`Markdown Agent requires unknown Skill "${name}".`);
-        if (skill.disableModelInvocation) throw new Error(`Skill "${name}" disables model invocation.`);
-        return skill;
+  try {
+    await registry.discover();
+  } catch (error) {
+    await releaseResolvedLearnedSkills(learned, input.bindingId);
+    throw error;
+  }
+  try {
+    const all = registry.list();
+    const wildcard = input.selection === undefined || input.selection.includes('*');
+    const selected = wildcard
+      ? all.filter((skill) => skill.source !== 'project' && !skill.disableModelInvocation)
+      : input.selection.map((name) => {
+          const skill = registry.get(name);
+          if (!skill) throw new Error(`Markdown Agent requires unknown Skill "${name}".`);
+          if (skill.disableModelInvocation) throw new Error(`Skill "${name}" disables model invocation.`);
+          return skill;
+        });
+    const refs: RuntimeEffectiveSkillRef[] = [];
+    for (const metadata of selected.sort((left, right) => left.name.localeCompare(right.name))) {
+      const revision = await skillRevision(await registry.loadFull(metadata.name));
+      refs.push({ name: metadata.name, source: skillSource(metadata.source), revision });
+    }
+    const result = {
+      registry: new PinnedSkillRegistry(registry, selected),
+      refs,
+      revision: stableHash(refs),
+      protectedFormalSkillNames: all
+        .filter((skill) => skill.source !== 'learned')
+        .map((skill) => skill.name),
+      ...(learned === undefined
+        ? {}
+        : {
+            learnedSkills: {
+              store: learned.store,
+              testingCapabilityIds: learned.testingCapabilityIds,
+            },
+          }),
+    };
+    await safeReleaseResolvedLearnedSkills(learned, input.bindingId);
+    return result;
+  } catch (error) {
+    await safeReleaseResolvedLearnedSkills(learned, input.bindingId);
+    throw error;
+  }
+}
+
+async function tryPrepareProjectLearnedSkills(
+  input: Parameters<typeof prepareProjectLearnedSkills>[0],
+): Promise<Awaited<ReturnType<typeof prepareProjectLearnedSkills>> | undefined> {
+  try {
+    return await prepareProjectLearnedSkills(input);
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'runtime:learned-skills',
+      level: 'warn',
+      message: `Learned Area disabled for this binding: ${errorMessage(error)}`,
+    });
+    return undefined;
+  }
+}
+
+async function releaseResolvedLearnedSkills(
+  learned: {
+    readonly store: LearnedAreaStore;
+    readonly testingCapabilityIds: readonly string[];
+  } | undefined,
+  bindingId: string | undefined,
+): Promise<void> {
+  if (learned === undefined || bindingId === undefined) return;
+  await Promise.all(learned.testingCapabilityIds.map((capabilityId) => (
+    releaseLearnedSkillBinding(learned.store, capabilityId, bindingId)
+  )));
+}
+
+async function safeReleaseResolvedLearnedSkills(
+  learned: {
+    readonly store: LearnedAreaStore;
+    readonly testingCapabilityIds: readonly string[];
+  } | undefined,
+  bindingId: string | undefined,
+): Promise<void> {
+  if (learned === undefined || bindingId === undefined) return;
+  const results = await Promise.allSettled(learned.testingCapabilityIds.map((capabilityId) => (
+    releaseLearnedSkillBinding(learned.store, capabilityId, bindingId)
+  )));
+  for (const result of results) {
+    if (result.status !== 'rejected') continue;
+    emitKodaXDiagnostic({
+      source: 'runtime:learned-skills',
+      level: 'warn',
+      message: `Learned Skill binding release requires lease recovery: ${errorMessage(result.reason)}`,
+    });
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function prepareProjectLearnedSkills(input: {
+  readonly configHome: string;
+  readonly projectRoot: string;
+  readonly bindingId?: string;
+  readonly ownerSessionRef?: string;
+}): Promise<{
+  readonly store: LearnedAreaStore;
+  readonly testingCapabilityIds: readonly string[];
+  readonly discovery: NonNullable<import('@kodax-ai/agent').SkillPathsConfig['learnedArea']>;
+}> {
+  const tenantId = `local:${input.configHome}`;
+  const remote = tryGitRemote(input.projectRoot)?.trim();
+  const projectId = remote === undefined
+    ? `local:${path.resolve(input.projectRoot).toLowerCase()}`
+    : canonicalMemoryProjectId(remote);
+  const rootDir = resolveProjectLearnedAreaRoot(input.configHome, { tenantId, projectId });
+  const store = new LearnedAreaStore(rootDir);
+  await store.initialize();
+  const scope = createLearnedCapabilityScope(input.configHome, { tenantId, projectId });
+  await migrateLegacyLearnedSkillsForProject(input.configHome, store, scope);
+  const testingBindings: Record<string, string> = {};
+  const testingCapabilityIds: string[] = [];
+  if (input.bindingId !== undefined && input.ownerSessionRef !== undefined) {
+    for (const record of await store.listCapabilities()) {
+      if (record.schemaVersion !== 2 || record.lifecycle !== 'testing') continue;
+      const admission = await admitLearnedSkillBinding(store, record.capabilityId, {
+        bindingId: input.bindingId,
+        ownerSessionRef: input.ownerSessionRef,
       });
-  const refs: RuntimeEffectiveSkillRef[] = [];
-  for (const metadata of selected.sort((left, right) => left.name.localeCompare(right.name))) {
-    const revision = await skillRevision(await registry.loadFull(metadata.name));
-    refs.push({ name: metadata.name, source: skillSource(metadata.source), revision });
+      if (admission === undefined) continue;
+      testingBindings[record.capabilityId] = admission.bindingId;
+      testingCapabilityIds.push(record.capabilityId);
+    }
   }
   return {
-    registry: new PinnedSkillRegistry(registry, selected),
-    refs,
-    revision: stableHash(refs),
+    store,
+    testingCapabilityIds,
+    discovery: {
+      rootDir,
+      expectedScope: scope,
+      testingBindings,
+    },
   };
 }
 
@@ -639,6 +831,10 @@ async function localAgentResources(
   host: RuntimeAgentBindingHost,
   ref: RuntimeUserMarkdownAgentRef,
   workspace: RuntimeWorkspaceBinding,
+  admission?: {
+    readonly bindingId: string;
+    readonly ownerSessionRef: string;
+  },
 ): Promise<{
   readonly scope: KodaXAgentScope;
   readonly loaded: LoadedMarkdownAgent;
@@ -660,6 +856,7 @@ async function localAgentResources(
       configHome: host.configHome,
       workspace,
       selection: loaded.requestedSkills,
+      ...(admission === undefined ? {} : admission),
     });
     return { scope: result.scope, loaded, configurationRevision, skills };
   } catch (error: unknown) {
@@ -704,6 +901,149 @@ export function createRuntimeAgentBindingService(
     owners.get(binding.ownerSessionId)?.delete(binding.bindingId);
     binding.scope?.dispose();
     await binding.skillScriptRunner?.dispose();
+    await safeReleaseResolvedLearnedSkills(binding.learnedSkills, binding.bindingId);
+  };
+
+  const prepareLearnedSkillRun = async (
+    binding: BindingResources,
+    sessionId: string,
+  ) => {
+    const formalSkills = binding.skillRegistry.list()
+      .filter((metadata) => metadata.source !== 'learned');
+    const formalRegistry = new PinnedSkillRegistry(binding.skillRegistry, formalSkills);
+    const withoutLearned = {
+      context: {
+        configHome: host.configHome,
+        protectedFormalSkillNames: binding.protectedFormalSkillNames,
+      },
+      registry: formalRegistry,
+      skills: binding.effectiveSkills.filter((skill) => skill.source !== 'learned'),
+      release: async () => undefined,
+    };
+    if (binding.learnedSkills === undefined || binding.workspace.mode !== 'fixed') {
+      return withoutLearned;
+    }
+    const runBindingId = `root_${randomUUID()}`;
+    const learned = await tryPrepareProjectLearnedSkills({
+      configHome: host.configHome,
+      projectRoot: binding.workspace.root,
+      bindingId: runBindingId,
+      ownerSessionRef: sessionId,
+    });
+    if (learned === undefined) return withoutLearned;
+    const learnedRegistry = new SkillRegistry(undefined, {
+      projectPaths: [],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(learned.discovery.rootDir, '.no-formal-skills'),
+      learnedArea: learned.discovery,
+    });
+    try {
+      await reconcileLearnedSkillBindingOutcomes(learned.store, {
+        sessionId,
+        bindingId: runBindingId,
+      });
+      await learnedRegistry.discover();
+    } catch (error: unknown) {
+      await safeReleaseResolvedLearnedSkills(learned, runBindingId);
+      emitKodaXDiagnostic({
+        source: 'runtime:learned-skills',
+        level: 'warn',
+        message: `Learned Area disabled for this root run: ${errorMessage(error)}`,
+      });
+      return withoutLearned;
+    }
+    const registry = new CompositeSkillRegistry(formalRegistry, learnedRegistry);
+    try {
+      for (const metadata of registry.list()) {
+        if (metadata.source !== 'learned' || metadata.learned === undefined) continue;
+        await recordLearnedSkillOffered(learned.store, {
+          sessionId,
+          bindingId: runBindingId,
+          capabilityId: metadata.learned.capabilityId,
+          revision: metadata.learned.revision,
+          fingerprint: metadata.learned.fingerprint,
+        });
+      }
+    } catch (error: unknown) {
+      await safeReleaseResolvedLearnedSkills(learned, runBindingId);
+      emitKodaXDiagnostic({
+        source: 'runtime:learned-skills',
+        level: 'warn',
+        message: `Learned usage receipts disabled for this root run: ${errorMessage(error)}`,
+      });
+      return withoutLearned;
+    }
+    const learnedSkills = registry.list()
+      .filter((metadata) => metadata.source === 'learned' && metadata.learned !== undefined)
+      .map((metadata): RuntimeEffectiveSkillRef => ({
+        name: metadata.name,
+        source: 'learned',
+        revision: metadata.learned!.fingerprint,
+      }));
+    return {
+      context: {
+        configHome: host.configHome,
+        protectedFormalSkillNames: binding.protectedFormalSkillNames,
+        learnedSkillBindingId: runBindingId,
+        admitLearnedSkillInvocation: async (
+          input: Parameters<NonNullable<KodaXContextOptions['admitLearnedSkillInvocation']>>[0],
+        ) => {
+          const receipt = await admitAndRecordLearnedSkillInvocation(learned.store, {
+            sessionId,
+            ownerSessionRef: sessionId,
+            capabilityId: input.capabilityId,
+            expectedRevision: input.revision,
+            expectedFingerprint: input.fingerprint,
+            bindingId: runBindingId,
+          });
+          return { invocationId: receipt.invocationId };
+        },
+        completeLearnedSkillOutcomes: async (
+          input: Parameters<NonNullable<KodaXContextOptions['completeLearnedSkillOutcomes']>>[0],
+        ) => {
+          await completeLearnedSkillSessionOutcomes(learned.store, {
+            ...input,
+            sessionId,
+            bindingId: runBindingId,
+          });
+        },
+      },
+      registry,
+      skills: [
+        ...binding.effectiveSkills.filter((skill) => skill.source !== 'learned'),
+        ...learnedSkills,
+      ],
+      release: async () => {
+        try {
+          await reconcileLearnedSkillBindingOutcomes(learned.store, {
+            sessionId,
+            bindingId: runBindingId,
+          });
+        } catch (error: unknown) {
+          emitKodaXDiagnostic({
+            source: 'runtime:learned-skills',
+            level: 'warn',
+            message: `Learned Skill outcome reconciliation failed: ${errorMessage(error)}`,
+          });
+        } finally {
+          await safeReleaseResolvedLearnedSkills(learned, runBindingId);
+        }
+      },
+    };
+  };
+
+  const withLearnedSkillRelease = async (
+    prepared: Awaited<ReturnType<typeof prepareLearnedSkillRun>>,
+    start: () => Promise<RuntimeRunHandle>,
+  ): Promise<RuntimeRunHandle> => {
+    try {
+      const handle = await start();
+      return { ...handle, result: handle.result.finally(prepared.release) };
+    } catch (error: unknown) {
+      await prepared.release();
+      throw error;
+    }
   };
 
   return {
@@ -723,7 +1063,13 @@ export function createRuntimeAgentBindingService(
       const workspace = normalizedWorkspace(input.workspace);
       const toolPolicy = validatedToolPolicy(input.toolPolicy);
       const workspaceByteLimit = validateWorkspaceByteLimit(input.workspaceByteLimit);
-      const skills = await resolveSkills({ configHome: host.configHome, workspace });
+      const bindingId = randomUUID();
+      const skills = await resolveSkills({
+        configHome: host.configHome,
+        workspace,
+        bindingId,
+        ownerSessionRef: input.ownerSessionId,
+      });
       const hasSkillScripts = Object.keys(toolPolicy.skillScripts).length > 0;
       const toolSurface = resolveToolSurface({ policy: toolPolicy, hasSkills: skills.refs.length > 0, hasSkillScripts });
       const skillScriptRunner = hasSkillScripts
@@ -732,8 +1078,10 @@ export function createRuntimeAgentBindingService(
             workspaceAccess: toolPolicy.workspace, network: toolPolicy.network, workspaceByteLimit,
           })
         : undefined;
-      if (hasSkillScripts && !skillScriptRunner) throw new Error('Runtime isolated Skill script backend is unavailable.');
-      const bindingId = randomUUID();
+      if (hasSkillScripts && !skillScriptRunner) {
+        await releaseResolvedLearnedSkills(skills.learnedSkills, bindingId);
+        throw new Error('Runtime isolated Skill script backend is unavailable.');
+      }
       const toolPolicyRevision = stableHash(toolPolicy);
       const workspaceBindingRevision = stableHash(workspace);
       const executionPolicyRevision = stableHash({
@@ -744,6 +1092,7 @@ export function createRuntimeAgentBindingService(
       });
       if (input.expectedExecutionPolicyRevision && input.expectedExecutionPolicyRevision !== executionPolicyRevision) {
         await skillScriptRunner?.dispose();
+        await releaseResolvedLearnedSkills(skills.learnedSkills, bindingId);
         throw new Error('Runtime default execution policy revision changed.');
       }
       const resources: BindingResources = {
@@ -751,8 +1100,11 @@ export function createRuntimeAgentBindingService(
         executionPolicyRevision, toolPolicyRevision, workspaceBindingRevision,
         workspace, toolPolicy, effectiveTools: toolSurface.tools,
         effectiveSkills: skills.refs, skillSetRevision: skills.revision,
-        skillRegistry: skills.registry, skillScriptRunner, remoteContracts: toolSurface.contracts,
+        skillRegistry: skills.registry,
+        protectedFormalSkillNames: skills.protectedFormalSkillNames,
+        skillScriptRunner, remoteContracts: toolSurface.contracts,
         toolRegistrations: toolSurface.registrations, workspaceByteLimit,
+        ...(skills.learnedSkills === undefined ? {} : { learnedSkills: skills.learnedSkills }),
       };
       bindings.set(bindingId, resources);
       owner.add(bindingId);
@@ -769,33 +1121,40 @@ export function createRuntimeAgentBindingService(
         throw new Error('Runtime default execution policy revision changed.');
       }
       const root = await requiredWorkspaceRoot(host, binding, input.sessionId);
-      return host.runs.start({
+      const learnedRun = await prepareLearnedSkillRun(binding, input.sessionId);
+      return withLearnedSkillRelease(learnedRun, () => host.runs.start({
         sessionId: input.sessionId, input: input.input, permissionBroker: input.permissionBroker,
         agentContext: input.agentContext,
         options: {
           context: {
             executionCwd: root, gitRoot: root, managedTaskWorkspaceDir: root,
+            ...learnedRun.context,
             toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
-            skillRegistry: binding.skillRegistry,
+            skillRegistry: learnedRun.registry,
             skillScriptRunner: binding.skillScriptRunner,
             assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
-            skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
+            skillsPrompt: skillsPrompt(learnedRun.skills, learnedRun.registry),
           },
           skillDynamicContext: { disable: true },
           guardrails: [createToolGuardrail(binding, root)],
           events: remoteRunEvents(),
         },
-      });
+      }));
     },
     async bindLocal(input) {
       const owner = requireOwner(input.ownerSessionId);
       const workspace = normalizedWorkspace(input.workspace);
       const toolPolicy = validatedToolPolicy(input.toolPolicy);
       const workspaceByteLimit = validateWorkspaceByteLimit(input.workspaceByteLimit);
-      const resources = await localAgentResources(host, input.ref, workspace);
+      const bindingId = randomUUID();
+      const resources = await localAgentResources(host, input.ref, workspace, {
+        bindingId,
+        ownerSessionRef: input.ownerSessionId,
+      });
       const resolved = resolvedLocal(input.ref, resources);
       if (input.expectedConfigurationRevision && input.expectedConfigurationRevision !== resolved.configurationRevision) {
         resources.scope.dispose();
+        await releaseResolvedLearnedSkills(resources.skills.learnedSkills, bindingId);
         throw new Error('User Markdown Agent configuration revision changed.');
       }
       const toolSurface = resolveToolSurface({
@@ -813,9 +1172,9 @@ export function createRuntimeAgentBindingService(
         : undefined;
       if (hasSkillScripts && !skillScriptRunner) {
         resources.scope.dispose();
+        await releaseResolvedLearnedSkills(resources.skills.learnedSkills, bindingId);
         throw new Error('Runtime isolated Skill script backend is unavailable.');
       }
-      const bindingId = randomUUID();
       const toolPolicyRevision = stableHash(toolPolicy);
       const workspaceBindingRevision = stableHash(workspace);
       const executionPolicyRevision = stableHash({
@@ -828,12 +1187,14 @@ export function createRuntimeAgentBindingService(
       if (input.expectedExecutionPolicyRevision && input.expectedExecutionPolicyRevision !== executionPolicyRevision) {
         await skillScriptRunner?.dispose();
         resources.scope.dispose();
+        await releaseResolvedLearnedSkills(resources.skills.learnedSkills, bindingId);
         throw new Error('Local Agent execution policy revision changed.');
       }
       const agent = resources.scope.resolve(input.ref.name)?.agent;
       if (!agent) {
         await skillScriptRunner?.dispose();
         resources.scope.dispose();
+        await releaseResolvedLearnedSkills(resources.skills.learnedSkills, bindingId);
         throw new Error(`User Markdown Agent not found: ${input.ref.name}`);
       }
       const binding: BindingResources = {
@@ -841,8 +1202,13 @@ export function createRuntimeAgentBindingService(
         executionPolicyRevision, toolPolicyRevision, workspaceBindingRevision,
         workspace, toolPolicy, effectiveTools: toolSurface.tools,
         effectiveSkills: resources.skills.refs, skillSetRevision: resources.skills.revision,
-        skillRegistry: resources.skills.registry, skillScriptRunner, remoteContracts: toolSurface.contracts,
+        skillRegistry: resources.skills.registry,
+        protectedFormalSkillNames: resources.skills.protectedFormalSkillNames,
+        skillScriptRunner, remoteContracts: toolSurface.contracts,
         toolRegistrations: toolSurface.registrations,
+        ...(resources.skills.learnedSkills === undefined
+          ? {}
+          : { learnedSkills: resources.skills.learnedSkills }),
         workspaceByteLimit,
         scope: resources.scope, loadedAgent: resources.loaded, agent,
         configurationRevision: resources.configurationRevision,
@@ -867,10 +1233,11 @@ export function createRuntimeAgentBindingService(
         throw new Error('Local Agent execution policy revision changed.');
       }
       const root = await requiredWorkspaceRoot(host, binding, input.sessionId);
+      const learnedRun = await prepareLearnedSkillRun(binding, input.sessionId);
       const instructions = typeof binding.agent.instructions === 'string'
         ? binding.agent.instructions
         : binding.agent.instructions({});
-      return host.runs.start({
+      return withLearnedSkillRelease(learnedRun, () => host.runs.start({
         sessionId: input.sessionId, input: input.input, permissionBroker: input.permissionBroker,
         agentContext: input.agentContext,
         options: {
@@ -879,18 +1246,19 @@ export function createRuntimeAgentBindingService(
           ...(binding.agent.effort ? { effort: binding.agent.effort } : {}),
           context: {
             executionCwd: root, gitRoot: root, managedTaskWorkspaceDir: root,
+            ...learnedRun.context,
             systemPromptOverride: instructions, agentScope: binding.scope,
             toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
-            skillRegistry: binding.skillRegistry,
+            skillRegistry: learnedRun.registry,
             skillScriptRunner: binding.skillScriptRunner,
             assertReadablePath: (candidate) => { resolveToolPath(root, candidate); },
-            skillsPrompt: skillsPrompt(binding.effectiveSkills, binding.skillRegistry),
+            skillsPrompt: skillsPrompt(learnedRun.skills, learnedRun.registry),
           },
           skillDynamicContext: { disable: true },
           guardrails: [createToolGuardrail(binding, root)],
           events: remoteRunEvents(),
         },
-      });
+      }));
     },
     async prepareWorkspace(input) {
       const binding = requireBinding(input.ownerSessionId, input.bindingId);

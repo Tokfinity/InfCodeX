@@ -6,6 +6,7 @@ import {
   appendMemoryClientNotice,
   appendMemoryOutcomeDigest,
   appendMemoryReviewReceipt,
+  getActiveMemoryOutcomeReviewIds,
 } from './memory-outcomes.js';
 
 const base: KodaXSessionLineage = {
@@ -78,5 +79,40 @@ describe('FEATURE_260 outcome lineage', () => {
 
     expect(duplicate).toBe(first);
     expect(first.entries.filter((entry) => entry.type === 'client_notice')).toHaveLength(1);
+  });
+
+  it('keeps the same review key on distinct branches and deduplicates receipts by job', () => {
+    const firstBranch = appendMemoryOutcomeDigest(base, digest, 'job-a');
+    const siblingBase: KodaXSessionLineage = {
+      ...firstBranch,
+      activeEntryId: 'message-2',
+      entries: [...firstBranch.entries, {
+        type: 'message',
+        id: 'message-2',
+        logicalId: 'message-2',
+        parentId: null,
+        timestamp: '2026-07-12T00:03:00.000Z',
+        message: { role: 'user', content: 'sibling' },
+      }],
+    };
+    const secondBranch = appendMemoryOutcomeDigest(siblingBase, digest, 'job-b');
+    const firstReceipt = appendMemoryReviewReceipt(secondBranch, {
+      jobId: 'job-a',
+      reviewKey: digest.reviewKey,
+      proposalIds: [],
+      completedAt: '2026-07-12T00:04:00.000Z',
+    });
+    const secondReceipt = appendMemoryReviewReceipt(firstReceipt, {
+      jobId: 'job-b',
+      reviewKey: digest.reviewKey,
+      proposalIds: [],
+      completedAt: '2026-07-12T00:05:00.000Z',
+    });
+
+    expect(secondBranch.entries.filter((entry) => entry.type === 'memory_outcome_digest'))
+      .toHaveLength(2);
+    expect(secondReceipt.entries.filter((entry) => entry.type === 'memory_review_receipt'))
+      .toHaveLength(2);
+    expect(getActiveMemoryOutcomeReviewIds(secondBranch)).toEqual(['job-b']);
   });
 });

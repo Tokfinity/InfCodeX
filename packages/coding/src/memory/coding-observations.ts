@@ -31,6 +31,15 @@ export function buildToolMemoryObservations(
     const failure = result.is_error === true || /^\s*\[Tool Error\]/i.test(content);
     const verificationCall = isVerificationToolCall(block);
     const verification = !failure && verificationCall;
+    const verificationCommand = verificationCall
+      ? readStringField(block.input, 'command')
+      : undefined;
+    const safeVerificationCommand = verificationCommand === undefined
+      ? undefined
+      : sanitizePromptSafeMemoryClaim(verificationCommand, 240);
+    const reusableLesson = verification && safeVerificationCommand !== undefined
+      ? `Run \`${safeVerificationCommand}\` and require a successful verifier result.`
+      : undefined;
     if (!failure && !verification) continue;
     if (verification && isRestrictedMemoryContent(content)) continue;
     const callRefId = canonicalToolCallId(block.id);
@@ -61,9 +70,19 @@ export function buildToolMemoryObservations(
             actionSignature: input.decisionActionSignature ?? block.name,
             claimKey: `tool-failure:${block.name}:${failureFingerprint(safeResult)}`,
           }
-        : { actionSignature: `${block.name}:verify` }),
+        : {
+            // Successful verifier evidence must stay bound to the concrete
+            // command that produced it. A broad task signature would let an
+            // unrelated later command inherit this verified method.
+            actionSignature: verificationActionSignature(block.name, verificationCommand),
+          }),
       occurredAt: input.observedAt,
-      metadata: { toolName: block.name, failed: failure, verification: verificationCall },
+      metadata: {
+        toolName: block.name,
+        failed: failure,
+        verification: verificationCall,
+        ...(reusableLesson === undefined ? {} : { reusableLesson }),
+      },
     });
   }
   return observations;
@@ -86,7 +105,12 @@ function failureFingerprint(safeResult: string | undefined): string {
 export const codingMemorySourcePolicy: MemorySourcePolicy = (evidence) => {
   if (evidence.source === 'user' || evidence.source === 'host') return evidence.requestedGrade;
   if (evidence.source === 'environment') return capGrade(evidence, 'verified');
-  if (evidence.source === 'tool') return capGrade(evidence, 'observed');
+  if (evidence.source === 'tool') {
+    return evidence.requestedGrade === 'verified'
+      && (evidence.verdict === 'passed' || evidence.verdict === 'failed')
+      ? 'verified'
+      : capGrade(evidence, 'observed');
+  }
   return 'inferred';
 };
 
@@ -106,6 +130,11 @@ function readStringField(value: unknown, field: string): string | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const candidate = (value as Readonly<Record<string, unknown>>)[field];
   return typeof candidate === 'string' ? candidate : undefined;
+}
+
+function verificationActionSignature(toolName: string, command: string | undefined): string {
+  const normalized = command?.replace(/\s+/g, ' ').trim() ?? toolName;
+  return `${toolName}:verify:${createHash('sha256').update(normalized).digest('hex').slice(0, 16)}`;
 }
 
 function toolResultText(result: KodaXToolResultBlock): string {

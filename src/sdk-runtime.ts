@@ -642,6 +642,7 @@ export interface RuntimeCapabilityRequirements {
   readonly sessionObservation?: 1;
   readonly afterTurnInput?: 1;
   readonly learningCenter?: 1;
+  readonly skillLearningLoop?: 1;
   readonly interruptInput?: 1;
   readonly askUserTransport?: 1;
   readonly permissionCas?: 1;
@@ -1440,7 +1441,6 @@ export type RuntimeKodaXOptions = Omit<
 
 export type RuntimeDaemonContextOptions = Pick<
   KodaXContextOptions,
-  | 'memoryIdentity'
   | 'gitRoot'
   | 'executionCwd'
   | 'shellExecution'
@@ -2594,6 +2594,14 @@ export async function createKodaXRuntime(
       citedEntries: true,
     },
     learningCenter: { version: 1 },
+    skillLearningLoop: {
+      version: 1,
+      activation: 'project_scoped_canary',
+      immutableDecisions: true,
+      recordGatedDiscovery: true,
+      exactUseAttribution: true,
+      rollback: true,
+    },
     actorControlPlane: { version: 1, methodNamespace: 'agents' },
     runtimeAutoModeGuardrail: {
       version: 3,
@@ -2624,9 +2632,12 @@ export async function createKodaXRuntime(
     version: process.env.KODAX_VERSION ?? '0.0.0',
     isolation: 'inline',
   };
+  const configHome = options.homeDir
+    ? path.join(path.resolve(options.homeDir), '.kodax')
+    : replApi.KODAX_DIR;
   const sessionsDir = resolveRuntimeSessionsDir(options);
   const sessionManager = createSessionManager(
-    sessionsDir ? { sessionsDir } : undefined,
+    sessionsDir ? { sessionsDir, configHome } : { configHome },
   );
   const sessionAdmission = createRuntimeSessionAdmission(
     identity.profile,
@@ -2690,7 +2701,6 @@ export async function createKodaXRuntime(
     runs.set(recovered.runId, recordFromPersistedStatus(recovered));
   }
   let closed = false;
-
   const ensureOpen = (): void => {
     if (closed) {
       throw new Error('KodaX runtime is closed');
@@ -2701,6 +2711,7 @@ export async function createKodaXRuntime(
     bus,
     defaultModel: options.defaultModel,
     defaultProvider: options.defaultProvider,
+    defaultConfigHome: configHome,
     ensureOpen,
     isClosed: () => closed,
     artifacts,
@@ -2718,6 +2729,7 @@ export async function createKodaXRuntime(
   });
   const sessionService = createRuntimeSessionService(
     identity,
+    configHome,
     sessionManager,
     bus,
     persistence,
@@ -2736,9 +2748,6 @@ export async function createKodaXRuntime(
     },
     sessionAdmission,
   );
-  const configHome = options.homeDir
-    ? path.join(path.resolve(options.homeDir), '.kodax')
-    : replApi.KODAX_DIR;
   const managedWorkspaceRoot = path.join(
     options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
     'kodax_a2a_server_workspace',
@@ -2759,6 +2768,7 @@ export async function createKodaXRuntime(
   });
   const learning = createRuntimeLearningOwner({
     rootDir: path.join(configHome, 'learned'),
+    userSkillsRoot: path.join(configHome, 'skills'),
     defaultClientIdentity:
       options.clientInfo?.instanceId ?? `inline_${identity.runtimeId}`,
     proposalStores: [
@@ -2993,6 +3003,7 @@ function assertRuntimeCapabilities(
     requirements?.sessionObservation === undefined &&
     requirements?.afterTurnInput === undefined &&
     requirements?.learningCenter === undefined &&
+    requirements?.skillLearningLoop === undefined &&
     requirements?.interruptInput === undefined &&
     requirements?.askUserTransport === undefined &&
     requirements?.permissionCas === undefined &&
@@ -3040,6 +3051,7 @@ function assertRuntimeCapabilities(
     ['sessionObservation', requirements.sessionObservation],
     ['afterTurnInput', requirements.afterTurnInput],
     ['learningCenter', requirements.learningCenter],
+    ['skillLearningLoop', requirements.skillLearningLoop],
     ['interruptInput', requirements.interruptInput],
     ['askUserTransport', requirements.askUserTransport],
     ['permissionCas', requirements.permissionCas],
@@ -3635,6 +3647,7 @@ function createRuntimeSessionSettingsOwner(
 
 function createRuntimeSessionService(
   identity: RuntimeIdentity,
+  configHome: string,
   manager: SessionManager,
   bus: RuntimeEventBus,
   persistence: RuntimePersistence,
@@ -4176,6 +4189,7 @@ function createRuntimeRunService(deps: {
   readonly artifacts: RuntimeArtifactStore;
   readonly bus: RuntimeEventBus;
   readonly defaultModel?: string;
+  readonly defaultConfigHome: string;
   readonly defaultProvider?: string;
   readonly defaultAgentContext?: AgentDispatchContext;
   readonly ensureOpen: () => void;
@@ -4364,6 +4378,7 @@ function createRuntimeRunService(deps: {
     });
     const runOptions = buildRunOptions({
       agentPlane: deps.agentPlane,
+      defaultConfigHome: deps.defaultConfigHome,
       events,
       model: record.model,
       options: record.start.options,
@@ -5547,6 +5562,7 @@ function createRuntimeArtifactStore() {
 
 function buildRunOptions(input: {
   readonly agentPlane?: AgentExecutorPlane;
+  readonly defaultConfigHome: string;
   readonly events: KodaXEvents;
   readonly model?: string;
   readonly options: RuntimeKodaXOptions;
@@ -5564,10 +5580,11 @@ function buildRunOptions(input: {
     sessionManager,
   } = input;
   const hideUnwiredExitPlanMode = options.events?.exitPlanMode === undefined;
-  const requiresContextOverride =
-    hideUnwiredExitPlanMode ||
-    record.actorSession !== undefined ||
-    Boolean(agentPlane && record.agentContext);
+  const {
+    configHome: _callerConfigHome,
+    memoryIdentity: _callerMemoryIdentity,
+    ...ownerSafeContext
+  } = options.context ?? {};
   return {
     ...options,
     provider,
@@ -5581,53 +5598,50 @@ function buildRunOptions(input: {
       persistedByHost: false,
     },
     events,
-    ...(requiresContextOverride
-      ? {
-          context: {
-            ...(options.context ?? {}),
-            ...(hideUnwiredExitPlanMode
-              ? {
-                  // Runtime daemon options cannot transport callback functions. Do
-                  // not expose a plan-exit tool that can only raise a generic
-                  // permission request and then fail for lack of an approval UI.
-                  excludeTools: [
-                    ...new Set([
-                      ...(options.context?.excludeTools ?? []),
-                      'exit_plan_mode',
-                    ]),
-                  ],
+    context: {
+      ...ownerSafeContext,
+      configHome: input.defaultConfigHome,
+      ...(hideUnwiredExitPlanMode
+        ? {
+            // Runtime daemon options cannot transport callback functions. Do
+            // not expose a plan-exit tool that can only raise a generic
+            // permission request and then fail for lack of an approval UI.
+            excludeTools: [
+              ...new Set([
+                ...(options.context?.excludeTools ?? []),
+                'exit_plan_mode',
+              ]),
+            ],
+          }
+        : {}),
+      ...(record.actorSession
+        ? {
+            actorSession: record.actorSession,
+            interruptInput: {
+              closeInputWindow() {
+                record.interruptInputOpen = false;
+              },
+              reopenInputWindow() {
+                if (
+                  !record.terminalEmitted
+                  && isActiveRunPhase(record.phase)
+                  && options.abortSignal?.aborted !== true
+                ) {
+                  record.interruptInputOpen = true;
                 }
-              : {}),
-            ...(record.actorSession
-              ? {
-                  actorSession: record.actorSession,
-                  interruptInput: {
-                    closeInputWindow() {
-                      record.interruptInputOpen = false;
-                    },
-                    reopenInputWindow() {
-                      if (
-                        !record.terminalEmitted
-                        && isActiveRunPhase(record.phase)
-                        && options.abortSignal?.aborted !== true
-                      ) {
-                        record.interruptInputOpen = true;
-                      }
-                    },
-                  },
-                }
-              : {}),
-            ...(agentPlane && record.agentContext
-              ? {
-                  agentExecutorPlane: {
-                    plane: agentPlane,
-                    context: record.agentContext,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
+              },
+            },
+          }
+        : {}),
+      ...(agentPlane && record.agentContext
+        ? {
+            agentExecutorPlane: {
+              plane: agentPlane,
+              context: record.agentContext,
+            },
+          }
+        : {}),
+    },
   };
 }
 

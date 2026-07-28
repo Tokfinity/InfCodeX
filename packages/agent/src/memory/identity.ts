@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
 export interface MemoryContextIdentity {
+  /** Explicit owner home for durable runtime state; never persisted in review envelopes. */
+  readonly configHome?: string;
   readonly tenantId: string;
   readonly workspaceId?: string;
   readonly userId?: string;

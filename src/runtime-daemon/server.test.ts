@@ -1013,6 +1013,14 @@ describe('runtime daemon dispatcher', () => {
             defaultScope: 'compacted',
             citedEntries: true,
           },
+          skillLearningLoop: {
+            version: 1,
+            activation: 'project_scoped_canary',
+            immutableDecisions: true,
+            recordGatedDiscovery: true,
+            exactUseAttribution: true,
+            rollback: true,
+          },
           askUserTransport: { version: 1 },
           permissionCas: { version: 1 },
           providerCredentialBroker: { version: 1 },
@@ -1170,6 +1178,43 @@ describe('runtime daemon dispatcher', () => {
     if (isRuntimeDaemonSuccessResponse(awaited)) {
       expect(awaited.result).toMatchObject({ runId: 'run-1', sessionId: 'session-1', phase: 'completed' });
     }
+  });
+
+  it('strips caller-controlled learning owner identity from raw run.start payloads', async () => {
+    const runtime = makeRuntime();
+    const start = vi.spyOn(runtime.runs, 'start');
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-untrusted-learning-owner',
+      'run.start',
+      {
+        sessionId: 'session-1',
+        prompt: 'hello',
+        options: {
+          context: {
+            gitRoot: 'C:\\trusted-project',
+            configHome: 'C:\\attacker-home',
+            memoryIdentity: {
+              tenantId: 'attacker',
+              agentId: 'attacker',
+              sessionId: 'session-1',
+              projectId: 'other-project',
+              configHome: 'C:\\attacker-home',
+            },
+          },
+        },
+      },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    const context = start.mock.calls[0]?.[0].options?.context as unknown as
+      Record<string, unknown> | undefined;
+    expect(context).toMatchObject({ gitRoot: 'C:\\trusted-project' });
+    expect(context).not.toHaveProperty('configHome');
+    expect(context).not.toHaveProperty('memoryIdentity');
+    dispatcher.close();
   });
 
   it('shares retained run results across daemon dispatchers', async () => {

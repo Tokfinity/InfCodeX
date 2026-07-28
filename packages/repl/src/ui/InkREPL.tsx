@@ -6266,27 +6266,45 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): StreamingEvents => ({
-    onMemoryOutcomeDigest: (digest) => {
+    onMemoryOutcomeDigest: (digest, metadata) => {
+      if (digest.sessionId !== context.sessionId) {
+        options.events?.onMemoryOutcomeDigest?.(digest, metadata);
+        return;
+      }
       context.lineage = appendMemoryOutcomeDigest(
         context.lineage ?? createSessionLineage(context.messages),
         digest,
+        metadata?.jobId,
       );
     },
     onMemoryReviewReceipt: (receipt) => {
+      if (receipt.sessionId !== undefined && receipt.sessionId !== context.sessionId) {
+        options.events?.onMemoryReviewReceipt?.(receipt);
+        return;
+      }
       context.lineage = appendMemoryReviewReceipt(
         context.lineage ?? createSessionLineage(context.messages),
         receipt,
       );
     },
     onMemoryNotice: (notice) => {
-      context.lineage = appendMemoryClientNotice(
-        context.lineage ?? createSessionLineage(context.messages),
+      if (notice.sessionId !== undefined && notice.sessionId !== context.sessionId) {
+        options.events?.onMemoryNotice?.(notice);
+        return;
+      }
+      const lineage = context.lineage ?? createSessionLineage(context.messages);
+      const nextLineage = appendMemoryClientNotice(
+        lineage,
         { ...notice, createdAt: new Date().toISOString() },
       );
-      addHistoryItem({
-        type: "info",
-        text: `[memory] ${notice.summaries.slice(0, 3).join("; ")}`,
-      });
+      context.lineage = nextLineage;
+      if (nextLineage !== lineage) {
+        addHistoryItem({
+          type: "info",
+          text: `[memory] ${notice.summaries.slice(0, 3).join("; ")}`,
+        });
+      }
+      options.events?.onMemoryNotice?.(notice);
     },
     onThinkingDelta: (text: string, meta?: KodaXActivityEventMeta) => {
       if (userInterruptedRef.current) {

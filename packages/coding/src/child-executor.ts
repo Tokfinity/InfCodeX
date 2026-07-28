@@ -899,6 +899,7 @@ async function createWorkflowChildDigest(
           assertReadablePath: input.scopeCtx.assertReadablePath,
           toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
           skillRegistry: input.scopeCtx.skillRegistry,
+          admitLearnedSkillInvocation: input.scopeCtx.admitLearnedSkillInvocation,
           skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
           ...(input.options.parentOptions.contextDiagnostics !== undefined
@@ -1055,6 +1056,7 @@ async function resolveChildStructuredOutput(input: {
           assertReadablePath: input.scopeCtx.assertReadablePath,
           toolVisibilityPolicy: input.scopeCtx.toolVisibilityPolicy,
           skillRegistry: input.scopeCtx.skillRegistry,
+          admitLearnedSkillInvocation: input.scopeCtx.admitLearnedSkillInvocation,
           skillScriptRunner: input.scopeCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(input.options),
           ...(input.options.parentOptions.contextDiagnostics !== undefined
@@ -1374,6 +1376,7 @@ async function runReadChildBody(
           assertReadablePath: scope.ctx.assertReadablePath,
           toolVisibilityPolicy: scope.ctx.toolVisibilityPolicy,
           skillRegistry: scope.ctx.skillRegistry,
+          admitLearnedSkillInvocation: scope.ctx.admitLearnedSkillInvocation,
           skillScriptRunner: scope.ctx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
           ...(options.parentOptions.contextDiagnostics !== undefined
@@ -1659,6 +1662,7 @@ async function runWriteChildBody(
           assertReadablePath: childCtx.assertReadablePath,
           toolVisibilityPolicy: childCtx.toolVisibilityPolicy,
           skillRegistry: childCtx.skillRegistry,
+          admitLearnedSkillInvocation: childCtx.admitLearnedSkillInvocation,
           skillScriptRunner: childCtx.skillScriptRunner,
           ...inheritRepoIntelligenceContext(options),
           ...(options.parentOptions.contextDiagnostics !== undefined

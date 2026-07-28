@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   type MemoryPackHint,
@@ -43,7 +43,10 @@ class DefaultMemoryAgent implements MemoryAgent {
         maxHints: 5,
       });
     return new DefaultMemorySession(
-      input,
+      {
+        ...input,
+        episodeId: input.episodeId ?? `episode_${randomUUID()}`,
+      },
       memoryPack.memoryRevision,
       memoryPack.candidates,
       this.options,
@@ -67,7 +70,7 @@ class DefaultMemorySession implements MemorySession {
   private readonly injectedReceiptIds: string[] = [];
 
   constructor(
-    private readonly input: MemorySessionInput,
+    private readonly input: MemorySessionInput & { readonly episodeId: string },
     private readonly memoryRevision: string,
     private readonly candidates: readonly MemoryPackHint[],
     private readonly options: CreateMemoryAgentOptions,
@@ -667,16 +670,20 @@ function uniqueCandidates(
 }
 
 function buildOutcomeDigest(
-  input: MemorySessionInput,
+  input: MemorySessionInput & { readonly episodeId: string },
   observations: readonly MemoryObservation[],
   outcome: MemoryEpisodeOutcome & { readonly status: 'succeeded' | 'failed' },
   createdAt: string,
   injectedReceiptIds: readonly string[],
 ): PersistedOutcomeDigest {
   const latestOutcome = [...observations].reverse().find((observation) => observation.kind === 'outcome');
+  const reusableLesson = typeof latestOutcome?.metadata?.reusableLesson === 'string'
+    ? sanitizePromptSafeMemoryClaim(latestOutcome.metadata.reusableLesson, 512)
+    : undefined;
   const sequence = observations.at(-1)?.sequence ?? 0;
   const reviewKey = digest([
     input.identity.sessionId,
+    input.episodeId,
     String(sequence),
     outcome.status,
     outcome.summary,
@@ -684,6 +691,7 @@ function buildOutcomeDigest(
   return {
     id: `memory-outcome:${reviewKey.slice(0, 24)}`,
     reviewKey,
+    episodeId: input.episodeId,
     sessionId: input.identity.sessionId,
     branchId: input.identity.sessionId,
     sequence,
@@ -691,6 +699,7 @@ function buildOutcomeDigest(
     ...(latestOutcome?.actionSignature !== undefined
       ? { actionSignature: latestOutcome.actionSignature }
       : {}),
+    ...(reusableLesson === undefined ? {} : { lesson: reusableLesson }),
     approach: latestOutcome?.summary ?? 'episode completion',
     outcome: outcome.status,
     summary: outcome.summary.trim(),
@@ -699,6 +708,7 @@ function buildOutcomeDigest(
       ref: evidence.ref,
       grade: evidence.requestedGrade,
       source: evidence.source,
+      ...(evidence.verdict !== undefined ? { verdict: evidence.verdict } : {}),
       observedAt: evidence.observedAt,
     })),
     ...(injectedReceiptIds.length > 0 ? {

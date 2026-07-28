@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   LearningCapabilityError,
+  commitLearnedSkillRevision,
   createLearningCenterService,
   getLearnedExtensionToolName,
   isLearnedExtensionCommandAllowed,
@@ -96,6 +97,59 @@ describe('Learning Center identity and lifecycle', () => {
     await expect(nextEvent).resolves.toMatchObject({
       done: false,
       value: { eventId: 'lc_release_notes-r1-ready' },
+    });
+    await iterator.return?.();
+  });
+
+  it('delivers project Learned Area events to a global subscriber without an in-process writer facade', async () => {
+    const rootDir = await createArea();
+    const globalService = createLearningCenterService({ rootDir, clientIdentity: 'cli-a' });
+    await globalService.initialize();
+    const iterator = globalService.subscribe()[Symbol.asyncIterator]();
+    const nextEvent = iterator.next();
+    const tenantHash = 'a'.repeat(64);
+    const projectHash = 'b'.repeat(64);
+    const projectStore = new LearnedAreaStore(join(
+      rootDir,
+      'projects',
+      tenantHash,
+      projectHash,
+    ));
+    await projectStore.initialize();
+
+    await commitLearnedSkillRevision(projectStore, {
+      scope: {
+        configHomeHash: 'c'.repeat(64),
+        tenantHash,
+        projectHash,
+      },
+      spec: {
+        name: 'verify-release',
+        description: 'Verify a release before publishing.',
+        purpose: 'Keep release verification repeatable.',
+        triggers: ['Preparing a release.'],
+        steps: ['Run the repository verification command.'],
+        verification: ['The verification command succeeds.'],
+        pitfalls: ['Do not publish after a failed verification.'],
+      },
+      disposition: 'project_canary',
+      operation: 'create',
+      provenance: {
+        jobId: 'job-1',
+        inputHash: 'input-1',
+        decisionId: 'decision-1',
+        actionId: 'action-1',
+      },
+    });
+
+    await expect(Promise.race([
+      nextEvent,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('project event was not delivered')), 500);
+      }),
+    ])).resolves.toMatchObject({
+      done: false,
+      value: { displayName: 'verify-release', kind: 'testing' },
     });
     await iterator.return?.();
   });

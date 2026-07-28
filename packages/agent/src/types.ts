@@ -165,6 +165,8 @@ export interface KodaXSessionClientNoticeEntry extends KodaXSessionEntryBase {
 export interface KodaXMemoryOutcomeDigest {
   readonly id: string;
   readonly reviewKey: string;
+  /** Stable root-episode identity; absent on pre-F263 digests. */
+  readonly episodeId?: string;
   readonly sessionId: string;
   readonly branchId: string;
   readonly sequence: number;
@@ -186,6 +188,7 @@ export interface KodaXMemoryOutcomeEvidence {
   readonly ref: string;
   readonly grade: 'authoritative' | 'verified' | 'corroborated' | 'observed' | 'inferred';
   readonly source: 'user' | 'host' | 'tool' | 'environment' | 'agent';
+  readonly verdict?: 'passed' | 'failed' | 'inconclusive';
   readonly observedAt: string;
 }
 
@@ -197,10 +200,14 @@ export interface KodaXMemoryInfluenceRef {
 export interface KodaXSessionMemoryOutcomeDigestEntry extends KodaXSessionEntryBase {
   readonly type: 'memory_outcome_digest';
   readonly digest: KodaXMemoryOutcomeDigest;
+  /** Durable F263 review job identity. Absent on pre-F263 lineage records. */
+  readonly jobId?: string;
 }
 
 export interface KodaXSessionMemoryReviewReceiptEntry extends KodaXSessionEntryBase {
   readonly type: 'memory_review_receipt';
+  /** Distinguishes repeated review keys across branch epochs. */
+  readonly jobId?: string;
   readonly reviewKey: string;
   readonly proposalIds: readonly string[];
   readonly status: 'completed' | 'no_action';
@@ -536,6 +543,17 @@ export interface KodaXExtensionStore {
 export interface KodaXSessionStorage {
   save(id: string, data: KodaXSessionData): Promise<void>;
   load(id: string): Promise<KodaXSessionData | null>;
+  /**
+   * Atomically mutates context-silent lineage state against the latest
+   * persisted session. Hosts that own session persistence may expose this
+   * without allowing the runner to write a stale full snapshot. Returns
+   * true when the session existed and the callback was evaluated, including
+   * an idempotent no-op; false only when the session was not found.
+   */
+  mutateLineage?(
+    id: string,
+    mutation: (lineage: KodaXSessionLineage) => KodaXSessionLineage,
+  ): Promise<boolean>;
   getLineage?(id: string): Promise<KodaXSessionLineage | null>;
   /** Exact lineage merged from the active session file and island sidecars. */
   loadFullLineage?(id: string): Promise<KodaXSessionLineage | null>;

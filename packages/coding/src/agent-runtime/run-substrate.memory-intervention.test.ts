@@ -23,7 +23,10 @@ import { compact as mockedCompact } from '@kodax-ai/agent';
 
 import { MEMORY_EVIDENCE_PREFIX } from '../memory/rendering.js';
 import type { RuntimeContextBudgetSnapshot } from './context-budget.js';
-import { runSubstrate } from './run-substrate.js';
+import {
+  runSubstrate,
+  shouldInstallProductionLearningReviewer,
+} from './run-substrate.js';
 
 const compactMock = mockedCompact as unknown as ReturnType<typeof vi.fn>;
 const PROVIDER_NAME = 'memory-intervention-runtime-test';
@@ -84,6 +87,21 @@ describe('runSubstrate memory intervention ordering', { timeout: 30_000 }, () =>
   afterEach(() => {
     delete process.env[API_KEY_ENV];
     clearRuntimeModelProviders();
+  });
+
+  it('preserves an explicitly configured legacy Memory reviewer', () => {
+    expect(shouldInstallProductionLearningReviewer({
+      memoryReviewer: async (input) => ({
+        trigger: input.trigger,
+        createdAt: input.createdAt,
+        task: input.task,
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidates.map((candidate) => candidate.ref),
+        actions: [],
+        warnings: [],
+      }),
+    })).toBe(false);
+    expect(shouldInstallProductionLearningReviewer({})).toBe(true);
   });
 
   it('injects one failed-tool reminder into the next Action request without a selector runner', async () => {

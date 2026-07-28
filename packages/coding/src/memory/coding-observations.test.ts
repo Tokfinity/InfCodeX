@@ -104,14 +104,20 @@ describe('FEATURE_260 coding memory observations', () => {
       ],
       startSequence: 0,
       observedAt: '2026-07-12T02:00:00.000Z',
+      decisionActionSignature: 'task:update-source',
     });
 
     expect(observations).toHaveLength(1);
     expect(observations[0]).toMatchObject({
       sequence: 1,
-      actionSignature: 'bash:verify',
+      actionSignature: expect.stringMatching(/^bash:verify:[a-f0-9]{16}$/),
       summary: expect.stringContaining('Verification command succeeded'),
+      metadata: {
+        verification: true,
+        reusableLesson: 'Run `npm test` and require a successful verifier result.',
+      },
     });
+    expect(observations[0]?.actionSignature).not.toBe('task:update-source');
   });
 
   it('drops restricted output before it can enter the runtime memory window', () => {
@@ -134,6 +140,17 @@ describe('FEATURE_260 coding memory observations', () => {
 
     expect(codingMemorySourcePolicy({ ...evidence, source: 'environment' })).toBe('verified');
     expect(codingMemorySourcePolicy({ ...evidence, source: 'tool' })).toBe('observed');
+    expect(codingMemorySourcePolicy({
+      ...evidence,
+      requestedGrade: 'verified',
+      source: 'tool',
+      verdict: 'passed',
+    })).toBe('verified');
+    expect(codingMemorySourcePolicy({
+      ...evidence,
+      requestedGrade: 'verified',
+      source: 'tool',
+    })).toBe('observed');
     expect(codingMemorySourcePolicy({ ...evidence, source: 'agent' })).toBe('inferred');
     expect(codingMemorySourcePolicy({ ...evidence, source: 'user' })).toBe('authoritative');
   });

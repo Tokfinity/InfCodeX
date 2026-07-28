@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 
 import {
   createLearningCenterService,
+  createLearnedSkillActionDriver,
   type LearnedCapabilityRecord,
   type LearningEvent,
+  type LearningExplicitUserAuthority,
   type LearningPage,
   type LearningQuery,
   type LearningSubscribeOptions,
@@ -12,18 +14,18 @@ import {
 
 export interface RuntimeLearningService {
   list(query?: LearningQuery): Promise<LearningPage>;
-  get(nameOrSlug: string): Promise<LearnedCapabilityRecord>;
+  get(nameOrSlugOrId: string): Promise<LearnedCapabilityRecord>;
   getSnapshot(): Promise<LearningSurfaceSnapshot>;
   events(afterRevision?: number): Promise<readonly LearningEvent[]>;
   subscribe(options?: LearningSubscribeOptions): AsyncIterable<LearningEvent>;
-  acknowledge(nameOrSlug: string): Promise<void>;
-  snooze(nameOrSlug: string, until: string): Promise<void>;
-  reject(nameOrSlug: string): Promise<void>;
-  disable(nameOrSlug: string): Promise<void>;
-  rollback(nameOrSlug: string): Promise<void>;
-  promote(nameOrSlug: string, scope: 'user'): Promise<void>;
-  review(nameOrSlug: string): Promise<void>;
-  trust(nameOrSlug: string): Promise<void>;
+  acknowledge(nameOrSlugOrId: string): Promise<void>;
+  snooze(nameOrSlugOrId: string, until: string): Promise<void>;
+  reject(nameOrSlugOrId: string): Promise<void>;
+  disable(nameOrSlugOrId: string): Promise<void>;
+  rollback(nameOrSlugOrId: string): Promise<void>;
+  promote(nameOrSlugOrId: string, scope: 'user'): Promise<void>;
+  review(nameOrSlugOrId: string): Promise<void>;
+  trust(nameOrSlugOrId: string): Promise<void>;
 }
 
 interface RuntimeLearningOwner extends RuntimeLearningService {
@@ -32,6 +34,7 @@ interface RuntimeLearningOwner extends RuntimeLearningService {
 
 export interface CreateRuntimeLearningOwnerOptions {
   readonly rootDir: string;
+  readonly userSkillsRoot?: string;
   readonly defaultClientIdentity: string;
   readonly proposalStores?: readonly string[];
 }
@@ -39,10 +42,18 @@ export interface CreateRuntimeLearningOwnerOptions {
 export function createRuntimeLearningOwner(
   options: CreateRuntimeLearningOwnerOptions,
 ): RuntimeLearningService {
+  const actionDrivers = options.userSkillsRoot === undefined
+    ? []
+    : [createLearnedSkillActionDriver({
+        learnedAreaRoot: options.rootDir,
+        learnedAreaKind: 'global',
+        userSkillsRoot: options.userSkillsRoot,
+      })];
   const rootService = createLearningCenterService({
     rootDir: options.rootDir,
     clientIdentity: learningClientFileKey(options.defaultClientIdentity),
     proposalStores: options.proposalStores,
+    actionDrivers,
   });
   let ready: Promise<void> | undefined;
   const ensureReady = (): Promise<void> => {
@@ -55,6 +66,7 @@ export function createRuntimeLearningOwner(
       rootDir: options.rootDir,
       clientIdentity: key,
       proposalStores: options.proposalStores,
+      actionDrivers,
     });
     return createInitializedFacade(service, ensureReady);
   };
@@ -92,13 +104,58 @@ function createInitializedFacade(
     subscribe: (options) => subscribeWhenReady(ensureReady(), service, options),
     acknowledge: async (nameOrSlug) => { await ensureReady(); await service.acknowledge(nameOrSlug); },
     snooze: async (nameOrSlug, until) => { await ensureReady(); await service.snooze(nameOrSlug, until); },
-    reject: async (nameOrSlug) => { await ensureReady(); await service.reject(nameOrSlug); },
-    disable: async (nameOrSlug) => { await ensureReady(); await service.disable(nameOrSlug); },
-    rollback: async (nameOrSlug) => { await ensureReady(); await service.rollback(nameOrSlug); },
-    promote: async (nameOrSlug, scope) => { await ensureReady(); await service.promote(nameOrSlug, scope); },
-    review: async (nameOrSlug) => { await ensureReady(); await service.review(nameOrSlug); },
-    trust: async (nameOrSlug) => { await ensureReady(); await service.trust(nameOrSlug); },
+    reject: async (nameOrSlug) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.reject(nameOrSlug, authority)
+      ));
+    },
+    disable: async (nameOrSlug) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.disable(nameOrSlug, authority)
+      ));
+    },
+    rollback: async (nameOrSlug) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.rollback(nameOrSlug, authority)
+      ));
+    },
+    promote: async (nameOrSlug, scope) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.promote(nameOrSlug, scope, authority)
+      ));
+    },
+    review: async (nameOrSlug) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.review(nameOrSlug, authority)
+      ));
+    },
+    trust: async (nameOrSlug) => {
+      await ensureReady();
+      await withExplicitUserAuthority(service, nameOrSlug, (authority) => (
+        service.trust(nameOrSlug, authority)
+      ));
+    },
   };
+}
+
+async function withExplicitUserAuthority(
+  service: ReturnType<typeof createLearningCenterService>,
+  nameOrSlug: string,
+  execute: (authority: LearningExplicitUserAuthority) => Promise<void>,
+): Promise<void> {
+  const current = await service.get(nameOrSlug);
+  await execute({
+    authority: 'explicit_user',
+    expectedRevision: current.revision,
+    ...(current.schemaVersion === 2
+      ? { expectedFingerprint: current.artifact.fingerprint }
+      : {}),
+  });
 }
 
 function subscribeWhenReady(

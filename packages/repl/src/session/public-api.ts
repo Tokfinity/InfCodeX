@@ -420,9 +420,12 @@ export interface SessionManager {
 
 // ── Shared storage instance (lazy) ───────────────────────────────────────────
 
-function getStorage(sessionsDir?: string): FileSessionStorage {
-  return sessionsDir !== undefined
-    ? new FileSessionStorage({ sessionsDir })
+function getStorage(sessionsDir?: string, configHome?: string): FileSessionStorage {
+  return sessionsDir !== undefined || configHome !== undefined
+    ? new FileSessionStorage({
+        ...(sessionsDir === undefined ? {} : { sessionsDir }),
+        ...(configHome === undefined ? {} : { configHome }),
+      })
     : new FileSessionStorage();
 }
 
@@ -1144,9 +1147,10 @@ async function rewindSessionImpl(
   id: string,
   opts: { selector?: string } | undefined,
   sessionsDirOverride: string | undefined,
+  configHomeOverride?: string,
 ): Promise<SessionData | null> {
   try {
-    return await getStorage(sessionsDirOverride).rewind(id, opts?.selector);
+    return await getStorage(sessionsDirOverride, configHomeOverride).rewind(id, opts?.selector);
   } catch {
     return null;
   }
@@ -1169,9 +1173,10 @@ async function setActiveEntryImpl(
   id: string,
   selector: string,
   sessionsDirOverride: string | undefined,
+  configHomeOverride?: string,
 ): Promise<SessionData | null> {
   try {
-    return await getStorage(sessionsDirOverride).setActiveEntry(id, selector);
+    return await getStorage(sessionsDirOverride, configHomeOverride).setActiveEntry(id, selector);
   } catch {
     return null;
   }
@@ -1480,19 +1485,27 @@ function watchSessionsWindows(
  * that directory instead of the module-load-frozen `KODAX_SESSIONS_DIR`.
  * `listRunningSessions` still consults the agent-config-home instances
  * directory (sibling-process awareness is not scoped per sessions dir).
+ * `configHome` binds rewind/setActive review fencing to the same Runtime owner.
  */
-export function createSessionManager(opts?: { sessionsDir?: string }): SessionManager {
+export function createSessionManager(opts?: {
+  sessionsDir?: string;
+  configHome?: string;
+}): SessionManager {
   const sessionsDir = opts?.sessionsDir;
+  const configHome = opts?.configHome;
   scheduleToolOutputRetention(sessionsDir ?? KODAX_SESSIONS_DIR);
   // Single FileSessionStorage instance per manager. Returned via the
   // `storage` field so callers can pass it through
   // `runKodaX({ session: { id, storage } })`; sharing one instance keeps
   // write-queue + append-watermark caches (CAP-013-001) coherent across
   // mixed read (load/list) + write (run) operations.
-  const storage = sessionsDir !== undefined
-    ? new FileSessionStorage({ sessionsDir })
+  const storage = sessionsDir !== undefined || configHome !== undefined
+    ? new FileSessionStorage({
+        ...(sessionsDir === undefined ? {} : { sessionsDir }),
+        ...(configHome === undefined ? {} : { configHome }),
+      })
     : new FileSessionStorage();
-  if (sessionsDir === undefined) {
+  if (sessionsDir === undefined && configHome === undefined) {
     return {
       listSessions,
       loadSession,
@@ -1519,8 +1532,9 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     loadFullTranscript: (id) => loadFullTranscriptImpl(id, sessionsDir),
     appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
     forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
-    rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir),
-    setActiveEntry: (id, selector) => setActiveEntryImpl(id, selector, sessionsDir),
+    rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir, configHome),
+    setActiveEntry: (id, selector) =>
+      setActiveEntryImpl(id, selector, sessionsDir, configHome),
     deleteSession: (id) => deleteSessionImpl(id, sessionsDir),
     archiveSession: (id) => archiveSessionImpl(id, sessionsDir),
     unarchiveSession: (id) => unarchiveSessionImpl(id, sessionsDir),

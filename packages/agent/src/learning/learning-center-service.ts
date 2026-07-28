@@ -7,6 +7,7 @@ import type {
   LearningClientEventState,
   LearningClientRecord,
   LearningEvent,
+  LearningExplicitUserAuthority,
   LearningPage,
   LearningQuery,
   LearningSubscribeOptions,
@@ -40,14 +41,18 @@ export interface LearningCenterService {
   acknowledge(nameOrSlug: string): Promise<void>;
   markSeen(nameOrSlug: string): Promise<void>;
   snooze(nameOrSlug: string, until: string): Promise<void>;
-  reject(nameOrSlug: string): Promise<void>;
-  disable(nameOrSlug: string): Promise<void>;
-  rollback(nameOrSlug: string): Promise<void>;
+  reject(nameOrSlug: string, authority?: LearningExplicitUserAuthority): Promise<void>;
+  disable(nameOrSlug: string, authority?: LearningExplicitUserAuthority): Promise<void>;
+  rollback(nameOrSlug: string, authority?: LearningExplicitUserAuthority): Promise<void>;
   archive(nameOrSlug: string): Promise<void>;
   restore(nameOrSlug: string): Promise<void>;
-  promote(nameOrSlug: string, scope: 'user'): Promise<void>;
-  review(nameOrSlug: string): Promise<void>;
-  trust(nameOrSlug: string): Promise<void>;
+  promote(
+    nameOrSlug: string,
+    scope: 'user',
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void>;
+  review(nameOrSlug: string, authority?: LearningExplicitUserAuthority): Promise<void>;
+  trust(nameOrSlug: string, authority?: LearningExplicitUserAuthority): Promise<void>;
   record(record: LearnedCapabilityRecord): Promise<LearnedCapabilityRecord>;
 }
 
@@ -56,6 +61,7 @@ interface EventWaiter {
 }
 
 const EVENT_HUBS = new Map<string, Set<EventWaiter>>();
+const DURABLE_EVENT_POLL_MS = 25;
 
 function eventHubFor(rootDir: string): Set<EventWaiter> {
   const existing = EVENT_HUBS.get(rootDir);
@@ -75,7 +81,7 @@ export class FileLearningCenterService implements LearningCenterService {
   constructor(private readonly options: CreateLearningCenterServiceOptions) {
     const rootDir = options.rootDir ?? getAgentConfigPath('learned');
     this.store = new LearnedAreaStore(rootDir);
-    this.waiters = eventHubFor(rootDir);
+    this.waiters = eventHubFor(this.store.paths.events);
     this.now = options.now ?? (() => new Date().toISOString());
     this.proposalStores = options.proposalStores ?? [];
     this.drivers = new Map((options.actionDrivers ?? []).map((driver) => [driver.carrier, driver]));
@@ -104,13 +110,21 @@ export class FileLearningCenterService implements LearningCenterService {
   async get(nameOrSlug: string): Promise<LearnedCapabilityRecord> {
     const needle = nameOrSlug.trim().toLowerCase();
     const records = await this.loadCapabilities();
-    const slugMatch = records.find((record) => record.slug.toLowerCase() === needle);
-    if (slugMatch) return slugMatch;
+    const idMatch = records.find((record) => record.capabilityId.toLowerCase() === needle);
+    if (idMatch) return idMatch;
+    const slugMatches = records.filter((record) => record.slug.toLowerCase() === needle);
+    if (slugMatches.length > 1) {
+      throw new LearningCapabilityError(
+        'ambiguous_name',
+        `learned capability slug is ambiguous: ${nameOrSlug}; use capabilityId ${slugMatches.map((entry) => entry.capabilityId).join(', ')}`,
+      );
+    }
+    if (slugMatches.length === 1) return slugMatches[0];
     const nameMatches = records.filter((record) => record.displayName.toLowerCase() === needle);
     if (nameMatches.length > 1) {
       throw new LearningCapabilityError(
         'ambiguous_name',
-        `learned capability name is ambiguous: ${nameOrSlug}; use one of ${nameMatches.map((entry) => entry.slug).join(', ')}`,
+        `learned capability name is ambiguous: ${nameOrSlug}; use capabilityId ${nameMatches.map((entry) => entry.capabilityId).join(', ')}`,
       );
     }
     if (nameMatches.length === 1) return nameMatches[0];
@@ -163,29 +177,31 @@ export class FileLearningCenterService implements LearningCenterService {
     await this.updateNotificationState(nameOrSlug, 'snoozed', until);
   }
 
-  async reject(nameOrSlug: string): Promise<void> {
+  async reject(
+    nameOrSlug: string,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
     const current = await this.get(nameOrSlug);
+    assertExplicitAuthority(current, authority);
     if (current.source.kind === 'f224_proposal') {
       await this.updateF224Proposal(current, 'reject');
       return;
     }
-    await this.transition(current, 'rejected');
+    await this.transitionByName(nameOrSlug, 'rejected', authority);
   }
 
-  async disable(nameOrSlug: string): Promise<void> {
-    await this.transitionByName(nameOrSlug, 'archived');
+  async disable(
+    nameOrSlug: string,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
+    await this.transitionByName(nameOrSlug, 'archived', authority);
   }
 
-  async rollback(nameOrSlug: string): Promise<void> {
-    const current = await this.get(nameOrSlug);
-    const driver = this.driverFor(current, 'rollback');
-    if (!driver) {
-      throw new LearningCapabilityError(
-        'unsupported_action',
-        `rollback is not supported for learned ${current.carrier} capabilities`,
-      );
-    }
-    await this.record(await driver.execute('rollback', current));
+  async rollback(
+    nameOrSlug: string,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
+    await this.executeDriverAction(nameOrSlug, 'rollback', authority);
   }
 
   async archive(nameOrSlug: string): Promise<void> {
@@ -194,24 +210,38 @@ export class FileLearningCenterService implements LearningCenterService {
 
   async restore(nameOrSlug: string): Promise<void> {
     const current = await this.get(nameOrSlug);
-    await this.transition(current, current.previousGoodRevision === undefined ? 'ready' : 'active_learned');
+    await this.transitionByName(
+      nameOrSlug,
+      current.previousGoodRevision === undefined ? 'ready' : 'active_learned',
+    );
   }
 
-  async promote(nameOrSlug: string, _scope: 'user'): Promise<void> {
-    await this.executeDriverAction(nameOrSlug, 'promote');
+  async promote(
+    nameOrSlug: string,
+    _scope: 'user',
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
+    await this.executeDriverAction(nameOrSlug, 'promote', authority);
   }
 
-  async review(nameOrSlug: string): Promise<void> {
-    await this.executeDriverAction(nameOrSlug, 'review');
+  async review(
+    nameOrSlug: string,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
+    await this.executeDriverAction(nameOrSlug, 'review', authority);
   }
 
-  async trust(nameOrSlug: string): Promise<void> {
+  async trust(
+    nameOrSlug: string,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
     const current = await this.get(nameOrSlug);
+    assertExplicitAuthority(current, authority);
     if (current.source.kind === 'f224_proposal') {
       await this.updateF224Proposal(current, 'trust');
       return;
     }
-    await this.executeDriverAction(nameOrSlug, 'trust');
+    await this.executeDriverAction(nameOrSlug, 'trust', authority);
   }
 
   async record(record: LearnedCapabilityRecord): Promise<LearnedCapabilityRecord> {
@@ -234,7 +264,9 @@ export class FileLearningCenterService implements LearningCenterService {
       }
     }
     const slugOwner = (await this.store.listCapabilities()).find((entry) => (
-      entry.slug === record.slug && entry.capabilityId !== record.capabilityId
+      entry.slug === record.slug
+      && entry.capabilityId !== record.capabilityId
+      && hasSameCapabilityOwner(entry, record)
     ));
     if (slugOwner) {
       throw new LearningCapabilityError(
@@ -253,36 +285,41 @@ export class FileLearningCenterService implements LearningCenterService {
   private async transitionByName(
     nameOrSlug: string,
     lifecycle: LearnedCapabilityLifecycle,
+    authority?: LearningExplicitUserAuthority,
   ): Promise<LearnedCapabilityRecord> {
-    return this.transition(await this.get(nameOrSlug), lifecycle);
-  }
-
-  private async transition(
-    current: LearnedCapabilityRecord,
-    lifecycle: LearnedCapabilityLifecycle,
-  ): Promise<LearnedCapabilityRecord> {
-    assertLearnedCapabilityTransition(current.lifecycle, lifecycle);
-    return this.record({
-      ...current,
-      lifecycle,
-      revision: current.revision + 1,
-      updatedAt: this.now(),
-      ...(lifecycle === 'archived' && current.lifecycle === 'active_learned'
-        ? { previousGoodRevision: current.revision }
-        : {}),
+    return this.store.withOwnerMutation(async () => {
+      const current = await this.get(nameOrSlug);
+      assertExplicitAuthority(current, authority);
+      assertLearnedCapabilityTransition(current.lifecycle, lifecycle);
+      return this.recordUnlocked({
+        ...current,
+        lifecycle,
+        revision: current.revision + 1,
+        updatedAt: this.now(),
+        ...(lifecycle === 'archived' && current.lifecycle === 'active_learned'
+          ? { previousGoodRevision: current.revision }
+          : {}),
+      });
     });
   }
 
-  private async executeDriverAction(nameOrSlug: string, action: LearningAction): Promise<void> {
-    const current = await this.get(nameOrSlug);
-    const driver = this.driverFor(current, action);
-    if (!driver) {
-      throw new LearningCapabilityError(
-        'unsupported_action',
-        `${action} is not supported for learned ${current.carrier} capabilities`,
-      );
-    }
-    await this.record(await driver.execute(action, current));
+  private async executeDriverAction(
+    nameOrSlug: string,
+    action: LearningAction,
+    authority?: LearningExplicitUserAuthority,
+  ): Promise<void> {
+    await this.store.withOwnerMutation(async () => {
+      const current = await this.get(nameOrSlug);
+      assertExplicitAuthority(current, authority);
+      const driver = this.driverFor(current, action);
+      if (!driver) {
+        throw new LearningCapabilityError(
+          'unsupported_action',
+          `${action} is not supported for learned ${current.carrier} capabilities`,
+        );
+      }
+      await this.recordUnlocked(await driver.execute(action, current));
+    });
   }
 
   private driverFor(
@@ -417,7 +454,8 @@ class LearningEventSubscription implements AsyncIterableIterator<LearningEvent> 
       if (existing) return this.deliver(existing);
 
       const event = await this.registerAndRecheck();
-      if (this.closed || !event) break;
+      if (this.closed || event === undefined) break;
+      if (event === null) continue;
       if (event.sequence <= this.cursor) continue;
       return this.deliver(event);
     }
@@ -435,7 +473,7 @@ class LearningEventSubscription implements AsyncIterableIterator<LearningEvent> 
     return { done: true, value: undefined };
   }
 
-  private async registerAndRecheck(): Promise<LearningEvent | undefined> {
+  private async registerAndRecheck(): Promise<LearningEvent | null | undefined> {
     let waiter: EventWaiter | undefined;
     const waiting = new Promise<LearningEvent | undefined>((resolve) => {
       waiter = { resolve };
@@ -446,7 +484,12 @@ class LearningEventSubscription implements AsyncIterableIterator<LearningEvent> 
       const rechecked = (await this.store.listEvents()).find((event) => event.sequence > this.cursor);
       if (this.closed) return undefined;
       if (rechecked) return rechecked;
-      return await waiting;
+      return await Promise.race([
+        waiting,
+        new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), DURABLE_EVENT_POLL_MS);
+        }),
+      ]);
     } finally {
       if (waiter) this.waiters.delete(waiter);
       if (this.pendingWaiter === waiter) this.pendingWaiter = undefined;
@@ -466,13 +509,42 @@ export function createLearningCenterService(
 }
 
 function validateRecord(record: LearnedCapabilityRecord): void {
-  if (record.schemaVersion !== 1
+  if ((record.schemaVersion !== 1 && record.schemaVersion !== 2)
     || record.capabilityId.length === 0
     || record.displayName.trim().length === 0
     || record.slug !== slugifyLearnedCapabilityName(record.slug)
     || !Number.isSafeInteger(record.revision)
     || record.revision < 1) {
     throw new LearningCapabilityError('invalid_record', 'invalid learned capability record');
+  }
+}
+
+function hasSameCapabilityOwner(
+  left: LearnedCapabilityRecord,
+  right: LearnedCapabilityRecord,
+): boolean {
+  if (left.schemaVersion !== 2 || right.schemaVersion !== 2) {
+    return left.schemaVersion === right.schemaVersion;
+  }
+  return left.scope.configHomeHash === right.scope.configHomeHash
+    && left.scope.tenantHash === right.scope.tenantHash
+    && left.scope.projectHash === right.scope.projectHash;
+}
+
+function assertExplicitAuthority(
+  current: LearnedCapabilityRecord,
+  authority: LearningExplicitUserAuthority | undefined,
+): void {
+  if (authority === undefined) return;
+  if (authority.authority !== 'explicit_user'
+    || current.revision !== authority.expectedRevision
+    || (authority.expectedFingerprint !== undefined
+      && (current.schemaVersion !== 2
+        || current.artifact.fingerprint !== authority.expectedFingerprint))) {
+    throw new LearningCapabilityError(
+      'invalid_record',
+      'explicit user action expected revision or fingerprint changed',
+    );
   }
 }
 

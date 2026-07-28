@@ -69,6 +69,11 @@ export interface SkillMetadata {
   argumentHint?: string;
   path: string;
   source: ResolvedSkillSource;
+  readonly learned?: {
+    readonly capabilityId: string;
+    readonly revision: number;
+    readonly fingerprint: string;
+  };
   /** If true, exclude from system prompt; still invokable by explicit slash forms. */
   disableModelInvocation: boolean;
 }
@@ -261,7 +266,23 @@ export interface SkillPathsConfig {
   userPaths: string[];
   pluginPaths: string[];
   builtinPath: string;
+  /**
+   * Deprecated loose-file path. It remains in the public shape for source
+   * compatibility but is intentionally not discovered without a manifest.
+   */
   learnedPath?: string;
+  learnedArea?: LearnedSkillDiscoveryConfig;
+}
+
+export interface LearnedSkillDiscoveryConfig {
+  readonly rootDir: string;
+  readonly expectedScope: {
+    readonly configHomeHash: string;
+    readonly tenantHash: string;
+    readonly projectHash: string;
+  };
+  readonly testingBindings?: Readonly<Record<string, string>>;
+  readonly now?: string;
 }
 
 // === Default Skill Paths ===
@@ -271,7 +292,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { listPluginSkillPaths } from './plugin-paths.js';
-import { getAgentConfigPath } from '../../runtime/agent-home.js';
 
 // ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -303,7 +323,8 @@ function resolveBuiltinPath(): string {
  * 3. User - ~/.agents/skills/ (AgentSkills standard)
  * 4. Plugin - (dynamic)
  * 5. Builtin - packages/skills/src/builtin/
- * 6. Learned - ~/.kodax/learned/skills/ (never shadows a formal source)
+ * Learned Skills are supplied separately through a record-gated Learned Area
+ * and never through a loose directory.
  */
 export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
   const home = homedir();
@@ -328,14 +349,14 @@ export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
     // Built-in skills
     builtinPath: resolveBuiltinPath(),
 
-    learnedPath: getAgentConfigPath('learned', 'skills'),
   };
 }
 
 /**
  * All skill paths in priority order (highest to lowest)
  *
- * Priority: Project > User > Plugin > Builtin > Learned
+ * Priority: Project > User > Plugin > Builtin. Record-gated Learned Skills
+ * are appended by discovery after these formal sources.
  * - Project: Project-specific skills override everything else
  * - User: User preferences (~/.kodax/ and ~/.agents/)
  * - Plugin: Third-party plugins
@@ -356,9 +377,5 @@ export function getSkillPathsFlat(config: SkillPathsConfig): Array<{ path: strin
     result.push({ path: p, source: 'plugin' });
   }
   result.push({ path: config.builtinPath, source: 'builtin' });
-  if (config.learnedPath !== undefined) {
-    result.push({ path: config.learnedPath, source: 'learned' });
-  }
-
   return result;
 }

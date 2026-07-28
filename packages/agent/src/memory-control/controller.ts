@@ -23,6 +23,7 @@ import {
   updateLearningProposalStatus,
   upsertLearningProposal,
 } from '../learning/store.js';
+import { withLearningFileLock } from '../learning/store-lock.js';
 import type {
   MemoryLearningHandoff,
   ReasoningLearningHandoff,
@@ -57,6 +58,7 @@ import type {
   MemoryReviewCandidateRef,
   MemoryReviewDraftAction,
   MemoryReviewInput,
+  MemoryReviewModelInput,
   MemoryReviewPlan,
   MemoryReviewPersistenceDecision,
   MemoryReviewRunner,
@@ -196,6 +198,23 @@ export class MemoryControlPlane implements MemoryController {
     if (store.warnings.length > 0) return undefined;
     const entry = store.proposals.find((proposal) => memoryProposalId(proposal.proposalId) === id);
     return entry === undefined ? undefined : this.projectLearningProposal(entry);
+  }
+
+  async listHostAppliedEpisodeProposalIds(
+    proposalIds: readonly string[],
+  ): Promise<readonly string[]> {
+    if (proposalIds.length === 0) return [];
+    const requested = new Set(proposalIds);
+    const store = await readLearningProposalStore(this.learningStorePath);
+    if (store.warnings.length > 0) return [];
+    return store.proposals
+      .filter((entry) => (
+        requested.has(entry.proposalId)
+        && entry.status === 'approved'
+        && entry.approvedBy === 'host'
+        && entry.approvalPolicyId === `${MEMORY_POLICY_VERSION}:episode-promotion`
+      ))
+      .map((entry) => entry.proposalId);
   }
 
   async approveProposal(
@@ -454,26 +473,18 @@ export class MemoryControlPlane implements MemoryController {
 
   async reviewMemoryFeedback(input: MemoryReviewInput): Promise<MemoryReviewPlan> {
     const createdAt = this.now();
-    const sourceRefs = input.sourceRefs ?? [];
-    const selection = await this.selectReviewCandidateRefs(input);
-    const modelInput = {
-      trigger: input.trigger,
-      userFeedback: input.userFeedback ?? input.episodeDigest?.summary ?? '',
-      ...(input.task !== undefined ? { task: input.task } : {}),
-      sourceRefs,
-      candidateRefs: selection.candidateRefs,
-      warnings: selection.warnings,
-    };
+    const modelInput = await this.prepareReviewInput(input);
+    const sourceRefs = modelInput.sourceRefs;
 
     if (this.memoryReviewer === undefined) {
       const plan: MemoryReviewPlan = {
         trigger: input.trigger,
         createdAt,
         sourceRefs,
-        candidateRefs: selection.candidateRefs,
+        candidateRefs: modelInput.candidateRefs,
         actions: [],
         warnings: [
-          ...selection.warnings,
+          ...modelInput.warnings,
           'memory reviewer unavailable; semantic memory review was not run',
         ],
         ...(input.episodeDigest !== undefined ? { episodeDigest: input.episodeDigest } : {}),
@@ -490,11 +501,39 @@ export class MemoryControlPlane implements MemoryController {
     return plan;
   }
 
+  async prepareEpisodeReview(
+    digest: import('../types.js').KodaXMemoryOutcomeDigest,
+  ): Promise<MemoryReviewModelInput> {
+    return this.prepareReviewInput({
+      trigger: 'episode_completed',
+      episodeDigest: digest,
+      userFeedback: digest.summary,
+      task: digest.objective,
+      sourceRefs: digest.evidenceRefs,
+    });
+  }
+
+  private async prepareReviewInput(input: MemoryReviewInput): Promise<MemoryReviewModelInput> {
+    const sourceRefs = input.sourceRefs ?? [];
+    const selection = await this.selectReviewCandidateRefs(input);
+    return {
+      trigger: input.trigger,
+      userFeedback: input.userFeedback ?? input.episodeDigest?.summary ?? '',
+      ...(input.task !== undefined ? { task: input.task } : {}),
+      sourceRefs,
+      candidateRefs: selection.candidateRefs,
+      warnings: selection.warnings,
+    };
+  }
+
   async persistReviewPlan(plan: MemoryReviewPlan): Promise<readonly string[]> {
     return (await this.persistReviewPlanWithDecisions(plan)).proposalIds;
   }
 
-  private async persistReviewPlanWithDecisions(plan: MemoryReviewPlan): Promise<PersistedReviewPlan> {
+  private async persistReviewPlanWithDecisions(
+    plan: MemoryReviewPlan,
+    revalidateAuthority?: () => Promise<void>,
+  ): Promise<PersistedReviewPlan> {
     const proposalIds: string[] = [];
     const decisions: MemoryReviewPersistenceDecision[] = [];
     const existingRefs = await this.listRefs({ includePrivate: true });
@@ -580,7 +619,10 @@ export class MemoryControlPlane implements MemoryController {
           } : {}),
         },
       };
-      await upsertLearningProposal(this.learningStorePath, handoff, { now: this.now });
+      await upsertLearningProposal(this.learningStorePath, handoff, {
+        now: this.now,
+        ...(revalidateAuthority === undefined ? {} : { revalidateAuthority }),
+      });
       proposalIds.push(proposalId);
       decisions.push({ ...consultation, proposalId });
       this.emit({ type: 'proposal.created', proposalId: memoryProposalId(proposalId) });
@@ -650,8 +692,20 @@ export class MemoryControlPlane implements MemoryController {
       task: digest.objective,
       sourceRefs: digest.evidenceRefs,
     });
+    return this.applyReviewedEpisode(plan, digest, signal);
+  }
+
+  async applyReviewedEpisode(
+    reviewedPlan: MemoryReviewPlan,
+    digest: import('../types.js').KodaXMemoryOutcomeDigest,
+    signal?: AbortSignal,
+    revalidateAuthority?: () => Promise<void>,
+  ): Promise<MemoryEpisodeReviewResult> {
+    const plan = reviewedPlan.episodeDigest === digest
+      ? reviewedPlan
+      : { ...reviewedPlan, episodeDigest: digest };
     if (isAborted(signal)) return cancelledEpisodeReview(plan, 'episode review timed out');
-    const persisted = await this.persistReviewPlanWithDecisions(plan);
+    const persisted = await this.persistReviewPlanWithDecisions(plan, revalidateAuthority);
     const proposalIds = persisted.proposalIds;
     const appliedProposalIds: string[] = [];
     const warnings = [...plan.warnings];
@@ -668,6 +722,7 @@ export class MemoryControlPlane implements MemoryController {
         memoryProposalId(proposalId),
         `${MEMORY_POLICY_VERSION}:episode-promotion`,
         'verified low-risk episode memory',
+        revalidateAuthority,
       );
       if (result.applied) appliedProposalIds.push(proposalId);
       else if (result.skippedReason !== undefined) warnings.push(result.skippedReason);
@@ -743,6 +798,7 @@ export class MemoryControlPlane implements MemoryController {
     id: string,
     policyId: string,
     policyReason: string,
+    revalidateAuthority?: () => Promise<void>,
   ): Promise<MemoryApplyResult> {
     const proposal = await this.showProposal(id);
     if (proposal === undefined) return skippedApply(id, 'memory proposal not found');
@@ -753,6 +809,7 @@ export class MemoryControlPlane implements MemoryController {
       expectedFingerprints: proposal.expectedFingerprints,
       policyId,
       policyReason,
+      ...(revalidateAuthority === undefined ? {} : { revalidateAuthority }),
     });
     if (result.applied) this.emit({ type: 'proposal.approved', proposalId: id });
     return result;
@@ -1150,6 +1207,9 @@ class LearningHandoffAdapter implements MemorySourceAdapter {
         approvalExpectedFingerprints: approval.expectedFingerprints,
         approvalResultingFingerprints: approval.expectedFingerprints,
         now: this.now,
+        ...(approval.revalidateAuthority === undefined
+          ? {}
+          : { revalidateAuthority: approval.revalidateAuthority }),
       },
     );
     return {
@@ -1248,6 +1308,15 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     proposal: MemoryActionProposal,
     approval: MemoryApproval,
   ): Promise<MemoryApplyResult> {
+    return withLearningFileLock(join(this.memoryRoot, '.memory-review.lock'), () => (
+      this.applyProposalWithLock(proposal, approval)
+    ));
+  }
+
+  private async applyProposalWithLock(
+    proposal: MemoryActionProposal,
+    approval: MemoryApproval,
+  ): Promise<MemoryApplyResult> {
     const proposalId = parseMemoryProposalId(proposal.id);
     if (proposalId === undefined) return skippedApply(proposal.id, 'invalid memory proposal id');
     const target = proposal.targetRefs.find((ref) => ref.kind === 'memdir' && ref.storageUri !== undefined);
@@ -1286,12 +1355,14 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
     const changedPaths: string[] = [];
     const warnings: string[] = [];
     if (!targetAlreadyApplied) {
+      await approval.revalidateAuthority?.();
       await writeFileAtomic(target.storageUri, content);
       changedPaths.push(target.storageUri);
     } else {
       warnings.push('target memory already matched proposal content; completing approval');
     }
     if (!indexAlreadyApplied) {
+      await approval.revalidateAuthority?.();
       await writeFileAtomic(indexRef.storageUri, resultingIndexContent);
       changedPaths.push(indexRef.storageUri);
     } else {
@@ -1314,6 +1385,9 @@ class MemdirMemoryAdapter implements MemorySourceAdapter {
           [indexRef.id]: fingerprint(resultingIndexContent),
         },
         now: this.now,
+        ...(approval.revalidateAuthority === undefined
+          ? {}
+          : { revalidateAuthority: approval.revalidateAuthority }),
       },
     );
     return {
@@ -2099,9 +2173,16 @@ function procedurePromotionHistory(
 function hasVerifiedDigestEvidence(
   digest: import('../types.js').KodaXMemoryOutcomeDigest,
 ): boolean {
-  return digest.evidence?.some((evidence) =>
+  const expectedVerdict = digest.outcome === 'succeeded' ? 'passed' : 'failed';
+  return digest.evidence?.some((evidence) => (
     (evidence.grade === 'authoritative' || evidence.grade === 'verified')
-    && (evidence.source === 'user' || evidence.source === 'host' || evidence.source === 'environment')) === true;
+    && (
+      evidence.source === 'user'
+      || evidence.source === 'host'
+      || evidence.source === 'environment'
+      || (evidence.source === 'tool' && evidence.verdict === expectedVerdict)
+    )
+  )) === true;
 }
 
 function extractClaimBody(body: string): string {

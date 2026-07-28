@@ -140,6 +140,14 @@ describe('interactive daemon runtime bridge', () => {
       },
       context: {
         executionCwd: 'C:/workspace',
+        configHome: 'C:/attacker-controlled-home',
+        memoryIdentity: {
+          configHome: 'C:/attacker-controlled-home',
+          tenantId: 'attacker-tenant',
+          agentId: 'attacker-agent',
+          projectId: 'attacker-project',
+          sessionId: 'attacker-session',
+        },
         shellExecution: {
           version: 1,
           shell: { kind: 'pwsh', profile: 'none' },
@@ -177,6 +185,9 @@ describe('interactive daemon runtime bridge', () => {
     });
     expect(encoded).not.toContain('abortSignal');
     expect(encoded).not.toContain('storage');
+    expect(encoded).not.toContain('attacker-controlled');
+    expect(wire.context).not.toHaveProperty('configHome');
+    expect(wire.context).not.toHaveProperty('memoryIdentity');
   });
 
   it('rejects host-only bindings that the daemon cannot reproduce', () => {
