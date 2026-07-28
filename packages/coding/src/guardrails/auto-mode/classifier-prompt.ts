@@ -76,6 +76,9 @@ About compact review data:
   - <operation_facts> is deterministic structured data. A boundary such as outside-workspace is a risk fact, not an automatic block or request for human confirmation.
   - operation_facts.evidence.status='targeted' means a large operation set is summarized; counts cover the complete set and samples prioritize risky boundaries and destructive operations.
   - If facts or intent evidence are incomplete, block when the available evidence cannot justify autonomous execution. Do not request more context merely because bytes were omitted.
+  - Do not infer a tool prohibition merely because the user asks whether that tool is available. Questions that explicitly request or restate constraints still carry user authority and must be respected.
+  - On a scope mismatch, name the actual unrequested operation in the reason. Do not replace that reason with an unsupported capability or policy claim.
+  - Calling PowerShell from the Windows command tool is not circumvention by itself; judge the concrete operations and user authority.
 
 Output EXACTLY:
 <block>yes|no</block><reason>one short sentence</reason>

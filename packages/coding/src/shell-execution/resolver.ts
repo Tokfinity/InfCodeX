@@ -4,7 +4,9 @@ import { accessSync, constants as fsConstants, realpathSync, statSync } from 'no
 import { delimiter, isAbsolute, join, resolve, win32 } from 'node:path';
 import iconv from 'iconv-lite';
 import {
+  ELECTRON_RUN_AS_NODE_ENV,
   killChildProcessTree,
+  prepareInternalNodeLaunch,
   registerManagedChildProcess,
 } from '@kodax-ai/agent';
 
@@ -352,29 +354,34 @@ function parseEnvironmentProbeOutput(
   return result;
 }
 
-function buildNodeEnvironmentHelper(
+/** @internal Exported for Electron bootstrap contract tests. */
+export function buildNodeEnvironmentHelper(
   kind: KodaXShellKind,
   sentinel: string,
+  executable = process.execPath,
+  isElectron = process.versions.electron !== undefined,
 ): string {
+  const launch = prepareInternalNodeLaunch({
+    args: ['-e', NODE_ENV_HELPER_EXPRESSION, sentinel],
+    env: {},
+    isElectron,
+  });
+  let command: string;
   if (kind === 'pwsh' || kind === 'powershell') {
-    return `& ${quotePowerShell(process.execPath)} -e ${
-      quotePowerShell(NODE_ENV_HELPER_EXPRESSION)
-    } ${quotePowerShell(sentinel)}`;
+    command = `& ${quotePowerShell(executable)} ${launch.args.map(quotePowerShell).join(' ')}`;
+  } else if (kind === 'cmd') {
+    command = [quoteCmd(executable), ...launch.args.map(quoteCmd)].join(' ');
+  } else {
+    command = [quotePosix(executable), ...launch.args.map(quotePosix)].join(' ');
+  }
+  if (launch.env[ELECTRON_RUN_AS_NODE_ENV] !== '1') return command;
+  if (kind === 'pwsh' || kind === 'powershell') {
+    return `& { $env:${ELECTRON_RUN_AS_NODE_ENV} = '1'; ${command} }`;
   }
   if (kind === 'cmd') {
-    return [
-      quoteCmd(process.execPath),
-      '-e',
-      quoteCmd(NODE_ENV_HELPER_EXPRESSION),
-      quoteCmd(sentinel),
-    ].join(' ');
+    return `set "${ELECTRON_RUN_AS_NODE_ENV}=1" && ${command}`;
   }
-  return [
-    quotePosix(process.execPath),
-    '-e',
-    quotePosix(NODE_ENV_HELPER_EXPRESSION),
-    quotePosix(sentinel),
-  ].join(' ');
+  return `${ELECTRON_RUN_AS_NODE_ENV}=1 ${command}`;
 }
 
 function combineProbeSetup(

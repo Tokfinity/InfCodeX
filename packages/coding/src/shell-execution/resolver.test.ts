@@ -17,6 +17,7 @@ import type {
 } from '../types.js';
 import { toolBash } from '../tools/bash.js';
 import {
+  buildNodeEnvironmentHelper,
   buildShellProbeArgs,
   clearShellExecutionEnvironmentCache,
 } from './resolver.js';
@@ -430,6 +431,34 @@ describe('resolved shell execution', () => {
 });
 
 describe('shell probe argv contract', () => {
+  it('bounds packaged Electron Node mode to the environment helper invocation', () => {
+    const executable =
+      process.platform === 'win32'
+        ? 'C:\\Program Files\\KodaX Space\\KodaX Space.exe'
+        : '/Applications/KodaX Space.app/Contents/MacOS/KodaX Space';
+    const sentinel = '__KODAX_ENV_TEST__';
+
+    for (const kind of ['powershell', 'cmd', 'bash'] as const) {
+      const command = buildNodeEnvironmentHelper(kind, sentinel, executable, true);
+      expect(command).toContain('ELECTRON_RUN_AS_NODE');
+      expect(command).toContain('--import');
+      expect(command).toContain('delete%20process.env.ELECTRON_RUN_AS_NODE');
+      expect(command).toContain(sentinel);
+    }
+  });
+
+  it('keeps ordinary Node environment helpers free of Electron bootstrap state', () => {
+    const command = buildNodeEnvironmentHelper(
+      process.platform === 'win32' ? 'powershell' : 'bash',
+      '__KODAX_ENV_TEST__',
+      process.execPath,
+      false,
+    );
+
+    expect(command).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(command).not.toContain('--import');
+  });
+
   it('places pwsh login first and does not contradict interactive mode', () => {
     const login = buildShellProbeArgs(
       'pwsh',

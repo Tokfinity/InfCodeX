@@ -171,6 +171,30 @@ describe('buildClassifierPrompt', () => {
     expect(out.system).not.toContain('PROJECT DOCUMENT MUST NOT APPEAR');
     expect(content.indexOf('</intent_evidence>')).toBe(content.lastIndexOf('</intent_evidence>'));
   });
+
+  it('forbids invented tool policy when a capability question accompanies a scope mismatch', () => {
+    const out = buildClassifierPrompt({
+      rules: emptyRules,
+      transcript: [],
+      intentEvidence: {
+        status: 'complete',
+        content: '[user-turn:1] Is PowerShell unavailable? Please confirm.',
+        sourceBytes: 58,
+        includedBytes: 58,
+        omittedBytes: 0,
+        sha256: 'b'.repeat(64),
+      },
+      action: JSON.stringify({
+        analysis: { shell: 'powershell', status: 'complete', binding: 'exact' },
+        operations: [{ kind: 'create', target: 'report.pdf' }],
+      }),
+    });
+
+    expect(out.system).toMatch(/not infer.*tool prohibition.*asks whether.*tool.*available/i);
+    expect(out.system).toMatch(/questions.*explicitly.*constraints.*authority/i);
+    expect(out.system).toMatch(/scope mismatch.*actual unrequested operation/i);
+    expect(out.system).toMatch(/PowerShell.*not.*circumvention/i);
+  });
 });
 
 // ============== FEATURE_158 — signals integration ==============

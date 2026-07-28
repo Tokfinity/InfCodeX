@@ -48,6 +48,9 @@ try {
     daemon: 'absent',
     externalChild: 'absent',
     externalChildStatus: 0,
+    shellProbe: 'shell-probe-ok',
+    shellProbeExitCode: 0,
+    shellProbeNodeMode: 'absent',
   }, 'The Electron Node bootstrap switch must not reach daemon or user child code.');
   await verifyConsoleProbe(consoleProbe);
   const sdk = await importInstalledRuntimeSdk();

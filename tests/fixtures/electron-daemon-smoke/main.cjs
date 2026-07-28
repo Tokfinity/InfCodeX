@@ -84,12 +84,22 @@ function prepareEnvironmentProbeExtension() {
     'dist',
     'sdk-llm.js',
   );
+  const codingEntry = path.join(
+    __dirname,
+    'node_modules',
+    '@kodax-ai',
+    'kodax',
+    'dist',
+    'sdk-coding.js',
+  );
   const llmUrl = pathToFileURL(llmEntry).href;
+  const codingUrl = pathToFileURL(codingEntry).href;
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(extensionPath, `
 import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { KodaXBaseProvider } from ${JSON.stringify(llmUrl)};
+import { toolBash } from ${JSON.stringify(codingUrl)};
 
 class WindowsHideSmokeProvider extends KodaXBaseProvider {
   name = 'windows-hide-smoke';
@@ -118,11 +128,45 @@ const child = spawnSync(process.env.ComSpec ?? 'cmd.exe', [
   '/d', '/s', '/c',
   'if defined ELECTRON_RUN_AS_NODE (echo present) else (echo absent)',
 ], { encoding: 'utf8', windowsHide: true });
+const shellProbe = await toolBash(
+  {
+    command:
+      "Write-Output 'shell-probe-ok'; "
+      + "Write-Output ('node-mode=' + $(if (Test-Path Env:ELECTRON_RUN_AS_NODE) "
+      + "{ $env:ELECTRON_RUN_AS_NODE } else { 'absent' }))",
+  },
+  {
+    backups: new Map(),
+    executionCwd: ${JSON.stringify(homeDir)},
+    shellExecution: {
+      version: 1,
+      shell: {
+        kind: 'powershell',
+        executable: process.env.SystemRoot
+          + '\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe',
+        profile: 'none',
+      },
+      environment: { inherit: 'filtered', windowsPath: 'registry' },
+      cache: { ttlMs: 0, refreshToken: 'packaged-electron-smoke' },
+      probeTimeoutMs: 10_000,
+    },
+  },
+);
+const shellProbeLines = shellProbe.trim().split(/\\r?\\n/);
+const shellProbeExitIndex = shellProbeLines.findIndex((line) => /^Exit: -?\\d+$/.test(line));
+const shellProbeExitCode =
+  shellProbeExitIndex >= 0
+    ? Number.parseInt(shellProbeLines[shellProbeExitIndex].slice('Exit: '.length), 10)
+    : null;
+const shellProbeOutput = shellProbeLines.slice(shellProbeExitIndex + 1);
 writeFileSync(${JSON.stringify(environmentProofFile)}, JSON.stringify({
   daemon: process.env.ELECTRON_RUN_AS_NODE ?? 'absent',
   externalChild: child.stdout.trim(),
   externalChildStatus: child.status,
   externalChildError: child.error?.message,
+  shellProbe: shellProbeOutput[0],
+  shellProbeExitCode,
+  shellProbeNodeMode: shellProbeOutput[1]?.replace(/^node-mode=/, ''),
 }), 'utf8');
 
 export default function(api) {
