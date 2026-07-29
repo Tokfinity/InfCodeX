@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 232 | Medium | Resolved | Workspace shell sandbox did not deny reads from sensitive home credential paths | v0.7.78 ASRT workspace shell sandbox | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 230 | Medium | Resolved | PID-only Actor owner liveness could pin crashed Runtime ownership after PID reuse | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 227 | High | Resolved | Root memory loop did not reliably capture explicit user remember intent in AMA and queued turns | v0.7.68 MemorySession; AMA lifecycle gap | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 226 | Medium | Resolved | Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading | v0.7.66 Runtime broker / Skill tool metadata | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -136,6 +137,64 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 232: Workspace shell sandbox did not deny reads from sensitive home credential paths
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.78 ASRT workspace shell sandbox
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+The ASRT workspace shell policy denied reads from KodaX's sandbox control
+directory, but did not explicitly deny credential-bearing paths under the
+user's home directory. On backends where home reads are otherwise available,
+an admitted workspace command that executed unexpected logic could attempt to
+read SSH, cloud, container, package-manager, or CLI credentials.
+
+#### Root Cause
+
+- Sensitive-path constants were used only while copying isolated Skill
+  snapshots and were not part of the workspace shell sandbox policy.
+- Home-local `PATH` entries were granted read access without excluding entries
+  nested below sensitive paths; ASRT read grants take precedence over denies.
+- A custom `KODAX_HOME` was protected only at its `sandbox-runtime` child
+  instead of at the complete agent configuration boundary.
+
+#### Resolution
+
+- Deny KodaX's explicit sensitive-home set: SSH, cloud, Kubernetes, container,
+  KodaX/agent, gcloud/GitHub CLI configuration, common environment files, and
+  common private-key names.
+- Protect the complete resolved agent home, including a programmatic override
+  or `KODAX_HOME`, while retaining an exact sandbox bootstrap read grant.
+- Keep ordinary home-local `PATH` entries readable, but remove entries nested
+  under a denied path so they cannot reopen the sensitive subtree.
+- On Windows, keep only the original control-directory deny in the long-lived
+  session ACL and pass the complete deny set through ASRT's per-exec deny
+  contract. This avoids `srt-win acl stamp` timeouts without weakening the
+  command boundary; macOS/Linux retain the session-level deny policy.
+- Preserve workspace/temp writes, ordinary external reads, the exact sandbox
+  bootstrap grant, and the existing workspace network behavior.
+
+#### Files Changed
+
+- `src/sandbox-runtime.ts`
+- `src/sandbox-runtime.test.ts`
+
+#### Tests Added or Updated
+
+- Extended the workspace shell adapter regression to assert the explicit
+  sensitive-home set and the complete resolved agent home.
+- Asserted that the Windows session ACL remains bounded while the exact command
+  receives the complete per-exec deny set.
+- Asserted that home-root and sensitive home-local `PATH` entries are not
+  re-granted while an ordinary home-local tool directory remains readable.
+- Verified against the real Windows ASRT backend that workspace-session
+  preparation succeeds and a read of an existing SSH file returns `DENIED`.
 
 ### 230: PID-only Actor owner liveness could pin crashed Runtime ownership after PID reuse
 
@@ -8346,11 +8405,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 113 (25 Open, 88 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 114 (25 Open, 89 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 232 resolved (v0.7.78 development)
+- Denied workspace-shell reads from sensitive home credential paths and
+  prevented home-local `PATH` grants from reopening those paths.
+- Protected custom agent homes and used Windows per-exec denies to avoid
+  long-lived ACL initialization timeouts.
+- Preserved ordinary reads, workspace/temp writes, bootstrap execution, and
+  the existing network policy.
 
 ### 2026-07-29: Issue 230 resolved (v0.7.78 development)
 - Added Runtime-identity IPC liveness for durable Actor owners, so PID reuse

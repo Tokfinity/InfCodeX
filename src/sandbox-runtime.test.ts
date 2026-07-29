@@ -20,6 +20,12 @@ const capturedSpawnArgv = vi.hoisted(
 const capturedWrappedCommands = vi.hoisted(
   () => [] as string[],
 );
+const capturedWorkspaceSessionConfigs = vi.hoisted(
+  () => [] as Array<Readonly<Record<string, unknown>>>,
+);
+const capturedSandboxWrapConfigs = vi.hoisted(
+  () => [] as Array<Readonly<Record<string, unknown>>>,
+);
 const capturedKillSignals = vi.hoisted(
   () => [] as Array<NodeJS.Signals | number | undefined>,
 );
@@ -104,7 +110,13 @@ vi.mock('node:child_process', async (importOriginal) => {
           || arg === '__asrt-workspace-session'
         ));
       if (workspaceSession) {
-        if (typeof requestFile === 'string') rmSync(requestFile, { force: true });
+        if (typeof requestFile === 'string') {
+          const init = JSON.parse(readFileSync(requestFile, 'utf8')) as {
+            readonly config: Readonly<Record<string, unknown>>;
+          };
+          capturedWorkspaceSessionConfigs.push(init.config);
+          rmSync(requestFile, { force: true });
+        }
         let input = '';
         child.stdin.on('data', (chunk: Buffer) => {
           input += chunk.toString('utf8');
@@ -266,8 +278,13 @@ vi.mock('@anthropic-ai/sandbox-runtime', async (importOriginal) => {
         capturedWrappedCommands.push(command);
         return Promise.resolve(command);
       },
-      wrapWithSandboxArgv: (command: string) => {
+      wrapWithSandboxArgv: (
+        command: string,
+        _binShell?: string,
+        customConfig?: Readonly<Record<string, unknown>>,
+      ) => {
         capturedWrappedCommands.push(command);
+        if (customConfig) capturedSandboxWrapConfigs.push(customConfig);
         return Promise.resolve({
           argv: [process.execPath, 'exec', '--quiet', '--', process.execPath, '-e', command],
           env: process.env,
@@ -306,6 +323,8 @@ afterEach(async () => {
   capturedSpawnEnvironments.length = 0;
   capturedSpawnArgv.length = 0;
   capturedWrappedCommands.length = 0;
+  capturedWorkspaceSessionConfigs.length = 0;
+  capturedSandboxWrapConfigs.length = 0;
   capturedKillSignals.length = 0;
   capturedProcessTreeKillOptions.length = 0;
   stubbornBroker.mode = 'none';
@@ -314,6 +333,7 @@ afterEach(async () => {
   sandboxInitialize.mockReset();
   sandboxInitialize.mockResolvedValue();
   sandboxWrapper.mode = 'attest';
+  vi.unstubAllEnvs();
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -339,6 +359,20 @@ describe('ASRT workspace shell adapter', () => {
   it('prepares only an admitted concrete call with workspace/temp writes and normal local network', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-shell-'));
     tempRoots.push(root);
+    const home = path.resolve(os.homedir());
+    const customAgentHome = path.join(root, 'custom-agent-home');
+    vi.stubEnv('KODAX_HOME', customAgentHome);
+    const homePathEntry = process.platform === 'win32'
+      ? `${home[0]!.toLowerCase()}${home.slice(1)}`
+      : home;
+    const sensitivePathEntry = path.join(home, '.ssh', 'bin');
+    const ordinaryHomePathEntry = path.join(home, 'tools', 'bin');
+    vi.stubEnv('PATH', [
+      homePathEntry,
+      sensitivePathEntry,
+      ordinaryHomePathEntry,
+      process.env.PATH,
+    ].filter((entry): entry is string => entry !== undefined).join(path.delimiter));
     const shouldSandbox = vi.fn(() => true);
     const reportObservation = vi.fn();
     const sandbox = createAsrtShellSandbox({ workspaceRoot: root, shouldSandbox });
@@ -359,54 +393,94 @@ describe('ASRT workspace shell adapter', () => {
     });
 
     expect(prepared).toBeDefined();
-    expect(shouldSandbox).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'bash-1',
-      name: 'bash',
-    }));
-    const requestFile = prepared!.args.find((arg) => arg.endsWith('.json'));
-    expect(requestFile).toBeDefined();
-    const request = JSON.parse(readFileSync(requestFile!, 'utf8')) as {
-      readonly config: {
-        readonly filesystem: {
-          readonly allowRead: readonly string[];
-          readonly allowWrite: readonly string[];
-          readonly denyRead: readonly string[];
-          readonly denyWrite: readonly string[];
+    if (!prepared) throw new Error('expected an admitted workspace invocation');
+    let cleanupResult: Awaited<ReturnType<typeof prepared.cleanup>> | undefined;
+    try {
+      expect(shouldSandbox).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'bash-1',
+        name: 'bash',
+      }));
+      const requestFile = prepared.args.find((arg) => arg.endsWith('.json'));
+      expect(requestFile).toBeDefined();
+      const request = JSON.parse(readFileSync(requestFile!, 'utf8')) as {
+        readonly config: {
+          readonly filesystem: {
+            readonly allowRead: readonly string[];
+            readonly allowWrite: readonly string[];
+            readonly denyRead: readonly string[];
+            readonly denyWrite: readonly string[];
+          };
+          readonly network: {
+            readonly allowedDomains: readonly string[];
+            readonly strictAllowlist: boolean;
+          };
         };
-        readonly network: {
-          readonly allowedDomains: readonly string[];
-          readonly strictAllowlist: boolean;
-        };
+        readonly env: Readonly<Record<string, string>>;
+        readonly allowAllNetwork?: boolean;
+        readonly observationFile: string;
       };
-      readonly env: Readonly<Record<string, string>>;
-      readonly allowAllNetwork?: boolean;
-      readonly observationFile: string;
-    };
-    expect(request.config.filesystem.allowWrite).toContain(path.resolve(root));
-    expect(request.config.filesystem.allowWrite).not.toContain(childControlledTemp);
-    if (process.platform === 'win32') {
-      expect(request.config.filesystem.allowRead).not.toContain(
-        path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+      expect(request.config.filesystem.allowWrite).toContain(path.resolve(root));
+      expect(request.config.filesystem.allowWrite).not.toContain(childControlledTemp);
+      expect(request.config.filesystem.denyRead).toEqual(expect.arrayContaining([
+        '.ssh', '.aws', '.azure', '.gnupg', '.kube', '.docker', '.kodax', '.agents',
+        path.join('.config', 'gcloud'),
+        path.join('.config', 'gh'),
+        '.env',
+        '.env.local',
+        '.env.development',
+        '.env.production',
+        '.env.test',
+        '.env.staging',
+        '.npmrc',
+        '.pypirc',
+        '.netrc',
+        '.git-credentials',
+        'credentials',
+        'credentials.json',
+        'application_default_credentials.json',
+        'id_rsa',
+        'id_dsa',
+        'id_ecdsa',
+        'id_ed25519',
+      ].map((relative) => path.join(home, relative))));
+      expect(request.config.filesystem.denyRead).toContain(path.resolve(customAgentHome));
+      expect(request.config.filesystem.allowRead).not.toContain(homePathEntry);
+      expect(request.config.filesystem.allowRead).not.toContain(sensitivePathEntry);
+      expect(request.config.filesystem.allowRead).toContain(ordinaryHomePathEntry);
+      const sessionConfig = capturedWorkspaceSessionConfigs.at(-1) as {
+        readonly filesystem: { readonly denyRead: readonly string[] };
+      };
+      expect(sessionConfig.filesystem.denyRead).toEqual(
+        process.platform === 'win32'
+          ? [path.resolve(customAgentHome, 'sandbox-runtime')]
+          : request.config.filesystem.denyRead,
       );
-      expect(request.config.filesystem.allowWrite).not.toContain(
-        path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'Temp'),
-      );
+      if (process.platform === 'win32') {
+        expect(request.config.filesystem.allowRead).not.toContain(
+          path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+        );
+        expect(request.config.filesystem.allowWrite).not.toContain(
+          path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'Temp'),
+        );
+      }
+      expect(requestFile).toContain(`${path.sep}sandbox-runtime${path.sep}`);
+      expect(request).toHaveProperty('wrappedInvocation');
+      expect(request.config.network.allowedDomains).toEqual([]);
+      expect(request.config.network.strictAllowlist).toBe(false);
+      expect(request.allowAllNetwork).toBe(true);
+      expect(request.env.TEST_API_KEY).toBe('must-not-cross-the-broker');
+      expect(request.env.AWS_ACCESS_KEY_ID).toBe('must-not-cross-the-broker-either');
+      await writeFile(request.observationFile, JSON.stringify({
+        version: 1,
+        state: 'applied',
+        backend: sandboxRuntimeCapability().backend,
+        policyId: 'kodax-workspace-shell-v1',
+      }), 'utf8');
+      expect(reportObservation).not.toHaveBeenCalled();
+    } finally {
+      cleanupResult = await prepared.cleanup();
     }
-    expect(requestFile).toContain(`${path.sep}sandbox-runtime${path.sep}`);
-    expect(request).toHaveProperty('wrappedInvocation');
-    expect(request.config.network.allowedDomains).toEqual([]);
-    expect(request.config.network.strictAllowlist).toBe(false);
-    expect(request.allowAllNetwork).toBe(true);
-    expect(request.env.TEST_API_KEY).toBe('must-not-cross-the-broker');
-    expect(request.env.AWS_ACCESS_KEY_ID).toBe('must-not-cross-the-broker-either');
-    await writeFile(request.observationFile, JSON.stringify({
-      version: 1,
-      state: 'applied',
-      backend: sandboxRuntimeCapability().backend,
-      policyId: 'kodax-workspace-shell-v1',
-    }), 'utf8');
-    expect(reportObservation).not.toHaveBeenCalled();
-    await expect(prepared!.cleanup()).resolves.toMatchObject({
+    expect(cleanupResult).toMatchObject({
       state: 'applied',
       backend: sandboxRuntimeCapability().backend,
       policyId: 'kodax-workspace-shell-v1',
@@ -1040,13 +1114,14 @@ describe('ASRT Skill-script adapter', () => {
     tempRoots.push(root);
     const requestFile = path.join(root, 'request.json');
     const observationFile = path.join(root, 'observation.json');
+    const sensitiveRead = path.join(os.homedir(), '.ssh');
     await writeFile(requestFile, JSON.stringify({
       config: {
         network: {
           allowedDomains: [], deniedDomains: [], strictAllowlist: true,
           allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false,
         },
-        filesystem: { denyRead: [], allowRead: [], allowWrite: [], denyWrite: [] },
+        filesystem: { denyRead: [sensitiveRead], allowRead: [], allowWrite: [], denyWrite: [] },
       },
       command: process.execPath,
       args: ['--version'],
@@ -1064,6 +1139,15 @@ describe('ASRT Skill-script adapter', () => {
     const childArgv = capturedSpawnArgv.at(-1) ?? [];
     expect(childArgv).toContain('--env');
     expect(childArgv).toContain('REPORT_FORMAT=pdf');
+    if (process.platform === 'win32') {
+      expect(capturedSandboxWrapConfigs.at(-1)).toMatchObject({
+        filesystem: {
+          denyRead: [sensitiveRead],
+          allowRead: [],
+          allowWrite: [],
+        },
+      });
+    }
   });
 
   it('falls back before target launch when the local workspace sandbox backend fails', async () => {

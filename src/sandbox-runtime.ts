@@ -191,6 +191,35 @@ const ASRT_MODULE_URL = process.env.KODAX_BUNDLED === 'true'
   : pathToFileURL(moduleRequire.resolve('@anthropic-ai/sandbox-runtime')).href;
 const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
 const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+const WORKSPACE_SHELL_SENSITIVE_HOME_PATHS = [
+  '.ssh',
+  '.aws',
+  '.azure',
+  '.gnupg',
+  '.kube',
+  '.docker',
+  '.kodax',
+  '.agents',
+  path.join('.config', 'gcloud'),
+  path.join('.config', 'gh'),
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test',
+  '.env.staging',
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  '.git-credentials',
+  'credentials',
+  'credentials.json',
+  'application_default_credentials.json',
+  'id_rsa',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+] as const;
 const ELECTRON_NODE_ENV_SCRUB_IMPORT_LITERAL = JSON.stringify(ELECTRON_NODE_ENV_SCRUB_IMPORT);
 const ELECTRON_RUN_AS_NODE_ENV_LITERAL = JSON.stringify(ELECTRON_RUN_AS_NODE_ENV);
 const TARGET_ARGV_BOOTSTRAP = String.raw`
@@ -1074,20 +1103,36 @@ function existingWorkspaceDenyWrites(workspaceRoot: string): string[] {
   });
 }
 
+function workspaceShellSensitiveReadDenies(
+  home: string,
+  agentHome: string,
+  controlDirectory: string,
+): string[] {
+  return [...new Set([
+    path.resolve(controlDirectory),
+    path.resolve(agentHome),
+    ...WORKSPACE_SHELL_SENSITIVE_HOME_PATHS.map((relative) => path.resolve(home, relative)),
+  ])];
+}
+
 function workspaceShellSandboxConfig(
   workspaceRoot: string,
 ): SandboxRuntimeConfig {
-  const controlDirectory = path.join(getAgentConfigHome(), 'sandbox-runtime');
+  const agentHome = path.resolve(getAgentConfigHome());
+  const controlDirectory = path.join(agentHome, 'sandbox-runtime');
   const home = path.resolve(os.homedir());
+  const denyRead = workspaceShellSensitiveReadDenies(home, agentHome, controlDirectory);
   const userReadGrants = (process.env.PATH ?? process.env.Path ?? '')
     .split(path.delimiter)
     .map((entry) => entry.replace(/^"|"$/g, ''))
+    .filter((entry) => path.isAbsolute(entry))
+    .map((entry) => path.resolve(entry))
     .filter((entry) => {
-      if (!path.isAbsolute(entry)) return false;
-      const relative = path.relative(home, path.resolve(entry));
+      const relative = path.relative(home, entry);
       return relative !== ''
         && !relative.startsWith('..')
-        && !path.isAbsolute(relative);
+        && !path.isAbsolute(relative)
+        && !denyRead.some((denied) => isInside(denied, entry));
     });
   const bootstrap = sandboxJavaScriptCommand();
   return {
@@ -1100,7 +1145,7 @@ function workspaceShellSandboxConfig(
       allowLocalBinding: false,
     },
     filesystem: {
-      denyRead: [controlDirectory],
+      denyRead,
       allowRead: [
         ...new Set([
           ...userReadGrants,
@@ -1112,6 +1157,22 @@ function workspaceShellSandboxConfig(
         controlDirectory,
         ...existingWorkspaceDenyWrites(workspaceRoot),
       ],
+    },
+  };
+}
+
+function workspaceShellSessionSandboxConfig(
+  workspaceRoot: string,
+): SandboxRuntimeConfig {
+  const config = workspaceShellSandboxConfig(workspaceRoot);
+  if (process.platform !== 'win32') return config;
+  // Keep the long-lived ACL stamp bounded; the complete read-deny set is
+  // applied by srt-win exec to each exact command in wrapSandboxTarget().
+  return {
+    ...config,
+    filesystem: {
+      ...config.filesystem,
+      denyRead: [path.resolve(getAgentConfigHome(), 'sandbox-runtime')],
     },
   };
 }
@@ -1343,7 +1404,7 @@ async function startWorkspaceSessionClient(
     `workspace-${process.pid}-${randomUUID()}.json`,
   );
   await writeFile(initFile, JSON.stringify({
-    config: workspaceShellSandboxConfig(workspaceRoot),
+    config: workspaceShellSessionSandboxConfig(workspaceRoot),
   }), { mode: 0o600 });
   const launch = prepareInternalNodeLaunch({
     args: workspaceSessionEntryArgs(initFile),
@@ -1974,10 +2035,20 @@ async function wrapSandboxTarget(
     }), 'utf8').toString('base64'),
   ].join(' ');
   if (process.platform === 'win32') {
+    // Windows supports per-exec denies but not grants. Empty grant arrays keep
+    // the session's workspace/PATH grants while the command receives all denies.
+    const perExecConfig = {
+      filesystem: {
+        denyRead: request.config.filesystem.denyRead,
+        allowRead: [],
+        allowWrite: [],
+        denyWrite: request.config.filesystem.denyWrite,
+      },
+    } satisfies Partial<SandboxRuntimeConfig>;
     const wrapped = await SandboxManager.wrapWithSandboxArgv(
       command,
       'cmd',
-      undefined,
+      perExecConfig,
       undefined,
       request.cwd,
     );
