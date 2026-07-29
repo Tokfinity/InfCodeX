@@ -35,7 +35,9 @@ are NOT obvious from inspecting the type definitions alone:
 25. [Always-on context compaction and bounded transcript recovery](#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774)
 26. [Agent mailbox control versus SDK event telemetry](#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774)
 27. [Windows GUI background subprocess visibility](#27-windows-gui-background-subprocess-visibility-v0775)
-28. [Standalone sandbox SDK](#28-standalone-sandbox-sdk-v0778)
+28. [Host-configurable Shell Execution Contract](#28-host-configurable-shell-execution-contract-v0777)
+29. [Evidence-gated background Skill learning](#29-evidence-gated-background-skill-learning-feature_263-v0778)
+30. [Standalone sandbox SDK](#30-standalone-sandbox-sdk-v0778)
 - [Learned Skill promotion reference](#learned-skill-promotion-reference-v0778)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
@@ -3701,6 +3703,10 @@ const server = createKodaXA2AServer({
 const localBaseUrl = await server.listen({ hostname: '127.0.0.1', port: 0 });
 ```
 
+The listener also refuses an explicit port blocked by WHATWG Fetch clients.
+With `port: 0`, it retries ephemeral allocation rather than returning a URL
+that Fetch would reject before connecting.
+
 Production hosts route `GET /.well-known/agent-card.json` and canonical
 JSON-RPC `POST /a2a` to `server.handle(request)` behind their own TLS
 terminator. `POST /` remains an accepted compatibility alias. `listen()` waits for durable recovery before
@@ -3838,7 +3844,7 @@ Coder. Products that depend on same-Run delivery should require
 (for example, SA execution) still return `unsupported_capability`; do not
 silently substitute `delivery:'after_turn'` unless that is the user's intent.
 
-The SDK requires `runtimeAutoModeGuardrail:3` automatically for ordinary
+The SDK requires `runtimeAutoModeGuardrail:4` automatically for ordinary
 `autoStart: true`. Supplying `daemonOrphanExitMs` additionally requires the
 dedicated `daemonOrphanExit:1` capability and passes the option only when
 spawning a new daemon. It does not silently reinterpret an already-running
@@ -4096,9 +4102,11 @@ Write/Edit content may differ). Generic extension calls can receive only an
 exact in-memory Session grant. Raw command/argv data is not stored in the
 matcher; grants and audit contain only its fingerprint plus a bounded,
 secret-redacted operator label. Clients must not keep separate persistent
-permission rule stores. Runtime capability `runtimeAutoModeGuardrail` v3 advertises this
-opaque concrete-grant contract; restart or upgrade an older daemon instead of
-falling back to a client-side alias.
+permission rule stores. Runtime capability `runtimeAutoModeGuardrail` v4
+advertises this opaque concrete-grant contract plus the intent-aligned
+retry/Accept-edits behavior that never changes the engine to rules. Embedded,
+Worker, and daemon hosts all report `fallbackPersistsEngine:false`; restart or
+upgrade an older daemon instead of falling back to a client-side alias.
 
 ### Broker a Space keychain credential
 
@@ -4806,7 +4814,79 @@ for cross-project, cache, cancellation, credential, and Windows argv checks.
 
 ---
 
-## 28. Standalone sandbox SDK (v0.7.78)
+## 29. Evidence-gated background Skill learning (FEATURE_263, v0.7.78)
+
+F263 completes the existing Learning Center rather than introducing a second
+queue or client-owned Skill store. Episode review runs after durable foreground
+completion and stays off the active Run's latency path. A correction, failure,
+or verifier result is Memory evidence first; it does not itself authorize a
+Skill mutation.
+
+A low-risk declarative Skill can enter automatic project-scoped testing only
+after an explicit preserve-as-Skill request with verified terminal evidence,
+or repeated independent root episodes plus independent verified artifact
+evidence. The owner writes an immutable revision and its canonical capability
+record before discovery can expose it. Formal/builtin/plugin/human Skills keep
+precedence and cannot be shadowed. Protected/formal changes, user-global
+promotion, and Extension authoring remain explicit user actions.
+
+Hosts that require this behavior should negotiate both Runtime capabilities:
+
+```ts
+const runtime = await createKodaXRuntime({
+  mode: 'daemon',
+  requirements: {
+    learningCenter: 1,
+    skillLearningLoop: 1,
+  },
+  clientInfo: {
+    name: 'my-host',
+    instanceId: stableClientId,
+    instanceSecret: keychainSecret,
+  },
+});
+
+const snapshot = await runtime.learning.getSnapshot();
+const page = await runtime.learning.list({ limit: 50 });
+
+for await (const event of runtime.learning.subscribe({
+  afterRevision: snapshot.revision,
+})) {
+  renderLearningEvent(event);
+}
+```
+
+`runtime.learning` is the authoritative host surface:
+
+| Need | API |
+|---|---|
+| Render inventory or one exact record | `list()` / `get()` |
+| Render client-specific badges | `getSnapshot()` |
+| Replay or follow durable lifecycle events | `events()` / `subscribe()` |
+| Clear or defer only this client's notice | `acknowledge()` / `snooze()` |
+| Explicitly control a learned revision | `reject()` / `disable()` / `rollback()` / `review()` / `trust()` |
+| Promote to the user scope | `promote(nameOrSlugOrId, 'user')` |
+
+Do not scan learned files and infer activation from their presence. Discovery
+requires the canonical record, matching project identity, lifecycle,
+fingerprint, regular-file checks, formal-name policy, and exact revision.
+Testing admission permits one concurrent root binding and at most three
+exact-revision invocations. Promotion requires independently verified success;
+failed or inconclusive canaries return to Ready/attention. A Run retains the
+revision it captured at admission, so rollback or replacement affects future
+bindings without mutating an in-flight prompt.
+
+Learning Center notification state is client-specific, but capability
+lifecycle and project canary state are owner-global. Renderer code should
+receive sanitized records/events through host IPC; it should not receive
+daemon credentials or mutate files directly. Inline, Worker, and daemon
+facades expose the same learning methods. A host missing `skillLearningLoop:1`
+may still support the older Ready/manual Learning Center surface, but must not
+claim the complete F263 project-canary contract.
+
+---
+
+## 30. Standalone sandbox SDK (v0.7.78)
 
 ASRT containment is a public SDK capability, not an Auto[LLM]-only
 implementation detail. Import the dedicated subpath when a host needs to
@@ -4896,6 +4976,13 @@ subtrees and always takes precedence over `allowWrite`. The HTTP(S) `origins`
 are normalized to the hostname/port pair enforced by ASRT's network proxy. It
 never silently runs without containment: sandbox unavailability is the typed
 `{ status: 'unavailable', sandboxed: false, doctor }` result.
+
+KodaX's own local workspace-shell policy supplies a stricter `denyRead` set
+than the generic SDK default: common home credential locations, sensitive
+private-key/environment filenames, and the complete resolved agent home are
+denied. Home-local executable search paths nested below those roots are not
+re-granted. This policy belongs to KodaX's command adapter; a standalone SDK
+host must declare the sensitive paths required by its own threat boundary.
 
 `command` and `args` remain separate process arguments. On Windows KodaX uses
 an encoded bootstrap followed by `shell: false`, so `%VAR%`, `&`, embedded

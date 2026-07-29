@@ -27,16 +27,16 @@ describe('toolBash cleanup rejection handling', () => {
     try {
       agentMocks.killChildProcessTree.mockClear();
       const controller = new AbortController();
-      controller.abort(new Error('stop'));
 
       const result = await toolBash({
-        command: 'node -e "console.log(\'background exits\')"',
+        command: 'node -e "setTimeout(() => {}, 250)"',
         run_in_background: true,
       }, {
         backups: new Map(),
         executionCwd: process.cwd(),
         abortSignal: controller.signal,
       });
+      controller.abort(new Error('stop'));
 
       await nextTurn();
       await nextTurn();

@@ -2256,7 +2256,10 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
           userQuote: durableRequest,
         },
       });
-      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 5_000 });
+      // Review is deliberately detached from foreground completion. Under the
+      // full parallel suite, filesystem-backed review can take longer than the
+      // default polling budget without violating that non-blocking contract.
+      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 15_000 });
       const proposalStore = await readLearningProposalStore(
         resolveLearningProposalStore(home, home),
       );
@@ -2323,7 +2326,7 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
         retryDelay: 100,
       });
     }
-  }, 20_000);
+  }, 30_000);
 
   it('binds AMA memory_intent to a queued user turn', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-follow-up-'));

@@ -1,6 +1,6 @@
 # Archived Issues
 
-_Last Updated: 2026-07-15_
+_Last Updated: 2026-07-29_
 
 ---
 
@@ -121,6 +121,12 @@ _Last Updated: 2026-07-15_
 | 079 | High | Resolved | Ink 历史渲染无限长导致崩溃 | v0.5.7 | 2026-03-04 |
 | 080 | Medium | Resolved | 长文本输入框未根据终端宽度自动换行 | v0.5.9 | 2026-03-05 |
 | 081 | Medium | Resolved | useAutocomplete 每次渲染创建新实例 | v0.5.10 | 2026-03-11 |
+| 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | 2026-06-15 |
+| 139 | High | Resolved | SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId | v0.7.49 | 2026-06-16 |
+| 140 | High | Resolved | Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents | v0.7.52 | 2026-06-18 |
+| 142 | High | Resolved | kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible | v0.7.56 | 2026-06-25 |
+| 143 | High | Resolved | Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设 | v0.7.57 | 2026-06-25 |
+| 144 | High | Resolved | Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete | v0.7.57 | 2026-06-26 |
 ---
 
 ## 2026-02 Archived Issues
@@ -4907,9 +4913,516 @@ options.events?.onEvaluatorFallbackSynthesized?.({...});
 - `npx tsc --noEmit -p packages/agent/tsconfig.json`
 - Against `http://82.156.201.14:4747/api/mcp`: `toolMcpSearch`, `toolMcpCall(list_repos)` and `toolMcpCall(query)` all succeeded.
 
+
+### 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token
+
+- **Priority**: High（畸形的生成脚本会让整轮 workflow 在合成阶段全损，或静默派发空 objective 的子 Agent 消耗预算）
+- **Status**: **Resolved**（v0.7.49）
+- **Introduced**: v0.7.49（FEATURE_217 dynamic workflow invocation）
+- **Created**: 2026-06-15
+- **Resolved**: 2026-06-15
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+`/workflow create` 生成的动态 workflow 在合成阶段失败，报错 `restricted workflow script failed: Error: input.inputs.map is not a function`。三个 investigator 子 Agent 全部成功完成（摘要已产出），却在最后一步整轮丢弃，且抛出的是一条看似内部崩溃的裸 `TypeError`。
+
+复现信号：
+
+- 生成脚本把 findings 先 `.map().join()` 拼成一份带标题的可读文档，再 `wf.synthesize({ inputs: combined, rubric })` —— `combined` 是字符串，不是数组。
+- 事件时间线：3× `agent_completed` → `phase_started(synthesize)` → 1ms 内 `workflow_failed`，**没有** `agent_spawned(synthesize)`，说明崩在 prompt 构造，连合成 Agent 都没起。
+
+#### Root Cause
+
+Workflow host RPC 边界对**标量字符串参数**（taskId/name/content/reason）在沙箱 + host 两层都有校验和友好报错，但对**对象载荷**（`runAgent`/`spawnAgent` 的 input、`synthesize` 的 input、`log` 的 event）只检查"是不是对象"，随即 `readRecord(input) as unknown as X` 强转放行，字段形状零校验。同源缺陷的三个表现：
+
+- `synthesize`：`buildSynthesisPrompt` 同步 `input.inputs.map(...)` → 非数组直接崩裸 `TypeError`，整轮全损（本 issue 的触发点）。
+- `runAgent`/`spawnAgent`：`name`/`prompt` 为 `undefined` 时静默流入真实 child 派发，烧 token 跑空 objective 的子 Agent，事件/UI 里 `name=undefined`（比崩溃更隐蔽）。
+- `log`：`message` 为 `undefined` 时产生 UI 垃圾行。
+
+同 runtime 的 `wf.parallel` 反而做对了（`Array.isArray` + 逐项 function 检查 + 清晰报错），证明这是"host 边界缺一个复合载荷校验 helper"导致的系统性遗漏，而非逐点疏忽。静态校验（`validateGeneratedWorkflowSource` 正则）无法拦——`inputs` 是运行时值。
+
+#### Resolution
+
+按"放宽契约 + 边界统一校验"两路修复：
+
+- **容忍单值**（runtime）：`WorkflowSynthesizeInput.inputs` 拓宽为 `array | string | object`；`normalizeSynthesisInputs` 把字符串/对象归一为数组，`normalizeSynthesisRubric` 校验 rubric 非空。从源头消除"模型先拼成串"这个几乎必然复发的陷阱。
+- **host 边界校验**（script-runner）：新增 `readSpawnAgentInput` / `readSynthesizeInput` / `readLogEvent`，替换 `handleCommand` 中 `runAgent`/`spawnAgent`/`synthesize`/`log` 的 4 处 `as unknown as` 裸转。强制 name/prompt 非空串（堵静默烧 token）、`readOnly` 必须 boolean（read-only 白名单为安全相关 flag）、rubric 非空、inputs 形状合法；畸形输入以"哪个调用、哪个字段"的明确信息在边界失败。
+- **prompt 提示**（generator）：`wf.synthesize` 说明 inputs 可为数组 / 单个已拼接字符串 / 命名对象，减少模型生成错误形状。
+- `wait` 的 opts 裸转刻意保留——仅 `{ timeoutMs? }`，downstream `normalizeWaitTimeoutMs` 已校验并给友好报错，不属于崩溃/烧钱类。
+
+#### Files Changed
+
+- `packages/agent/src/workflow/script-runner.ts`（host 边界校验器 + 接线）
+- `packages/agent/src/workflow/script-runner.test.ts`（6 个边界拒绝/接受测试）
+- `packages/agent/src/workflow/runtime.ts`（`normalizeSynthesisInputs/Rubric`）
+- `packages/agent/src/workflow/types.ts`（`WorkflowSynthesizeInput.inputs` 拓宽）
+- `packages/agent/src/workflow/runtime.test.ts`（命名对象 / 已格式化字符串两个 synthesize 测试）
+- `packages/coding/src/workflows/generator.ts`（synthesize prompt 提示）
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- script-runner：缺 prompt 拒绝、空 name 拒绝、`readOnly` 非布尔拒绝、缺 rubric 拒绝、`inputs: 42` 拒绝、单字符串 inputs 接受（验证不再误报）。
+- runtime：synthesize 接受命名对象（转 `{name,value}` 列表）+ 已格式化字符串（包进 `## Input 1`）。
+
+#### Verification
+
+- `npx vitest run packages/coding/src/workflows/ packages/agent/src/workflow/` → 135 passed
+- `npx tsc --noEmit -p packages/agent/tsconfig.json` + `packages/coding/tsconfig.json` → clean
+- `npm run build:packages` → success
+
+---
+
+### 139: SDK session full transcript hidden by active-lineage load + error snapshots can orphan activeEntryId
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.49)
+- **Introduced**: long-standing / pre-existing
+- **Created**: 2026-06-16
+- **Resolved**: 2026-06-16
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+KodaX Space renders SDK sessions through public `loadSession(id)`. For a session compacted four times, on-disk lineage contained 164 entries, but `loadSession` returned only the active branch's 10 messages. The earlier entries remained on disk, but users saw most conversation history disappear.
+
+The same session ended with an error snapshot whose first message was an assistant `tool_use`, not a clean system/user start. The provider rejected the request with zhipu code 1214, then the error snapshot advanced active lineage to that malformed tool-loop fragment.
+
+#### Root Cause
+
+- `loadSession` exposes active model context, not append-order full transcript.
+- Headless SDK persistence does not write TUI-style `uiHistory`.
+- Error snapshots can persist in-flight provider messages that are unsafe as authoritative session history.
+- Runner-driven compaction can drop the compaction anchor when no artifact ledger is present.
+
+#### Resolution
+
+- Added public `loadFullTranscript(id)` / `createSessionManager().loadFullTranscript(id)` for append-order UI scrollback while keeping `loadSession` active-context semantics.
+- Guarded error snapshots so malformed provider transcripts may record `errorMetadata` but cannot update active lineage.
+- Changed Runner-driven compaction to pass compaction anchors whenever they exist, independent of artifact ledger presence.
+
+#### Files Changed
+
+- `packages/coding/src/agent-runtime/middleware/session-snapshot.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/compaction.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/index.ts`
+- `src/sdk-session.ts`
+- Regression tests in the matching `*.test.ts` files.
+
+#### Tests Added
+
+- Error snapshot guard tests for valid user-starting transcripts and invalid assistant-tool fragments.
+- Public API tests proving `loadFullTranscript` returns append-order entries across disconnected lineage roots, including `.islands.jsonl` sidecar entries, while `loadSession` stays active-only.
+- Compaction hook test proving anchor propagation without artifact ledger.
+
+#### Follow-up hardening (v0.7.63)
+
+- Rewind audit entries now use a dedicated `rewind_marker` lineage type instead
+  of overloading compaction entries. Host scrollback sees the marker through
+  `loadFullTranscript().transcriptEntries`; model context and
+  `loadFullTranscript().messages` do not include it.
+- `/rewind` previous-turn selection skips synthetic user entries and
+  tool-result-only user messages, so the target is the previous real user
+  prompt rather than protocol plumbing.
+- `startKodaX()` generated handle IDs are threaded into run options only when
+  they will not override auto-resume/resume discovery, and they no longer
+  trigger the caller-provided `session.id` without storage warning.
+- `@kodax-ai/kodax/session` now re-exports `compactSession` and its public
+  types, with an SDK subpath regression test.
+
+#### Verification
+
+- `npx vitest run packages/coding/src/agent-runtime/middleware/session-snapshot.test.ts packages/coding/src/task-engine/_internal/managed-task/compaction.test.ts packages/repl/src/session/public-api.test.ts` -> 61 passed.
+- `npm run build:packages` -> passed.
+- `npm run build:dts` -> passed; bundled SDK declarations include `loadFullTranscript`.
+- `git diff --check` -> passed.
+
+Additional suite observations:
+
+- `npx vitest run packages/repl` exposed the existing workflow-command parallel-suite flake; `npx vitest run packages/repl/src/commands/workflow-command.test.ts` passed in isolation.
+- `npx vitest run packages/coding` exposed the existing Issue 133 repo-intelligence atomic rename flake; `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` passed in isolation.
+
+#### Context
+
+Evidence session: `C:\Users\iceto\.kodax\sessions\c-works-gitworks-kodax-author-kodax-space-fad022fc3b\s_8b5c4bc1-4034-438a-8258-04e0eb5d4723.jsonl`.
+
+---
+
+### 140: Published bundle leaves computed `./agent.js` child-executor import, breaking workflow child agents
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.52)
+- **Introduced**: v0.7.37 bundle distribution; confirmed in published `0.7.48`, `0.7.49`, and `0.7.50`
+- **Created**: 2026-06-17
+- **Resolved**: 2026-06-18
+- **Fixed**: v0.7.52
+
+#### Original Problem
+
+When a locally linked or published `kodax` package runs a workflow that dispatches child agents, the run can fail with:
+
+```text
+[child-executor] Failed to lazy-load agent module (`./agent.js`) for dispatch_child_task. This usually means the @kodax-ai/coding build is broken or out of date. Underlying cause: Cannot find module '...\dist\agent.js' imported from ...\dist\kodax_cli.js
+```
+
+The npm `@kodax-ai/kodax@0.7.50` tarball has the same failure signature: `package/dist/agent.js` is absent, while `package/dist/kodax_cli.js` and an SDK shared chunk still contain a runtime `./agent.js` dynamic import.
+
+#### Root Cause
+
+`packages/coding/src/child-executor.ts` used a computed dynamic import (`const spec = './agent.js'; await import(spec)`) to hide the `child-executor -> agent` edge from circular dependency tooling. That works in `packages/coding/dist`, where `agent.js` is a sibling file.
+
+In the bundled root distribution, esbuild cannot statically see the computed import and leaves it as a runtime import. At runtime it resolves relative to `dist/kodax_cli.js`, so Node looks for root `dist/agent.js`, which is not shipped.
+
+#### Proposed Solution
+
+- Keep the import lazy, but make the import target a string literal (`await import('./agent.js')`) so esbuild bundles the target into `dist/kodax_cli.js` / SDK chunks instead of leaving a raw runtime import.
+- Add a build/package regression guard that fails if built `dist/kodax_cli.js` or `dist/chunks/*.js` still contain the child-executor lazy-load error plus a raw `./agent.js` import.
+- Verify the fix against the packed tarball, not only TypeScript unit tests: `npm run build`, `npm pack`, inspect/extract the tarball, then run/grep the generated bundle.
+
+#### Resolution
+
+v0.7.52 changed the child-executor lazy load to a literal `import('./agent.js')`
+while keeping the import lazy, and added bundle/release guards so raw
+child-executor `./agent.js` imports fail the build or release check before
+publishing. The fixed release line was verified against the packaged bundle
+rather than only against TypeScript source output.
+
+#### Context
+
+- Reproduced from a local `npm link` workflow run on 2026-06-17.
+- Confirmed against the online npm package `@kodax-ai/kodax@0.7.50` tarball on 2026-06-17.
+- Spot-checked published `0.7.49` and `0.7.48`; both have the same missing `dist/agent.js` plus raw `./agent.js` import signature.
+- Fixed release line: v0.7.52.
+
+---
+
+### 142: kimi-code thinking-only completion can terminate Worker with only `[Worker]` visible
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.56)
+- **Introduced**: v0.7.56
+- **Created**: 2026-06-25
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.56
+
+#### Original Problem
+
+In v0.7.56, users can intermittently see an Assistant turn that contains only
+the managed role label, for example:
+
+```text
+Assistant [04:33 AM]
+[Worker]
+```
+
+The reported repro used `/model kimi-code` followed by a trivial Chinese
+greeting (`你好`). The first run produced a visible Thinking block but no
+assistant answer after `[Worker]`; sending the same greeting again produced a
+normal Chinese response. This makes the CLI look like it finished successfully
+while giving no user-facing answer.
+
+#### Context
+
+- Affected provider path: `kimi-code`, which uses the Anthropic-compatible
+  coding endpoint and supports thinking blocks.
+- Affected runtime path: managed Worker / Runner-driven adapter.
+- The symptom is intermittent because it depends on whether the upstream
+  reasoning model emits final public text after its thinking block.
+- Probe evidence: a scripted-provider reproduction with `thinkingBlocks`
+  present, empty `textBlocks`, empty `toolBlocks`, and stop reason `end_turn`
+  returns `text === ''` and does not consume the retry sentinel.
+
+#### Root Cause
+
+The current empty-completion retry guard in
+`packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts`
+classifies a turn as empty only when text, tool calls, and thinking blocks are
+all absent. A thinking-only completion therefore bypasses the retry branch even
+though it has no user-visible answer and no tool action.
+
+Downstream, the Runner treats `toolCalls.length === 0` as a valid text-only
+terminal turn. The final assistant text is empty, but the REPL managed
+foreground renderer may have already created an assistant block with the
+`[Worker]` prefix, so the transcript shows a role label with no body.
+
+#### Proposed Solution
+
+Treat "no user-visible text and no tool calls" as a degraded empty completion,
+even when thinking blocks are present. Let the existing bounded re-stream
+mechanism retry the same turn, while preserving thinking blocks for legitimate
+history replay when a real assistant turn exists.
+
+Implementation guardrails:
+
+1. Change the adapter predicate to trim concatenated `textBlocks` and ignore
+   `thinkingBlocks` for empty-output detection.
+2. Keep `stopReason === 'max_tokens'` excluded so max-token continuation and
+   escalation keep owning that path.
+3. Do not use thinking content as fallback public output.
+4. Keep the retry inside the adapter before the Runner commits the assistant
+   turn, so the failed attempt's empty public output never becomes model-facing
+   history.
+5. Add UI defensive handling so leading whitespace deltas do not create a
+   managed assistant ledger item containing only `[Worker]`.
+6. If the bounded retries are exhausted, fail the turn with a local provider
+   empty-output notice instead of committing an empty or thinking-only
+   assistant message to the model-facing transcript.
+7. Add regression tests for thinking-only, whitespace-text-only,
+   normal text-only, tool-only, and max-token cases.
+
+#### Expected Outcome
+
+When kimi-code or another reasoning provider emits a thinking-only or
+whitespace-only final turn, KodaX retries transparently. If a retry returns real
+public text or a tool call, the user sees the normal answer/tool flow. If the
+bounded retries are exhausted, the run should surface an explicit local
+empty-output failure rather than a bare `[Worker]` line, and the next user turn
+must not replay a malformed empty assistant message to the provider.
+
+#### Resolution
+
+- `packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts` now
+  treats empty/whitespace public text plus no tool calls as a degraded empty
+  completion even when thinking blocks are present.
+- The existing bounded same-turn re-stream path handles recoverable
+  thinking-only completions. If all retries are exhausted, the adapter throws a
+  local provider error and preserves only the safe pre-turn provider messages,
+  so no empty or thinking-only assistant turn is committed for the next request.
+- `packages/repl/src/ui/InkREPL.tsx` now avoids opening a managed assistant
+  block from leading whitespace deltas and treats a bare `[Worker]` prefix as
+  non-substantive assistant text during finalization.
+- Regression tests were added in
+  `packages/coding/src/task-engine/runner-driven.test.ts` and
+  `packages/repl/src/ui/InkREPL.managed-transcript.test.ts`.
+
+---
+
+### 143: Auto[llm] speculative classify 窗口默认 500ms + late verdict 被丢弃 → 远程/慢 provider 下 near-100% 误弹确认框，auto 模式形同虚设
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.57)
+- **Introduced**: v0.7.39（FEATURE_158 / ADR-025，commit `97e99d7d`；0.7.39 之前完整 await classify，只在真 block/escalate 才弹）
+- **Created**: 2026-06-25
+- **Resolved**: 2026-06-25
+- **Fixed**: v0.7.57
+
+#### Original Problem
+
+SDK 用户报告：在 `auto[llm]` 模式下，几乎每个经过 classifier 的非 Tier-1 工具调用
+（bash 跑的 cat/ls/grep、write/edit、web_fetch、mcp_call、semantic_lookup 等以及重型
+repo-intelligence 工具）都会弹出确认框。只读类 Tier-1（read/grep/glob/repo_overview
+投影为 `''`）不弹，但凡需要 classifier 裁决的调用近乎 100% 误弹。等于 auto 模式形同虚设。
+
+复现条件：远程 provider / 走代理 / 较大模型——classifier 是一次真实 LLM sideQuery，
+单次往返典型 1–5s，几乎不可能在 500ms 投机窗口内返回。
+
+#### Context
+
+- 组件：`AutoModeToolGuardrail` 的 speculative classify。
+- 受影响表面：REPL 与 Space 都中招——
+  [`auto-mode-bootstrap.ts:137-198`](../packages/repl/src/interactive/auto-mode-bootstrap.ts#L137-L198)
+  构造 guardrail 时传了 `timeoutMs` 却**没传 `speculativeWindowMs`**，两个 host 都退回
+  env / 默认值。这是 guardrail 默认值层面的问题，不是某个 surface 的接线遗漏。
+- 配置面缺失：[`config.example.jsonc`](../config.example.jsonc#L244-L247) 的 `autoMode`
+  段暴露了 `engine` / `classifierModel` / `timeoutMs`，**唯独 speculative window 没有
+  config.json 面**，只能靠 `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 环境变量，普通用户无从调。
+
+#### Root Cause
+
+三个根因叠加，按严重度排序：
+
+1. **late verdict 被硬丢弃（核心放大器）**。窗口过期后后台 classify 仍在跑且**不**被
+   abort，但其裁决在 v1 被明确丢弃。三处代码互证：
+   [`speculative.ts:13-17`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L13-L17)、
+   [`guardrail.ts:443-449`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L443-L449)
+   （注释 *"its result is dropped in v1"*，直接 `escalateOrAsk(...)`）、
+   接口文档 [`guardrail.ts:257-268`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L257-L268)
+   （*"its eventual result is discarded in v1 (UI doesn't adopt late verdicts yet)"*）。
+   因此即便 200ms 后 classifier 返回 allow 也没用——窗口一过就是一个必须人点的硬弹窗。
+   CC 的 `peekSpeculativeClassifierCheck` 对应能力在 KodaX 未接。
+
+2. **500ms 是占位值，micro-bench 从未回填**。设计稿
+   [`v0.7.39.md` commit 4](features/v0.7.39.md#L711) 承诺 "Anthropic/DeepSeek/Zhipu
+   micro-bench 报告附在文档末尾"，但文档末尾（结尾第 769 行）没有任何 bench 报告；
+   release gate [`v0.7.39.md:729`](features/v0.7.39.md#L729) "Speculative classify
+   p50/p95 < 1500ms p95" 是 `[ ]` 未勾选；`benchmark/` 下搜不到任何 speculative /
+   classifier-latency 数据集或结果。代码注释
+   [`speculative.ts:21-23`](../packages/coding/src/guardrails/auto-mode/speculative.ts#L21-L23)
+   自承 "finalized after micro-bench in commit body"——那个 bench 不存在。
+
+3. **窗口与 timeout 的 16× 内部矛盾**。同一 guardrail 内 classifier sideQuery 的
+   `timeoutMs` 默认 **8000ms**（[`guardrail.ts:306`](../packages/coding/src/guardrails/auto-mode/guardrail.ts#L306)），
+   speculative 窗口默认 **500ms**。设计上允许 classifier 跑 8s，却只给它 500ms 自证，
+   远程/慢 provider 的 p95 必然秒级 → 误弹是数学必然，非偶发。
+
+补充事实（影响修复设计）：cost-tracker 在
+[`classify.ts:96-98`](../packages/coding/src/guardrails/auto-mode/classify.ts#L96-L98)
+内部、sideQuery 返回时结算，每次 classify 恰好一次，与窗口是否过期无关——**采纳 late
+verdict 不会 double-settle cost**。当前窗口过期路径不记录 denial-tracker/breaker（裁决被丢），
+这是采纳 late verdict 时需要补齐的点。
+
+#### Proposed Solution（完整修复，非治标；按 KodaX 极简原则裁掉冗余 knob）
+
+分 5 个 workstream，WS1 治本、WS2 把 SDK/非交互路径一并修对、WS3 补可配置面、WS4 还文档债、
+WS5 是 WS1 内的验证项。**显式 descope**：原报告建议的"provider/latency-aware 默认窗口表"
+不做——一旦 WS1 采纳 late verdict，慢 provider 只意味着确认框先出现再自动消失，per-provider
+调参变成多余的 knob（违反 YAGNI / 无 3+ 用例不抽象）。这是比加 knob 更合理的完整方案。
+
+- **WS1（核心）— 采纳 late verdict / peek 模式**。窗口从"是否硬弹一个需人点的框"降级为
+  "是否先显示一个 pending（analyzing…）UI"。guardrail 不再丢弃 `classifyPromise`，把它
+  透传到 escalate 路径；`AutoModeAskUser` 契约扩展为可接收一个 late-verdict promise（或
+  AbortSignal + resolver），REPL 确认框 race 两件事：(a) 用户手动作答，(b) 迟到裁决。迟到
+  `allow` → 自动放行并关框；迟到 `block` → 自动关框并 block（带 reason）；迟到 `escalate`
+  → 保持等待用户（这才是真正需要人判的场景）；用户先作答 → 以用户为准。无论哪条路径，
+  `classifyPromise` 结算时按裁决补记 denial-tracker/breaker（reset/increment），且保证
+  user-answer 与 late-verdict 两条路径不重复记录（WS5）。
+
+- **WS2 — host/surface-aware 策略：无 askUser ⇒ 不投机**。speculative race 只在"有人会因此
+  干等"时才有意义。非交互 / SDK / 无 askUser 表面下，窗口过期提前 escalate 是纯伤害（没有人
+  可被抢答，还把 transient 的早退当裁决）。规则：无 `askUser` 时禁用 speculative，退回完整
+  await classify（即 0.7.39 之前行为）。这一条单独就修对 SDK / 非交互路径，并把原报告的
+  "GUI/非交互默认"收敛成一条干净规则。
+
+- **WS3 — 补 config 面 + 合理默认**。`autoMode.speculativeWindowMs` 加入 config.json（与
+  `timeoutMs` 并列），bootstrap 透传到 guardrail 与 Space。采纳 WS1 后默认窗口只决定"几 ms 后
+  显示 pending UI"，把默认提到一个不靠运气、又不至于让快裁决闪一下 pending 的值（候选由 WS4
+  实测）。
+
+- **WS4 — 回填并固化 micro-bench**。按 canonical 5-alias provider panel 实测 classifier
+  sideQuery 的 p50/p95，据此定 WS3 默认值，更新 `v0.7.39.md` 文档末尾报告并勾掉 release gate；
+  落 `benchmark/` 永久回归。
+
+- **WS5 — 防 double-record / double-settle 验证**。证实 cost-tracker 仍恰好结算一次；
+  新增 denial-tracker/breaker 记录在 "user 先答" 与 "late verdict 先到" 两条路径下互斥不重复；
+  late verdict 抵达后若用户已作答则只结算 cost + 记 tracker，不再触发 UI。
+
+#### Expected Outcome
+
+`auto[llm]` 模式在远程/慢 provider 下恢复可用：classifier 判 allow 的调用不再弹框（快则
+无感、慢则先显 pending 再自动放行），只有 classifier 真正判 escalate / 用户需介入时才落人工
+确认框。SDK / 非交互路径行为正确（完整 await，不再因 500ms 早退假弹）。speculative window 既
+可经 env 也可经 config.json 调整。default 值由实测固化、release gate 勾齐。
+
+#### Resolution
+
+实施分 5 个 workstream（全部完成）。**WS1 落地时对原 Proposed Solution 做了一处精炼**：
+原计划走「窗口过期即弹 pending 确认框，迟到 allow 再 auto-dismiss（peek-race）」；实现时改为
+更简洁且更正确的**「窗口过期 → `await` 同一 classifyPromise → 采纳裁决」**——allow/block 直接
+落地不弹框，只有真正 `escalate` 才弹框。后者无需 auto-dismiss、无需扩 askUser 契约、无需碰
+readline/Ink UI（现有 agent spinner 覆盖等待期），无弹框闪烁，且 allow 裁决产生**零**弹框，
+正是对症修复。
+
+- **WS1（核心，late-verdict 采纳）**：`packages/coding/src/guardrails/auto-mode/guardrail.ts`
+  `beforeTool` —— `speculativeRace` 返回 `window-expired` 时不再 `escalateOrAsk`，改为
+  `decision = await classifyPromise` 后走既有 switch（allow→allow / block→block / escalate→弹框）。
+  迟到 block 现在正确喂 denial-tracker（旧路径丢弃，曾被误记为 breaker error）。cost-tracker 在
+  `classify.ts:96-98` 内部结算恰好一次，二次 await 不 double-settle（reviewer code-trace 证实）。
+- **WS2（host-aware）**：同文件 —— 无 `askUser` 表面（SDK / 非交互 / 子 Agent）时强制窗口为 0，
+  直接 await 完整裁决，不再因 500ms 早退把 transient timeout 当裁决。
+- **WS3（config 面）**：`packages/repl/src/common/permission-config.ts` 新增
+  `autoMode.speculativeWindowMs`（env `KODAX_AUTO_SPECULATIVE_WINDOW_MS` 覆盖，0 合法=禁用，
+  env>file）；`packages/repl/src/interactive/auto-mode-bootstrap.ts` 透传到 guardrail（REPL +
+  Space 同时生效）；`config.example.jsonc` 文档化。
+- **WS4（文档对账）**：`docs/features/v0.7.39.md` —— 记录 late-verdict 采纳使原「Commit 4
+  micro-bench → 固化默认值」失去正确性意义（任何窗口值都不再造成误 escalate），按
+  EVAL_GUIDELINES Layer 1 纪律不补跑无决策价值的付费 bench；release gate p95 项标记 obviated。
+- **WS5（防退化验证）**：double-settle / double-record 由 WS1 单测覆盖（「late block 恰好记一次」
+  + 「窗口过期后 abort 仍正确传播」）；coding 全包 3570 passed（1 项 `orchestration.test.ts`
+  maxConcurrent 并发计时 flaky，隔离复跑绿，与本修复无关）、repl 全包 2135 passed、coding+repl
+  `tsc -b` clean。
+
+**Files Changed**：
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`（WS1 窗口过期采纳 + WS2 host-aware 窗口 + 接口/注释更正）
+- `packages/coding/src/guardrails/auto-mode/speculative.ts`（模块文档更正：late-verdict 采纳 + WS2 说明）
+- `packages/repl/src/common/permission-config.ts`（WS3：`speculativeWindowMs` 解析 + `parseSpeculativeWindow`）
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`（WS3：透传 `speculativeWindowMs`）
+- `config.example.jsonc`（WS3 文档化）
+- `docs/features/v0.7.39.md`（WS4 对账）
+
+**Tests Added**：
+- `guardrail.test.ts`：WS2×2（无 askUser 慢分类器 allow / block）、WS1×4（采纳迟到 allow / block、
+  真 escalate 仍弹框、late block 喂 denial-tracker 恰好一次）、WS1 abort-after-window-expiry×1
+- `permission-config.test.ts`：WS3×8（默认 undefined / file 读取 / 0 合法 / env>file / env 0 / 负数 clamp / 非数字回落 / 取整）
+- `auto-mode-bootstrap.test.ts`：WS3×2（透传 1500 / 省略转 undefined，capturing-spy）
+
+#### Related
+
+- FEATURE_158 / ADR-025（v0.7.39）：speculative classify 的引入版本。
+- Issue 131（v0.7.39，已修）：同 feature 的 Windows-flag 误判；本 issue 是同 feature 的
+  另一类回归（投机窗口默认值 + late-verdict 丢弃），独立成项。
+- 参考实现：Claude Code `peekSpeculativeClassifierCheck` 模式（WS1 对标对象；KodaX 采用更简洁的
+  await-adopt 变体）。
+
+---
+
+### 144: Worker misreads task_output block wait expiry as child-agent timeout and writes final report before children complete
+
+- **Priority**: High
+- **Status**: **Resolved** (v0.7.57)
+- **Introduced**: v0.7.45 (FEATURE_177 `task_output`)
+- **Created**: 2026-06-26
+- **Resolved**: 2026-06-26
+- **Fixed**: v0.7.57
+
+#### Original Problem
+
+When the Worker used `task_output({ block:true })` while child agents were still running, the bounded read window could expire after 30s and return:
+
+```xml
+<retrieval_status>timeout</retrieval_status>
+<status>running</status>
+```
+
+The child agent itself was still healthy, but the `timeout` label made the Worker summarize pending children as "timed out". In review fan-out flows, this could cascade into the Worker writing a final-looking review/report before all dispatched children had produced their matching `<task-completed>` blocks.
+
+#### Context
+
+- Component: `task_output` child-progress snapshot tool.
+- Affected flow: Worker-driven parallel review / audit / exploration with async child agents.
+- User-visible symptom: transcript says child agents are "timed out" even though child activity continues, and the Worker appears to finish from partial evidence.
+
+#### Root Cause
+
+`task_output` overloaded `retrieval_status=timeout` to mean "the synchronous read window expired". In agent language, `timeout` strongly implies task failure or cancellation, especially when shown next to a still-running child. The Worker prompt also allowed terminal summary once plan items were complete without explicitly requiring every dispatched child to have returned `<task-completed>`.
+
+#### Resolution
+
+- Renamed the bounded read-window result from `timeout` to `wait_expired`.
+- Added a result note clarifying that the child task has not timed out and callers must read the `status` field.
+- Updated `task_output` schema wording so normal Worker usage is `task_output({task_id})` / `block:false`, and `timeout_ms` is documented as a read-window cap rather than child lifetime.
+- Added Worker prompt guidance: pending children are not final evidence; while any dispatched child lacks a matching `<task-completed>` block, the Worker must idle-yield with a short waiting status rather than write a final report.
+- **Added an anti-block-peek Worker rule** ("waiting is idle-yield, not a blocking peek"). The first real pilot run exposed a *second* failure mode the initial wording missed: after `wait_expired`, models escalated to `task_output(block:true, timeout_ms:120000)` to "wait harder" — freezing the turn instead of idle-yielding. The rule explains why (a blocking peek holds the whole turn open and blocks chat-while-waiting) and redirects to text-only idle-yield.
+- Adjacent fix: `resolveEvidenceRef` no longer tells a *child* agent to poll a still-running sibling with `task_output` (coordinator-only) or to await a `<task-completed>` block (a parent-only mechanic) — it now states plainly that the sibling result is not available yet.
+- Added regression tests for runtime output, schema wording, Worker prompt gating, the pending-child gate, the child-facing sibling briefing, and Worker tool-surface preservation.
+- Added a pilot eval fixture (`tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`) for the `wait_expired + status=running` cascade.
+
+#### Eval Result (2026-06-26, real provider runs)
+
+- Pilot `zhipu/glm51` 3/3 PASS — model explicitly refuses to fabricate pending reports and idle-yields text-only ("I'll wait … rather than block on them" / "rather than peek again").
+- 5-alias panel on the same case confirmed the acute bug is gone everywhere with data: no alias claimed a child timed out, none wrote a premature report, none re-issued the turn-freezing `block:true`. Weak "flash" aliases (ark/v4flash, ark/v4pro) downgrade to harmless `block:false` peeks / read-only re-scans instead of pure idle-yield — a known weak-model floor, validated by dump inspection.
+- Eval-quality fix during review: the `judgeNoFinalReport` regex matched the bare token "findings", false-failing clean waiting messages that mention the one completed child ("no blocking findings"); tightened to match overall-verdict structure only.
+- Adjacent infra bug surfaced **and fixed** in the same pass: any caller that omitted `reasoning` (e.g. the eval harness) crashed `kimi-code` / `minimax-coding` with `does not support reasoning effort "none"`. These are always-on-thinking models (`localRejectEfforts: ['none','minimal']`, no `supportsDisabledThinking`); `normalizeReasoningRequest(undefined)` produces an implicit legacy effort `none`, and `resolveReasoningProfileIntent` hard-threw on it without checking `effortSource`. Fix in `packages/llm/src/providers/base.ts`: hard-reject a `localRejectEfforts` effort **only when explicitly requested** (mirrors `validateExplicitReasoningEffort`); an implicit/default `none` now falls back to the model's `defaultEffort` so the model simply thinks. Verified: 5-alias panel re-run — `kimi` and `mmx/m27` now produce data (previously zero); `mmx/m27` 3/3, `kimi` idle-yields correctly (judge-undercounted, see below). Regression test: `packages/llm/src/providers/base.test.ts` (`resolveReasoningProfileIntent — always-on-thinking models`).
+- Eval judge tightening (this pilot): `judgeNoFinalReport` no longer trips on the bare token "findings"; `judgeWaitingStatus` broadened to recognize natural waiting phrasings ("I will wait … to finish/complete", "until their reports arrive") that were false-failing correct idle-yields (kimi/zhipu).
+
+#### Files Changed
+
+- `packages/coding/src/tools/task-output.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/tools/task-output.test.ts`
+- `packages/coding/src/agents/worker-role-prompt.test.ts`
+- `packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `tests/feature-177-wait-expired-idle-yield-pilot.eval.ts`
+
+#### Tests Added / Run
+
+- `npm test -- packages/coding/src/tools/task-output.test.ts packages/coding/src/agents/worker-role-prompt.test.ts packages/coding/src/task-engine/runner-driven-tool-wiring.test.ts`
+- `ARK_CODING_API_KEY='' npm run test:eval -- feature-177-wait-expired-idle-yield-pilot` (skip-path compile check; real provider pilot intentionally not run automatically)
 ---
 
 ## Summary
-- Total Archived: 112 issues
+- Total Archived: 118 issues
 - Archive Started: 2026-03-04
-- Last Archived: 2026-07-15
+- Last Archived: 2026-07-29

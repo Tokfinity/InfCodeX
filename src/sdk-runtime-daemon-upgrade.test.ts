@@ -93,6 +93,53 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
+  it('replaces an idle v3 daemon when auto-start requires the v4 non-persistent fallback contract', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: {
+          version: 3,
+          owner: 'session-runtime',
+          fallbackPersistsEngine: true,
+        },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(
+        createLease(createCurrentTransport(calls, newClose)),
+      );
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+    });
+
+    expect(runtime.identity.runtimeId).toBe('runtime_current');
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
   it('publishes the pre-spawn orphan-exit SDK capability', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       daemonOrphanExit: 1,

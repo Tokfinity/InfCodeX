@@ -128,7 +128,7 @@ describe('FEATURE_263 coding root learned Skill binding', () => {
 
     const completed = await store.readCapability(record.capabilityId);
     expect(completed).toMatchObject({
-      lifecycle: 'active_learned',
+      lifecycle: 'testing',
       canary: { verifiedSuccesses: 1 },
     });
     expect(completed?.schemaVersion === 2 && 'binding' in completed.canary).toBe(false);

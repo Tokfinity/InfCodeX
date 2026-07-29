@@ -493,7 +493,7 @@ describe('FEATURE_263 Runtime learned Skill binding', () => {
     });
 
     expect(await store.readCapability(record.capabilityId)).toMatchObject({
-      lifecycle: 'active_learned',
+      lifecycle: 'testing',
       canary: { verifiedSuccesses: 1 },
     });
     expect(await listLearnedSkillUsageReceipts(store, 'session-learned'))

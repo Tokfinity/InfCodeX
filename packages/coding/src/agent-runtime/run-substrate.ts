@@ -992,6 +992,9 @@ export async function runSubstrate(
       });
     }
     if (memoryController !== undefined) {
+      // Deliberately not awaited: the foreground durability boundary is the
+      // persisted review job. This chain serializes same-process drains, while
+      // a later run recovers any job left behind by process exit.
       memoryReviewDrain = memoryReviewDrain.then(
         () => drainCodingMemoryReviewInbox(
           options,

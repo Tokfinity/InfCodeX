@@ -525,6 +525,16 @@ describe('FEATURE_267 bidirectional A2A', () => {
     }
   });
 
+  it('rejects an explicit listener port that Fetch-compatible clients block', async () => {
+    const server = createKodaXA2AServer(serverOptions(fakeRuntime(), temporaryRoot()));
+    try {
+      await expect(server.listen({ hostname: '127.0.0.1', port: 5060 }))
+        .rejects.toThrow(/Fetch-compatible clients block port 5060/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('maps an unknown forward-compatible task state to unspecified', () => {
     expect(parseA2ATask({
       id: 'future-task', contextId: 'future-context',

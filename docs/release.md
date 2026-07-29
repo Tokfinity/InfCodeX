@@ -18,6 +18,7 @@ following side-by-side files. Extract it into a dedicated directory:
 ├── provider-capabilities.json     # Provider metadata
 ├── semantic-worker.js             # Repo-intelligence Worker
 ├── runtime-worker.js              # SDK Runtime Worker
+├── sandbox-workspace-session.js   # ASRT workspace session
 └── constructed-handler-worker.js  # Constructed-tool Worker
 ```
 
@@ -76,7 +77,84 @@ Output lives under `dist/binary/<target>/`. Smoke-test with:
 dist/binary/linux-x64/kodax --version
 ```
 
-## v0.7.77 release-ready candidate verification
+## v0.7.78 release verification
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.78`. The release contains:
+
+- FEATURE_263 evidence-gated background Skill learning: Memory-first review,
+  immutable project-scoped canaries, canonical record-gated discovery,
+  exact-revision outcome attribution, and Learning Center control;
+- FEATURE_276 complete first-run split-configuration setup without overwriting
+  existing core/MCP/Extensions/A2A configuration or collecting secrets;
+- FEATURE_277 intent-aligned Auto[LLM] permission behavior, bounded
+  classifier retry/Accept-edits fallback, optional ASRT containment, explicit
+  `/sandbox` diagnostics, and the standalone `/sandbox` SDK subpath;
+- Runtime Actor ownership, daemon lifecycle, integration resilience, and
+  packaged shell/sandbox hardening recorded in the v0.7.78 changelog;
+- release-candidate closure for Skill promotion, Edit/Plan Skill admission,
+  governed AMA Memory intent, unbounded Workflow Actor polling, and the
+  `runtimeAutoModeGuardrail` v4 non-persistent fallback contract.
+
+The release must be cut from one integrated commit after concurrent fix tasks
+have landed. Evidence produced against an earlier working tree is preliminary
+and must not be reused as the final release decision.
+
+Before tagging, all of the following must be true:
+
+1. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+2. a clean-install-equivalent deterministic gate passes on the exact candidate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+3. the exact publish-shaped `kodax-ai-kodax-0.7.78.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths; `/sandbox` declarations and
+   `dist/sandbox-workspace-session.js` must be present;
+4. FEATURE_263's preregistered paid semantic gate runs only after explicit
+   owner authorization. Its frozen ceiling is 78 calls, 850,000 tokens,
+   estimated `$0.78-$7.80`, and a hard `$10` external-spend cap. Raw output and
+   blind main-session review stay outside the repository as required by
+   `benchmark/EVAL_GUIDELINES.md`; the owner records the final ship decision;
+5. FEATURE_277's required classifier semantic eval has a frozen experiment
+   revision, production-byte fixtures, budgets, raw dump, and blind review
+   contract before any provider call. Existing v0.7.33/v0.7.73 evals are
+   regression evidence, not a substitute for the v0.7.78 permission policy;
+6. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+7. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+8. only then is that exact commit tagged `v0.7.78`. The tag-triggered workflow
+   must finish green and the GitHub Release must contain all five archives plus
+   `SHA256SUMS`.
+
+npm publication is deliberately outside this checklist's automated actions.
+The maintainer publishes the already audited bytes with:
+
+```bash
+node scripts/release.mjs
+```
+
+Use `--otp=<code>` when npm 2FA requires it. Do not use bare `npm publish`;
+the development manifest intentionally remains `private: true`.
+
+The human verification guides are
+[`FEATURE_263_v0.7.78_TEST_GUIDE.md`](test-guides/FEATURE_263_v0.7.78_TEST_GUIDE.md),
+[`FEATURE_276_v0.7.78_TEST_GUIDE.md`](test-guides/FEATURE_276_v0.7.78_TEST_GUIDE.md),
+and
+[`FEATURE_277_v0.7.78_TEST_GUIDE.md`](test-guides/FEATURE_277_v0.7.78_TEST_GUIDE.md).
+
+## v0.7.77 release verification
 
 Release state: the root package, all four workspace packages, and every
 `package-lock.json` workspace entry are version `0.7.77`. The candidate adds
@@ -90,8 +168,8 @@ official Codex/Gemini CLI cache-usage preservation, ACP/native-CLI session
 isolation with restartable pseudo transports and fail-closed process exits, and
 terminal/schema/memory integrity fixes.
 
-The candidate is not yet tagged. Its feature/evaluation gates are complete;
-before tagging, all of the following must be true:
+The version was tagged, released on GitHub, and published to npm on
+2026-07-27. Its completed pre-tag gates were:
 
 1. the deterministic local gate and exact tarball audit pass from a clean
    install;
@@ -137,8 +215,8 @@ production build and exact Sidecar archive audit. Archive-level declaration
 inspection confirmed `promptCacheKey`, `promptCacheAffinityHash`, and optional
 cache read/write fields; production bundles retain the Kimi/OpenAI affinity and
 Codex/Gemini cache-usage parser wire fields. The final release-evidence commit
-must pass Node 20, Node 22 (including the Unix Runtime socket gate), the
-dedicated Windows Shell Contract job, and packaged Electron before tagging.
+passed Node 20, Node 22 (including the Unix Runtime socket gate), the dedicated
+Windows Shell Contract job, and packaged Electron before tagging.
 
 For a focused v0.7.77 rerun:
 
@@ -242,10 +320,9 @@ the exact generated tarball and run
 on Windows 10 and Windows 11, recording the Space build, OS build, tarball hash,
 tester, date, and outcome. Automated output must not pre-fill the human result.
 
-After every gate above is satisfied, commit the complete candidate, verify a
-clean status in both repositories, tag that exact commit `v0.7.77`, and let the
-five-platform GitHub Release workflow build the binaries. npm publication
-remains a separate manual operator action.
+After every gate above was satisfied, the complete candidate was tagged
+`v0.7.77`; the five-platform GitHub Release workflow built its binaries. npm
+publication was completed separately by the maintainer.
 
 ## Automated release (CI)
 
@@ -336,8 +413,9 @@ injected. Check `scripts/build-binary.mjs` was used, not raw `bun build`.
 directory is missing next to the executable. Verify the archive was extracted
 intact; the binary alone is not enough.
 
-**Worker mode fails in a compiled binary** - verify `semantic-worker.js`,
-`runtime-worker.js`, and `constructed-handler-worker.js` are next to the
-executable. `scripts/build-binary.mjs` fails the build when any source sidecar
-is missing, but copying only the executable after extraction breaks Worker
-resolution at runtime.
+**Worker or sandbox mode fails in a compiled binary** - verify
+`semantic-worker.js`, `runtime-worker.js`, `sandbox-workspace-session.js`, and
+`constructed-handler-worker.js` are next to the executable.
+`scripts/build-binary.mjs` fails the build when any source sidecar is missing,
+but copying only the executable after extraction breaks sidecar resolution at
+runtime.

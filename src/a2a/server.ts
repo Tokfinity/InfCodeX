@@ -84,6 +84,38 @@ const PUSH_METHODS = new Set([
 const MAX_SSE_STREAMS_PER_TASK = 4;
 const MAX_SSE_STREAMS_PER_SERVER = 8;
 const MAX_SSE_QUEUE_BYTES = 24 * 1024 * 1024;
+// WHATWG Fetch blocks these ports before any request reaches the listener.
+const FETCH_BLOCKED_PORTS = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79,
+  87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540,
+  548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049,
+  3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679,
+  6697, 10080,
+]);
+const MAX_EPHEMERAL_PORT_ATTEMPTS = 16;
+
+function listenNodeServer(server: Server, port: number, hostname: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, hostname);
+  });
+}
+
+function closeNodeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+}
 
 function nowIso(now: () => Date): string {
   return now().toISOString();
@@ -588,6 +620,9 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
     if (!isLoopbackHostname(input.hostname)) {
       throw new Error('The built-in A2A HTTP listener is loopback-only; use handle() behind TLS for public service.');
     }
+    if (input.port !== 0 && FETCH_BLOCKED_PORTS.has(input.port)) {
+      throw new Error(`Fetch-compatible clients block port ${input.port}; choose another A2A listener port.`);
+    }
     const server = createServer((request, response) => {
       void this.handleNodeRequest(request).then((result) => {
         response.statusCode = result.status;
@@ -614,17 +649,25 @@ class KodaXA2AServerRuntime implements KodaXA2AServer {
         response.end(JSON.stringify({ error: 'Internal server error.', diagnosticId }));
       });
     });
-    this.#nodeServer = server;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(input.port, input.hostname, resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('A2A server did not expose a TCP address.');
-    const baseUrl = `http://${input.hostname}:${address.port}`;
-    this.#listeningBaseUrl = input.publicBaseUrl ?? baseUrl;
-    this.#card = buildCard(this.options, this.#listeningBaseUrl);
-    return baseUrl;
+    const attempts = input.port === 0 ? MAX_EPHEMERAL_PORT_ATTEMPTS : 1;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await listenNodeServer(server, input.port, input.hostname);
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        await closeNodeServer(server);
+        throw new Error('A2A server did not expose a TCP address.');
+      }
+      if (FETCH_BLOCKED_PORTS.has(address.port)) {
+        await closeNodeServer(server);
+        continue;
+      }
+      const baseUrl = `http://${input.hostname}:${address.port}`;
+      this.#nodeServer = server;
+      this.#listeningBaseUrl = input.publicBaseUrl ?? baseUrl;
+      this.#card = buildCard(this.options, this.#listeningBaseUrl);
+      return baseUrl;
+    }
+    throw new Error('A2A server could not allocate a Fetch-compatible listener port.');
   }
 
   close(): Promise<void> {

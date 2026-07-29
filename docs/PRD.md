@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-27
+> Last updated: 2026-07-29
 >
-> Current implementation baseline: `v0.7.77` release-ready candidate
-> (`@kodax-ai/kodax@0.7.77` workspace package)
+> Current implementation baseline: `v0.7.78` integrated release candidate
+> (`@kodax-ai/kodax@0.7.78` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -154,6 +154,17 @@ credentials and execution-control variables must be removed before profile
 code and before command execution. A configured interpreter failure is visible
 and fail-closed; an absent contract preserves established behavior.
 
+ASRT is optional execution containment, not permission authority. Ordinary
+Runtime startup and tool admission must not depend on setup readiness or
+silently run installers/elevation. `/sandbox` is the explicit diagnostic
+surface. SDK hosts may use `@kodax-ai/kodax/sandbox` for their own commands
+with typed filesystem/network/environment/timeout/output policy; that
+standalone executor returns structured `unavailable` and never chooses an
+ordinary unsandboxed fallback for the host. KodaX's own workspace-shell
+containment must deny common home credential paths and the complete resolved
+agent home without converting ordinary external reads into an allowlist; a
+standalone SDK host remains responsible for its own filesystem threat boundary.
+
 Sidecar completion must distinguish an optional offer made after the current
 request is satisfied from clarification required to satisfy the request.
 Runtime hosts must receive budget-approval state only for an eligible revision,
@@ -161,27 +172,30 @@ and must retain structured blocked codes and reasons through embedded, daemon,
 persistence, and restart boundaries.
 
 For a session with `permissionMode: 'auto'`, the Runtime is also the owner of
-the Auto Mode tool guardrail. It creates and reuses the guardrail across turns,
-keys reuse to the effective provider/model, project boundary, execution
-directory, classifier model, and timeout, and persists an automatic fallback
-from LLM to rules in the session settings. The execution sequence is always
-guardrail classification, then the host permission bridge only for an explicit
-`escalate` verdict, then tool execution. A static approval hook must not bypass
-that decision owner or manufacture requests for an `allow` verdict.
+the Auto Mode tool guardrail. It creates and reuses the guardrail across turns
+and keys reuse to the effective provider/model, project boundary, execution
+directory, classifier model, and timeout. Precisely modeled ordinary reads and
+workspace/system-temp mutations are admitted deterministically before
+classifier latency. Remaining actions are classified, then reach the host
+permission bridge only for an explicit `escalate` verdict, then execute. A
+static approval hook must not bypass that decision owner or manufacture
+requests for an `allow` verdict.
 
 The Auto LLM request must contain only bounded permission-relevant evidence,
 not the Runner's raw accumulated session. The current tool action remains
 separate from a transcript that removes assistant prose/thinking, images, and
 unbounded historical tool output. Missing classifier identity is a recoverable
-configuration error before provider/permission work; infrastructure timeout or
-an oversized unsafe-to-truncate action may escalate, but must never be
-reinterpreted as an automatic allow.
+configuration error before provider/permission work. Timeout, provider, or
+response-contract failure is retried once within the configured deadline; a
+second failure uses the Accept-edits boundary without changing the Session
+engine to rules. Oversized unsafe-to-truncate input escalates without silently
+truncating into an allow.
 
 Interactive permission-mode changes must be deterministic: Shift-Tab cycles
 Plan -> Edits -> Auto, entering Auto immediately exposes the configured
 `Auto[LLM]` or `Auto[RULES]` state, and rapid changes are applied in user order.
-An automatic LLM-to-rules fallback remains Session-scoped and sticky until the
-user explicitly selects the LLM engine again. Shift+Enter remains newline input.
+`Auto[RULES]` is sticky only after an explicit or persisted user selection;
+classifier failure never selects it. Shift+Enter remains newline input.
 
 SDK hosts must consume this behavior through one typed Auto settings resolver,
 and Runtime Session settings must represent the full public Auto configuration,
@@ -221,12 +235,16 @@ alias defaults to the official `k3-256k` Model ID while retaining
 1,048,576-token local context tier. `thinking.effort` carries K3 reasoning
 intent without mixing public and subscription credentials.
 
-A bare interactive first launch with no valid provider selection and no
-supported credential must offer a provider/model setup flow before Runtime or
-REPL creation. This flow stores no key value: it persists only provider/model
-and validated public custom-provider metadata, names the required environment
+A bare interactive first launch and `kodax setup` must initialize and validate
+the complete split configuration before Runtime or REPL creation: core,
+MCP, Extensions, and A2A active files plus annotated templates. Existing files
+are never overwritten; readable legacy declarations are preserved through the
+shared migration path, and invalid active files fail before any write. The
+provider flow stores no key value: it persists only provider/model and
+validated public custom-provider metadata, names the required environment
 variable, asks the user to restart the terminal, and exits. Scripted, resumed,
-JSON, SDK, daemon, subcommand, and non-TTY paths remain non-interactive.
+JSON, SDK, daemon, unrelated subcommand, and non-TTY paths remain
+non-interactive.
 
 ### Tools
 
@@ -328,6 +346,19 @@ capabilities. They are source-code subtrees under `packages/agent`, not separate
 workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 `@kodax-ai/kodax/mcp`.
 
+Background Skill learning is Memory-first and remains outside foreground Run
+latency. A single correction, failure, or verifier result is evidence rather
+than mutation authority. Only repeated independently verified evidence, or an
+explicit preserve-as-Skill request with verified terminal evidence, may create
+a low-risk immutable project-scoped testing revision. Discovery requires the
+canonical lifecycle/fingerprint record. Testing is bounded to one concurrent
+root binding and three exact-revision uses; project activation requires every
+bounded outcome to settle and at least one independently verified success.
+Protected/formal Skills, global promotion, and Extension authoring remain
+explicit user actions. Runtime hosts consume inventory,
+events, and controls through `runtime.learning`, not by inferring state from
+files.
+
 Bidirectional A2A 1.0 is a root integration edge exposed through
 `@kodax-ai/kodax/a2a`. Outbound Agents must fail closed against advertised
 Card/Skill security, keep Card/RPC/token origins separate, and support fixed
@@ -367,6 +398,13 @@ model call; an in-process host may opt into a bounded `memoryRecallRunner` that
 can return only offered IDs. At most three candidates enter the next
 Action-LLM request, while stale, malformed, unknown, timed-out, cancelled, or
 failed selector results remain silent.
+
+An exact current-user `memory_intent` is authoritative evidence for the
+post-episode governed reviewer, not a direct Memory write. If the root task is
+later cancelled, that already captured intent may still reach durable review,
+but cancelled-task observations, lessons, checks, and inferred intent must not.
+Foreground completion ends after durable enqueue; semantic review may drain in
+the same process or be recovered by a later run.
 
 Durable changes must continue through proposal, preview, fingerprint, and apply.
 Identity and applicability checks, secret filtering, poisoning defenses, and

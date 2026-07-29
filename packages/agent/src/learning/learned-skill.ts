@@ -443,6 +443,17 @@ export async function invokeLearnedSkillCanary(
     if (record.lifecycle !== 'testing') {
       throw new LearningCapabilityError('invalid_transition', 'learned Skill is not in canary testing');
     }
+    if (
+      (input.artifactRevision !== undefined
+        && record.artifact.contentRevision !== input.artifactRevision)
+      || (input.artifactFingerprint !== undefined
+        && record.artifact.fingerprint !== input.artifactFingerprint)
+    ) {
+      throw new LearningCapabilityError(
+        'invalid_record',
+        'learned Skill invocation expected revision or fingerprint changed',
+      );
+    }
     const binding = record.canary.binding;
     if (binding?.bindingId !== input.bindingId || Date.parse(binding.expiresAt) <= now.getTime()) {
       throw new LearningCapabilityError('action_failed', 'learned Skill canary binding is not authoritative');
@@ -535,11 +546,12 @@ export async function completeLearnedSkillOutcome(
     const credibleNegatives = record.canary.credibleNegatives
       + (input.outcome === 'credible_negative' ? 1 : 0);
     const pending = invocations.some((item) => item.status === 'pending');
+    const canarySettled = record.canary.invocationCount >= record.canary.maxInvocations && !pending;
     const lifecycle = credibleNegatives > 0
       ? 'quarantined'
-      : verifiedSuccesses > 0
+      : canarySettled && verifiedSuccesses > 0
         ? 'active_learned'
-        : record.canary.invocationCount >= record.canary.maxInvocations && !pending
+        : canarySettled
           ? 'ready'
           : record.lifecycle;
     const next = {

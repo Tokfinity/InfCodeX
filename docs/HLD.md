@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-27
+> Last updated: 2026-07-29
 >
-> Current implementation baseline: `v0.7.77` release-ready candidate
-> (`@kodax-ai/kodax@0.7.77` workspace package)
+> Current implementation baseline: `v0.7.78` integrated release candidate
+> (`@kodax-ai/kodax@0.7.78` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -25,9 +25,10 @@ clients/    optional external clients and protocol adapters
 benchmark/  eval harness, datasets, and prompt-change rules
 ```
 
-The published package is `@kodax-ai/kodax`. It exposes the root API plus eleven
+The published package is `@kodax-ai/kodax`. It exposes the root API plus twelve
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
-`/mcp`, `/session`, `/runtime`, `/a2a`, and `/experimental-memory`.
+`/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, and
+`/experimental-memory`.
 
 ## 2. Layering
 
@@ -144,18 +145,21 @@ not silently cross or execute in the client. Runtime methods bridge abort,
 events, permissions, artifacts, config, and owner-loaded extensions instead.
 
 Auto Mode is likewise an owner-plane concern. For an `auto` session, the
-Runtime holds one session-scoped LLM/rules guardrail and runs it before the
-generic permission bridge. Only an explicit guardrail escalation reaches a
-shared pending-permission request; a rules fallback updates the persisted
-engine for later turns. Classifier model/timeout, project boundary, execution
-directory, and provider/model are part of the guardrail reuse key, so a setting
-change gets a fresh guardrail rather than stale classification state.
+Runtime holds one session-scoped LLM/rules guardrail. Precisely modeled ordinary
+reads and workspace/system-temp mutations are admitted deterministically
+before classifier latency. Remaining calls run through the guardrail before
+the generic permission bridge; only an explicit escalation reaches a shared
+pending-permission request. Classifier failure retries once and then applies
+the Accept-edits boundary without changing the engine to rules. Classifier
+model/timeout, project boundary, execution directory, and provider/model are
+part of the guardrail reuse key, so a setting change gets a fresh guardrail
+rather than stale classification state.
 
 REPL-to-Runtime Auto settings are serialized per Session. The UI may project the
 configured engine immediately while the owner acknowledgement is pending, then
 reconcile to the persisted engine; this prevents both a transient bare `Auto`
-label and out-of-order completion of rapid mode changes. Persisted rules fallback
-is not reset merely by leaving and re-entering Auto.
+label and out-of-order completion of rapid mode changes. `Auto[RULES]` is
+sticky only when explicitly selected or restored from a prior user choice.
 
 The classifier input boundary is owned by `classify`, not by individual
 guardrail callers. It projects the current action independently and sanitizes
@@ -167,18 +171,21 @@ The public Runtime contract mirrors that boundary. REPL and root SDK entries
 export one pure Auto settings resolver plus its config-loading wrapper;
 Session state owns classifier model, timeout, and speculative window through
 the same serialized mutation queue. Auto-started daemon clients require
-`runtimeAutoModeGuardrail` v3, whose Runtime-issued opaque exact grant
-suggestions and concrete matchers extend the v2 reliability contract; version
-negotiation treats requirements as minimums. Side-query diagnostics report only
-coarse, observed timing/retry facts, while guardrail spans start before and end
-after the awaited callback.
+`runtimeAutoModeGuardrail` v4, whose intent-aligned retry/Accept-edits behavior
+extends the v3 opaque exact-grant and concrete-matcher contract; version
+negotiation treats requirements as minimums. Side-query diagnostics report
+only coarse, observed timing/retry facts, while guardrail spans start before
+and end after the awaited callback.
 
-First-run provider setup is a pre-Runtime CLI branch. A REPL-layer readiness
-inspection consults the canonical provider catalog, environment, and
-core config; a standalone terminal interaction produces a non-secret choice;
-and a revision-checked atomic mutation writes only provider metadata. The CLI
-then exits for terminal environment refresh. This branch never initializes the
-daemon, Runtime, session, extensions, or provider network client.
+First-run setup is a pre-Runtime CLI branch. One root-owned coordinator
+validates and creates the core, MCP, Extensions, and A2A active files plus
+annotated templates through shared lock/revision checks, preserving readable
+legacy declarations and never overwriting existing files. Provider readiness
+then consults the canonical catalog and environment; a standalone terminal
+interaction produces a non-secret choice, and a revision-checked atomic
+mutation writes only provider metadata. The CLI exits for terminal environment
+refresh. This branch never initializes the daemon, Runtime, session,
+extensions, or provider network client.
 
 The main coding path is:
 
@@ -292,6 +299,18 @@ then uses the same explicit interpreter for the command. Cache identity binds
 the contract, canonical cwd, Session scratch identity, denied credential
 names, and refresh generation. Legacy callers bypass this resolver.
 
+ASRT containment is a separate execution layer below permission admission.
+Local permission results do not depend on ASRT readiness; a failure before
+target spawn may use the ordinary already-admitted path, while a failure after
+spawn never re-executes. Workspace commands reuse one long-lived containment
+session. The public `/sandbox` entry exposes capability/doctor/setup plus an
+explicit host-owned executor that returns `unavailable` instead of applying
+the local fallback. `/sandbox` and optional `tool.sandbox` events are diagnostic
+surfaces; ordinary REPL history remains unchanged. KodaX's workspace-shell
+policy denies sensitive home credential paths and the complete resolved agent
+home, and filters home-local executable grants that would reopen a denied
+subtree. The generic SDK executor continues to apply its caller-owned policy.
+
 The permission boundary treats `gitRoot` as an allowed repository boundary and
 `executionCwd` as the base for relative operands. It never promotes quoted
 script or regular-expression source into a filesystem path. Permission events
@@ -319,6 +338,12 @@ Coordination separates the model control plane from runtime telemetry:
 
 Children are a coordination primitive, not a replacement for the main Worker.
 The main Worker owns final synthesis and user communication.
+
+Every persisted Actor Session has one exclusive Runtime owner. Current owners
+publish a Runtime-scoped loopback identity challenge in addition to the PID, so
+PID reuse cannot make an unrelated process look authoritative. A refused or
+completed mismatched challenge proves stale; ambiguous failures and legacy
+snapshots without identity evidence stay fail-closed.
 
 FEATURE_274 gives the Worker a shared six-pattern decision catalog without
 adding another scheduler. Existing Actor operations accept optional,
@@ -417,6 +442,13 @@ before exact sidecar persistence is not reconstructable.
 
 Skills are Markdown-based capabilities discovered from configured paths and
 expanded for the LLM through `packages/agent/src/capabilities/skills`.
+The F263 learning owner reuses the governed episode-review inbox and Learning
+Center. It records an immutable decision, writes a project-scoped Skill
+revision plus canonical capability record, and only then permits
+fingerprint/lifecycle-gated discovery. One concurrent root binding and three
+exact-revision uses bound testing; independent verified success is required
+for project trust. Files alone are never activation authority. Formal sources,
+global promotion, and Extension authoring remain explicit.
 
 MCP integration lives under `packages/agent/src/capabilities/mcp` and includes
 catalog/search, transport, runtime connection, OAuth helpers, protected-resource
@@ -431,6 +463,7 @@ Published SDK subpaths expose focused subsets:
 - `@kodax-ai/kodax/media`
 - `@kodax-ai/kodax/skills`
 - `@kodax-ai/kodax/mcp`
+- `@kodax-ai/kodax/sandbox`
 
 A2A remains a root integration edge rather than an agent-layer wire concern.
 `src/a2a` composes A2A 1.0 Card discovery, JSON-RPC/SSE execution, inbound
@@ -479,6 +512,13 @@ private/sensitive filtering, prompt-injection rejection, stale-result fences,
 and managed-path guards remain deterministic. Decision receipts separately
 record offered candidate IDs, selected candidate IDs, and exposed evidence refs;
 they are trace-only and never store hidden reasoning.
+
+The root Action LLM may bind explicit durable user intent through
+`memory_intent`. A later cancellation preserves only that exact authoritative
+intent evidence; observations and lessons from the cancelled task remain
+discarded. Foreground finalization waits for durable review enqueue but not
+semantic review. A chained same-process drain is best effort, and a later run
+recovers persisted jobs.
 
 The public opt-in entry is `@kodax-ai/kodax/experimental-memory`; it does not
 become an implicit dependency for consumers of the stable root or Runtime SDK.

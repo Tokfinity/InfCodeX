@@ -202,7 +202,7 @@ describe('FEATURE_263 learned Skill canary authority', () => {
     expect(recovered?.schemaVersion === 2 && 'binding' in recovered.canary).toBe(false);
   });
 
-  it('admits one root binding, caps exact-revision use at three, and promotes on verified success', async () => {
+  it('admits one root binding, caps exact-revision use at three, and promotes only after every outcome settles', async () => {
     const rootDir = await area();
     const artifact = await stageLearnedSkillRevision(rootDir, 'lc_verify_release', spec());
     const store = new LearnedAreaStore(rootDir);
@@ -257,9 +257,87 @@ describe('FEATURE_263 learned Skill canary authority', () => {
       evidenceRefs: ['check:release'],
       now: '2026-07-27T00:02:00.000Z',
     });
+    const partiallySettled = await store.readCapability('lc_verify_release');
+    expect(partiallySettled).toMatchObject({
+      lifecycle: 'testing',
+      canary: { verifiedSuccesses: 1 },
+    });
+    expect(partiallySettled?.schemaVersion === 2
+      ? partiallySettled.previousGoodArtifact
+      : undefined).toBeUndefined();
+
+    await completeLearnedSkillOutcome(store, 'lc_verify_release', {
+      invocationId: 'invoke-2',
+      outcome: 'inconclusive',
+      evidenceRefs: ['host:no-independent-check'],
+      now: '2026-07-27T00:02:01.000Z',
+    });
+    expect(await store.readCapability('lc_verify_release')).toMatchObject({
+      lifecycle: 'testing',
+      canary: { verifiedSuccesses: 1 },
+    });
+
+    await completeLearnedSkillOutcome(store, 'lc_verify_release', {
+      invocationId: 'invoke-3',
+      outcome: 'inconclusive',
+      evidenceRefs: ['host:no-independent-check'],
+      now: '2026-07-27T00:02:02.000Z',
+    });
     expect(await store.readCapability('lc_verify_release')).toMatchObject({
       lifecycle: 'active_learned',
       canary: { verifiedSuccesses: 1 },
+      previousGoodArtifact: {
+        contentRevision: artifact.contentRevision,
+        fingerprint: artifact.fingerprint,
+      },
+    });
+  });
+
+  it('revalidates exact artifact identity inside the invocation mutation', async () => {
+    const rootDir = await area();
+    const artifact = await stageLearnedSkillRevision(rootDir, 'lc_verify_release', spec());
+    const store = new LearnedAreaStore(rootDir);
+    await store.initialize();
+    await store.writeCapability(createLearnedSkillRecord({
+      capabilityId: 'lc_verify_release',
+      displayName: 'Verify release',
+      scope: {
+        configHomeHash: 'a'.repeat(64),
+        tenantHash: 'b'.repeat(64),
+        projectHash: 'c'.repeat(64),
+      },
+      artifact,
+      provenance: {
+        jobId: 'job-1',
+        inputHash: 'd'.repeat(64),
+        decisionId: 'decision-1',
+        actionId: 'action-1',
+      },
+      now: '2026-07-27T00:00:00.000Z',
+    }));
+    await admitLearnedSkillBinding(store, 'lc_verify_release', {
+      bindingId: 'binding-a',
+      ownerSessionRef: 'owner-a',
+      now: new Date('2026-07-27T00:01:00.000Z'),
+    });
+
+    await expect(invokeLearnedSkillCanary(store, 'lc_verify_release', {
+      bindingId: 'binding-a',
+      invocationId: 'wrong-revision',
+      artifactRevision: artifact.contentRevision + 1,
+      artifactFingerprint: artifact.fingerprint,
+      now: new Date('2026-07-27T00:01:01.000Z'),
+    })).rejects.toThrow(/expected revision or fingerprint changed/i);
+    await expect(invokeLearnedSkillCanary(store, 'lc_verify_release', {
+      bindingId: 'binding-a',
+      invocationId: 'wrong-fingerprint',
+      artifactRevision: artifact.contentRevision,
+      artifactFingerprint: 'f'.repeat(64),
+      now: new Date('2026-07-27T00:01:02.000Z'),
+    })).rejects.toThrow(/expected revision or fingerprint changed/i);
+    expect(await store.readCapability('lc_verify_release')).toMatchObject({
+      lifecycle: 'testing',
+      canary: { invocationCount: 0, invocations: [] },
     });
   });
 

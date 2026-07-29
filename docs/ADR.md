@@ -1,6 +1,20 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-07-27
+> Last updated: 2026-07-29
+>
+> **v0.7.78 intent-aligned permission and learning addendum:** FEATURE_277
+> supersedes ADR-056's automatic LLM-to-rules fallback. Precisely modeled safe
+> operations bypass classifier latency; other classifier infrastructure
+> failures retry once and then use the Accept-edits boundary for that call.
+> They never mutate the Session engine to Rules. Rules remains an explicit,
+> persisted user choice, while optional ASRT containment stays below the
+> permission decision and never becomes an authorization source.
+> `runtimeAutoModeGuardrail` v4 is the capability boundary for this behavior.
+> FEATURE_263 separately keeps one-off recovery knowledge in governed Memory;
+> only independently verified, exact-use project canaries may become Skills,
+> and promotion to global Skill or Extension remains a deliberate action.
+> FEATURE_276 initializes the full split configuration without overwriting any
+> existing file.
 >
 > **v0.7.77 adaptive-quality and memory addendum:** FEATURE_274 gives AMA one
 > shared six-pattern catalog and Runtime-derived, fact-only `PatternTrace`
@@ -140,7 +154,7 @@
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
 > 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
-> **Current package / SDK state (2026-07-19 / v0.7.72)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 11 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`）；LLM registry 有 15 个内置 provider alias（含 `zai-coding`）。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。既有事实仍含 inline workflow authoring、profile-gated SDK agent profile、可白标 self-knowledge、effort-first reasoning、内置 repo intelligence、workflow process/durable replay/hostMetadata、external-agent executor plane，以及 FEATURE_250/251/252/259/260/266/270 的渐进披露、工具输出完整采集/无损优先/批次容量回退、workflow quality lint、review handoff optimization、governed memory recall/review、Learning Center 与 Actor/Turn control plane。
+> **Current package / SDK state (2026-07-29 / v0.7.78)**: 源码 workspace 为 `llm / agent / coding / repl` 4 包；根 npm 包 `@kodax-ai/kodax` 暴露 12 个 SDK subpath（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/sandbox`、`/a2a`、`/experimental-memory`）；LLM registry 有 16 个内置 provider alias。当前 Runtime 事实包括 embedded inline、embedded Worker 与本机 daemon 三种 ownership/isolation 形态，以及 F269 的 authoritative shared Coder daemon：atomic observe/resync、durable operation、AskUser/permission transport、run-scoped credential/Host Tool bridge、crash outcome 与 daemon/inline owner fence。F267 提供双向 A2A 1.0 edge，F268 将 MCP/A2A/Extension 拆入三个 user-level versioned file 并提供 last-known-good hot reload。F263 以 Memory-first、不可变项目 canary、规范记录门禁发现和 Learning Center 控制完成后台 Skill 学习；F276 完成不覆盖既有配置的首次 split-config setup；F277 将 Auto[LLM] 权限与可选 ASRT containment 解耦，并公开 `/sandbox` SDK。small-window 工具 schema 仍通过 `tool_search` / `tool_describe` / `tool_call` 渐进披露，最终目标工具只经过一次权限校验。
 >
 > 之前的执行模型注脚（v0.7.42 前）：
 > 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
@@ -4661,3 +4675,61 @@ task-effect evidence with zero privacy/unknown-ID violations, no registered
 case regression, and a positive paired confidence interval. Adding a durable
 execution-state bank requires three concrete cases F228 projections cannot
 serve plus a new authority/lifecycle ADR.
+
+---
+
+## ADR-060: Auto Permission Degradation Preserves Intent and Does Not Change Engines
+
+**Status**: Accepted (2026-07-29)
+
+**Driver**: `FEATURE_277`, v0.7.78 intent-aligned Auto Mode correction
+
+**Context**: ADR-056 correctly moved Auto Mode permission ownership into the
+Runtime, but its automatic, durable LLM-to-rules fallback conflated classifier
+availability with user intent. A transient classifier failure could therefore
+replace the user's selected policy engine and make later calls obey a different
+policy. Sandbox readiness was also at risk of becoming an authorization
+shortcut even though containment and permission answer different questions.
+
+**Decision**:
+
+1. This ADR supersedes only ADR-056 Decision 3 and its claims that automatic
+   fallback persists or reuses the Rules engine. ADR-056's Runtime ownership,
+   ordering, bounded input, permission transport, and exact-grant decisions
+   remain in force.
+2. Precisely modeled safe operations use a deterministic pre-classifier
+   decision. All remaining Auto[LLM] calls use the configured classifier.
+3. Classifier timeout, provider failure, or invalid output is retried once.
+   A second infrastructure failure applies the call-local Accept-edits
+   boundary; it does not mutate, cache, or persist an engine change.
+4. Rules is an explicit, persisted user selection. Neither classifier failure,
+   permission timeout, nor sandbox availability may select it implicitly.
+5. Permission is decided before optional ASRT containment. A sandbox may
+   contain an admitted operation, but readiness, failure, or fallback cannot
+   authorize it or cause a second classifier/approval pass.
+6. `runtimeAutoModeGuardrail` v4 identifies this contract. Its metadata must
+   report that fallback does not persist the engine, and v0.7.78 clients that
+   depend on this invariant require v4 rather than accepting a v3 daemon.
+
+**Consequences**:
+
+- A classifier outage can narrow one call to Accept-edits behavior without
+  silently changing the user's policy for the current or later Session.
+- Runtime, daemon, REPL, and SDK hosts share one explicit engine owner and one
+  capability boundary.
+- ASRT remains independently usable through the sandbox SDK and never becomes
+  an Auto Mode correctness prerequisite.
+- v3 daemons remain attachable only to clients that do not require the v4
+  invariant; an auto-starting v0.7.78 client upgrades or rejects them through
+  the existing idle-fenced capability negotiation.
+
+**Rejected alternatives**: durable or call-local implicit Rules selection,
+using sandbox readiness as permission evidence, repeating permission after a
+containment fallback, removing classifier retry, or advertising v4 while
+retaining v3 fallback metadata.
+
+**Reconsideration gates**: any automatic engine transition requires explicit
+user-facing semantics, a separately versioned capability, and evidence that it
+cannot broaden authority after infrastructure failure. Moving containment
+above permission requires a threat-model update and cross-platform proof that
+containment state cannot act as authorization.

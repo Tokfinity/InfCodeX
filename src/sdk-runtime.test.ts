@@ -175,6 +175,10 @@ describe("createKodaXRuntime", () => {
       unavailableBehavior: "structured-no-execution",
       permissionFallback: "normal-permission-policy",
     });
+    expect(runtime.capabilities.runtimeAutoModeGuardrail).toMatchObject({
+      version: 4,
+      fallbackPersistsEngine: false,
+    });
     const session = await runtime.sessions.create({ title: "Worker Session" });
     await expect(runtime.sessions.list()).resolves.toEqual([
       expect.objectContaining({ id: session.id, title: "Worker Session" }),

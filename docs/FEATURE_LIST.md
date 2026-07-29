@@ -11,13 +11,13 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.76` (Git tag / GitHub Release; npm publication remains manual) |
+| Current released version | `v0.7.77` (Git tag / GitHub Release / npm) |
 | Current package version | `@kodax-ai/kodax@0.7.78` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `64` |
-| InProgress | `6` |
+| InProgress | `1` |
 | Planned | `10` |
-| Completed | `41` |
+| Completed | `46` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
@@ -26,8 +26,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.76 remains the current Git/GitHub release. |
-| InProgress | 6 | `263, 276, 277, 274, 275, 225` | `263`, `276`, and `277` target v0.7.78 and remain InProgress until that version releases. `274` and `275` are release-ready after paid evaluation and a joint `SHIP` decision; they move to Completed only after v0.7.77 is actually released. `225` remains the bounded v0.7.100 cleanup. |
+| Completed | 46 | `277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate; v0.7.77 remains the current Git/GitHub/npm release. |
+| InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 2 | `278, 265` | `v0.7.80` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
@@ -415,11 +415,6 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) |
-| `276` | Complete First-Run Setup and Split-Configuration Onboarding | Enhancement / CLI + Configuration | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) |
-| `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | Core / Permissions + Sandbox | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) |
-| `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | Core / Agent Orchestration + Quality | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) |
-| `275` | Governed Event-Triggered Memory Intervention | Core / Memory + Agent Quality | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_275-governed-event-triggered-memory-intervention) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 ---
@@ -435,9 +430,10 @@ The final hardening also adds session-wide all-root atomic preflight, exact
 durable identity/payload/owner gates, decision-pinned carriers with
 completion-after-all-receipts, and Memory-required/Skill-optional recovery for
 older v2 artifacts. It is not a Ready-only MVP. Layer 1 build and automated
-verification pass, including 180 focused tests at 86.39% line coverage across
-14 core files; the wider F263 cross-layer regression matrix adds 452 passing
-tests across 23 files, and the complete fast/unit/contract/system suite passes.
+verification pass. The recorded 14-core-file scoped coverage run measured
+86.39% line coverage; the current documented F263 cross-layer regression
+matrix passes 487 tests with one optional case skipped across 23 files, and the
+complete fast/unit/contract/system suite passes.
 The human guide is
 [FEATURE_263_v0.7.78_TEST_GUIDE](test-guides/FEATURE_263_v0.7.78_TEST_GUIDE.md).
 
@@ -471,13 +467,17 @@ guide are maintained in
 [FEATURE_277_v0.7.78_TEST_GUIDE](test-guides/FEATURE_277_v0.7.78_TEST_GUIDE.md);
 normal REPL history stays quiet and `/sandbox` is the explicit diagnostics entry.
 
-All three features remain InProgress until the target version is actually released
-and any required paid semantic release evaluation is explicitly authorized and
-recorded.
+All three features are `Completed`: their implementation and feature-level
+acceptance evidence are complete. Publication is tracked independently at the
+version level; required paid semantic release evaluation and the final
+integrated regression matrix remain release-candidate gates, not Feature
+lifecycle states. Automated evidence recorded in the feature documents
+predates the final concurrent-fix integration and must be rerun against the
+exact candidate SHA before release.
 
 ---
 
-## v0.7.77 Release-Ready Candidate Record
+## v0.7.77 Release Record
 
 `@kodax-ai/kodax@0.7.77` contains the engineering-complete F274/F275
 implementation. F274 gives AMA one shared six-pattern adaptive playbook,
@@ -488,7 +488,7 @@ timing-ineffective F260 semantic prefetch with sparse foreground intervention
 after tool failure, verification failure, or committed compaction while F228
 remains the sole durable memory authority.
 
-The candidate also adds public `kimi-k3`, prompt-cache diagnostics, provider
+The release also adds public `kimi-k3`, prompt-cache diagnostics, provider
 default-model resolution before Auto preflight, default-model catalog
 deduplication, active-run interrupt finalization hardening, the final
 child-runtime cache/context identity and Actor capability fixes, a
@@ -496,11 +496,9 @@ host-configurable Shell Execution Contract, compaction-safe request-only
 managed context, stable root/child Provider cache affinity across physical
 requests and resume, official Codex/Gemini CLI cache-usage preservation,
 ACP/native-CLI session isolation with fail-closed process exits, and
-terminal/schema/memory integrity hardening. Package
-metadata is synchronized at `0.7.77`; the final candidate must pass Node 20/22,
-Unix Runtime socket, Windows Shell Contract, and packaged Electron CI before
-tagging. The final release-evidence commit is required to pass that complete
-matrix before any tag, GitHub Release, or npm publication.
+terminal/schema/memory integrity hardening. Package metadata was synchronized
+at `0.7.77`; the release-evidence commit passed Node 20/22, Unix Runtime
+socket, Windows Shell Contract, and packaged Electron CI before tagging.
 The frozen F274 `f274-v0.7.77.6` Layer 2/3 evaluation and F275
 `f275-v0.7.77.3` pilot completed against clean commit `25d5521e`; the three
 final blinded stage reviews recorded `recommend-ship`, and the joint owner
@@ -512,7 +510,8 @@ in 6/6 cells, and accidental Workflow activation was zero. F275 deterministic
 B/C preserved the post-compaction compatibility constraint in 4/4 cells while
 all four selector calls remained silent. The semantic selector remains experimental
 and host opt-in; no task-effect/default-on, token, or latency improvement is
-claimed. The Git tag, GitHub Release, and npm publication do not exist yet.
+claimed. Git tag `v0.7.77`, the GitHub Release, and npm publication completed
+on 2026-07-27.
 
 ---
 
@@ -850,15 +849,20 @@ fixed GitHub binary archive sidecar omission before tagging.
 - 活跃项必须有明确版本和设计入口；`TBD` / parking-lot / 用户需求未成熟的项不进主表。
 - archive cutoff 之前的已完成、取消、吸收、搁置项归档到 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)；cutoff 之后的近期完成项暂留本表以便发布审计。
 - 新 feature 进入本表前，应先确认是否已有相同目标、是否可被现有 feature 吸收、是否需要单独设计文档。
-- 发布后把对应行移到“已完成 Feature”，同步 [CHANGELOG.md](../CHANGELOG.md)；越过 archive cutoff 后再归档。
+- Feature 在实现与功能验收完成后、正式发布前移到“已完成 Feature”；版本是否发布由 Current released version、[CHANGELOG.md](../CHANGELOG.md)、Git tag、GitHub Release 与 npm 独立记录。越过 archive cutoff 后再归档。
 - Emergency patch absorption: Session Scratch Directory / `KODAX_SESSION_TMP` is tracked as a `FEATURE_071` workspace-discipline extension, not as a new active feature ID. The patch gives each session a repo-local `.agent/tmp/sessions/<session-id>/` scratch path and keeps temporary helper files out of shared roots.
 
 ---
 
 ## 已完成 Feature
 
-| ID | Title | Released | Design | Notes |
+| ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
+| `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) | Engineering and feature-level acceptance are complete. Publication remains governed by the independent semantic-eval, integrated CI, binary, tag, and release-asset gates. |
+| `276` | Complete First-Run Setup and Split-Configuration Onboarding | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) | Engineering and feature-level acceptance are complete, including create-only split configuration, shared writer fencing, built-process setup coverage, and sandbox preparation guidance. |
+| `263` | Evidence-Gated Background Skill Learning Loop | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) | Engineering and feature-level acceptance are complete. The explicitly authorized paid semantic evaluation remains a release-candidate decision rather than a Feature lifecycle state. |
+| `275` | Governed Event-Triggered Memory Intervention | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_275-governed-event-triggered-memory-intervention) | Sparse foreground intervention after tool failure, verification failure, or committed compaction; F228 remains the durable authority and semantic selection remains an explicit in-process host option. Frozen paid evaluation and blind review produced the joint `SHIP` decision. |
+| `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) | One shared six-pattern catalog, optional validated `quality_strategy`, bounded fact-only `PatternTrace`, and the existing Sidecar as sole terminal-answer adjudicator. Frozen Layer 2/3 evaluation and blind review produced the joint `SHIP` decision. |
 | `273` | Mailbox-Driven Agent Wait + Telemetry/Control Separation | `v0.7.74` | [v0.7.74](features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation) | Model coordination waits only on scoped mailbox/user/interruption/timeout activity; progress remains SDK/UI telemetry. Safe-boundary synthetic delivery, post-transcript completion acknowledgement, explicit pending-delivery recovery, and child-turn queue deduplication provide one-shot completion evidence across restart. |
 | `272` | Reliable Full-Coverage Context Compaction + Durable Exact-History Recovery | `v0.7.74` | [v0.7.74](features/v0.7.74.md#feature_272-reliable-full-coverage-context-compaction-and-sdk-observability) | Always-on minimum-threshold policy, effective-trigger tail protection, complete eligible-prefix transaction, exact user-query ledger, context-owned events, bounded transcript pages/chunks/search, and durable-before-evict exact history for root and isolated persistent child Sessions. |
 | `271` | First-Run Provider Setup + Runtime Auto LLM Reliability Contract | `v0.7.73` | [v0.7.73](features/v0.7.73.md#feature_271-first-run-provider-setup-and-secure-restart-handoff) | Metadata-only pre-Runtime onboarding, typed Auto settings and diagnostics, bounded fail-closed classifier projection, Session speculative-window persistence, and monotonic daemon capability-v3 upgrade semantics with opaque exact permission grants. |

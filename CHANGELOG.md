@@ -6,6 +6,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.78] - 2026-07-29
+
+### Added
+
+- **Evidence-Gated Background Skill Learning (FEATURE_263).** Completed the
+  Memory-first learning loop with durable non-blocking review, immutable
+  project-scoped learned Skill revisions, canonical record/fingerprint-gated
+  discovery, exact-use outcome attribution, bounded three-use canaries,
+  independently verified project activation, and full `/learn`/Runtime Learning
+  Center controls. Protected/formal Skills, global promotion, and Extension
+  authoring remain explicit user actions.
+- **Complete First-Run Split Configuration (FEATURE_276).** `kodax setup`,
+  first-run onboarding, and `--custom` now create and validate the core, MCP,
+  Extensions, and A2A active files plus annotated templates without
+  overwriting existing configuration or collecting secrets. Legacy integration
+  declarations are preserved and all cooperating writers share the same
+  lock/revision boundary.
+- **Standalone Sandbox SDK.** Added the `@kodax-ai/kodax/sandbox` subpath with
+  typed capability, doctor, setup/activation guidance, and explicit
+  host-owned contained command execution. The generic API reports structured
+  unavailability and never silently executes without containment.
+- Added read-only `/sandbox` diagnostics and optional `tool.sandbox` Runtime
+  events. Ordinary startup, history, and command cards remain quiet.
+
+### Changed
+
+- **Intent-Aligned Auto[LLM] Permission and ASRT Execution (FEATURE_277).**
+  Precisely modeled ordinary reads and workspace/system-temp mutations bypass
+  classifier latency independently of sandbox readiness. Other actions are
+  reviewed against bounded user intent and exact side effects; approval timeout
+  cancels only the current operation. ASRT is optional execution containment,
+  not permission authority, and admitted commands reuse a workspace-scoped
+  session instead of paying initialization/reset per command.
+- The published bundle now exposes 12 SDK subpaths (13 entries including the
+  root), adding `/sandbox`; README, README_CN, the SDK embedder guide, and
+  `kodax_manual` describe the same surface.
+
 ### Fixed
 
 - Runtime Actor trees now persist one exclusive owner per Session. A second live
@@ -17,9 +54,11 @@ All notable changes to this project will be documented in this file.
   operation, while deletion quiesces executors before removing the file and
   then performs a no-write local dispose. A per-Session gate closes Run/Agent
   admission races with archive/delete, and SA root Runs now claim the same
-  owner fence. Only `ESRCH` permits dead-owner takeover; all other PID-probe
-  failures fail closed. Legacy snapshots with non-terminal turns fail closed
-  during upgrade because their live owner cannot be proven. Archived Sessions
+  owner fence. A Runtime-scoped loopback identity challenge now distinguishes
+  a live owner from an unrelated process that reused its PID: refused or
+  completed mismatched challenges prove stale, while timeouts and unknown
+  failures stay fail-closed. Legacy snapshots without an identity challenge
+  remain fail-closed because their live owner cannot be proven. Archived Sessions
   reject Run/Agent execution and in-place mutation until unarchived, and
   archived Actor CAS writes stay in the exact archived file instead of
   recreating an active duplicate. Failed deletion retains its authoritative
@@ -28,18 +67,17 @@ All notable changes to this project will be documented in this file.
   ambiguous start admission with a prompt `AbortSignal`, A2A request-level
   propagation, retained per-Agent start ordering, coalesced reference-aware
   cancellation, and bounded Actor-turn convergence.
-   preflight is byte-for-byte read-only, and Session recovery re-reads under the
-   cross-process lock without bypassing Actor ownership or moving archived data.
-   Stale full Session saves cannot replace the Actor CAS sub-snapshot, and all
-   full rewrites/island maintenance retain the resolved archived path.
-   Failed initialization releases a newly claimed fence and supports
-   same-instance/double-failure cleanup. Raw maintenance and retention reject
+  Actor recovery preflight is byte-for-byte read-only, and Session recovery re-reads under the
+  cross-process lock without bypassing Actor ownership or moving archived data.
+  Stale full Session saves cannot replace the Actor CAS sub-snapshot, and all
+  full rewrites/island maintenance retain the resolved archived path.
+  Failed initialization releases a newly claimed fence and supports
+  same-instance/double-failure cleanup. Raw maintenance and retention reject
   owned/non-terminal trees, complete Session file sets delete through
   rollback-safe staging, and cross-process append revalidates and merges stale
   watermarks plus same-length identity rewrites on the exact resolved path.
-  Runtime client, Worker,
-   hosted-daemon, host, lease, and executor-plane close attempts are shared and
-   retryable after partial failure or timeout.
+  Runtime client, Worker, hosted-daemon, host, lease, and executor-plane close
+  attempts are shared and retryable after partial failure or timeout.
 - SDK daemon auto-start accepts an opt-in `daemonOrphanExitMs` lifecycle
   contract. A newly ready daemon arms bootstrap grace even if its launching
   client crashes before initialize; attach cancels the timer, and loss of the
@@ -69,13 +107,59 @@ All notable changes to this project will be documented in this file.
   long-lived ASRT session, so session-level initialization/reset is not paid
   on every command. Normal history stays quiet, while `/sandbox` provides
   explicit diagnostics and SDK hosts can opt into structured events.
+- Runtime Auto capability negotiation now requires
+  `runtimeAutoModeGuardrail:4` for daemon auto-start and consistently reports
+  `fallbackPersistsEngine:false` from embedded, Worker, and daemon hosts. An
+  idle v3 daemon is replaced before a v0.7.78 client relies on the
+  intent-preserving, non-Rules fallback contract.
+- The built-in A2A listener now rejects explicit Fetch-blocked ports and
+  retries ephemeral allocation when the operating system selects one, so a
+  successfully returned loopback URL is usable by Fetch-compatible clients.
+- `/learn promote` now has dedicated help, strict `--scope user` validation,
+  name/slug/capability-ID disambiguation, command completion, v2 learned-record
+  transport across inline/Worker/daemon, reviewed `ready` or `active_learned`
+  admission, and atomic non-overwriting publication with symlink/junction
+  containment and idempotent repeat behavior.
+- Learned Skill canaries now remain in `testing` until all three exact-revision
+  outcomes settle, activate only with at least one independently verified
+  success, and revalidate revision/fingerprint inside the second locked
+  invocation mutation. A stale artifact identity cannot consume a canary slot
+  or be attributed to the current revision.
+- Root AMA runs now execute the same governed MemorySession lifecycle as the
+  standard Agent path. The new root-only `memory_intent` signal binds an exact
+  current-user quote, distinguishes captured/queued/applied states, retains
+  durable review evidence, serializes review drains, and prevents generated
+  resume text or child Agents from authorizing Memory writes. Explicit
+  host-bound intent survives a later root cancellation without preserving
+  observations or lessons from the cancelled task; foreground completion still
+  stops at durable review enqueue rather than waiting for semantic review.
+- Workspace ASRT shell containment now denies reads from sensitive home
+  credential paths and the complete resolved agent home. Home-local executable
+  search paths cannot carve access back into a denied subtree; ordinary
+  external reads, workspace/temp writes, bootstrap execution, and the existing
+  network policy remain unchanged.
+- Edit mode no longer sends already-allowed static Skill loading to the client
+  permission broker, and Plan mode can load static instructions without
+  authorizing their later side effects. Dynamic Skill commands are blocked
+  live in Plan and otherwise require an explicit host-controlled executor;
+  protected writes and non-read-only shell actions keep their normal gates.
+- Managed Workflow Actor waits no longer turn the Actor API's internal
+  30-second polling window into a misleading `undefinedms` failure when the
+  workflow has no explicit timeout. Explicit deadlines remain authoritative,
+  and terminal Actor output closes event-delivery races.
+- The resume Session picker now renders stored timestamps in the host's local
+  timezone instead of presenting UTC values without a timezone marker.
+- The Windows ordinary-query regression now gives temporary recursive removal
+  a bounded native retry window for the intentionally non-blocking governed
+  Memory review queue. The release gate no longer fails with transient
+  `ENOTEMPTY`, without making background review block foreground completion.
 
 ## [0.7.77] - 2026-07-27
 
-> Release-ready candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,
-> GitHub Release, and npm publication are not created yet. Frozen F274/F275
-> paid evaluation completed with a joint owner `SHIP` decision; no unmeasured
-> task-effect, token, or latency improvement is claimed.
+> Released as Git tag `v0.7.77`, GitHub Release, and
+> `@kodax-ai/kodax@0.7.77` on npm. Frozen F274/F275 paid evaluation completed
+> with a joint owner `SHIP` decision; no unmeasured task-effect, token, or
+> latency improvement is claimed.
 
 ### Added
 

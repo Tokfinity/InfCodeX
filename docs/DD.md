@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-27
+> Last updated: 2026-07-29
 >
-> Current release baseline: `v0.7.77` release-ready candidate
-> (`@kodax-ai/kodax@0.7.77`)
+> Current release baseline: `v0.7.78` integrated release candidate
+> (`@kodax-ai/kodax@0.7.78`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,11 +20,12 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.77`. The release-ready candidate
-adds pattern-aware adaptive AMA and governed event-triggered memory
-intervention, closes active-run interrupt finalization races, and adds public
-Kimi K3 without changing the Kimi Code `k3-256k` default established in
-v0.7.76.
+The root workspace package is `@kodax-ai/kodax@0.7.78`. The integrated
+candidate adds evidence-gated project Skill canaries, complete first-run split
+configuration, intent-aligned Auto[LLM] permission behavior, optional
+workspace-scoped ASRT containment, and the standalone `/sandbox` SDK surface.
+It retains v0.7.77's adaptive AMA, governed memory intervention, Shell
+Execution Contract, and Kimi K3 routes.
 
 `package.json` exposes:
 
@@ -40,6 +41,7 @@ v0.7.76.
 | `./mcp` | `dist/sdk-mcp.js` | Focused MCP subset. |
 | `./session` | `dist/sdk-session.js` | Public session-management subset. |
 | `./runtime` | `dist/sdk-runtime.js` | Stable host Runtime facade and daemon protocol/schema exports. |
+| `./sandbox` | `dist/sdk-sandbox.js` | Explicit ASRT capability, setup/doctor, and host-owned contained execution. |
 | `./a2a` | `dist/sdk-a2a.js` | Bidirectional A2A 1.0 client/server integration edge. |
 | `./experimental-memory` | `dist/sdk-experimental-memory.js` | Opt-in governed Memory Agent and scoped session contracts. |
 
@@ -110,8 +112,8 @@ daemon mode, are rejected rather than ignored.
 the provider/model/reasoning fields. The Runtime validates a positive timeout,
 persists these settings, advertises them through daemon capability negotiation,
 and uses them to build a session-owned auto guardrail. Changing classifier
-model or timeout invalidates the cached guardrail; an automatic LLM-to-rules
-fallback updates `autoModeEngine` for the next run.
+model or timeout invalidates the cached guardrail. Classifier infrastructure
+failure does not mutate `autoModeEngine`; only explicit settings input does.
 
 `createReplRuntimeAutoModeControl()` serializes `syncSettings()` and
 `setEngine()` writes per Session. Ink renders the configured engine immediately
@@ -133,12 +135,12 @@ propagates it through effective settings, active/queued records, cache identity,
 and guardrail bootstrap. `0` is preserved rather than treated as absent.
 
 Daemon and embedded capability metadata advertise
-`runtimeAutoModeGuardrail.version = 3`, retaining the effective 20-second
-timeout, 500 ms default speculative window, bounded-input flag, and diagnostics
-version while adding Runtime-issued opaque exact permission-grant suggestions
-and concrete matchers. Capability checks accept `advertised >= required`;
-auto-start can safely fence and replace an idle v1 or v2 daemon, but
-attach-only/busy paths return a recoverable error without mutation.
+`runtimeAutoModeGuardrail.version = 4`, retaining the effective 20-second
+timeout, bounded-input flag, diagnostics, Runtime-issued opaque exact
+permission-grant suggestions, and concrete matchers while adding the F277
+intent-aligned retry/Accept-edits behavior. Capability checks accept
+`advertised >= required`; auto-start may fence and replace an idle older
+daemon, but attach-only/busy paths return a recoverable error without mutation.
 
 `sideQuery()` owns a fixed-field `SideQueryDiagnostics` envelope: provider,
 model, effective timeout, elapsed time, retry count/wait, optional first-output
@@ -147,13 +149,17 @@ response content and does not invent connect/queue timings unavailable from
 provider adapters. Guardrail tracing creates a pending child span before the
 callback and finalizes its verdict/error after the await.
 
-On a bare TTY launch, `src/kodax_cli.ts` runs provider readiness after normal
-environment/config preparation but before Runtime/extension/session creation.
-Only `needs-provider` enters the setup interaction; selected providers missing
-credentials preserve their existing error path, and malformed config is never
-overwritten. `kodax setup` invokes the same interaction explicitly. The writer
-uses a SHA-256 content revision, same-directory temp file, restrictive mode,
-and atomic rename while preserving unrelated keys.
+On a bare TTY launch, `src/kodax_cli.ts` runs the root-owned setup coordinator
+before Runtime/extension/session creation. It validates every existing
+core/MCP/Extensions/A2A active file, preserves readable legacy integration
+declarations, and creates only missing active files/templates while holding
+the shared configuration lock and rechecking revisions. Any invalid active
+file fails before all writes and before the provider wizard. Only
+`needs-provider` enters the non-secret provider interaction; selected providers
+missing credentials preserve their existing error path. `kodax setup` invokes
+the same coordinator explicitly, while `setup --help` returns before side
+effects. Writers use SHA-256 revisions, same-directory temporary files,
+restrictive modes, and atomic rename while preserving unrelated keys.
 
 The Worker and daemon facades reuse `runtime-daemon/server.ts` and
 `runtime-daemon/client.ts`; there is no duplicate service implementation.
@@ -246,6 +252,13 @@ shared by daemon and inline ownership. CAS policy changes make rollback to
 inline sticky. Partner compatibility depends on the embedder retaining its
 existing distinct inline data/sessions root; Partner does not acquire or write
 the Coder owner fence.
+
+Actor Session snapshots separately persist one exclusive Runtime owner.
+Current owners expose a Runtime-scoped loopback liveness challenge, so a
+contender can distinguish that exact owner from an unrelated process that
+reused its PID. A refused or completed mismatched challenge proves stale;
+timeouts, unknown failures, and legacy owners without challenge evidence remain
+fail-closed.
 
 `runs.start({ options })` is transport-safe data in Worker/daemon forms. The
 client rejects functions, symbols, bigint, cycles, non-finite numbers, and
@@ -396,10 +409,10 @@ Key concepts:
 
 - permission modes come from REPL/CLI options and config;
 - tools declare side-effect class;
-- an auto session uses its Runtime-owned guardrail before the generic permission
+- an auto session deterministically admits precisely modeled ordinary reads
+  and workspace/system-temp mutations before classifier latency;
+- remaining calls use the Runtime-owned guardrail before the generic permission
   hook; only a guardrail `escalate` creates a shared broker request;
-- shell commands and other classifier-eligible tools are classified before
-  execution, while safe allow verdicts do not become pending permissions;
 - trusted-local workflow scripts require explicit confirmation;
 - verifier and stop-hook failures fail open where blocking would trap the user.
 
@@ -438,8 +451,23 @@ No contract keeps `shell: true` plus the legacy process environment.
 The default terminal bindings keep Shift-Tab for the three permission modes and
 Shift+Enter for newline input. Rapid Shift-Tab changes enter the per-Session
 Runtime settings queue in input order, so the final visible mode is also the
-final persisted mode. `Auto[RULES]` remains a valid sticky fallback state;
-`/auto-engine llm` changes it explicitly.
+final persisted mode. Classifier timeout/provider/contract failure retries once
+within the deadline, then uses the Accept-edits boundary without mutating the
+engine. `Auto[RULES]` remains a valid sticky state only after explicit or
+persisted user selection; `/auto-engine llm` changes it explicitly.
+
+ASRT is an execution adapter below this permission decision. Workspace
+commands share one long-lived containment session; unavailable or pre-spawn
+backend failure may use the already-admitted ordinary local path, while
+post-spawn failure never retries the target. The `/sandbox` command and
+`tool.sandbox` events expose diagnostics without entering ordinary history.
+The separate `src/sdk-sandbox.ts` API deliberately has no such fallback:
+`runKodaXSandboxed()` returns a typed `unavailable` result when containment
+cannot run. The internal workspace-shell adapter also denies common
+credential-bearing home paths and the complete resolved agent home; it removes
+home-local executable grants nested below those paths before sending the ASRT
+policy. This stricter local policy is not silently imposed on the standalone
+SDK executor, whose filesystem boundary remains caller-owned.
 
 Do not add a new permission bypass path for convenience. Route effects through
 the tool layer or an existing capability API.
@@ -570,10 +598,27 @@ Core modules:
 - skill loader and frontmatter parsing,
 - skill registry and resolver,
 - LLM expansion,
-- built-in skills copied during build.
+- built-in skills copied during build,
+- `packages/agent/src/learning` for immutable learned revisions, canonical
+  lifecycle records, project canary admission, usage/outcome receipts, and
+  Learning Center actions,
+- `packages/coding/src/learning-reviewer.ts` plus `memory-runtime.ts` for the
+  bounded production review and Memory-first carrier decision.
 
 The published `@kodax-ai/kodax/skills` subpath is a focused subset of agent
 capabilities. It should not require importing the full coding package.
+
+Learned Skill files are not self-authorizing. Runtime discovery requires a
+matching canonical record, project identity, lifecycle, fingerprint,
+regular-file checks, and formal-name policy. A testing revision permits one
+concurrent root binding and three exact-revision invocations. Project trust is
+established only after all three outcomes settle and at least one is an
+independently verified success. Credible negative evidence quarantines
+immediately; an exhausted canary without success returns the record to
+Ready/attention. The locked invocation mutation rechecks the current artifact
+revision and fingerprint before consuming a slot. Protected/formal
+changes, user-global promotion, and Extension authoring require explicit user
+authority through `runtime.learning` or `/learn`.
 
 ## 12. Media Input Artifacts
 
@@ -618,7 +663,8 @@ A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
 - `server.ts` authenticates before body/task lookup, reserves global capacity
   synchronously before slow preparation, replays after subscription, drains
   admitted handlers on close, and enforces fixed per-task/per-server/per-stream
-  SSE limits.
+  SSE limits. Its loopback listener rejects explicit Fetch-blocked ports and
+  retries ephemeral allocation until the returned URL is Fetch-compatible.
 
 The external-Agent plane persists an internal immutable registration snapshot
 for each admitted route. It is not part of the public task DTO and contains no
@@ -670,6 +716,13 @@ existing preview/fingerprint/apply controller is the only durable write path.
 `MemoryDecisionReceipt` stores candidate IDs, selected candidate IDs, exposed
 evidence refs, event triggers, and policy facts in tracing, not hidden reasoning
 or a second event database.
+
+The root-only `memory_intent` tool binds an exact quote from the current user
+turn. If cancellation follows capture, MemorySession may enqueue an
+intent-only cancelled digest; it rejects any cancelled digest containing task
+observations, lessons, verifier facts, or inferred intent. Foreground close
+awaits durable inbox persistence, not semantic review. Same-process drains are
+serialized best effort, and restart recovery owns any persisted remainder.
 
 ## 15. Workflow Runtime
 

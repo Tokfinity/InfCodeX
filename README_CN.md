@@ -114,7 +114,7 @@ daemon Runtime 边界保留结构化 blocked 原因。
 可选模型，同时保留 `kimi-for-coding-highspeed` 与 1M `k3` tier。K3 支持
 `low` / `high` / `max` 思考强度，默认 `high`；256K 路由支持图片但不支持视频输入。
 
-**v0.7.77 发布就绪候选版**：AMA 现在通过现有 Actor 控制面按需组合六种具名问题解决
+**v0.7.77 正式版**：AMA 现在通过现有 Actor 控制面按需组合六种具名问题解决
 模式，不引入固定拓扑或隐藏 Workflow。可选策略元数据会形成有界、仅记录事实的
 `PatternTrace`，现有 Sidecar 仍是唯一的终态答案质量裁决者。治理式记忆可在工具
 失败、验证失败或已提交 compact 之后稀疏触发，在下一次 Action-LLM 请求前注入最多
@@ -126,6 +126,13 @@ daemon Runtime 边界保留结构化 blocked 原因。
 冻结的 F274/F275 付费评测已完成；F274 最终 Layer 2/Layer 3 与 F275 pilot 盲审均
 为 `recommend-ship`，随后形成发布确定性契约的联合 `SHIP` 决策。语义记忆选择仍为
 实验性、宿主显式启用能力；本版本不宣称任务质量、token 或延迟改善。
+
+**v0.7.78 证据门禁学习、首次配置与权限/沙盒正式版**：后台学习遵循
+Memory-first；只有重复且独立验证的证据，或带已验证终态证据的显式
+preserve-as-Skill 请求，才能把低风险声明式 Skill 放入不可变、项目级的有界
+canary。自动项目信任需要完成三次精确 revision 使用并取得独立验证成功；每个
+revision 都可在 `/learn` 中查看、禁用、回滚、信任或拒绝。受保护/正式 Skill、
+全局提升和 Extension 编写仍必须由用户显式决定。
 
 ### 将 learned Skill 提升到用户正式目录
 
@@ -153,7 +160,27 @@ option，以及多余参数都会失败且不改变目录。目标位置是所�
 `/help learn promote`。在 Ink Learning Center 中可执行 `/learn`，选择一个
 `active_learned` Skill，再选择 **Promote to user catalog**。
 
-同一候选版还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
+首次 setup 会创建并校验 core/MCP/Extensions/A2A 分离配置及带注释模板，不覆盖
+现有配置，也不收集密钥。Auto[LLM] 在 classifier 延迟之前放行可精确建模的普通
+读取及 workspace/temp 变更；classifier 基础设施失败只重试一次，随后按
+Accept-edits 边界降级，绝不切换到 rules。ASRT 是可选执行期 containment，不是
+权限裁决者；`/sandbox` 是显式诊断入口，SDK 宿主也可独立使用 `/sandbox`
+subpath，且不可用时不会静默改为非隔离执行。KodaX 自身的 workspace containment
+会拒绝读取常见的用户主目录凭据路径及完整的已解析 agent home，同时不把普通外部
+读取收窄成 allowlist。详见
+[v0.7.78 设计](docs/features/v0.7.78.md)、
+[发布检查清单](docs/release.md#v0778-release-verification)与
+[SDK 指南第 29–30 节](docs/SDK_EMBEDDER_GUIDE.md#29-evidence-gated-background-skill-learning-feature_263-v0778)。
+
+本次发布收口同时保证相邻表面不扭曲意图：Edit/Plan 可加载静态 Skill 指令，但不
+预授权其后续副作用；动态 Skill 命令必须由宿主显式控制 executor；根 AMA 使用受
+治理的 `memory_intent` 生命周期（包括在后续取消前已捕获的显式意图）；Workflow
+Actor wait 只有在 workflow 显式设置
+deadline 时才超时；embedded、Worker 与 daemon 的 Runtime Auto v4 均声明
+`fallbackPersistsEngine:false`。Actor owner 还会验证 Runtime identity，而不是只看
+PID，因此 PID 复用不会卡住已崩溃 owner。恢复 Session 选择器也改为显示宿主本地时区。
+
+v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一
 解释器执行命令。环境缓存按 contract 与 cwd 隔离，使用有界 TTL，也可由宿主显式
@@ -332,7 +359,7 @@ Auto[LLM] 的权限体验保持一致，只缺少 OS 级 containment；普通运
 在 REPL 中，`/sandbox` 会刷新 ready 状态与诊断，但不会激活 backend 或请求提权。
 逐命令 sandbox 路由属于内部机制，不显示在普通命令历史中。SDK 嵌入方还可通过
 `@kodax-ai/kodax/sandbox` 在 Auto[LLM] 之外独立使用该能力，
-见 [SDK sandbox 指南](docs/SDK_EMBEDDER_GUIDE.md#28-standalone-sandbox-sdk-v0778)。
+见 [SDK sandbox 指南](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778)。
 
 Qwen Token Plan 需要选择 `qwen-token-plan` 并使用单独的凭据；`QWEN_API_KEY`
 不能用于该路由：
@@ -730,7 +757,7 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## 仓库结构
 
-KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 11 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/a2a`、`/experimental-memory`；ADR-024 + ADR-032 + ADR-038）。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 12 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/media`、`/repl`、`/skills`、`/mcp`、`/session`、`/runtime`、`/sandbox`、`/a2a`、`/experimental-memory`；ADR-024 + ADR-032 + ADR-038）。核心包：
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
@@ -739,20 +766,20 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 | `@kodax-ai/coding` | Coding Agent:50+ 工具（含 canonical Actor 协作工具）、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,media,repl,skills,mcp,session,runtime,sandbox,a2a,experimental-memory}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ### 源码层 vs npm 发布层
 
 KodaX 有两层结构，SDK 用户需要分开理解：
 
 - **源码层**：上面 4 个 workspace 包（开发者读代码时看到的物理结构）。
-- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 11 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
+- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 12 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
   - **完整包 subpath**（`/agent`、`/llm`、`/coding`、`/repl`）—— 每个 1:1 对应一个源码包，暴露完整公开 API。
-  - **窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`、`/experimental-memory`）—— 从 `/agent` 或 `/repl` 切出聚焦能力；`/experimental-memory` 明确为 opt-in 不稳定接口。
+  - **集成与窄子集 subpath**（`/media`、`/skills`、`/mcp`、`/session`、`/runtime`、`/sandbox`、`/a2a`、`/experimental-memory`）—— 聚焦能力或宿主集成边界；`/experimental-memory` 明确为 opt-in 不稳定接口。
 
 | 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 15-alias LLM 抽象 (108 exports) | 独立 LLM 客户端 |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 16-alias LLM 抽象 (108 exports) | 独立 LLM 客户端 |
 | `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / 外部 Agent plane / session-lineage / capabilities / tracing (331 exports) | 自定义 agent 框架 |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (23 exports) | MCP server 宿主 |
@@ -762,6 +789,7 @@ KodaX 有两层结构，SDK 用户需要分开理解：
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (217 exports) | 终端 UI 消费者 |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` 等 (17 exports) | 读取 session 历史的 IDE 插件和桌面宿主 |
 | `src`             | `@kodax-ai/kodax/runtime` | 宿主 API | Embedded/Worker/daemon facade，含 sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/外部 Agent 和 daemon schema (10 exports) | SDK 宿主、Space/IDE、daemon client |
+| `src`             | `@kodax-ai/kodax/sandbox` | 宿主 API | 显式 ASRT capability/doctor/setup 与宿主自有受控命令执行；不可用时绝不静默普通执行 | 需要独立进程 containment 的 SDK 宿主 |
 | `src`             | `@kodax-ai/kodax/a2a` | 集成边界 | A2A 1.0 Agent Card 发现、JSON-RPC/SSE F258 executor、安全 fetch 与鉴权 Runtime Agent server | Agent 编排器和 KodaX 宿主 |
 
 **经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
@@ -780,7 +808,7 @@ runtime、消息、UI 历史、lineage、artifact、extension 状态、标题、
 
 **实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 
-**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback，且不会返回 Fetch 兼容客户端禁止的端口；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
 
 **A2A 互操作与认证加固**：发现得到的 interface 必须与受信 Agent Card 同源，且只有
 完整满足 Card/Skill 的一个 security requirement 时才会携带凭据。无代码 client
@@ -900,11 +928,11 @@ KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 │   └── repl/                # @kodax-ai/repl —— Ink TUI
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,sandbox,a2a,experimental-memory}
 ├── scripts/
-│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 11 SDK subpath + chunks）
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + root + 12 SDK subpath + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
-│   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
+│   └── release.mjs          # 构建/审计后仅临时切换 private 以 pack/publish
 └── .github/workflows/
     └── release.yml          # 推 v* tag 自动发布 GitHub Release
 ```

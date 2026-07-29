@@ -90,6 +90,26 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toMatch(/input\s+window/);
   });
 
+  it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
+    const content = resolveKodaXManual({ topic: 'skills' }).content;
+
+    expect(content).toContain('Memory first');
+    expect(content).toContain('project-scoped');
+    expect(content).toContain('three exact-revision invocations');
+    expect(content).toContain('all three outcomes settle');
+    expect(content).toContain('independently verified success');
+    expect(content).toContain('credible negative quarantines immediately');
+    expect(content).toContain('/learn');
+    expect(content).toMatch(/protected\/formal/i);
+    expect(content).toContain('global promotion');
+    expect(content).toContain('Extension');
+    expect(content).toContain('/learn promote');
+    expect(content).toContain('--scope user');
+    expect(content).toContain('ready or active_learned');
+    expect(content).toContain('atomically');
+    expect(content).toContain('without overwriting');
+  });
+
   it('documents the v0.7.73 setup, Qwen Token Plan, and Runtime permission contracts', () => {
     const install = resolveKodaXManual({ topic: 'install' }).content;
     const providers = resolveKodaXManual({ topic: 'providers' }).content;
@@ -108,9 +128,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(permissions).toContain('allow once');
     expect(permissions).toContain('session-scoped');
     expect(permissions).toContain('persistent');
+    expect(permissions).toContain('static Skill');
+    expect(permissions).toContain('Edit and Plan');
+    expect(permissions).toContain('dynamic-context commands');
+    expect(permissions).toContain('explicit host-controlled executor');
     expect(sdk).toContain('grantSuggestions');
     expect(sdk).toContain('RuntimePermissionMatcher');
-    expect(sdk).toContain('runtimeAutoModeGuardrail');
+    expect(sdk).toContain('runtimeAutoModeGuardrail` v4');
+    expect(sdk).toContain('requires v4');
+    expect(sdk).toContain('fallbackPersistsEngine:false');
   });
 
   it('documents the v0.7.73 regression closure for legacy grants and effort commands', () => {
@@ -148,6 +174,9 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('exact quote');
     expect(content).toContain('captured only');
     expect(content).toContain('before any durable review job exists');
+    expect(content).toContain('root task is later cancelled');
+    expect(content).toContain('Foreground completion waits for durable enqueue');
+    expect(content).toContain('later run recovers');
     expect(content).toContain('fallback');
     expect(content).toContain('query()');
     expect(content).toContain('low-authority');
@@ -189,6 +218,10 @@ describe('FEATURE_218 manual registry', () => {
     expect(agents).toContain('Do not poll `agent_output`');
     expect(agents).toContain('synthetic evidence');
     expect(agents).toContain('pending-delivery');
+    expect(agents).toContain('Managed Workflow `runAgent`');
+    expect(agents).toContain('omitted workflow timeout');
+    expect(agents).toContain('polling window');
+    expect(agents).toContain('explicit workflow deadline');
     expect(sdk).toContain('runtime.agents.events()');
     expect(sdk).toContain('runtime.agents.wait(sessionId, afterSequence, timeoutMs)');
     expect(sdk).toContain('interruptInput:1');
@@ -213,13 +246,27 @@ describe('FEATURE_218 manual registry', () => {
   it('keeps the SDK topic aligned with current published subpaths', () => {
     const content = resolveKodaXManual({ topic: 'sdk' }).content;
 
-    expect(content).toContain('11 SDK subpaths');
+    expect(content).toContain('12 SDK subpaths');
     expect(content).toContain('@kodax-ai/kodax/runtime');
+    expect(content).toContain('@kodax-ai/kodax/sandbox');
     expect(content).toContain('@kodax-ai/kodax/experimental-memory');
     expect(content).toContain('@kodax-ai/kodax/a2a');
     expect(content).toContain('server.whenReady()');
     expect(content).toContain('sessions.observe()');
     expect(content).toContain('run-bound Host Tools');
+    expect(content).toContain('runtime.learning');
+    expect(content).toContain('skillLearningLoop');
+    expect(content).toContain('loopback identity challenge');
+    expect(content).toMatch(/reuses\s+the PID/);
+  });
+
+  it('documents the v0.7.78 sensitive-home workspace containment boundary', () => {
+    const content = resolveKodaXManual({ topic: 'sandbox' }).content;
+
+    expect(content).toContain('common home credential paths');
+    expect(content).toMatch(/complete\s+resolved agent home/);
+    expect(content).toContain('cannot reopen a denied subtree');
+    expect(content).toMatch(/ordinary\s+external reads/);
   });
 
   it('documents the split integration configuration instead of legacy core fields', () => {

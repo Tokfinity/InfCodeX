@@ -330,7 +330,7 @@ describe('daemon CLI smoke', () => {
               expect.objectContaining({
                 domain: 'a2a',
                 path: path.join(homeConfigDir, 'a2a.json'),
-                source: 'default',
+                source: 'user',
                 diagnostic: expect.objectContaining({ code: 'invalid-config' }),
               }),
             ]),

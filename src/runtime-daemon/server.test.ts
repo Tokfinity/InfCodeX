@@ -1037,7 +1037,7 @@ describe('runtime daemon dispatcher', () => {
             version: 4,
             owner: 'session-runtime',
             escalationCreatesPermission: true,
-            fallbackPersistsEngine: true,
+            fallbackPersistsEngine: false,
             defaultClassifierTimeoutMs: 20_000,
             defaultSpeculativeWindowMs: 500,
             boundedClassifierInput: true,

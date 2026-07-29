@@ -216,7 +216,7 @@ and diagnostics without activating the backend or requesting elevation.
 Per-command sandbox routing remains internal and is not shown in normal command
 history. SDK embedders can use the same capability independently through
 `@kodax-ai/kodax/sandbox`; see the
-[SDK sandbox guide](docs/SDK_EMBEDDER_GUIDE.md#28-standalone-sandbox-sdk-v0778).
+[SDK sandbox guide](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778).
 
 For Qwen Token Plan, select `qwen-token-plan` and use its separate credential;
 `QWEN_API_KEY` does not authenticate this route:
@@ -467,7 +467,7 @@ for K2.7 Code, alongside `kimi-for-coding-highspeed` and the 1M `k3` tier. K3
 supports `low` / `high` / `max` reasoning with `high` as default; the 256K
 route supports image input but not video input.
 
-**v0.7.77 release-ready candidate:** AMA now chooses and composes six named
+**v0.7.77 release:** AMA now chooses and composes six named
 problem-solving patterns through the existing Actor control plane instead of
 using a fixed topology or hidden Workflow. Optional strategy metadata becomes
 a bounded, fact-only `PatternTrace`; the existing Sidecar remains the only
@@ -485,7 +485,42 @@ joint `SHIP` decision for the deterministic contracts. Semantic memory
 selection remains experimental and host opt-in; no task-quality, token, or
 latency improvement is claimed.
 
-The same candidate adds an opt-in, host-configurable Shell Execution Contract.
+**v0.7.78 evidence-gated learning, setup, and permission/sandbox release:**
+Background learning is Memory-first. Only repeated independently verified
+evidence, or an explicit preserve-as-Skill request with verified terminal
+evidence, can admit a low-risk declarative Skill to a bounded immutable
+project canary; three exact-revision uses and independently verified success
+are required before automatic project trust. Every revision remains visible
+and reversible in `/learn`. Protected/formal Skills, global promotion, and
+Extension authoring remain explicit user actions.
+
+First-run setup now creates and validates the split core/MCP/Extensions/A2A
+files and annotated templates without overwriting existing configuration or
+collecting secrets. Auto[LLM] admits precisely modeled ordinary reads and
+workspace/temp mutations before classifier latency, retries classifier
+infrastructure failure once, then falls back at the Accept-edits boundary
+without switching to rules. ASRT is optional execution containment rather
+than permission authority; `/sandbox` is the explicit diagnostic surface, and
+SDK hosts can use the standalone `/sandbox` subpath without a silent
+unsandboxed fallback. KodaX's workspace containment denies reads from common
+home credential paths and the complete resolved agent home without turning
+ordinary external reads into an allowlist. See the
+[v0.7.78 design](docs/features/v0.7.78.md), the
+[release checklist](docs/release.md#v0778-release-verification), and
+[SDK guide sections 29–30](docs/SDK_EMBEDDER_GUIDE.md#29-evidence-gated-background-skill-learning-feature_263-v0778).
+
+The release closure also preserves intent across adjacent surfaces: static
+Skill instructions load in Edit/Plan without granting later side effects,
+dynamic Skill commands require an explicit host-controlled executor, root AMA
+uses the governed `memory_intent` lifecycle (including explicit intent captured
+before a later cancellation), Workflow Actor waits remain
+unbounded unless the workflow sets a deadline, and Runtime Auto capability v4
+advertises `fallbackPersistsEngine:false` across embedded, Worker, and daemon
+hosts. Actor ownership additionally uses Runtime identity rather than PID alone,
+so PID reuse cannot pin a crashed owner. The resume Session picker also renders
+timestamps in the host's local timezone.
+
+The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX
 resolves the shell environment in the effective project cwd and then executes
@@ -567,7 +602,7 @@ kodax --repo-intelligence full --repo-intelligence-trace
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 11 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/a2a`, `/experimental-memory`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 12 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, `/experimental-memory`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
 
 ```
 KodaX/
@@ -593,9 +628,9 @@ KodaX/
 │
 ├── src/                     # CLI entry + SDK subpath entries
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
-│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,a2a,experimental-memory}
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,media,repl,skills,mcp,session,runtime,sandbox,a2a,experimental-memory}
 │
-└── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
+└── package.json             # Publish-shaped exports; release.mjs only toggles private during pack/publish
 ```
 
 ### Package Dependencies
@@ -642,9 +677,9 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 KodaX has two layers that consumers should understand separately:
 
 - **Source-side**: 4 workspace packages above (what developers see when reading the repo).
-- **npm-published**: a single bundled package `@kodax-ai/kodax` with 11 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
+- **npm-published**: a single bundled package `@kodax-ai/kodax` with 12 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
   - **Full-package subpaths** (`/agent`, `/llm`, `/coding`, `/repl`) — each one maps 1:1 to a source workspace and exposes its complete public API.
-  - **Integration and narrow subpaths** (`/media`, `/skills`, `/mcp`, `/session`, `/runtime`, `/a2a`, `/experimental-memory`) — focused host surfaces. `/a2a` composes the neutral F258 plane with the Runtime facade; it does not add A2A wire types to `/agent`.
+  - **Integration and narrow subpaths** (`/media`, `/skills`, `/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, `/experimental-memory`) — focused host surfaces. `/a2a` composes the neutral F258 plane with the Runtime facade; it does not add A2A wire types to `/agent`.
 
 | Source package | npm subpath | Type | What you get | Example consumer |
 |---|---|---|---|---|
@@ -658,6 +693,7 @@ KodaX has two layers that consumers should understand separately:
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (217 exports) | Terminal-UI consumers |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `loadFullTranscript` / `appendClientNotice` / `forkSession` / `compactSession` / `watchSessions` / ... (17 exports) | IDE plugins and desktop hosts reading session history |
 | `src`             | `@kodax-ai/kodax/runtime` | Host API | Embedded/Worker/daemon runtime facade, sessions/runs/events/permissions/catalog/MCP/artifacts/diagnostics/external agents, daemon protocol schema (10 exports) | SDK hosts, Space/IDE clients, daemon clients |
+| `src`             | `@kodax-ai/kodax/sandbox` | Host API | Explicit ASRT capability/doctor/setup and host-owned contained command execution; unavailability never means silent ordinary execution | SDK hosts that need standalone process containment |
 | `src`             | `@kodax-ai/kodax/a2a` | Integration edge | A2A 1.0 Agent Card discovery, JSON-RPC/SSE F258 executor, safe fetch policy, and authenticated Runtime-backed Agent server | Agent orchestrators and KodaX hosts |
 
 **Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
@@ -690,7 +726,7 @@ KodaX has two layers that consumers should understand separately:
 
 **Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
 
-**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only and will not return a port blocked by Fetch-compatible clients; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
 
 **A2A interoperability and authentication hardening** keeps a discovered
 interface on the trusted Agent Card origin and sends credentials only when one
@@ -1239,7 +1275,7 @@ await runKodaX({
 
 ## SDK Usage
 
-KodaX ships as a single npm package `@kodax-ai/kodax` with 11 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime` + v0.7.68 `/experimental-memory` + v0.7.69 `/a2a`). Each subpath is tree-shake-friendly so consumers pull only what they need:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 12 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49 + v0.7.56 `/media` + v0.7.64 `/runtime` + v0.7.68 `/experimental-memory` + v0.7.69 `/a2a` + v0.7.78 `/sandbox`). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
 ```bash
 npm install @kodax-ai/kodax
@@ -1256,6 +1292,7 @@ import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep sk
 import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
 import { listSessions } from '@kodax-ai/kodax/session';           // session history helpers
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';     // embedded/daemon runtime API
+import { runKodaXSandboxed } from '@kodax-ai/kodax/sandbox';      // explicit standalone containment
 import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';      // A2A 1.0 client/server edge
 import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in experimental memory SDK
 ```
@@ -1547,6 +1584,13 @@ Built-in skills include:
 - **git-workflow** - Git commit and workflow automation
 
 Skills are stored in `~/.kodax/skills/` and can be extended with custom skills.
+F263 background learning is Memory-first: a single correction does not create
+a Skill. Repeated independently verified evidence can create a low-risk,
+immutable project-scoped testing revision for at most three exact-revision
+uses. Promotion requires independently verified success. Use `/learn` to
+inspect, disable, rollback, trust, or reject learned revisions. Protected or
+formal Skills, user-global promotion, and Extension authoring remain explicit
+user actions.
 
 ### Promote a learned Skill to the user catalog
 

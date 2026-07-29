@@ -1900,7 +1900,7 @@ function runtimeDaemonCapabilities(
       version: 4,
       owner: "session-runtime",
       escalationCreatesPermission: true,
-      fallbackPersistsEngine: true,
+      fallbackPersistsEngine: false,
       defaultClassifierTimeoutMs: DEFAULT_CLASSIFIER_TIMEOUT_MS,
       defaultSpeculativeWindowMs: DEFAULT_SPECULATIVE_WINDOW_MS,
       boundedClassifierInput: true,
