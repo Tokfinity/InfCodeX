@@ -279,7 +279,11 @@ function createContextForToolCall(
   ctx: KodaXToolExecutionContext,
 ): KodaXToolExecutionContext {
   const toolMeta = createToolEventMeta(events, toolCall.id);
-  return events.onToolProgress || events.askUser || events.askUserMulti || events.askUserInput
+  return events.onToolProgress
+      || events.onToolSandboxObservation
+      || events.askUser
+      || events.askUserMulti
+      || events.askUserInput
     ? {
         ...ctx,
         toolCallId: toolCall.id,
@@ -287,6 +291,16 @@ function createContextForToolCall(
           ? {
               reportToolProgress: (message: string) => {
                 events.onToolProgress?.({ id: toolCall.id, message }, toolMeta);
+              },
+            }
+          : {}),
+        ...(events.onToolSandboxObservation
+          ? {
+              reportToolSandboxObservation: (observation) => {
+                events.onToolSandboxObservation?.(
+                  { id: toolCall.id, observation },
+                  toolMeta,
+                );
               },
             }
           : {}),

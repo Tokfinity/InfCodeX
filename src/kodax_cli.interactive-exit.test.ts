@@ -30,6 +30,8 @@ interface InteractiveMainHarness {
   readonly runManagedTask: ReturnType<typeof vi.fn>;
   readonly prepareRuntimeConfig: ReturnType<typeof vi.fn>;
   readonly inspectProviderSetupReadiness: ReturnType<typeof vi.fn>;
+  readonly initializeSetupConfiguration: ReturnType<typeof vi.fn>;
+  readonly renderSetupGuide: ReturnType<typeof vi.fn>;
   readonly runProviderSetupWizard: ReturnType<typeof vi.fn>;
 }
 
@@ -90,6 +92,10 @@ async function importMainWithMocks(options: {
   readonly inspectProviderSetupReadiness?: (
     input: Readonly<Record<string, unknown>>,
   ) => Readonly<Record<string, unknown>>;
+  readonly initializeSetupConfiguration?: () => {
+    readonly configHome: string;
+    readonly files: readonly Readonly<Record<string, unknown>>[];
+  };
 } = {}): Promise<{
   readonly main: () => Promise<void>;
   readonly harness: InteractiveMainHarness;
@@ -141,6 +147,16 @@ async function importMainWithMocks(options: {
       provider: 'mock-provider',
     }
   ));
+  const initializeSetupConfiguration = vi.fn(() => (
+    options.initializeSetupConfiguration?.() ?? {
+      configHome: 'C:/Users/test/.kodax',
+      files: [
+        { domain: 'core', kind: 'active', status: 'created', path: 'C:/Users/test/.kodax/config.json' },
+        { domain: 'mcp', kind: 'active', status: 'created', path: 'C:/Users/test/.kodax/integrations/mcp.json' },
+      ],
+    }
+  ));
+  const renderSetupGuide = vi.fn(() => 'KodaX setup guide');
   const runProviderSetupWizard = vi.fn(async () => ({ status: 'cancelled' as const }));
   const createKodaXRuntime = vi.fn(async (runtimeOptionsInput: unknown) => {
     runtimeOptions.push(runtimeOptionsInput);
@@ -333,6 +349,8 @@ async function importMainWithMocks(options: {
       runInteractiveMode,
       runInkInteractiveMode,
       inspectProviderSetupReadiness,
+      initializeSetupConfiguration,
+      renderSetupGuide,
       providerSetupRestartInstructions: vi.fn(() => []),
       runProviderSetupWizard,
     };
@@ -372,6 +390,8 @@ async function importMainWithMocks(options: {
       runManagedTask,
       prepareRuntimeConfig,
       inspectProviderSetupReadiness,
+      initializeSetupConfiguration,
+      renderSetupGuide,
       runProviderSetupWizard,
     },
   };
@@ -415,6 +435,112 @@ describe('CLI interactive exit lifecycle', () => {
       if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
       else Reflect.deleteProperty(process.stdout, 'isTTY');
     }
+  });
+
+  it('runs setup before entering the REPL when the first interactive run has no provider config', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      const { main, harness } = await importMainWithMocks({
+        inspectProviderSetupReadiness: () => ({
+          status: 'needs-provider',
+          configPath: 'C:/Users/test/.kodax/config.json',
+          configRevision: 'missing',
+        }),
+      });
+
+      await main();
+
+      expect(harness.renderSetupGuide).toHaveBeenCalledOnce();
+      expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
+      expect(harness.runProviderSetupWizard).toHaveBeenCalledWith({ customOnly: undefined });
+      expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
+      expect(harness.runInteractiveMode).not.toHaveBeenCalled();
+      expect(harness.createKodaXRuntime).not.toHaveBeenCalled();
+      expect(writeSpy).toHaveBeenCalled();
+    } finally {
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
+  it('does not let KODAX_PROVIDER bypass first-run initialization when config.json is missing', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    process.env.KODAX_PROVIDER = 'env-provider';
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      const { main, harness } = await importMainWithMocks({
+        inspectProviderSetupReadiness: (input) => ({
+          status: input.explicitProvider === undefined ? 'needs-provider' : 'ready',
+          configPath: 'C:/Users/test/.kodax/config.json',
+          configRevision: 'missing',
+        }),
+      });
+
+      await main();
+
+      expect(harness.inspectProviderSetupReadiness).toHaveBeenCalledWith(
+        expect.objectContaining({ explicitProvider: undefined }),
+      );
+      expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
+      expect(harness.runProviderSetupWizard).toHaveBeenCalledOnce();
+      expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
+    } finally {
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
+  it('shows setup help before hardening, cleanup, tracing, config migration, or session retention', async () => {
+    process.argv = ['node', 'kodax', 'setup', '--help'];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const { main, harness } = await importMainWithMocks();
+
+    await main();
+
+    expect(harness.calls).toEqual([]);
+    expect(harness.renderSetupGuide).toHaveBeenCalled();
+    expect(harness.initializeSetupConfiguration).not.toHaveBeenCalled();
+    expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
+    expect(writeSpy).toHaveBeenCalled();
+  });
+
+  it('stops explicit setup before the provider wizard when an active config is invalid', async () => {
+    process.argv = ['node', 'kodax', 'setup'];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const errorSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const { main, harness } = await importMainWithMocks({
+      initializeSetupConfiguration: () => ({
+        configHome: 'C:/Users/test/.kodax',
+        files: [{
+          domain: 'mcp',
+          kind: 'active',
+          status: 'invalid',
+          path: 'C:/Users/test/.kodax/integrations/mcp.json',
+          diagnostic: 'MCP integration config version must be 1.',
+        }],
+      }),
+    });
+
+    await main();
+
+    expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
+    expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('invalid'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Setup stopped'));
   });
 
   it('keeps Ink cleanup host-owned and exits only after top-level cleanup', async () => {

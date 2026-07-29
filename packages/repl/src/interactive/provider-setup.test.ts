@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -56,6 +57,17 @@ function scriptedInteraction(input: {
   };
 }
 
+async function sendTerminalAnswers(
+  input: PassThrough,
+  answers: readonly string[],
+): Promise<void> {
+  for (const answer of answers) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    input.write(`${answer}\n`);
+  }
+  input.end();
+}
+
 describe('runProviderSetupWizard', () => {
   it('persists a built-in provider/model without ever collecting a secret', async () => {
     const scripted = scriptedInteraction({
@@ -91,6 +103,78 @@ describe('runProviderSetupWizard', () => {
     expect(() => readFileSync(configPath, 'utf8')).toThrow();
   });
 
+  it('treats terminal EOF as cancellation instead of hanging or writing config', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    input.end();
+
+    await expect(runProviderSetupWizard({
+      configPath,
+      catalog,
+      input,
+      output,
+    })).resolves.toEqual({ status: 'cancelled' });
+    expect(() => readFileSync(configPath, 'utf8')).toThrow();
+  });
+
+  it('treats EOF after a valid answer as cancellation instead of using a closed readline', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+
+    const [result] = await Promise.all([
+      runProviderSetupWizard({ configPath, catalog, input, output }),
+      sendTerminalAnswers(input, ['1']),
+    ]);
+
+    expect(result).toEqual({ status: 'cancelled' });
+    expect(() => readFileSync(configPath, 'utf8')).toThrow();
+  });
+
+  it('drives the terminal built-in route and retries an invalid numeric choice', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const outputChunks: string[] = [];
+    output.on('data', (chunk: Buffer) => outputChunks.push(chunk.toString('utf8')));
+
+    const [result] = await Promise.all([
+      runProviderSetupWizard({ configPath, catalog, input, output }),
+      sendTerminalAnswers(input, ['0', '1', '2', 'y']),
+    ]);
+
+    expect(result).toMatchObject({
+      status: 'configured',
+      selection: { provider: 'alpha', model: 'alpha-fast' },
+    });
+    expect(outputChunks.join('')).toMatch(/choose one of the numbered options/i);
+  });
+
+  it('drives terminal custom prompts and honors a negative confirmation', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+
+    const [result] = await Promise.all([
+      runProviderSetupWizard({
+        configPath,
+        catalog,
+        input,
+        output,
+        customOnly: true,
+      }),
+      sendTerminalAnswers(input, [
+        'local',
+        '0',
+        '2',
+        'https://example.test',
+        'LOCAL_API_KEY',
+        'local-model',
+        'n',
+      ]),
+    ]);
+
+    expect(result).toEqual({ status: 'cancelled' });
+    expect(() => readFileSync(configPath, 'utf8')).toThrow();
+  });
+
   it('persists only public custom-provider metadata', async () => {
     const scripted = scriptedInteraction({
       choices: ['custom', 'openai'],
@@ -108,6 +192,27 @@ describe('runProviderSetupWizard', () => {
     const persisted = readFileSync(configPath, 'utf8');
     expect(persisted).toContain('LOCAL_API_KEY');
     expect(persisted).not.toMatch(/apiKeyValue|secret|token/i);
+  });
+
+  it('supports a custom-only route with explanatory prompts', async () => {
+    const scripted = scriptedInteraction({
+      choices: ['anthropic'],
+      texts: ['private-relay', 'https://relay.example.test', 'RELAY_API_KEY', 'relay-model'],
+      confirm: true,
+    });
+
+    const result = await runProviderSetupWizard({
+      configPath,
+      catalog,
+      interaction: scripted.interaction,
+      customOnly: true,
+    });
+
+    expect(result.status).toBe('configured');
+    expect(scripted.prompts[0]).toMatch(/local alias|provider name/i);
+    expect(scripted.prompts.join('\n')).toMatch(/provider documentation|api documentation/i);
+    expect(scripted.prompts.join('\n')).toMatch(/environment.variable name/i);
+    expect(scripted.prompts.join('\n')).toMatch(/never.*credential value|not.*api key value/i);
   });
 
   it('rejects credential-bearing endpoint metadata before confirmation can echo it', async () => {

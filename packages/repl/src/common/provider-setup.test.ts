@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +19,7 @@ import {
   persistProviderSetupChoice,
   providerSetupRestartInstructions,
   type ProviderSetupCatalogEntry,
+  type ProviderSetupChoice,
 } from './provider-setup.js';
 
 let tempDirectory: string;
@@ -45,8 +54,25 @@ function writeConfig(value: unknown): void {
 }
 
 describe('inspectProviderSetupReadiness', () => {
-  it('offers first-run setup only when no provider selection or credential exists', () => {
-    expect(inspectProviderSetupReadiness({ configPath, catalog, environment: {} })).toMatchObject({
+  it('offers first-run setup whenever config.json is missing, even if a credential already exists', () => {
+    expect(inspectProviderSetupReadiness({
+      configPath,
+      catalog,
+      environment: { ALPHA_API_KEY: 'already-configured-outside-kodax' },
+    })).toMatchObject({
+      status: 'needs-provider',
+      configPath,
+    });
+  });
+
+  it('keeps offering setup until config.json selects a provider', () => {
+    writeConfig({});
+
+    expect(inspectProviderSetupReadiness({
+      configPath,
+      catalog,
+      environment: { ALPHA_API_KEY: 'already-configured-outside-kodax' },
+    })).toMatchObject({
       status: 'needs-provider',
       configPath,
     });
@@ -174,6 +200,51 @@ describe('persistProviderSetupChoice', () => {
       choice: { kind: 'builtin', provider: 'alpha', model: 'alpha-default' },
     })).toThrow(ProviderSetupConfigConflictError);
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({ provider: 'beta' });
+  });
+
+  it('rechecks the revision after choice normalization before replacing config', () => {
+    const readiness = inspectProviderSetupReadiness({ configPath, catalog, environment: {} });
+    let edited = false;
+    const choice: ProviderSetupChoice = {
+      kind: 'builtin',
+      get provider() {
+        if (!edited) {
+          edited = true;
+          writeConfig({ provider: 'beta', model: 'beta-default' });
+        }
+        return 'alpha';
+      },
+      model: 'alpha-default',
+    };
+
+    expect(() => persistProviderSetupChoice({
+      configPath,
+      expectedRevision: readiness.configRevision,
+      catalog,
+      choice,
+    })).toThrow(ProviderSetupConfigConflictError);
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toMatchObject({
+      provider: 'beta',
+      model: 'beta-default',
+    });
+  });
+
+  it('serializes setup writers so two wizards cannot pass the same revision check', () => {
+    const readiness = inspectProviderSetupReadiness({ configPath, catalog, environment: {} });
+    const lockPath = `${configPath}.write.lock`;
+    const lock = openSync(lockPath, 'wx');
+    try {
+      expect(() => persistProviderSetupChoice({
+        configPath,
+        expectedRevision: readiness.configRevision,
+        catalog,
+        choice: { kind: 'builtin', provider: 'alpha', model: 'alpha-default' },
+      })).toThrow(ProviderSetupConfigConflictError);
+      expect(existsSync(configPath)).toBe(false);
+    } finally {
+      closeSync(lock);
+      rmSync(lockPath, { force: true });
+    }
   });
 
   it('validates custom provider metadata and never accepts an API key value', () => {

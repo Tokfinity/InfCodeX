@@ -102,6 +102,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
       ownerPolicy: ownerPolicySchema(),
       owner: ownerIdentitySchema(),
       preflight: objectAnySchema,
+      integrations: integrationHealthSchema(),
     }, ['runtimeId', 'revision', 'ownerPolicy', 'owner', 'preflight']),
   },
   'daemon.rollbackToInline': {
@@ -662,6 +663,30 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function integrationHealthSchema(): RuntimeDaemonJsonSchema {
+  const diagnostic = objectSchema({
+    code: {
+      type: 'string',
+      enum: ['invalid-config', 'activation-failed', 'watcher-degraded'],
+    },
+    message: stringSchema,
+    time: stringSchema,
+  }, ['code', 'message', 'time']);
+  const domain = objectSchema({
+    domain: { type: 'string', enum: ['mcp', 'a2a', 'extensions'] },
+    path: stringSchema,
+    revision: stringSchema,
+    source: { type: 'string', enum: ['user', 'legacy-user', 'default'] },
+    lastReloadAt: stringSchema,
+    diagnostic,
+    watching: booleanSchema,
+  }, ['domain', 'path', 'watching']);
+  return objectSchema({
+    state: { type: 'string', enum: ['healthy', 'degraded'] },
+    domains: { type: 'array', items: domain },
+  }, ['state', 'domains']);
+}
+
 function objectSchema(
   properties: Record<string, RuntimeDaemonJsonSchema>,
   required: readonly string[] = [],
@@ -1048,6 +1073,7 @@ function permissionRequestInputSchema(): RuntimeDaemonJsonSchema {
     // persisted grants.
     toolInput: objectAnySchema,
     executionCwd: { type: 'string', maxLength: 4_096 },
+    autoModeDiagnostics: objectAnySchema,
     expiresAt: stringSchema,
     timeoutMs: integerSchema,
   }, ['sessionId', 'runId', 'toolName']);
@@ -1094,6 +1120,7 @@ function permissionDecisionSchema(): RuntimeDaemonJsonSchema {
       objectSchema({
         type: { enum: ['reject'] },
         reason: stringSchema,
+        cause: { enum: ['approval_timeout'] },
       }, ['type']),
     ],
   };

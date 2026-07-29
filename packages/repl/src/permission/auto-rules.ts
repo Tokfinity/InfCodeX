@@ -137,7 +137,16 @@ function canonicalizeExistingDirectory(targetPath: string): string | undefined {
 }
 
 function canonicalTempDirectories(): string[] {
-  const candidates = [os.tmpdir(), process.env.TEMP, process.env.TMP, process.env.TMPDIR];
+  const candidates = [
+    os.tmpdir(),
+    process.env.TEMP,
+    process.env.TMP,
+    process.env.TMPDIR,
+    process.platform === 'win32'
+      ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'Temp')
+      : '/tmp',
+    ...(process.platform === 'win32' ? [] : ['/var/tmp']),
+  ];
   const result = new Set<string>();
   for (const candidate of candidates) {
     if (!candidate?.trim()) continue;
@@ -437,6 +446,18 @@ function assessBashCall(
       review('incomplete', 'shell', [], ['command_unresolved'], 'shell command is missing'),
     );
   }
+  if (hasAmbiguousQuotedWindowsDirectory(command)) {
+    return assessment(
+      escalate('auto-mode requires confirmation because a quoted Windows directory is ambiguous'),
+      review(
+        'incomplete',
+        'shell',
+        [{ kind: 'unknown', summary: 'ambiguous quoted Windows directory command' }],
+        ['command_unresolved'],
+        'a trailing backslash may escape the closing quote',
+      ),
+    );
+  }
 
   const tree = parseBashCommand(command);
   const shell = hasPowerShellMutationStage(tree) ? 'powershell' : 'shell';
@@ -488,6 +509,11 @@ function assessBashCall(
     ? { action: 'allow' as const }
     : escalate('auto-mode rules require confirmation for a protected or out-of-boundary shell target');
   return assessment(decision, permissionReview);
+}
+
+function hasAmbiguousQuotedWindowsDirectory(command: string): boolean {
+  if (process.platform !== 'win32') return false;
+  return /"[A-Za-z]:\\[^"\r\n]*\\"(?=\s*(?:&&|\|\||[;|]|$))/.test(command);
 }
 
 function collectShellOperations(
@@ -567,7 +593,9 @@ function collectDirectShellOperations(
       kind: 'delete', target: classifyTarget(target, context),
       options: {
         recursive: stage.argv.some((token) => (
-          token === '--recursive' || /^-[^-]*[rR]/.test(token)
+          token === '--recursive'
+          || /^-[^-]*[rR]/.test(token)
+          || (['del', 'erase', 'rd', 'rmdir'].includes(command) && /^\/s$/i.test(token))
         )),
       },
     }));
@@ -631,10 +659,14 @@ const DIRECT_WINDOWS_SWITCHES: Readonly<Record<string, ReadonlySet<string>>> = {
   erase: new Set(['/p', '/f', '/s', '/q', '/a']),
   move: new Set(['/y', '/-y']),
   rd: new Set(['/s', '/q']),
+  rmdir: new Set(['/s', '/q']),
 };
 
 function isDirectWindowsSwitch(command: string, token: string): boolean {
-  return DIRECT_WINDOWS_SWITCHES[command]?.has(token.toLowerCase()) === true;
+  const normalized = token.toLowerCase();
+  const separator = normalized.indexOf(':');
+  const base = separator >= 0 ? normalized.slice(0, separator) : normalized;
+  return DIRECT_WINDOWS_SWITCHES[command]?.has(base) === true;
 }
 
 function directOptionTakesValue(command: string, token: string): boolean {

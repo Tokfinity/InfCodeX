@@ -584,13 +584,24 @@ export interface InkRuntimeRunnerInput {
 export type InkRuntimeRunner = (input: InkRuntimeRunnerInput) => Promise<KodaXResult>;
 export type InkRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | undefined>;
 
+export interface InkTransientNotice {
+  readonly text: string;
+  readonly tone: "success" | "warning";
+}
+
 export interface InkREPLOptions extends KodaXOptions {
   storage?: SessionStorage;
   hardExitOnClose?: boolean;
   runtimeRunner?: InkRuntimeRunner;
   runtimeAutoModeControl?: ReplRuntimeAutoModeControl;
   getRuntimeStatus?: InkRuntimeStatusProvider;
+  validateSetupA2AConfig?: (value: unknown) => unknown;
+  prepareSetupSandbox?: CommandCallbacks['prepareSetupSandbox'];
+  inspectSandbox?: CommandCallbacks['inspectSandbox'];
   learning?: LearningBinding;
+  subscribeTransientNotices?: (
+    listener: (notice: InkTransientNotice) => void,
+  ) => () => void;
 }
 
 // Ink REPL Props
@@ -4566,6 +4577,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       tone,
     });
   }, []);
+  useEffect(() => options.subscribeTransientNotices?.((notice) => {
+    showClipboardNotice(notice.text, notice.tone);
+  }), [options.subscribeTransientNotices, showClipboardNotice]);
   const showPasteFallbackNotice = useCallback((message: string): void => {
     showClipboardNotice(message, "warning");
   }, [showClipboardNotice]);
@@ -8881,6 +8895,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Create command callbacks
         const callbacks: CommandCallbacks = {
           getRuntimeStatus: options.getRuntimeStatus,
+          validateSetupA2AConfig: options.validateSetupA2AConfig,
+          prepareSetupSandbox: options.prepareSetupSandbox,
+          inspectSandbox: options.inspectSandbox,
           learning: options.learning,
           getLearningSummary: options.learning ? () => options.learning!.getSnapshot() : undefined,
           openLearningCenter,

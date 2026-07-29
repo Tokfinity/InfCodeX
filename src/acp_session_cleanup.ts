@@ -16,7 +16,8 @@ export function isAcpPollutionSession(data: KodaXSessionData): boolean {
     && (data.artifactLedger?.length ?? 0) === 0
     && (data.extensionRecords?.length ?? 0) === 0
     && data.extensionState === undefined
-    && data.errorMetadata === undefined;
+    && data.errorMetadata === undefined
+    && data.actorSnapshot === undefined;
 }
 
 export async function findAcpPollutionCandidates(

@@ -17,6 +17,10 @@ import {
   validateCustomProviderConfig,
   type KodaXCustomProviderConfig,
 } from '@kodax-ai/coding';
+import {
+  CoreConfigWriteConflictError,
+  withCoreConfigWriteLock,
+} from './core-config-lock.js';
 
 export interface ProviderSetupCatalogEntry {
   readonly name: string;
@@ -109,6 +113,7 @@ export class ProviderSetupInvalidConfigError extends Error {
 interface ParsedConfig {
   readonly configPath: string;
   readonly revision: string;
+  readonly exists: boolean;
   readonly config?: Record<string, unknown>;
   readonly error?: string;
 }
@@ -193,6 +198,14 @@ export function inspectProviderSetupReadiness(
       : needsCredential(configPath, parsed.revision, explicitProvider, selected?.apiKeyEnv);
   }
 
+  if (!parsed.exists) {
+    return {
+      status: 'needs-provider',
+      configPath,
+      configRevision: parsed.revision,
+    };
+  }
+
   const configuredProvider = normalizedString(parsed.config.provider);
   if (configuredProvider) {
     const selected = resolveConfiguredProvider(parsed.config, configuredProvider, catalog);
@@ -207,13 +220,6 @@ export function inspectProviderSetupReadiness(
     return !selected.requiresCredential || hasEnvironmentValue(environment, selected.apiKeyEnv)
       ? ready(configPath, parsed.revision, configuredProvider)
       : needsCredential(configPath, parsed.revision, configuredProvider, selected.apiKeyEnv);
-  }
-
-  if (catalog.some((entry) => hasEnvironmentValue(environment, entry.apiKeyEnv))
-    || hasCustomProviderCredential(parsed.config, environment)) {
-    // Existing behaviour remains unchanged when a user already supplied a
-    // credential but never selected a provider in config.json.
-    return ready(configPath, parsed.revision);
   }
 
   return {
@@ -232,29 +238,44 @@ export function persistProviderSetupChoice(
 ): PersistedProviderSetupChoice {
   const configPath = input.configPath ?? getAgentConfigPath('config.json');
   const catalog = input.catalog ?? getProviderSetupCatalog();
-  const parsed = readConfig(configPath);
-  if (!parsed.config) {
-    throw new ProviderSetupInvalidConfigError(configPath, parsed.error ?? 'config.json is invalid JSON.');
-  }
-  if (parsed.revision !== input.expectedRevision) {
-    throw new ProviderSetupConfigConflictError(configPath);
-  }
-  assertCustomProvidersPreservable(parsed.config, configPath);
+  try {
+    return withCoreConfigWriteLock(configPath, () => {
+      const parsed = readConfig(configPath);
+      if (!parsed.config) {
+        throw new ProviderSetupInvalidConfigError(
+          configPath,
+          parsed.error ?? 'config.json is invalid JSON.',
+        );
+      }
+      if (parsed.revision !== input.expectedRevision) {
+        throw new ProviderSetupConfigConflictError(configPath);
+      }
+      assertCustomProvidersPreservable(parsed.config, configPath);
 
-  const selection = normalizeProviderSetupChoice(input.choice, catalog, parsed.config);
-  const next = {
-    ...parsed.config,
-    provider: selection.provider,
-    model: selection.model,
-    ...(selection.customProviders ? { customProviders: selection.customProviders } : {}),
-  };
-  writeConfigAtomically(configPath, next);
-  return {
-    provider: selection.provider,
-    model: selection.model,
-    apiKeyEnv: selection.apiKeyEnv,
-    configPath,
-  };
+      const selection = normalizeProviderSetupChoice(input.choice, catalog, parsed.config);
+      const next = {
+        ...parsed.config,
+        provider: selection.provider,
+        model: selection.model,
+        ...(selection.customProviders ? { customProviders: selection.customProviders } : {}),
+      };
+      if (readConfig(configPath).revision !== input.expectedRevision) {
+        throw new ProviderSetupConfigConflictError(configPath);
+      }
+      writeConfigAtomically(configPath, next);
+      return {
+        provider: selection.provider,
+        model: selection.model,
+        apiKeyEnv: selection.apiKeyEnv,
+        configPath,
+      };
+    });
+  } catch (error) {
+    if (error instanceof CoreConfigWriteConflictError) {
+      throw new ProviderSetupConfigConflictError(configPath);
+    }
+    throw error;
+  }
 }
 
 export function providerSetupRestartInstructions(input: {
@@ -363,18 +384,6 @@ function existingCustomProvidersError(config: Record<string, unknown>): string |
     names.add(provider.name);
   }
   return undefined;
-}
-
-function hasCustomProviderCredential(
-  config: Record<string, unknown>,
-  environment: NodeJS.ProcessEnv | Readonly<Record<string, string | undefined>>,
-): boolean {
-  const values = config.customProviders;
-  if (!Array.isArray(values)) return false;
-  return values.some((value) => {
-    const provider = toValidCustomProvider(value);
-    return provider !== undefined && hasEnvironmentValue(environment, provider.apiKeyEnv);
-  });
 }
 
 function findValidCustomProvider(
@@ -509,7 +518,12 @@ function customProviderEndpointError(baseUrl: string): string | undefined {
 
 function readConfig(configPath: string): ParsedConfig {
   if (!fs.existsSync(configPath)) {
-    return { configPath, revision: revisionFor(undefined), config: {} };
+    return {
+      configPath,
+      revision: revisionFor(undefined),
+      exists: false,
+      config: {},
+    };
   }
   let raw: string;
   try {
@@ -518,6 +532,7 @@ function readConfig(configPath: string): ParsedConfig {
     return {
       configPath,
       revision: revisionFor(undefined),
+      exists: true,
       error: error instanceof Error ? error.message : 'config.json cannot be read.',
     };
   }
@@ -527,14 +542,21 @@ function readConfig(configPath: string): ParsedConfig {
       return {
         configPath,
         revision: revisionFor(raw),
+        exists: true,
         error: 'config.json must contain a JSON object.',
       };
     }
-    return { configPath, revision: revisionFor(raw), config: parsed };
+    return {
+      configPath,
+      revision: revisionFor(raw),
+      exists: true,
+      config: parsed,
+    };
   } catch (error) {
     return {
       configPath,
       revision: revisionFor(raw),
+      exists: true,
       error: error instanceof Error ? error.message : 'config.json is invalid JSON.',
     };
   }

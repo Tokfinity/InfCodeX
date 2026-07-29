@@ -13,6 +13,7 @@ export type {
   InkRuntimeRunner,
   InkRuntimeRunnerInput,
   InkRuntimeStatusProvider,
+  InkTransientNotice,
 } from "./ui/index.js";
 
 // === 传统 REPL 入口 ===
@@ -153,6 +154,22 @@ export type {
   ProviderSetupWizardResult,
   RunProviderSetupWizardInput,
 } from "./interactive/provider-setup.js";
+export { initializeSetupConfiguration } from "./common/setup-config.js";
+export type {
+  InitializeSetupConfigurationInput,
+  SetupConfigDomain,
+  SetupConfigFileKind,
+  SetupConfigFileResult,
+  SetupConfigFileStatus,
+  SetupConfigurationResult,
+} from "./common/setup-config.js";
+export { renderSetupGuide } from "./common/setup-guide.js";
+export type { RenderSetupGuideInput } from "./common/setup-guide.js";
+export {
+  CoreConfigWriteConflictError,
+  coreConfigWriteLockPath,
+  withCoreConfigWriteLock,
+} from "./common/core-config-lock.js";
 
 // === MCP server CRUD (v0.7.42 SDK export) ===
 // SDK embedders (KodaX Space etc.) can add / remove `mcpServers` entries
@@ -170,6 +187,7 @@ export {
 
 export {
   IntegrationConfigController,
+  IntegrationConfigConflictError,
   migrateLegacyIntegrationConfig,
   planLegacyIntegrationMigration,
   parseExtensionsIntegrationDocument,

@@ -99,6 +99,8 @@ describe('FEATURE_218 manual registry', () => {
     expect(install).toContain('kodax setup');
     expect(install).toContain('never asks for or stores an API key');
     expect(install).toContain('restart terminal');
+    expect(install).toContain('kodax setup --custom');
+    expect(install).toContain('/setup --help');
     expect(providers).toContain('qwen-token-plan');
     expect(providers).toContain('QWEN_TOKEN_API_KEY');
     expect(providers).toContain('qwen3.8-max-preview');
@@ -122,6 +124,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(permissions).toContain('Legacy grants without a Runtime-issued matcher');
     expect(permissions).toContain('remain visible and revocable');
     expect(permissions).toMatch(/never\s+authorize a concrete call/);
+  });
+
+  it('keeps setup commands and the default mode shortcuts in the commands topic', () => {
+    const commands = resolveKodaXManual({ topic: 'commands' }).content;
+
+    expect(commands).toContain('/setup --custom');
+    expect(commands).toContain('/setup --help');
+    expect(commands).toContain('Ctrl+T');
+    expect(commands).toContain('Shift+Tab');
+    expect(commands).toContain('Alt+M');
+    expect(commands).toMatch(/Ctrl\+T.*reasoning/i);
+    expect(commands).toMatch(/Shift\+Tab.*permission/i);
+    expect(commands).toMatch(/Alt\+M.*AMA\/SA/i);
   });
 
   it('documents the governed runtime and SDK memory surfaces', () => {
@@ -210,11 +225,19 @@ describe('FEATURE_218 manual registry', () => {
     expect(config).toContain('~/.kodax/integrations/mcp.json');
     expect(config).toContain('~/.kodax/integrations/a2a.json');
     expect(config).toContain('~/.kodax/integrations/extensions.json');
+    expect(config).toContain('~/.kodax/config.example.jsonc');
+    expect(config).toContain('strict JSON');
+    expect(config).toContain('template first line');
+    expect(config).toContain('kodax config paths');
     expect(config).toContain('kodax integrations migrate --apply');
     expect(config).toContain('MCP and Extensions');
     expect(config).toContain('does not overwrite an existing destination');
     expect(config).toContain('first MCP/Extension mutation');
     expect(config).toContain('literal-secret warnings');
+    expect(config).toContain('"version": 2');
+    expect(config).toContain('safe empty document');
+    expect(config).toContain('does not delete or rewrite');
+    expect(config).toContain('bootstrap.log');
     expect(mcp).toContain('~/.kodax/integrations/mcp.json');
     expect(extensions).toContain('~/.kodax/integrations/extensions.json');
     expect(extensions).toContain('config.json#extensions');

@@ -14,7 +14,8 @@
 // mode, but setting NODE_ENV here keeps downstream NODE_ENV checks sane.
 const nodeEnvKey = ['NODE', 'ENV'].join('_') as 'NODE_ENV';
 if (!process.env[nodeEnvKey]) {
-  process.env[nodeEnvKey] = process.env.KODAX_DEV === '1' ? 'development' : 'production';
+  process.env[nodeEnvKey] =
+    process.env.KODAX_DEV === '1' ? 'development' : 'production';
 }
 
 // Propagate a sensible V8 heap limit to child processes (sub-agents, forks).
@@ -22,11 +23,12 @@ if (!process.env[nodeEnvKey]) {
 // package.json scripts or shell wrapper. NODE_OPTIONS set here at runtime
 // only affects children. Default 4 GB; override via KODAX_HEAP_LIMIT.
 if (
-  !process.execArgv.some(a => a.includes('max-old-space-size'))
-  && !process.env.NODE_OPTIONS?.includes('max-old-space-size')
+  !process.execArgv.some((a) => a.includes('max-old-space-size')) &&
+  !process.env.NODE_OPTIONS?.includes('max-old-space-size')
 ) {
   const limit = process.env.KODAX_HEAP_LIMIT ?? '4096';
-  process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --max-old-space-size=${limit}`.trim();
+  process.env.NODE_OPTIONS =
+    `${process.env.NODE_OPTIONS ?? ''} --max-old-space-size=${limit}`.trim();
 }
 
 /**
@@ -67,6 +69,8 @@ import {
 import { createRuntimeDaemonSocketClientTransport } from './runtime-daemon/transport.js';
 import { acquireRuntimeDaemonLease } from './runtime-daemon/manager.js';
 import {
+  detachRuntimeDaemonBootstrapOutput,
+  RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES,
   RuntimeDaemonStartupError,
   spawnRuntimeDaemonServeProcess,
   waitForHealthyDaemonStartup,
@@ -113,10 +117,15 @@ import {
 } from './acp_session_cleanup.js';
 
 // Read the CLI version from the binary build define first, then package.json.
-const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
-const version = process.env.KODAX_VERSION ?? (fsSync.existsSync(packageJsonPath)
-  ? JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version
-  : '0.0.0');
+const packageJsonPath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../package.json',
+);
+const version =
+  process.env.KODAX_VERSION ??
+  (fsSync.existsSync(packageJsonPath)
+    ? JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version
+    : '0.0.0');
 
 import {
   runKodaX,
@@ -151,6 +160,8 @@ import {
   getGitRoot,
   loadConfig,
   prepareRuntimeConfig,
+  readExtensionsIntegration,
+  readMcpIntegration,
   FileSessionStorage,
   dedupeSessions,
   KODAX_CONFIG_FILE,
@@ -164,6 +175,8 @@ import {
   inspectProviderSetupReadiness,
   providerSetupRestartInstructions,
   runProviderSetupWizard,
+  initializeSetupConfiguration,
+  renderSetupGuide,
   listSessions,
   loadSession,
   type ReplRuntimeAutoModeControl,
@@ -175,12 +188,24 @@ import {
 } from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
 import { configureIntegrationCommands } from './integration-cli.js';
-import { startIntegrationHotReload, type IntegrationHotReloadHandle } from './integration-hot-reload.js';
+import {
+  createIntegrationEventBridge,
+  startIntegrationHotReload,
+  type IntegrationHotReloadHandle,
+} from './integration-hot-reload.js';
 import {
   createConfiguredA2ARuntimeIntegration,
   type ConfiguredA2ARuntimeHandle,
 } from './a2a/runtime-config.js';
-import { runAsrtBrokerProcess } from './sandbox-runtime.js';
+import { parseA2AIntegrationDocument } from './a2a/config.js';
+import {
+  doctorSandboxRuntime,
+  prepareSandboxRuntimeForSetup,
+  runAsrtBrokerProcess,
+  runAsrtWorkspaceSessionProcess,
+  sandboxRuntimeCapability,
+  sandboxSetupGuidance,
+} from './sandbox-runtime.js';
 import { createReplLearningBinding } from './repl-learning-binding.js';
 import { shouldAutoLaunchProviderSetup } from './provider-setup-cli.js';
 export {
@@ -199,7 +224,9 @@ export {
 };
 export type { KodaXCommand, KodaXCommandContext };
 
-function hasConfiguredMcpServers(config: { mcpServers?: Record<string, { connect?: string }> }): boolean {
+function hasConfiguredMcpServers(config: {
+  mcpServers?: Record<string, { connect?: string }>;
+}): boolean {
   return Object.values(config.mcpServers ?? {}).some(
     (server) => (server.connect ?? 'lazy') !== 'disabled',
   );
@@ -213,11 +240,14 @@ function resolveCliRuntimeDaemonLocation(
   homeDir: string | undefined,
   configHome?: string,
 ): { readonly homeDir: string; readonly configHome: string } {
-  const resolvedHome = path.resolve(homeDir ?? resolveDefaultRuntimeDaemonHomeDir());
+  const resolvedHome = path.resolve(
+    homeDir ?? resolveDefaultRuntimeDaemonHomeDir(),
+  );
   return {
     homeDir: resolvedHome,
     configHome: path.resolve(
-      configHome ?? (homeDir === undefined ? KODAX_DIR : path.join(resolvedHome, '.kodax')),
+      configHome ??
+        (homeDir === undefined ? KODAX_DIR : path.join(resolvedHome, '.kodax')),
     ),
   };
 }
@@ -227,12 +257,19 @@ async function discoverCliDefaultExtensions(): Promise<string[]> {
     return await discoverDefaultExtensions();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(chalk.yellow('[extensions] Failed to discover default extensions: ' + message));
+    console.warn(
+      chalk.yellow(
+        '[extensions] Failed to discover default extensions: ' + message,
+      ),
+    );
     return [];
   }
 }
 
-function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean): void {
+function printSessionDedupeReport(
+  report: SessionDedupeReport,
+  applied: boolean,
+): void {
   const action = applied ? 'Applied' : 'Dry run';
   console.log(chalk.cyan(`\nSession dedupe ${action}\n`));
   console.log(`Scanned: ${report.scanned}`);
@@ -246,17 +283,24 @@ function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean)
   if (report.matches.length > 0) {
     console.log(chalk.bold('\nMatches:'));
     for (const match of report.matches) {
-      const marker = report.moved.some((move) => move.runnerId === match.runnerId)
+      const marker = report.moved.some(
+        (move) => move.runnerId === match.runnerId,
+      )
         ? 'moved'
         : 'candidate';
-      console.log(`  ${match.runnerId} -> ${match.canonicalId} (${marker}, score=${match.score})`);
+      console.log(
+        `  ${match.runnerId} -> ${match.canonicalId} (${marker}, score=${match.score})`,
+      );
     }
   }
 
   if (report.skipped.length > 0) {
     const reasonCounts = new Map<string, number>();
     for (const skipped of report.skipped) {
-      reasonCounts.set(skipped.reason, (reasonCounts.get(skipped.reason) ?? 0) + 1);
+      reasonCounts.set(
+        skipped.reason,
+        (reasonCounts.get(skipped.reason) ?? 0) + 1,
+      );
     }
     console.log(chalk.bold('\nSkipped:'));
     for (const [reason, count] of reasonCounts.entries()) {
@@ -265,7 +309,11 @@ function printSessionDedupeReport(report: SessionDedupeReport, applied: boolean)
   }
 
   if (!applied) {
-    console.log(chalk.dim('\nRun `kodax sessions dedupe --apply` to move uniquely matched runner ghosts.'));
+    console.log(
+      chalk.dim(
+        '\nRun `kodax sessions dedupe --apply` to move uniquely matched runner ghosts.',
+      ),
+    );
   }
 }
 
@@ -333,10 +381,17 @@ async function printDaemonStatus(input: {
   readonly configHome: string;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   const observation = await observeRuntimeDaemonHealth(paths);
   const health = classifyRuntimeDaemonHealth(observation);
-  const runtimeStatus = await readDaemonRuntimeStatusSummary(paths, observation.state, health);
+  const runtimeStatus = await readDaemonRuntimeStatusSummary(
+    paths,
+    observation.state,
+    health,
+  );
   const snapshot = {
     profile: paths.profile,
     health,
@@ -358,16 +413,26 @@ async function printDaemonStatus(input: {
   console.log(`State: ${snapshot.state ? snapshot.state.status : 'missing'}`);
   if (snapshot.state) {
     console.log(`Runtime: ${snapshot.state.runtimeId}`);
-    console.log(`PID: ${snapshot.state.pid} (${snapshot.pidAlive ? 'alive' : 'not alive'})`);
-    console.log(`Endpoint: ${snapshot.state.endpoint} (${snapshot.endpointReachable ? 'reachable' : 'unreachable'})`);
+    console.log(
+      `PID: ${snapshot.state.pid} (${snapshot.pidAlive ? 'alive' : 'not alive'})`,
+    );
+    console.log(
+      `Endpoint: ${snapshot.state.endpoint} (${snapshot.endpointReachable ? 'reachable' : 'unreachable'})`,
+    );
   }
   if (runtimeStatus?.ok === true) {
     console.log(`Sessions: ${runtimeStatus.summary.sessions}`);
-    console.log(`Runs: ${runtimeStatus.summary.runs} (${runtimeStatus.summary.activeRuns} active, ${runtimeStatus.summary.queuedRuns} queued)`);
-    console.log(`Pending permissions: ${runtimeStatus.summary.pendingPermissions}`);
+    console.log(
+      `Runs: ${runtimeStatus.summary.runs} (${runtimeStatus.summary.activeRuns} active, ${runtimeStatus.summary.queuedRuns} queued)`,
+    );
+    console.log(
+      `Pending permissions: ${runtimeStatus.summary.pendingPermissions}`,
+    );
     console.log(`Workflows: ${runtimeStatus.summary.workflows}`);
   } else if (runtimeStatus?.ok === false) {
-    console.log(chalk.yellow(`Runtime status: unavailable (${runtimeStatus.error})`));
+    console.log(
+      chalk.yellow(`Runtime status: unavailable (${runtimeStatus.error})`),
+    );
   }
   console.log(chalk.dim(`State file: ${snapshot.stateFile}`));
 }
@@ -393,7 +458,9 @@ async function readDaemonRuntimeStatusSummary(
     });
     return {
       ok: true,
-      summary: summarizeDaemonRuntimeStatus(await transport.request('daemon.status')),
+      summary: summarizeDaemonRuntimeStatus(
+        await transport.request('daemon.status'),
+      ),
     };
   } catch (error: unknown) {
     return {
@@ -405,7 +472,9 @@ async function readDaemonRuntimeStatusSummary(
   }
 }
 
-function summarizeDaemonRuntimeStatus(value: unknown): DaemonRuntimeStatusSummary {
+function summarizeDaemonRuntimeStatus(
+  value: unknown,
+): DaemonRuntimeStatusSummary {
   const record = isRecord(value) ? value : {};
   const runs = Array.isArray(record.runs) ? record.runs : [];
   return {
@@ -427,7 +496,10 @@ async function getInteractiveRuntimeStatus(input: {
   let endpoint: string | undefined;
   let health: string | undefined;
   if (input.runtime.identity.mode === 'daemon') {
-    const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+    const paths = resolveRuntimeDaemonPathsFromConfigHome(
+      input.configHome,
+      input.profile,
+    );
     const observation = await observeRuntimeDaemonHealth(paths);
     health = classifyRuntimeDaemonHealth(observation);
     endpoint = observation.state?.endpoint;
@@ -461,10 +533,15 @@ interface InteractiveRuntimeRunnerInput {
   readonly legacyPermissionHook?: true;
 }
 
-export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRuntimeAutoModeControl {
+export function createReplRuntimeAutoModeControl(
+  runtime: KodaXRuntime,
+): ReplRuntimeAutoModeControl {
   const initializedSessions = new Set<string>();
   const pendingSettingsUpdates = new Map<string, Promise<unknown>>();
-  const enqueueSettingsUpdate = <T>(sessionId: string, update: () => Promise<T>): Promise<T> => {
+  const enqueueSettingsUpdate = <T>(
+    sessionId: string,
+    update: () => Promise<T>,
+  ): Promise<T> => {
     const previous = pendingSettingsUpdates.get(sessionId) ?? Promise.resolve();
     const next = previous.then(update, update);
     let tracked: Promise<T>;
@@ -496,7 +573,9 @@ export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRun
     async setEngine(sessionId, engine) {
       return enqueueSettingsUpdate(sessionId, async () => {
         await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
-        await runtime.sessions.updateSettings(sessionId, { autoModeEngine: engine });
+        await runtime.sessions.updateSettings(sessionId, {
+          autoModeEngine: engine,
+        });
         initializedSessions.add(sessionId);
         return runtime.sessions.getAutoModeStats(sessionId);
       });
@@ -504,8 +583,10 @@ export function createReplRuntimeAutoModeControl(runtime: KodaXRuntime): ReplRun
     async syncSettings(sessionId, permissionMode, settings) {
       return enqueueSettingsUpdate(sessionId, async () => {
         await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
-        const initializeEngine = !initializedSessions.has(sessionId)
-          && (await runtime.sessions.getSettings(sessionId)).autoModeEngine === undefined;
+        const initializeEngine =
+          !initializedSessions.has(sessionId) &&
+          (await runtime.sessions.getSettings(sessionId)).autoModeEngine ===
+            undefined;
         await runtime.sessions.updateSettings(sessionId, {
           permissionMode,
           ...(initializeEngine ? { autoModeEngine: settings.engine } : {}),
@@ -544,10 +625,19 @@ interface RuntimeReplEventBridge {
 
 export function createInteractiveRuntimeRunner(
   runtime: KodaXRuntime,
-  autoModeControl: ReplRuntimeAutoModeControl = createReplRuntimeAutoModeControl(runtime),
+  autoModeControl: ReplRuntimeAutoModeControl = createReplRuntimeAutoModeControl(
+    runtime,
+  ),
 ) {
-  return async (input: InteractiveRuntimeRunnerInput): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
-    await ensureCliRuntimeSession(runtime, input.sessionId, input.surface ?? 'repl', input.prompt);
+  return async (
+    input: InteractiveRuntimeRunnerInput,
+  ): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
+    await ensureCliRuntimeSession(
+      runtime,
+      input.sessionId,
+      input.surface ?? 'repl',
+      input.prompt,
+    );
     if (
       input.permissionMode !== undefined &&
       input.autoModeSettings !== undefined &&
@@ -575,10 +665,12 @@ export function createInteractiveRuntimeRunner(
         sessionId: input.sessionId,
         prompt: input.prompt,
         mode: 'managed_task',
-        permissionBroker: input.requestPermission === undefined ? 'runtime' : 'client',
-        options: runtime.identity.mode === 'daemon'
-          ? toDaemonRuntimeRunOptions(runtimeOptions)
-          : runtimeOptions,
+        permissionBroker:
+          input.requestPermission === undefined ? 'runtime' : 'client',
+        options:
+          runtime.identity.mode === 'daemon'
+            ? toDaemonRuntimeRunOptions(runtimeOptions)
+            : runtimeOptions,
       });
       bridge.setRunId(handle.runId);
       abortRun = () => {
@@ -611,9 +703,9 @@ export function toRuntimeOwnedInteractiveOptions(
   options: KodaXOptions,
   sanitization: { readonly omitLegacyBeforeToolExecute?: boolean } = {},
 ): KodaXOptions {
-  const guardrails = options.guardrails?.filter((guardrail) => (
-    guardrail.kind !== 'tool' || guardrail.name !== 'auto-mode'
-  ));
+  const guardrails = options.guardrails?.filter(
+    (guardrail) => guardrail.kind !== 'tool' || guardrail.name !== 'auto-mode',
+  );
   const events = sanitization.omitLegacyBeforeToolExecute
     ? omitBeforeToolExecute(options.events)
     : options.events;
@@ -626,7 +718,9 @@ export function toRuntimeOwnedInteractiveOptions(
   };
 }
 
-function omitBeforeToolExecute(events: KodaXOptions['events']): KodaXOptions['events'] {
+function omitBeforeToolExecute(
+  events: KodaXOptions['events'],
+): KodaXOptions['events'] {
   if (events === undefined) return undefined;
   const { beforeToolExecute: _beforeToolExecute, ...rest } = events;
   return rest;
@@ -641,14 +735,17 @@ async function ensureCliRuntimeSession(
   try {
     await runtime.sessions.load(sessionId);
   } catch (error: unknown) {
-    if (!(error instanceof Error) || !error.message.startsWith('Session not found:')) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.startsWith('Session not found:')
+    ) {
       throw error;
     }
     await runtime.sessions.create({
       sessionId,
       title: surface === 'repl' ? 'REPL Session' : prompt.slice(0, 50),
       projectPath: process.cwd(),
-      gitRoot: await getGitRoot() ?? process.cwd(),
+      gitRoot: (await getGitRoot()) ?? process.cwd(),
       surface,
     });
   }
@@ -661,12 +758,13 @@ async function runCliTaskWithRuntime(
 ): Promise<Awaited<ReturnType<typeof runManagedTask>>> {
   const sessionId = await resolveCliTaskSessionId(options);
   const transientSession = options.session === undefined;
-  const runOptions: KodaXOptions = options.session === undefined
-    ? options
-    : {
-        ...options,
-        session: { ...options.session, id: sessionId },
-      };
+  const runOptions: KodaXOptions =
+    options.session === undefined
+      ? options
+      : {
+          ...options,
+          session: { ...options.session, id: sessionId },
+        };
   try {
     return await createInteractiveRuntimeRunner(runtime)({
       options: runOptions,
@@ -683,9 +781,17 @@ async function runCliTaskWithRuntime(
 
 async function resolveCliTaskSessionId(options: KodaXOptions): Promise<string> {
   if (options.session?.id) return options.session.id;
-  if ((options.session?.resume || options.session?.autoResume) && options.session.storage?.list) {
+  if (
+    (options.session?.resume || options.session?.autoResume) &&
+    options.session.storage?.list
+  ) {
+    const storage = options.session.storage;
+    const list = storage.list;
     const recent = await findMostRecentResumableSession(
-      options.session.storage,
+      {
+        list: (gitRoot, listOptions) =>
+          list.call(storage, gitRoot, listOptions),
+      },
       options.context?.gitRoot ?? undefined,
     );
     if (recent) return recent.id;
@@ -693,7 +799,9 @@ async function resolveCliTaskSessionId(options: KodaXOptions): Promise<string> {
   return generateSessionId();
 }
 
-function interruptedRuntimeResult(sessionId: string): Awaited<ReturnType<typeof runManagedTask>> {
+function interruptedRuntimeResult(
+  sessionId: string,
+): Awaited<ReturnType<typeof runManagedTask>> {
   return {
     success: false,
     lastText: '',
@@ -705,7 +813,9 @@ function interruptedRuntimeResult(sessionId: string): Awaited<ReturnType<typeof 
   };
 }
 
-export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOptions {
+export function toDaemonRuntimeRunOptions(
+  options: KodaXOptions,
+): RuntimeKodaXOptions {
   assertDaemonHostBindingsAbsent(options);
   const {
     events,
@@ -750,7 +860,9 @@ export function toDaemonRuntimeRunOptions(options: KodaXOptions): RuntimeKodaXOp
     if (!isRecord(cloned)) throw new Error('expected an object');
     return cloned as RuntimeKodaXOptions;
   } catch (error: unknown) {
-    throw new Error(`Daemon runtime options are not JSON serializable: ${normalizeCliError(error).message}`);
+    throw new Error(
+      `Daemon runtime options are not JSON serializable: ${normalizeCliError(error).message}`,
+    );
   }
 }
 
@@ -773,8 +885,8 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
   const binding = unsupported.find(([, value]) => value !== undefined);
   if (!binding) return;
   throw new Error(
-    `KodaX daemon run option '${binding[0]}' cannot cross the process boundary. `
-    + 'Configure the capability in the daemon owner or use embedded mode.',
+    `KodaX daemon run option '${binding[0]}' cannot cross the process boundary. ` +
+      'Configure the capability in the daemon owner or use embedded mode.',
   );
 }
 
@@ -797,13 +909,16 @@ function createRuntimeReplEventBridge(
         }
       });
   };
-  const subscription = runtime.events.subscribe({ sessionId: input.sessionId }, (event) => {
-    if (activeRunId === undefined) {
-      buffered.push(event);
-    } else if (event.runId === activeRunId) {
-      enqueue(event);
-    }
-  });
+  const subscription = runtime.events.subscribe(
+    { sessionId: input.sessionId },
+    (event) => {
+      if (activeRunId === undefined) {
+        buffered.push(event);
+      } else if (event.runId === activeRunId) {
+        enqueue(event);
+      }
+    },
+  );
   return {
     setRunId(runId) {
       activeRunId = runId;
@@ -826,7 +941,13 @@ async function forwardRuntimeReplEvent(
 ): Promise<void> {
   const payload = isRecord(event.payload) ? event.payload : {};
   if (event.type === 'permission.requested') {
-    await respondToRuntimePermission(runtime, input.requestPermission, event, payload, toolInputs);
+    await respondToRuntimePermission(
+      runtime,
+      input.requestPermission,
+      event,
+      payload,
+      toolInputs,
+    );
     return;
   }
   if (runtime.identity.mode !== 'daemon') return;
@@ -842,23 +963,51 @@ function forwardDaemonStreamEvent(
   payload: Record<string, unknown>,
   toolInputs: Map<string, Record<string, unknown>>,
 ): boolean {
-  const meta = payload.meta as Parameters<NonNullable<KodaXEvents['onTextDelta']>>[1];
+  const meta = payload.meta as Parameters<
+    NonNullable<KodaXEvents['onTextDelta']>
+  >[1];
   if (event.type === 'assistant.delta' && typeof payload.text === 'string') {
     events?.onTextDelta?.(payload.text, meta);
-  } else if (event.type === 'thinking.delta' && typeof payload.text === 'string') {
+  } else if (
+    event.type === 'thinking.delta' &&
+    typeof payload.text === 'string'
+  ) {
     events?.onThinkingDelta?.(payload.text, meta);
-  } else if (event.type === 'thinking.finished' && typeof payload.thinking === 'string') {
+  } else if (
+    event.type === 'thinking.finished' &&
+    typeof payload.thinking === 'string'
+  ) {
     events?.onThinkingEnd?.(payload.thinking, meta);
   } else if (event.type === 'tool.started' && isRecord(payload.tool)) {
-    const tool = payload.tool as Parameters<NonNullable<KodaXEvents['onToolUseStart']>>[0];
-    if (typeof tool.id === 'string' && isRecord(tool.input)) toolInputs.set(tool.id, tool.input);
-    events?.onToolUseStart?.(tool, payload.meta as Parameters<NonNullable<KodaXEvents['onToolUseStart']>>[1]);
+    const tool = payload.tool as Parameters<
+      NonNullable<KodaXEvents['onToolUseStart']>
+    >[0];
+    if (typeof tool.id === 'string' && isRecord(tool.input))
+      toolInputs.set(tool.id, tool.input);
+    events?.onToolUseStart?.(
+      tool,
+      payload.meta as Parameters<NonNullable<KodaXEvents['onToolUseStart']>>[1],
+    );
   } else if (event.type === 'tool.progress') {
     forwardDaemonToolProgress(events, payload);
+  } else if (event.type === 'tool.sandbox' && isRecord(payload.update)) {
+    events?.onToolSandboxObservation?.(
+      payload.update as Parameters<
+        NonNullable<KodaXEvents['onToolSandboxObservation']>
+      >[0],
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onToolSandboxObservation']>
+      >[1],
+    );
   } else if (event.type === 'tool.finished' && isRecord(payload.result)) {
-    const result = payload.result as Parameters<NonNullable<KodaXEvents['onToolResult']>>[0];
+    const result = payload.result as Parameters<
+      NonNullable<KodaXEvents['onToolResult']>
+    >[0];
     if (typeof result.id === 'string') toolInputs.delete(result.id);
-    events?.onToolResult?.(result, payload.meta as Parameters<NonNullable<KodaXEvents['onToolResult']>>[1]);
+    events?.onToolResult?.(
+      result,
+      payload.meta as Parameters<NonNullable<KodaXEvents['onToolResult']>>[1],
+    );
   } else {
     return false;
   }
@@ -871,14 +1020,21 @@ function forwardDaemonToolProgress(
 ): void {
   if (isRecord(payload.update)) {
     events?.onToolProgress?.(
-      payload.update as Parameters<NonNullable<KodaXEvents['onToolProgress']>>[0],
+      payload.update as Parameters<
+        NonNullable<KodaXEvents['onToolProgress']>
+      >[0],
       payload.meta as Parameters<NonNullable<KodaXEvents['onToolProgress']>>[1],
     );
-  } else if (typeof payload.toolName === 'string' && typeof payload.partialJson === 'string') {
+  } else if (
+    typeof payload.toolName === 'string' &&
+    typeof payload.partialJson === 'string'
+  ) {
     events?.onToolInputDelta?.(
       payload.toolName,
       payload.partialJson,
-      payload.meta as Parameters<NonNullable<KodaXEvents['onToolInputDelta']>>[2],
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onToolInputDelta']>
+      >[2],
     );
   }
 }
@@ -889,20 +1045,34 @@ function forwardDaemonLifecycleEvent(
   payload: Record<string, unknown>,
 ): boolean {
   if (event.type === 'session.loaded') {
-    events?.onSessionStart?.(event.payload as Parameters<NonNullable<KodaXEvents['onSessionStart']>>[0]);
+    events?.onSessionStart?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onSessionStart']>
+      >[0],
+    );
   } else if (event.type === 'turn.started') {
-    events?.onTurnStarted?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnStarted']>>[0]);
+    events?.onTurnStarted?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onTurnStarted']>>[0],
+    );
   } else if (event.type === 'turn.completed') {
-    events?.onTurnCompleted?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnCompleted']>>[0]);
+    events?.onTurnCompleted?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onTurnCompleted']>
+      >[0],
+    );
   } else if (event.type === 'turn.failed') {
-    events?.onTurnFailed?.(event.payload as Parameters<NonNullable<KodaXEvents['onTurnFailed']>>[0]);
+    events?.onTurnFailed?.(
+      event.payload as Parameters<NonNullable<KodaXEvents['onTurnFailed']>>[0],
+    );
   } else if (event.type === 'run.progress') {
     forwardDaemonRunProgress(events, payload);
   } else if (event.type.startsWith('context.compaction.')) {
     forwardDaemonCompactionEvent(events, event, payload);
   } else if (event.type === 'child_activity.finished') {
     events?.onChildActivityEnd?.(
-      payload.meta as Parameters<NonNullable<KodaXEvents['onChildActivityEnd']>>[0],
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onChildActivityEnd']>
+      >[0],
     );
   } else {
     return false;
@@ -915,26 +1085,50 @@ function forwardDaemonRunProgress(
   payload: Record<string, unknown>,
 ): void {
   if (payload.kind === 'stream_end') {
-    events?.onStreamEnd?.(payload.meta as Parameters<NonNullable<KodaXEvents['onStreamEnd']>>[0]);
-  } else if (payload.kind === 'iteration_start' && typeof payload.iter === 'number' && typeof payload.maxIter === 'number') {
+    events?.onStreamEnd?.(
+      payload.meta as Parameters<NonNullable<KodaXEvents['onStreamEnd']>>[0],
+    );
+  } else if (
+    payload.kind === 'iteration_start' &&
+    typeof payload.iter === 'number' &&
+    typeof payload.maxIter === 'number'
+  ) {
     events?.onIterationStart?.(
       payload.iter,
       payload.maxIter,
-      payload.meta as Parameters<NonNullable<KodaXEvents['onIterationStart']>>[2],
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onIterationStart']>
+      >[2],
     );
   } else if (payload.kind === 'iteration_end' && isRecord(payload.info)) {
-    events?.onIterationEnd?.(payload.info as Parameters<NonNullable<KodaXEvents['onIterationEnd']>>[0]);
-  } else if (payload.kind === 'mid_turn_user_messages' && Array.isArray(payload.contents)) {
-    events?.onMidTurnUserMessages?.(
-      payload.contents.filter((item): item is string => typeof item === 'string'),
-      payload.meta as Parameters<NonNullable<KodaXEvents['onMidTurnUserMessages']>>[1],
+    events?.onIterationEnd?.(
+      payload.info as Parameters<NonNullable<KodaXEvents['onIterationEnd']>>[0],
     );
-  } else if (payload.kind === 'managed_task_status' && isRecord(payload.status)) {
+  } else if (
+    payload.kind === 'mid_turn_user_messages' &&
+    Array.isArray(payload.contents)
+  ) {
+    events?.onMidTurnUserMessages?.(
+      payload.contents.filter(
+        (item): item is string => typeof item === 'string',
+      ),
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onMidTurnUserMessages']>
+      >[1],
+    );
+  } else if (
+    payload.kind === 'managed_task_status' &&
+    isRecord(payload.status)
+  ) {
     events?.onManagedTaskStatus?.(
-      payload.status as unknown as Parameters<NonNullable<KodaXEvents['onManagedTaskStatus']>>[0],
+      payload.status as unknown as Parameters<
+        NonNullable<KodaXEvents['onManagedTaskStatus']>
+      >[0],
     );
   } else if (payload.kind === 'complete') {
-    events?.onComplete?.(payload.meta as Parameters<NonNullable<KodaXEvents['onComplete']>>[0]);
+    events?.onComplete?.(
+      payload.meta as Parameters<NonNullable<KodaXEvents['onComplete']>>[0],
+    );
   }
 }
 
@@ -943,18 +1137,29 @@ function forwardDaemonCompactionEvent(
   event: RuntimeEvent,
   payload: Record<string, unknown>,
 ): void {
-  const meta = payload.meta as Parameters<NonNullable<KodaXEvents['onCompactStart']>>[0];
+  const meta = payload.meta as Parameters<
+    NonNullable<KodaXEvents['onCompactStart']>
+  >[0];
   if (event.type === 'context.compaction.started') {
     events?.onCompactStart?.(meta);
-  } else if (event.type === 'context.compaction.finished' && typeof payload.estimatedTokens === 'number') {
+  } else if (
+    event.type === 'context.compaction.finished' &&
+    typeof payload.estimatedTokens === 'number'
+  ) {
     events?.onCompact?.(payload.estimatedTokens, meta);
   } else if (event.type === 'context.compaction.stats') {
-    events?.onCompactStats?.(event.payload as Parameters<NonNullable<KodaXEvents['onCompactStats']>>[0]);
+    events?.onCompactStats?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onCompactStats']>
+      >[0],
+    );
   } else if (event.type === 'context.compaction.ended') {
     events?.onCompactEnd?.(meta);
   } else if (event.type === 'context.compaction.skipped') {
     events?.onContextCompactionSkipped?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onContextCompactionSkipped']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onContextCompactionSkipped']>
+      >[0],
     );
   }
 }
@@ -970,36 +1175,61 @@ function forwardDaemonDiagnosticEvent(
     forwardDaemonRecoveryEvent(events, payload);
   } else if (event.type === 'repo_intelligence.trace') {
     events?.onRepoIntelligenceTrace?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onRepoIntelligenceTrace']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onRepoIntelligenceTrace']>
+      >[0],
     );
   } else if (event.type === 'context.budget.snapshot') {
     events?.onContextBudgetSnapshot?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onContextBudgetSnapshot']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onContextBudgetSnapshot']>
+      >[0],
     );
   } else if (event.type === 'provider.cache.diagnostics') {
     events?.onPromptCacheDiagnostics?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onPromptCacheDiagnostics']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onPromptCacheDiagnostics']>
+      >[0],
     );
   } else if (event.type === 'tool.exposure.planned') {
     events?.onToolExposurePlanned?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onToolExposurePlanned']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onToolExposurePlanned']>
+      >[0],
     );
   } else if (event.type === 'sidecar.message') {
-    events?.onSidecarMessage?.(event.payload as Parameters<NonNullable<KodaXEvents['onSidecarMessage']>>[0]);
+    events?.onSidecarMessage?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onSidecarMessage']>
+      >[0],
+    );
   } else if (event.type === 'todo.updated' && Array.isArray(payload.items)) {
     events?.onTodoUpdate?.(
       payload.items as Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[0],
       payload.meta as Parameters<NonNullable<KodaXEvents['onTodoUpdate']>>[1],
     );
   } else if (event.type === 'todo.warning') {
-    events?.onTodoDriftWarning?.(event.payload as Parameters<NonNullable<KodaXEvents['onTodoDriftWarning']>>[0]);
+    events?.onTodoDriftWarning?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onTodoDriftWarning']>
+      >[0],
+    );
   } else if (event.type === 'config.effective') {
-    events?.onEffectiveConfig?.(event.payload as Parameters<NonNullable<KodaXEvents['onEffectiveConfig']>>[0]);
+    events?.onEffectiveConfig?.(
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onEffectiveConfig']>
+      >[0],
+    );
   } else if (event.type.startsWith('workflow.')) {
     events?.onWorkflowProcessEvent?.(
-      event.payload as Parameters<NonNullable<KodaXEvents['onWorkflowProcessEvent']>>[0],
+      event.payload as Parameters<
+        NonNullable<KodaXEvents['onWorkflowProcessEvent']>
+      >[0],
     );
-  } else if (event.type === 'runtime.warning' && typeof payload.message === 'string') {
+  } else if (
+    event.type === 'runtime.warning' &&
+    typeof payload.message === 'string'
+  ) {
     events?.onError?.(new Error(payload.message));
   }
 }
@@ -1010,20 +1240,26 @@ function forwardDaemonRetryEvent(
 ): void {
   if (isRecord(payload.retryAfter)) {
     events?.onRetryAfter?.(
-      payload.retryAfter as Parameters<NonNullable<KodaXEvents['onRetryAfter']>>[0],
+      payload.retryAfter as Parameters<
+        NonNullable<KodaXEvents['onRetryAfter']>
+      >[0],
       payload.meta as Parameters<NonNullable<KodaXEvents['onRetryAfter']>>[1],
     );
   } else if (
-    payload.reason === 'rate_limit'
-    && typeof payload.attempt === 'number'
-    && typeof payload.maxAttempts === 'number'
-    && typeof payload.delayMs === 'number'
+    payload.reason === 'rate_limit' &&
+    typeof payload.attempt === 'number' &&
+    typeof payload.maxAttempts === 'number' &&
+    typeof payload.delayMs === 'number'
   ) {
-    events?.onProviderRateLimit?.(payload.attempt, payload.maxAttempts, payload.delayMs);
+    events?.onProviderRateLimit?.(
+      payload.attempt,
+      payload.maxAttempts,
+      payload.delayMs,
+    );
   } else if (
-    typeof payload.reason === 'string'
-    && typeof payload.attempt === 'number'
-    && typeof payload.maxAttempts === 'number'
+    typeof payload.reason === 'string' &&
+    typeof payload.attempt === 'number' &&
+    typeof payload.maxAttempts === 'number'
   ) {
     events?.onRetry?.(payload.reason, payload.attempt, payload.maxAttempts);
   }
@@ -1035,12 +1271,18 @@ function forwardDaemonRecoveryEvent(
 ): void {
   if (payload.kind === 'reasoning_effort_rejected' && isRecord(payload.event)) {
     events?.onReasoningEffortRejected?.(
-      payload.event as Parameters<NonNullable<KodaXEvents['onReasoningEffortRejected']>>[0],
+      payload.event as Parameters<
+        NonNullable<KodaXEvents['onReasoningEffortRejected']>
+      >[0],
     );
   } else if (isRecord(payload.event)) {
     events?.onProviderRecovery?.(
-      payload.event as unknown as Parameters<NonNullable<KodaXEvents['onProviderRecovery']>>[0],
-      payload.meta as Parameters<NonNullable<KodaXEvents['onProviderRecovery']>>[1],
+      payload.event as unknown as Parameters<
+        NonNullable<KodaXEvents['onProviderRecovery']>
+      >[0],
+      payload.meta as Parameters<
+        NonNullable<KodaXEvents['onProviderRecovery']>
+      >[1],
     );
   }
 }
@@ -1052,12 +1294,18 @@ async function respondToRuntimePermission(
   payload: Record<string, unknown>,
   toolInputs: ReadonlyMap<string, Record<string, unknown>>,
 ): Promise<void> {
-  if (typeof payload.id !== 'string' || typeof payload.toolName !== 'string') return;
-  const toolCallId = typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined;
-  const input = toolCallId !== undefined
-    ? toolInputs.get(toolCallId) ?? parsePermissionInput(payload.inputPreview)
-    : parsePermissionInput(payload.inputPreview);
-  const grantSuggestions = parseRuntimeGrantSuggestions(payload.grantSuggestions);
+  if (typeof payload.id !== 'string' || typeof payload.toolName !== 'string')
+    return;
+  const toolCallId =
+    typeof payload.toolCallId === 'string' ? payload.toolCallId : undefined;
+  const input =
+    toolCallId !== undefined
+      ? (toolInputs.get(toolCallId) ??
+        parsePermissionInput(payload.inputPreview))
+      : parsePermissionInput(payload.inputPreview);
+  const grantSuggestions = parseRuntimeGrantSuggestions(
+    payload.grantSuggestions,
+  );
   let decision: RuntimePermissionDecision;
   try {
     decision = requestPermission
@@ -1066,33 +1314,47 @@ async function respondToRuntimePermission(
           toolName: payload.toolName,
           ...(toolCallId !== undefined ? { toolCallId } : {}),
           input,
-          ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
-          ...(isRuntimePermissionRisk(payload.risk) ? { risk: payload.risk } : {}),
+          ...(typeof payload.reason === 'string'
+            ? { reason: payload.reason }
+            : {}),
+          ...(isRuntimePermissionRisk(payload.risk)
+            ? { risk: payload.risk }
+            : {}),
           ...(typeof payload.executionCwd === 'string'
             ? { executionCwd: payload.executionCwd }
             : {}),
           ...(grantSuggestions.length > 0 ? { grantSuggestions } : {}),
         })
-      : { type: 'reject', reason: 'Interactive permission handler unavailable.' };
+      : {
+          type: 'reject',
+          reason: 'Interactive permission handler unavailable.',
+        };
   } catch (error: unknown) {
     decision = { type: 'reject', reason: normalizeCliError(error).message };
   }
-  await runtime.permissions.respond(payload.id, decision, { runId: event.runId });
+  await runtime.permissions.respond(payload.id, decision, {
+    runId: event.runId,
+  });
 }
 
-function isRuntimePermissionRisk(value: unknown): value is 'low' | 'medium' | 'high' {
+function isRuntimePermissionRisk(
+  value: unknown,
+): value is 'low' | 'medium' | 'high' {
   return value === 'low' || value === 'medium' || value === 'high';
 }
 
-function parseRuntimeGrantSuggestions(value: unknown): ReplRuntimePermissionGrantSuggestion[] {
+function parseRuntimeGrantSuggestions(
+  value: unknown,
+): ReplRuntimePermissionGrantSuggestion[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
     if (
-      !isRecord(candidate)
-      || typeof candidate.id !== 'string'
-      || (candidate.kind !== 'session' && candidate.kind !== 'persistent')
-      || typeof candidate.label !== 'string'
-    ) return [];
+      !isRecord(candidate) ||
+      typeof candidate.id !== 'string' ||
+      (candidate.kind !== 'session' && candidate.kind !== 'persistent') ||
+      typeof candidate.label !== 'string'
+    )
+      return [];
     return [{ id: candidate.id, kind: candidate.kind, label: candidate.label }];
   });
 }
@@ -1109,9 +1371,11 @@ function parsePermissionInput(value: unknown): Record<string, unknown> {
 
 function isActiveDaemonRunStatus(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  return value.phase === 'running'
-    || value.phase === 'waiting_permission'
-    || value.phase === 'waiting_user_input';
+  return (
+    value.phase === 'running' ||
+    value.phase === 'waiting_permission' ||
+    value.phase === 'waiting_user_input'
+  );
 }
 
 function isQueuedDaemonRunStatus(value: unknown): boolean {
@@ -1131,22 +1395,32 @@ async function startDaemonCommand(input: {
   readonly timeoutMs: number;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   const result = await getDaemonStartResult(input);
   if (input.json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
   if (result.reason === 'already_running') {
-    console.log(chalk.green(`KodaX runtime daemon already running for profile "${paths.profile}".`));
+    console.log(
+      chalk.green(
+        `KodaX runtime daemon already running for profile "${paths.profile}".`,
+      ),
+    );
     return;
   }
   if (result.health !== 'healthy') {
     throw new Error(
-      result.error ?? `KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`,
+      result.error ??
+        `KodaX runtime daemon did not become healthy within ${input.timeoutMs}ms.`,
     );
   }
-  console.log(chalk.green(`KodaX runtime daemon started for profile "${paths.profile}".`));
+  console.log(
+    chalk.green(`KodaX runtime daemon started for profile "${paths.profile}".`),
+  );
   if (result.state) {
     console.log(chalk.dim(`PID: ${result.state.pid}`));
     console.log(chalk.dim(`Endpoint: ${result.state.endpoint}`));
@@ -1161,7 +1435,10 @@ async function getDaemonStartResult(input: {
   readonly model?: string;
   readonly timeoutMs: number;
 }): Promise<DaemonStartResult> {
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   const before = await observeRuntimeDaemonHealth(paths);
   const beforeHealth = classifyRuntimeDaemonHealth(before);
   if (beforeHealth === 'healthy' && before.state?.status === 'ready') {
@@ -1174,10 +1451,14 @@ async function getDaemonStartResult(input: {
   if (beforeHealth === 'healthy' && before.state) {
     const cancellation = createDaemonStartupCancellation();
     try {
-      const ready = await waitForReadyRuntimeDaemonOwner(paths, {
-        startupTimeoutMs: input.timeoutMs,
-        startupSignal: cancellation.signal,
-      }, before);
+      const ready = await waitForReadyRuntimeDaemonOwner(
+        paths,
+        {
+          startupTimeoutMs: input.timeoutMs,
+          startupSignal: cancellation.signal,
+        },
+        before,
+      );
       return {
         started: false,
         reason: 'already_running',
@@ -1206,10 +1487,14 @@ async function getDaemonStartResult(input: {
       defaultModel: input.model,
     });
     try {
-      const observation = await waitForHealthyDaemonStartup(paths, {
-        startupTimeoutMs: input.timeoutMs,
-        startupSignal: cancellation.signal,
-      }, child);
+      const observation = await waitForHealthyDaemonStartup(
+        paths,
+        {
+          startupTimeoutMs: input.timeoutMs,
+          startupSignal: cancellation.signal,
+        },
+        child,
+      );
       return {
         started: true,
         pid: child.pid ?? null,
@@ -1217,7 +1502,10 @@ async function getDaemonStartResult(input: {
         state: observation.state,
       };
     } catch (error: unknown) {
-      if (!(error instanceof RuntimeDaemonStartupError) || error.reason === 'cancelled') {
+      if (
+        !(error instanceof RuntimeDaemonStartupError) ||
+        error.reason === 'cancelled'
+      ) {
         throw error;
       }
       const observation = await observeRuntimeDaemonHealth(paths);
@@ -1242,9 +1530,27 @@ async function serveDaemonCommand(input: {
   readonly model?: string;
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
+  readonly orphanExitMs?: number;
 }): Promise<void> {
-  const extensions = await createDaemonOwnedExtensionRuntime();
   const daemonConfigHome = path.resolve(input.configHome);
+  if (process.env.KODAX_DAEMON_SERVE === '1') {
+    detachRuntimeDaemonBootstrapOutput(
+      resolveRuntimeDaemonPathsFromConfigHome(daemonConfigHome, input.profile),
+    );
+    const internalBootstrapBytes = Number.parseInt(
+      process.env.KODAX_INTERNAL_DAEMON_TEST_BOOTSTRAP_BYTES ?? '',
+      10,
+    );
+    if (Number.isSafeInteger(internalBootstrapBytes) && internalBootstrapBytes > 0) {
+      process.stderr.write(
+        Buffer.alloc(
+          Math.min(internalBootstrapBytes, RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES * 4),
+          'x',
+        ),
+      );
+    }
+  }
+  const extensions = await createDaemonOwnedExtensionRuntime(daemonConfigHome);
   const a2aIntegration = createConfiguredA2ARuntimeIntegration({
     configHome: daemonConfigHome,
     onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
@@ -1259,6 +1565,11 @@ async function serveDaemonCommand(input: {
       // The host is created only after createRuntime returns, so this trusted
       // fact is never observable until reconcile and watcher startup succeed.
       ownsA2AConfigReconciler: true,
+      integrationStatuses: () => [
+        ...extensions.hotReload.statuses(),
+        ...(a2aHandle ? [a2aHandle.status()] : []),
+      ],
+      ...(input.orphanExitMs !== undefined ? { orphanExitMs: input.orphanExitMs } : {}),
       createRuntime: async (runtimeId) => {
         const usesCanonicalHome = isSameRuntimeDaemonPath(
           daemonConfigHome,
@@ -1268,7 +1579,8 @@ async function serveDaemonCommand(input: {
           mode: 'embedded',
           profile: input.profile,
           ...(usesCanonicalHome ? { homeDir: input.homeDir } : {}),
-          sessionsDir: input.sessionsDir ?? path.join(daemonConfigHome, 'sessions'),
+          sessionsDir:
+            input.sessionsDir ?? path.join(daemonConfigHome, 'sessions'),
           defaultProvider: input.provider,
           defaultModel: input.model,
           permissionTimeoutMs: input.permissionTimeoutMs,
@@ -1298,14 +1610,20 @@ async function serveDaemonCommand(input: {
     if (!lease.ownsHost) {
       await lease.close();
       const observation = await observeRuntimeDaemonHealth(lease.paths);
-      console.log(chalk.yellow(`KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`));
+      console.log(
+        chalk.yellow(
+          `KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`,
+        ),
+      );
       return;
     }
     if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
     const hostClosed = lease.hostClosed;
     if (!hostClosed) {
       await lease.shutdown();
-      throw new Error('Owned Runtime daemon lease did not expose its close signal.');
+      throw new Error(
+        'Owned Runtime daemon lease did not expose its close signal.',
+      );
     }
     const testParentWatch = watchRuntimeDaemonTestParent(
       process.env.KODAX_INTERNAL_DAEMON_TEST_PARENT_PID,
@@ -1315,9 +1633,10 @@ async function serveDaemonCommand(input: {
       shutdownPromise ??= lease.shutdown();
       return shutdownPromise;
     };
-    const externallyClosed = testParentWatch === undefined
-      ? hostClosed
-      : Promise.race([hostClosed, testParentWatch.exited.then(shutdown)]);
+    const externallyClosed =
+      testParentWatch === undefined
+        ? hostClosed
+        : Promise.race([hostClosed, testParentWatch.exited.then(shutdown)]);
     try {
       await waitForShutdownSignal(shutdown, externallyClosed);
     } finally {
@@ -1334,16 +1653,35 @@ async function serveDaemonCommand(input: {
   }
 }
 
-async function createDaemonOwnedExtensionRuntime(): Promise<{
+async function createDaemonOwnedExtensionRuntime(configHome: string): Promise<{
   readonly runtime: ReturnType<typeof createExtensionRuntime>;
   readonly hotReload: IntegrationHotReloadHandle;
 }> {
   const config = prepareRuntimeConfig();
-  const configWithExtensions = config as typeof config & { extensions?: string[] };
-  const configured = Array.isArray(configWithExtensions.extensions)
-    ? configWithExtensions.extensions
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .map((value) => path.isAbsolute(value) ? value : path.resolve(path.dirname(KODAX_CONFIG_FILE), value))
+  let configuredPaths: readonly string[] = [];
+  let configuredMcpServers: Parameters<
+    typeof registerConfiguredMcpCapabilityProvider
+  >[1] = {};
+  try {
+    configuredPaths = readExtensionsIntegration(configHome).document.paths;
+  } catch {
+    // Invalid optional integration config is represented by the controller's
+    // cold-start diagnostic and must not make the daemon unavailable.
+  }
+  try {
+    configuredMcpServers = readMcpIntegration(configHome).document.servers;
+  } catch {
+    // See the Extension-domain note above.
+  }
+  const configured = Array.isArray(configuredPaths)
+    ? configuredPaths
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
+        .map((value) =>
+          path.isAbsolute(value) ? value : path.resolve(configHome, value),
+        )
     : [];
   const discovered = await discoverDefaultExtensions();
   const active = await excludeExtensionPathsByEntrypoint(
@@ -1351,20 +1689,45 @@ async function createDaemonOwnedExtensionRuntime(): Promise<{
     await dedupeExtensionPathsByEntrypoint(configured),
   );
   const configuredOnly = await dedupeExtensionPathsByEntrypoint(configured);
-  const runtime = createExtensionRuntime({ config });
-  await registerConfiguredMcpCapabilityProvider(runtime, configWithExtensions.mcpServers, {
-    reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: false }),
+  const runtime = createExtensionRuntime({
+    config: {
+      ...config,
+      extensions: configured,
+      mcpServers: configuredMcpServers,
+    },
+  });
+  await registerConfiguredMcpCapabilityProvider(runtime, configuredMcpServers, {
+    reverse: buildMcpReverseCapabilities({
+      cwd: process.cwd(),
+      enableElicitation: false,
+    }),
   });
   const loader = runtime as typeof runtime & {
-    loadExtensions(paths: string[], options?: { continueOnError?: boolean; loadSource?: 'discovery' | 'config' }): Promise<void>;
+    loadExtensions(
+      paths: string[],
+      options?: {
+        continueOnError?: boolean;
+        loadSource?: 'discovery' | 'config';
+      },
+    ): Promise<void>;
   };
-  await loader.loadExtensions(active, { continueOnError: true, loadSource: 'discovery' });
-  await loader.loadExtensions(configuredOnly, { continueOnError: true, loadSource: 'config' });
+  await loader.loadExtensions(active, {
+    continueOnError: true,
+    loadSource: 'discovery',
+  });
+  await loader.loadExtensions(configuredOnly, {
+    continueOnError: true,
+    loadSource: 'config',
+  });
   runtime.activate();
   const hotReload = await startIntegrationHotReload({
     runtime,
+    configHome,
     mcpOptions: {
-      reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: false }),
+      reverse: buildMcpReverseCapabilities({
+        cwd: process.cwd(),
+        enableElicitation: false,
+      }),
     },
     onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
   });
@@ -1379,7 +1742,10 @@ async function stopDaemonCommand(input: {
   readonly force: boolean;
   readonly json: boolean;
 }): Promise<void> {
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   const result = await getDaemonStopResult(input);
   if (input.json) {
     console.log(JSON.stringify(result, null, 2));
@@ -1391,13 +1757,21 @@ async function stopDaemonCommand(input: {
     );
   }
   if (result.reason !== undefined) {
-    console.log(chalk.yellow(`No healthy KodaX runtime daemon for profile "${paths.profile}" (${result.reason}).`));
+    console.log(
+      chalk.yellow(
+        `No healthy KodaX runtime daemon for profile "${paths.profile}" (${result.reason}).`,
+      ),
+    );
     return;
   }
   if (!result.stopped) {
-    throw new Error(`KodaX runtime daemon did not stop within ${input.timeoutMs}ms.`);
+    throw new Error(
+      `KodaX runtime daemon did not stop within ${input.timeoutMs}ms.`,
+    );
   }
-  console.log(chalk.green(`KodaX runtime daemon stopped for profile "${paths.profile}".`));
+  console.log(
+    chalk.green(`KodaX runtime daemon stopped for profile "${paths.profile}".`),
+  );
 }
 
 async function getDaemonStopResult(input: {
@@ -1408,7 +1782,10 @@ async function getDaemonStopResult(input: {
   readonly force?: boolean;
 }): Promise<DaemonStopResult> {
   const deadline = Date.now() + input.timeoutMs;
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   const observation = await observeRuntimeDaemonHealth(paths);
   const health = classifyRuntimeDaemonHealth(observation);
   if (health !== 'healthy' || !observation.state) {
@@ -1440,11 +1817,12 @@ async function getDaemonStopResult(input: {
   }
   const after = await waitForDaemonStopped(paths, input.timeoutMs);
   const afterHealth = classifyRuntimeDaemonHealth(after);
-  const processExited = afterHealth !== 'healthy'
-    && await waitForDaemonProcessExit(
+  const processExited =
+    afterHealth !== 'healthy' &&
+    (await waitForDaemonProcessExit(
       observation.state.pid,
       Math.max(0, deadline - Date.now()),
-    );
+    ));
   return {
     stopped: processExited,
     health: afterHealth,
@@ -1468,9 +1846,11 @@ function forceStopDaemonOwnership(
         state,
       };
     }
-    if (!removeRuntimeDaemonOwnershipIfUnchanged(paths, {
-      ...(lockOwner !== undefined ? { lockOwner } : {}),
-    })) {
+    if (
+      !removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+        ...(lockOwner !== undefined ? { lockOwner } : {}),
+      })
+    ) {
       return {
         stopped: false,
         forced: true,
@@ -1489,10 +1869,11 @@ function forceStopDaemonOwnership(
   if (health === 'stale') {
     const lockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
     if (
-      state === null
-      || (lockOwner !== undefined
-        && (lockOwner.runtimeId !== state.runtimeId || lockOwner.pid !== state.pid))
-      || !removeRuntimeDaemonOwnershipIfUnchanged(paths, {
+      state === null ||
+      (lockOwner !== undefined &&
+        (lockOwner.runtimeId !== state.runtimeId ||
+          lockOwner.pid !== state.pid)) ||
+      !removeRuntimeDaemonOwnershipIfUnchanged(paths, {
         state,
         ...(lockOwner !== undefined ? { lockOwner } : {}),
       })
@@ -1535,11 +1916,20 @@ async function restartDaemonCommand(input: {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   if (!result.restarted) {
-    throw new Error(`KodaX runtime daemon restart failed for profile "${paths.profile}".`);
+    throw new Error(
+      `KodaX runtime daemon restart failed for profile "${paths.profile}".`,
+    );
   }
-  console.log(chalk.green(`KodaX runtime daemon restarted for profile "${paths.profile}".`));
+  console.log(
+    chalk.green(
+      `KodaX runtime daemon restarted for profile "${paths.profile}".`,
+    ),
+  );
   if (result.start.state) {
     console.log(chalk.dim(`PID: ${result.start.state.pid}`));
     console.log(chalk.dim(`Endpoint: ${result.start.state.endpoint}`));
@@ -1625,7 +2015,10 @@ function readDaemonLogs(input: {
   readonly configHome: string;
   readonly lines: number;
 }): DaemonLogsResult {
-  const paths = resolveRuntimeDaemonPathsFromConfigHome(input.configHome, input.profile);
+  const paths = resolveRuntimeDaemonPathsFromConfigHome(
+    input.configHome,
+    input.profile,
+  );
   if (!fsSync.existsSync(paths.logFile)) {
     return {
       profile: paths.profile,
@@ -1671,7 +2064,10 @@ async function waitForDaemonStopped(
   return latestStopped;
 }
 
-async function waitForDaemonProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+async function waitForDaemonProcessExit(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (isRuntimeDaemonPidAlive(pid)) {
     const remainingMs = deadline - Date.now();
@@ -1727,15 +2123,24 @@ function createDaemonStartupCancellation(): {
   };
 }
 
-function watchRuntimeDaemonTestParent(parentPidValue: string | undefined): {
-  readonly exited: Promise<void>;
-  close(): void;
-} | undefined {
+function watchRuntimeDaemonTestParent(parentPidValue: string | undefined):
+  | {
+      readonly exited: Promise<void>;
+      close(): void;
+    }
+  | undefined {
   const parentPid = Number(parentPidValue);
-  if (!Number.isInteger(parentPid) || parentPid <= 0 || parentPid === process.pid) return undefined;
+  if (
+    !Number.isInteger(parentPid) ||
+    parentPid <= 0 ||
+    parentPid === process.pid
+  )
+    return undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let resolveExit: (() => void) | undefined;
-  const exited = new Promise<void>((resolve) => { resolveExit = resolve; });
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
   const poll = (): void => {
     if (isRuntimeDaemonPidAlive(parentPid)) return;
     if (timer !== undefined) clearInterval(timer);
@@ -1772,7 +2177,9 @@ function normalizeCliError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function formatDaemonHealth(health: ReturnType<typeof classifyRuntimeDaemonHealth>): string {
+function formatDaemonHealth(
+  health: ReturnType<typeof classifyRuntimeDaemonHealth>,
+): string {
   if (health === 'healthy') return chalk.green(health);
   if (health === 'missing') return chalk.dim(health);
   if (health === 'stale') return chalk.yellow(health);
@@ -1784,164 +2191,460 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
   acp: () => {
     console.log(chalk.cyan('\nACP Server\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Run KodaX as a stdio ACP server so editors and IDEs can connect directly.'));
-    console.log(chalk.dim('  Session creation, prompt streaming, cancellation, and permission prompts reuse KodaX runtime semantics.\n'));
+    console.log(
+      chalk.dim(
+        '  Run KodaX as a stdio ACP server so editors and IDEs can connect directly.',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  Session creation, prompt streaming, cancellation, and permission prompts reuse KodaX runtime semantics.\n',
+      ),
+    );
     console.log(chalk.bold('Command:'));
     console.log(chalk.dim('  kodax acp serve [options]\n'));
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory exposed to ACP sessions');
-    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
-    console.log(chalk.dim('  --model <name>               ') + 'Model override');
-    console.log(chalk.dim('  --effort <level>             ') + 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
-    console.log(chalk.dim('  --reasoning <mode>           ') + 'Compatibility mode: off, auto, quick, balanced, deep');
-    console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, full, light, off');
-    console.log(chalk.dim('  --repo-intelligence-trace    ') + 'Emit repo intelligence trace metadata/logging');
-    console.log(chalk.dim('  -t, --thinking               ') + 'Compatibility alias for --reasoning auto');
-    console.log(chalk.dim('  --permission-mode <mode>     ') + 'Initial mode: plan, accept-edits, auto-in-project');
-    console.log(chalk.dim('  KODAX_ACP_LOG=<level>        ') + 'stderr log level: off, error, info, debug\n');
+    console.log(
+      chalk.dim('  --cwd <dir>                  ') +
+        'Working directory exposed to ACP sessions',
+    );
+    console.log(
+      chalk.dim('  -m, --provider <name>        ') + 'Provider to use',
+    );
+    console.log(
+      chalk.dim('  --model <name>               ') + 'Model override',
+    );
+    console.log(
+      chalk.dim('  --effort <level>             ') +
+        'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value',
+    );
+    console.log(
+      chalk.dim('  --reasoning <mode>           ') +
+        'Compatibility mode: off, auto, quick, balanced, deep',
+    );
+    console.log(
+      chalk.dim('  --repo-intelligence <mode>   ') +
+        'Repo intelligence mode: auto, full, light, off',
+    );
+    console.log(
+      chalk.dim('  --repo-intelligence-trace    ') +
+        'Emit repo intelligence trace metadata/logging',
+    );
+    console.log(
+      chalk.dim('  -t, --thinking               ') +
+        'Compatibility alias for --reasoning auto',
+    );
+    console.log(
+      chalk.dim('  --permission-mode <mode>     ') +
+        'Initial mode: plan, accept-edits, auto-in-project',
+    );
+    console.log(
+      chalk.dim('  KODAX_ACP_LOG=<level>        ') +
+        'stderr log level: off, error, info, debug\n',
+    );
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax acp serve'));
-    console.log(chalk.dim('  kodax acp serve --cwd C:\\repo --permission-mode accept-edits'));
-    console.log(chalk.dim('  kodax acp serve -m openai --model gpt-5.4 --reasoning balanced\n'));
+    console.log(
+      chalk.dim(
+        '  kodax acp serve --cwd C:\\repo --permission-mode accept-edits',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  kodax acp serve -m openai --model gpt-5.4 --reasoning balanced\n',
+      ),
+    );
   },
   skill: () => {
     console.log(chalk.cyan('\nSkill Utilities\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Use built-in skill packaging commands without starting an agent session.'));
-    console.log(chalk.dim('  These commands are thin wrappers around the builtin skill-creator tools.\n'));
+    console.log(
+      chalk.dim(
+        '  Use built-in skill packaging commands without starting an agent session.',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  These commands are thin wrappers around the builtin skill-creator tools.\n',
+      ),
+    );
     console.log(chalk.bold('Commands:'));
-    console.log(chalk.dim('  kodax skill init <name> [options]   ') + 'Create a new skill scaffold');
-    console.log(chalk.dim('  kodax skill validate <dir>          ') + 'Validate a skill directory');
-    console.log(chalk.dim('  kodax skill eval --skill-path ...   ') + 'Run end-to-end eval workspace generation');
-    console.log(chalk.dim('  kodax skill grade <workspace>       ') + 'Grade eval runs into grading.json files');
-    console.log(chalk.dim('  kodax skill analyze <workspace>     ') + 'Analyze benchmark variance and failures');
-    console.log(chalk.dim('  kodax skill compare <workspace>     ') + 'Blind-compare two configs across runs');
-    console.log(chalk.dim('  kodax skill package <dir> [options] ') + 'Package a skill as .skill');
-    console.log(chalk.dim('  kodax skill install <input> [opts]  ') + 'Install a skill from dir or .skill');
+    console.log(
+      chalk.dim('  kodax skill init <name> [options]   ') +
+        'Create a new skill scaffold',
+    );
+    console.log(
+      chalk.dim('  kodax skill validate <dir>          ') +
+        'Validate a skill directory',
+    );
+    console.log(
+      chalk.dim('  kodax skill eval --skill-path ...   ') +
+        'Run end-to-end eval workspace generation',
+    );
+    console.log(
+      chalk.dim('  kodax skill grade <workspace>       ') +
+        'Grade eval runs into grading.json files',
+    );
+    console.log(
+      chalk.dim('  kodax skill analyze <workspace>     ') +
+        'Analyze benchmark variance and failures',
+    );
+    console.log(
+      chalk.dim('  kodax skill compare <workspace>     ') +
+        'Blind-compare two configs across runs',
+    );
+    console.log(
+      chalk.dim('  kodax skill package <dir> [options] ') +
+        'Package a skill as .skill',
+    );
+    console.log(
+      chalk.dim('  kodax skill install <input> [opts]  ') +
+        'Install a skill from dir or .skill',
+    );
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax skill init release-notes --dest ./.kodax/skills'));
+    console.log(
+      chalk.dim('  kodax skill init release-notes --dest ./.kodax/skills'),
+    );
     console.log(chalk.dim('  kodax skill validate ./.kodax/skills/my-skill'));
-    console.log(chalk.dim('  kodax skill eval --skill-path ./.kodax/skills/my-skill --evals ./.kodax/skills/my-skill/evals/evals.json --workspace ./iteration-1'));
+    console.log(
+      chalk.dim(
+        '  kodax skill eval --skill-path ./.kodax/skills/my-skill --evals ./.kodax/skills/my-skill/evals/evals.json --workspace ./iteration-1',
+      ),
+    );
     console.log(chalk.dim('  kodax skill grade ./iteration-1'));
     console.log(chalk.dim('  kodax skill analyze ./iteration-1'));
-    console.log(chalk.dim('  kodax skill compare ./iteration-1 --config-a with_skill --config-b without_skill'));
-    console.log(chalk.dim('  kodax skill package ./.kodax/skills/my-skill --output ./my-skill.skill'));
-    console.log(chalk.dim('  kodax skill install ./my-skill.skill --dest ~/.kodax/skills --force\n'));
+    console.log(
+      chalk.dim(
+        '  kodax skill compare ./iteration-1 --config-a with_skill --config-b without_skill',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  kodax skill package ./.kodax/skills/my-skill --output ./my-skill.skill',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  kodax skill install ./my-skill.skill --dest ~/.kodax/skills --force\n',
+      ),
+    );
   },
   sessions: () => {
     console.log(chalk.cyan('\nSession Management\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  KodaX automatically saves conversation sessions, allowing you to'));
-    console.log(chalk.dim('  resume work later or switch between different conversations.\n'));
+    console.log(
+      chalk.dim(
+        '  KodaX automatically saves conversation sessions, allowing you to',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  resume work later or switch between different conversations.\n',
+      ),
+    );
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  -c, --continue       ') + 'Continue most recent non-empty conversation');
-    console.log(chalk.dim('  -r, --resume [value] ') + 'Resume by ID or exact title (no value = searchable picker)');
-    console.log(chalk.dim('  -n, --new            ') + 'Legacy no-op; current CLI already starts a fresh session by default');
-    console.log(chalk.dim('  -s, --session <op>   ') + 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
-    console.log(chalk.dim('  --no-session         ') + 'Disable session persistence (print mode only)\n');
+    console.log(
+      chalk.dim('  -c, --continue       ') +
+        'Continue most recent non-empty conversation',
+    );
+    console.log(
+      chalk.dim('  -r, --resume [value] ') +
+        'Resume by ID or exact title (no value = searchable picker)',
+    );
+    console.log(
+      chalk.dim('  -n, --new            ') +
+        'Legacy no-op; current CLI already starts a fresh session by default',
+    );
+    console.log(
+      chalk.dim('  -s, --session <op>   ') +
+        'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID',
+    );
+    console.log(
+      chalk.dim('  --no-session         ') +
+        'Disable session persistence (print mode only)\n',
+    );
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax                      ') + '# Start new session (interactive)');
-    console.log(chalk.dim('  kodax -c                   ') + '# Continue recent conversation');
-    console.log(chalk.dim('  kodax -r                   ') + '# Search and select a saved session');
-    console.log(chalk.dim('  kodax -r 20260219_143052   ') + '# Resume specific session');
-    console.log(chalk.dim('  kodax -r "Review runtime"  ') + '# Resume a unique exact title; duplicates open the picker');
-    console.log(chalk.dim('  kodax -s list              ') + '# List all sessions');
-    console.log(chalk.dim('  kodax -s delete 20260219   ') + '# Delete a session');
-    console.log(chalk.dim('  kodax -p "task" --no-session') + ' # Run without saving\n');
+    console.log(
+      chalk.dim('  kodax                      ') +
+        '# Start new session (interactive)',
+    );
+    console.log(
+      chalk.dim('  kodax -c                   ') +
+        '# Continue recent conversation',
+    );
+    console.log(
+      chalk.dim('  kodax -r                   ') +
+        '# Search and select a saved session',
+    );
+    console.log(
+      chalk.dim('  kodax -r 20260219_143052   ') + '# Resume specific session',
+    );
+    console.log(
+      chalk.dim('  kodax -r "Review runtime"  ') +
+        '# Resume a unique exact title; duplicates open the picker',
+    );
+    console.log(
+      chalk.dim('  kodax -s list              ') + '# List all sessions',
+    );
+    console.log(
+      chalk.dim('  kodax -s delete 20260219   ') + '# Delete a session',
+    );
+    console.log(
+      chalk.dim('  kodax -p "task" --no-session') + ' # Run without saving\n',
+    );
   },
   project: () => {
     console.log(chalk.cyan('\nProject Mode\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Project mode spans two surfaces: non-REPL bootstrap commands and REPL /project commands.'));
-    console.log(chalk.dim('  Current workflow includes planning, quality review, brainstorm sessions, harness-verified execution, and runtime artifacts under .agent/project/.\n'));
+    console.log(
+      chalk.dim(
+        '  Project mode spans two surfaces: non-REPL bootstrap commands and REPL /project commands.',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  Current workflow includes planning, quality review, brainstorm sessions, harness-verified execution, and runtime artifacts under .agent/project/.\n',
+      ),
+    );
     console.log(chalk.bold('REPL /project Commands:'));
-    console.log(chalk.dim('  /project status [prompt] [--features|--progress]') + '  Status + guided analysis');
-    console.log(chalk.dim('  /project plan [#index|topic]                 ') + '  Generate project or feature planning truth');
-    console.log(chalk.dim('  /project quality                             ') + '  Deterministic workflow health + release review');
-    console.log(chalk.dim('  /project brainstorm                          ') + '  UI-driven discovery flow');
-    console.log(chalk.dim('  /project next [prompt|#index] [--no-confirm] ') + '  Harness-verified feature execution');
-    console.log(chalk.dim('  /project auto [prompt] [--max=N|--confirm]   ') + '  REPL-side auto-continue with pause support');
-    console.log(chalk.dim('  /project pause                               ') + '  Stop /project auto');
-    console.log(chalk.dim('  /project verify [#index|--last]              ') + '  Rerun deterministic harness verification');
-    console.log(chalk.dim('  /project edit <prompt>                       ') + '  Edit current-stage truth');
-    console.log(chalk.dim('  /project analyze [prompt]                    ') + '  AI project analysis');
-    console.log(chalk.dim('  /project reset [--all]                       ') + '  Clear progress or remove project truth files\n');
+    console.log(
+      chalk.dim('  /project status [prompt] [--features|--progress]') +
+        '  Status + guided analysis',
+    );
+    console.log(
+      chalk.dim('  /project plan [#index|topic]                 ') +
+        '  Generate project or feature planning truth',
+    );
+    console.log(
+      chalk.dim('  /project quality                             ') +
+        '  Deterministic workflow health + release review',
+    );
+    console.log(
+      chalk.dim('  /project brainstorm                          ') +
+        '  UI-driven discovery flow',
+    );
+    console.log(
+      chalk.dim('  /project next [prompt|#index] [--no-confirm] ') +
+        '  Harness-verified feature execution',
+    );
+    console.log(
+      chalk.dim('  /project auto [prompt] [--max=N|--confirm]   ') +
+        '  REPL-side auto-continue with pause support',
+    );
+    console.log(
+      chalk.dim('  /project pause                               ') +
+        '  Stop /project auto',
+    );
+    console.log(
+      chalk.dim('  /project verify [#index|--last]              ') +
+        '  Rerun deterministic harness verification',
+    );
+    console.log(
+      chalk.dim('  /project edit <prompt>                       ') +
+        '  Edit current-stage truth',
+    );
+    console.log(
+      chalk.dim('  /project analyze [prompt]                    ') +
+        '  AI project analysis',
+    );
+    console.log(
+      chalk.dim('  /project reset [--all]                       ') +
+        '  Clear progress or remove project truth files\n',
+    );
     console.log(chalk.bold('Current Semantics:'));
-    console.log(chalk.dim('  - /project next and /project auto are verifier-gated, not self-declared completion'));
-    console.log(chalk.dim('  - /project plan writes the latest plan to .agent/project/session_plan.md'));
-    console.log(chalk.dim('  - /project quality combines deterministic checks with optional model-generated guidance'));
-    console.log(chalk.dim('  - /project brainstorm aligns requirements into .agent/project/alignment.md\n'));
+    console.log(
+      chalk.dim(
+        '  - /project next and /project auto are verifier-gated, not self-declared completion',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  - /project plan writes the latest plan to .agent/project/session_plan.md',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  - /project quality combines deterministic checks with optional model-generated guidance',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  - /project brainstorm aligns requirements into .agent/project/alignment.md\n',
+      ),
+    );
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax -h project'));
-    console.log(chalk.dim('  kodax  # then: /project brainstorm -> /project plan -> /project next'));
-    console.log(chalk.dim('  kodax  # then: /project quality | /project verify --last | /project auto --max=3\n'));
+    console.log(
+      chalk.dim(
+        '  kodax  # then: /project brainstorm -> /project plan -> /project next',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  kodax  # then: /project quality | /project verify --last | /project auto --max=3\n',
+      ),
+    );
   },
   auto: () => {
     console.log(chalk.cyan('\nAuto Mode\n'));
     console.log(chalk.bold('Auto Mode (-y, --auto):'));
     console.log(chalk.dim('  Backward-compatibility alias kept for scripts.'));
-    console.log(chalk.dim('  Non-REPL CLI already runs in auto mode by default, so this flag currently has no additional effect.\n'));
+    console.log(
+      chalk.dim(
+        '  Non-REPL CLI already runs in auto mode by default, so this flag currently has no additional effect.\n',
+      ),
+    );
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  -y, --auto             ') + 'Backward-compat alias (no-op in non-REPL CLI)\n');
+    console.log(
+      chalk.dim('  -y, --auto             ') +
+        'Backward-compat alias (no-op in non-REPL CLI)\n',
+    );
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -y "refactor code"          ') + '# Legacy alias; same as plain non-REPL run\n');
+    console.log(
+      chalk.dim('  kodax -y "refactor code"          ') +
+        '# Legacy alias; same as plain non-REPL run\n',
+    );
   },
   provider: () => {
     const providerNames = getAvailableProviderNames();
     console.log(chalk.cyan('\nLLM Providers\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  KodaX supports multiple LLM providers. Configure via -m option'));
-    console.log(chalk.dim('  or set default in ~/.kodax/config.json. Use --model to override the default model.\n'));
+    console.log(
+      chalk.dim(
+        '  KodaX supports multiple LLM providers. Configure via -m option',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  or set default in ~/.kodax/config.json. Use --model to override the default model.\n',
+      ),
+    );
     console.log(chalk.bold('Available Providers:'));
     providerNames.forEach((name) => {
-      const detail = name === 'gemini-cli' || name === 'codex-cli'
-        ? 'CLI bridge provider (latest-user-message only, MCP unavailable)'
-        : 'Native provider';
+      const detail =
+        name === 'gemini-cli' || name === 'codex-cli'
+          ? 'CLI bridge provider (latest-user-message only, MCP unavailable)'
+          : 'Native provider';
       console.log(chalk.dim(`  ${name.padEnd(15)} `) + detail);
     });
     console.log();
     console.log(chalk.bold('Key Options:'));
     console.log(chalk.dim('  -m, --provider <name> ') + 'Provider to use');
-    console.log(chalk.dim('  --model <name>        ') + 'Model override for the selected provider\n');
+    console.log(
+      chalk.dim('  --model <name>        ') +
+        'Model override for the selected provider\n',
+    );
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax -m anthropic "task"     ') + '# Use Claude');
-    console.log(chalk.dim('  kodax -m openai --model gpt-5.4 "task"') + '# Override model');
-    console.log(chalk.dim('  /model                        ') + '# Switch in REPL (saves to config)\n');
+    console.log(
+      chalk.dim('  kodax -m openai --model gpt-5.4 "task"') +
+        '# Override model',
+    );
+    console.log(
+      chalk.dim('  /model                        ') +
+        '# Switch in REPL (saves to config)\n',
+    );
   },
   thinking: () => {
     console.log(chalk.cyan('\nReasoning Effort\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Reasoning controls how much deliberate analysis KodaX should apply.'));
-    console.log(chalk.dim('  Use --effort for new configs; --reasoning remains as a compatibility alias.\n'));
+    console.log(
+      chalk.dim(
+        '  Reasoning controls how much deliberate analysis KodaX should apply.',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  Use --effort for new configs; --reasoning remains as a compatibility alias.\n',
+      ),
+    );
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  --effort <level>     ') + 'Set reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
-    console.log(chalk.dim('  --reasoning <mode>   ') + 'Compatibility mode: off, auto, quick, balanced, deep');
-    console.log(chalk.dim('  --agent-mode <mode>  ') + 'Set agent mode: ama, sa');
-    console.log(chalk.dim('  -t, --thinking       ') + 'Compatibility alias for --reasoning auto\n');
+    console.log(
+      chalk.dim('  --effort <level>     ') +
+        'Set reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value',
+    );
+    console.log(
+      chalk.dim('  --reasoning <mode>   ') +
+        'Compatibility mode: off, auto, quick, balanced, deep',
+    );
+    console.log(
+      chalk.dim('  --agent-mode <mode>  ') + 'Set agent mode: ama, sa',
+    );
+    console.log(
+      chalk.dim('  -t, --thinking       ') +
+        'Compatibility alias for --reasoning auto\n',
+    );
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax --effort high "design the architecture"     ') + '# High effort');
-    console.log(chalk.dim('  kodax --reasoning deep "design the architecture"   ') + '# Legacy alias for high effort');
-    console.log(chalk.dim('  kodax --reasoning balanced -p "analyze this bug"   ') + '# Medium-depth reasoning');
-    console.log(chalk.dim('  kodax -t "review this PR"                           ') + '# Alias for auto');
-    console.log(chalk.dim('  /reasoning balanced                                 ') + '# Set in REPL\n');
+    console.log(
+      chalk.dim('  kodax --effort high "design the architecture"     ') +
+        '# High effort',
+    );
+    console.log(
+      chalk.dim('  kodax --reasoning deep "design the architecture"   ') +
+        '# Legacy alias for high effort',
+    );
+    console.log(
+      chalk.dim('  kodax --reasoning balanced -p "analyze this bug"   ') +
+        '# Medium-depth reasoning',
+    );
+    console.log(
+      chalk.dim('  kodax -t "review this PR"                           ') +
+        '# Alias for auto',
+    );
+    console.log(
+      chalk.dim('  /reasoning balanced                                 ') +
+        '# Set in REPL\n',
+    );
   },
   print: () => {
     console.log(chalk.cyan('\nPrint Mode\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Run a single task and exit. Useful for scripting and CI/CD.\n'));
-    console.log(chalk.dim('  `--mode json` is a scripting surface, not the ACP server protocol.\n'));
+    console.log(
+      chalk.dim(
+        '  Run a single task and exit. Useful for scripting and CI/CD.\n',
+      ),
+    );
+    console.log(
+      chalk.dim(
+        '  `--mode json` is a scripting surface, not the ACP server protocol.\n',
+      ),
+    );
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -p, --print <text>  ') + 'Run task and exit');
-    console.log(chalk.dim('  --mode json         ') + 'Emit newline-delimited JSON events to stdout for scripts/CI');
-    console.log(chalk.dim('  --model <name>      ') + 'Override the selected provider model');
-    console.log(chalk.dim('  --no-session        ') + 'Disable session saving\n');
+    console.log(
+      chalk.dim('  --mode json         ') +
+        'Emit newline-delimited JSON events to stdout for scripts/CI',
+    );
+    console.log(
+      chalk.dim('  --model <name>      ') +
+        'Override the selected provider model',
+    );
+    console.log(
+      chalk.dim('  --no-session        ') + 'Disable session saving\n',
+    );
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -p "fix the bug in auth.ts"   ') + '# Quick fix');
-    console.log(chalk.dim('  kodax -p "generate tests" --reasoning balanced') + ' # With reasoning');
-    console.log(chalk.dim('  kodax -p "task" -m openai --model gpt-5.4') + ' # Provider + model override');
-    console.log(chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run');
-    console.log(chalk.dim('  kodax --mode json "inspect auth flow"') + ' # Structured JSONL output');
-    console.log(chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
+    console.log(
+      chalk.dim('  kodax -p "fix the bug in auth.ts"   ') + '# Quick fix',
+    );
+    console.log(
+      chalk.dim('  kodax -p "generate tests" --reasoning balanced') +
+        ' # With reasoning',
+    );
+    console.log(
+      chalk.dim('  kodax -p "task" -m openai --model gpt-5.4') +
+        ' # Provider + model override',
+    );
+    console.log(
+      chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run',
+    );
+    console.log(
+      chalk.dim('  kodax --mode json "inspect auth flow"') +
+        ' # Structured JSONL output',
+    );
+    console.log(
+      chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') +
+        ' # Explicit provider selection\n',
+    );
   },
 };
 
@@ -1963,39 +2666,90 @@ const CLI_SUBCOMMAND_NAMES = new Set([
   'setup',
 ]);
 
-function collectRepeatedOption(value: string, previous: string[] = []): string[] {
+function collectRepeatedOption(
+  value: string,
+  previous: string[] = [],
+): string[] {
   return [...previous, value];
 }
 
 export function configureKodaXRootCommand(program: Command): Command {
-  return program
-    // Disable commander default help so the custom topic help can take over.
-    .helpOption(false)
-    .argument('[prompt...]', 'Prompt text for a single CLI run')
-    .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
-    .option('-p, --print <text>', 'Print mode: run single task and exit')
-    .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
-    .option('--runtime-mode <mode>', 'Interactive runtime mode: embedded, daemon', parseRuntimeModeOption)
-    .option('-c, --continue', 'Continue most recent non-empty conversation in current directory')
-    .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
-    .option('-r, --resume [id-or-title]', 'Resume session by ID or exact title (no value = open searchable session picker)')
-    .option('-m, --provider <name>', 'LLM provider')
-    .option('--model <name>', 'Model override')
-    .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
-    .option('--effort <level>', 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value', parseEffortOption)
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
-    .option('--agent-mode <mode>', 'Agent mode: ama, sa', parseAgentModeOption)
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
-    .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
-    .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
-    .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
-    .option('--apply-session-cleanup', 'Archive strictly matched empty ACP test sessions (with -s cleanup-acp)')
-    .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
-    .option('--no-session', 'Disable session persistence (print mode only)')
-    .option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')
-    .allowUnknownOption(false)
-    // Keep the root command executable even when subcommands like `skill` exist.
-    .action(() => {});
+  return (
+    program
+      // Disable commander default help so the custom topic help can take over.
+      .helpOption(false)
+      .argument('[prompt...]', 'Prompt text for a single CLI run')
+      .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
+      .option('-p, --print <text>', 'Print mode: run single task and exit')
+      .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
+      .option(
+        '--runtime-mode <mode>',
+        'Interactive runtime mode: embedded, daemon',
+        parseRuntimeModeOption,
+      )
+      .option(
+        '-c, --continue',
+        'Continue most recent non-empty conversation in current directory',
+      )
+      .option(
+        '-n, --new',
+        'Legacy no-op; current CLI already starts a fresh session by default',
+      )
+      .option(
+        '-r, --resume [id-or-title]',
+        'Resume session by ID or exact title (no value = open searchable session picker)',
+      )
+      .option('-m, --provider <name>', 'LLM provider')
+      .option('--model <name>', 'Model override')
+      .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
+      .option(
+        '--effort <level>',
+        'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value',
+        parseEffortOption,
+      )
+      .option(
+        '--reasoning <mode>',
+        'Reasoning mode: off, auto, quick, balanced, deep',
+        parseReasoningModeOption,
+      )
+      .option(
+        '--agent-mode <mode>',
+        'Agent mode: ama, sa',
+        parseAgentModeOption,
+      )
+      .option(
+        '--repo-intelligence <mode>',
+        'Repo intelligence mode: auto, full, light, off',
+        parseRepoIntelligenceModeOption,
+      )
+      .option(
+        '--repo-intelligence-trace',
+        'Enable repo intelligence trace metadata/logging',
+      )
+      .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
+      .option(
+        '-s, --session <op>',
+        'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID',
+      )
+      .option(
+        '--apply-session-cleanup',
+        'Archive strictly matched empty ACP test sessions (with -s cleanup-acp)',
+      )
+      .option(
+        '--extension <path>',
+        'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)',
+        collectRepeatedOption,
+        [],
+      )
+      .option('--no-session', 'Disable session persistence (print mode only)')
+      .option(
+        '--max-iter <n>',
+        'Max iterations (default: 200 from coding package)',
+      )
+      .allowUnknownOption(false)
+      // Keep the root command executable even when subcommands like `skill` exist.
+      .action(() => {})
+  );
 }
 
 function showCliHelpTopic(topic: string): boolean {
@@ -2009,14 +2763,32 @@ function showCliHelpTopic(topic: string): boolean {
 
 function showCliHelpTopics(): void {
   console.log(chalk.cyan('\nDetailed Help Topics:\n'));
-  console.log(chalk.dim('  kodax -h acp        ') + 'ACP server mode for editors and IDEs');
-  console.log(chalk.dim('  kodax -h sessions   ') + 'Session management (-c, -r, -s options)');
-  console.log(chalk.dim('  kodax -h skill      ') + 'Skill packaging and installation helpers');
-  console.log(chalk.dim('  kodax -h project    ') + 'Project mode workflow across CLI and /project');
-  console.log(chalk.dim('  kodax -h auto       ') + 'Auto mode backward-compat alias');
+  console.log(
+    chalk.dim('  kodax -h acp        ') +
+      'ACP server mode for editors and IDEs',
+  );
+  console.log(
+    chalk.dim('  kodax -h sessions   ') +
+      'Session management (-c, -r, -s options)',
+  );
+  console.log(
+    chalk.dim('  kodax -h skill      ') +
+      'Skill packaging and installation helpers',
+  );
+  console.log(
+    chalk.dim('  kodax -h project    ') +
+      'Project mode workflow across CLI and /project',
+  );
+  console.log(
+    chalk.dim('  kodax -h auto       ') + 'Auto mode backward-compat alias',
+  );
   console.log(chalk.dim('  kodax -h provider   ') + 'LLM provider options');
-  console.log(chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control');
-  console.log(chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n');
+  console.log(
+    chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control',
+  );
+  console.log(
+    chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n',
+  );
 }
 
 type CliRunResultEvent = {
@@ -2059,16 +2831,30 @@ function printAcpSubcommandHelp(name: string): boolean {
     console.log('Run KodaX as a stdio ACP server for editors and IDEs.');
     console.log();
     console.log('Options:');
-    console.log('  --cwd <dir>                  Working directory exposed to ACP sessions');
+    console.log(
+      '  --cwd <dir>                  Working directory exposed to ACP sessions',
+    );
     console.log('  -m, --provider <name>        Provider to use');
     console.log('  --model <name>               Model override');
-    console.log('  --effort <level>             Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
-    console.log('  -t, --thinking               Compatibility alias for --reasoning auto');
-    console.log('  --reasoning <mode>           Reasoning mode: off, auto, quick, balanced, deep');
-    console.log('  --repo-intelligence <mode>   Repo intelligence mode: auto, full, light, off');
-    console.log('  --repo-intelligence-trace    Emit repo intelligence trace metadata/logging');
+    console.log(
+      '  --effort <level>             Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value',
+    );
+    console.log(
+      '  -t, --thinking               Compatibility alias for --reasoning auto',
+    );
+    console.log(
+      '  --reasoning <mode>           Reasoning mode: off, auto, quick, balanced, deep',
+    );
+    console.log(
+      '  --repo-intelligence <mode>   Repo intelligence mode: auto, full, light, off',
+    );
+    console.log(
+      '  --repo-intelligence-trace    Emit repo intelligence trace metadata/logging',
+    );
     console.log('  --permission-mode <mode>     Initial permission mode');
-    console.log('  KODAX_ACP_LOG=<level>        stderr log level: off, error, info, debug');
+    console.log(
+      '  KODAX_ACP_LOG=<level>        stderr log level: off, error, info, debug',
+    );
     return true;
   }
 
@@ -2084,7 +2870,9 @@ function printSkillSubcommandHelp(name: string): boolean {
     console.log('Options:');
     console.log('  -d, --dest <dir>         Base skills directory');
     console.log('  --description <text>     Initial skill description');
-    console.log('  -f, --force              Allow writing into an existing target directory');
+    console.log(
+      '  -f, --force              Allow writing into an existing target directory',
+    );
     console.log('  --no-evals               Skip creating evals/evals.json');
     return true;
   }
@@ -2099,7 +2887,9 @@ function printSkillSubcommandHelp(name: string): boolean {
   if (name === 'eval') {
     console.log('Usage: kodax skill eval [options]');
     console.log();
-    console.log('Run end-to-end skill evals and write a benchmark/review workspace.');
+    console.log(
+      'Run end-to-end skill evals and write a benchmark/review workspace.',
+    );
     console.log();
     console.log('Required Options:');
     console.log('  --skill-path <dir>       Skill directory to evaluate');
@@ -2113,7 +2903,9 @@ function printSkillSubcommandHelp(name: string): boolean {
     console.log('  --max-iter <n>           Max iterations per run');
     console.log('  --reasoning <mode>       Reasoning mode');
     console.log('  --cwd <dir>              Working directory for the runs');
-    console.log('  --configs <list>         Comma-separated configs, e.g. with_skill,without_skill');
+    console.log(
+      '  --configs <list>         Comma-separated configs, e.g. with_skill,without_skill',
+    );
     console.log('  -o, --output <file>      Optional JSON summary output');
     return true;
   }
@@ -2128,21 +2920,29 @@ function printSkillSubcommandHelp(name: string): boolean {
     console.log('  --model <name>           Model override');
     console.log('  --reasoning <mode>       Reasoning mode');
     console.log('  --max-iter <n>           Max iterations per grading run');
-    console.log('  --configs <list>         Comma-separated configs, e.g. with_skill,without_skill');
-    console.log('  --overwrite              Re-grade runs that already have grading.json');
+    console.log(
+      '  --configs <list>         Comma-separated configs, e.g. with_skill,without_skill',
+    );
+    console.log(
+      '  --overwrite              Re-grade runs that already have grading.json',
+    );
     return true;
   }
 
   if (name === 'analyze') {
     console.log('Usage: kodax skill analyze [options] <workspace>');
     console.log();
-    console.log('Analyze benchmark variance and write analysis.json + analysis.md.');
+    console.log(
+      'Analyze benchmark variance and write analysis.json + analysis.md.',
+    );
     console.log();
     console.log('Options:');
     console.log('  --benchmark <file>       Optional benchmark.json path');
     console.log('  --output <file>          JSON output path');
     console.log('  --markdown <file>        Markdown output path');
-    console.log('  --skill-name <name>      Skill name if benchmark.json must be regenerated');
+    console.log(
+      '  --skill-name <name>      Skill name if benchmark.json must be regenerated',
+    );
     console.log('  --provider <name>        Provider to use');
     console.log('  --model <name>           Model override');
     console.log('  --reasoning <mode>       Reasoning mode');
@@ -2155,8 +2955,12 @@ function printSkillSubcommandHelp(name: string): boolean {
     console.log('Blind-compare two configs across eval run pairs.');
     console.log();
     console.log('Options:');
-    console.log('  --config-a <name>        Primary config (default: with_skill)');
-    console.log('  --config-b <name>        Baseline config (default: without_skill)');
+    console.log(
+      '  --config-a <name>        Primary config (default: with_skill)',
+    );
+    console.log(
+      '  --config-b <name>        Baseline config (default: without_skill)',
+    );
     console.log('  --output <file>          JSON output path');
     console.log('  --markdown <file>        Markdown output path');
     console.log('  --max-pairs <n>          Limit pairs per eval');
@@ -2179,11 +2983,15 @@ function printSkillSubcommandHelp(name: string): boolean {
   if (name === 'install') {
     console.log('Usage: kodax skill install [options] <input>');
     console.log();
-    console.log('Install a skill directory or .skill archive into a skills directory.');
+    console.log(
+      'Install a skill directory or .skill archive into a skills directory.',
+    );
     console.log();
     console.log('Options:');
     console.log('  -d, --dest <dir>         Destination skills directory');
-    console.log('  -f, --force              Overwrite an existing target skill');
+    console.log(
+      '  -f, --force              Overwrite an existing target skill',
+    );
     return true;
   }
 
@@ -2197,25 +3005,55 @@ function showBasicHelp(): void {
   console.log('       kodax "your task"');
   console.log('       kodax /command_name\n');
   console.log('Options:');
-  console.log('  -h, --help [TOPIC]      Show help, or detailed help for a topic');
+  console.log(
+    '  -h, --help [TOPIC]      Show help, or detailed help for a topic',
+  );
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
-  console.log('  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI');
-  console.log('  -c, --continue          Continue most recent non-empty conversation');
-  console.log('  -r, --resume [value]    Resume by ID or exact title (no value = searchable picker)');
-  console.log('  -n, --new               Legacy no-op; current CLI already starts a fresh session by default');
+  console.log(
+    '  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI',
+  );
+  console.log(
+    '  -c, --continue          Continue most recent non-empty conversation',
+  );
+  console.log(
+    '  -r, --resume [value]    Resume by ID or exact title (no value = searchable picker)',
+  );
+  console.log(
+    '  -n, --new               Legacy no-op; current CLI already starts a fresh session by default',
+  );
   console.log(`  -m, --provider NAME     LLM provider (${providerNames})`);
-  console.log('  --model NAME            Model override for the selected provider');
-  console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
-  console.log('  --effort LEVEL          Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value');
-  console.log('  --reasoning MODE        Compatibility mode: off, auto, quick, balanced, deep');
+  console.log(
+    '  --model NAME            Model override for the selected provider',
+  );
+  console.log(
+    '  -t, --thinking          Compatibility alias for --reasoning auto',
+  );
+  console.log(
+    '  --effort LEVEL          Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value',
+  );
+  console.log(
+    '  --reasoning MODE        Compatibility mode: off, auto, quick, balanced, deep',
+  );
   console.log('  --agent-mode MODE       Agent mode: ama, sa');
-  console.log('  -y, --auto              Backward-compat alias; no effect in non-REPL CLI');
-  console.log('  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
-  console.log('  --no-session            Disable session persistence (print mode only)');
-  console.log('  --max-iter N            Max iterations per session (default: 200)\n');
-  process.stdout.write('  kodax setup             Configure provider/model metadata (never stores an API key)\n\n');
+  console.log(
+    '  -y, --auto              Backward-compat alias; no effect in non-REPL CLI',
+  );
+  console.log(
+    '  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID',
+  );
+  console.log(
+    '  --no-session            Disable session persistence (print mode only)',
+  );
+  console.log(
+    '  --max-iter N            Max iterations per session (default: 200)\n',
+  );
+  process.stdout.write(
+    '  kodax setup             Configure provider/model metadata (never stores an API key)\n\n',
+  );
   console.log('Help Topics (use -h <topic>):');
-  console.log('  acp, skill, sessions, project, auto, provider, thinking, print\n');
+  console.log(
+    '  acp, skill, sessions, project, auto, provider, thinking, print\n',
+  );
   console.log('Interactive Commands (in REPL mode):');
   console.log('  /help, /h               Show all commands');
   console.log('  /exit, /quit            Exit interactive mode');
@@ -2226,23 +3064,47 @@ function showBasicHelp(): void {
   console.log('  /sessions               List saved sessions\n');
   console.log('Examples:');
   console.log('  kodax                             # Enter interactive mode');
-  process.stdout.write('  kodax setup                       # Configure provider/model, then restart terminal\n');
-  console.log('  kodax "create a component"        # Run single task (with session)');
+  process.stdout.write(
+    '  kodax setup                       # Configure provider/model, then restart terminal\n',
+  );
+  console.log(
+    '  kodax "create a component"        # Run single task (with session)',
+  );
   console.log('  kodax acp serve                   # Start ACP stdio server');
   console.log('  kodax skill init my-skill         # Scaffold a new skill');
-  console.log('  kodax skill package ./my-skill    # Package a skill without starting the agent');
-  console.log('  kodax -h project                 # Project mode workflow across CLI and REPL');
-  console.log('  kodax -p "quick fix" --reasoning balanced  # Quick task with reasoning');
-  console.log('  kodax -c                          # Continue recent conversation');
+  console.log(
+    '  kodax skill package ./my-skill    # Package a skill without starting the agent',
+  );
+  console.log(
+    '  kodax -h project                 # Project mode workflow across CLI and REPL',
+  );
+  console.log(
+    '  kodax -p "quick fix" --reasoning balanced  # Quick task with reasoning',
+  );
+  console.log(
+    '  kodax -c                          # Continue recent conversation',
+  );
   console.log('  kodax -c "finish this"            # Continue with new task');
-  console.log('  kodax -r                          # Search and select a saved session');
-  console.log('  kodax -r "Review runtime"         # Resume by unique exact title');
-  console.log('  kodax -p "task" --model gpt-5.4   # Override model for a one-off run');
-  console.log('  kodax -p "task" --no-session      # Run without saving session');
-  console.log('  kodax -h sessions                 # Detailed help on sessions\n');
+  console.log(
+    '  kodax -r                          # Search and select a saved session',
+  );
+  console.log(
+    '  kodax -r "Review runtime"         # Resume by unique exact title',
+  );
+  console.log(
+    '  kodax -p "task" --model gpt-5.4   # Override model for a one-off run',
+  );
+  console.log(
+    '  kodax -p "task" --no-session      # Run without saving session',
+  );
+  console.log(
+    '  kodax -h sessions                 # Detailed help on sessions\n',
+  );
 }
 
-async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerItem[]> {
+async function loadResumableSessions(
+  maxSessions = 1000,
+): Promise<SessionPickerItem[]> {
   const sessions = await listSessions({
     projectRoot: process.cwd(),
     scope: 'user',
@@ -2254,8 +3116,12 @@ async function loadResumableSessions(maxSessions = 1000): Promise<SessionPickerI
       id: session.id,
       title: session.title,
       msgCount: session.msgCount,
-      ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
-      ...(session.runtimeInfo?.surface !== undefined ? { surface: session.runtimeInfo.surface } : {}),
+      ...(session.createdAt !== undefined
+        ? { createdAt: session.createdAt }
+        : {}),
+      ...(session.runtimeInfo?.surface !== undefined
+        ? { surface: session.runtimeInfo.surface }
+        : {}),
     }));
 }
 
@@ -2265,24 +3131,152 @@ function printProviderSetupCompletion(selection: {
   readonly apiKeyEnv: string;
   readonly configPath: string;
 }): void {
-  process.stdout.write(`${chalk.green(`\nProvider setup saved: ${selection.provider}/${selection.model}`)}\n`);
+  process.stdout.write(
+    `${chalk.green(`\nProvider setup saved: ${selection.provider}/${selection.model}`)}\n`,
+  );
   process.stdout.write(`${chalk.dim(`Config: ${selection.configPath}`)}\n`);
-  for (const line of providerSetupRestartInstructions({ apiKeyEnv: selection.apiKeyEnv })) {
+  for (const line of providerSetupRestartInstructions({
+    apiKeyEnv: selection.apiKeyEnv,
+  })) {
     process.stdout.write(`  ${line}\n`);
   }
 }
 
-async function executeProviderSetup(): Promise<void> {
-  const result = await runProviderSetupWizard();
+async function prepareSetupSandboxReport(): Promise<{
+  readonly status: 'ready' | 'cancelled' | 'unavailable';
+  readonly lines: readonly string[];
+}> {
+  const outcome = await prepareSandboxRuntimeForSetup({
+    allowElevation: process.stdin.isTTY === true && process.stdout.isTTY === true,
+  });
+  const details = [
+    ...outcome.guidance,
+    ...outcome.doctor.diagnostics.map((diagnostic) => `Diagnostic: ${diagnostic}`),
+    ...(outcome.error ? [`Setup result: ${outcome.error}`] : []),
+    ...(outcome.status === 'unavailable'
+      ? ['KodaX will use the normal permission policy; sandbox containment remains off until activated.']
+      : []),
+  ];
+  return { status: outcome.status, lines: [...new Set(details)] };
+}
+
+async function inspectSandboxReport(): Promise<{
+  readonly ready: boolean;
+  readonly platform: string;
+  readonly version: string;
+  readonly backend: string;
+  readonly diagnostics: readonly string[];
+  readonly guidance: readonly string[];
+}> {
+  const doctor = await doctorSandboxRuntime({ refresh: true });
+  return {
+    ready: doctor.ready,
+    platform: doctor.platform,
+    version: doctor.version,
+    backend: sandboxRuntimeCapability().backend,
+    diagnostics: doctor.diagnostics,
+    guidance: sandboxSetupGuidance(doctor),
+  };
+}
+
+async function executeProviderSetup(
+  input: { readonly customOnly?: boolean } = {},
+): Promise<void> {
+  process.stdout.write(`\n${renderSetupGuide()}\n\n`);
+  const sandbox = await prepareSetupSandboxReport();
+  const sandboxLabel = sandbox.status === 'ready'
+    ? chalk.green('active')
+    : sandbox.status === 'cancelled'
+      ? chalk.yellow('cancelled')
+      : chalk.yellow('not active');
+  process.stdout.write(`Sandbox: [${sandboxLabel}]\n`);
+  for (const line of sandbox.lines) process.stdout.write(`  ${line}\n`);
+  process.stdout.write('\n');
+  const initialized = initializeSetupConfiguration({
+    validateA2A: parseA2AIntegrationDocument,
+  });
+  for (const file of initialized.files) {
+    const marker =
+      file.status === 'created'
+        ? chalk.green('created')
+        : file.status === 'invalid'
+          ? chalk.red('invalid')
+          : file.status === 'missing'
+            ? chalk.yellow('missing')
+            : chalk.dim('existing');
+    process.stdout.write(`  [${marker}] ${file.path}\n`);
+    if (file.diagnostic)
+      process.stdout.write(`      ${chalk.red(file.diagnostic)}\n`);
+  }
+  process.stdout.write('\n');
+  if (initialized.files.some((file) => file.status === 'invalid')) {
+    process.stderr.write(
+      `${chalk.red('Setup stopped: fix the invalid active configuration above, then run `kodax setup` again.')}\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await runProviderSetupWizard({ customOnly: input.customOnly });
   if (result.status === 'cancelled') {
-    process.stdout.write(`${chalk.dim('Provider setup cancelled. Run `kodax setup` when you are ready.')}\n`);
+    process.stdout.write(
+      `${chalk.dim(
+        'Provider setup cancelled. Configuration files remain initialized; run `kodax setup` when ready.',
+      )}\n`,
+    );
     return;
   }
   printProviderSetupCompletion(result.selection);
 }
 
+export function configureKodaXSetupCommand(program: Command): Command {
+  const setupCommand = program
+    .command('setup')
+    .description(
+      'Initialize configuration and configure a provider without storing an API key',
+    )
+    .helpOption(
+      '-h, --help',
+      'Show the complete setup guide without changing files',
+    )
+    .option(
+      '--custom',
+      'Interactively configure a custom OpenAI/Anthropic-compatible provider',
+    )
+    .action((options: { readonly custom?: boolean }) =>
+      executeProviderSetup({
+        customOnly: options.custom === true,
+      }),
+    );
+  setupCommand.addHelpText('after', () => `\n${renderSetupGuide()}\n`);
+  return setupCommand;
+}
+
+export function showKodaXSetupHelpIfRequested(
+  argv: readonly string[],
+  setupCommand: Command,
+): boolean {
+  if (
+    argv[0] !== 'setup' ||
+    !argv.slice(1).some((arg) => arg === '-h' || arg === '--help')
+  ) {
+    return false;
+  }
+  setupCommand.outputHelp();
+  return true;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
+  if (
+    argv[0] === 'setup' &&
+    argv.slice(1).some((arg) => arg === '-h' || arg === '--help')
+  ) {
+    const helpProgram = new Command().name('kodax');
+    const helpCommand = configureKodaXSetupCommand(helpProgram);
+    showKodaXSetupHelpIfRequested(argv, helpCommand);
+    return;
+  }
   const isDaemonManagementCommand = argv[0] === 'daemon' && argv[1] !== 'serve';
 
   // FEATURE_208 (v0.7.45): strip dynamic-linker preload env vars
@@ -2293,6 +3287,11 @@ async function main() {
   if (argv[0] === '__asrt-broker') {
     if (!argv[1]) throw new Error('Missing internal ASRT broker request.');
     process.exitCode = await runAsrtBrokerProcess(argv[1]);
+    return;
+  }
+  if (argv[0] === '__asrt-workspace-session') {
+    if (!argv[1]) throw new Error('Missing internal ASRT workspace session request.');
+    process.exitCode = await runAsrtWorkspaceSessionProcess(argv[1]);
     return;
   }
   if (!isDaemonManagementCommand) {
@@ -2324,21 +3323,22 @@ async function main() {
   // startup before prepareRuntimeConfig's bridge, so it reads config directly.
   if (!isDaemonManagementCommand) {
     const sessionRetentionDays = Number(
-      process.env.KODAX_SESSION_RETENTION_DAYS ?? loadConfig().sessionRetentionDays ?? 0,
+      process.env.KODAX_SESSION_RETENTION_DAYS ??
+        loadConfig().sessionRetentionDays ??
+        0,
     );
     void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
   }
 
-  const program = configureKodaXRootCommand(new Command()
-    .name('kodax')
-    .description('KodaX - Intelligent Coding Agent')
-    .version(version));
+  const program = configureKodaXRootCommand(
+    new Command()
+      .name('kodax')
+      .description('KodaX - Intelligent Coding Agent')
+      .version(version),
+  );
   configureIntegrationCommands(program, { version });
 
-  program
-    .command('setup')
-    .description('Configure a provider and model without collecting or storing an API key')
-    .action(executeProviderSetup);
+  configureKodaXSetupCommand(program);
 
   // ============== completion subcommand ==============
   program
@@ -2351,22 +3351,63 @@ async function main() {
       const effortModes = 'off auto low medium high xhigh max';
       const agentModes = 'ama sa';
       const repoModes = 'auto full light off';
-      const rootSubcommands = 'setup acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
+      const rootSubcommands =
+        'setup acp skill tools sessions constructed doctor daemon completion config integrations mcp extensions a2a sandbox';
       const allOptions = [
-        '-p', '-c', '-r', '-n', '-m', '-t', '-s', '-y', '-h',
-        '--help', '--print', '--mode', '--runtime-mode', '--continue', '--resume', '--new',
-        '--provider', '--model', '--thinking', '--effort', '--reasoning', '--agent-mode',
-        '--repo-intelligence', '--repo-intelligence-trace',
-        '--auto', '--session', '--extension', '--no-session',
-        '--max-iter', '--version', '--json', '--ping', '--cwd', '--permission-mode',
-        '--dest', '--description', '--force', '--no-evals', '--skill-path',
-        '--evals', '--workspace', '--config-a', '--config-b', '--output',
-        '--apply', '--all',
+        '-p',
+        '-c',
+        '-r',
+        '-n',
+        '-m',
+        '-t',
+        '-s',
+        '-y',
+        '-h',
+        '--help',
+        '--print',
+        '--mode',
+        '--runtime-mode',
+        '--continue',
+        '--resume',
+        '--new',
+        '--provider',
+        '--model',
+        '--thinking',
+        '--effort',
+        '--reasoning',
+        '--agent-mode',
+        '--repo-intelligence',
+        '--repo-intelligence-trace',
+        '--auto',
+        '--session',
+        '--extension',
+        '--no-session',
+        '--max-iter',
+        '--version',
+        '--json',
+        '--ping',
+        '--cwd',
+        '--permission-mode',
+        '--dest',
+        '--description',
+        '--force',
+        '--no-evals',
+        '--skill-path',
+        '--evals',
+        '--workspace',
+        '--config-a',
+        '--config-b',
+        '--output',
+        '--apply',
+        '--all',
+        '--custom',
       ].join(' ');
-      const skillSubcommands = 'init validate eval grade analyze compare package install';
+      const skillSubcommands =
+        'init validate eval grade analyze compare package install';
       const toolsSubcommands = 'list inspect revoke';
       const sessionsSubcommands = 'dedupe';
-      const constructedSubcommands = 'reset-self-modify-budget audit disable-self-modify rollback';
+      const constructedSubcommands =
+        'reset-self-modify-budget audit disable-self-modify rollback';
 
       if (shell === 'bash') {
         console.log(`# KodaX bash completion — add to ~/.bashrc:
@@ -2506,16 +3547,29 @@ complete -c kodax -l version -d 'Show version'`);
     .action(() => {
       console.log(chalk.cyan('\nKodaX Sessions\n'));
       console.log(chalk.bold('Commands:'));
-      console.log(chalk.dim('  kodax sessions dedupe          ') + 'Dry-run historical runner ghost cleanup');
-      console.log(chalk.dim('  kodax sessions dedupe --apply  ') + 'Move uniquely matched runner ghosts to .dedupe-archive');
+      console.log(
+        chalk.dim('  kodax sessions dedupe          ') +
+          'Dry-run historical runner ghost cleanup',
+      );
+      console.log(
+        chalk.dim('  kodax sessions dedupe --apply  ') +
+          'Move uniquely matched runner ghosts to .dedupe-archive',
+      );
       console.log(chalk.dim('\nLegacy:'));
-      console.log(chalk.dim('  kodax -s list                  ') + 'List saved sessions');
+      console.log(
+        chalk.dim('  kodax -s list                  ') + 'List saved sessions',
+      );
     });
 
   sessionsCommand
     .command('dedupe')
-    .description('Find and optionally move historical runner ghost session files')
-    .option('--apply', 'Move uniquely matched runner ghost files into .dedupe-archive')
+    .description(
+      'Find and optionally move historical runner ghost session files',
+    )
+    .option(
+      '--apply',
+      'Move uniquely matched runner ghost files into .dedupe-archive',
+    )
     .action(async (subOpts: { apply?: boolean }) => {
       const applied = subOpts.apply === true;
       const report = await dedupeSessions({ apply: applied });
@@ -2525,11 +3579,18 @@ complete -c kodax -l version -d 'Show version'`);
   // ============== doctor subcommand (FEATURE_204) ==============
   program
     .command('doctor')
-    .description('Print environment diagnostics (runtime, providers, session/trace disk usage)')
+    .description(
+      'Print environment diagnostics (runtime, providers, session/trace disk usage)',
+    )
     .option('--json', 'Output machine-readable JSON')
-    .option('--ping', 'Live-probe each configured provider (network + small token cost)')
+    .option(
+      '--ping',
+      'Live-probe each configured provider (network + small token cost)',
+    )
     .action(async (opts: { json?: boolean; ping?: boolean }) => {
-      await runDoctor(version, Boolean(opts?.json), { ping: Boolean(opts?.ping) });
+      await runDoctor(version, Boolean(opts?.json), {
+        ping: Boolean(opts?.ping),
+      });
     });
 
   const daemonCommand = program
@@ -2541,136 +3602,219 @@ complete -c kodax -l version -d 'Show version'`);
     .command('start')
     .description('Start the runtime daemon in a detached background process')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
-    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon health', parseOptionalNonNegativeInt, 5_000)
+    .option(
+      '--timeout-ms <n>',
+      'Milliseconds to wait for daemon health',
+      parseOptionalNonNegativeInt,
+      5_000,
+    )
     .option('--json', 'Output machine-readable JSON')
-    .action(async (localOptions: {
-      profile?: string;
-      home?: string;
-      provider?: string;
-      model?: string;
-      timeoutMs?: number;
-      json?: boolean;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      await startDaemonCommand({
-        profile: options.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(options.home),
-        provider: options.provider,
-        model: options.model,
-        timeoutMs: options.timeoutMs ?? 5_000,
-        json: options.json === true,
-      });
-    });
+    .action(
+      async (
+        localOptions: {
+          profile?: string;
+          home?: string;
+          provider?: string;
+          model?: string;
+          timeoutMs?: number;
+          json?: boolean;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        await startDaemonCommand({
+          profile: options.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(options.home),
+          provider: options.provider,
+          model: options.model,
+          timeoutMs: options.timeoutMs ?? 5_000,
+          json: options.json === true,
+        });
+      },
+    );
 
   daemonCommand
     .command('stop')
     .description('Stop a healthy runtime daemon')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
-    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown', parseOptionalNonNegativeInt, 5_000)
-    .option('--force', 'Clean verified stale daemon ownership without killing unverified live processes')
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
+    .option(
+      '--timeout-ms <n>',
+      'Milliseconds to wait for daemon shutdown',
+      parseOptionalNonNegativeInt,
+      5_000,
+    )
+    .option(
+      '--force',
+      'Clean verified stale daemon ownership without killing unverified live processes',
+    )
     .option('--json', 'Output machine-readable JSON')
-    .action(async (subOpts: {
-      profile?: string;
-      home?: string;
-      timeoutMs?: number;
-      force?: boolean;
-      json?: boolean;
-    }) => {
-      await stopDaemonCommand({
-        profile: subOpts.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(subOpts.home),
-        timeoutMs: subOpts.timeoutMs ?? 5_000,
-        force: subOpts.force === true,
-        json: subOpts.json === true,
-      });
-    });
+    .action(
+      async (subOpts: {
+        profile?: string;
+        home?: string;
+        timeoutMs?: number;
+        force?: boolean;
+        json?: boolean;
+      }) => {
+        await stopDaemonCommand({
+          profile: subOpts.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(subOpts.home),
+          timeoutMs: subOpts.timeoutMs ?? 5_000,
+          force: subOpts.force === true,
+          json: subOpts.json === true,
+        });
+      },
+    );
 
   daemonCommand
     .command('restart')
     .description('Restart the runtime daemon')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
-    .option('--timeout-ms <n>', 'Milliseconds to wait for daemon shutdown/startup', parseOptionalNonNegativeInt, 5_000)
+    .option(
+      '--timeout-ms <n>',
+      'Milliseconds to wait for daemon shutdown/startup',
+      parseOptionalNonNegativeInt,
+      5_000,
+    )
     .option('--json', 'Output machine-readable JSON')
-    .action(async (localOptions: {
-      profile?: string;
-      home?: string;
-      provider?: string;
-      model?: string;
-      timeoutMs?: number;
-      json?: boolean;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      await restartDaemonCommand({
-        profile: options.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(options.home),
-        provider: options.provider,
-        model: options.model,
-        timeoutMs: options.timeoutMs ?? 5_000,
-        json: options.json === true,
-      });
-    });
+    .action(
+      async (
+        localOptions: {
+          profile?: string;
+          home?: string;
+          provider?: string;
+          model?: string;
+          timeoutMs?: number;
+          json?: boolean;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        await restartDaemonCommand({
+          profile: options.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(options.home),
+          provider: options.provider,
+          model: options.model,
+          timeoutMs: options.timeoutMs ?? 5_000,
+          json: options.json === true,
+        });
+      },
+    );
 
   daemonCommand
     .command('logs')
     .description('Print the daemon log path and recent lines')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
-    .option('--lines <n>', 'Number of log lines to print', parseOptionalNonNegativeInt, 80)
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
+    .option(
+      '--lines <n>',
+      'Number of log lines to print',
+      parseOptionalNonNegativeInt,
+      80,
+    )
     .option('--json', 'Output machine-readable JSON')
-    .action(async (subOpts: { profile?: string; home?: string; lines?: number; json?: boolean }) => {
-      await printDaemonLogs({
-        profile: subOpts.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(subOpts.home),
-        lines: subOpts.lines ?? 80,
-        json: subOpts.json === true,
-      });
-    });
+    .action(
+      async (subOpts: {
+        profile?: string;
+        home?: string;
+        lines?: number;
+        json?: boolean;
+      }) => {
+        await printDaemonLogs({
+          profile: subOpts.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(subOpts.home),
+          lines: subOpts.lines ?? 80,
+          json: subOpts.json === true,
+        });
+      },
+    );
 
   daemonCommand
     .command('serve')
     .description('Run the runtime daemon host in the foreground')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
     .addOption(new Option('--config-home <dir>').hideHelp())
     .option('-m, --provider <name>', 'Default provider for hosted runs')
     .option('--model <name>', 'Default model for hosted runs')
     .option('--sessions-dir <dir>', 'Runtime session storage directory')
-    .option('--permission-timeout-ms <n>', 'Permission request timeout', parseOptionalNonNegativeInt)
-    .action(async (localOptions: {
-      profile?: string; home?: string; provider?: string; model?: string;
-      configHome?: string; sessionsDir?: string; permissionTimeoutMs?: number;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      await serveDaemonCommand({
-        profile: options.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(options.home, options.configHome),
-        provider: options.provider,
-        model: options.model,
-        sessionsDir: options.sessionsDir,
-        permissionTimeoutMs: options.permissionTimeoutMs,
-      });
-    });
+    .option(
+      '--permission-timeout-ms <n>',
+      'Permission request timeout',
+      parseOptionalNonNegativeInt,
+    )
+    .addOption(
+      new Option('--orphan-exit-ms <n>')
+        .argParser(parseOptionalNonNegativeInt)
+        .hideHelp(),
+    )
+    .action(
+      async (
+        localOptions: {
+          profile?: string;
+          home?: string;
+          provider?: string;
+          model?: string;
+          configHome?: string;
+          sessionsDir?: string;
+          permissionTimeoutMs?: number;
+          orphanExitMs?: number;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        await serveDaemonCommand({
+          profile: options.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(options.home, options.configHome),
+          provider: options.provider,
+          model: options.model,
+          sessionsDir: options.sessionsDir,
+          permissionTimeoutMs: options.permissionTimeoutMs,
+          orphanExitMs: options.orphanExitMs,
+        });
+      },
+    );
 
   daemonCommand
     .command('status')
     .description('Inspect daemon state and endpoint health')
     .option('--profile <name>', 'Daemon profile', 'default')
-    .option('--home <dir>', 'Base directory that owns the .kodax runtime daemon state')
+    .option(
+      '--home <dir>',
+      'Base directory that owns the .kodax runtime daemon state',
+    )
     .option('--json', 'Output machine-readable JSON')
-    .action(async (subOpts: { profile?: string; home?: string; json?: boolean }) => {
-      await printDaemonStatus({
-        profile: subOpts.profile ?? 'default',
-        ...resolveCliRuntimeDaemonLocation(subOpts.home),
-        json: subOpts.json === true,
-      });
-    });
+    .action(
+      async (subOpts: { profile?: string; home?: string; json?: boolean }) => {
+        await printDaemonStatus({
+          profile: subOpts.profile ?? 'default',
+          ...resolveCliRuntimeDaemonLocation(subOpts.home),
+          json: subOpts.json === true,
+        });
+      },
+    );
 
   const skillCommand = program
     .command('skill')
@@ -2688,41 +3832,66 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--cwd <dir>', 'Working directory exposed to ACP sessions')
     .option('-m, --provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
+    // prettier-ignore
     .option('--effort <level>', 'Reasoning effort: off, auto, low, medium, high, xhigh, max, or model-supported value', parseEffortOption)
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
-    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep', parseReasoningModeOption)
-    .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, full, light, off', parseRepoIntelligenceModeOption)
-    .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
-    .option('--permission-mode <mode>', 'Initial permission mode', parsePermissionModeOption, 'accept-edits')
-    .action(async (localOptions: {
-      cwd?: string;
-      provider?: string;
-      model?: string;
-      effort?: string;
-      thinking?: boolean;
-      reasoning?: KodaXReasoningMode;
-      repoIntelligence?: string;
-      repoIntelligenceTrace?: boolean;
-      permissionMode?: AcpPermissionMode;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      if (typeof options.repoIntelligence === 'string' && options.repoIntelligence.trim()) {
-        process.env.KODAX_REPO_INTELLIGENCE = options.repoIntelligence.trim();
-      }
-      if (options.repoIntelligenceTrace === true) {
-        process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
-      }
-      await runAcpServer({
-        cwd: options.cwd,
-        provider: options.provider,
-        model: options.model,
-        effort: options.effort,
-        thinking: options.thinking,
-        reasoningMode: options.reasoning,
-        permissionMode: options.permissionMode,
-        agentVersion: version,
-      });
-    });
+    .option(
+      '--reasoning <mode>',
+      'Reasoning mode: off, auto, quick, balanced, deep',
+      parseReasoningModeOption,
+    )
+    .option(
+      '--repo-intelligence <mode>',
+      'Repo intelligence mode: auto, full, light, off',
+      parseRepoIntelligenceModeOption,
+    )
+    .option(
+      '--repo-intelligence-trace',
+      'Enable repo intelligence trace metadata/logging',
+    )
+    .option(
+      '--permission-mode <mode>',
+      'Initial permission mode',
+      parsePermissionModeOption,
+      'accept-edits',
+    )
+    .action(
+      async (
+        localOptions: {
+          cwd?: string;
+          provider?: string;
+          model?: string;
+          effort?: string;
+          thinking?: boolean;
+          reasoning?: KodaXReasoningMode;
+          repoIntelligence?: string;
+          repoIntelligenceTrace?: boolean;
+          permissionMode?: AcpPermissionMode;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        if (
+          typeof options.repoIntelligence === 'string' &&
+          options.repoIntelligence.trim()
+        ) {
+          process.env.KODAX_REPO_INTELLIGENCE = options.repoIntelligence.trim();
+        }
+        if (options.repoIntelligenceTrace === true) {
+          process.env.KODAX_REPO_INTELLIGENCE_TRACE = '1';
+        }
+        await runAcpServer({
+          cwd: options.cwd,
+          provider: options.provider,
+          model: options.model,
+          effort: options.effort,
+          thinking: options.thinking,
+          reasoningMode: options.reasoning,
+          permissionMode: options.permissionMode,
+          agentVersion: version,
+        });
+      },
+    );
 
   skillCommand
     .command('init <name>')
@@ -2731,30 +3900,32 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--description <text>', 'Initial skill description')
     .option('-f, --force', 'Allow writing into an existing target directory')
     .option('--no-evals', 'Skip creating evals/evals.json')
-    .action(async (
-      name: string,
-      subcommandOptions: {
-        dest?: string;
-        description?: string;
-        force?: boolean;
-        evals?: boolean;
-      }
-    ) => {
-      const args = [name];
-      if (subcommandOptions.dest) {
-        args.push('--dest', subcommandOptions.dest);
-      }
-      if (subcommandOptions.description) {
-        args.push('--description', subcommandOptions.description);
-      }
-      if (subcommandOptions.force) {
-        args.push('--force');
-      }
-      if (subcommandOptions.evals === false) {
-        args.push('--no-evals');
-      }
-      await runSkillCreatorTool('init', args);
-    });
+    .action(
+      async (
+        name: string,
+        subcommandOptions: {
+          dest?: string;
+          description?: string;
+          force?: boolean;
+          evals?: boolean;
+        },
+      ) => {
+        const args = [name];
+        if (subcommandOptions.dest) {
+          args.push('--dest', subcommandOptions.dest);
+        }
+        if (subcommandOptions.description) {
+          args.push('--description', subcommandOptions.description);
+        }
+        if (subcommandOptions.force) {
+          args.push('--force');
+        }
+        if (subcommandOptions.evals === false) {
+          args.push('--no-evals');
+        }
+        await runSkillCreatorTool('init', args);
+      },
+    );
 
   skillCommand
     .command('validate <skillDir>')
@@ -2765,7 +3936,9 @@ complete -c kodax -l version -d 'Show version'`);
 
   skillCommand
     .command('eval')
-    .description('Run end-to-end skill evals and write a benchmark/review workspace')
+    .description(
+      'Run end-to-end skill evals and write a benchmark/review workspace',
+    )
     .requiredOption('--skill-path <dir>', 'Skill directory to evaluate')
     .requiredOption('--evals <file>', 'Evals JSON file')
     .requiredOption('--workspace <dir>', 'Workspace output directory')
@@ -2775,53 +3948,64 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--max-iter <n>', 'Max iterations per run')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .option('--cwd <dir>', 'Working directory for the runs')
-    .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
+    .option(
+      '--configs <list>',
+      'Comma-separated configs, e.g. with_skill,without_skill',
+    )
     .option('-o, --output <file>', 'Optional JSON summary output')
-    .action(async (localOptions: {
-      skillPath: string;
-      evals: string;
-      workspace: string;
-      provider?: string;
-      model?: string;
-      runs?: string;
-      maxIter?: string;
-      reasoning?: string;
-      cwd?: string;
-      configs?: string;
-      output?: string;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      const args = [
-        '--skill-path', options.skillPath,
-        '--evals', options.evals,
-        '--workspace', options.workspace,
-      ];
-      if (options.provider) {
-        args.push('--provider', options.provider);
-      }
-      if (options.model) {
-        args.push('--model', options.model);
-      }
-      if (options.runs) {
-        args.push('--runs', options.runs);
-      }
-      if (options.maxIter) {
-        args.push('--max-iter', options.maxIter);
-      }
-      if (options.reasoning) {
-        args.push('--reasoning', options.reasoning);
-      }
-      if (options.cwd) {
-        args.push('--cwd', options.cwd);
-      }
-      if (options.configs) {
-        args.push('--configs', options.configs);
-      }
-      if (options.output) {
-        args.push('--output', options.output);
-      }
-      await runSkillCreatorTool('eval', args);
-    });
+    .action(
+      async (
+        localOptions: {
+          skillPath: string;
+          evals: string;
+          workspace: string;
+          provider?: string;
+          model?: string;
+          runs?: string;
+          maxIter?: string;
+          reasoning?: string;
+          cwd?: string;
+          configs?: string;
+          output?: string;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        const args = [
+          '--skill-path',
+          options.skillPath,
+          '--evals',
+          options.evals,
+          '--workspace',
+          options.workspace,
+        ];
+        if (options.provider) {
+          args.push('--provider', options.provider);
+        }
+        if (options.model) {
+          args.push('--model', options.model);
+        }
+        if (options.runs) {
+          args.push('--runs', options.runs);
+        }
+        if (options.maxIter) {
+          args.push('--max-iter', options.maxIter);
+        }
+        if (options.reasoning) {
+          args.push('--reasoning', options.reasoning);
+        }
+        if (options.cwd) {
+          args.push('--cwd', options.cwd);
+        }
+        if (options.configs) {
+          args.push('--configs', options.configs);
+        }
+        if (options.output) {
+          args.push('--output', options.output);
+        }
+        await runSkillCreatorTool('eval', args);
+      },
+    );
 
   skillCommand
     .command('grade <workspace>')
@@ -2830,38 +4014,47 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--model <name>', 'Model override')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
     .option('--max-iter <n>', 'Max iterations per grading run')
-    .option('--configs <list>', 'Comma-separated configs, e.g. with_skill,without_skill')
+    .option(
+      '--configs <list>',
+      'Comma-separated configs, e.g. with_skill,without_skill',
+    )
     .option('--overwrite', 'Re-grade runs that already have grading.json')
-    .action(async (workspace: string, localOptions: {
-      provider?: string;
-      model?: string;
-      reasoning?: string;
-      maxIter?: string;
-      configs?: string;
-      overwrite?: boolean;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      const args = [workspace];
-      if (options.provider) {
-        args.push('--provider', options.provider);
-      }
-      if (options.model) {
-        args.push('--model', options.model);
-      }
-      if (options.reasoning) {
-        args.push('--reasoning', options.reasoning);
-      }
-      if (options.maxIter) {
-        args.push('--max-iter', options.maxIter);
-      }
-      if (options.configs) {
-        args.push('--configs', options.configs);
-      }
-      if (options.overwrite) {
-        args.push('--overwrite');
-      }
-      await runSkillCreatorTool('grade', args);
-    });
+    .action(
+      async (
+        workspace: string,
+        localOptions: {
+          provider?: string;
+          model?: string;
+          reasoning?: string;
+          maxIter?: string;
+          configs?: string;
+          overwrite?: boolean;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        const args = [workspace];
+        if (options.provider) {
+          args.push('--provider', options.provider);
+        }
+        if (options.model) {
+          args.push('--model', options.model);
+        }
+        if (options.reasoning) {
+          args.push('--reasoning', options.reasoning);
+        }
+        if (options.maxIter) {
+          args.push('--max-iter', options.maxIter);
+        }
+        if (options.configs) {
+          args.push('--configs', options.configs);
+        }
+        if (options.overwrite) {
+          args.push('--overwrite');
+        }
+        await runSkillCreatorTool('grade', args);
+      },
+    );
 
   skillCommand
     .command('analyze <workspace>')
@@ -2869,44 +4062,53 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--benchmark <file>', 'Optional benchmark.json path')
     .option('--output <file>', 'JSON output path')
     .option('--markdown <file>', 'Markdown output path')
-    .option('--skill-name <name>', 'Skill name if benchmark.json must be regenerated')
+    .option(
+      '--skill-name <name>',
+      'Skill name if benchmark.json must be regenerated',
+    )
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
-    .action(async (workspace: string, localOptions: {
-      benchmark?: string;
-      output?: string;
-      markdown?: string;
-      skillName?: string;
-      provider?: string;
-      model?: string;
-      reasoning?: string;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      const args = [workspace];
-      if (options.benchmark) {
-        args.push('--benchmark', options.benchmark);
-      }
-      if (options.output) {
-        args.push('--output', options.output);
-      }
-      if (options.markdown) {
-        args.push('--markdown', options.markdown);
-      }
-      if (options.skillName) {
-        args.push('--skill-name', options.skillName);
-      }
-      if (options.provider) {
-        args.push('--provider', options.provider);
-      }
-      if (options.model) {
-        args.push('--model', options.model);
-      }
-      if (options.reasoning) {
-        args.push('--reasoning', options.reasoning);
-      }
-      await runSkillCreatorTool('analyze', args);
-    });
+    .action(
+      async (
+        workspace: string,
+        localOptions: {
+          benchmark?: string;
+          output?: string;
+          markdown?: string;
+          skillName?: string;
+          provider?: string;
+          model?: string;
+          reasoning?: string;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        const args = [workspace];
+        if (options.benchmark) {
+          args.push('--benchmark', options.benchmark);
+        }
+        if (options.output) {
+          args.push('--output', options.output);
+        }
+        if (options.markdown) {
+          args.push('--markdown', options.markdown);
+        }
+        if (options.skillName) {
+          args.push('--skill-name', options.skillName);
+        }
+        if (options.provider) {
+          args.push('--provider', options.provider);
+        }
+        if (options.model) {
+          args.push('--model', options.model);
+        }
+        if (options.reasoning) {
+          args.push('--reasoning', options.reasoning);
+        }
+        await runSkillCreatorTool('analyze', args);
+      },
+    );
 
   skillCommand
     .command('compare <workspace>')
@@ -2919,70 +4121,87 @@ complete -c kodax -l version -d 'Show version'`);
     .option('--provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--reasoning <mode>', 'Reasoning mode', parseReasoningModeOption)
-    .action(async (workspace: string, localOptions: {
-      configA: string;
-      configB: string;
-      output?: string;
-      markdown?: string;
-      maxPairs?: string;
-      provider?: string;
-      model?: string;
-      reasoning?: string;
-    }, command: Command) => {
-      const options = mergeCommandOptionsWithGlobals(localOptions, command);
-      const args = [
-        workspace,
-        '--config-a', options.configA,
-        '--config-b', options.configB,
-      ];
-      if (options.output) {
-        args.push('--output', options.output);
-      }
-      if (options.markdown) {
-        args.push('--markdown', options.markdown);
-      }
-      if (options.maxPairs) {
-        args.push('--max-pairs', options.maxPairs);
-      }
-      if (options.provider) {
-        args.push('--provider', options.provider);
-      }
-      if (options.model) {
-        args.push('--model', options.model);
-      }
-      if (options.reasoning) {
-        args.push('--reasoning', options.reasoning);
-      }
-      await runSkillCreatorTool('compare', args);
-    });
+    .action(
+      async (
+        workspace: string,
+        localOptions: {
+          configA: string;
+          configB: string;
+          output?: string;
+          markdown?: string;
+          maxPairs?: string;
+          provider?: string;
+          model?: string;
+          reasoning?: string;
+        },
+        command: Command,
+      ) => {
+        const options = mergeCommandOptionsWithGlobals(localOptions, command);
+        const args = [
+          workspace,
+          '--config-a',
+          options.configA,
+          '--config-b',
+          options.configB,
+        ];
+        if (options.output) {
+          args.push('--output', options.output);
+        }
+        if (options.markdown) {
+          args.push('--markdown', options.markdown);
+        }
+        if (options.maxPairs) {
+          args.push('--max-pairs', options.maxPairs);
+        }
+        if (options.provider) {
+          args.push('--provider', options.provider);
+        }
+        if (options.model) {
+          args.push('--model', options.model);
+        }
+        if (options.reasoning) {
+          args.push('--reasoning', options.reasoning);
+        }
+        await runSkillCreatorTool('compare', args);
+      },
+    );
 
   skillCommand
     .command('package <skillDir>')
     .description('Package a skill directory as a .skill archive')
     .option('-o, --output <file>', 'Output .skill file path')
-    .action(async (skillDir: string, subcommandOptions: { output?: string }) => {
-      const args = [skillDir];
-      if (subcommandOptions.output) {
-        args.push('--output', subcommandOptions.output);
-      }
-      await runSkillCreatorTool('package', args);
-    });
+    .action(
+      async (skillDir: string, subcommandOptions: { output?: string }) => {
+        const args = [skillDir];
+        if (subcommandOptions.output) {
+          args.push('--output', subcommandOptions.output);
+        }
+        await runSkillCreatorTool('package', args);
+      },
+    );
 
   skillCommand
     .command('install <input>')
-    .description('Install a skill directory or .skill archive into a skills directory')
+    .description(
+      'Install a skill directory or .skill archive into a skills directory',
+    )
     .option('-d, --dest <dir>', 'Destination skills directory')
     .option('-f, --force', 'Overwrite an existing target skill')
-    .action(async (input: string, subcommandOptions: { dest?: string; force?: boolean }) => {
-      const args = [input];
-      if (subcommandOptions.dest) {
-        args.push('--dest', subcommandOptions.dest);
-      }
-      if (subcommandOptions.force) {
-        args.push('--force');
-      }
-      await runSkillCreatorTool('install', args);
-    });
+    .action(
+      async (
+        input: string,
+        subcommandOptions: { dest?: string; force?: boolean },
+      ) => {
+        const args = [input];
+        if (subcommandOptions.dest) {
+          args.push('--dest', subcommandOptions.dest);
+        }
+        if (subcommandOptions.force) {
+          args.push('--force');
+        }
+        await runSkillCreatorTool('install', args);
+      },
+    );
 
   if (argv[0] === 'skill') {
     if (argv.length === 1 || argv[1] === '-h' || argv[1] === '--help') {
@@ -3025,16 +4244,27 @@ complete -c kodax -l version -d 'Show version'`);
     .command('list')
     .description('List constructed tools registered in the current workspace')
     .option('--all', 'Also list builtin / extension tools')
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (subOpts: { all?: boolean; cwd?: string }) => {
       const { runToolsList } = await import('./constructed_cli.js');
-      await runToolsList({ all: subOpts.all, cwd: subOpts.cwd ?? process.cwd() });
+      await runToolsList({
+        all: subOpts.all,
+        cwd: subOpts.cwd ?? process.cwd(),
+      });
     });
 
   toolsCommand
     .command('inspect <spec>')
-    .description("Print an artifact manifest. <spec> is '<name>' (active) or '<name>@<version>'.")
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .description(
+      "Print an artifact manifest. <spec> is '<name>' (active) or '<name>@<version>'.",
+    )
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (spec: string, subOpts: { cwd?: string }) => {
       const { runToolsInspect } = await import('./constructed_cli.js');
       await runToolsInspect(spec, { cwd: subOpts.cwd ?? process.cwd() });
@@ -3042,8 +4272,13 @@ complete -c kodax -l version -d 'Show version'`);
 
   toolsCommand
     .command('revoke <spec>')
-    .description("Revoke a constructed tool. <spec> must be '<name>@<version>'.")
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .description(
+      "Revoke a constructed tool. <spec> must be '<name>@<version>'.",
+    )
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (spec: string, subOpts: { cwd?: string }) => {
       const { runToolsRevoke } = await import('./constructed_cli.js');
       await runToolsRevoke(spec, { cwd: subOpts.cwd ?? process.cwd() });
@@ -3059,7 +4294,9 @@ complete -c kodax -l version -d 'Show version'`);
   // approval.
   const constructedCommand = program
     .command('constructed')
-    .description('Manage the self-modify lifecycle of constructed agents (FEATURE_090, v0.7.32)')
+    .description(
+      'Manage the self-modify lifecycle of constructed agents (FEATURE_090, v0.7.32)',
+    )
     .helpOption('-h, --help', 'Show constructed subcommand help');
 
   constructedCommand
@@ -3067,10 +4304,15 @@ complete -c kodax -l version -d 'Show version'`);
     .description(
       'Reset the per-agent self-modify counter to zero. Use after a deliberate, audited decision to allow further self-modifications past the default cap. The reset is recorded in `.kodax/constructed/_audit.jsonl`.',
     )
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (name: string, subOpts: { cwd?: string }) => {
       const { runResetSelfModifyBudget } = await import('./self_modify_cli.js');
-      await runResetSelfModifyBudget(name, { cwd: subOpts.cwd ?? process.cwd() });
+      await runResetSelfModifyBudget(name, {
+        cwd: subOpts.cwd ?? process.cwd(),
+      });
     });
 
   constructedCommand
@@ -3078,7 +4320,10 @@ complete -c kodax -l version -d 'Show version'`);
     .description(
       'Print every recorded self-modify lifecycle event for the named agent (staged / activated / rejected / rolled-back / disabled / budget-reset). Read-only.',
     )
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (name: string, subOpts: { cwd?: string }) => {
       const { runConstructedAudit } = await import('./self_modify_cli.js');
       await runConstructedAudit(name, { cwd: subOpts.cwd ?? process.cwd() });
@@ -3089,7 +4334,10 @@ complete -c kodax -l version -d 'Show version'`);
     .description(
       'Permanently disable self-modify for the named agent. There is NO re-enable command — to author further changes, stage a separately-named agent. The disable event is recorded in `.kodax/constructed/_audit.jsonl`.',
     )
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (name: string, subOpts: { cwd?: string }) => {
       const { runDisableSelfModify } = await import('./self_modify_cli.js');
       await runDisableSelfModify(name, { cwd: subOpts.cwd ?? process.cwd() });
@@ -3098,9 +4346,12 @@ complete -c kodax -l version -d 'Show version'`);
   constructedCommand
     .command('rollback <name>')
     .description(
-      "Roll the agent back to its previous active version. Revokes the current active manifest and re-registers the next-most-recent active version on disk. Re-runs admission against the rollback target so a target that no longer admits (e.g. system caps tightened) cannot be silently re-registered.",
+      'Roll the agent back to its previous active version. Revokes the current active manifest and re-registers the next-most-recent active version on disk. Re-runs admission against the rollback target so a target that no longer admits (e.g. system caps tightened) cannot be silently re-registered.',
     )
-    .option('--cwd <dir>', 'Workspace root to inspect (defaults to current directory)')
+    .option(
+      '--cwd <dir>',
+      'Workspace root to inspect (defaults to current directory)',
+    )
     .action(async (name: string, subOpts: { cwd?: string }) => {
       const { runConstructedRollback } = await import('./self_modify_cli.js');
       await runConstructedRollback(name, { cwd: subOpts.cwd ?? process.cwd() });
@@ -3113,19 +4364,32 @@ complete -c kodax -l version -d 'Show version'`);
   // name matches an activated constructed tool. On no match we fall
   // through to commander, which preserves existing behavior (skill/acp/
   // help topics/REPL).
-  if (argv.length > 0 && argv[0] && !argv[0].startsWith('-') && !CLI_SUBCOMMAND_NAMES.has(argv[0])) {
-    const { detectConstructedToolDispatch, runConstructedToolDispatch } = await import('./constructed_cli.js');
-    const dispatchTarget = await detectConstructedToolDispatch(argv, process.cwd());
+  if (
+    argv.length > 0 &&
+    argv[0] &&
+    !argv[0].startsWith('-') &&
+    !CLI_SUBCOMMAND_NAMES.has(argv[0])
+  ) {
+    const { detectConstructedToolDispatch, runConstructedToolDispatch } =
+      await import('./constructed_cli.js');
+    const dispatchTarget = await detectConstructedToolDispatch(
+      argv,
+      process.cwd(),
+    );
     if (dispatchTarget) {
-      await runConstructedToolDispatch(dispatchTarget, argv.slice(1), process.cwd());
+      await runConstructedToolDispatch(
+        dispatchTarget,
+        argv.slice(1),
+        process.cwd(),
+      );
       return;
     }
   }
 
   await program.parseAsync(process.argv);
   if (
-    program.args[0] !== undefined
-    && CLI_SUBCOMMAND_NAMES.has(program.args[0])
+    program.args[0] !== undefined &&
+    CLI_SUBCOMMAND_NAMES.has(program.args[0])
   ) {
     return;
   }
@@ -3136,34 +4400,41 @@ complete -c kodax -l version -d 'Show version'`);
   // readiness inspects credentials. Reuse this same Runtime configuration for
   // startup so the gate and the session cannot observe different environments.
   const config = prepareRuntimeConfig();
-  if (shouldAutoLaunchProviderSetup({
-    outputMode,
-    prompt: opts.print ? [String(opts.print)] : program.args,
-    print: opts.print !== undefined,
-    continue: opts.continue === true,
-    resumeRequested: opts.resume !== undefined,
-    sessionRequested: opts.session !== undefined,
-    helpRequested: opts.help !== undefined,
-    extensionRequested: Array.isArray(opts.extension) && opts.extension.length > 0,
-    isInputTty: process.stdin.isTTY,
-    isOutputTty: process.stdout.isTTY,
-  })) {
+  if (
+    shouldAutoLaunchProviderSetup({
+      outputMode,
+      prompt: opts.print ? [String(opts.print)] : program.args,
+      print: opts.print !== undefined,
+      continue: opts.continue === true,
+      resumeRequested: opts.resume !== undefined,
+      sessionRequested: opts.session !== undefined,
+      helpRequested: opts.help !== undefined,
+      extensionRequested:
+        Array.isArray(opts.extension) && opts.extension.length > 0,
+      isInputTty: process.stdin.isTTY,
+      isOutputTty: process.stdout.isTTY,
+    })
+  ) {
     const readiness = inspectProviderSetupReadiness({
       configPath: KODAX_CONFIG_FILE,
       environment: process.env,
-      explicitProvider: opts.provider ?? process.env.KODAX_PROVIDER,
+      explicitProvider: opts.provider,
     });
     if (readiness.status === 'needs-provider') {
       await executeProviderSetup();
       return;
     }
     if (readiness.status === 'invalid-config') {
-      process.stderr.write(`${chalk.yellow(
-        `KodaX cannot start first-run setup because ${readiness.configPath} is invalid: ${readiness.reason}`,
-      )}\n`);
-      process.stderr.write(`${chalk.dim(
-        'Repair or move that file, then run `kodax setup`. No configuration was changed.',
-      )}\n`);
+      process.stderr.write(
+        `${chalk.yellow(
+          `KodaX cannot start first-run setup because ${readiness.configPath} is invalid: ${readiness.reason}`,
+        )}\n`,
+      );
+      process.stderr.write(
+        `${chalk.dim(
+          'Repair or move that file, then run `kodax setup`. No configuration was changed.',
+        )}\n`,
+      );
       process.exitCode = 1;
       return;
     }
@@ -3172,7 +4443,10 @@ complete -c kodax -l version -d 'Show version'`);
     extensions?: string[];
     runtimeMode?: 'embedded' | 'daemon';
   };
-  if (typeof opts.repoIntelligence === 'string' && opts.repoIntelligence.trim()) {
+  if (
+    typeof opts.repoIntelligence === 'string' &&
+    opts.repoIntelligence.trim()
+  ) {
     process.env.KODAX_REPO_INTELLIGENCE = opts.repoIntelligence.trim();
   }
   if (opts.repoIntelligenceTrace === true) {
@@ -3183,18 +4457,31 @@ complete -c kodax -l version -d 'Show version'`);
   const agentMode = resolveCliAgentMode(program, opts, config);
   const configuredExtensions = Array.isArray(configWithExtensions.extensions)
     ? configWithExtensions.extensions
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .map((value) => path.isAbsolute(value) ? value : path.resolve(path.dirname(KODAX_CONFIG_FILE), value))
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
+        .map((value) =>
+          path.isAbsolute(value)
+            ? value
+            : path.resolve(path.dirname(KODAX_CONFIG_FILE), value),
+        )
     : [];
   const cliExtensions = Array.isArray(opts.extension)
     ? opts.extension
-      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .map((value) => path.resolve(value))
+        .filter(
+          (value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+        )
+        .map((value) => path.resolve(value))
     : [];
   const discoveredExtensions = await discoverCliDefaultExtensions();
-  const dedupedDiscoveredExtensions = await dedupeExtensionPathsByEntrypoint(discoveredExtensions);
-  const dedupedConfiguredExtensions = await dedupeExtensionPathsByEntrypoint(configuredExtensions);
-  const dedupedCliExtensions = await dedupeExtensionPathsByEntrypoint(cliExtensions);
+  const dedupedDiscoveredExtensions =
+    await dedupeExtensionPathsByEntrypoint(discoveredExtensions);
+  const dedupedConfiguredExtensions =
+    await dedupeExtensionPathsByEntrypoint(configuredExtensions);
+  const dedupedCliExtensions =
+    await dedupeExtensionPathsByEntrypoint(cliExtensions);
   const configuredOnlyExtensions = await excludeExtensionPathsByEntrypoint(
     dedupedConfiguredExtensions,
     dedupedCliExtensions,
@@ -3252,342 +4539,413 @@ complete -c kodax -l version -d 'Show version'`);
   let a2aRuntimeHandle: ConfiguredA2ARuntimeHandle | undefined;
   let cliRuntime: KodaXRuntime | undefined;
   let shouldHardExitAfterInteractiveCleanup = false;
+  const integrationEvents = createIntegrationEventBridge((message) =>
+    console.error(chalk.dim(message)),
+  );
 
   const getCliRuntime = async (): Promise<KodaXRuntime> => {
     if (cliRuntime !== undefined) return cliRuntime;
     const mode = options.runtimeMode ?? 'embedded';
-    const a2aIntegration = mode === 'embedded'
-      ? createConfiguredA2ARuntimeIntegration({
-          configHome: KODAX_DIR,
-          onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
-        })
-      : undefined;
+    const a2aIntegration =
+      mode === 'embedded'
+        ? createConfiguredA2ARuntimeIntegration({
+            configHome: KODAX_DIR,
+            onEvent: integrationEvents.onEvent,
+          })
+        : undefined;
     cliRuntime = await createKodaXRuntime({
       mode,
       profile: 'default',
       autoStartDaemon: mode === 'daemon',
       defaultProvider: options.provider,
       ...(options.model !== undefined ? { defaultModel: options.model } : {}),
-      ...(a2aIntegration ? { externalAgents: a2aIntegration.runtimeOptions } : {}),
+      ...(a2aIntegration
+        ? { externalAgents: a2aIntegration.runtimeOptions }
+        : {}),
     });
-    if (a2aIntegration) a2aRuntimeHandle = await a2aIntegration.start(cliRuntime);
+    if (a2aIntegration)
+      a2aRuntimeHandle = await a2aIntegration.start(cliRuntime);
     return cliRuntime;
   };
 
   try {
-  const isLegacySessionManagement =
-    options.session === 'list'
-    || options.session === 'delete'
-    || options.session === 'delete-all'
-    || options.session === 'cleanup-acp'
-    || options.session?.startsWith('delete ');
+    const isLegacySessionManagement =
+      options.session === 'list' ||
+      options.session === 'delete' ||
+      options.session === 'delete-all' ||
+      options.session === 'cleanup-acp' ||
+      options.session?.startsWith('delete ');
 
-  if (options.outputMode === 'json' && isLegacySessionManagement) {
-    validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
-  }
-
-  // Session list: show a bounded preview; bare -r provides searchable navigation.
-  if (options.session === 'list') {
-    const sessions = await loadResumableSessions();
-    const visible = sessions.slice(0, 50);
-    const lines = visible.map((session) => {
-      const surface = session.surface ? ` ${session.surface}` : '';
-      return `  ${session.id} [${session.msgCount}]${surface} ${session.title}`;
-    });
-    if (sessions.length > visible.length) {
-      lines.push(`  ... ${sessions.length - visible.length} more; use \`kodax -r\` to search and page.`);
+    if (options.outputMode === 'json' && isLegacySessionManagement) {
+      validateCliModeSelection(options, {
+        resumeWithoutId: opts.resume === true,
+      });
     }
-    console.log(lines.length > 0 ? `Sessions:\n${lines.join('\n')}` : 'No resumable sessions.');
-    return;
-  }
 
-  if (options.session === 'cleanup-acp') {
-    const storage = new FileSessionStorage({ cwd: process.cwd() });
-    const candidates = await findAcpPollutionCandidates(storage);
-    console.log(`Matched ${candidates.length} empty ACP placeholder sessions in the current project.`);
-    for (const candidate of candidates.slice(0, 10)) {
-      console.log(`  ${candidate.id}${candidate.createdAt ? ` ${candidate.createdAt}` : ''}`);
-    }
-    if (candidates.length > 10) console.log(`  ... ${candidates.length - 10} more`);
-    if (opts.applySessionCleanup !== true) {
-      console.log('Preview only. Re-run with --apply-session-cleanup to archive these sessions reversibly.');
+    // Session list: show a bounded preview; bare -r provides searchable navigation.
+    if (options.session === 'list') {
+      const sessions = await loadResumableSessions();
+      const visible = sessions.slice(0, 50);
+      const lines = visible.map((session) => {
+        const surface = session.surface ? ` ${session.surface}` : '';
+        return `  ${session.id} [${session.msgCount}]${surface} ${session.title}`;
+      });
+      if (sessions.length > visible.length) {
+        lines.push(
+          `  ... ${sessions.length - visible.length} more; use \`kodax -r\` to search and page.`,
+        );
+      }
+      console.log(
+        lines.length > 0
+          ? `Sessions:\n${lines.join('\n')}`
+          : 'No resumable sessions.',
+      );
       return;
     }
-    const archived = await archiveAcpPollutionCandidates(storage, candidates);
-    console.log(`Archived ${archived.length} sessions. Use the session SDK unarchive operation to restore one.`);
-    return;
-  }
 
-  if (options.session === 'delete-all') {
-    const storage = new FileSessionStorage();
-    await storage.deleteAll();
-    console.log('Deleted all sessions.');
-    return;
-  }
-
-  const sessionOperation = options.session;
-  if (sessionOperation === 'delete' || sessionOperation?.startsWith('delete ')) {
-    const quotedId = sessionOperation.startsWith('delete ')
-      ? sessionOperation.slice('delete '.length).trim()
-      : undefined;
-    const positionalId = sessionOperation === 'delete' ? options.prompt[0]?.trim() : undefined;
-    const sessionId = quotedId || positionalId;
-    if (!sessionId) {
-      throw new Error('`-s delete` requires a session id. Usage: kodax -s delete <id>');
-    }
-    if (sessionOperation === 'delete' && options.prompt.length > 1) {
-      throw new Error('`-s delete` accepts exactly one session id.');
-    }
-    const storage = new FileSessionStorage();
-    await storage.delete(sessionId);
-    console.log(`Deleted session: ${sessionId}`);
-    return;
-  }
-
-  let userPrompt = options.prompt.join(' ');
-
-  // -h / --help [topic]: show basic help or a detailed help topic
-  if (opts.help !== undefined) {
-    if (typeof opts.help === 'string') {
-      const topic = opts.help.toLowerCase();
-      if (showCliHelpTopic(topic)) {
+    if (options.session === 'cleanup-acp') {
+      const storage = new FileSessionStorage({ cwd: process.cwd() });
+      const candidates = await findAcpPollutionCandidates(storage);
+      console.log(
+        `Matched ${candidates.length} empty ACP placeholder sessions in the current project.`,
+      );
+      for (const candidate of candidates.slice(0, 10)) {
+        console.log(
+          `  ${candidate.id}${candidate.createdAt ? ` ${candidate.createdAt}` : ''}`,
+        );
+      }
+      if (candidates.length > 10)
+        console.log(`  ... ${candidates.length - 10} more`);
+      if (opts.applySessionCleanup !== true) {
+        console.log(
+          'Preview only. Re-run with --apply-session-cleanup to archive these sessions reversibly.',
+        );
         return;
       }
-      console.log(chalk.yellow(`\n[Unknown help topic: ${topic}]`));
-      showCliHelpTopics();
+      const archived = await archiveAcpPollutionCandidates(storage, candidates);
+      console.log(
+        `Archived ${archived.length} sessions. Use the session SDK unarchive operation to restore one.`,
+      );
       return;
     }
-  // No topic specified: show basic help overview.
-    showBasicHelp();
-    return;
-  }
 
-  validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
-
-  if (opts.resume === true) {
-    const sessions = await loadResumableSessions();
-    if (sessions.length === 0) {
-      console.log(chalk.yellow('No resumable sessions found. Starting a new session...'));
-      options.resume = undefined;
-    } else {
-      const selected = await runSessionPicker(sessions);
-      if (!selected) {
-        console.log(chalk.dim('Session resume cancelled.'));
-        return;
-      }
-      options.resume = selected.id;
+    if (options.session === 'delete-all') {
+      const storage = new FileSessionStorage();
+      await storage.deleteAll();
+      console.log('Deleted all sessions.');
+      return;
     }
-  } else if (typeof opts.resume === 'string') {
-    const exactIdSession = await loadSession(opts.resume);
-    if (!exactIdSession) {
-      const titleMatches = findSessionTitleMatches(await loadResumableSessions(), opts.resume);
-      if (titleMatches.length === 1) {
-        options.resume = titleMatches[0]!.id;
-      } else if (titleMatches.length > 1) {
-        if (options.outputMode === 'json') {
-          throw new Error(
-            `Multiple sessions have the title "${opts.resume}". Use an exact session ID with --mode json.`,
-          );
+
+    const sessionOperation = options.session;
+    if (
+      sessionOperation === 'delete' ||
+      sessionOperation?.startsWith('delete ')
+    ) {
+      const quotedId = sessionOperation.startsWith('delete ')
+        ? sessionOperation.slice('delete '.length).trim()
+        : undefined;
+      const positionalId =
+        sessionOperation === 'delete' ? options.prompt[0]?.trim() : undefined;
+      const sessionId = quotedId || positionalId;
+      if (!sessionId) {
+        throw new Error(
+          '`-s delete` requires a session id. Usage: kodax -s delete <id>',
+        );
+      }
+      if (sessionOperation === 'delete' && options.prompt.length > 1) {
+        throw new Error('`-s delete` accepts exactly one session id.');
+      }
+      const storage = new FileSessionStorage();
+      await storage.delete(sessionId);
+      console.log(`Deleted session: ${sessionId}`);
+      return;
+    }
+
+    let userPrompt = options.prompt.join(' ');
+
+    // -h / --help [topic]: show basic help or a detailed help topic
+    if (opts.help !== undefined) {
+      if (typeof opts.help === 'string') {
+        const topic = opts.help.toLowerCase();
+        if (showCliHelpTopic(topic)) {
+          return;
         }
-        console.log(chalk.yellow(
-          `Multiple sessions have the title "${opts.resume}". Choose the intended session:`,
-        ));
-        const selected = await runSessionPicker(titleMatches);
+        console.log(chalk.yellow(`\n[Unknown help topic: ${topic}]`));
+        showCliHelpTopics();
+        return;
+      }
+      // No topic specified: show basic help overview.
+      showBasicHelp();
+      return;
+    }
+
+    validateCliModeSelection(options, {
+      resumeWithoutId: opts.resume === true,
+    });
+
+    if (opts.resume === true) {
+      const sessions = await loadResumableSessions();
+      if (sessions.length === 0) {
+        console.log(
+          chalk.yellow(
+            'No resumable sessions found. Starting a new session...',
+          ),
+        );
+        options.resume = undefined;
+      } else {
+        const selected = await runSessionPicker(sessions);
         if (!selected) {
           console.log(chalk.dim('Session resume cancelled.'));
           return;
         }
         options.resume = selected.id;
       }
-    }
-  }
-
-  if (selectedRuntimeMode === 'daemon' && dedupedCliExtensions.length > 0) {
-    throw new Error(
-      'CLI --extension paths cannot cross the daemon process boundary. '
-      + 'Add the extension to the daemon profile config or use --runtime-mode embedded.',
-    );
-  }
-  if (selectedRuntimeMode !== 'daemon') {
-    extensionRuntime = createExtensionRuntime({ config });
-    // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
-    // serve elicitation through the REPL's live ask-user dialogs. In print /
-    // non-interactive mode no interaction surface registers, so elicitation
-    // requests safely decline.
-    await registerConfiguredMcpCapabilityProvider(extensionRuntime, configWithExtensions.mcpServers, {
-      reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: true }),
-    });
-    const extensionLoader = extensionRuntime as typeof extensionRuntime & {
-      loadExtensions: (
-        paths: string[],
-        options?: { continueOnError?: boolean; loadSource?: 'discovery' | 'config' | 'cli' | 'api' },
-      ) => Promise<void>;
-    };
-    await extensionLoader.loadExtensions(discoveredOnlyExtensions, {
-      continueOnError: true,
-      loadSource: 'discovery',
-    });
-    await extensionLoader.loadExtensions(configuredOnlyExtensions, {
-      continueOnError: true,
-      loadSource: 'config',
-    });
-    await extensionLoader.loadExtensions(dedupedCliExtensions, {
-      continueOnError: true,
-      loadSource: 'cli',
-    });
-    options.extensionRuntime = extensionRuntime;
-    extensionRuntime.activate();
-    integrationHotReload = await startIntegrationHotReload({
-      runtime: extensionRuntime,
-      mcpOptions: {
-        reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: true }),
-      },
-      onEvent: (message) => console.error(chalk.dim(`[integrations] ${message}`)),
-    });
-  }
-
-  // Command dispatch for /command-style invocations.
-  if (userPrompt.startsWith('/')) {
-    const parsed = parseCommandCall(userPrompt);
-    if (parsed) {
-      const [commandName, args] = parsed;
-      const commands = await loadCommands();
-      if (commands.has(commandName)) {
-        const kodaXOptions = createKodaXOptions(options, false);
-        const commandPrompt = await processCommandCall(
-          commandName,
-          args,
-          commands,
-          async (prompt: string) => runCliTaskWithRuntime(
-            await getCliRuntime(),
-            {
-              ...kodaXOptions,
-              context: {
-                ...kodaXOptions.context,
-                taskSurface: 'cli',
-              },
-            },
-            prompt,
-          ),
+    } else if (typeof opts.resume === 'string') {
+      const exactIdSession = await loadSession(opts.resume);
+      if (!exactIdSession) {
+        const titleMatches = findSessionTitleMatches(
+          await loadResumableSessions(),
+          opts.resume,
         );
-        if (commandPrompt) {
-          const result = await runCliTaskWithRuntime(
-            await getCliRuntime(),
-            {
-              ...kodaXOptions,
-              context: {
-                ...kodaXOptions.context,
-                taskSurface: 'cli',
-              },
-            },
-            commandPrompt,
+        if (titleMatches.length === 1) {
+          options.resume = titleMatches[0]!.id;
+        } else if (titleMatches.length > 1) {
+          if (options.outputMode === 'json') {
+            throw new Error(
+              `Multiple sessions have the title "${opts.resume}". Use an exact session ID with --mode json.`,
+            );
+          }
+          console.log(
+            chalk.yellow(
+              `Multiple sessions have the title "${opts.resume}". Choose the intended session:`,
+            ),
           );
-          emitJsonRunResultIfNeeded(options.outputMode, result);
-          return;
+          const selected = await runSessionPicker(titleMatches);
+          if (!selected) {
+            console.log(chalk.dim('Session resume cancelled.'));
+            return;
+          }
+          options.resume = selected.id;
         }
       }
     }
-  }
-  // No prompt and not in print mode: enter interactive mode
-  if (!userPrompt && !options.print) {
-    const kodaXOptions = createKodaXOptions(options, false);
-    const interactiveSurface = resolveInteractiveSurfacePreference();
-    const useClassicInteractiveMode = interactiveSurface === 'classic';
-    // Pass FileSessionStorage for persisted sessions.
-    try {
-      if (useClassicInteractiveMode) {
-        console.error(chalk.dim(
-          '\n[Terminal compatibility] Using classic REPL because this terminal host cannot safely run the fullscreen TUI.',
-        ));
-        console.error(chalk.dim(
-          'Set KODAX_FORCE_INK=1 or KODAX_TUI_RENDERER=owned to override, or KODAX_FORCE_CLASSIC_REPL=1 to keep this mode everywhere.\n',
-        ));
-      }
 
-      const runtimeProfile = 'default';
-      const interactiveRuntime = await getCliRuntime();
-      const runtimeAutoModeControl = createReplRuntimeAutoModeControl(interactiveRuntime);
-      const runtimeRunner = createInteractiveRuntimeRunner(
-        interactiveRuntime,
-        runtimeAutoModeControl,
+    if (selectedRuntimeMode === 'daemon' && dedupedCliExtensions.length > 0) {
+      throw new Error(
+        'CLI --extension paths cannot cross the daemon process boundary. ' +
+          'Add the extension to the daemon profile config or use --runtime-mode embedded.',
       );
-
-      const interactiveOptions = {
-        provider: kodaXOptions.provider,
-        model: kodaXOptions.model,
-        effort: kodaXOptions.effort,
-        thinking: kodaXOptions.thinking,
-        reasoningMode: kodaXOptions.reasoningMode,
-        agentMode: kodaXOptions.agentMode,
-        maxIter: kodaXOptions.maxIter,
-        extensionRuntime: kodaXOptions.extensionRuntime,
-        session: kodaXOptions.session,
-        storage: new FileSessionStorage({ cwd: process.cwd() }),
-        runtimeRunner,
-        runtimeAutoModeControl,
-        getRuntimeStatus: () => getInteractiveRuntimeStatus({
-          runtime: interactiveRuntime,
-          configHome: KODAX_DIR,
-          profile: runtimeProfile,
-        }),
-        learning: createReplLearningBinding(interactiveRuntime),
-        hardExitOnClose: false,
+    }
+    if (selectedRuntimeMode !== 'daemon') {
+      extensionRuntime = createExtensionRuntime({ config });
+      // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
+      // serve elicitation through the REPL's live ask-user dialogs. In print /
+      // non-interactive mode no interaction surface registers, so elicitation
+      // requests safely decline.
+      await registerConfiguredMcpCapabilityProvider(
+        extensionRuntime,
+        configWithExtensions.mcpServers,
+        {
+          reverse: buildMcpReverseCapabilities({
+            cwd: process.cwd(),
+            enableElicitation: true,
+          }),
+        },
+      );
+      const extensionLoader = extensionRuntime as typeof extensionRuntime & {
+        loadExtensions: (
+          paths: string[],
+          options?: {
+            continueOnError?: boolean;
+            loadSource?: 'discovery' | 'config' | 'cli' | 'api';
+          },
+        ) => Promise<void>;
       };
+      await extensionLoader.loadExtensions(discoveredOnlyExtensions, {
+        continueOnError: true,
+        loadSource: 'discovery',
+      });
+      await extensionLoader.loadExtensions(configuredOnlyExtensions, {
+        continueOnError: true,
+        loadSource: 'config',
+      });
+      await extensionLoader.loadExtensions(dedupedCliExtensions, {
+        continueOnError: true,
+        loadSource: 'cli',
+      });
+      options.extensionRuntime = extensionRuntime;
+      extensionRuntime.activate();
+      integrationHotReload = await startIntegrationHotReload({
+        runtime: extensionRuntime,
+        mcpOptions: {
+          reverse: buildMcpReverseCapabilities({
+            cwd: process.cwd(),
+            enableElicitation: true,
+          }),
+        },
+        onEvent: integrationEvents.onEvent,
+      });
+    }
 
-      // F1 — first launch with no config.json: drop a commented config.example.jsonc
-      // reference next to it and point the user at it (one time only).
-      const exampleConfigPaths = ensureExampleConfigFiles();
-      if (exampleConfigPaths.length > 0) {
-        console.error(chalk.dim(
-          `\n[Configuration] Wrote missing annotated examples:\n` +
-          `${exampleConfigPaths.map((file) => `  ${file}`).join('\n')}\n` +
-          `Core settings belong in config.json; integrations belong in integrations/*.json.\n`,
-        ));
-      }
-
-      if (useClassicInteractiveMode) {
-        await runInteractiveMode(interactiveOptions);
-      } else {
-        await runInkInteractiveMode(interactiveOptions);
-      }
-      shouldHardExitAfterInteractiveCleanup = true;
-    } catch (error) {
-      if (error instanceof KodaXTerminalError) {
-        console.error(chalk.red(`\n[Error] ${error.message}`));
-        console.error(chalk.dim("\nYour terminal environment does not support interactive mode."));
-        console.error(chalk.dim("\nPlease use CLI mode instead:"));
-        for (const suggestion of error.suggestions) {
-          console.error(chalk.cyan(`  ${suggestion}`));
+    // Command dispatch for /command-style invocations.
+    if (userPrompt.startsWith('/')) {
+      const parsed = parseCommandCall(userPrompt);
+      if (parsed) {
+        const [commandName, args] = parsed;
+        const commands = await loadCommands();
+        if (commands.has(commandName)) {
+          const kodaXOptions = createKodaXOptions(options, false);
+          const commandPrompt = await processCommandCall(
+            commandName,
+            args,
+            commands,
+            async (prompt: string) =>
+              runCliTaskWithRuntime(
+                await getCliRuntime(),
+                {
+                  ...kodaXOptions,
+                  context: {
+                    ...kodaXOptions.context,
+                    taskSurface: 'cli',
+                  },
+                },
+                prompt,
+              ),
+          );
+          if (commandPrompt) {
+            const result = await runCliTaskWithRuntime(
+              await getCliRuntime(),
+              {
+                ...kodaXOptions,
+                context: {
+                  ...kodaXOptions.context,
+                  taskSurface: 'cli',
+                },
+              },
+              commandPrompt,
+            );
+            emitJsonRunResultIfNeeded(options.outputMode, result);
+            return;
+          }
         }
-        console.error();
-        process.exitCode = 1;
-      } else {
-        throw error;
       }
     }
-    return;
-  }
+    // No prompt and not in print mode: enter interactive mode
+    if (!userPrompt && !options.print) {
+      const kodaXOptions = createKodaXOptions(options, false);
+      const interactiveSurface = resolveInteractiveSurfacePreference();
+      const useClassicInteractiveMode = interactiveSurface === 'classic';
+      // Pass FileSessionStorage for persisted sessions.
+      try {
+        if (useClassicInteractiveMode) {
+          console.error(
+            chalk.dim(
+              '\n[Terminal compatibility] Using classic REPL because this terminal host cannot safely run the fullscreen TUI.',
+            ),
+          );
+          console.error(
+            chalk.dim(
+              'Set KODAX_FORCE_INK=1 or KODAX_TUI_RENDERER=owned to override, or KODAX_FORCE_CLASSIC_REPL=1 to keep this mode everywhere.\n',
+            ),
+          );
+        }
 
-  // No prompt + --print: show basic help and exit.
-  if (!userPrompt && options.print) {
-    showBasicHelp();
-    return;
-  }
+        const runtimeProfile = 'default';
+        const interactiveRuntime = await getCliRuntime();
+        const runtimeAutoModeControl =
+          createReplRuntimeAutoModeControl(interactiveRuntime);
+        const runtimeRunner = createInteractiveRuntimeRunner(
+          interactiveRuntime,
+          runtimeAutoModeControl,
+        );
 
-  // Run a single managed task through the selected Runtime and exit.
-  const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-  const result = await runCliTaskWithRuntime(
-    await getCliRuntime(),
-    {
-      ...kodaXOptions,
-      context: {
-        ...kodaXOptions.context,
-        taskSurface: 'cli',
+        const interactiveOptions = {
+          provider: kodaXOptions.provider,
+          model: kodaXOptions.model,
+          effort: kodaXOptions.effort,
+          thinking: kodaXOptions.thinking,
+          reasoningMode: kodaXOptions.reasoningMode,
+          agentMode: kodaXOptions.agentMode,
+          maxIter: kodaXOptions.maxIter,
+          extensionRuntime: kodaXOptions.extensionRuntime,
+          session: kodaXOptions.session,
+          storage: new FileSessionStorage({ cwd: process.cwd() }),
+          runtimeRunner,
+          runtimeAutoModeControl,
+          getRuntimeStatus: () =>
+            getInteractiveRuntimeStatus({
+              runtime: interactiveRuntime,
+              configHome: KODAX_DIR,
+              profile: runtimeProfile,
+            }),
+          validateSetupA2AConfig: parseA2AIntegrationDocument,
+          prepareSetupSandbox: prepareSetupSandboxReport,
+          inspectSandbox: inspectSandboxReport,
+          learning: createReplLearningBinding(interactiveRuntime),
+          subscribeTransientNotices: integrationEvents.subscribe,
+          hardExitOnClose: false,
+        };
+
+        // F1 — first launch with no config.json: drop a commented config.example.jsonc
+        // reference next to it and point the user at it (one time only).
+        const exampleConfigPaths = ensureExampleConfigFiles();
+        if (exampleConfigPaths.length > 0) {
+          console.error(
+            chalk.dim(
+              `\n[Configuration] Wrote missing annotated examples:\n` +
+                `${exampleConfigPaths.map((file) => `  ${file}`).join('\n')}\n` +
+                `Core settings belong in config.json; integrations belong in integrations/*.json.\n`,
+            ),
+          );
+        }
+
+        if (useClassicInteractiveMode) {
+          await runInteractiveMode(interactiveOptions);
+        } else {
+          await runInkInteractiveMode(interactiveOptions);
+        }
+        shouldHardExitAfterInteractiveCleanup = true;
+      } catch (error) {
+        if (error instanceof KodaXTerminalError) {
+          console.error(chalk.red(`\n[Error] ${error.message}`));
+          console.error(
+            chalk.dim(
+              '\nYour terminal environment does not support interactive mode.',
+            ),
+          );
+          console.error(chalk.dim('\nPlease use CLI mode instead:'));
+          for (const suggestion of error.suggestions) {
+            console.error(chalk.cyan(`  ${suggestion}`));
+          }
+          console.error();
+          process.exitCode = 1;
+        } else {
+          throw error;
+        }
+      }
+      return;
+    }
+
+    // No prompt + --print: show basic help and exit.
+    if (!userPrompt && options.print) {
+      showBasicHelp();
+      return;
+    }
+
+    // Run a single managed task through the selected Runtime and exit.
+    const kodaXOptions = createKodaXOptions(options, options.print ?? false);
+    const result = await runCliTaskWithRuntime(
+      await getCliRuntime(),
+      {
+        ...kodaXOptions,
+        context: {
+          ...kodaXOptions.context,
+          taskSurface: 'cli',
+        },
       },
-    },
-    userPrompt,
-  );
-  emitJsonRunResultIfNeeded(options.outputMode, result);
+      userPrompt,
+    );
+    emitJsonRunResultIfNeeded(options.outputMode, result);
   } finally {
     let runtimeCloseFailed = false;
     let runtimeCloseError: unknown;
@@ -3610,7 +4968,10 @@ complete -c kodax -l version -d 'Show version'`);
     if (runtimeCloseFailed) {
       throw runtimeCloseError;
     }
-    if (shouldHardExitAfterInteractiveCleanup && process.env.VITEST !== 'true') {
+    if (
+      shouldHardExitAfterInteractiveCleanup &&
+      process.env.VITEST !== 'true'
+    ) {
       process.exit(process.exitCode ?? 0);
     }
   }
@@ -3638,7 +4999,10 @@ const scriptUrl = scriptPath ? pathToFileURL(scriptPath).href : '';
 const isMainModule = scriptPath && metaUrl === scriptUrl;
 
 if (isMainModule) {
-  main().catch(e => { console.error(chalk.red(`[Error] ${e.message}`)); process.exit(1); });
+  main().catch((e) => {
+    console.error(chalk.red(`[Error] ${e.message}`));
+    process.exit(1);
+  });
 }
 
 // Export for testing

@@ -1226,6 +1226,8 @@ export function createRuntimeAgentBindingService(
       if (binding.kind !== 'local-agent' || !binding.agent || !binding.scope) {
         throw new Error('Runtime Agent binding kind mismatch.');
       }
+      const agent = binding.agent;
+      const scope = binding.scope;
       if (binding.configurationRevision !== input.expectedConfigurationRevision) {
         throw new Error('User Markdown Agent configuration revision changed.');
       }
@@ -1234,20 +1236,20 @@ export function createRuntimeAgentBindingService(
       }
       const root = await requiredWorkspaceRoot(host, binding, input.sessionId);
       const learnedRun = await prepareLearnedSkillRun(binding, input.sessionId);
-      const instructions = typeof binding.agent.instructions === 'string'
-        ? binding.agent.instructions
-        : binding.agent.instructions({});
+      const instructions = typeof agent.instructions === 'string'
+        ? agent.instructions
+        : agent.instructions({});
       return withLearnedSkillRelease(learnedRun, () => host.runs.start({
         sessionId: input.sessionId, input: input.input, permissionBroker: input.permissionBroker,
         agentContext: input.agentContext,
         options: {
-          ...(binding.agent.provider ? { provider: binding.agent.provider } : {}),
-          ...(binding.agent.model ? { modelOverride: binding.agent.model } : {}),
-          ...(binding.agent.effort ? { effort: binding.agent.effort } : {}),
+          ...(agent.provider ? { provider: agent.provider } : {}),
+          ...(agent.model ? { modelOverride: agent.model } : {}),
+          ...(agent.effort ? { effort: agent.effort } : {}),
           context: {
             executionCwd: root, gitRoot: root, managedTaskWorkspaceDir: root,
             ...learnedRun.context,
-            systemPromptOverride: instructions, agentScope: binding.scope,
+            systemPromptOverride: instructions, agentScope: scope,
             toolVisibilityPolicy: (tool) => binding.effectiveTools.includes(tool.name),
             skillRegistry: learnedRun.registry,
             skillScriptRunner: binding.skillScriptRunner,

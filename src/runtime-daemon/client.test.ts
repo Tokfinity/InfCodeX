@@ -17,6 +17,50 @@ import {
 } from './client.js';
 
 describe('runtime daemon client proxy', () => {
+  it('shares concurrent close attempts and retries a transient transport failure', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const base = fakeTransport(calls);
+    let closeCalls = 0;
+    let releaseFirstClose: (() => void) | undefined;
+    const firstCloseGate = new Promise<void>((resolve) => {
+      releaseFirstClose = resolve;
+    });
+    const transport: RuntimeDaemonClientTransport = {
+      ...base,
+      async close() {
+        closeCalls += 1;
+        if (closeCalls === 1) {
+          await firstCloseGate;
+          throw new Error('transient transport close failure');
+        }
+      },
+    };
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-close-retry',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-28T00:00:00.000Z',
+        version: '0.7.78',
+      },
+      transport,
+    });
+
+    const first = client.close();
+    const concurrent = client.close();
+    expect(concurrent).toBe(first);
+    releaseFirstClose?.();
+    await expect(Promise.all([first, concurrent])).rejects.toThrow(
+      'transient transport close failure',
+    );
+    expect(closeCalls).toBe(1);
+
+    await expect(client.close()).resolves.toBeUndefined();
+    expect(closeCalls).toBe(2);
+    await expect(client.close()).resolves.toBeUndefined();
+    expect(closeCalls).toBe(2);
+  });
+
   it('requires an advertised Actor control plane before issuing Actor RPCs', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const client = createRuntimeDaemonClient({

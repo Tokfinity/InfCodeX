@@ -205,6 +205,27 @@ export interface SafeFetchResult {
   readonly url: URL;
 }
 
+function combineAbortSignals(
+  caller: AbortSignal | null | undefined,
+  deadline: AbortSignal,
+): { readonly signal: AbortSignal; readonly cleanup: () => void } {
+  if (!caller) return { signal: deadline, cleanup: () => undefined };
+  const combined = new AbortController();
+  const abortFromCaller = (): void => combined.abort(caller.reason);
+  const abortFromDeadline = (): void => combined.abort(deadline.reason);
+  if (caller.aborted) abortFromCaller();
+  else caller.addEventListener('abort', abortFromCaller, { once: true });
+  if (deadline.aborted) abortFromDeadline();
+  else deadline.addEventListener('abort', abortFromDeadline, { once: true });
+  return {
+    signal: combined.signal,
+    cleanup: () => {
+      caller.removeEventListener('abort', abortFromCaller);
+      deadline.removeEventListener('abort', abortFromDeadline);
+    },
+  };
+}
+
 export async function safeA2AFetch(
   input: URL,
   init: RequestInit,
@@ -216,6 +237,7 @@ export async function safeA2AFetch(
   for (let redirect = 0; redirect <= policy.maxRedirects; redirect += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('A2A request timed out.')), policy.requestTimeoutMs);
+    const combinedSignal = combineAbortSignals(init.signal, controller.signal);
     const headers = new Headers(init.headers);
     if (authorization === null) headers.delete('authorization');
     else headers.set('authorization', authorization);
@@ -224,7 +246,7 @@ export async function safeA2AFetch(
         ...init,
         headers,
         redirect: 'manual',
-        signal: controller.signal,
+        signal: combinedSignal.signal,
       }, policy, fetchImpl);
       if (response.status < 300 || response.status >= 400) {
         return { response, body: await boundedBody(response, policy.maxResponseBytes), url: current };
@@ -239,6 +261,7 @@ export async function safeA2AFetch(
       current = next;
     } finally {
       clearTimeout(timer);
+      combinedSignal.cleanup();
     }
   }
   throw new A2AError(-32603, 'A2A redirect limit exceeded.');

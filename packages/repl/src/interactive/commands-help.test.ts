@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as setupConfig from '../common/setup-config.js';
 import { BUILTIN_COMMANDS, executeCommand, getCommandRegistry, type CommandCallbacks } from './commands.js';
 import { createInteractiveContext } from './context.js';
+import * as providerSetup from './provider-setup.js';
 
 describe('help command output', () => {
   beforeEach(() => {
@@ -89,6 +91,119 @@ describe('help command output', () => {
     expect(result).toBe(true);
     expect(callbacks.exit).not.toHaveBeenCalled();
     expect(output).toContain('/exit - Exit Interactive Mode');
+  });
+
+  it('shows the shared onboarding guide for /setup --help', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const callbacks = {
+      saveSession: vi.fn(async () => {}),
+      exit: vi.fn(),
+    } as unknown as CommandCallbacks;
+
+    const result = await executeCommand(
+      { command: 'setup', args: ['--help'] },
+      context,
+      callbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(result).toBe(true);
+    expect(output).toContain('KodaX setup guide');
+    expect(output).toContain('kodax setup --custom');
+    expect(output).toContain('/model');
+    expect(output).toContain('mcp.json');
+    expect(output).toContain('Alt+M');
+  });
+
+  it('shows refreshed sandbox diagnostics only when /sandbox is requested', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const inspectSandbox = vi.fn(async () => ({
+      ready: true,
+      platform: 'win32',
+      version: '0.0.65',
+      backend: 'windows-restricted-user',
+      diagnostics: [] as string[],
+      guidance: ['KodaX sandbox is active (win32, ASRT 0.0.65).'],
+    }));
+
+    const result = await executeCommand(
+      { command: 'sandbox', args: [] },
+      await createInteractiveContext({}),
+      { inspectSandbox } as unknown as CommandCallbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(result).toBe(true);
+    expect(inspectSandbox).toHaveBeenCalledOnce();
+    expect(output).toContain('Sandbox');
+    expect(output).toContain('ready');
+    expect(output).toContain('windows-restricted-user');
+    expect(output).toContain('0.0.65');
+  });
+
+  it('keeps /sandbox unavailable diagnostics explicit without triggering setup', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const inspectSandbox = vi.fn(async () => ({
+      ready: false,
+      platform: 'linux',
+      version: '0.0.65',
+      backend: 'bubblewrap',
+      diagnostics: ['bubblewrap is unavailable'],
+      guidance: ['Run: apt install bubblewrap socat ripgrep'],
+    }));
+    const prepareSetupSandbox = vi.fn();
+
+    await executeCommand(
+      { command: 'sandbox', args: [] },
+      await createInteractiveContext({}),
+      { inspectSandbox, prepareSetupSandbox } as unknown as CommandCallbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(inspectSandbox).toHaveBeenCalledOnce();
+    expect(prepareSetupSandbox).not.toHaveBeenCalled();
+    expect(output).toContain('unavailable');
+    expect(output).toContain('bubblewrap is unavailable');
+    expect(output).toContain('apt install bubblewrap socat ripgrep');
+  });
+
+  it('stops /setup before opening the provider UI when an active config is invalid', async () => {
+    vi.spyOn(setupConfig, 'initializeSetupConfiguration').mockReturnValue({
+      configHome: 'C:/Users/test/.kodax',
+      files: [{
+        domain: 'a2a',
+        kind: 'active',
+        status: 'invalid',
+        path: 'C:/Users/test/.kodax/integrations/a2a.json',
+        diagnostic: 'A2A config version must be 1 or 2.',
+      }],
+    });
+    const wizard = vi.spyOn(providerSetup, 'runProviderSetupWizard');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prepareSetupSandbox = vi.fn(async () => ({
+      status: 'unavailable' as const,
+      lines: ['Install bubblewrap, socat, and ripgrep.'],
+    }));
+
+    const result = await executeCommand(
+      { command: 'setup', args: [] },
+      await createInteractiveContext({}),
+      { prepareSetupSandbox } as unknown as CommandCallbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(result).toBe(true);
+    expect(prepareSetupSandbox).toHaveBeenCalledOnce();
+    expect(wizard).not.toHaveBeenCalled();
+    expect(output).toContain('Sandbox');
+    expect(output).toContain('bubblewrap');
+    expect(output).toContain('invalid');
+    expect(output).toContain('Setup stopped');
   });
 
   it('shows basic help for /<command> help when detailed help is absent', async () => {

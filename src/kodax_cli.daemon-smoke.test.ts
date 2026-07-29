@@ -11,11 +11,16 @@ import { killChildProcessTree, killPidTree } from '@kodax-ai/agent';
 import {
   acquireKodaXInlineOwner,
   connectKodaXRuntime,
+  createKodaXRuntime,
   enableKodaXDaemonOwner,
   getKodaXRuntimeOwnerState,
   type KodaXDaemonRuntime,
 } from './sdk-runtime.js';
 
+import {
+  RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES,
+  runtimeDaemonBootstrapLogPath,
+} from './runtime-daemon/process.js';
 import {
   resolveRuntimeDaemonPaths,
   resolveRuntimeDaemonPathsFromConfigHome,
@@ -38,6 +43,42 @@ afterEach(async () => {
 });
 
 describe('daemon CLI smoke', () => {
+  it('keeps child bootstrap output bounded before the daemon becomes ready', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-bootstrap-bound-'));
+    tempRoots.push(homeDir);
+    const profile = `bootstrap-bound-${process.pid}-${Date.now()}`;
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const start = runDaemonCommand(
+      [
+        'start',
+        '--home',
+        homeDir,
+        '--profile',
+        profile,
+        '--provider',
+        'mock-provider',
+        '--timeout-ms',
+        '30000',
+        '--json',
+      ],
+      {
+        KODAX_INTERNAL_DAEMON_TEST_BOOTSTRAP_BYTES: String(
+          RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES * 3,
+        ),
+        KODAX_INTERNAL_DAEMON_TEST_READY_DELAY_MS: '1000',
+      },
+    );
+
+    await waitForHealthyDaemonStatus(paths, 'starting');
+    expect(fs.statSync(runtimeDaemonBootstrapLogPath(paths)).size).toBeLessThanOrEqual(
+      RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES,
+    );
+    await expect(start).resolves.toMatchObject({ started: true, health: 'healthy' });
+    expect(fs.statSync(runtimeDaemonBootstrapLogPath(paths)).size).toBeLessThanOrEqual(
+      RUNTIME_DAEMON_BOOTSTRAP_LOG_MAX_BYTES,
+    );
+  }, 90_000);
+
   it('kills a timed-out node process tree', async () => {
     const markerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-node-timeout-'));
     const markerFile = path.join(markerDir, 'nested-pid.txt');
@@ -233,7 +274,7 @@ describe('daemon CLI smoke', () => {
     }
   }, 90_000);
 
-  it('binds foreground daemon A2A config to --home and cleans a failed initial reconcile', async () => {
+  it('binds foreground daemon A2A config to --home and degrades an invalid domain safely', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-a2a-home-'));
     const ambientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-a2a-ambient-'));
     tempRoots.push(homeDir, ambientHome);
@@ -272,24 +313,47 @@ describe('daemon CLI smoke', () => {
     child.stderr?.on('data', (chunk: Buffer | string) => {
       stderr += chunk.toString();
     });
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error('Foreground daemon ignored the A2A config owned by --home.'));
-      }, 15_000);
-      child.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-      child.once('exit', (code) => {
-        clearTimeout(timeout);
-        resolve(code);
-      });
-    });
-
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toMatch(/Integration configuration is invalid/i);
     const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    try {
+      await waitForHealthyDaemonStatus(paths, 'ready');
+      const runtime = await connectKodaXRuntime({
+        profile,
+        homeDir,
+        autoStart: false,
+        requirements: { daemonManagement: 1 },
+      });
+      try {
+        await expect(runtime.daemon.inspect()).resolves.toMatchObject({
+          integrations: {
+            state: 'degraded',
+            domains: expect.arrayContaining([
+              expect.objectContaining({
+                domain: 'a2a',
+                path: path.join(homeConfigDir, 'a2a.json'),
+                source: 'default',
+                diagnostic: expect.objectContaining({ code: 'invalid-config' }),
+              }),
+            ]),
+          },
+        });
+      } finally {
+        await runtime.close();
+      }
+      expect(stderr).toMatch(/Integration configuration is invalid/i);
+      await expect(runDaemonCommand([
+        'stop', '--home', homeDir, '--profile', profile,
+        '--timeout-ms', '30000', '--json',
+      ])).resolves.toMatchObject({ stopped: true });
+      const exitCode = child.exitCode ?? await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', resolve);
+      });
+      expect(exitCode).toBe(0);
+    } finally {
+      if (isRuntimeDaemonPidAlive(child.pid ?? -1)) {
+        await killChildProcessTree(child, { forceMs: 2_000, taskkillMs: 5_000 });
+      }
+    }
     expect(fs.existsSync(paths.stateFile)).toBe(false);
     expect(fs.existsSync(paths.lockFile)).toBe(false);
   }, 30_000);
@@ -359,6 +423,65 @@ describe('daemon CLI smoke', () => {
     ]);
     expect(status).toMatchObject({ health: 'healthy' });
   }, 90_000);
+
+  it('self-stops a Space-managed daemon after its final client disconnects', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-orphan-smoke-'));
+    tempRoots.push(homeDir);
+    const profile = `orphan-${process.pid}-${Date.now()}`;
+    const runtime = await createKodaXRuntime({
+      mode: 'daemon',
+      homeDir,
+      profile,
+      autoStartDaemon: true,
+      daemonOrphanExitMs: 150,
+      clientInfo: {
+        name: 'kodax-space',
+        instanceId: `space_${process.pid}`,
+      },
+    });
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as { pid: number };
+
+    await runtime.close();
+    await waitForDaemonState(profile, homeDir, false, 10_000);
+    await waitForDaemonPidExit(state.pid, 10_000);
+
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+  }, 30_000);
+
+  it('self-stops an opt-in daemon that becomes ready before any client initializes', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-bootstrap-orphan-'));
+    tempRoots.push(homeDir);
+    const profile = `bootstrap-orphan-${process.pid}-${Date.now()}`;
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const serving = runNodeProcess(
+      [
+        '--import',
+        'tsx',
+        path.join(process.cwd(), 'src', 'kodax_cli.ts'),
+        'daemon',
+        'serve',
+        '--home',
+        homeDir,
+        '--profile',
+        profile,
+        '--orphan-exit-ms',
+        '1000',
+      ],
+      {},
+      30_000,
+    );
+
+    await waitForHealthyDaemonStatus(paths, 'ready');
+    const state = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8')) as { pid: number };
+    await serving;
+    await waitForDaemonState(profile, homeDir, false, 10_000);
+    await waitForDaemonPidExit(state.pid, 10_000);
+
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+  }, 30_000);
 
   it('lets process-distinct concurrent SDK starters elect exactly one owner', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-race-smoke-'));

@@ -227,7 +227,7 @@ function propertyName(name) {
 
 function assertEmbeddedWindowsBrokerHidden(bundlePath) {
   const bundle = readFileSync(bundlePath, 'utf8');
-  const brokerSpawn = /spawn\(wrapped\.argv\[0\],[\s\S]{0,500}?windowsHide:\s*true/;
+  const brokerSpawn = /spawn\((?:wrapped\.argv|childArgv)\[0\],[\s\S]{0,500}?windowsHide:\s*true/;
   if (!brokerSpawn.test(bundle)) {
     throw new Error('Runtime Worker embedded Windows sandbox broker lacks windowsHide: true.');
   }

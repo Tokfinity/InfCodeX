@@ -161,6 +161,22 @@ export interface CommandCallbacks {
   rewindSession?: (selector?: string) => Promise<SessionRewindStatus>;
   getCostReport?: () => string | null;
   getRuntimeStatus?: () => Promise<RuntimeSurfaceStatus | undefined>;
+  /** Canonical host parser used by `/setup` for the root-owned A2A schema. */
+  validateSetupA2AConfig?: (value: unknown) => unknown;
+  /** Root-owned sandbox activation because ASRT is distributed by the host package. */
+  prepareSetupSandbox?: () => Promise<{
+    readonly status: 'ready' | 'cancelled' | 'unavailable';
+    readonly lines: readonly string[];
+  }>;
+  /** Explicit read-only `/sandbox` probe. Ordinary startup never calls it. */
+  inspectSandbox?: () => Promise<{
+    readonly ready: boolean;
+    readonly platform: string;
+    readonly version: string;
+    readonly backend: string;
+    readonly diagnostics: readonly string[];
+    readonly guidance: readonly string[];
+  }>;
   learning?: LearningBinding;
   getLearningSummary?: () => Promise<LearningSurfaceSnapshot>;
   openLearningCenter?: (nameOrSlug?: string) => Promise<void>;

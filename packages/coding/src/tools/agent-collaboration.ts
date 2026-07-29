@@ -702,7 +702,19 @@ function errorFact(error: unknown): Readonly<Record<string, unknown>> {
         ? { activeNonRootTurns: record.activeNonRootTurns } : {}),
       ...(record.availableNonRootSlots === 0 ? { availableNonRootSlots: 0 } : {}),
       ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
-      ...(record.retryable === true ? { hint: 'Wait for an active Agent turn to finish, then replan.' } : {}),
+      ...(typeof record.currentRevision === 'number'
+        ? { currentRevision: record.currentRevision } : {}),
+      ...(typeof record.ownerRuntimeId === 'string'
+        ? { ownerRuntimeId: record.ownerRuntimeId } : {}),
+      ...(typeof record.localExecutionsAborted === 'boolean'
+        ? { localExecutionsAborted: record.localExecutionsAborted } : {}),
+      ...(record.code === 'actor_owner_conflict'
+        ? { hint: 'Use the Runtime that owns this Session, or stop that Runtime before retrying.' }
+        : record.code === 'actor_owner_unknown'
+          ? { hint: 'Stop the pre-v0.7.78 Runtime cleanly, then retry the Session operation.' }
+        : record.retryable === true
+          ? { hint: 'Wait for an active Agent turn to finish, then replan.' }
+          : {}),
       ...(typeof record.limit === 'number' ? { limit: record.limit } : {}),
       ...(typeof record.sent === 'number' ? { sent: record.sent } : {}),
     };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { KodaXSessionData } from '@kodax-ai/agent';
+import type { AgentActorSnapshot, KodaXSessionData } from '@kodax-ai/agent';
 import { isAcpPollutionSession } from './acp_session_cleanup.js';
 
 function session(overrides: Partial<KodaXSessionData> = {}): KodaXSessionData {
@@ -57,6 +57,9 @@ describe('ACP session cleanup', () => {
     }))).toBe(false);
     expect(isAcpPollutionSession(session({
       errorMetadata: { consecutiveErrors: 1, lastError: 'retry later' },
+    }))).toBe(false);
+    expect(isAcpPollutionSession(session({
+      actorSnapshot: { schemaVersion: 2 } as AgentActorSnapshot,
     }))).toBe(false);
   });
 });

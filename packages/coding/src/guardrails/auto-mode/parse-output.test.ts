@@ -48,16 +48,14 @@ describe('parseClassifierOutput', () => {
     expect(r.kind).toBe('unparseable');
   });
 
-  it('uses an explicit fallback when a blocking decision omits its reason', () => {
+  it('treats a blocking decision without a reason as a contract failure', () => {
     const r = parseClassifierOutput('<block>yes</block>');
-    expect(r.kind).toBe('block');
-    if (r.kind === 'block') expect(r.reason).toMatch(/denied.*without a reason/i);
+    expect(r.kind).toBe('unparseable');
   });
 
-  it('uses the same fallback when a blocking reason tag is empty', () => {
+  it('treats an empty blocking reason as a contract failure', () => {
     const r = parseClassifierOutput('<block>yes</block><reason></reason>');
-    expect(r.kind).toBe('block');
-    if (r.kind === 'block') expect(r.reason).toMatch(/denied.*without a reason/i);
+    expect(r.kind).toBe('unparseable');
   });
 
   it('truncates excessively long reasons to a sane upper bound', () => {

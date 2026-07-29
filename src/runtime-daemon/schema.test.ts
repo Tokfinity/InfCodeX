@@ -163,10 +163,36 @@ describe('runtime daemon protocol schema', () => {
       sessionId: 'session-1',
       runId: 'run-1',
       toolName: 'bash',
+      autoModeDiagnostics: {
+        source: 'classifier_failure',
+        classifierFailureKind: 'timeout',
+        classifierAttempts: [{ attempt: 1, outcome: 'timeout' }],
+      },
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolName: 'bash',
       projectRoot: 'C:\\untrusted',
     })).toContain('$.projectRoot is not allowed.');
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['permission.list'].result.items?.properties)
       .not.toHaveProperty('toolInput');
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['permission.list'].result.items?.properties)
+      .toHaveProperty('autoModeDiagnostics');
+  });
+
+  it('carries typed approval timeout decisions across permission RPC', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['permission.request'].result;
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      type: 'reject',
+      reason: 'permission request timed out',
+      cause: 'approval_timeout',
+    })).toEqual([]);
+    const invalid = validateRuntimeDaemonJsonSchema(schema, {
+      type: 'reject',
+      cause: 'network_timeout',
+    });
+    expect(invalid).not.toEqual([]);
   });
 
   it('keeps deprecated scope decisions transport-compatible without trusting them', () => {

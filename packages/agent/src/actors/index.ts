@@ -1,9 +1,12 @@
 export { AgentActorController, createAgentActorController } from './controller.js';
 export type { AgentControllerOptions } from './controller.js';
 export {
+  AgentActorStoreConflictError,
   AgentBudgetExhaustedError,
   AgentControlError,
   AgentLimitReachedError,
+  AgentOwnerConflictError,
+  AgentOwnerUnknownError,
   AgentRevisionConflictError,
 } from './errors.js';
 export type { AgentControlErrorCode } from './errors.js';
@@ -12,7 +15,10 @@ export type {
   AgentActor,
   AgentArtifactDescriptor,
   AgentActorClient,
+  AgentActorOwner,
   AgentActorSnapshot,
+  AgentActorSnapshotV1,
+  AgentActorSnapshotV2,
   AgentActorState,
   AgentActorStore,
   AgentBudgetAdmission,

@@ -15,6 +15,7 @@ export type KodaXManualTopicId =
   | 'custom-providers'
   | 'config'
   | 'permissions'
+  | 'sandbox'
   | 'commands'
   | 'tools'
   | 'agents'

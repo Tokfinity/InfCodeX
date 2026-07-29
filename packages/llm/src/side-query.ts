@@ -65,6 +65,8 @@ export interface SideQueryResult {
 export type SideQueryTerminalPhase =
   | 'completed'
   | 'pre_output'
+  | 'awaiting_text'
+  | 'thinking'
   | 'streaming'
   | 'contract_error';
 
@@ -73,8 +75,17 @@ export interface SideQueryDiagnostics {
   readonly model: string;
   readonly timeoutMs: number;
   readonly elapsedMs: number;
+  readonly systemBytes: number;
+  readonly messageBytes: number;
+  readonly promptBytes: number;
   readonly retryCount: number;
   readonly retryWaitMs: number;
+  /** Time until the first lifecycle/data event exposed by the provider adapter. */
+  readonly firstUpstreamEventMs?: number;
+  /** Time until the first non-empty thinking delta. */
+  readonly firstThinkingDeltaMs?: number;
+  /** Time until the first non-empty text delta. */
+  readonly firstTextDeltaMs?: number;
   /** Time until the first non-empty text delta, when the adapter exposes it. */
   readonly firstOutputMs?: number;
   /** Time from the first observed text delta until termination. */
@@ -120,6 +131,10 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let costTracker = req.costTracker;
   const startedAt = performance.now();
+  const systemBytes = Buffer.byteLength(req.system, 'utf8');
+  const messageBytes = Buffer.byteLength(JSON.stringify(req.messages), 'utf8');
+  let firstUpstreamEventMs: number | undefined;
+  let firstThinkingDeltaMs: number | undefined;
   let firstOutputMs: number | undefined;
   let retryCount = 0;
   let retryWaitMs = 0;
@@ -133,10 +148,16 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       model: req.model,
       timeoutMs,
       elapsedMs,
+      systemBytes,
+      messageBytes,
+      promptBytes: systemBytes + messageBytes,
       retryCount,
       retryWaitMs,
+      ...(firstUpstreamEventMs !== undefined ? { firstUpstreamEventMs } : {}),
+      ...(firstThinkingDeltaMs !== undefined ? { firstThinkingDeltaMs } : {}),
       ...(firstOutputMs !== undefined
         ? {
+            firstTextDeltaMs: firstOutputMs,
             firstOutputMs,
             streamMs: Math.max(0, elapsedMs - firstOutputMs),
           }
@@ -166,8 +187,30 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
     }
   }
 
+  const elapsed = (): number => Math.max(
+    0,
+    Math.round(performance.now() - startedAt),
+  );
+  const recordUpstreamEvent = (): void => {
+    if (firstUpstreamEventMs === undefined) firstUpstreamEventMs = elapsed();
+  };
+  let onControllerAbort: (() => void) | undefined;
+  const interruption = new Promise<never>((_, reject) => {
+    onControllerAbort = () => {
+      reject(new DOMException(
+        abortCause === 'timeout' ? 'sideQuery timed out' : 'sideQuery aborted',
+        'AbortError',
+      ));
+    };
+    if (controller.signal.aborted) {
+      onControllerAbort();
+    } else {
+      controller.signal.addEventListener('abort', onControllerAbort, { once: true });
+    }
+  });
+
   try {
-    const result = await req.provider.stream(
+    const providerResult = req.provider.stream(
       [...req.messages],
       [],
       req.system,
@@ -180,14 +223,20 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
           ? { maxOutputTokensOverride: req.maxOutputTokens }
           : {}),
         onTextDelta: (text) => {
+          recordUpstreamEvent();
           if (text.length > 0 && firstOutputMs === undefined) {
-            firstOutputMs = Math.max(
-              0,
-              Math.round(performance.now() - startedAt),
-            );
+            firstOutputMs = elapsed();
           }
         },
+        onThinkingDelta: (text) => {
+          recordUpstreamEvent();
+          if (text.length > 0 && firstThinkingDeltaMs === undefined) {
+            firstThinkingDeltaMs = elapsed();
+          }
+        },
+        onHeartbeat: () => recordUpstreamEvent(),
         onRetryAfter: (event) => {
+          recordUpstreamEvent();
           retryCount += 1;
           retryWaitMs += Math.max(0, event.waitMs);
           if (!costTracker) return;
@@ -201,6 +250,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       },
       controller.signal,
     );
+    const result = await Promise.race([providerResult, interruption]);
 
     const usage = result.usage ?? EMPTY_USAGE;
     const textBlocks = result.textBlocks ?? [];
@@ -253,7 +303,13 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       costTracker,
       stopReason,
       diagnostics: diagnostics(
-        firstOutputMs === undefined ? 'pre_output' : 'streaming',
+        firstOutputMs !== undefined
+          ? 'streaming'
+          : firstThinkingDeltaMs !== undefined
+            ? 'thinking'
+            : firstUpstreamEventMs !== undefined
+              ? 'awaiting_text'
+              : 'pre_output',
       ),
       error,
     };
@@ -261,6 +317,9 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
     clearTimeout(timeoutHandle);
     if (req.abortSignal) {
       req.abortSignal.removeEventListener('abort', onParentAbort);
+    }
+    if (onControllerAbort) {
+      controller.signal.removeEventListener('abort', onControllerAbort);
     }
   }
 }

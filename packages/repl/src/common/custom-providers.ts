@@ -32,13 +32,9 @@
  * unlike the load-time-frozen `KODAX_CONFIG_FILE` constant in
  * `common/utils.ts` that captures the path once at import time.
  *
- * Concurrency / multi-process: this is a single-machine, last-write-
- * wins implementation. If two SDK consumers (KodaX CLI + KodaX Space)
- * both mutate the same config simultaneously, the later writer's view
- * survives. KodaX is a single-user CLI; the multi-writer surface is
- * not a real production concern for v0.7.42. A future FEATURE could
- * layer file locking on top of this surface without changing the
- * caller-facing API.
+ * Concurrency / multi-process: mutations share the core-config writer lock
+ * with setup and saveConfig, so cooperating KodaX processes fail with a
+ * visible conflict instead of silently replacing one another.
  */
 
 import fs from 'node:fs';
@@ -50,6 +46,7 @@ import {
   validateCustomProviderConfig,
   type KodaXCustomProviderConfig,
 } from '@kodax-ai/coding';
+import { withCoreConfigWriteLock } from './core-config-lock.js';
 
 /**
  * Return a snapshot of every custom provider currently persisted in
@@ -101,16 +98,17 @@ export function upsertCustomProvider(
   validateCustomProviderConfig(config);
 
   const cloned = cloneCustomProvider(config);
-  const whole = readWholeConfig();
-  const existing = extractCustomProviders(whole);
-
-  const idx = existing.findIndex((provider) => provider.name === cloned.name);
-  const next =
-    idx >= 0
+  const file = configFilePath();
+  const next = withCoreConfigWriteLock(file, () => {
+    const whole = readWholeConfig();
+    const existing = extractCustomProviders(whole);
+    const idx = existing.findIndex((provider) => provider.name === cloned.name);
+    const updated = idx >= 0
       ? existing.map((provider, i) => (i === idx ? cloned : provider))
       : [...existing, cloned];
-
-  writeWholeConfig({ ...whole, customProviders: next });
+    writeWholeConfig({ ...whole, customProviders: updated });
+    return updated;
+  });
   registerCustomProviders(next);
   return cloneCustomProvider(cloned);
 }
@@ -128,13 +126,16 @@ export function removeCustomProvider(name: string): boolean {
   if (typeof name !== 'string' || name.length === 0) {
     return false;
   }
-  const whole = readWholeConfig();
-  const existing = extractCustomProviders(whole);
-  const next = existing.filter((provider) => provider.name !== name);
-  if (next.length === existing.length) {
-    return false;
-  }
-  writeWholeConfig({ ...whole, customProviders: next });
+  const file = configFilePath();
+  const next = withCoreConfigWriteLock(file, () => {
+    const whole = readWholeConfig();
+    const existing = extractCustomProviders(whole);
+    const updated = existing.filter((provider) => provider.name !== name);
+    if (updated.length === existing.length) return undefined;
+    writeWholeConfig({ ...whole, customProviders: updated });
+    return updated;
+  });
+  if (!next) return false;
   registerCustomProviders(next);
   return true;
 }

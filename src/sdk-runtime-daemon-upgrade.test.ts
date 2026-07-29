@@ -29,6 +29,7 @@ vi.mock('./runtime-daemon/state.js', async (importOriginal) => {
 
 import {
   connectKodaXRuntime,
+  KODAX_RUNTIME_SDK_CAPABILITIES,
   RuntimeDaemonCapabilityUpgradeError,
   type RuntimeDaemonManagementState,
   type RuntimeDaemonPreflight,
@@ -88,6 +89,57 @@ describe('Runtime daemon capability upgrade', () => {
     expect(upgradeMocks.enableDaemonOwner).toHaveBeenCalledWith(oldLease.paths);
     expect(oldClose).toHaveBeenCalled();
 
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
+  it('publishes the pre-spawn orphan-exit SDK capability', () => {
+    expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
+      daemonOrphanExit: 1,
+    });
+  });
+
+  it('passes orphan idle exit to process startup and replaces a daemon without that lifecycle policy', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 3, owner: 'session-runtime' },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+      daemonOrphanExitMs: 30_000,
+    });
+
+    expect(upgradeMocks.acquireProcessLease).toHaveBeenCalledTimes(2);
+    expect(upgradeMocks.acquireProcessLease).toHaveBeenLastCalledWith(
+      expect.objectContaining({ orphanExitMs: 30_000 }),
+    );
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
     await runtime.close();
     expect(newClose).toHaveBeenCalled();
   });
@@ -218,16 +270,20 @@ function createLegacyTransport(input: {
   readonly preflight: RuntimeDaemonPreflight;
   readonly calls: string[];
   readonly close: () => Promise<void>;
+  readonly capabilities?: Readonly<Record<string, unknown>>;
   readonly onRollback?: () => void;
 }): RuntimeDaemonClientTransport {
   return {
     async request(method) {
       input.calls.push(`old:${method}`);
       if (method === 'initialize') {
-        return initializeResult(RUNTIME_ID, {
-          daemonManagement: { version: 1 },
-          runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
-        });
+        return initializeResult(
+          RUNTIME_ID,
+          input.capabilities ?? {
+            daemonManagement: { version: 1 },
+            runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
+          },
+        );
       }
       if (method === 'daemon.management.get') {
         return createManagementState(input.preflight);
@@ -268,7 +324,12 @@ function createCurrentTransport(
         throw new Error(`Unexpected current daemon request: ${method}`);
       }
       return initializeResult('runtime_current', {
-        runtimeAutoModeGuardrail: { version: 3, owner: 'session-runtime' },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        daemonOrphanExit: {
+          version: 1,
+          idleOnly: true,
+          bootstrapGrace: true,
+        },
       });
     },
     subscribe() {

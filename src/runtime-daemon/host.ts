@@ -1,4 +1,7 @@
-import type { KodaXRuntime } from '../sdk-runtime.js';
+import type {
+  KodaXRuntime,
+  RuntimeIntegrationDomainStatus,
+} from '../sdk-runtime.js';
 import path from 'node:path';
 import {
   emitKodaXDiagnostic,
@@ -36,8 +39,11 @@ export interface RuntimeDaemonHostOptions {
   readonly paths: RuntimeDaemonPaths;
   readonly endpoint: RuntimeDaemonEndpoint;
   readonly lock: RuntimeDaemonLockHandle;
+  /** Space-managed detached daemons self-stop after their final client leaves and work is idle. */
+  readonly orphanExitMs?: number;
   /** Trusted owner fact; never derived from caller-advertised capabilities. */
   readonly ownsA2AConfigReconciler?: boolean;
+  readonly integrationStatuses?: () => readonly RuntimeIntegrationDomainStatus[];
 }
 
 export interface RuntimeDaemonHost {
@@ -85,6 +91,10 @@ export async function startRuntimeDaemonHost(
     runtime: options.runtime,
     paths: options.paths,
     requestStop,
+    ...(options.orphanExitMs !== undefined ? { orphanExitMs: options.orphanExitMs } : {}),
+    ...(options.integrationStatuses
+      ? { integrationStatuses: options.integrationStatuses }
+      : {}),
   });
   let ready: RuntimeDaemonState;
   try {
@@ -96,6 +106,7 @@ export async function startRuntimeDaemonHost(
         ...(options.ownsA2AConfigReconciler === true
           ? { ownsA2AConfigReconciler: true }
           : {}),
+        ...(options.orphanExitMs !== undefined ? { orphanExitEnabled: true } : {}),
         allowAgentRegistrationAdmin: true,
         notify,
         runResults,
@@ -116,6 +127,10 @@ export async function startRuntimeDaemonHost(
     }
     ready = createHostState(options, 'ready');
     writeRuntimeDaemonState(options.paths, ready);
+    // A detached daemon can outlive its launcher between ready-state
+    // publication and the first SDK initialize. Arm bootstrap recovery at the
+    // same synchronous boundary; a real attach cancels the timer.
+    management.armOrphanExitAfterReady();
     appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon ready.', {
       runtimeId: ready.runtimeId,
       endpoint: ready.endpoint,
@@ -149,35 +164,47 @@ export async function startRuntimeDaemonHost(
     throw error;
   }
   let closed = false;
+  let closeAttempt: Promise<void> | undefined;
+  let transportClosed = false;
+  let localServicesClosed = false;
+  let runtimeClosed = false;
+  let ownershipReleased = false;
   let signalClosed: (() => void) | undefined;
   const closedPromise = new Promise<void>((resolve) => { signalClosed = resolve; });
-  const closeHost = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    const failures: string[] = [];
-    let transportClosed = false;
-    let runtimeClosed = false;
-    try {
-      try {
-        writeRuntimeDaemonState(options.paths, createHostState(options, 'stopping'));
-        appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopping.');
-      } catch (error: unknown) {
-        failures.push(`state transition: ${normalizeHostError(error).message}`);
+  const closeHost = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    if (closeAttempt) return closeAttempt;
+    const attempt = (async (): Promise<void> => {
+      const failures: string[] = [];
+      if (!ownershipReleased) {
+        try {
+          writeRuntimeDaemonState(options.paths, createHostState(options, 'stopping'));
+          appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopping.');
+        } catch (error: unknown) {
+          failures.push(`state transition: ${normalizeHostError(error).message}`);
+        }
       }
-      try {
-        await server?.close();
-        transportClosed = true;
-      } catch (error: unknown) {
-        failures.push(`transport close: ${normalizeHostError(error).message}`);
+      if (!transportClosed) {
+        try {
+          await server?.close();
+          transportClosed = true;
+        } catch (error: unknown) {
+          failures.push(`transport close: ${normalizeHostError(error).message}`);
+        }
       }
-      management.close();
-      reverseBridgeHub.close();
-      runResults.clear();
-      try {
-        await options.runtime.close();
-        runtimeClosed = true;
-      } catch (error: unknown) {
-        failures.push(`Runtime close: ${normalizeHostError(error).message}`);
+      if (!localServicesClosed) {
+        management.close();
+        reverseBridgeHub.close();
+        runResults.clear();
+        localServicesClosed = true;
+      }
+      if (!runtimeClosed) {
+        try {
+          await options.runtime.close();
+          runtimeClosed = true;
+        } catch (error: unknown) {
+          failures.push(`Runtime close: ${normalizeHostError(error).message}`);
+        }
       }
       try {
         appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopped.');
@@ -185,18 +212,20 @@ export async function startRuntimeDaemonHost(
         failures.push(`stop log: ${normalizeHostError(error).message}`);
       }
       restoreDiagnostics();
-      if (transportClosed && runtimeClosed) {
+      if (transportClosed && runtimeClosed && !ownershipReleased) {
         const released = await releaseHostOwnership(options.paths, options.lock);
         const current = readRuntimeDaemonLockOwner(options.lock.file);
-        if (
-          !released
-          && current?.runtimeId === options.lock.owner.runtimeId
+        const stillOwned = (
+          current?.runtimeId === options.lock.owner.runtimeId
           && current.pid === options.lock.owner.pid
           && current.createdAt === options.lock.owner.createdAt
-        ) {
+        );
+        if (!released && stillOwned) {
           failures.push('owner release: the daemon still owns its profile lock');
+        } else {
+          ownershipReleased = true;
         }
-      } else {
+      } else if (!transportClosed || !runtimeClosed) {
         try {
           writeRuntimeDaemonState(options.paths, {
             ...createHostState(options, 'unhealthy'),
@@ -216,10 +245,15 @@ export async function startRuntimeDaemonHost(
         }
         throw new Error(`Runtime daemon cleanup failed: ${failures.join('; ')}`);
       }
-    } finally {
-      restoreDiagnostics();
+      closed = true;
       signalClosed?.();
-    }
+    })();
+    closeAttempt = attempt;
+    void attempt.finally(() => {
+      if (closeAttempt === attempt) closeAttempt = undefined;
+      restoreDiagnostics();
+    }).catch(() => undefined);
+    return attempt;
   };
   scheduleStop = () => {
     try {

@@ -16,6 +16,7 @@ export type {
   InkRuntimeRunner,
   InkRuntimeRunnerInput,
   InkRuntimeStatusProvider,
+  InkTransientNotice,
 } from "./InkREPL.js";
 export type { SessionPickerItem } from "./SessionPicker.js";
 

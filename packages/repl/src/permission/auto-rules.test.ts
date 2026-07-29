@@ -534,6 +534,42 @@ describe('Auto[rules] deterministic Tier 2', () => {
     ]);
   });
 
+  it.each([
+    ['move /Y src/a.txt build/a.txt', 'move', ['source_removed', 'destination_overwrite_possible']],
+    ['copy /Y src/a.txt build/a.txt', 'copy', ['destination_overwrite_possible']],
+    ['del /Q build/old.txt', 'delete', ['source_removed']],
+    ['rd /S /Q build/old', 'delete', ['source_removed']],
+  ] as const)(
+    'models cmd mutation switches without inventing write targets: %s',
+    (command, kind, risks) => {
+      const projectRoot = createRoot('kodax-auto-rules-project-');
+      const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+
+      expect(assessment.review.analysis).toMatchObject({
+        status: 'complete',
+        binding: 'exact',
+      });
+      expect(assessment.review.operations).toHaveLength(1);
+      expect(assessment.review.operations[0]).toMatchObject({ kind });
+      expect(assessment.review.risks).toEqual(expect.arrayContaining(risks));
+      expect(JSON.stringify(assessment.review.operations)).not.toMatch(/\/(?:Y|Q|S|A:H)"/i);
+    },
+  );
+
+  it.each([
+    'del /S /Q build/old.txt',
+    'rd /S /Q build/old',
+    'rmdir /S /Q build/old',
+  ])('records recursive cmd deletion semantics: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+
+    expect(assessment.review.operations[0]).toMatchObject({
+      kind: 'delete',
+      options: { recursive: true },
+    });
+  });
+
   it.each(['/tmp', '/home'])(
     'keeps a single-segment POSIX absolute path as an rm target: %s',
     (target) => {
@@ -568,6 +604,30 @@ describe('Auto[rules] deterministic Tier 2', () => {
       }),
     ]);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'does not claim exact binding for cmd move paths whose trailing backslash is ambiguous to the POSIX parser',
+    () => {
+      const projectRoot = createRoot('kodax-auto-rules-project-');
+      const destination = `${path.join(projectRoot, '旅游城市数据标注项目')}\\`;
+      const command = [
+        `move /Y "${path.join(projectRoot, 'a.json')}" "${destination}"`,
+        `move /Y "${path.join(projectRoot, 'b.md')}" "${destination}"`,
+      ].join(' && ');
+
+      const assessment = assessAutoModeCall(
+        call('bash', { command }),
+        context(projectRoot),
+      );
+
+      expect(assessment.review.analysis).toMatchObject({
+        status: 'incomplete',
+        binding: 'partial',
+      });
+      expect(assessment.review.risks).not.toContain('outside_workspace_mutation');
+      expect(JSON.stringify(assessment.review.operations)).not.toContain('&& move');
+    },
+  );
 
   it('marks unknown PowerShell parameter binding incomplete instead of guessing', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');

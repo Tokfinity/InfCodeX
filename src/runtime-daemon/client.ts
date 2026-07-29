@@ -263,6 +263,31 @@ export function createRuntimeDaemonClient(
       ).catch(() => reportReverseBridgeFailure('host tool invocation'));
     }
   });
+  let localResourcesClosed = false;
+  let transportClosed = false;
+  let closeAttempt: Promise<void> | undefined;
+  const closeClient = (): Promise<void> => {
+    if (transportClosed) return Promise.resolve();
+    if (closeAttempt) return closeAttempt;
+    const attempt = (async (): Promise<void> => {
+      if (!localResourcesClosed) {
+        transportLifecycleSubscription?.close();
+        reverseSubscription.close();
+        connectionListeners.clear();
+        credentialBrokers.clear();
+        hostToolHandlers.clear();
+        hostToolResults.clear();
+        localResourcesClosed = true;
+      }
+      await options.transport.close?.();
+      transportClosed = true;
+    })();
+    closeAttempt = attempt;
+    void attempt.finally(() => {
+      if (closeAttempt === attempt) closeAttempt = undefined;
+    }).catch(() => undefined);
+    return attempt;
+  };
 
   return {
     identity: options.identity,
@@ -866,15 +891,7 @@ export function createRuntimeDaemonClient(
         };
       },
     },
-    async close() {
-      transportLifecycleSubscription?.close();
-      reverseSubscription.close();
-      connectionListeners.clear();
-      credentialBrokers.clear();
-      hostToolHandlers.clear();
-      hostToolResults.clear();
-      await options.transport.close?.();
-    },
+    close: closeClient,
   };
 }
 

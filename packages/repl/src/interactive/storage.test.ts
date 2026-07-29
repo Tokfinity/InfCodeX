@@ -21,6 +21,7 @@ import {
   withPendingEpisodeReviewSessionFence,
 } from '@kodax-ai/agent';
 import type {
+  AgentActorSnapshot,
   KodaXMemoryOutcomeDigest,
   KodaXSessionLineage,
 } from '@kodax-ai/agent';
@@ -139,14 +140,188 @@ describe('FileSessionStorage', () => {
     const nextSnapshot = { ...actorSnapshot, revision: 4 };
     await storage.saveActorSnapshot('actor-session', nextSnapshot, 3);
     await expect(storage.saveActorSnapshot('actor-session', actorSnapshot, 3))
-      .rejects.toThrow(/revision conflict/);
+      .rejects.toMatchObject({
+        code: 'actor_snapshot_conflict',
+        expectedRevision: 3,
+        currentRevision: 4,
+      });
 
     expect(await storage.load('actor-session')).toMatchObject({
       title: 'Actor owner updated',
       actorSnapshot: nextSnapshot,
     });
+
+    const competingStorage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const competingWrites = await Promise.allSettled([
+      storage.saveActorSnapshot(
+        'actor-session',
+        { ...nextSnapshot, revision: 5, maxConcurrentThreads: 6 },
+        4,
+      ),
+      competingStorage.saveActorSnapshot(
+        'actor-session',
+        { ...nextSnapshot, revision: 5, maxConcurrentThreads: 8 },
+        4,
+      ),
+    ]);
+    expect(competingWrites.map((result) => result.status).sort()).toEqual([
+      'fulfilled',
+      'rejected',
+    ]);
+    const rejectedWrite = competingWrites.find((result) => result.status === 'rejected');
+    expect(rejectedWrite?.reason).toMatchObject({
+      code: 'actor_snapshot_conflict',
+      expectedRevision: 4,
+      currentRevision: 5,
+    });
+    expect([6, 8]).toContain(
+      (await storage.load('actor-session'))?.actorSnapshot?.maxConcurrentThreads,
+    );
+    const wonSnapshot = (await storage.load('actor-session'))?.actorSnapshot;
+    if (!wonSnapshot) throw new Error('Expected the winning Actor snapshot.');
+    const staleFullSession = await storage.load('actor-session');
+    if (!staleFullSession) throw new Error('Expected a stale full Session snapshot.');
+    const nextWinner = { ...wonSnapshot, revision: 6 };
+    await storage.saveActorSnapshot('actor-session', nextWinner, 5);
+    await storage.save('actor-session', {
+      ...staleFullSession,
+      title: 'Stale host save must preserve Actor CAS state',
+    });
+    expect((await storage.peek('actor-session'))?.actorSnapshot).toEqual(nextWinner);
+
+    await storage.archive('actor-session');
+    await competingStorage.saveActorSnapshot(
+      'actor-session',
+      { ...nextWinner, revision: 7 },
+      6,
+    );
+    expect((await storage.list(
+      path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+    )).map((session) => session.id)).not.toContain('actor-session');
+    expect((await storage.list(
+      path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      { includeArchived: true },
+    )).filter((session) => session.id === 'actor-session')).toHaveLength(1);
+
     const fork = await storage.fork('actor-session', undefined, { sessionId: 'actor-fork' });
     expect(fork?.data.actorSnapshot).toBeUndefined();
+  });
+
+  it('requires the durable Actor owner for archive, unarchive, and delete', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const now = '2026-07-28T00:00:00.000Z';
+    const owner = {
+      ownerId: 'owner-maintenance',
+      runtimeId: 'runtime-maintenance',
+      pid: process.pid,
+      startedAt: now,
+    };
+    const actorSnapshot: AgentActorSnapshot = {
+      schemaVersion: 2,
+      revision: 1,
+      maxConcurrentThreads: 4,
+      owner,
+      actors: [{
+        path: '/root',
+        taskName: 'root',
+        kind: 'native',
+        state: 'running',
+        capabilities: {
+          tools: ['*'],
+          filesystem: 'write',
+          network: true,
+          providers: ['*'],
+          canAskUser: true,
+        },
+        turnIds: [],
+        mailboxCursor: 0,
+        createdAt: now,
+        updatedAt: now,
+        revision: 1,
+      }],
+      turns: [],
+      mailboxes: { '/root': [] },
+      events: [],
+    };
+    const data = {
+      messages: [
+        { role: 'user' as const, content: 'Leave a tool call incomplete.' },
+        {
+          role: 'assistant' as const,
+          content: [
+            { type: 'tool_use' as const, id: 'call_owned', name: 'test', input: {} },
+          ],
+        },
+      ],
+      title: 'Owned maintenance',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      scope: 'user' as const,
+      actorSnapshot,
+      errorMetadata: {
+        lastError: 'interrupted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    };
+    await storage.save('owned-maintenance', data);
+
+    await expect(storage.archive('owned-maintenance')).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+      ownerRuntimeId: owner.runtimeId,
+    });
+    await expect(storage.archiveOwned('owned-maintenance', 'wrong-owner'))
+      .rejects.toMatchObject({ code: 'actor_owner_conflict' });
+    await expect(storage.archiveOwned('owned-maintenance', owner.ownerId))
+      .resolves.toBe(true);
+    await expect(storage.unarchive('owned-maintenance')).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+    });
+    await expect(storage.unarchiveOwned('owned-maintenance', owner.ownerId))
+      .resolves.toBe(true);
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const mainPath = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(data.gitRoot).key,
+      'owned-maintenance.jsonl',
+    );
+    const bytesBeforeOwnedLoad = await readFile(mainPath);
+    await expect(storage.load('owned-maintenance')).resolves.toMatchObject({
+      errorMetadata: { consecutiveErrors: 1 },
+      actorSnapshot: { owner },
+    });
+    expect(await readFile(mainPath)).toEqual(bytesBeforeOwnedLoad);
+    await expect(storage.delete('owned-maintenance')).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+    });
+    await expect(storage.deleteOwned('owned-maintenance', owner.ownerId))
+      .resolves.toBeUndefined();
+    await expect(storage.load('owned-maintenance')).resolves.toBeNull();
+
+    const unknownOwnerSnapshot: AgentActorSnapshot = {
+      ...actorSnapshot,
+      owner: undefined,
+      revision: 2,
+      turns: [{
+        turnId: 'turn_root_worker_1',
+        actorPath: '/root',
+        sequence: 1,
+        state: 'accepted',
+        objective: 'Must not be removed during owner handoff.',
+        forkTurns: 'none',
+        createdAt: now,
+        progress: [],
+        revision: 1,
+      }],
+    };
+    await storage.save('unknown-owner-maintenance', {
+      ...data,
+      actorSnapshot: unknownOwnerSnapshot,
+    });
+    await expect(storage.delete('unknown-owner-maintenance')).rejects.toMatchObject({
+      code: 'actor_owner_unknown',
+      currentRevision: 2,
+    });
   });
 
   it('round-trips extension state and extension records through JSONL session storage', async () => {
@@ -864,6 +1039,69 @@ describe('FileSessionStorage', () => {
     expect(existsSync(recentPath)).toBe(true);
   });
 
+  it('cleanupOldSessions never removes an old Session with a durable Actor owner', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'retention-owned-actor';
+    const now = '2026-07-28T00:00:00.000Z';
+    const actorSnapshot = {
+      schemaVersion: 2 as const,
+      revision: 1,
+      maxConcurrentThreads: 4,
+      owner: {
+        ownerId: 'owner-retention',
+        runtimeId: 'runtime-retention',
+        pid: process.pid,
+        startedAt: now,
+      },
+      actors: [{
+        path: '/root',
+        taskName: 'root',
+        kind: 'native' as const,
+        state: 'running' as const,
+        capabilities: {
+          tools: ['*'],
+          filesystem: 'write' as const,
+          network: true,
+          providers: ['*'],
+          canAskUser: true,
+        },
+        turnIds: [],
+        mailboxCursor: 0,
+        createdAt: now,
+        updatedAt: now,
+        revision: 1,
+      }],
+      turns: [],
+      mailboxes: { '/root': [] },
+      events: [],
+    };
+    await storage.save(sessionId, {
+      messages: [],
+      title: 'Owned Actor',
+      gitRoot,
+      scope: 'user',
+      actorSnapshot,
+    });
+    const mainPath = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+      `${sessionId}.jsonl`,
+    );
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    await utimes(mainPath, sixtyDaysAgo, sixtyDaysAgo);
+
+    await expect(storage.cleanupOldSessions(30)).resolves.toBe(0);
+    expect(existsSync(mainPath)).toBe(true);
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      actorSnapshot: {
+        owner: expect.objectContaining({ ownerId: 'owner-retention' }),
+      },
+    });
+  });
+
   it('cleanupOldSessions is a no-op when retention is disabled (0 / negative / NaN)', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
@@ -934,6 +1172,148 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.messages).toHaveLength(4);
     expect(loaded2?.messages[2]).toEqual({ role: 'user', content: 'follow-up' });
     expect(loaded2?.lineage?.entries.length).toBe(lineage2.entries.length);
+  });
+
+  it('does not duplicate or lose deltas appended by separate storage instances', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const first = new FileSessionStorage({ sessionsDir });
+    const second = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-cross-instance-append';
+    const baseMessages = [{ role: 'user' as const, content: 'shared base' }];
+    await first.save(sessionId, {
+      messages: baseMessages,
+      title: 'Cross-instance append',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const [firstBase, secondBase] = await Promise.all([
+      first.load(sessionId),
+      second.load(sessionId),
+    ]);
+    if (!firstBase?.lineage || !secondBase?.lineage) {
+      throw new Error('expected both storage instances to load the base lineage');
+    }
+    const firstMessages = [
+      ...baseMessages,
+      { role: 'assistant' as const, content: 'delta from first runtime' },
+    ];
+    const secondMessages = [
+      ...baseMessages,
+      { role: 'assistant' as const, content: 'delta from second runtime' },
+    ];
+
+    await Promise.all([
+      first.appendSessionDelta(sessionId, {
+        ...firstBase,
+        messages: firstMessages,
+        lineage: createSessionLineage(firstMessages, firstBase.lineage),
+      }),
+      second.appendSessionDelta(sessionId, {
+        ...secondBase,
+        messages: secondMessages,
+        lineage: createSessionLineage(secondMessages, secondBase.lineage),
+      }),
+    ]);
+
+    const full = await new FileSessionStorage({ sessionsDir }).loadFullLineage(sessionId);
+    const persistedMessages = full?.entries
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => entry.message.content);
+    expect(persistedMessages?.filter(
+      (content) => content === 'delta from first runtime',
+    )).toHaveLength(1);
+    expect(persistedMessages?.filter(
+      (content) => content === 'delta from second runtime',
+    )).toHaveLength(1);
+  });
+
+  it('appends to the exact archived path after another storage instance moves the Session', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const writer = new FileSessionStorage({ sessionsDir });
+    const mover = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-archived-cross-instance-append';
+    const baseMessages = [{ role: 'user' as const, content: 'archive base' }];
+    await writer.save(sessionId, {
+      messages: baseMessages,
+      title: 'Archived append',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const stale = await writer.load(sessionId);
+    if (!stale?.lineage) throw new Error('expected stale lineage');
+    await mover.archive(sessionId);
+    const messages = [
+      ...baseMessages,
+      { role: 'assistant' as const, content: 'archived delta' },
+    ];
+
+    await writer.appendSessionDelta(sessionId, {
+      ...stale,
+      messages,
+      lineage: createSessionLineage(messages, stale.lineage),
+    });
+
+    const projectDir = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(KODAX_REPO_ROOT).key,
+    );
+    expect(existsSync(path.join(projectDir, `${sessionId}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(projectDir, 'archived', `${sessionId}.jsonl`))).toBe(true);
+    await expect(writer.load(sessionId)).resolves.toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ content: 'archived delta' }),
+      ]),
+    });
+  });
+
+  it('merges a same-length cross-instance lineage rewrite before appending', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const first = new FileSessionStorage({ sessionsDir });
+    const staleWriter = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-same-length-rewrite';
+    const baseMessages = [{ role: 'user' as const, content: 'original base' }];
+    await first.save(sessionId, {
+      messages: baseMessages,
+      title: 'Same length rewrite',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const stale = await staleWriter.load(sessionId);
+    if (!stale?.lineage) throw new Error('expected stale lineage');
+    const rewrittenMessages = [{ role: 'user' as const, content: 'rewritten base' }];
+    await first.save(sessionId, {
+      ...stale,
+      messages: rewrittenMessages,
+      lineage: createSessionLineage(rewrittenMessages),
+    });
+    const staleMessages = [
+      ...baseMessages,
+      { role: 'assistant' as const, content: 'stale writer delta' },
+    ];
+
+    await staleWriter.appendSessionDelta(sessionId, {
+      ...stale,
+      messages: staleMessages,
+      lineage: createSessionLineage(staleMessages, stale.lineage),
+    });
+
+    const full = await first.loadFullLineage(sessionId);
+    const ids = new Set(full?.entries.map((entry) => entry.id));
+    expect(full?.entries.every(
+      (entry) => entry.parentId === null || ids.has(entry.parentId),
+    )).toBe(true);
+    expect(full?.entries).toContainEqual(expect.objectContaining({
+      type: 'message',
+      message: expect.objectContaining({ content: 'rewritten base' }),
+    }));
+    expect(full?.entries).toContainEqual(expect.objectContaining({
+      type: 'message',
+      message: expect.objectContaining({ content: 'stale writer delta' }),
+    }));
   });
 
   it('appendSessionDelta meta_update overwrites title but preserves extensionState from disk', async () => {
@@ -2184,10 +2564,23 @@ describe('FileSessionStorage', () => {
     const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
 
     await storage.save('20260801_000000', {
-      messages: [{ role: 'user', content: 'to archive' }],
+      messages: [
+        { role: 'user', content: 'to archive' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'call_archived', name: 'test', input: {} },
+          ],
+        },
+      ],
       title: 'Archive Me',
       gitRoot,
       scope: 'user',
+      errorMetadata: {
+        lastError: 'interrupted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
     });
 
     expect(await storage.archive('20260801_000000')).toBe(true);
@@ -2203,11 +2596,213 @@ describe('FileSessionStorage', () => {
     const withArchived = await storage.list(gitRoot, { includeArchived: true });
     const archivedEntry = withArchived.find((s) => s.id === '20260801_000000');
     expect(archivedEntry?.archived).toBe(true);
-    expect((await storage.load('20260801_000000'))?.title).toBe('Archive Me');
+    const recoveredArchived = await storage.load('20260801_000000');
+    expect(recoveredArchived).toMatchObject({
+      title: 'Archive Me',
+      messages: [{ role: 'user', content: 'to archive' }],
+      errorMetadata: { consecutiveErrors: 0 },
+    });
+    if (!recoveredArchived) throw new Error('Expected archived recovery data.');
+    await storage.save('20260801_000000', {
+      ...recoveredArchived,
+      title: 'Archive Me In Place',
+    });
+    expect(existsSync(path.join(projectDir, 'archived', '20260801_000000.jsonl'))).toBe(true);
+    expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(false);
+    expect((await storage.load('20260801_000000'))?.title).toBe('Archive Me In Place');
 
     // Unarchive restores it to the default list.
     expect(await storage.unarchive('20260801_000000')).toBe(true);
     expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(true);
     expect((await storage.list(gitRoot)).map((s) => s.id)).toContain('20260801_000000');
+  });
+
+  it('keeps raw lineage mutators on the exact archived Session path', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'archived-lineage-mutators';
+    const messages = [
+      { role: 'user' as const, content: 'first question' },
+      { role: 'assistant' as const, content: 'first answer' },
+      { role: 'user' as const, content: 'second question' },
+      { role: 'assistant' as const, content: 'second answer' },
+    ];
+    const lineage = createSessionLineage(messages);
+    const messageEntries = lineage.entries.filter((entry) => entry.type === 'message');
+    const firstId = messageEntries[0]?.id;
+    const lastId = messageEntries.at(-1)?.id;
+    if (!firstId || !lastId) throw new Error('expected lineage selectors');
+    await storage.save(sessionId, {
+      messages,
+      title: 'Archived lineage mutators',
+      gitRoot,
+      lineage,
+    });
+    await storage.archive(sessionId);
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    const activePath = path.join(projectDir, `${sessionId}.jsonl`);
+    const archivedPath = path.join(projectDir, 'archived', `${sessionId}.jsonl`);
+
+    await expect(storage.setLabel(sessionId, lastId, 'archived-label'))
+      .resolves.not.toBeNull();
+    await expect(storage.setActiveEntry(sessionId, firstId)).resolves.not.toBeNull();
+    await expect(storage.setActiveEntry(sessionId, lastId)).resolves.not.toBeNull();
+    await expect(storage.rewind(sessionId, firstId)).resolves.not.toBeNull();
+
+    expect(existsSync(activePath)).toBe(false);
+    expect(existsSync(archivedPath)).toBe(true);
+  });
+
+  it('rolls the main Session file back when its sidecar cannot be archived', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'archive-sidecar-rollback';
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'archive atomically' }],
+      title: 'Archive Rollback',
+      gitRoot,
+      scope: 'user',
+    });
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const sidecarPath = path.join(projectDir, `${sessionId}.islands.jsonl`);
+    const archivedDir = path.join(projectDir, 'archived');
+    await writeFile(sidecarPath, '{"_type":"archive_meta"}\n', 'utf-8');
+    const renameOriginal = fsPromises.rename.bind(fsPromises);
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(
+      async (from, to) => {
+        if (
+          path.resolve(String(from)) === path.resolve(sidecarPath)
+          && path.dirname(path.resolve(String(to))) === path.resolve(archivedDir)
+        ) {
+          throw Object.assign(new Error('sidecar move denied'), { code: 'EACCES' });
+        }
+        await renameOriginal(from, to);
+      },
+    );
+
+    try {
+      await expect(storage.archive(sessionId)).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(existsSync(mainPath)).toBe(true);
+    expect(existsSync(sidecarPath)).toBe(true);
+    expect(existsSync(path.join(archivedDir, `${sessionId}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(archivedDir, `${sessionId}.islands.jsonl`))).toBe(false);
+  });
+
+  it('surfaces both the move and rollback errors when paired archive recovery fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'archive-incomplete-rollback';
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'report incomplete rollback' }],
+      title: 'Archive Incomplete Rollback',
+      gitRoot,
+      scope: 'user',
+    });
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const sidecarPath = path.join(projectDir, `${sessionId}.islands.jsonl`);
+    const archivedDir = path.join(projectDir, 'archived');
+    const archivedMainPath = path.join(archivedDir, `${sessionId}.jsonl`);
+    await writeFile(sidecarPath, '{"_type":"archive_meta"}\n', 'utf-8');
+    const renameOriginal = fsPromises.rename.bind(fsPromises);
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(
+      async (from, to) => {
+        const resolvedFrom = path.resolve(String(from));
+        const resolvedTo = path.resolve(String(to));
+        if (
+          resolvedFrom === path.resolve(sidecarPath)
+          && path.dirname(resolvedTo) === path.resolve(archivedDir)
+        ) {
+          throw Object.assign(new Error('sidecar move denied'), { code: 'EACCES' });
+        }
+        if (
+          resolvedFrom === path.resolve(archivedMainPath)
+          && resolvedTo === path.resolve(mainPath)
+        ) {
+          throw Object.assign(new Error('main rollback denied'), { code: 'EPERM' });
+        }
+        await renameOriginal(from, to);
+      },
+    );
+
+    let failure: unknown;
+    try {
+      await storage.archive(sessionId);
+    } catch (error: unknown) {
+      failure = error;
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    expect(existsSync(archivedMainPath)).toBe(true);
+    expect(existsSync(sidecarPath)).toBe(true);
+  });
+
+  it('keeps the authoritative Session snapshot when strict deletion fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'delete-failure-owner-retry';
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'retain on failure' }],
+      title: 'Delete Failure',
+      gitRoot,
+      scope: 'user',
+    });
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const sidecarPath = path.join(projectDir, `${sessionId}.islands.jsonl`);
+    await writeFile(sidecarPath, '{"_type":"archive_meta"}\n', 'utf-8');
+    const renameOriginal = fsPromises.rename;
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementation(
+      async (source, target) => {
+        if (path.resolve(String(source)) === path.resolve(mainPath)) {
+          throw Object.assign(new Error('delete denied'), { code: 'EACCES' });
+        }
+        return renameOriginal(source, target);
+      },
+    );
+
+    try {
+      await expect(storage.delete(sessionId)).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(existsSync(mainPath)).toBe(true);
+    expect(existsSync(sidecarPath)).toBe(true);
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      title: 'Delete Failure',
+    });
   });
 });

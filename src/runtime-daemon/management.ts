@@ -4,10 +4,12 @@ import type {
   RuntimeDaemonPreflight,
   RuntimeDaemonRollbackInput,
   RuntimeDaemonRollbackResult,
+  RuntimeIntegrationDomainStatus,
   RuntimeSubscription,
 } from '../sdk-runtime.js';
 import type { RuntimeDaemonMethod } from './protocol.js';
 import {
+  appendRuntimeDaemonLog,
   commitRuntimeDaemonRollbackPolicy,
   readRuntimeDaemonLockOwner,
   readRuntimeOwnerPolicy,
@@ -15,6 +17,7 @@ import {
 } from './state.js';
 
 export interface RuntimeDaemonManagementController {
+  armOrphanExitAfterReady(): void;
   attachClient(connectionId: string): void;
   detachClient(connectionId: string): void;
   runMutation<T>(method: RuntimeDaemonMethod, effect: () => Promise<T>): Promise<T>;
@@ -29,6 +32,13 @@ export function createRuntimeDaemonManagementController(input: {
   readonly runtime: KodaXRuntime;
   readonly paths: RuntimeDaemonPaths;
   readonly requestStop: () => void;
+  /**
+   * When set, a daemon that has observed at least one logical client stops
+   * itself after the final client disconnects and all governed work is idle.
+   * Omitted for ordinary CLI-owned daemons, which remain persistent.
+   */
+  readonly orphanExitMs?: number;
+  readonly integrationStatuses?: () => readonly RuntimeIntegrationDomainStatus[];
 }): RuntimeDaemonManagementController {
   return new DaemonManagementController(input);
 }
@@ -42,15 +52,28 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
   private draining = false;
   private closed = false;
   private preflightFingerprint: string | undefined;
+  private orphanExitArmed = false;
+  private clientGeneration = 0;
+  private orphanExitTimer: ReturnType<typeof setTimeout> | undefined;
+  private orphanExitCheckRunning = false;
+  private orphanBlockerFingerprint: string | undefined;
 
   constructor(private readonly input: {
     readonly runtime: KodaXRuntime;
     readonly paths: RuntimeDaemonPaths;
     readonly requestStop: () => void;
+    readonly orphanExitMs?: number;
+    readonly integrationStatuses?: () => readonly RuntimeIntegrationDomainStatus[];
   }) {
     this.runtimeEvents = input.runtime.events.subscribe({}, () => {
       this.revision += 1;
     });
+  }
+
+  armOrphanExitAfterReady(): void {
+    if (this.input.orphanExitMs === undefined || this.closed || this.draining) return;
+    this.orphanExitArmed = true;
+    this.scheduleOrphanExitCheck(this.input.orphanExitMs);
   }
 
   attachClient(connectionId: string): void {
@@ -59,12 +82,18 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     }
     if (this.clients.has(connectionId)) return;
     this.clients.add(connectionId);
+    this.orphanExitArmed = true;
+    this.clientGeneration += 1;
+    this.cancelOrphanExitCheck();
+    this.orphanBlockerFingerprint = undefined;
     this.revision += 1;
   }
 
   detachClient(connectionId: string): void {
     if (!this.clients.delete(connectionId)) return;
+    this.clientGeneration += 1;
     this.revision += 1;
+    if (this.clients.size === 0) this.scheduleOrphanExitCheck(this.input.orphanExitMs);
   }
 
   async runMutation<T>(method: RuntimeDaemonMethod, effect: () => Promise<T>): Promise<T> {
@@ -115,6 +144,9 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
         ownerPolicy: readRuntimeOwnerPolicy(this.input.paths),
         owner,
         preflight: current,
+        ...(this.input.integrationStatuses
+          ? { integrations: integrationHealth(this.input.integrationStatuses()) }
+          : {}),
       };
     }
     throw managementError('conflict', 'Runtime state changed while daemon management was inspected.');
@@ -164,6 +196,7 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.cancelOrphanExitCheck();
     this.runtimeEvents.close();
     this.clients.clear();
   }
@@ -186,6 +219,7 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
       );
     }
     this.draining = true;
+    this.cancelOrphanExitCheck();
   }
 
   private async assertStoppable(expectedRevision?: number): Promise<void> {
@@ -215,6 +249,110 @@ class DaemonManagementController implements RuntimeDaemonManagementController {
     this.preflightFingerprint = fingerprint;
     this.revision += 1;
   }
+
+  private scheduleOrphanExitCheck(delayMs: number | undefined): void {
+    if (
+      delayMs === undefined
+      || !this.orphanExitArmed
+      || this.closed
+      || this.draining
+      || this.clients.size > 0
+      || this.orphanExitCheckRunning
+    ) {
+      return;
+    }
+    this.cancelOrphanExitCheck();
+    this.orphanExitTimer = setTimeout(() => {
+      this.orphanExitTimer = undefined;
+      void this.tryOrphanExit();
+    }, delayMs);
+    this.orphanExitTimer.unref?.();
+  }
+
+  private cancelOrphanExitCheck(): void {
+    if (this.orphanExitTimer === undefined) return;
+    clearTimeout(this.orphanExitTimer);
+    this.orphanExitTimer = undefined;
+  }
+
+  private async tryOrphanExit(): Promise<void> {
+    if (
+      this.closed
+      || this.draining
+      || this.clients.size > 0
+      || this.input.orphanExitMs === undefined
+    ) {
+      return;
+    }
+    this.orphanExitCheckRunning = true;
+    const clientGeneration = this.clientGeneration;
+    let stopped = false;
+    let retryDelayMs = Math.min(this.input.orphanExitMs, 5_000);
+    try {
+      const current = await this.preflight();
+      if (this.clients.size > 0 || this.closed || this.draining) return;
+      if (this.clientGeneration !== clientGeneration) {
+        // A client attached and detached while preflight was in flight. Give
+        // that newest detach a complete grace period instead of stopping on
+        // the stale timer's deadline.
+        retryDelayMs = this.input.orphanExitMs;
+        return;
+      }
+      if (current.canStop) {
+        this.appendOrphanExitLog(
+          'info',
+          'Runtime daemon orphan exit accepted after the final client disconnected.',
+        );
+        await this.stop();
+        stopped = true;
+        return;
+      }
+      const fingerprint = current.blockers.join(',');
+      if (fingerprint !== this.orphanBlockerFingerprint) {
+        this.orphanBlockerFingerprint = fingerprint;
+        this.appendOrphanExitLog(
+          'info',
+          'Runtime daemon orphan exit deferred until governed work becomes idle.',
+          { blockers: current.blockers },
+        );
+      }
+    } catch (error: unknown) {
+      this.appendOrphanExitLog(
+        'warn',
+        'Runtime daemon orphan exit inspection failed; it will retry.',
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+    } finally {
+      this.orphanExitCheckRunning = false;
+      if (!stopped) {
+        this.scheduleOrphanExitCheck(retryDelayMs);
+      }
+    }
+  }
+
+  private appendOrphanExitLog(
+    level: 'info' | 'warn',
+    message: string,
+    detail?: Record<string, unknown>,
+  ): void {
+    try {
+      appendRuntimeDaemonLog(this.input.paths, level, message, detail);
+    } catch {
+      // Orphan recovery is a lifecycle guarantee; diagnostic I/O is best-effort.
+    }
+  }
+}
+
+function integrationHealth(
+  domains: readonly RuntimeIntegrationDomainStatus[],
+): NonNullable<RuntimeDaemonManagementState['integrations']> {
+  const snapshot = structuredClone(domains);
+  return {
+    state: snapshot.some((domain) => domain.diagnostic !== undefined)
+      ? 'degraded'
+      : 'healthy',
+    domains: snapshot,
+  };
 }
 
 function withLogicalClients(

@@ -160,6 +160,7 @@ export function buildToolExecutionContext(
     lspService: options.context?.lspService ?? getDefaultLspService(),
     executionCwd,
     shellExecution: options.context?.shellExecution,
+    shellSandbox: options.context?.shellSandbox,
     providerCredentialEnvironmentNames:
       options.context?.shellExecution === undefined
         ? undefined

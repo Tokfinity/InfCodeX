@@ -52,6 +52,7 @@ export const CONTRACT_TEST_FILES = [
 // behavior makes them unsuitable for the edit/verify loop.
 export const SYSTEM_TEST_FILES = [
   'src/kodax_cli.daemon-smoke.test.ts',
+  'src/kodax_cli.setup-boundary.test.ts',
   'src/kodax_cli.interactive-exit.test.ts',
   'src/sdk-runtime*.test.ts',
   'src/integration-*.test.ts',

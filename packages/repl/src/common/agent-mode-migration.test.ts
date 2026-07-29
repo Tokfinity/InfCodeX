@@ -48,4 +48,24 @@ describe('v0.7.72 agent-mode config migration', () => {
     const { utils } = await loadWithConfig({ agentMode: 'mystery-mode' });
     expect(() => utils.loadConfig()).toThrow(/Invalid agentMode.*Expected "ama" or "sa"/);
   });
+
+  it('does not persist self-healing migrations while another KodaX writer holds the core lock', async () => {
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    const { home, utils } = await loadWithConfig({
+      agentMode: 'amaw',
+      permissionMode: 'auto-in-project',
+      provider: 'openai',
+    });
+    const configPath = path.join(home, 'config.json');
+    const original = readFileSync(configPath, 'utf8');
+    writeFileSync(`${configPath}.write.lock`, 'busy', 'utf8');
+
+    expect(utils.loadConfig()).toMatchObject({
+      agentMode: 'ama',
+      permissionMode: 'auto',
+      provider: 'openai',
+    });
+    expect(readFileSync(configPath, 'utf8')).toBe(original);
+    expect(warning).toHaveBeenCalledTimes(1);
+  });
 });

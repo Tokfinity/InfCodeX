@@ -35,6 +35,7 @@ import {
   loadAutoRules,
   resolveProvider as resolveCodingProvider,
   type AutoModeAskUser,
+  type AutoModeGuardrailConfig,
   type AutoModeSharedState,
   type AutoModeToolGuardrail,
   type RulesLoadResult,
@@ -44,6 +45,7 @@ import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
 import { replBashUserKodaxWriteDeny } from '../permission/repl-bash-signals.js';
 import { analyzeAutoModeCall, evaluateAutoRulesCall } from '../permission/auto-rules.js';
+import { allowsAcceptEditsClassifierFallback } from '../permission/accept-edits-fallback.js';
 
 export interface AutoModeBootstrapDeps {
   /**
@@ -56,6 +58,10 @@ export interface AutoModeBootstrapDeps {
   readonly projectRoot: string;
   /** Directory used to resolve relative tool paths. */
   readonly executionCwd: string;
+  /** Runtime-confirmed ASRT availability for exact workspace shell calls. */
+  readonly workspaceShellSandboxAvailable?: boolean;
+  /** Runtime-owned one-shot admission into the workspace shell sandbox. */
+  readonly admitWorkspaceSandboxCall?: AutoModeGuardrailConfig['admitWorkspaceSandboxCall'];
   readonly getCurrentProviderName: () => string;
   readonly getCurrentModel: () => string | undefined;
   readonly getCurrentPermissionMode: () => PermissionMode;
@@ -172,6 +178,13 @@ export async function bootstrapAutoMode(
       getDefaultProvider: deps.getCurrentProviderName,
       getDefaultModel: () => deps.getCurrentModel() ?? '',
       askUser: deps.askUser,
+      allowOnClassifierFailure: (call) => allowsAcceptEditsClassifierFallback(
+        call,
+        deps.projectRoot,
+        deps.executionCwd,
+      ),
+      workspaceShellSandboxAvailable: deps.workspaceShellSandboxAvailable,
+      admitWorkspaceSandboxCall: deps.admitWorkspaceSandboxCall,
       evaluateRulesCall: evaluateAutoRulesCall,
       analyzeCall: analyzeAutoModeCall,
       log: deps.log,

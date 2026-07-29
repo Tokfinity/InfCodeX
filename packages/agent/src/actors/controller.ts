@@ -1,12 +1,15 @@
 import {
   AgentBudgetExhaustedError,
   AgentControlError,
+  AgentOwnerConflictError,
+  AgentOwnerUnknownError,
   AgentRevisionConflictError,
 } from './errors.js';
 import { AgentTurnScheduler } from './scheduler.js';
 import type {
   AgentActor,
   AgentActorClient,
+  AgentActorOwner,
   AgentArtifactDescriptor,
   AgentActorSnapshot,
   AgentActorStore,
@@ -52,6 +55,10 @@ export interface AgentControllerOptions {
   readonly executorFor?: (kind: AgentExecutionKind) => AgentTurnExecutor;
   readonly budget?: AgentBudgetPort;
   readonly store?: AgentActorStore;
+  /** Unique Runtime/controller claim for one durable Session Actor tree. */
+  readonly owner?: AgentActorOwner;
+  /** Conservative liveness probe for a persisted foreign owner. Omitted means alive. */
+  readonly isOwnerAlive?: (owner: AgentActorOwner) => boolean | Promise<boolean>;
   readonly now?: () => string;
   readonly warn?: (message: string) => void;
   readonly onBackgroundError?: (error: unknown) => void;
@@ -97,6 +104,11 @@ export class AgentActorController {
   private readonly now: () => string;
   private mutationTail: Promise<void> = Promise.resolve();
   private revision = 0;
+  private snapshotSchemaVersion: 1 | 2;
+  private durableOwner?: AgentActorOwner;
+  private initialized = false;
+  private ownershipLost = false;
+  private ownershipReleased = false;
   private committedSnapshot: AgentActorSnapshot;
 
   constructor(private readonly options: AgentControllerOptions = {}) {
@@ -104,19 +116,65 @@ export class AgentActorController {
     this.scheduler = new AgentTurnScheduler(max);
     this.budget = options.budget ?? UNLIMITED_BUDGET;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.snapshotSchemaVersion = options.owner ? 2 : 1;
     if (max >= 8) options.warn?.(`Agent concurrency is ${max}; available slots include the current Agent.`);
     this.installRoot(options.rootCapabilities ?? defaultRootCapabilities());
     this.committedSnapshot = this.snapshot();
   }
 
   async initialize(): Promise<void> {
+    if (this.initialized) return;
+    // A failed initialization may have claimed and then cleanly released this
+    // controller's owner. Retrying the same instance must begin a fresh
+    // ownership lifecycle; successful shutdown remains idempotent because an
+    // initialized controller returned above.
+    if (this.ownershipReleased) this.ownershipReleased = false;
     const snapshot = await this.options.store?.load();
-    if (!snapshot) return;
-    validateSnapshot(snapshot, this.scheduler.maxConcurrentThreads);
-    this.restore(snapshot);
-    this.committedSnapshot = this.snapshot();
-    this.republishUnacknowledgedRootCompletions();
-    await this.recoverUnmatchedTurns();
+    if (snapshot) {
+      validateSnapshot(snapshot, this.scheduler.maxConcurrentThreads);
+      this.restore(snapshot);
+      this.committedSnapshot = this.snapshot();
+    }
+    let ownershipClaimed = false;
+    try {
+      if (this.options.owner) {
+        if (
+          snapshot?.schemaVersion === 1
+          && snapshot.turns.some((turn) => !isTerminal(turn.state))
+        ) {
+          throw new AgentOwnerUnknownError(snapshot.revision);
+        }
+        ownershipClaimed = await this.claimOwnership();
+      } else if (this.snapshotSchemaVersion === 2) {
+        throw new AgentOwnerConflictError(
+          this.durableOwner?.runtimeId,
+          this.revision,
+          false,
+        );
+      }
+      this.republishUnacknowledgedRootCompletions();
+      await this.recoverUnmatchedTurns();
+      this.initialized = true;
+    } catch (error: unknown) {
+      if (ownershipClaimed) {
+        try {
+          await this.releaseOwnershipAfterInitializationFailure();
+        } catch (releaseError: unknown) {
+          throw new AggregateError(
+            [error, releaseError],
+            'Actor initialization failed and its newly claimed owner fence could not be released.',
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
+  ownsDurableFence(): boolean {
+    return this.options.owner !== undefined
+      && this.durableOwner?.ownerId === this.options.owner.ownerId
+      && !this.ownershipLost
+      && !this.ownershipReleased;
   }
 
   bind(callerPath: string): AgentActorClient {
@@ -389,27 +447,40 @@ export class AgentActorController {
     reason = 'interrupted',
     scope: AgentInterruptScope = 'turn',
   ): Promise<void> {
-    const aborts = await this.mutate(() => {
-      const target = this.requireControl(callerPath, targetPath);
-      const actors = scope === 'subtree'
-        ? this.descendantsInclusive(targetPath).reverse()
-        : [target];
-      const active = actors.filter((actor) => actor.currentTurnId !== undefined);
-      if (active.length === 0) throw new AgentControlError('no_active_turn', `${targetPath} is idle`);
-      for (const actor of active) {
-        if (actor.capabilities.control?.interrupt === false) {
-          throw new AgentControlError('unsupported_operation', `${actor.path} does not support interruption`);
+    try {
+      const aborts = await this.mutate(() => {
+        const target = this.requireControl(callerPath, targetPath);
+        const actors = scope === 'subtree'
+          ? this.descendantsInclusive(targetPath).reverse()
+          : [target];
+        const active = actors.filter((actor) => actor.currentTurnId !== undefined);
+        if (active.length === 0) throw new AgentControlError('no_active_turn', `${targetPath} is idle`);
+        for (const actor of active) {
+          if (actor.capabilities.control?.interrupt === false) {
+            throw new AgentControlError('unsupported_operation', `${actor.path} does not support interruption`);
+          }
         }
-      }
-      return active.flatMap((actor) => {
-        const turnId = actor.currentTurnId;
-        if (!turnId) return [];
-        const abort = this.abortControllers.get(turnId);
-        this.finishTurn(turnId, 'interrupted', { error: reason });
-        return abort ? [abort] : [];
+        return active.flatMap((actor) => {
+          const turnId = actor.currentTurnId;
+          if (!turnId) return [];
+          const abort = this.abortControllers.get(turnId);
+          this.finishTurn(turnId, 'interrupted', { error: reason });
+          return abort ? [abort] : [];
+        });
       });
-    });
-    for (const abort of aborts) abort.abort(reason);
+      for (const abort of aborts) abort.abort(reason);
+    } catch (error) {
+      if (
+        error instanceof AgentOwnerConflictError
+        && (
+          error.localExecutionsAborted
+          || this.isInterruptionDurable(callerPath, targetPath, scope)
+        )
+      ) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async close(callerPath: string, targetPath: string, reason = 'closed by owner'): Promise<void> {
@@ -442,8 +513,22 @@ export class AgentActorController {
     for (const abort of aborts) abort.abort(reason);
   }
 
-  /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */
-  async shutdown(reason = 'runtime stopped'): Promise<void> {
+  /**
+   * Final local teardown after the host has durably removed the backing store.
+   * No mutation is allowed here because there is no longer a snapshot to save.
+   */
+  disposeAfterStoreRemoval(reason = 'backing store removed'): void {
+    if (this.ownershipReleased) return;
+    this.ownershipReleased = true;
+    const aborts = [...new Set(this.abortControllers.values())];
+    this.abortControllers.clear();
+    for (const abort of aborts) abort.abort(reason);
+    for (const waiter of [...this.waiters]) waiter.resolve(undefined);
+  }
+
+  /** Interrupts every local execution while retaining the durable owner fence. */
+  async quiesce(reason = 'runtime quiesced'): Promise<void> {
+    if (this.ownershipReleased) return;
     const aborts = await this.mutate(() => {
       const pendingAborts: AbortController[] = [];
       for (const turn of this.turns.values()) {
@@ -455,6 +540,39 @@ export class AgentActorController {
       return pendingAborts;
     });
     for (const abort of aborts) abort.abort(reason);
+  }
+
+  /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */
+  async shutdown(reason = 'runtime stopped'): Promise<void> {
+    if (this.ownershipReleased) return;
+    try {
+      const aborts = await this.mutate(() => {
+        const pendingAborts: AbortController[] = [];
+        for (const turn of this.turns.values()) {
+          if (isTerminal(turn.state)) continue;
+          const abort = this.abortControllers.get(turn.turnId);
+          if (abort) pendingAborts.push(abort);
+          this.finishTurn(turn.turnId, 'interrupted', { error: reason });
+        }
+        return pendingAborts;
+      });
+      for (const abort of aborts) abort.abort(reason);
+      if (this.options.owner) {
+        await this.mutate(() => {
+          this.durableOwner = undefined;
+        });
+        this.ownershipReleased = true;
+      }
+      for (const waiter of [...this.waiters]) waiter.resolve(undefined);
+    } catch (error) {
+      if (
+        error instanceof AgentOwnerConflictError
+        && (this.ownershipLost || this.ownershipReleased)
+      ) {
+        return;
+      }
+      throw error;
+    }
   }
 
   list(callerPath: string): AgentTreeSnapshot {
@@ -674,7 +792,15 @@ export class AgentActorController {
         (result) => this.completeExecution(plan.turn.turnId, result),
         (error: unknown) => this.failExecution(plan.turn.turnId, error),
       )
-      .catch((error: unknown) => this.reportBackgroundError(error));
+      .catch((error: unknown) => {
+        if (
+          error instanceof AgentOwnerConflictError
+          && (this.ownershipLost || this.ownershipReleased)
+        ) {
+          return;
+        }
+        this.reportBackgroundError(error);
+      });
   }
 
   private async completeExecution(
@@ -1056,6 +1182,7 @@ export class AgentActorController {
   private async mutate<T>(
     operation: () => T | Promise<T>,
     shouldCommit: (result: T) => boolean = () => true,
+    allowOwnershipClaim = false,
   ): Promise<T> {
     const previousTail = this.mutationTail;
     let release: () => void = () => {};
@@ -1065,6 +1192,7 @@ export class AgentActorController {
     const beforeAborts = new Map(this.abortControllers);
     const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
     try {
+      if (!allowOwnershipClaim) this.assertWritableOwner();
       const result = await operation();
       if (!shouldCommit(result)) {
         this.restore(before);
@@ -1083,6 +1211,14 @@ export class AgentActorController {
       }
       return result;
     } catch (error) {
+      const conflict = actorSnapshotConflictFact(error);
+      if (conflict) {
+        throw await this.fenceAfterSnapshotConflict(
+          conflict,
+          before,
+          beforeAborts,
+        );
+      }
       this.restore(before);
       replaceMap(this.abortControllers, [...beforeAborts.entries()]);
       throw error;
@@ -1092,8 +1228,7 @@ export class AgentActorController {
   }
 
   private snapshot(): AgentActorSnapshot {
-    return {
-      schemaVersion: 1,
+    const contents = {
       revision: this.revision,
       maxConcurrentThreads: this.scheduler.maxConcurrentThreads,
       actors: [...this.actors.values()],
@@ -1107,9 +1242,18 @@ export class AgentActorController {
         : {}),
       events: [...this.eventsLog],
     };
+    return this.snapshotSchemaVersion === 2
+      ? {
+          schemaVersion: 2,
+          ...contents,
+          ...(this.durableOwner ? { owner: this.durableOwner } : {}),
+        }
+      : { schemaVersion: 1, ...contents };
   }
 
   private restore(snapshot: AgentActorSnapshot): void {
+    this.snapshotSchemaVersion = snapshot.schemaVersion;
+    this.durableOwner = snapshot.schemaVersion === 2 ? snapshot.owner : undefined;
     this.revision = snapshot.revision;
     replaceMap(this.actors, snapshot.actors.map((actor) => [actor.path, actor]));
     replaceMap(this.turns, snapshot.turns.map((turn) => [turn.turnId, turn]));
@@ -1154,6 +1298,130 @@ export class AgentActorController {
         }
         this.finishTurn(turn.turnId, 'interrupted', { error: 'runtime_recovered_without_executor' });
       }
+    });
+  }
+
+  private async claimOwnership(): Promise<boolean> {
+    const desired = this.options.owner;
+    if (!desired) return false;
+    const current = this.durableOwner;
+    if (current?.ownerId === desired.ownerId) return false;
+    if (current) {
+      const probe = this.options.isOwnerAlive?.(current);
+      const alive = probe === undefined ? true : await probe;
+      if (alive) {
+        throw new AgentOwnerConflictError(current.runtimeId, this.revision, false);
+      }
+    }
+    await this.mutate(() => {
+      this.snapshotSchemaVersion = 2;
+      this.durableOwner = desired;
+    }, () => true, true);
+    return true;
+  }
+
+  private async releaseOwnershipAfterInitializationFailure(): Promise<void> {
+    if (
+      !this.options.owner
+      || this.durableOwner?.ownerId !== this.options.owner.ownerId
+      || this.ownershipLost
+      || this.ownershipReleased
+    ) {
+      return;
+    }
+    await this.mutate(() => {
+      this.durableOwner = undefined;
+    });
+    this.ownershipReleased = true;
+  }
+
+  private assertWritableOwner(): void {
+    const desired = this.options.owner;
+    if (this.ownershipLost || this.ownershipReleased) {
+      throw new AgentOwnerConflictError(
+        this.durableOwner?.runtimeId,
+        this.revision,
+        false,
+      );
+    }
+    if (!desired) return;
+    if (this.durableOwner?.ownerId !== desired.ownerId) {
+      throw new AgentOwnerConflictError(
+        this.durableOwner?.runtimeId,
+        this.revision,
+        false,
+      );
+    }
+  }
+
+  private async fenceAfterSnapshotConflict(
+    conflict: ActorSnapshotConflictFact,
+    before: AgentActorSnapshot,
+    beforeAborts: ReadonlyMap<string, AbortController>,
+  ): Promise<AgentOwnerConflictError> {
+    this.restore(before);
+    this.ownershipLost = true;
+    const localAborts = [...new Set(beforeAborts.values())];
+    replaceMap(this.abortControllers, []);
+    for (const abort of localAborts) abort.abort('actor owner superseded');
+
+    const priorCommitted = this.committedSnapshot;
+    let ownerRuntimeId: string | undefined;
+    let currentRevision = conflict.currentRevision;
+    try {
+      const latest = await this.options.store?.load();
+      if (latest) {
+        validateSnapshot(latest, this.scheduler.maxConcurrentThreads);
+        this.restore(latest);
+        replaceMap(this.abortControllers, []);
+        this.committedSnapshot = this.snapshot();
+        ownerRuntimeId = latest.schemaVersion === 2
+          ? latest.owner?.runtimeId
+          : undefined;
+        currentRevision = latest.revision;
+        for (const message of appendedMessages(priorCommitted, this.committedSnapshot)) {
+          this.publishCommittedMessage(message);
+        }
+        const priorSequence = priorCommitted.events.at(-1)?.sequence ?? 0;
+        for (const event of this.committedSnapshot.events) {
+          if (event.sequence > priorSequence) this.publishCommittedEvent(event);
+        }
+      }
+    } catch (refreshError) {
+      this.options.warn?.(
+        `Actor owner conflict refresh failed: ${
+          refreshError instanceof Error ? refreshError.message : String(refreshError)
+        }`,
+      );
+    }
+    return new AgentOwnerConflictError(
+      ownerRuntimeId,
+      currentRevision,
+      localAborts.length > 0,
+    );
+  }
+
+  private isInterruptionDurable(
+    callerPath: string,
+    targetPath: string,
+    scope: AgentInterruptScope,
+  ): boolean {
+    try {
+      this.requireCommittedControl(callerPath, targetPath);
+    } catch {
+      return false;
+    }
+    const actors = scope === 'subtree'
+      ? this.committedSnapshot.actors.filter((actor) => (
+          actor.path === targetPath || actor.path.startsWith(`${targetPath}/`)
+        ))
+      : this.committedSnapshot.actors.filter((actor) => actor.path === targetPath);
+    return actors.length > 0 && actors.every((actor) => {
+      if (actor.currentTurnId) return false;
+      const latestTurnId = actor.turnIds.at(-1);
+      if (!latestTurnId) return false;
+      return this.committedSnapshot.turns.find((turn) => turn.turnId === latestTurnId)?.state
+        === 'interrupted';
     });
   }
 
@@ -1386,6 +1654,27 @@ function appendedMessages(
   return messages;
 }
 
+interface ActorSnapshotConflictFact {
+  readonly expectedRevision: number;
+  readonly currentRevision: number;
+}
+
+function actorSnapshotConflictFact(error: unknown): ActorSnapshotConflictFact | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const record = error as Readonly<Record<string, unknown>>;
+  if (
+    record.code !== 'actor_snapshot_conflict'
+    || typeof record.expectedRevision !== 'number'
+    || typeof record.currentRevision !== 'number'
+  ) {
+    return undefined;
+  }
+  return {
+    expectedRevision: record.expectedRevision,
+    currentRevision: record.currentRevision,
+  };
+}
+
 function metadataValueEqual(
   left: AgentMetadataValue | undefined,
   right: AgentMetadataValue | undefined,
@@ -1417,7 +1706,10 @@ function isMetadataRecord(
 }
 
 function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): void {
-  if (snapshot.schemaVersion !== 1) throw new Error('Unsupported actor snapshot schema.');
+  if (snapshot.schemaVersion !== 1 && snapshot.schemaVersion !== 2) {
+    throw new Error('Unsupported actor snapshot schema.');
+  }
+  if (snapshot.schemaVersion === 2 && snapshot.owner) validateOwner(snapshot.owner);
   if (snapshot.maxConcurrentThreads !== configuredMax) {
     throw new Error('Actor snapshot concurrency does not match the root session setting.');
   }
@@ -1451,5 +1743,17 @@ function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): 
     if (snapshot.acknowledgedCompletionTurnIds?.includes(turnId)) {
       throw new Error(`Actor snapshot tracks an acknowledged root completion turn: ${turnId}`);
     }
+  }
+}
+
+function validateOwner(owner: AgentActorOwner): void {
+  if (
+    owner.ownerId.trim().length === 0
+    || owner.runtimeId.trim().length === 0
+    || !Number.isSafeInteger(owner.pid)
+    || owner.pid <= 0
+    || owner.startedAt.trim().length === 0
+  ) {
+    throw new Error('Actor snapshot has an invalid Runtime owner.');
   }
 }

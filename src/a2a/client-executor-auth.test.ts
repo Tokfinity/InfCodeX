@@ -57,6 +57,52 @@ function options(fetchImpl: typeof fetch) {
 }
 
 describe('A2A outbound authentication planning', () => {
+  it('propagates a pending start cancellation signal to the SendMessage request', async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).includes('.well-known/agent-card.json')) {
+        return Response.json({
+          ...card(),
+          securitySchemes: {},
+          securityRequirements: [],
+        });
+      }
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => {
+          reject(new Error('pending SendMessage aborted'));
+        }, { once: true });
+      });
+    });
+    const clientOptions = options(fetchImpl);
+    const discovered = await discoverA2ARegistration({
+      agentId: 'external:abortable-start',
+      agentCardUrl: `${CARD_ORIGIN}/.well-known/agent-card.json`,
+      effects: { remote: 'read' },
+    }, clientOptions);
+    const executor = await createA2AAgentExecutorFactory(clientOptions).create(
+      discovered.registration,
+      {
+        async withCredential(_reference, use) { return use('unused'); },
+        async authorizeArtifact() {},
+      },
+    );
+    const controller = new AbortController();
+    const starting = executor.start({
+      agentId: discovered.registration.agentId,
+      objective: 'wait for cancellation',
+      idempotencyKey: 'abortable-start',
+      context: { actorId: 'test' },
+    }, controller.signal);
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+
+    controller.abort('operator canceled');
+
+    await expect(starting).rejects.toThrow(/pending SendMessage aborted/i);
+    expect(requestSignal?.aborted).toBe(true);
+    await executor.dispose();
+  });
+
   it('keeps Card discovery small while allowing a separately bounded task response', async () => {
     const output = 'x'.repeat(80 * 1024);
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {

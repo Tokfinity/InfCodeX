@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   KodaXRuntime,
@@ -59,6 +59,56 @@ describe('runtime daemon lease manager', () => {
 
     expect(secondLease.ownsHost).toBe(false);
     expect(candidateCalls).toBe(0);
+  });
+
+  it('shares attached shutdown and keeps its transport open for retry', async () => {
+    const homeDir = tempHome();
+    const endpoint = await makeTestEndpoint();
+    const ownerLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async (runtimeId) => makeRuntime(runtimeId),
+    });
+    const attachedLease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint,
+      createRuntime: async (runtimeId) => makeRuntime(runtimeId),
+    });
+    cleanupTasks.push(async () => {
+      await attachedLease.close();
+      await ownerLease.close();
+      await ownerLease.shutdown();
+    });
+    const paths = resolveRuntimeDaemonPaths(homeDir, 'default');
+    await attachedLease.transport.request('initialize', {
+      profile: 'default',
+      token: readRuntimeDaemonToken(paths),
+    });
+    const originalRequest = attachedLease.transport.request.bind(attachedLease.transport);
+    let shutdownRequests = 0;
+    const request = vi.spyOn(attachedLease.transport, 'request').mockImplementation(
+      async (method, params) => {
+        if (method === 'runtime.shutdown') {
+          shutdownRequests += 1;
+          if (shutdownRequests === 1) {
+            throw new Error('transient attached shutdown failure');
+          }
+        }
+        return originalRequest(method, params);
+      },
+    );
+    try {
+      const first = attachedLease.shutdown();
+      const concurrent = attachedLease.shutdown();
+      await expect(first).rejects.toThrow('transient attached shutdown failure');
+      await expect(concurrent).rejects.toThrow('transient attached shutdown failure');
+      expect(shutdownRequests).toBe(1);
+
+      await expect(attachedLease.shutdown()).resolves.toBeUndefined();
+      expect(shutdownRequests).toBe(2);
+    } finally {
+      request.mockRestore();
+    }
   });
 
   it('lets concurrent starters converge on one daemon owner', async () => {
@@ -297,6 +347,41 @@ describe('runtime daemon lease manager', () => {
 
     await lease.shutdown();
     expect(readRuntimeDaemonState(lease.paths)).toBeUndefined();
+    expect(readRuntimeDaemonLockOwner(lease.paths.lockFile)).toBeUndefined();
+  });
+
+  it('shares concurrent owned-host shutdown and permits retry after failure', async () => {
+    const homeDir = tempHome();
+    let runtime: ReturnType<typeof makeRuntime> | undefined;
+    let closeCalls = 0;
+    const lease = await acquireRuntimeDaemonLease({
+      homeDir,
+      endpoint: await makeTestEndpoint(),
+      createRuntime: async (runtimeId) => {
+        runtime = makeRuntime(runtimeId);
+        const originalClose = runtime.close.bind(runtime);
+        runtime.close = async () => {
+          closeCalls += 1;
+          if (closeCalls === 1) throw new Error('transient owned Runtime close failure');
+          await originalClose();
+        };
+        return runtime;
+      },
+    });
+    cleanupTasks.push(() => lease.shutdown());
+
+    const first = lease.shutdown();
+    const concurrent = lease.shutdown();
+    expect(concurrent).toBe(first);
+    await expect(Promise.all([first, concurrent])).rejects.toThrow(
+      'transient owned Runtime close failure',
+    );
+    expect(runtime?.closed).toBe(false);
+    expect(readRuntimeDaemonLockOwner(lease.paths.lockFile)).toBeDefined();
+
+    await expect(lease.shutdown()).resolves.toBeUndefined();
+    expect(closeCalls).toBe(2);
+    expect(runtime?.closed).toBe(true);
     expect(readRuntimeDaemonLockOwner(lease.paths.lockFile)).toBeUndefined();
   });
 });

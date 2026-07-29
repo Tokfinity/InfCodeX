@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { cleanupRegisteredManagedChildren, setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { KodaXShellSandbox } from '../types.js';
 import { toolBash } from './bash.js';
 
 const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 15_000;
@@ -114,6 +115,111 @@ async function waitForPidExit(
 }
 
 describe('toolBash', () => {
+  it('executes an admitted command through the runtime-owned shell sandbox', async () => {
+    const cleanup = vi.fn(async () => ({
+      version: 1 as const,
+      state: 'applied' as const,
+      backend: 'windows-restricted-user' as const,
+      policyId: 'kodax-workspace-shell-v1' as const,
+    }));
+    const reportToolSandboxObservation = vi.fn();
+    const prepare = vi.fn(async () => ({
+      executable: process.execPath,
+      args: ['-e', 'process.stdout.write("sandboxed")'],
+      env: process.env,
+      cleanup,
+    }));
+
+    const result = await toolBash({ command: 'echo unsandboxed' }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-1',
+      shellSandbox: { prepare },
+      reportToolSandboxObservation,
+    });
+
+    expect(completedCommandBody(result)).toContain('sandboxed');
+    expect(completedCommandBody(result)).not.toContain('unsandboxed');
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+      toolCallId: 'bash-sandbox-1',
+      command: 'echo unsandboxed',
+    }));
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(reportToolSandboxObservation).toHaveBeenCalledWith({
+      version: 1,
+      state: 'applied',
+      backend: 'windows-restricted-user',
+      policyId: 'kodax-workspace-shell-v1',
+    });
+  });
+
+  it('falls back to ordinary execution when sandbox preparation unexpectedly fails', async () => {
+    const reportToolSandboxObservation = vi.fn();
+    const prepare = vi.fn(async () => {
+      throw new Error('sandbox preparation failed');
+    });
+    const command = nodeOutputCommand('ordinary execution completed');
+
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-fallback',
+      shellSandbox: { prepare },
+      reportToolSandboxObservation,
+    });
+
+    expect(completedCommandBody(result)).toContain('ordinary execution completed');
+    expect(reportToolSandboxObservation).toHaveBeenCalledWith({
+      version: 1,
+      state: 'fallback',
+      reason: 'prepare_failed',
+      execution: 'normal_permission_policy',
+    });
+  });
+
+  it('does not fall back or spawn after cancellation during sandbox preparation', async () => {
+    const controller = new AbortController();
+    const reportToolSandboxObservation = vi.fn();
+    const shellSandbox: KodaXShellSandbox = {
+      prepare: (input) => new Promise((_, reject) => {
+        input.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Operation aborted', 'AbortError'));
+        }, { once: true });
+      }),
+    };
+    const command = nodeOutputCommand('must not execute');
+    const running = toolBash({ command }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-cancelled-prepare',
+      shellSandbox,
+      abortSignal: controller.signal,
+      reportToolSandboxObservation,
+    });
+
+    controller.abort();
+    await expect(running).resolves.toContain('[Cancelled]');
+    expect(reportToolSandboxObservation).not.toHaveBeenCalled();
+  });
+
+  it('does not spawn when the command deadline expires during sandbox preparation', async () => {
+    const reportToolSandboxObservation = vi.fn();
+    const shellSandbox: KodaXShellSandbox = {
+      async prepare() {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        throw new Error('late preparation failure');
+      },
+    };
+    const command = nodeOutputCommand('must not execute');
+
+    const result = await toolBash({ command, timeout: 0.01 }, {
+      backups: new Map(),
+      toolCallId: 'bash-sandbox-timeout-prepare',
+      shellSandbox,
+      reportToolSandboxObservation,
+    });
+
+    expect(result).toContain('[Timeout] Command was not started');
+    expect(reportToolSandboxObservation).not.toHaveBeenCalled();
+  });
+
   let tempDir = '';
 
   beforeEach(async () => {

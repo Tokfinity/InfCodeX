@@ -22,6 +22,9 @@ import type {
   AgentActorSnapshot,
 } from '@kodax-ai/agent';
 import {
+  AgentActorStoreConflictError,
+  AgentOwnerConflictError,
+  AgentOwnerUnknownError,
   appendSessionLineageLabel,
   archiveOldIslands,
   cleanupIncompleteToolCalls,
@@ -155,6 +158,7 @@ interface PersistedSessionSnapshot {
 interface ResolvedSessionSnapshot {
   data: SessionData;
   createdAt?: string;
+  filePath: string;
 }
 
 function reportStorageDiagnostic(level: 'info' | 'warn' | 'error', message: string, detail?: unknown): void {
@@ -321,6 +325,43 @@ function mergeFullLineageEntries(
     if (!archived || isCompactedPlaceholder(archived)) merged.set(entry.id, entry);
   }
   return [...merged.values()];
+}
+
+function mergeConcurrentAppendData(
+  incoming: SessionData,
+  persisted: SessionData,
+): SessionData {
+  const incomingLineage = incoming.lineage;
+  const persistedLineage = persisted.lineage;
+  const lineage = incomingLineage && persistedLineage
+    ? {
+        ...incomingLineage,
+        entries: mergeFullLineageEntries(
+          persistedLineage.entries,
+          incomingLineage.entries,
+        ),
+      }
+    : incomingLineage ?? persistedLineage;
+  const artifacts = new Map<string, KodaXSessionArtifactLedgerEntry>();
+  for (const entry of persisted.artifactLedger ?? []) artifacts.set(entry.id, entry);
+  for (const entry of incoming.artifactLedger ?? []) artifacts.set(entry.id, entry);
+  const extensions = new Map<string, KodaXExtensionSessionRecord>();
+  for (const record of persisted.extensionRecords ?? []) extensions.set(record.id, record);
+  for (const record of incoming.extensionRecords ?? []) extensions.set(record.id, record);
+  return {
+    ...incoming,
+    ...(lineage ? { lineage } : {}),
+    ...(
+      incoming.artifactLedger !== undefined || persisted.artifactLedger !== undefined
+        ? { artifactLedger: [...artifacts.values()] }
+        : {}
+    ),
+    ...(
+      incoming.extensionRecords !== undefined || persisted.extensionRecords !== undefined
+        ? { extensionRecords: [...extensions.values()] }
+        : {}
+    ),
+  };
 }
 
 function reconcileCompactionLineage(
@@ -570,10 +611,14 @@ function resolveSnapshotLineage(
   return createSessionLineage(data.messages, existingLineage);
 }
 
-function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSnapshot {
+function buildSessionData(
+  snapshot: PersistedSessionSnapshot,
+  filePath: string,
+): ResolvedSessionSnapshot {
   const lineage = buildLineage(snapshot);
   return {
     createdAt: snapshot.meta?.createdAt,
+    filePath,
       data: {
         messages: lineage
           ? getSessionMessagesFromLineage(lineage)
@@ -854,6 +899,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     artifactCount: number;
     extensionCount: number;
     metaUpdateCount: number;
+    activeEntryId?: string;
     tag?: string;
   }>();
 
@@ -884,6 +930,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       artifactCount: data.artifactLedger?.length ?? prev?.artifactCount ?? 0,
       extensionCount: data.extensionRecords?.length ?? prev?.extensionCount ?? 0,
       metaUpdateCount: metaUpdateCount ?? prev?.metaUpdateCount ?? 0,
+      activeEntryId: data.lineage?.activeEntryId ?? prev?.activeEntryId,
       tag: data.tag !== undefined ? data.tag : prev?.tag,
     });
   }
@@ -1018,7 +1065,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }
 
     warnMalformedSessionData(filePath, snapshot.malformedCount);
-    return buildSessionData(snapshot);
+    return buildSessionData(snapshot, filePath);
   }
 
   private async readArchivedEntries(id: string, sessionPath?: string): Promise<KodaXSessionEntry[]> {
@@ -1077,9 +1124,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     data: SessionData,
     entries: readonly KodaXSessionEntry[],
     archiveBatchId: string,
+    exactSessionPath?: string,
   ): Promise<void> {
     if (entries.length === 0) return;
-    const archiveDir = this.resolveWriteDir(id, data);
+    const archiveDir = exactSessionPath
+      ? path.dirname(exactSessionPath)
+      : this.resolveWriteDir(id, data);
     await fs.mkdir(archiveDir, { recursive: true });
     const archivePath = path.join(archiveDir, `${id}.islands.jsonl`);
     const handle = await fs.open(archivePath, 'a');
@@ -1130,11 +1180,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
     id: string,
     data: SessionData,
     createdAt?: string,
+    exactTargetPath?: string,
   ): Promise<void> {
-    const dir = this.resolveWriteDir(id, data);
+    const dir = exactTargetPath
+      ? path.dirname(exactTargetPath)
+      : this.resolveWriteDir(id, data);
     await fs.mkdir(dir, { recursive: true });
 
-    const targetPath = path.join(dir, `${id}.jsonl`);
+    const targetPath = exactTargetPath ?? path.join(dir, `${id}.jsonl`);
     const tempPath = `${targetPath}.${process.pid}.${Date.now()}.${sessionTempSequence++}.tmp`;
     const lineage = data.lineage ?? createSessionLineage(data.messages);
     const meta = createSessionMeta(id, data, lineage, createdAt);
@@ -1157,7 +1210,8 @@ export class FileSessionStorage implements KodaXSessionStorage {
         await handle.close();
       }
       await replaceSessionFile(tempPath, targetPath);
-      await this.ensureProjectJson(dir, deriveProjectKeyFromData(data));
+      const projectDir = path.basename(dir) === 'archived' ? path.dirname(dir) : dir;
+      await this.ensureProjectJson(projectDir, deriveProjectKeyFromData(data));
       // Lazy migrate-on-write: a legacy flat copy is now superseded by the
       // per-project file. Remove it (and relocate its sidecar) so the locator
       // never sees the same id in two places.
@@ -1167,7 +1221,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
         const legacyArchive = this.legacyFlatArchivePath(id);
         if (fsSync.existsSync(legacyArchive)) {
           // Rename the legacy `.archive.jsonl` sidecar to `.islands.jsonl` (Phase 3).
-          await fs.rename(legacyArchive, path.join(dir, `${id}.islands.jsonl`)).catch(() => undefined);
+          await fs.rename(
+            legacyArchive,
+            path.join(projectDir, `${id}.islands.jsonl`),
+          ).catch(() => undefined);
         }
       }
     } finally {
@@ -1190,7 +1247,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
       uiHistory: data.uiHistory ?? existing?.data.uiHistory,
       extensionState: data.extensionState ?? existing?.data.extensionState,
       artifactLedger: data.artifactLedger ?? existing?.data.artifactLedger,
-      actorSnapshot: data.actorSnapshot ?? existing?.data.actorSnapshot,
+      // Actor state has one writer: saveActorSnapshot's revision CAS. A stale
+      // full Session snapshot must never replace a newer owner/revision.
+      actorSnapshot: existing?.data.actorSnapshot ?? data.actorSnapshot,
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
       errorMetadata: data.errorMetadata ?? existing?.data.errorMetadata,
@@ -1212,9 +1271,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
       merged,
       archiveResult.archivedEntries,
       archiveResult.archiveBatchId,
+      existing?.filePath,
     );
     const persisted: SessionData = { ...merged, lineage: archiveResult.slimmedLineage };
-    await this.writeSessionInternal(id, persisted, existing?.createdAt);
+    await this.writeSessionInternal(
+      id,
+      persisted,
+      existing?.createdAt,
+      existing?.filePath,
+    );
     // The caller continues with the unslimmed lineage. Keep its count as the
     // append watermark even though storage moved old entries to the sidecar.
     this.syncAppendState(id, { ...merged, lineage: reconciledLineage });
@@ -1229,15 +1294,6 @@ export class FileSessionStorage implements KodaXSessionStorage {
   //   - Watermark inconsistency (rewind/fork occurred)
   async appendSessionDelta(id: string, data: SessionData): Promise<void> {
     await this.ensureMigrated();
-    const filePath = this.writeFilePath(id, data);
-
-    // Pre-checks that don't need serialization. A session still living in the
-    // legacy flat pool (no per-project file yet) takes the save() path, which
-    // writes to the project dir and supersedes the flat copy.
-    if (!fsSync.existsSync(filePath) || !data.lineage) {
-      await this.save(id, data);
-      return;
-    }
 
     await this.serializedWrite(id, async () => {
       // Read latest watermark INSIDE the queue (not before entry)
@@ -1249,45 +1305,56 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
 
-      // Consistency: snapshot shrunk since last write → rewind/fork → fallback
+      // Caller-owned rewrites are authoritative cold-path transactions, not
+      // evidence of a concurrent writer. Handle them before comparing the
+      // process-local watermark with disk so explicit clears are not merged
+      // back from the persisted snapshot.
       if (
-        data.lineage!.entries.length < cached.lineageCount
+        !data.lineage
+        || data.lineage.entries.length < cached.lineageCount
         || (data.artifactLedger?.length ?? 0) < cached.artifactCount
+        || (data.tag !== undefined && data.tag !== cached.tag)
+        || data.extensionState !== undefined
+        || data.actorSnapshot !== undefined
+        || (
+          data.extensionRecords !== undefined
+          && cached.extensionCount > 0
+          && data.extensionRecords.length <= cached.extensionCount
+        )
+        || data.lineage.entries
+          .slice(cached.lineageCount)
+          .some((entry) => entry.type === 'compaction')
       ) {
         await this.mergeAndWriteInternal(id, data);
         return;
       }
 
-      if (data.tag !== undefined && data.tag !== cached.tag) {
-        await this.mergeAndWriteInternal(id, data);
-        return;
-      }
-
-      if (data.extensionState !== undefined) {
-        await this.mergeAndWriteInternal(id, data);
-        return;
-      }
-
-      if (data.actorSnapshot !== undefined) {
-        await this.mergeAndWriteInternal(id, data);
-        return;
-      }
-
+      // The watermark is process-local. Another Runtime may have appended
+      // while this instance was idle, even though both writers share the
+      // cross-process file lock. Re-read under that lock and use the merge path
+      // unless the durable counts still match our observed baseline.
+      const latest = await this.readSession(id);
       if (
-        data.extensionRecords !== undefined
-        && data.extensionRecords.length <= cached.extensionCount
+        !latest
+        || !data.lineage
+        || (latest.data.lineage?.entries.length ?? 0) !== cached.lineageCount
+        || (latest.data.artifactLedger?.length ?? 0) !== cached.artifactCount
+        || (latest.data.extensionRecords?.length ?? 0) !== cached.extensionCount
+        || latest.data.lineage?.activeEntryId !== cached.activeEntryId
+        || !latest.data.lineage?.entries.every(
+          (entry, index) => data.lineage?.entries[index]?.id === entry.id,
+        )
+        || !(latest.data.artifactLedger ?? []).every(
+          (entry, index) => data.artifactLedger?.[index]?.id === entry.id,
+        )
+        || !(latest.data.extensionRecords ?? []).every(
+          (record, index) => data.extensionRecords?.[index]?.id === record.id,
+        )
       ) {
-        await this.mergeAndWriteInternal(id, data);
-        return;
-      }
-
-      // A compaction is a durable transaction, not an ordinary append. The
-      // cold path flushes exact old-island entries before slimming the main
-      // file, so the host may safely evict its in-memory copy after await.
-      if (data.lineage!.entries
-        .slice(cached.lineageCount)
-        .some((entry) => entry.type === 'compaction')) {
-        await this.mergeAndWriteInternal(id, data);
+        await this.mergeAndWriteInternal(
+          id,
+          latest ? mergeConcurrentAppendData(data, latest.data) : data,
+        );
         return;
       }
 
@@ -1319,7 +1386,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
       parts.push(JSON.stringify(metaUpdate));
 
       if (parts.length > 0) {
-        await fs.appendFile(filePath, '\n' + parts.join('\n'), 'utf-8');
+        // The exact path is resolved under the same cross-process lock as the
+        // append. An archive/unarchive cannot move the file between path
+        // selection and write, so this never recreates an active duplicate.
+        await fs.appendFile(latest.filePath, '\n' + parts.join('\n'), 'utf-8');
       }
 
       // Update watermark inside the queue
@@ -1351,7 +1421,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
       const { slimmedLineage, archivedEntries, archiveBatchId } = archiveOldIslands(resolved.data.lineage);
       if (archivedEntries.length === 0) {
         // Nothing to archive, but still rewrite to merge meta_updates
-        await this.writeSessionInternal(id, resolved.data, resolved.createdAt);
+        await this.writeSessionInternal(
+          id,
+          resolved.data,
+          resolved.createdAt,
+          resolved.filePath,
+        );
         this.syncAppendState(id, resolved.data, 0);
         return;
       }
@@ -1359,11 +1434,22 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // Write island sidecar (streaming append — no join) into the same project
       // dir. FEATURE_219 — `.islands.jsonl` (renamed from the old `.archive.jsonl`,
       // whose "archive" word now means whole-session archival; ADR-038 §4).
-      await this.appendIslandArchive(id, resolved.data, archivedEntries, archiveBatchId);
+      await this.appendIslandArchive(
+        id,
+        resolved.data,
+        archivedEntries,
+        archiveBatchId,
+        resolved.filePath,
+      );
 
       // Full streamed rewrite of main session with slimmed lineage
       const cleanedData: SessionData = { ...resolved.data, lineage: slimmedLineage };
-      await this.writeSessionInternal(id, cleanedData, resolved.createdAt);
+      await this.writeSessionInternal(
+        id,
+        cleanedData,
+        resolved.createdAt,
+        resolved.filePath,
+      );
       // Preserve the live caller's unslimmed count. Reset only maintenance
       // cadence so the next append does not repeat already persisted entries.
       this.syncAppendState(id, resolved.data, 0);
@@ -1409,17 +1495,26 @@ export class FileSessionStorage implements KodaXSessionStorage {
       if (!resolved) throw new Error(`Session not found: ${id}`);
       const actualRevision = resolved.data.actorSnapshot?.revision ?? 0;
       if (actualRevision !== expectedRevision) {
-        throw new Error(
-          `Actor snapshot revision conflict for ${id}: expected ${expectedRevision}, actual ${actualRevision}.`,
-        );
+        throw new AgentActorStoreConflictError(expectedRevision, actualRevision, id);
       }
       const updated: SessionData = {
         ...resolved.data,
         actorSnapshot: structuredClone(snapshot),
       };
-      await this.writeSessionInternal(id, updated, resolved.createdAt);
+      await this.writeSessionInternal(
+        id,
+        updated,
+        resolved.createdAt,
+        resolved.filePath,
+      );
       this.syncAppendState(id, updated);
     });
+  }
+
+  /** Read Session data without recovery writes or append-watermark mutation. */
+  async peek(id: string): Promise<SessionData | null> {
+    const resolved = await this.readSession(id);
+    return resolved ? structuredClone(resolved.data) : null;
   }
 
   async load(id: string): Promise<SessionData | null> {
@@ -1432,7 +1527,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // don't need to fallback to full rewrite.
     this.syncAppendState(id, resolved.data);
 
-    const { data, createdAt } = resolved;
+    const { data } = resolved;
     // Label only — used by the no-op `warnMalformedSessionData(filePath, 0)`
     // call below (count 0 returns early). The actual file was already located
     // by `readSession` via the id-only locator.
@@ -1481,28 +1576,72 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }
 
     if (data.errorMetadata?.consecutiveErrors && data.errorMetadata.consecutiveErrors > 0) {
-      const cleaned = cleanupIncompleteToolCalls(data.messages);
-      if (cleaned !== data.messages) {
-        writeStorageNotice(chalk.cyan('[Session Recovery] Cleaned incomplete tool calls from previous session'));
-        const recovered: SessionData = {
-          ...data,
+      let current: SessionData | null = data;
+      let recovered = false;
+      await this.serializedWrite(id, async () => {
+        const latest = await this.readSession(id);
+        if (!latest) {
+          current = null;
+          return;
+        }
+        current = latest.data;
+        const actorSnapshot = latest.data.actorSnapshot;
+        if (
+          (actorSnapshot?.schemaVersion === 2 && actorSnapshot.owner !== undefined)
+          || actorSnapshot?.turns.some(
+            (turn) => turn.state === 'accepted' || turn.state === 'running',
+          )
+        ) {
+          this.syncAppendState(id, latest.data);
+          return;
+        }
+        if (
+          !latest.data.errorMetadata?.consecutiveErrors
+          || latest.data.errorMetadata.consecutiveErrors <= 0
+        ) {
+          this.syncAppendState(id, latest.data);
+          return;
+        }
+        const cleaned = cleanupIncompleteToolCalls(latest.data.messages);
+        if (cleaned === latest.data.messages) {
+          this.syncAppendState(id, latest.data);
+          return;
+        }
+        const next: SessionData = {
+          ...latest.data,
           messages: cleaned,
           errorMetadata: {
-            ...data.errorMetadata,
+            ...latest.data.errorMetadata,
             consecutiveErrors: 0,
           },
-          lineage: createSessionLineage(cleaned, data.lineage),
+          lineage: createSessionLineage(cleaned, latest.data.lineage),
         };
-        await this.serializedWrite(id, async () => {
-          await this.writeSessionInternal(id, recovered, createdAt);
-          this.syncAppendState(id, recovered);
-        });
-        return recovered;
+        await this.writeSessionInternal(
+          id,
+          next,
+          latest.createdAt,
+          latest.filePath,
+        );
+        this.syncAppendState(id, next);
+        current = next;
+        recovered = true;
+      });
+      if (recovered) {
+        writeStorageNotice(chalk.cyan(
+          '[Session Recovery] Cleaned incomplete tool calls from previous session',
+        ));
       }
+      return current;
     }
 
     warnMalformedSessionData(filePath, 0);
     return data;
+  }
+
+  async isArchived(id: string): Promise<boolean> {
+    await this.ensureMigrated();
+    const filePath = await this.resolveSessionLocation(id);
+    return filePath !== null && path.basename(path.dirname(filePath)) === 'archived';
   }
 
   async getLineage(id: string): Promise<KodaXSessionLineage | null> {
@@ -1549,7 +1688,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
           messages: getSessionMessagesFromLineage(lineage),
           lineage,
         };
-        await this.writeSessionInternal(id, nextData, resolved.createdAt);
+        await this.writeSessionInternal(
+          id,
+          nextData,
+          resolved.createdAt,
+          resolved.filePath,
+        );
         this.syncAppendState(id, nextData);
         result = nextData;
       }),
@@ -1577,7 +1721,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
           messages: getSessionMessagesFromLineage(lineage),
           lineage,
         };
-        await this.writeSessionInternal(id, nextData, resolved.createdAt);
+        await this.writeSessionInternal(
+          id,
+          nextData,
+          resolved.createdAt,
+          resolved.filePath,
+        );
         this.syncAppendState(id, nextData);
         result = nextData;
       }),
@@ -1598,7 +1747,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
         ...resolved.data,
         lineage,
       };
-      await this.writeSessionInternal(id, nextData, resolved.createdAt);
+      await this.writeSessionInternal(
+        id,
+        nextData,
+        resolved.createdAt,
+        resolved.filePath,
+      );
       this.syncAppendState(id, nextData);
       result = nextData;
     });
@@ -1923,16 +2077,26 @@ export class FileSessionStorage implements KodaXSessionStorage {
    * (never orphans the sidecar). No-op + returns false for a missing session.
    */
   async archive(id: string): Promise<boolean> {
+    return this.archiveWithActorOwner(id);
+  }
+
+  async archiveOwned(id: string, ownerId: string): Promise<boolean> {
+    return this.archiveWithActorOwner(id, ownerId);
+  }
+
+  private async archiveWithActorOwner(
+    id: string,
+    expectedOwnerId?: string,
+  ): Promise<boolean> {
     await this.ensureMigrated();
     // Serialized through the per-session write queue so a concurrent
     // appendSessionDelta / save can't write to a path we're moving.
     let result = false;
     await this.serializedWrite(id, async () => {
-      const located = await this.resolveSessionLocation(id);
-      if (!located) {
-        return;
-      }
-      const dir = path.dirname(located);
+      const resolved = await this.readSession(id);
+      if (!resolved) return;
+      this.assertActorFileOwner(resolved.data.actorSnapshot, expectedOwnerId);
+      const dir = path.dirname(resolved.filePath);
       if (path.basename(dir) === 'archived') {
         result = true; // already archived
         return;
@@ -1946,14 +2110,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   /** Restore an archived session back into its project directory. */
   async unarchive(id: string): Promise<boolean> {
+    return this.unarchiveWithActorOwner(id);
+  }
+
+  async unarchiveOwned(id: string, ownerId: string): Promise<boolean> {
+    return this.unarchiveWithActorOwner(id, ownerId);
+  }
+
+  private async unarchiveWithActorOwner(
+    id: string,
+    expectedOwnerId?: string,
+  ): Promise<boolean> {
     await this.ensureMigrated();
     let result = false;
     await this.serializedWrite(id, async () => {
-      const located = await this.resolveSessionLocation(id);
-      if (!located) {
-        return;
-      }
-      const dir = path.dirname(located);
+      const resolved = await this.readSession(id);
+      if (!resolved) return;
+      this.assertActorFileOwner(resolved.data.actorSnapshot, expectedOwnerId);
+      const dir = path.dirname(resolved.filePath);
       if (path.basename(dir) !== 'archived') {
         result = true; // not archived
         return;
@@ -1972,41 +2146,159 @@ export class FileSessionStorage implements KodaXSessionStorage {
    */
   private async movePair(id: string, fromDir: string, toDir: string): Promise<void> {
     await fs.mkdir(toDir, { recursive: true });
-    for (const name of [`${id}.jsonl`, `${id}.islands.jsonl`]) {
-      const src = path.join(fromDir, name);
-      if (!fsSync.existsSync(src)) {
-        continue;
-      }
-      try {
+    const moved: string[] = [];
+    try {
+      for (const name of [`${id}.jsonl`, `${id}.islands.jsonl`]) {
+        const src = path.join(fromDir, name);
+        if (!fsSync.existsSync(src)) continue;
         await fs.rename(src, path.join(toDir, name));
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw err;
+        moved.push(name);
+      }
+    } catch (error: unknown) {
+      const rollbackErrors: unknown[] = [];
+      for (const name of moved.reverse()) {
+        try {
+          await fs.rename(path.join(toDir, name), path.join(fromDir, name));
+        } catch (rollbackError: unknown) {
+          rollbackErrors.push(rollbackError);
         }
       }
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `Session ${id} move failed and rollback was incomplete.`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Remove a complete Session file set without exposing a partial failure.
+   * Every canonical path is first renamed to an ignored tombstone. A staging
+   * failure rolls all prior renames back; only after the full set is hidden do
+   * we unlink tombstones. A locked tombstone is recoverable and no longer
+   * represents a live Session, so cleanup failure is diagnostic rather than a
+   * failed logical deletion.
+   */
+  private async removeFileSetAtomically(
+    id: string,
+    targets: readonly string[],
+  ): Promise<number> {
+    const staged: Array<{ readonly source: string; readonly tombstone: string }> = [];
+    try {
+      for (const source of [...new Set(targets)]) {
+        const tombstone = `${source}.${process.pid}.${Date.now()}.${sessionTempSequence++}.deleting.tmp`;
+        try {
+          await fs.rename(source, tombstone);
+          staged.push({ source, tombstone });
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+    } catch (error: unknown) {
+      const rollbackErrors: unknown[] = [];
+      for (const entry of staged.reverse()) {
+        try {
+          await fs.rename(entry.tombstone, entry.source);
+        } catch (rollbackError: unknown) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...rollbackErrors],
+          `Session ${id} deletion failed and rollback was incomplete.`,
+        );
+      }
+      throw error;
+    }
+
+    for (const entry of staged) {
+      try {
+        await fs.unlink(entry.tombstone);
+      } catch (error: unknown) {
+        reportStorageDiagnostic(
+          'warn',
+          `Session ${id} was deleted, but a recoverable tombstone could not be removed.`,
+          error,
+        );
+      }
+    }
+    return staged.length;
+  }
+
+  private assertActorFileOwner(
+    snapshot: AgentActorSnapshot | undefined,
+    expectedOwnerId?: string,
+  ): void {
+    if (expectedOwnerId !== undefined) {
+      if (
+        snapshot?.schemaVersion !== 2
+        || snapshot.owner?.ownerId !== expectedOwnerId
+      ) {
+        throw new AgentOwnerConflictError(
+          snapshot?.schemaVersion === 2 ? snapshot.owner?.runtimeId : undefined,
+          snapshot?.revision ?? 0,
+          false,
+        );
+      }
+      return;
+    }
+    if (snapshot?.schemaVersion === 2 && snapshot.owner) {
+      throw new AgentOwnerConflictError(
+        snapshot.owner.runtimeId,
+        snapshot.revision,
+        false,
+      );
+    }
+    if (snapshot?.turns.some(
+      (turn) => turn.state === 'accepted' || turn.state === 'running',
+    )) {
+      throw new AgentOwnerUnknownError(snapshot.revision);
     }
   }
 
   async delete(id: string): Promise<void> {
+    return this.deleteWithActorOwner(id);
+  }
+
+  /** Strict deletion path for the Runtime that already owns the Actor tree. */
+  async deleteOwned(id: string, ownerId: string): Promise<void> {
+    if (ownerId.trim().length === 0) {
+      throw new Error('Actor owner ID is required for owned Session deletion.');
+    }
+    return this.deleteWithActorOwner(id, ownerId);
+  }
+
+  private async deleteWithActorOwner(
+    id: string,
+    expectedOwnerId?: string,
+  ): Promise<void> {
     await this.ensureMigrated();
     // Locate the session anywhere (project dir / archived / legacy flat), then
     // remove it together with its island sidecar (paired — never orphan a
     // sidecar, ADR-038 §4). Also sweep a legacy flat copy if one lingers.
-    const located = await this.resolveSessionLocation(id);
-    const targets = new Set<string>();
-    if (located) {
-      targets.add(located);
-      targets.add(located.replace(/\.jsonl$/, '.archive.jsonl'));
-      targets.add(located.replace(/\.jsonl$/, '.islands.jsonl'));
-    }
-    targets.add(this.legacyFlatPath(id));
-    targets.add(this.legacyFlatArchivePath(id));
-    for (const target of targets) {
-      if (fsSync.existsSync(target)) {
-        await fs.unlink(target).catch(() => undefined);
-      }
-    }
-    this.sessionDirCache.delete(id);
+    await this.serializedWrite(id, async () => {
+      const resolved = await this.readSession(id);
+      if (!resolved) return;
+      this.assertActorFileOwner(resolved.data.actorSnapshot, expectedOwnerId);
+
+      const located = resolved.filePath;
+      const targets: string[] = [];
+      const addTarget = (target: string): void => {
+        if (!targets.includes(target)) targets.push(target);
+      };
+      addTarget(located.replace(/\.jsonl$/, '.archive.jsonl'));
+      addTarget(located.replace(/\.jsonl$/, '.islands.jsonl'));
+      addTarget(this.legacyFlatArchivePath(id));
+      addTarget(this.legacyFlatPath(id));
+      const earlierIndex = targets.indexOf(located);
+      if (earlierIndex >= 0) targets.splice(earlierIndex, 1);
+      targets.push(located);
+      await this.removeFileSetAtomically(id, targets);
+      this.sessionDirCache.delete(id);
+    });
   }
 
   async deleteAll(gitRoot?: string): Promise<void> {
@@ -2031,15 +2323,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   /**
-   * Auto-retention: delete session files (`.jsonl` + `.archive.jsonl`) whose
+   * Auto-retention: delete a complete Session file set when its main file
    * mtime is older than `retentionDays`. Modeled on claudecode's
    * `cleanup.ts` (`unlinkIfOld`). Bounds the sessions directory so it never
    * accumulates unboundedly — which is what keeps `list()`'s head-read pass
    * fast (its cost scales with file COUNT, not size). A non-positive /
    * non-finite `retentionDays` disables cleanup (no-op). Best-effort: per-file
-   * errors are swallowed so a single locked/racing file never aborts the
-   * sweep. Returns the number of files removed. mtime-based, so the session
-   * currently being written/resumed (fresh mtime) is never eligible.
+   * errors are isolated so a single locked/racing file never aborts the
+   * sweep. Durable Actor owners and non-terminal turns are never eligible.
+   * Returns the number of files removed.
    */
   async cleanupOldSessions(retentionDays: number): Promise<number> {
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
@@ -2048,16 +2340,43 @@ export class FileSessionStorage implements KodaXSessionStorage {
     await this.ensureMigrated();
     let removed = 0;
     const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-    const unlinkIfOld = async (filePath: string): Promise<void> => {
-      if (!filePath.endsWith('.jsonl')) {
+    const unlinkSessionIfOld = async (filePath: string): Promise<void> => {
+      const fileName = path.basename(filePath);
+      if (
+        !fileName.endsWith('.jsonl')
+        || fileName.endsWith('.archive.jsonl')
+        || fileName.endsWith('.islands.jsonl')
+      ) {
         return;
       }
+      const id = fileName.slice(0, -'.jsonl'.length);
       try {
-        const stat = await fs.stat(filePath);
-        if (stat.mtimeMs < cutoffMs) {
-          await fs.unlink(filePath);
-          removed++;
-        }
+        await this.serializedWrite(id, async () => {
+          const stat = await fs.stat(filePath);
+          if (stat.mtimeMs >= cutoffMs) return;
+          const persisted = await readPersistedSessionFile(filePath);
+          const actorSnapshot = persisted?.meta?.actorSnapshot;
+          if (
+            !persisted?.meta
+            || (
+              actorSnapshot !== undefined
+              && (
+                (actorSnapshot.schemaVersion === 2 && actorSnapshot.owner !== undefined)
+                || actorSnapshot.turns.some(
+                  (turn) => turn.state === 'accepted' || turn.state === 'running',
+                )
+              )
+            )
+          ) {
+            return;
+          }
+          removed += await this.removeFileSetAtomically(id, [
+            filePath.replace(/\.jsonl$/, '.archive.jsonl'),
+            filePath.replace(/\.jsonl$/, '.islands.jsonl'),
+            filePath,
+          ]);
+          this.sessionDirCache.delete(id);
+        });
       } catch {
         // ignore — locked/racing file
       }
@@ -2071,7 +2390,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       for (const entry of top) {
         const entryPath = path.join(this.sessionsDir, entry.name);
         if (entry.isFile()) {
-          await unlinkIfOld(entryPath);
+          await unlinkSessionIfOld(entryPath);
           continue;
         }
         if (!entry.isDirectory() || entry.name.startsWith('.')) {
@@ -2086,7 +2405,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         for (const child of inner) {
           const childPath = path.join(entryPath, child.name);
           if (child.isFile()) {
-            await unlinkIfOld(childPath);
+            await unlinkSessionIfOld(childPath);
           } else if (child.isDirectory() && child.name === 'archived') {
             let archived: string[] = [];
             try {
@@ -2095,7 +2414,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
               continue;
             }
             for (const f of archived) {
-              await unlinkIfOld(path.join(childPath, f));
+              await unlinkSessionIfOld(path.join(childPath, f));
             }
           }
         }

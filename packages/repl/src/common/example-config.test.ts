@@ -5,6 +5,7 @@ import {
   ensureExampleConfigFile,
   getConfigTemplate,
   KODAX_CONFIG_FILE,
+  KODAX_CONFIG_ENV_BINDINGS,
   KODAX_DIR,
   KODAX_EXAMPLE_CONFIG_FILE,
   KODAX_INTEGRATION_EXAMPLE_FILES,
@@ -72,11 +73,42 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
   });
 
   it('returns the exact embedded canonical templates', () => {
-    expect(getConfigTemplate('core')).toContain('KodaX core configuration template');
+    const core = getConfigTemplate('core');
+    expect(core.split(/\r?\n/u)[0]).toMatch(/mcp\.json.*extensions\.json.*a2a\.json/i);
+    expect(core).toContain('KodaX core configuration template');
+    expect(core).toContain('kodax integrations migrate`');
+    expect(core).not.toContain('migrate --dry-run');
+    expect(core).toContain('"deepseek-v4-flash"');
+    expect(core).toContain('"deepseek-v4-pro"');
+    expect(core).not.toContain('"deepseek-reasoner"');
     expect(getConfigTemplate('mcp')).toContain('"version": 1');
     const a2a = getConfigTemplate('a2a');
     expect(a2a).toContain('"agents": {');
     expect(a2a.match(/^\s*"agents": \{/gmu)).toHaveLength(1);
     expect(getConfigTemplate('extensions')).toContain('"paths": []');
+  });
+
+  it('documents every config-to-environment binding plus non-bridged core settings', () => {
+    const core = getConfigTemplate('core');
+    for (const binding of KODAX_CONFIG_ENV_BINDINGS) {
+      const field = binding.configPath.split('.').at(-1);
+      expect(field, binding.configPath).toBeDefined();
+      expect(core, binding.configPath).toContain(`"${field}"`);
+    }
+    for (const field of [
+      'model',
+      'planModeEffort',
+      'reasoningCeiling',
+      'agentMode',
+      'permissionMode',
+      'alwaysAllowTools',
+      'autoMode',
+      'locale',
+      'providerModels',
+      'customProviders',
+      'compaction',
+    ]) {
+      expect(core, field).toContain(`"${field}"`);
+    }
   });
 });

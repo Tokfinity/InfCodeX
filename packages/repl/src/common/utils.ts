@@ -24,6 +24,7 @@ import {
   readMcpIntegration,
   writeIntegrationDocument,
 } from './integration-config.js';
+import { withCoreConfigWriteLock } from './core-config-lock.js';
 import {
   buildProviderCapabilitySnapshot,
   evaluateProviderPolicy,
@@ -261,6 +262,22 @@ function normalizeConfiguredExtensions(value: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : [];
 }
 
+interface PersistedCoreConfig {
+  readonly raw: string;
+  readonly value: Record<string, unknown>;
+}
+
+function readPersistedCoreConfig(): PersistedCoreConfig | undefined {
+  const raw = fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf8');
+  const value = JSON.parse(raw) as unknown;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return { raw, value: value as Record<string, unknown> };
+}
+
+function writePersistedCoreConfig(config: Readonly<Record<string, unknown>>): void {
+  fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(
   config: T,
 ): T {
@@ -274,10 +291,17 @@ function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string
   } as T;
 
   try {
-    fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
-    fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(migrated, null, 2));
+    withCoreConfigWriteLock(KODAX_CONFIG_FILE, () => {
+      const persisted = readPersistedCoreConfig();
+      if (persisted?.value.permissionMode !== 'default') return;
+      writePersistedCoreConfig({
+        ...persisted.value,
+        permissionMode: 'accept-edits',
+      });
+    });
   } catch {
-    // Keep runtime behavior correct even if the migration cannot be persisted.
+    // Best-effort self-heal. The in-memory canonicalization still applies,
+    // while a competing KodaX writer remains authoritative on disk.
   }
 
   return migrated;
@@ -298,16 +322,18 @@ function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }
     return config;
   }
   try {
-    const raw = fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8');
-    const next = raw.replace(
-      /("permissionMode"\s*:\s*)"auto-in-project"/,
-      '$1"auto"',
-    );
-    if (next !== raw) {
-      fsSync.writeFileSync(KODAX_CONFIG_FILE, next);
-    }
+    withCoreConfigWriteLock(KODAX_CONFIG_FILE, () => {
+      const persisted = readPersistedCoreConfig();
+      if (persisted?.value.permissionMode !== 'auto-in-project') return;
+      const next = persisted.raw.replace(
+        /("permissionMode"\s*:\s*)"auto-in-project"/,
+        '$1"auto"',
+      );
+      if (next !== persisted.raw) fsSync.writeFileSync(KODAX_CONFIG_FILE, next);
+    });
   } catch {
-    // Best-effort self-heal; the in-memory canonicalization below still applies.
+    // Best-effort self-heal. The in-memory canonicalization below still applies,
+    // while a competing KodaX writer remains authoritative on disk.
   }
   return { ...config, permissionMode: 'auto' } as T;
 }
@@ -911,12 +937,26 @@ function migrateLegacyAgentModeConfig<
     agentMode: 'ama' as const,
     schemaVersion: Math.max(parsed.schemaVersion ?? 0, AGENT_MODE_CONFIG_SCHEMA_VERSION),
   };
-  const temporary = `${KODAX_CONFIG_FILE}.migrate-${process.pid}.tmp`;
   try {
-    fsSync.writeFileSync(temporary, JSON.stringify(migrated, null, 2), { mode: 0o600 });
-    fsSync.renameSync(temporary, KODAX_CONFIG_FILE);
+    withCoreConfigWriteLock(KODAX_CONFIG_FILE, () => {
+      const persisted = readPersistedCoreConfig();
+      if (!persisted) return;
+      const persistedMode = persisted.value.agentMode;
+      if (persistedMode !== 'amaw' && persistedMode !== 'ama-workflow') return;
+      writePersistedCoreConfig({
+        ...persisted.value,
+        agentMode: 'ama',
+        schemaVersion: Math.max(
+          typeof persisted.value.schemaVersion === 'number'
+            ? persisted.value.schemaVersion
+            : 0,
+          AGENT_MODE_CONFIG_SCHEMA_VERSION,
+        ),
+      });
+    });
   } catch {
-    fsSync.rmSync(temporary, { force: true });
+    // Best-effort self-heal. A competing KodaX writer remains authoritative
+    // on disk, while the current process uses the canonical in-memory value.
   }
   if (!agentModeMigrationNoticeEmitted) {
     process.emitWarning(
@@ -1327,28 +1367,26 @@ export function saveConfig(config: {
     maxConcurrency?: number;
   };
 }): void {
-  let current: Record<string, unknown> = {};
-  if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
-    try {
-      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf8')) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        current = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Preserve the existing public behavior: a malformed core config does
-      // not block replacing it with a valid explicitly supplied snapshot.
-    }
-  }
   const { extensions, mcpServers, ...coreConfig } = config;
-  const merged: Record<string, unknown> = { ...current, ...coreConfig };
-  // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
-  for (const key of Object.keys(coreConfig) as Array<keyof typeof coreConfig>) {
-    if (coreConfig[key] === undefined) {
-      delete merged[key];
+  withCoreConfigWriteLock(KODAX_CONFIG_FILE, () => {
+    let current: Record<string, unknown> = {};
+    if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
+      try {
+        const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf8')) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Preserve the existing public behavior: a malformed core config does
+        // not block replacing it with a valid explicitly supplied snapshot.
+      }
     }
-  }
-  fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
-  fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+    const merged: Record<string, unknown> = { ...current, ...coreConfig };
+    for (const key of Object.keys(coreConfig) as Array<keyof typeof coreConfig>) {
+      if (coreConfig[key] === undefined) delete merged[key];
+    }
+    fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
+  });
 
   if (extensions !== undefined) {
     const currentExtensions = readExtensionsIntegration(KODAX_DIR);

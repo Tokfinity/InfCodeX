@@ -28,6 +28,57 @@ class DeferredExecutor implements AgentTurnExecutor {
   }
 }
 
+const FIRST_OWNER = {
+  ownerId: 'actor-owner-first',
+  runtimeId: 'runtime-first',
+  pid: 101,
+  startedAt: '2026-07-28T00:00:00.000Z',
+} as const;
+
+const SECOND_OWNER = {
+  ownerId: 'actor-owner-second',
+  runtimeId: 'runtime-second',
+  pid: 202,
+  startedAt: '2026-07-28T00:01:00.000Z',
+} as const;
+
+function revisionedActorStore(): {
+  readonly store: AgentActorStore;
+  read(): AgentActorSnapshot | undefined;
+  replace(snapshot: AgentActorSnapshot): void;
+  saveCount(): number;
+} {
+  let snapshot: AgentActorSnapshot | undefined;
+  let saves = 0;
+  return {
+    store: {
+      async load() {
+        return snapshot === undefined ? undefined : structuredClone(snapshot);
+      },
+      async save(next, expectedRevision) {
+        const currentRevision = snapshot?.revision ?? 0;
+        if (currentRevision !== expectedRevision) {
+          throw Object.assign(
+            new Error(
+              `Actor snapshot revision conflict: expected ${expectedRevision}, actual ${currentRevision}.`,
+            ),
+            {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision,
+            },
+          );
+        }
+        snapshot = structuredClone(next);
+        saves += 1;
+      },
+    },
+    read: () => snapshot === undefined ? undefined : structuredClone(snapshot),
+    replace: (next) => { snapshot = structuredClone(next); },
+    saveCount: () => saves,
+  };
+}
+
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
@@ -938,6 +989,463 @@ describe('F270 actor tree and scheduler', () => {
     expect(restartedExecutor.pending).toHaveLength(1);
   });
 
+  it('does not recover an Actor tree while its durable Runtime owner is still alive', async () => {
+    const state = revisionedActorStore();
+    const firstExecutor = new DeferredExecutor();
+    const first = new AgentActorController({
+      executor: firstExecutor,
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await first.initialize();
+    const turn = await first.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Remain owned by the first Runtime.',
+    });
+
+    const contender = new AgentActorController({
+      store: state.store,
+      owner: SECOND_OWNER,
+      isOwnerAlive: async () => true,
+    });
+
+    await expect(contender.initialize()).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+      ownerRuntimeId: FIRST_OWNER.runtimeId,
+    });
+    expect(firstExecutor.pending[0]?.input.signal.aborted).toBe(false);
+    expect(state.read()?.turns.find((candidate) => candidate.turnId === turn.turnId)).toMatchObject({
+      state: 'running',
+    });
+  });
+
+  it('fails closed when an owner-aware Runtime finds active turns in a legacy snapshot', async () => {
+    const state = revisionedActorStore();
+    const legacyExecutor = new DeferredExecutor();
+    const legacy = new AgentActorController({
+      executor: legacyExecutor,
+      store: state.store,
+    });
+    await legacy.initialize();
+    const turn = await legacy.spawn('/root', {
+      taskName: 'legacy-worker',
+      objective: 'May still be executing in a pre-owner Runtime.',
+    });
+    const savesBeforeUpgrade = state.saveCount();
+    const upgraded = new AgentActorController({
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => false,
+    });
+
+    await expect(upgraded.initialize()).rejects.toMatchObject({
+      code: 'actor_owner_unknown',
+      currentRevision: state.read()?.revision,
+    });
+    expect(state.saveCount()).toBe(savesBeforeUpgrade);
+    expect(legacyExecutor.pending[0]?.input.signal.aborted).toBe(false);
+    expect(state.read()?.turns.find((candidate) => candidate.turnId === turn.turnId))
+      .toMatchObject({ state: 'running' });
+  });
+
+  it('upgrades a terminal legacy snapshot to an owned schema-v2 snapshot', async () => {
+    const state = revisionedActorStore();
+    const legacyExecutor = new DeferredExecutor();
+    const legacy = new AgentActorController({
+      executor: legacyExecutor,
+      store: state.store,
+    });
+    await legacy.initialize();
+    await legacy.spawn('/root', {
+      taskName: 'legacy-worker',
+      objective: 'Finish before upgrade.',
+    });
+    legacyExecutor.pending[0]?.resolve({ output: 'done' });
+    await settle();
+
+    const upgraded = new AgentActorController({
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => false,
+    });
+    await upgraded.initialize();
+
+    expect(state.read()).toMatchObject({
+      schemaVersion: 2,
+      owner: FIRST_OWNER,
+    });
+  });
+
+  it('requires an owner-aware controller for a released schema-v2 Actor tree', async () => {
+    const state = revisionedActorStore();
+    const owner = new AgentActorController({
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await owner.initialize();
+    await owner.shutdown();
+
+    const ownerless = new AgentActorController({ store: state.store });
+
+    await expect(ownerless.initialize()).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+      ownerRuntimeId: undefined,
+    });
+  });
+
+  it('ignores an executor settlement that arrives after owner release', async () => {
+    const state = revisionedActorStore();
+    const executor = new DeferredExecutor();
+    const onBackgroundError = vi.fn();
+    const owner = new AgentActorController({
+      store: state.store,
+      executor,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError,
+    });
+    await owner.initialize();
+    await owner.spawn('/root', { taskName: 'worker', objective: 'Stop on shutdown.' });
+    await owner.shutdown();
+
+    executor.pending[0]?.reject(new Error('late abort settlement'));
+    await settle();
+    await settle();
+
+    expect(onBackgroundError).not.toHaveBeenCalled();
+  });
+
+  it('disposes local executors after the backing Session has been deleted without writing again', async () => {
+    const state = revisionedActorStore();
+    const executor = new DeferredExecutor();
+    const onBackgroundError = vi.fn();
+    const owner = new AgentActorController({
+      store: state.store,
+      executor,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError,
+    });
+    await owner.initialize();
+    const turn = await owner.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Stop when the Session file is removed.',
+    });
+    const cursor = owner.eventSnapshot('/root').at(-1)?.sequence ?? 0;
+    const waiting = owner.wait('/root', cursor, 30_000);
+    const savesBeforeDispose = state.saveCount();
+
+    owner.disposeAfterStoreRemoval('session deleted');
+
+    expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+    await expect(waiting).resolves.toBeUndefined();
+    executor.pending[0]?.reject(new Error('late deleted-session settlement'));
+    await settle();
+    await settle();
+
+    expect(state.saveCount()).toBe(savesBeforeDispose);
+    expect(onBackgroundError).not.toHaveBeenCalled();
+    await expect(owner.followup('/root', turn.actorPath, 'Must stay disposed.'))
+      .rejects.toMatchObject({ code: 'actor_owner_conflict' });
+  });
+
+  it('makes concurrent owner shutdown calls idempotent', async () => {
+    const state = revisionedActorStore();
+    const owner = new AgentActorController({
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await owner.initialize();
+
+    await expect(Promise.all([
+      owner.shutdown('first close'),
+      owner.shutdown('second close'),
+    ])).resolves.toEqual([undefined, undefined]);
+    expect(state.read()).toMatchObject({ schemaVersion: 2 });
+    expect(state.read()?.schemaVersion === 2 ? state.read()?.owner : undefined)
+      .toBeUndefined();
+  });
+
+  it('takes over a dead durable owner before recovering unmatched local turns', async () => {
+    const state = revisionedActorStore();
+    const first = new AgentActorController({
+      executor: new DeferredExecutor(),
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await first.initialize();
+    const turn = await first.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Become unmatched after the owner crashes.',
+    });
+
+    const recovered = new AgentActorController({
+      store: state.store,
+      owner: SECOND_OWNER,
+      isOwnerAlive: async () => false,
+    });
+    await recovered.initialize();
+
+    expect(state.read()).toMatchObject({
+      schemaVersion: 2,
+      owner: SECOND_OWNER,
+    });
+    expect(recovered.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'runtime_recovered_without_executor',
+    });
+  });
+
+  it('releases a newly claimed owner when unmatched-turn recovery fails', async () => {
+    const state = revisionedActorStore();
+    const first = new AgentActorController({
+      executor: new DeferredExecutor(),
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await first.initialize();
+    const turn = await first.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Remain recoverable after a transient store failure.',
+    });
+    let failRecoverySave = true;
+    const transientStore: AgentActorStore = {
+      load: state.store.load,
+      async save(snapshot, expectedRevision) {
+        if (
+          failRecoverySave
+          && snapshot.schemaVersion === 2
+          && snapshot.owner?.ownerId === SECOND_OWNER.ownerId
+          && snapshot.turns.every((candidate) => (
+            candidate.state === 'completed'
+            || candidate.state === 'failed'
+            || candidate.state === 'interrupted'
+          ))
+        ) {
+          failRecoverySave = false;
+          throw new Error('transient recovery write failure');
+        }
+        await state.store.save(snapshot, expectedRevision);
+      },
+    };
+    const failedRecovery = new AgentActorController({
+      store: transientStore,
+      owner: SECOND_OWNER,
+      isOwnerAlive: async () => false,
+    });
+
+    await expect(failedRecovery.initialize()).rejects.toThrow(
+      'transient recovery write failure',
+    );
+    expect(state.read()).toMatchObject({ schemaVersion: 2 });
+    expect(state.read()?.schemaVersion === 2 ? state.read()?.owner : undefined)
+      .toBeUndefined();
+
+    await expect(failedRecovery.initialize()).resolves.toBeUndefined();
+    expect(failedRecovery.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'runtime_recovered_without_executor',
+    });
+  });
+
+  it('can clean up its owner after recovery and the first release write both fail', async () => {
+    const state = revisionedActorStore();
+    const first = new AgentActorController({
+      executor: new DeferredExecutor(),
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+    });
+    await first.initialize();
+    await first.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Remain active across the simulated crash.',
+    });
+
+    let claimed = false;
+    let failuresAfterClaim = 0;
+    const twiceFailingStore: AgentActorStore = {
+      load: state.store.load,
+      async save(snapshot, expectedRevision) {
+        if (
+          !claimed
+          && snapshot.schemaVersion === 2
+          && snapshot.owner?.ownerId === SECOND_OWNER.ownerId
+          && snapshot.turns.some((turn) => ![
+            'completed',
+            'failed',
+            'interrupted',
+          ].includes(turn.state))
+        ) {
+          await state.store.save(snapshot, expectedRevision);
+          claimed = true;
+          return;
+        }
+        if (claimed && failuresAfterClaim < 2) {
+          failuresAfterClaim += 1;
+          throw new Error(`transient owner cleanup failure ${failuresAfterClaim}`);
+        }
+        await state.store.save(snapshot, expectedRevision);
+      },
+    };
+    const controller = new AgentActorController({
+      store: twiceFailingStore,
+      owner: SECOND_OWNER,
+      isOwnerAlive: async () => false,
+    });
+
+    await expect(controller.initialize()).rejects.toBeInstanceOf(AggregateError);
+    expect(state.read()).toMatchObject({ schemaVersion: 2, owner: SECOND_OWNER });
+
+    await expect(controller.shutdown('initialization cleanup')).resolves.toBeUndefined();
+    expect(state.read()?.schemaVersion === 2 ? state.read()?.owner : undefined)
+      .toBeUndefined();
+  });
+
+  it('fences a stale owner, aborts its physical execution, and refreshes durable state', async () => {
+    const state = revisionedActorStore();
+    const executor = new DeferredExecutor();
+    const onMessageCommitted = vi.fn();
+    const first = new AgentActorController({
+      executor,
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onMessageCommitted,
+    });
+    await first.initialize();
+    const turn = await first.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Stop when ownership is lost.',
+    });
+    const cursor = first.eventSnapshot('/root').at(-1)?.sequence ?? 0;
+    const waiting = first.wait('/root', cursor, 1_000);
+    const beforeTakeover = state.read();
+    if (!beforeTakeover) throw new Error('Expected a durable Actor snapshot.');
+    const completedAt = '2026-07-28T00:02:00.000Z';
+    const rootMailbox = beforeTakeover.mailboxes['/root'] ?? [];
+    const completion = {
+      messageId: `msg_${rootMailbox.length + 1}_recovered`,
+      sequence: (rootMailbox.at(-1)?.sequence ?? 0) + 1,
+      senderPath: turn.actorPath,
+      recipientPath: '/root',
+      turnId: turn.turnId,
+      kind: 'completion',
+      classification: 'internal',
+      lineage: [turn.actorPath],
+      content: 'runtime_recovered_without_executor',
+      createdAt: completedAt,
+    } as const;
+    const supersedingSnapshot = {
+      ...beforeTakeover,
+      schemaVersion: 2,
+      revision: beforeTakeover.revision + 1,
+      owner: SECOND_OWNER,
+      actors: beforeTakeover.actors.map((actor) => (
+        actor.path === turn.actorPath
+          ? {
+              ...actor,
+              state: 'idle',
+              currentTurnId: undefined,
+              updatedAt: completedAt,
+              revision: actor.revision + 1,
+            }
+          : actor
+      )),
+      turns: beforeTakeover.turns.map((candidate) => (
+        candidate.turnId === turn.turnId
+          ? {
+              ...candidate,
+              state: 'interrupted',
+              completedAt,
+              error: 'runtime_recovered_without_executor',
+              revision: candidate.revision + 1,
+            }
+          : candidate
+      )),
+      mailboxes: {
+        ...beforeTakeover.mailboxes,
+        '/root': [...rootMailbox, completion],
+      },
+      pendingRootCompletionTurnIds: [
+        ...(beforeTakeover.pendingRootCompletionTurnIds ?? []),
+        turn.turnId,
+      ],
+      events: [
+        ...beforeTakeover.events,
+        {
+          sequence: (beforeTakeover.events.at(-1)?.sequence ?? 0) + 1,
+          kind: 'turn_interrupted',
+          actorPath: turn.actorPath,
+          turnId: turn.turnId,
+          parentPath: '/root',
+          createdAt: completedAt,
+        },
+      ],
+    } as unknown as AgentActorSnapshot;
+    state.replace(supersedingSnapshot);
+
+    await expect(first.interrupt('/root', turn.actorPath, 'stop requested')).resolves.toBeUndefined();
+
+    expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+    await expect(waiting).resolves.toMatchObject({
+      kind: 'turn_interrupted',
+      actorPath: turn.actorPath,
+      turnId: turn.turnId,
+    });
+    expect(onMessageCommitted).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'completion',
+      turnId: turn.turnId,
+    }));
+    expect(first.list('/root')).toMatchObject({
+      revision: supersedingSnapshot.revision,
+      activeNonRootTurns: 0,
+    });
+    expect(first.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'runtime_recovered_without_executor',
+    });
+    const savesAfterFence = state.saveCount();
+    await expect(first.spawn('/root', {
+      taskName: 'after-loss',
+      objective: 'Must not write from the stale owner.',
+    })).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+    });
+    expect(state.saveCount()).toBe(savesAfterFence);
+  });
+
+  it('permanently fences a legacy ownerless controller after its first store CAS conflict', async () => {
+    const state = revisionedActorStore();
+    const winner = new AgentActorController({
+      executor: new DeferredExecutor(),
+      store: state.store,
+    });
+    const stale = new AgentActorController({
+      executor: new DeferredExecutor(),
+      store: state.store,
+    });
+    await Promise.all([winner.initialize(), stale.initialize()]);
+    await winner.spawn('/root', { taskName: 'winner', objective: 'Commit first.' });
+
+    await expect(stale.spawn('/root', {
+      taskName: 'stale-first',
+      objective: 'Lose the CAS race.',
+    })).rejects.toMatchObject({ code: 'actor_owner_conflict' });
+    const savesAfterFence = state.saveCount();
+
+    await expect(stale.spawn('/root', {
+      taskName: 'stale-second',
+      objective: 'Must remain fenced after refresh.',
+    })).rejects.toMatchObject({ code: 'actor_owner_conflict' });
+    expect(state.saveCount()).toBe(savesAfterFence);
+  });
+
   it('fails an unmatched external turn with an explicit unknown-state recovery error', async () => {
     let snapshot: AgentActorSnapshot | undefined;
     const store: AgentActorStore = {
@@ -971,7 +1479,7 @@ describe('F270 actor tree and scheduler', () => {
     });
     await first.spawn('/root', { taskName: 'worker', objective: 'Persist.' });
     if (!saved) throw new Error('Expected an Actor snapshot to be persisted.');
-    const incompatible = { ...saved, schemaVersion: 2 } as unknown as AgentActorSnapshot;
+    const incompatible = { ...saved, schemaVersion: 3 } as unknown as AgentActorSnapshot;
     const save = vi.fn(async () => undefined);
     const recovered = new AgentActorController({
       store: { async load() { return incompatible; }, save },

@@ -27,6 +27,7 @@
 //   dist/sdk-mcp.d.ts
 //   dist/sdk-session.d.ts
 //   dist/sdk-runtime.d.ts
+//   dist/sdk-sandbox.d.ts
 //   dist/types-chunks/*.d.ts     ← shared chunks (mirrors esbuild splitting)
 //
 // External list mirrors build-bundle.mjs: anything in root dependencies stays
@@ -91,6 +92,7 @@ const sdkEntries = {
   'sdk-mcp': 'src/sdk-mcp.ts',
   'sdk-session': 'src/sdk-session.ts',
   'sdk-runtime': 'src/sdk-runtime.ts',
+  'sdk-sandbox': 'src/sdk-sandbox.ts',
   'sdk-a2a': 'src/sdk-a2a.ts',
   'sdk-experimental-memory': 'src/sdk-experimental-memory.ts',
 };

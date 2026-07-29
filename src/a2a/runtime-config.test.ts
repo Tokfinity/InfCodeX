@@ -105,6 +105,52 @@ afterEach(() => {
 });
 
 describe('configured A2A Runtime integration', () => {
+  it('starts with no outbound agents when the A2A file is invalid and recovers after repair', async () => {
+    const root = tempRoot();
+    const configHome = path.join(root, '.kodax');
+    const integrationDir = path.join(configHome, 'integrations');
+    fs.mkdirSync(integrationDir, { recursive: true });
+    fs.writeFileSync(path.join(integrationDir, 'a2a.json'), '{ broken', 'utf8');
+    const observedEvents: string[] = [];
+    const integration = createConfiguredA2ARuntimeIntegration({
+      configHome,
+      onEvent: (message) => observedEvents.push(message),
+    });
+    const runtime = await createKodaXRuntime({
+      mode: 'embedded',
+      homeDir: path.join(root, 'runtime-invalid-cold-start'),
+      externalAgents: integration.runtimeOptions,
+    });
+    const handle = await integration.start(runtime);
+    try {
+      expect(handle.status()).toMatchObject({
+        domain: 'a2a',
+        source: 'user',
+        diagnostic: { code: 'invalid-config' },
+      });
+      expect(await runtime.admin.agentRegistrations.list()).toEqual([]);
+      expect(observedEvents).toContainEqual(expect.stringMatching(/a2a:.*invalid/i));
+
+      writeA2A(configHome, {
+        version: 2,
+        agents: {
+          repaired: {
+            cardUrl: 'https://127.0.0.1/repaired/card',
+            enabled: false,
+            effect: 'read',
+          },
+        },
+      });
+      await handle.reload();
+      expect(handle.status()).toMatchObject({ source: 'user' });
+      expect(handle.status().diagnostic).toBeUndefined();
+      expect(await runtime.admin.agentRegistrations.list()).toEqual([]);
+    } finally {
+      handle.close();
+      await runtime.close();
+    }
+  });
+
   it('preserves bounded inline and remote artifact references without fetching remote URLs', async () => {
     const root = tempRoot();
     const configHome = path.join(root, '.kodax');

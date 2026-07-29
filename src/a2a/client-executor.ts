@@ -738,7 +738,10 @@ class A2AClientExecutor implements AgentExecutor {
     }
   }
 
-  async start(input: AgentTaskStartInput): Promise<AgentExecutorTaskReference> {
+  async start(
+    input: AgentTaskStartInput,
+    signal?: AbortSignal,
+  ): Promise<AgentExecutorTaskReference> {
     const idempotencyKey = input.idempotencyKey;
     if (!idempotencyKey) throw new Error('A2A executor requires an idempotency key.');
     const result = await this.sendMessage({
@@ -748,7 +751,7 @@ class A2AClientExecutor implements AgentExecutor {
         parts: [{ text: input.input ?? input.objective, mediaType: 'text/plain' }],
       },
       configuration: { returnImmediately: true },
-    });
+    }, signal);
     if (isRecord(result.task)) {
       const task = parseA2ATask(result.task);
       return {
@@ -1050,20 +1053,27 @@ class A2AClientExecutor implements AgentExecutor {
     return { id: reference.remoteTaskId, ...(config.tenant ? { tenant: config.tenant } : {}) };
   }
 
-  private async sendMessage(params: Readonly<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  private async sendMessage(
+    params: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     const result = await this.rpc('SendMessage', {
       ...params,
       ...(executorConfig(this.registration).tenant
         ? { tenant: executorConfig(this.registration).tenant } : {}),
-    });
+    }, signal);
     if (!isRecord(result)) throw new Error('A2A SendMessage result is invalid.');
     return result;
   }
 
-  private async rpc(method: string, params: Readonly<Record<string, unknown>>): Promise<unknown> {
+  private async rpc(
+    method: string,
+    params: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.#disposed) throw new Error('A2A executor is disposed.');
     return this.withAuthorization((authorization) => (
-      this.rpcWithAuthorization(method, params, authorization)
+      this.rpcWithAuthorization(method, params, authorization, signal)
     ));
   }
 
@@ -1148,6 +1158,7 @@ class A2AClientExecutor implements AgentExecutor {
     method: string,
     params: Readonly<Record<string, unknown>>,
     authorization: string | undefined,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     const config = executorConfig(this.registration);
     const headers = new Headers({
@@ -1161,6 +1172,7 @@ class A2AClientExecutor implements AgentExecutor {
       method: 'POST',
       headers,
       body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
+      ...(signal ? { signal } : {}),
     }, taskNetworkPolicy(this.options), this.options.fetch);
     if (result.response.status === 401) {
       throw new A2AError(-32600, 'A2A authentication was rejected.', 401);

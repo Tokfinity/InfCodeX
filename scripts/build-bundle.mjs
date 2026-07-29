@@ -17,7 +17,8 @@
 //  11. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
 //  12. dist/sdk-session.js   — SDK subpath `@kodax-ai/kodax/session`
 //  13. dist/sdk-runtime.js   — SDK subpath `@kodax-ai/kodax/runtime`
-//  14. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
+//  14. dist/sdk-sandbox.js   — SDK subpath `@kodax-ai/kodax/sandbox`
+//  15. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
 //                                across the SDK entries (avoids repeated bundle bloat).
 //  15. dist/builtin/         — verbatim copy of
 //                                packages/agent/dist/capabilities/skills/builtin/
@@ -334,7 +335,7 @@ log(`  ✓ dist/kodax_bootstrap.js (${(bootstrapBytes / 1024).toFixed(0)} kB)`);
 // — Node's ESM resolver follows chunk imports transparently, so splitting
 // does not affect the helper-depth contract verified below.
 
-const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-media', 'sdk-repl', 'sdk-skills', 'sdk-mcp', 'sdk-session', 'sdk-runtime', 'sdk-a2a', 'sdk-experimental-memory'];
+const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-media', 'sdk-repl', 'sdk-skills', 'sdk-mcp', 'sdk-session', 'sdk-runtime', 'sdk-sandbox', 'sdk-a2a', 'sdk-experimental-memory'];
 const sdkEntryPoints = sdkEntryNames.map((name) => {
   // index.ts lives directly under src/, the others as src/sdk-<name>.ts.
   const filename = name === 'index' ? 'index.ts' : `${name}.ts`;
@@ -393,6 +394,20 @@ const runtimeWindowsAudit = auditRuntimeWorkerWindowsHide({
 log(
   `  OK Runtime Worker child-process audit: ${runtimeWindowsAudit.calls.length} calls, `
   + `${runtimeWindowsAudit.exceptions.length} intentional exceptions`,
+);
+
+log('Building dist/sandbox-workspace-session.js (ASRT workspace sidecar)...');
+await build({
+  ...commonOptions,
+  entryPoints: [path.join(repoRoot, 'src/sandbox-workspace-session-entry.ts')],
+  outfile: path.join(distDir, 'sandbox-workspace-session.js'),
+});
+const sandboxSessionBytes = statSync(
+  path.join(distDir, 'sandbox-workspace-session.js'),
+).size;
+log(
+  `  OK dist/sandbox-workspace-session.js ` +
+  `(${(sandboxSessionBytes / 1024).toFixed(0)} kB)`,
 );
 
 log('Building dist/constructed-handler-worker.js (constructed tool sidecar)...');
@@ -512,6 +527,10 @@ if (!existsSync(path.join(distDir, 'runtime-worker.js'))) {
   throw new Error('[build-bundle] runtime-worker.js sidecar is missing.');
 }
 log(`  OK worker sidecar guard: dist/runtime-worker.js present`);
+if (!existsSync(path.join(distDir, 'sandbox-workspace-session.js'))) {
+  throw new Error('[build-bundle] sandbox-workspace-session.js sidecar is missing.');
+}
+log(`  OK worker sidecar guard: dist/sandbox-workspace-session.js present`);
 if (!existsSync(path.join(distDir, 'constructed-handler-worker.js'))) {
   throw new Error('[build-bundle] constructed-handler-worker.js sidecar is missing.');
 }
@@ -531,6 +550,7 @@ for (const name of sdkEntryNames) {
 log(`  Builtin skills: dist/builtin/`);
 log(`  Worker:         dist/semantic-worker.js`);
 log(`  Runtime worker: dist/runtime-worker.js`);
+log(`  ASRT session:   dist/sandbox-workspace-session.js`);
 log(`  Handler worker: dist/constructed-handler-worker.js`);
 log(`  Shared chunks:  dist/chunks/`);
 log('');

@@ -467,6 +467,9 @@ export interface RepLOptions extends KodaXOptions {
   runtimeRunner?: ReplRuntimeRunner;
   runtimeAutoModeControl?: ReplRuntimeAutoModeControl;
   getRuntimeStatus?: ReplRuntimeStatusProvider;
+  validateSetupA2AConfig?: (value: unknown) => unknown;
+  prepareSetupSandbox?: CommandCallbacks['prepareSetupSandbox'];
+  inspectSandbox?: CommandCallbacks['inspectSandbox'];
   learning?: LearningBinding;
 }
 
@@ -998,6 +1001,9 @@ Keyboard Shortcuts:
   // Command callbacks - 命令回调
   const callbacks: CommandCallbacks = {
     getRuntimeStatus: options.getRuntimeStatus,
+    validateSetupA2AConfig: options.validateSetupA2AConfig,
+    prepareSetupSandbox: options.prepareSetupSandbox,
+    inspectSandbox: options.inspectSandbox,
     learning: options.learning,
     getLearningSummary: options.learning ? () => options.learning!.getSnapshot() : undefined,
     exit: () => {

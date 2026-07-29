@@ -232,6 +232,12 @@ export function withLiveTurnAttribution(
     onToolProgress: (update, meta) => {
       baseEvents.onToolProgress?.(update, withActivityMeta(scope, meta));
     },
+    onToolSandboxObservation: (update, meta) => {
+      baseEvents.onToolSandboxObservation?.(
+        update,
+        withActivityMeta(scope, meta),
+      );
+    },
     onToolResult: (result, meta) => {
       baseEvents.onToolResult?.(result, withActivityMeta(scope, meta));
     },

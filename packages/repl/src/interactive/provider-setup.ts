@@ -34,6 +34,7 @@ export interface RunProviderSetupWizardInput {
   readonly interaction?: ProviderSetupInteraction;
   readonly input?: Readable;
   readonly output?: Writable;
+  readonly customOnly?: boolean;
 }
 
 /**
@@ -61,7 +62,7 @@ export async function runProviderSetupWizard(
     output: input.output ?? process.stdout,
   });
   try {
-    const route = await interaction.choose(
+    const route = input.customOnly ? 'custom' : await interaction.choose(
       'Choose a provider. KodaX will save metadata only and will never ask for an API key.',
       [
         ...catalog.map((entry) => ({
@@ -117,18 +118,33 @@ async function collectBuiltinChoice(
 async function collectCustomChoice(
   interaction: ProviderSetupInteraction,
 ): Promise<ProviderSetupChoice | undefined> {
-  const name = await requiredText(interaction, 'Custom provider name');
+  const name = await requiredText(
+    interaction,
+    'Custom provider name (a unique local alias used by /model and config.json)',
+  );
   if (!name) return undefined;
-  const protocol = await interaction.choose('Protocol family', [
-    { value: 'openai', label: 'OpenAI-compatible' },
-    { value: 'anthropic', label: 'Anthropic-compatible' },
-  ]);
+  const protocol = await interaction.choose(
+    'Protocol family (check the provider API documentation for OpenAI or Anthropic compatibility)',
+    [
+      { value: 'openai', label: 'OpenAI-compatible' },
+      { value: 'anthropic', label: 'Anthropic-compatible' },
+    ],
+  );
   if (protocol !== 'openai' && protocol !== 'anthropic') return undefined;
-  const baseUrl = await requiredText(interaction, 'Base URL, for example https://example.com/v1');
+  const baseUrl = await requiredText(
+    interaction,
+    'API Base URL from the provider documentation, for example https://example.com/v1',
+  );
   if (!baseUrl) return undefined;
-  const apiKeyEnv = await requiredText(interaction, 'Environment-variable name that will hold the API key');
+  const apiKeyEnv = await requiredText(
+    interaction,
+    'Environment-variable name only (for example MY_PROVIDER_API_KEY); KodaX never asks for the credential value',
+  );
   if (!apiKeyEnv) return undefined;
-  const model = await requiredText(interaction, 'Model identifier');
+  const model = await requiredText(
+    interaction,
+    'Model identifier from the provider documentation, for example provider/model-name',
+  );
   if (!model) return undefined;
   return {
     kind: 'custom',
@@ -168,9 +184,13 @@ function createTerminalProviderSetupInteraction(input: {
   readonly output: Writable;
 }): ProviderSetupInteraction {
   const rl = readline.createInterface({ input: input.input, output: input.output });
+  let readlineClosed = false;
+  rl.on('close', () => {
+    readlineClosed = true;
+  });
   rl.on('SIGINT', () => rl.close());
 
-  const question = (prompt: string): Promise<string | undefined> => new Promise((resolve) => {
+  const question = (prompt: string): Promise<string | undefined> => new Promise((resolve, reject) => {
     let settled = false;
     const finish = (value: string | undefined): void => {
       if (settled) return;
@@ -179,8 +199,21 @@ function createTerminalProviderSetupInteraction(input: {
       resolve(value);
     };
     const onClose = (): void => finish(undefined);
+    if (readlineClosed) {
+      finish(undefined);
+      return;
+    }
     rl.once('close', onClose);
-    rl.question(prompt, (answer) => finish(answer));
+    try {
+      rl.question(prompt, (answer) => finish(answer));
+    } catch (error) {
+      rl.removeListener('close', onClose);
+      if (readlineClosed) {
+        finish(undefined);
+      } else {
+        reject(error);
+      }
+    }
   });
 
   return {

@@ -242,6 +242,7 @@ export function createConfiguredA2ARuntimeIntegration(input: {
         configHome: input.configHome,
         validate: parseA2AIntegrationDocument,
         read: () => readA2AIntegration(input.configHome),
+        coldStartDefault: { version: 2, agents: {} },
       });
 
       const persistDisabledFence = async (
@@ -448,6 +449,8 @@ export function createConfiguredA2ARuntimeIntegration(input: {
 
       try {
         const initial = await controller.initialize();
+        const initialDiagnostic = controller.status().diagnostic;
+        if (initialDiagnostic) notify(`a2a: ${initialDiagnostic.message}`);
         await reconcile(initial.document);
         controller.subscribe(async (snapshot) => {
           await reconcile(snapshot.document);

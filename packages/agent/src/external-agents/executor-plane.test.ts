@@ -84,6 +84,8 @@ class FakeExecutor implements AgentExecutor {
   cancelSnapshot: AgentExecutorTaskSnapshot | undefined;
   startError: Error | undefined;
   cancelError: Error | undefined;
+  startEntered: ((input: AgentTaskStartInput) => void) | undefined;
+  startGate: ((input: AgentTaskStartInput) => Promise<void>) | undefined;
   preflightGate: (() => Promise<void>) | undefined;
   preflightMutation: ((input: AgentTaskStartInput) => void) | undefined;
   eventGate: (() => Promise<void>) | undefined;
@@ -106,6 +108,8 @@ class FakeExecutor implements AgentExecutor {
 
   async start(input: AgentTaskStartInput): Promise<AgentExecutorTaskReference> {
     this.starts.push(input);
+    this.startEntered?.(input);
+    await this.startGate?.(input);
     if (this.startError) throw this.startError;
     return this.startReference
       ?? { idempotencyKey: input.idempotencyKey!, remoteTaskId: 'remote-1' };
@@ -973,6 +977,27 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     await closing.catch(() => undefined);
     expect(closeResult).toBeInstanceOf(Error);
     expect((closeResult as Error).message).toMatch(/timed out.*20 ms/i);
+    await expect(plane.close()).resolves.toBeUndefined();
+    expect(executor.disposeCalls).toBe(1);
+  });
+
+  it('surfaces persistent executor disposal failure and allows close to retry it', async () => {
+    const executor = new FakeExecutor();
+    executor.disposeError = new Error('executor cleanup denied');
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    await plane.tasks.start(taskInput({ taskId: 'retry-dispose-close' }));
+
+    await expect(plane.close()).rejects.toThrow(/could not be disposed/i);
+    expect(executor.disposeCalls).toBe(2);
+
+    executor.disposeError = undefined;
+    await expect(plane.close()).resolves.toBeUndefined();
+    expect(executor.disposeCalls).toBe(3);
   });
 
   it('drains a short executor operation before disposal on close', async () => {
@@ -1524,6 +1549,212 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     await plane.close();
   });
 
+  it('returns cancellation promptly and aborts an executor start that has not returned', async () => {
+    let enteredStart: (() => void) | undefined;
+    const startEntered = new Promise<void>((resolve) => { enteredStart = resolve; });
+    let observedSignal: AbortSignal | undefined;
+    const executor: AgentExecutor = {
+      async start(input, signal) {
+        observedSignal = signal;
+        enteredStart?.();
+        return new Promise<AgentExecutorTaskReference>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            reject(new Error(String(signal.reason ?? 'start aborted')));
+          }, { once: true });
+        });
+      },
+      async *events() {},
+      async get() { return { state: 'working' }; },
+      async sendInput() {},
+      async cancel() { return { state: 'canceled' }; },
+      async reconcile() { return { state: 'unknown' }; },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const starting = plane.tasks.start(taskInput({ taskId: 'cancel-pending-start' }));
+    await startEntered;
+    const requested = await plane.tasks.cancel('cancel-pending-start', 'operator canceled');
+
+    expect(requested).toMatchObject({
+      state: 'submitted',
+      cancellation: 'requested',
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(starting).resolves.toMatchObject({
+      state: 'unknown',
+      cancellation: 'unknown',
+      cancellationError: expect.stringMatching(/operator canceled/i),
+    });
+    await plane.close();
+  });
+
+  it('records a start aborted by plane close as ambiguous instead of failed', async () => {
+    let enteredStart: (() => void) | undefined;
+    const startEntered = new Promise<void>((resolve) => { enteredStart = resolve; });
+    const executor: AgentExecutor = {
+      async start(input, signal) {
+        enteredStart?.();
+        return new Promise<AgentExecutorTaskReference>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            reject(new Error(String(signal.reason ?? 'plane closed')));
+          }, { once: true });
+        });
+      },
+      async *events() {},
+      async get() { return { state: 'working' }; },
+      async sendInput() {},
+      async cancel() { return { state: 'canceled' }; },
+      async reconcile() { return { state: 'unknown' }; },
+      async dispose() {},
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [{
+        executorId: 'fake-http',
+        protocol: 'http',
+        async create() { return executor; },
+      }],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const starting = plane.tasks.start(taskInput({ taskId: 'close-pending-start' }));
+    await startEntered;
+    const closing = plane.close();
+
+    await expect(starting).resolves.toMatchObject({
+      state: 'unknown',
+      cancellation: 'unknown',
+      cancellationError: expect.stringMatching(/executor plane is closed/i),
+    });
+    await expect(closing).resolves.toBeUndefined();
+  });
+
+  it('aborts a caller start during executor preflight without dispatching remote work', async () => {
+    const executor = new FakeExecutor();
+    let enterPreflight: (() => void) | undefined;
+    let releasePreflight: (() => void) | undefined;
+    const preflightEntered = new Promise<void>((resolve) => { enterPreflight = resolve; });
+    const preflightReleased = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    executor.preflightGate = async () => {
+      enterPreflight?.();
+      await preflightReleased;
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const controller = new AbortController();
+
+    const starting = plane.tasks.start(
+      taskInput({ taskId: 'abort-during-preflight' }),
+      controller.signal,
+    );
+    await preflightEntered;
+    controller.abort(new Error('stop during preflight'));
+
+    await expect(starting).rejects.toThrow(/stop during preflight/i);
+    expect(executor.starts).toHaveLength(0);
+    expect(await plane.tasks.list()).toHaveLength(0);
+    releasePreflight?.();
+    await plane.close();
+  });
+
+  it('keeps later same-agent starts queued when an earlier queued caller aborts', async () => {
+    const executor = new FakeExecutor();
+    let enterFirstStart: (() => void) | undefined;
+    let releaseFirstStart: (() => void) | undefined;
+    const firstStartEntered = new Promise<void>((resolve) => { enterFirstStart = resolve; });
+    const firstStartReleased = new Promise<void>((resolve) => { releaseFirstStart = resolve; });
+    executor.startEntered = (input) => {
+      if (input.taskId === 'queued-start-a') enterFirstStart?.();
+    };
+    executor.startGate = async (input) => {
+      if (input.taskId === 'queued-start-a') await firstStartReleased;
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+
+    const first = plane.tasks.start(taskInput({ taskId: 'queued-start-a' }));
+    await firstStartEntered;
+    const controller = new AbortController();
+    const aborted = plane.tasks.start(
+      taskInput({ taskId: 'queued-start-b' }),
+      controller.signal,
+    );
+    controller.abort(new Error('drop queued start b'));
+    await expect(aborted).rejects.toThrow(/drop queued start b/i);
+    const third = plane.tasks.start(taskInput({ taskId: 'queued-start-c' }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+    expect(executor.starts.map((input) => input.taskId)).toEqual(['queued-start-a']);
+    releaseFirstStart?.();
+    await Promise.all([first, third]);
+    expect(executor.starts.map((input) => input.taskId)).toEqual([
+      'queued-start-a',
+      'queued-start-c',
+    ]);
+    await plane.close();
+  });
+
+  it('coalesces caller abort and task cancellation after a start reference is durable', async () => {
+    let enterAcceptedEvent: (() => void) | undefined;
+    let releaseAcceptedEvent: (() => void) | undefined;
+    const acceptedEventEntered = new Promise<void>((resolve) => { enterAcceptedEvent = resolve; });
+    const acceptedEventReleased = new Promise<void>((resolve) => { releaseAcceptedEvent = resolve; });
+    const base = createMemoryAgentExecutorPlaneStore();
+    const store: AgentExecutorPlaneStore = {
+      ...base,
+      async appendEvent(event) {
+        if (event.type === 'state' && event.state === 'working' && event.cancellation === 'none') {
+          enterAcceptedEvent?.();
+          await acceptedEventReleased;
+        }
+        await base.appendEvent(event);
+      },
+    };
+    const executor = new FakeExecutor();
+    executor.cancelSnapshot = { state: 'canceled' };
+    const plane = await createAgentExecutorPlane({
+      factories: [factory(executor)],
+      policy: allowAllPolicy(),
+      store,
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const controller = new AbortController();
+    const starting = plane.tasks.start(
+      taskInput({ taskId: 'coalesced-start-cancel' }),
+      controller.signal,
+    );
+    await acceptedEventEntered;
+
+    controller.abort(new Error('stop after accepted reference'));
+    const canceling = plane.tasks.cancel('coalesced-start-cancel', 'stop after accepted reference');
+    releaseAcceptedEvent?.();
+    const [started, canceled] = await Promise.all([starting, canceling]);
+
+    expect(started).toMatchObject({ state: 'canceled', cancellation: 'confirmed' });
+    expect(canceled).toMatchObject({ state: 'canceled', cancellation: 'confirmed' });
+    expect(executor.cancelCalls).toBe(1);
+    await plane.close();
+  });
+
   it('drains admission on close and never starts through a disposed executor', async () => {
     let enteredSnapshotSave: (() => void) | undefined;
     let releaseSnapshotSave: (() => void) | undefined;
@@ -1793,6 +2024,46 @@ describe('FEATURE_258 AgentExecutorPlane', () => {
     releaseFactory?.();
 
     await expect(starting).rejects.toThrow(/executor plane is closed/i);
+    await expect(closing).resolves.toBeUndefined();
+    expect(executor.disposeCalls).toBe(1);
+  });
+
+  it('close drains executor creation left behind by an aborted caller start', async () => {
+    let factoryEntered: (() => void) | undefined;
+    let releaseFactory: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => { factoryEntered = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseFactory = resolve; });
+    const executor = new FakeExecutor();
+    const delayedFactory: AgentExecutorFactory = {
+      executorId: 'fake-http',
+      protocol: 'http',
+      async create() {
+        factoryEntered?.();
+        await gate;
+        return executor;
+      },
+    };
+    const plane = await createAgentExecutorPlane({
+      factories: [delayedFactory],
+      policy: allowAllPolicy(),
+      store: createMemoryAgentExecutorPlaneStore(),
+    });
+    await plane.registrations.upsert(registration({ credentialRef: undefined }));
+    const controller = new AbortController();
+    const starting = plane.tasks.start(
+      taskInput({ taskId: 'abort-during-create' }),
+      controller.signal,
+    );
+    await entered;
+    controller.abort(new Error('stop during executor creation'));
+    await expect(starting).rejects.toThrow(/stop during executor creation/i);
+
+    let closeResolved = false;
+    const closing = plane.close().then(() => { closeResolved = true; });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(closeResolved).toBe(false);
+
+    releaseFactory?.();
     await expect(closing).resolves.toBeUndefined();
     expect(executor.disposeCalls).toBe(1);
   });

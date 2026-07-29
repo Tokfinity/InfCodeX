@@ -585,6 +585,262 @@ describe('F270 coding Actor runtime adapter', () => {
     expect(onChildActivityEnd).toHaveBeenCalledOnce();
   });
 
+  it('submits external cancellation even while start admission remains pending', async () => {
+    const tasks = {
+      start: vi.fn(() => new Promise<AgentTaskSnapshot>(() => undefined)),
+      get: vi.fn(async () => externalTask('working')),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn(async () => externalTask('canceled')),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(tasks.start).toHaveBeenCalledOnce());
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    await vi.waitFor(() => expect(tasks.cancel).toHaveBeenCalledOnce());
+
+    expect(tasks.cancel).toHaveBeenCalledWith(
+      expect.any(String),
+      'stop requested',
+    );
+    expect(tasks.get).not.toHaveBeenCalled();
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
+  it('settles an interrupted external turn when pending start becomes cancellation unknown', async () => {
+    let enterStart: (() => void) | undefined;
+    const startEntered = new Promise<void>((resolve) => { enterStart = resolve; });
+    let observedSignal: AbortSignal | undefined;
+    const unknownTask = {
+      ...externalTask('unknown'),
+      cancellation: 'unknown' as const,
+      cancellationError: 'remote start cancellation outcome is unknown',
+    };
+    const tasks = {
+      start: vi.fn((_input: unknown, signal?: AbortSignal) => {
+        observedSignal = signal;
+        enterStart?.();
+        return new Promise<AgentTaskSnapshot>((resolve) => {
+          const finish = (): void => resolve(unknownTask);
+          if (signal?.aborted) finish();
+          else signal?.addEventListener('abort', finish, { once: true });
+        });
+      }),
+      get: vi.fn(async () => unknownTask),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn(async () => ({
+        ...externalTask('submitted'),
+        cancellation: 'requested' as const,
+      })),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    const onChildActivityEnd = vi.fn();
+    ctx.agentExecutorPlane = binding;
+    ctx.parentEvents = { onChildActivityEnd };
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await startEntered;
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    await vi.waitFor(() => expect(onChildActivityEnd).toHaveBeenCalledOnce());
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(tasks.get.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
+  it('retries an early external cancellation after start admission becomes visible', async () => {
+    let finishStart: ((task: AgentTaskSnapshot) => void) | undefined;
+    const tasks = {
+      start: vi.fn(() => new Promise<AgentTaskSnapshot>((resolve) => {
+        finishStart = resolve;
+      })),
+      get: vi.fn(async () => externalTask('working')),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn()
+        .mockRejectedValueOnce(new Error('task is not admitted yet'))
+        .mockResolvedValueOnce(externalTask('canceled')),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(tasks.start).toHaveBeenCalledOnce());
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    await vi.waitFor(() => expect(tasks.cancel).toHaveBeenCalledTimes(1));
+    finishStart?.(externalTask('working'));
+    await vi.waitFor(() => expect(tasks.cancel).toHaveBeenCalledTimes(2));
+
+    expect(tasks.get).not.toHaveBeenCalled();
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
+  it('cancels an external task when interruption happens during start admission', async () => {
+    let finishStart: ((task: AgentTaskSnapshot) => void) | undefined;
+    const tasks = {
+      start: vi.fn(() => new Promise<AgentTaskSnapshot>((resolve) => {
+        finishStart = resolve;
+      })),
+      get: vi.fn(async () => externalTask('working')),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn(async () => externalTask('canceled')),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(tasks.start).toHaveBeenCalledOnce());
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    finishStart?.(externalTask('working'));
+    await vi.waitFor(() => expect(tasks.cancel).toHaveBeenCalledOnce());
+
+    expect(tasks.cancel).toHaveBeenCalledWith(
+      expect.any(String),
+      'stop requested',
+    );
+    expect(tasks.get).not.toHaveBeenCalled();
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
+  it('does not forward queued mailbox input after external cancellation is requested', async () => {
+    let finishStart: ((task: AgentTaskSnapshot) => void) | undefined;
+    const tasks = {
+      start: vi.fn(() => new Promise<AgentTaskSnapshot>((resolve) => {
+        finishStart = resolve;
+      })),
+      get: vi.fn(async () => externalTask('canceled')),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn(async () => ({
+        ...externalTask('working'),
+        cancellation: 'requested' as const,
+      })),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(tasks.start).toHaveBeenCalledOnce());
+    await root.send(turn.actorPath, 'queued before interruption');
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    finishStart?.(externalTask('working'));
+    await vi.waitFor(() => expect(tasks.get).toHaveBeenCalledOnce());
+
+    expect(tasks.cancel).toHaveBeenCalledOnce();
+    expect(tasks.sendInput).not.toHaveBeenCalled();
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
+  it('attempts cancellation when an interrupted external start has an ambiguous failure', async () => {
+    let rejectStart: ((error: Error) => void) | undefined;
+    const tasks = {
+      start: vi.fn(() => new Promise<AgentTaskSnapshot>((_resolve, reject) => {
+        rejectStart = reject;
+      })),
+      get: vi.fn(async () => externalTask('working')),
+      sendInput: vi.fn(async () => externalTask('working')),
+      cancel: vi.fn(async () => externalTask('canceled')),
+    };
+    const binding = {
+      context: { actorId: 'root-actor' },
+      plane: { tasks } as unknown as AgentExecutorPlaneBinding['plane'],
+    } satisfies AgentExecutorPlaneBinding;
+    const session = new CodingActorSession({ sessionId: 'session-1' });
+    const { ctx, options } = environment();
+    ctx.agentExecutorPlane = binding;
+    const root = session.attach(ctx, options);
+    const turn = await root.spawn({
+      taskName: 'reviewer',
+      objective: 'Review.',
+      kind: 'external',
+      metadata: { agentId: 'external:reviewer' },
+    });
+    await vi.waitFor(() => expect(tasks.start).toHaveBeenCalledOnce());
+
+    await root.interrupt(turn.actorPath, 'stop requested');
+    rejectStart?.(new Error('start response was lost'));
+    await vi.waitFor(() => expect(tasks.cancel).toHaveBeenCalledOnce());
+
+    expect(tasks.cancel).toHaveBeenCalledWith(
+      expect.any(String),
+      'stop requested',
+    );
+    expect(tasks.get).not.toHaveBeenCalled();
+    expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted',
+      error: 'stop requested',
+    });
+  });
+
   it('preserves structured external artifact metadata through agent_output', async () => {
     const tasks = {
       start: vi.fn(async () => externalTask('completed', undefined, [{

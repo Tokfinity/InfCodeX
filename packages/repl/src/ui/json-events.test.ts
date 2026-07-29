@@ -58,6 +58,21 @@ describe('createJsonEvents', () => {
         workflowCorrelation,
       },
     );
+    events.onToolSandboxObservation?.(
+      {
+        id: 'tool-1',
+        observation: {
+          version: 1,
+          state: 'fallback',
+          reason: 'not_ready',
+          execution: 'normal_permission_policy',
+        },
+      },
+      {
+        toolId: 'tool-1',
+        workflowCorrelation,
+      },
+    );
     events.onProviderRecovery?.({
       stage: 'mid_stream_text',
       errorClass: 'stream_idle_timeout',
@@ -132,6 +147,17 @@ describe('createJsonEvents', () => {
         type: 'tool.progress',
         id: 'tool-1',
         message: 'reading README.md',
+        workflowCorrelation,
+      },
+      {
+        type: 'tool.sandbox',
+        id: 'tool-1',
+        observation: {
+          version: 1,
+          state: 'fallback',
+          reason: 'not_ready',
+          execution: 'normal_permission_policy',
+        },
         workflowCorrelation,
       },
       {

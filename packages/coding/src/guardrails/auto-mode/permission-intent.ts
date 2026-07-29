@@ -3,6 +3,9 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 
 export interface PermissionIntentEvidence {
   readonly status: 'complete' | 'targeted' | 'missing';
+  /** Latest genuine user request, kept separate as the authoritative intent. */
+  readonly currentUserContent?: string;
+  readonly currentUserContentTruncated?: boolean;
   readonly content: string;
   readonly sourceBytes: number;
   readonly includedBytes: number;
@@ -11,6 +14,7 @@ export interface PermissionIntentEvidence {
 }
 
 export const MAX_PERMISSION_INTENT_BYTES = 6 * 1024;
+export const MAX_CURRENT_USER_INTENT_BYTES = 4 * 1024;
 const SLICE_CHARS = 480;
 const AUTHORITY_TERMS = /\b(?:allow|approve|authorize|deny|forbid|must|never|outside|delete|move|write)\b|允许|授权|同意|禁止|不要|必须|工作区外|删除|移动|写入/i;
 
@@ -27,18 +31,23 @@ export function buildPermissionIntentEvidence(
   maxBytes = MAX_PERMISSION_INTENT_BYTES,
 ): PermissionIntentEvidence {
   const userTexts = messages.flatMap((message) => extractUserText(message));
+  const latestUserContent = userTexts.at(-1) ?? '';
+  const currentUserContent = compactCurrentUserContent(latestUserContent, query);
+  const currentUserContentTruncated = currentUserContent !== latestUserContent;
   const source = userTexts.map((text, index) => `[user-turn:${index + 1}] ${text}`).join('\n');
   const sourceBytes = utf8Bytes(source);
   const sha256 = createHash('sha256').update(source).digest('hex');
   if (userTexts.length === 0) {
     return {
-      status: 'missing', content: '', sourceBytes: 0,
+      status: 'missing', currentUserContent, currentUserContentTruncated,
+      content: '', sourceBytes: 0,
       includedBytes: 0, omittedBytes: 0, sha256,
     };
   }
   if (sourceBytes <= maxBytes) {
     return {
-      status: 'complete', content: source, sourceBytes,
+      status: 'complete', currentUserContent, currentUserContentTruncated,
+      content: source, sourceBytes,
       includedBytes: sourceBytes, omittedBytes: 0, sha256,
     };
   }
@@ -52,20 +61,45 @@ export function buildPermissionIntentEvidence(
     .join('\n');
   const includedBytes = utf8Bytes(content);
   return {
-    status: 'targeted', content, sourceBytes, includedBytes,
+    status: 'targeted', currentUserContent, currentUserContentTruncated,
+    content, sourceBytes, includedBytes,
     omittedBytes: Math.max(0, sourceBytes - includedBytes), sha256,
   };
 }
 
+function compactCurrentUserContent(text: string, query: string): string {
+  if (utf8Bytes(text) <= MAX_CURRENT_USER_INTENT_BYTES) return text;
+  const terms = queryTerms(query);
+  const candidates = relevantSlices(text, terms).map((slice, order) => ({
+    turn: 0,
+    order,
+    text: slice,
+    score: segmentScore(slice, terms, 0, 1),
+  }));
+  return selectSegments(candidates, MAX_CURRENT_USER_INTENT_BYTES)
+    .sort((left, right) => left.order - right.order)
+    .map((segment) => segment.text)
+    .join('\n');
+}
+
 function extractUserText(message: KodaXMessage): string[] {
   if (message.role !== 'user') return [];
-  if (typeof message.content === 'string') return message.content.trim() ? [message.content] : [];
+  if ((message as KodaXMessage & { readonly _synthetic?: boolean })._synthetic === true) return [];
+  if (typeof message.content === 'string') {
+    const text = message.content.trim();
+    return text && !isSyntheticReminder(text) ? [text] : [];
+  }
   const text = message.content
     .filter((block) => block.type === 'text')
     .map((block) => block.type === 'text' ? block.text : '')
     .filter(Boolean)
     .join('\n');
-  return text ? [text] : [];
+  const trimmed = text.trim();
+  return trimmed && !isSyntheticReminder(trimmed) ? [trimmed] : [];
+}
+
+function isSyntheticReminder(text: string): boolean {
+  return /^<system-reminder(?:\s|>)/i.test(text);
 }
 
 function buildSegments(userTexts: readonly string[], terms: readonly string[]): IntentSegment[] {

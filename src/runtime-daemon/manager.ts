@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-import type { KodaXRuntime } from '../sdk-runtime.js';
+import type {
+  KodaXRuntime,
+  RuntimeIntegrationDomainStatus,
+} from '../sdk-runtime.js';
 import type { RuntimeDaemonClientTransport } from './client.js';
 import {
   resolveRuntimeDaemonOwnership,
@@ -32,8 +35,10 @@ export interface RuntimeDaemonLeaseOptions {
   readonly startupTimeoutMs?: number;
   readonly pollIntervalMs?: number;
   readonly healthCheck?: RuntimeDaemonHealthCheckOptions;
+  readonly orphanExitMs?: number;
   /** True only when this host owns the live A2A config reconciler. */
   readonly ownsA2AConfigReconciler?: boolean;
+  readonly integrationStatuses?: () => readonly RuntimeIntegrationDomainStatus[];
   createRuntime(runtimeId: string): Promise<KodaXRuntime>;
 }
 
@@ -50,6 +55,12 @@ export interface RuntimeDaemonLease {
 export async function acquireRuntimeDaemonLease(
   options: RuntimeDaemonLeaseOptions,
 ): Promise<RuntimeDaemonLease> {
+  if (
+    options.orphanExitMs !== undefined
+    && (!Number.isSafeInteger(options.orphanExitMs) || options.orphanExitMs <= 0)
+  ) {
+    throw new Error('orphanExitMs must be a positive safe integer.');
+  }
   const profile = options.profile ?? 'default';
   const homeDir = resolveRuntimeDaemonHomeDir(options.homeDir);
   const configHome = path.resolve(options.configHome ?? path.join(homeDir, '.kodax'));
@@ -137,8 +148,12 @@ async function createClaimedDaemonLease(
       paths,
       endpoint,
       lock,
+      ...(options.orphanExitMs !== undefined ? { orphanExitMs: options.orphanExitMs } : {}),
       ...(options.ownsA2AConfigReconciler === true
         ? { ownsA2AConfigReconciler: true }
+        : {}),
+      ...(options.integrationStatuses
+        ? { integrationStatuses: options.integrationStatuses }
         : {}),
     });
     try {
@@ -165,20 +180,42 @@ async function createAttachedLease(
   const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
     connectTimeoutMs,
   });
+  let transportClosed = false;
+  let closeAttempt: Promise<void> | undefined;
+  let shutdownRequested = false;
+  let shutdownAttempt: Promise<void> | undefined;
+  const closeTransport = (): Promise<void> => {
+    if (transportClosed) return Promise.resolve();
+    if (closeAttempt) return closeAttempt;
+    const attempt = Promise.resolve(transport.close?.()).then(() => {
+      transportClosed = true;
+    });
+    closeAttempt = attempt;
+    void attempt.finally(() => {
+      if (closeAttempt === attempt) closeAttempt = undefined;
+    }).catch(() => undefined);
+    return attempt;
+  };
   return {
     transport,
     endpoint,
     paths,
     ownsHost: false,
-    async close() {
-      await transport.close?.();
-    },
-    async shutdown() {
-      try {
-        await transport.request('runtime.shutdown');
-      } finally {
-        await transport.close?.();
-      }
+    close: closeTransport,
+    shutdown() {
+      if (shutdownAttempt) return shutdownAttempt;
+      const attempt = (async () => {
+        if (!shutdownRequested) {
+          await transport.request('runtime.shutdown');
+          shutdownRequested = true;
+        }
+        await closeTransport();
+      })();
+      shutdownAttempt = attempt;
+      void attempt.finally(() => {
+        if (shutdownAttempt === attempt) shutdownAttempt = undefined;
+      }).catch(() => undefined);
+      return attempt;
     },
   };
 }
@@ -192,21 +229,39 @@ function createOwnedLease(
   host.unref();
   let transportClosed = false;
   let hostClosed = false;
+  let transportCloseAttempt: Promise<void> | undefined;
+  let hostCloseAttempt: Promise<void> | undefined;
   return {
     transport,
     endpoint,
     paths,
     ownsHost: true,
     hostClosed: host.closed,
-    async close() {
-      if (transportClosed) return;
-      transportClosed = true;
-      await transport.close?.();
+    close() {
+      if (transportClosed) return Promise.resolve();
+      if (transportCloseAttempt) return transportCloseAttempt;
+      const attempt = Promise.resolve(transport.close?.()).then(() => {
+        transportClosed = true;
+      });
+      transportCloseAttempt = attempt;
+      void attempt.finally(() => {
+        if (transportCloseAttempt === attempt) {
+          transportCloseAttempt = undefined;
+        }
+      }).catch(() => undefined);
+      return attempt;
     },
-    async shutdown() {
-      if (hostClosed) return;
-      hostClosed = true;
-      await host.close();
+    shutdown() {
+      if (hostClosed) return Promise.resolve();
+      if (hostCloseAttempt) return hostCloseAttempt;
+      const attempt = host.close().then(() => {
+        hostClosed = true;
+      });
+      hostCloseAttempt = attempt;
+      void attempt.finally(() => {
+        if (hostCloseAttempt === attempt) hostCloseAttempt = undefined;
+      }).catch(() => undefined);
+      return attempt;
     },
   };
 }

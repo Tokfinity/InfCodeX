@@ -139,6 +139,24 @@ export type {
   RuntimeWorkflowSnapshot,
   RuntimeWorkflowSummary,
 } from './sdk-runtime.js';
+export {
+  KODAX_ASRT_VERSION,
+  doctorKodaXSandbox,
+  activateKodaXSandbox,
+  getKodaXSandboxSetupGuidance,
+  getKodaXSandboxCapability,
+  runKodaXSandboxed,
+  setupKodaXSandbox,
+} from './sdk-sandbox.js';
+export type {
+  KodaXSandboxDoctorResult,
+  KodaXSandboxCapability,
+  KodaXSandboxFilesystemPolicy,
+  KodaXSandboxNetworkPolicy,
+  KodaXSandboxRunInput,
+  KodaXSandboxRunResult,
+  KodaXSandboxSetupOutcome,
+} from './sdk-sandbox.js';
 // ACP server API - server `cwd` can pin the session-level executionCwd for prompts and tools.
 export { KodaXAcpServer, runAcpServer, type KodaXAcpServerOptions } from './acp_server.js';
 

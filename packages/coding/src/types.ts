@@ -306,6 +306,35 @@ export interface KodaXToolEventMeta extends KodaXActivityEventMeta {
   readonly toolId?: string;
 }
 
+export type KodaXShellSandboxBackend =
+  | 'windows-restricted-user'
+  | 'macos-seatbelt'
+  | 'linux-bubblewrap'
+  | 'unsupported';
+
+export type KodaXShellSandboxObservation =
+  | {
+      readonly version: 1;
+      readonly state: 'applied';
+      readonly backend: KodaXShellSandboxBackend;
+      readonly policyId: 'kodax-workspace-shell-v1';
+    }
+  | {
+      readonly version: 1;
+      readonly state: 'fallback';
+      readonly reason: 'not_ready' | 'prepare_failed' | 'backend_failed';
+      readonly execution: 'normal_permission_policy';
+    }
+  | {
+      readonly version: 1;
+      readonly state: 'not_selected';
+    };
+
+export interface KodaXToolSandboxObservationUpdate {
+  readonly id: string;
+  readonly observation: KodaXShellSandboxObservation;
+}
+
 export interface KodaXContextCompactionFinishedEvent
   extends Partial<KodaXLiveEventMeta> {
   readonly source: 'manual' | 'automatic_threshold' | 'physical_capacity';
@@ -438,6 +467,14 @@ export interface KodaXEvents {
   /** FEATURE_067 v2: Real-time tool execution progress update. Updates the tool's display in the REPL transcript. */
   onToolProgress?: (
     update: { id: string; message: string },
+    meta?: KodaXToolEventMeta,
+  ) => void;
+  /**
+   * Execution metadata for professional hosts. REPL history intentionally does
+   * not render this internal containment state.
+   */
+  onToolSandboxObservation?: (
+    update: KodaXToolSandboxObservationUpdate,
     meta?: KodaXToolEventMeta,
   ) => void;
   onToolInputDelta?: (
@@ -1520,6 +1557,37 @@ export interface KodaXShellExecutionContract {
   readonly probeTimeoutMs?: number;
 }
 
+export interface KodaXShellSandboxPrepareInput {
+  readonly toolCallId?: string;
+  readonly toolInput: Readonly<Record<string, unknown>>;
+  readonly command: string;
+  readonly executable?: string;
+  readonly args?: readonly string[];
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly windowsVerbatimArguments?: boolean;
+  /** Caller cancellation while waiting for sandbox admission/preparation. */
+  readonly signal?: AbortSignal;
+  /** Absolute wall-clock deadline shared with the command timeout. */
+  readonly deadlineAt?: number;
+  readonly reportObservation?: (observation: KodaXShellSandboxObservation) => void;
+}
+
+export interface KodaXPreparedShellSandboxInvocation {
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly env: NodeJS.ProcessEnv;
+  readonly windowsVerbatimArguments?: boolean;
+  cleanup(): Promise<KodaXShellSandboxObservation | undefined>;
+}
+
+/** Runtime-owned OS sandbox broker for selected concrete shell calls. */
+export interface KodaXShellSandbox {
+  prepare(
+    input: KodaXShellSandboxPrepareInput,
+  ): Promise<KodaXPreparedShellSandboxInvocation | undefined>;
+}
+
 export interface KodaXContextOptions {
   /** Runtime-owner config home used by Memory, review inbox, and Learned Area routing. */
   configHome?: string;
@@ -1580,6 +1648,8 @@ export interface KodaXContextOptions {
   executionCwd?: string;
   /** Optional host-owned shell/environment resolution policy for command tools. */
   shellExecution?: KodaXShellExecutionContract;
+  /** Runtime-owned OS sandbox broker; never accepted from serialized model input. */
+  shellSandbox?: KodaXShellSandbox;
   /** Fail-closed host policy applied to every concrete file a read tool opens. */
   assertReadablePath?: (candidate: string) => void;
   /**
@@ -2321,6 +2391,10 @@ export interface KodaXToolExecutionContext {
   executionCwd?: string;
   /** Validated shell execution policy inherited by native child runtimes. */
   shellExecution?: KodaXShellExecutionContract;
+  /** Runtime-owned OS sandbox broker for selected concrete shell calls. */
+  shellSandbox?: KodaXShellSandbox;
+  /** Structured containment metadata; never model-visible or persisted as conversation text. */
+  reportToolSandboxObservation?: (observation: KodaXShellSandboxObservation) => void;
   /**
    * Exact credential variable names owned by registered Providers.
    * Used only to remove non-standard `apiKeyEnv` names from child processes.

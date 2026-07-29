@@ -500,6 +500,21 @@ describe('collectBashWriteTargets — FEATURE_152 AST hardening', () => {
     },
   );
 
+  it.each([
+    ['move /Y src/a.txt build/a.txt', ['src/a.txt', 'build/a.txt'], ['/Y']],
+    ['copy /Y src/a.txt build/a.txt', ['build/a.txt'], ['/Y', 'src/a.txt']],
+    ['del /Q /A:H build/old.txt', ['build/old.txt'], ['/Q', '/A:H']],
+    ['rd /S /Q build/old', ['build/old'], ['/S', '/Q']],
+  ] as const)(
+    'does not treat cmd mutation switches as write targets: %s',
+    async (command, included, excluded) => {
+      const { collectDeterministicBashWriteTargets } = await import('./permission.js');
+      const targets = collectDeterministicBashWriteTargets(command);
+      for (const target of included) expect(targets).toContain(target);
+      for (const value of excluded) expect(targets).not.toContain(value);
+    },
+  );
+
   it('returns paths-only on unparseable input (fallback safety)', async () => {
     // `$(...)` makes AST unparseable, so the AST pass in
     // extractPathsFromCommand contributes nothing. The legacy regex pass

@@ -241,8 +241,7 @@ export interface AgentTurnExecutor {
   execute(input: AgentExecutionInput): Promise<AgentExecutionResult>;
 }
 
-export interface AgentActorSnapshot {
-  readonly schemaVersion: 1;
+interface AgentActorSnapshotContents {
   readonly revision: number;
   readonly maxConcurrentThreads: number;
   readonly actors: readonly AgentActor[];
@@ -255,8 +254,28 @@ export interface AgentActorSnapshot {
   readonly events: readonly AgentEvent[];
 }
 
+/** Runtime process/controller identity that exclusively owns one durable Actor tree. */
+export interface AgentActorOwner {
+  readonly ownerId: string;
+  readonly runtimeId: string;
+  readonly pid: number;
+  readonly startedAt: string;
+}
+
+export interface AgentActorSnapshotV1 extends AgentActorSnapshotContents {
+  readonly schemaVersion: 1;
+}
+
+export interface AgentActorSnapshotV2 extends AgentActorSnapshotContents {
+  readonly schemaVersion: 2;
+  readonly owner?: AgentActorOwner;
+}
+
+export type AgentActorSnapshot = AgentActorSnapshotV1 | AgentActorSnapshotV2;
+
 export interface AgentActorStore {
   load(): Promise<AgentActorSnapshot | undefined>;
+  /** CAS save. Implementations must throw actor_snapshot_conflict on a revision mismatch. */
   save(snapshot: AgentActorSnapshot, expectedRevision: number): Promise<void>;
 }
 

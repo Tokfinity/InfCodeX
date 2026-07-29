@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import iconv from 'iconv-lite';
 import {
+  emitKodaXDiagnostic,
   killChildProcessTree,
   killChildProcessTreeSync,
   registerManagedChildProcess,
@@ -52,6 +53,10 @@ interface ForegroundOutputRecovery {
 
 function cancelledCommandResult(command: string): string {
   return `Command: ${command}\n[Cancelled] Operation cancelled by user`;
+}
+
+function commandPreparationTimeoutResult(command: string, timeout: number): string {
+  return `Command: ${command}\n[Timeout] Command was not started because preparation exceeded ${timeout}s`;
 }
 
 function startStreamRecovery(collector: BashOutputCollector): StreamRecovery {
@@ -240,6 +245,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   if (memoryDenial !== undefined) return memoryDenial;
   const userTimeout = input.timeout as number | undefined;
   const timeout = userTimeout ? Math.min(KODAX_HARD_TIMEOUT, userTimeout) : KODAX_DEFAULT_TIMEOUT;
+  const deadlineAt = Date.now() + timeout * 1000;
   const capped = userTimeout && userTimeout > KODAX_HARD_TIMEOUT;
   const runInBackground = (input.run_in_background as boolean) ?? false;
   const cwd = resolveExecutionCwd(ctx);
@@ -274,7 +280,77 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       return `[Error] Command was not started because the configured shell environment could not be resolved: ${message}`;
     }
   }
-  const spawnCommand = () => commandInvocation === undefined
+  let sandboxInvocation:
+    | Awaited<ReturnType<NonNullable<typeof ctx.shellSandbox>['prepare']>>
+    | undefined;
+  if (ctx.shellSandbox) {
+    try {
+      sandboxInvocation = await ctx.shellSandbox.prepare({
+        toolCallId: ctx.toolCallId,
+        toolInput: input,
+        command,
+        executable: commandInvocation?.executable,
+        args: commandInvocation?.args,
+        cwd,
+        env: commandInvocation?.env ?? legacyEnv,
+        windowsVerbatimArguments: commandInvocation?.windowsVerbatimArguments,
+        signal: ctx.abortSignal,
+        deadlineAt,
+        reportObservation: ctx.reportToolSandboxObservation,
+      });
+    } catch {
+      if (ctx.abortSignal?.aborted) return cancelledCommandResult(command);
+      if (Date.now() >= deadlineAt) {
+        return commandPreparationTimeoutResult(command, timeout);
+      }
+      ctx.reportToolSandboxObservation?.({
+        version: 1,
+        state: 'fallback',
+        reason: 'prepare_failed',
+        execution: 'normal_permission_policy',
+      });
+    }
+  }
+  let sandboxCleanup:
+    | Promise<Awaited<ReturnType<NonNullable<typeof sandboxInvocation>['cleanup']>>>
+    | undefined;
+  const cleanupSandbox = async (): Promise<void> => {
+    if (!sandboxInvocation) return;
+    sandboxCleanup ??= sandboxInvocation.cleanup().then((observation) => {
+      if (observation) ctx.reportToolSandboxObservation?.(observation);
+      return observation;
+    });
+    try {
+      await sandboxCleanup;
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'coding:bash-sandbox',
+        level: 'warn',
+        message: 'Workspace sandbox diagnostics cleanup failed.',
+        detail: error,
+      });
+    }
+  };
+  if (ctx.abortSignal?.aborted) {
+    await cleanupSandbox();
+    return cancelledCommandResult(command);
+  }
+  if (Date.now() >= deadlineAt) {
+    await cleanupSandbox();
+    return commandPreparationTimeoutResult(command, timeout);
+  }
+  const spawnCommand = () => sandboxInvocation !== undefined
+    ? spawn(sandboxInvocation.executable, [...sandboxInvocation.args], {
+        shell: false,
+        windowsHide: true,
+        cwd,
+        env: sandboxInvocation.env,
+        detached: process.platform !== 'win32',
+        ...(sandboxInvocation.windowsVerbatimArguments === true
+          ? { windowsVerbatimArguments: true }
+          : {}),
+      })
+    : commandInvocation === undefined
     ? spawn(command, [], {
         shell: true,
         windowsHide: true,
@@ -300,6 +376,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     try {
       logStream = await openBackgroundLog(outputFile);
     } catch (error) {
+      void cleanupSandbox();
       const message = error instanceof Error ? error.message : String(error);
       return `[Error] Background command was not started because its output file could not be created: ${message}`;
     }
@@ -307,6 +384,8 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     // POSIX background jobs get a process group so cleanup can signal -pid and
     // reap shell descendants.
     const proc = spawnCommand();
+    proc.once('close', () => { void cleanupSandbox(); });
+    proc.once('error', () => { void cleanupSandbox(); });
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash-background',
       command,
@@ -369,6 +448,8 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
 
   return new Promise(resolve => {
     const proc = spawnCommand();
+    proc.once('close', () => { void cleanupSandbox(); });
+    proc.once('error', () => { void cleanupSandbox(); });
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash',
       command,
@@ -544,7 +625,10 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       });
     };
 
-    timer = setTimeout(() => requestStop('timeout'), timeout * 1000);
+    timer = setTimeout(
+      () => requestStop('timeout'),
+      Math.max(0, deadlineAt - Date.now()),
+    );
 
     // Issue 113: Kill child process when abort signal fires (Ctrl+C).
     const abortSignal = ctx.abortSignal;
@@ -619,6 +703,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         try {
           if (timer) clearTimeout(timer);
           unregisterForegroundCommand();
+          await cleanupSandbox();
           if (stopReason) {
             if (stoppedOutputRecovery) {
               finishForegroundOutputRecovery(stoppedOutputRecovery, stdout, stderr);
@@ -711,16 +796,25 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       });
     });
     proc.on('error', error => {
-      if (stopReason) return;
-      if (timer) clearTimeout(timer);
-      unregisterForegroundCommand();
-      disposeCollectors();
-      // Y-1/Y-2: Same hints on spawn-level errors — a malformed command
-      // string (newlines in `-c`, heredoc not understood by cmd) can surface
-      // as a spawn error on some platforms.
-      const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
-      const gotchaNote = gotchaHints.length > 0 ? `\n${gotchaHints.join('\n')}` : '';
-      settle(`Command: ${command}\n[Error] ${error.message}${gotchaNote}`);
+      void (async () => {
+        if (stopReason) return;
+        if (timer) clearTimeout(timer);
+        unregisterForegroundCommand();
+        await cleanupSandbox();
+        disposeCollectors();
+        // Y-1/Y-2: Same hints on spawn-level errors — a malformed command
+        // string (newlines in `-c`, heredoc not understood by cmd) can surface
+        // as a spawn error on some platforms.
+        const gotchaHints = detectWindowsCmdGotchas(command, usesWindowsCmd);
+        const gotchaNote = gotchaHints.length > 0 ? `\n${gotchaHints.join('\n')}` : '';
+        settle(`Command: ${command}\n[Error] ${error.message}${gotchaNote}`);
+      })().catch((cleanupError: unknown) => {
+        const message = cleanupError instanceof Error
+          ? cleanupError.message
+          : String(cleanupError);
+        disposeCollectors();
+        settle(`Command: ${command}\n[Error] ${error.message}\n[warn] Sandbox diagnostics cleanup failed: ${message}`);
+      });
     });
   });
 }

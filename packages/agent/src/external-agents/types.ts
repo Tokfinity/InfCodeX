@@ -318,7 +318,10 @@ export interface AgentExecutorPreflightResult {
 
 export interface AgentExecutor {
   preflight?(input: AgentTaskStartInput): Promise<AgentExecutorPreflightResult>;
-  start(input: AgentTaskStartInput): Promise<AgentExecutorTaskReference>;
+  start(
+    input: AgentTaskStartInput,
+    signal?: AbortSignal,
+  ): Promise<AgentExecutorTaskReference>;
   events(reference: AgentExecutorTaskReference): AsyncIterable<AgentExecutorEvent>;
   get(reference: AgentExecutorTaskReference): Promise<AgentExecutorTaskSnapshot>;
   sendInput(reference: AgentExecutorTaskReference, input: AgentContinuationInput): Promise<void>;
@@ -433,7 +436,7 @@ export interface AgentRegistrationService {
 }
 
 export interface AgentTaskService {
-  start(input: AgentTaskStartInput): Promise<AgentTaskSnapshot>;
+  start(input: AgentTaskStartInput, signal?: AbortSignal): Promise<AgentTaskSnapshot>;
   list(filter?: AgentTaskFilter): Promise<readonly AgentTaskSnapshot[]>;
   get(taskId: string): Promise<AgentTaskSnapshot>;
   events(taskId: string, cursor?: number): Promise<readonly AgentTaskEvent[]>;

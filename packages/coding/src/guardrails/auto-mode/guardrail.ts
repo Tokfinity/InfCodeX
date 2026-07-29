@@ -8,18 +8,19 @@
  *
  * Decision flow (per design doc "三层权限金字塔"):
  *
- *   1. Tier-0 deterministic deny             → block
- *   2. Tool projection is '' (Tier 1)        → allow (zero token cost)
- *   3. Engine is rules → deterministic Tier 2, otherwise user confirms
- *   4. denial/circuit threshold              → engine downgrade, then escalate
- *   5. classify(...) sideQuery
- *        allow                               → allow (record allow → reset consecutive)
- *        block                               → block + reason (record block)
- *        escalate                            → escalate + reason (record error)
- *        AbortError thrown                   → re-throw (propagate user cancel)
+ *   1. Tier-0 deterministic critical match   → user confirmation
+ *   2. exact safe read/workspace-temp effect → allow (zero token cost)
+ *   3. Tool projection is '' (Tier 1)        → allow
+ *   4. Engine is rules → deterministic Tier 2, otherwise user confirms
+ *   5. degraded classifier infrastructure    → Accept-edits fallback
+ *   6. classify(...) sideQuery
+ *        allow                                → allow (record allow → reset consecutive)
+ *        confirm                              → user confirmation (record concern)
+ *        failure                              → Accept-edits fallback (record error)
+ *        AbortError thrown                    → re-throw (propagate user cancel)
  *
  * State (mutable, session-scoped):
- *   - engine: 'llm' | 'rules' (starts at 'llm', downgrades on threshold)
+ *   - engine: 'llm' | 'rules' (user-selected; classifier health never changes it)
  *   - denialTracker (immutable type, swapped on each event)
  *   - circuitBreaker (immutable type, swapped on each event)
  *
@@ -53,6 +54,8 @@ import { bashSignalCollector } from './bash-signals.js';
 import {
   classify,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  type ClassifierAttemptDiagnostics,
+  type ClassifierFailureKind,
   type ClassifyDecision,
 } from './classify.js';
 import {
@@ -65,7 +68,6 @@ import {
   createDenialTracker,
   recordAllow as recordDenialAllow,
   recordBlock as recordDenialBlock,
-  shouldFallback as denialShouldFallback,
   type DenialTracker,
 } from './denial-tracker.js';
 import { fileSignalCollector } from './file-signals.js';
@@ -76,7 +78,10 @@ import {
 import type { AutoRules } from './rules.js';
 import { collectAllSignals, type SignalCollector, type ToolCallSignal } from './signals.js';
 import { speculativeRace } from './speculative.js';
-import { buildPermissionIntentEvidence } from './permission-intent.js';
+import {
+  buildPermissionIntentEvidence,
+  type PermissionIntentEvidence,
+} from './permission-intent.js';
 import { safeFallbackToClassifierInput } from '../../tools/classifier-projection.js';
 import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 
@@ -92,16 +97,26 @@ export interface AutoModeSharedState {
  * User answer for an escalated tool-call. The guardrail translates this into
  * the actual `GuardrailVerdict` returned to the Runner. `'block'` preserves
  * the original escalation reason as the verdict reason so downstream consumers
- * see why the tool was blocked.
+ * see why the tool was blocked. `'timeout'` reports that the action was not
+ * executed and gives the main model a bounded recovery instruction.
  */
-export type AutoModeAskUserVerdict = 'allow' | 'block';
+export type AutoModeAskUserVerdict = 'allow' | 'block' | 'timeout';
+
+export interface AutoModeDecisionDiagnostics {
+  readonly source:
+    | 'classifier_confirm'
+    | 'classifier_failure'
+    | 'classifier_circuit_breaker'
+    | 'configuration';
+  readonly classifierFailureKind?: ClassifierFailureKind;
+  readonly classifierAttempts?: readonly ClassifierAttemptDiagnostics[];
+}
 
 /**
- * Optional REPL-supplied prompt callback for the 6 escalate paths in
- * `beforeTool` (engine-downgraded, denial-threshold-just-crossed,
- * breaker-just-tripped, classifier-error, classifier-decision-escalate,
- * provider-not-configured). When supplied, the guardrail calls this and
- * translates the user's answer into `'allow'` or `'block'`. When NOT
+ * Optional REPL-supplied prompt callback for calls that require a human
+ * decision (rules escalation, classifier concern/failure, or configuration
+ * failure). When supplied, the guardrail calls this and
+ * translates the user's answer into allow/block/timeout semantics. When NOT
  * supplied, the guardrail returns `'escalate'` as before — the Runner will
  * then throw `GuardrailEscalateError` (preserves backward compat with
  * SDK-side guardrail consumers that have no askUser surface).
@@ -119,6 +134,7 @@ export type AutoModeAskUser = (
    * confirm dialog (replacing the input-marker path from FEATURE_066).
    */
   signals?: readonly ToolCallSignal[],
+  diagnostics?: AutoModeDecisionDiagnostics,
 ) => Promise<AutoModeAskUserVerdict>;
 
 export interface AutoModeRulesContext {
@@ -212,6 +228,23 @@ export interface AutoModeGuardrailConfig {
   readonly askUser?: AutoModeAskUser;
 
   /**
+   * Runtime-owned Accept-edits fallback used only when classifier
+   * infrastructure or its response contract fails.
+   */
+  readonly allowOnClassifierFailure?: (
+    call: RunnerToolCall,
+  ) => boolean | Promise<boolean>;
+
+  /** Whether ordinary bash calls can be enforced by an OS workspace sandbox. */
+  readonly workspaceShellSandboxAvailable?: boolean;
+
+  /** Mint one exact bash call for workspace-sandboxed execution. */
+  readonly admitWorkspaceSandboxCall?: (
+    call: RunnerToolCall,
+    review: AutoModePermissionReview,
+  ) => void;
+
+  /**
    * Runtime-owned deterministic Tier-2 evaluator. It is injected rather than
    * implemented in @kodax/coding because canonical path and shell-AST helpers
    * live in @kodax/repl. Omitting it preserves fail-closed SDK compatibility:
@@ -268,13 +301,12 @@ export interface AutoModeGuardrailConfig {
   readonly getCostTracker?: () => CostTracker | undefined;
   readonly setCostTracker?: (t: CostTracker) => void;
 
-  /** Optional logger for engine-downgrade and config warnings. */
+  /** Optional logger for classifier-health and configuration warnings. */
   readonly log?: (level: 'info' | 'warn', msg: string) => void;
 
   /**
-   * Fired whenever the active engine changes — both on automatic downgrades
-   * (denial threshold / circuit breaker) AND on manual `setEngine(...)`
-   * calls. UI surfaces (status bar engine indicator, slash-command
+   * Fired whenever the active engine changes through `setEngine(...)`.
+   * UI surfaces (status bar engine indicator, slash-command
    * confirmations) subscribe here so the displayed engine stays in sync
    * with the guardrail's internal state without the user having to trigger
    * another mode toggle just to refresh the bar.
@@ -284,8 +316,8 @@ export interface AutoModeGuardrailConfig {
   /**
    * Optional shared state for subagent threshold-bypass defense
    * (design doc "防绕阈值"). When supplied, the parent and child
-   * guardrails reference the SAME object — engine downgrades and
-   * tracker advances are visible across the session boundary.
+   * guardrails reference the SAME object — engine changes and tracker
+   * advances are visible across the session boundary.
    */
   readonly sharedState?: AutoModeSharedState;
 
@@ -361,8 +393,8 @@ export interface AutoModeGuardrailConfig {
    * (late-verdict adoption). The window therefore only controls "fast path
    * vs wait", never "dialog vs no dialog": an `allow` never surfaces a
    * confirm dialog regardless of how long the classifier takes, and only an
-   * `escalate` verdict (explicit LLM escalation, classifier timeout, or infra
-   * error — all mapped to `escalate` by classify()) reaches the user.
+   * confirmation/failure verdict reaches the configured user or Accept-edits
+   * fallback path.
    * The background classifier's cost is settled exactly once inside
    * classify(), so awaiting it after window expiry does not double-count.
    *
@@ -382,6 +414,7 @@ export interface AutoModeGuardrailConfig {
  */
 export interface AutoModeStats {
   readonly engine: AutoModeEngine;
+  readonly classifierHealth: 'healthy' | 'degraded';
   readonly classifierModel?: string;
   readonly denials: DenialTracker;
   readonly breaker: CircuitBreaker;
@@ -394,9 +427,7 @@ export interface AutoModeToolGuardrail extends ToolGuardrail {
   getStats(): AutoModeStats;
   /**
    * Manually set the engine. Used by `/auto-engine` slash command to flip
-   * back to 'llm' after an automatic downgrade or to flip to 'rules' for
-   * manual testing. The downgrade thresholds still operate normally — a
-   * subsequent threshold cross will downgrade again.
+   * between 'llm' and 'rules' after an explicit user or host choice.
    */
   setEngine(engine: AutoModeEngine): void;
 
@@ -404,29 +435,236 @@ export interface AutoModeToolGuardrail extends ToolGuardrail {
   getEngineForTest(): AutoModeEngine;
   /** Test-only alias for getStats(). Backward-compat for test files. */
   getStatsForTest(): AutoModeStats;
-  /** Test-only override: swap the provider mid-test (for downgrade scenarios). */
+  /** Test-only override: swap the provider mid-test. */
   setProviderForTest(provider: KodaXBaseProvider): void;
 }
 
 const DETERMINISTIC_READ_TOOLS = new Set(['read', 'grep', 'glob']);
+const DETERMINISTIC_OPERATION_RISKS = new Set([
+  'source_removed',
+  'destination_overwrite_possible',
+  'cross_boundary_copy',
+  'cross_boundary_mutation',
+]);
+const APPROVAL_TIMEOUT_REASON =
+  '[approval_timeout] The requested operation was not executed because user approval timed out. '
+  + 'Try a safer, narrower, or reversible way to continue. If no safer alternative exists, '
+  + 'stop the task and wait for explicit user approval before retrying.';
 
-function hasSensitiveReadRisk(permissionReview: AutoModePermissionReview): boolean {
-  return permissionReview.risks.some((risk) => (
-    risk === 'sensitive_read' || risk === 'sensitive_environment_read'
-  )) || permissionReview.operations.some((operation) => (
-    operation.kind === 'read' && operation.target.boundary === 'protected'
+type MutationOperationKind = 'copy' | 'create' | 'delete' | 'move' | 'rename' | 'write';
+
+const MUTATION_DENIAL_TERMS: Readonly<Record<
+  MutationOperationKind,
+  RegExp
+>> = {
+  copy: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:copy|cp|duplicate)\b|\bwithout\s+(?:copying|duplicating)\b|(?:不要|别|禁止|不得).{0,24}(?:copy|cp|duplicate|复制|拷贝)/i,
+  create: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:create|generate|mkdir|make)\b|\bwithout\s+(?:creating|generating|making)\b|(?:不要|别|禁止|不得).{0,24}(?:create|generate|mkdir|make|创建|新建|生成)/i,
+  delete: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:delete|del|erase|remove|rm|rmdir)\b|\bwithout\s+(?:deleting|removing|erasing)\b|(?:不要|别|禁止|不得).{0,24}(?:delete|del|erase|remove|rm|rmdir|删除|移除|清理)/i,
+  move: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:move|mv|relocate|organize)\b|\bwithout\s+(?:moving|relocating|organizing)\b|(?:不要|别|禁止|不得).{0,24}(?:move|mv|relocate|organize|移动|移到|搬到|整理)/i,
+  rename: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:rename|ren)\b|\bwithout\s+renaming\b|(?:不要|别|禁止|不得).{0,24}(?:rename|ren|重命名|改名)/i,
+  write: /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b[\s\S]{0,48}\b(?:write|edit|update|modify|save)\b|\bwithout\s+(?:writing|editing|updating|modifying|saving)\b|(?:不要|别|禁止|不得).{0,24}(?:write|edit|update|modify|save|写入|编辑|修改|更新|保存)/i,
+};
+
+const NON_EXECUTING_DENIAL_INTENT = /\b(?:do\s+not|don't|dont|never)\s+(?:execute|run|proceed|perform|apply|make\s+(?:the\s+)?change|do\s+(?:it|that|this))\b|\bnot\s+actually\s+(?:execute|run|proceed|perform|apply|do\s+(?:it|that|this))\b|(?:不要|别|禁止|不得)(?:实际|真的)?(?:执行|操作|运行|实施|应用|改动|动|做)(?![./\\])|不(?:执行|操作)(?![./\\])/i;
+const NON_EXECUTING_REQUEST_INTENT = /(?:^|[\n,.;!?，。；！？])\s*(?:(?:please|kindly|just)\s+|(?:(?:can|could|would)\s+you\s+)|请(?:你)?\s*|(?:只|仅|仅仅)\s*)*(?:explain(?![./\\])\b|describe(?![./\\])\b|discuss(?![./\\])\b|how\s+to\b|show\s+me\s+how\b|should\s+(?:i|we)\b|(?:would|could|is|are)\s+(?:moving|copying|deleting|removing|writing|editing|creating|renaming)\b|whether\b|what\s+if\b|hypothetically\b|解释(?!器)|说明(?!书)|讨论|如何|怎么|是否|要不要|该不该|假设|仅供参考|只是\s*说明(?!书))/i;
+const CONCRETE_FILE_REFERENCE = /(?:^|[\s"'`])([A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z0-9]{1,12})(?=$|[\s"'`,.;:!?])/g;
+const ACTION_SCOPED_REFERENCE = /\b(?:copy|cp|duplicate|create|generate|mkdir|make|delete|del|erase|remove|rm|rmdir|move|mv|relocate|organize|rename|ren|write|edit|update|modify|save)\s+(?:the\s+)?["'`]?([A-Za-z0-9_][A-Za-z0-9_.\\/-]*)/gi;
+const MUTATION_INTENT_TERMS: Readonly<Record<MutationOperationKind, RegExp>> = {
+  copy: /\b(?:copy|cp|duplicate)\b|复制|拷贝/i,
+  create: /\b(?:create|generate|mkdir|make)\b|创建|新建|生成/i,
+  delete: /\b(?:delete|del|erase|remove|rm|rmdir)\b|删除|移除|清理/i,
+  move: /\b(?:move|mv|relocate|organize)\b|移动|移到|搬到|整理/i,
+  rename: /\b(?:rename|ren)\b|重命名|改名/i,
+  write: /\b(?:write|edit|update|modify|save|fix)\b|写入|编辑|修改|更新|保存|修复/i,
+};
+const MUTATION_INTENT_COMPATIBILITY: Readonly<Record<
+  MutationOperationKind,
+  ReadonlySet<MutationOperationKind>
+>> = {
+  copy: new Set(['copy']),
+  create: new Set(['create', 'write']),
+  delete: new Set(['delete']),
+  move: new Set(['move', 'rename']),
+  rename: new Set(['move', 'rename']),
+  write: new Set(['create', 'write']),
+};
+
+function operationTargetPaths(operation: AutoModePermissionOperation): string[] {
+  return 'target' in operation
+    ? [operation.target.path]
+    : 'source' in operation
+      ? [operation.source.path, operation.destination.path]
+      : [];
+}
+
+function normalizedTargetBasenames(operation: AutoModePermissionOperation): Set<string> {
+  const paths = operationTargetPaths(operation);
+  return new Set(paths.map((value) => (
+    value.replace(/\\/g, '/').replace(/\/+$/, '').split('/').at(-1)?.toLowerCase() ?? ''
+  )));
+}
+
+function intentWithoutOperationPaths(
+  operation: AutoModePermissionOperation,
+  currentIntent: string,
+): string {
+  const lexemes = operationTargetPaths(operation).flatMap((value) => {
+    const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    const basename = normalized.split('/').at(-1) ?? '';
+    return [value, normalized, ...(basename.includes('.') ? [basename] : [])];
+  });
+  return [...new Set(lexemes.filter((value) => value.length > 1))]
+    .sort((left, right) => right.length - left.length)
+    .reduce((intent, value) => (
+      intent.replace(new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), ' target ')
+    ), currentIntent);
+}
+
+function intentNamesOnlyDifferentConcreteFiles(
+  operation: AutoModePermissionOperation,
+  currentIntent: string,
+): boolean {
+  const references = [
+    ...currentIntent.matchAll(CONCRETE_FILE_REFERENCE),
+    ...currentIntent.matchAll(ACTION_SCOPED_REFERENCE),
+  ]
+    .map((match) => match[1]?.replace(/[.,;:!?]+$/, '').toLowerCase())
+    .filter((value): value is string => value !== undefined);
+  if (references.length === 0) return false;
+  const targets = normalizedTargetBasenames(operation);
+  return !references.some((reference) => {
+    const basename = reference.replace(/\\/g, '/').split('/').at(-1) ?? reference;
+    return targets.has(basename);
+  });
+}
+
+function intentRequestsDifferentMutation(
+  operation: AutoModePermissionOperation,
+  currentIntent: string,
+): boolean {
+  if (
+    operation.kind === 'read'
+    || operation.kind === 'execute'
+    || operation.kind === 'unknown'
+  ) return false;
+  const operationKind: MutationOperationKind = operation.kind;
+  const requested = (Object.entries(MUTATION_INTENT_TERMS) as Array<
+    [MutationOperationKind, RegExp]
+  >)
+    .filter(([, terms]) => terms.test(currentIntent))
+    .map(([kind]) => kind);
+  return requested.length > 0
+    && !requested.some((kind) => MUTATION_INTENT_COMPATIBILITY[operationKind].has(kind));
+}
+
+function mutationContradictsCurrentIntent(
+  operation: AutoModePermissionOperation,
+  currentIntent: string,
+): boolean {
+  if (
+    operation.kind === 'read'
+    || operation.kind === 'execute'
+    || operation.kind === 'unknown'
+  ) return false;
+  const intentWithoutTargets = intentWithoutOperationPaths(operation, currentIntent);
+  return MUTATION_DENIAL_TERMS[operation.kind].test(intentWithoutTargets)
+    || NON_EXECUTING_DENIAL_INTENT.test(intentWithoutTargets)
+    || NON_EXECUTING_REQUEST_INTENT.test(intentWithoutTargets)
+    || intentRequestsDifferentMutation(operation, intentWithoutTargets)
+    || intentNamesOnlyDifferentConcreteFiles(operation, currentIntent);
+}
+
+function isAllowedMutationBoundary(boundary: AutoModePermissionBoundary): boolean {
+  return boundary === 'workspace' || boundary === 'system-temp';
+}
+
+function isDeterministicallyAllowedOperation(
+  operation: AutoModePermissionOperation,
+): boolean {
+  if (operation.options?.whatIf === true) return true;
+  if (operation.kind === 'execute') return operation.options?.readOnly === true;
+  if (operation.kind === 'unknown') return false;
+  if (operation.kind === 'read') {
+    return operation.target.boundary !== 'protected'
+      && operation.target.boundary !== 'unresolved';
+  }
+  if ('target' in operation) return isAllowedMutationBoundary(operation.target.boundary);
+  if (!('source' in operation)) return false;
+  if (operation.kind === 'copy') {
+    return isAllowedMutationBoundary(operation.destination.boundary)
+      && operation.source.boundary !== 'protected'
+      && operation.source.boundary !== 'unresolved';
+  }
+  return isAllowedMutationBoundary(operation.source.boundary)
+    && isAllowedMutationBoundary(operation.destination.boundary);
+}
+
+function isDeterministicallyAllowed(
+  permissionReview: AutoModePermissionReview,
+  intentEvidence?: PermissionIntentEvidence,
+): boolean {
+  if (
+    permissionReview.analysis.status !== 'complete'
+    || permissionReview.analysis.binding !== 'exact'
+    || permissionReview.risks.some((risk) => !DETERMINISTIC_OPERATION_RISKS.has(risk))
+    || permissionReview.operations.length === 0
+  ) {
+    return false;
+  }
+  const currentIntent = intentEvidence?.currentUserContent?.trim();
+  return permissionReview.operations.every((operation) => (
+    isDeterministicallyAllowedOperation(operation)
+    && (
+      !currentIntent
+      || (
+        intentEvidence?.currentUserContentTruncated !== true
+        && !mutationContradictsCurrentIntent(operation, currentIntent)
+      )
+    )
   ));
 }
 
-function isExactSafeRead(permissionReview: AutoModePermissionReview): boolean {
-  return permissionReview.analysis.status === 'complete'
-    && permissionReview.analysis.binding === 'exact'
-    && permissionReview.risks.length === 0
-    && permissionReview.operations.length > 0
-    && permissionReview.operations.every((operation) => (
-      operation.kind === 'read'
-      || (operation.kind === 'execute' && operation.options?.readOnly === true)
-    ));
+function isSandboxContainableMutation(
+  permissionReview: AutoModePermissionReview,
+): boolean {
+  if (
+    permissionReview.analysis.status !== 'complete'
+    || permissionReview.analysis.binding !== 'exact'
+    || permissionReview.operations.length === 0
+  ) return false;
+  let hasMutation = false;
+  for (const operation of permissionReview.operations) {
+    if (operation.options?.whatIf === true || operation.kind === 'read') {
+      if (
+        operation.kind === 'read'
+        && (
+          operation.target.boundary === 'protected'
+          || operation.target.boundary === 'unresolved'
+        )
+      ) return false;
+      continue;
+    }
+    if (operation.kind === 'execute' || operation.kind === 'unknown') return false;
+    hasMutation = true;
+    if ('target' in operation) {
+      if (!isAllowedMutationBoundary(operation.target.boundary)) return false;
+      continue;
+    }
+    if (!('source' in operation)) return false;
+    if (operation.kind === 'copy') {
+      if (
+        !isAllowedMutationBoundary(operation.destination.boundary)
+        || operation.source.boundary === 'protected'
+        || operation.source.boundary === 'unresolved'
+      ) return false;
+      continue;
+    }
+    if (
+      !isAllowedMutationBoundary(operation.source.boundary)
+      || !isAllowedMutationBoundary(operation.destination.boundary)
+    ) return false;
+  }
+  return hasMutation;
 }
 
 export function createAutoModeToolGuardrail(
@@ -439,14 +677,13 @@ export function createAutoModeToolGuardrail(
   };
   const timeoutMs = config.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
 
-  // For tests only: lets us swap the provider mid-flight to verify downgrade.
+  // For tests only: lets us swap the provider mid-flight.
   let providerOverride: KodaXBaseProvider | undefined;
 
   // Single mutation point for `state.engine`. Fires `onEngineChange` on every
   // real transition (no callback when the new value equals the old) so UI
   // surfaces (status bar engine indicator) stay in sync without polling. The
-  // automatic-downgrade paths (denial threshold, circuit breaker) and the
-  // manual `setEngine(...)` path both go through here.
+  // explicit `setEngine(...)` path goes through here.
   const transitionEngine = (next: AutoModeEngine): void => {
     if (state.engine === next) return;
     state.engine = next;
@@ -472,25 +709,57 @@ export function createAutoModeToolGuardrail(
     // classifier prompt and the escalate-to-user path (REPL UI renders
     // Scope/Risk from signals). Empty array when no collector matches.
     const signals = collectAllSignals(guardedCall, projectRoot, signalCollectors, executionCwd);
+    let permissionReview: AutoModePermissionReview | undefined;
+
+    const allowFinal = (): GuardrailVerdict => {
+      if (
+        guardedCall.name === 'bash'
+        && permissionReview
+        && isSandboxContainableMutation(permissionReview)
+      ) {
+        config.admitWorkspaceSandboxCall?.(guardedCall, permissionReview);
+      }
+      return { action: 'allow' };
+    };
 
     // When the REPL has supplied askUser, every "escalate" path is resolved
     // here into a concrete allow/block; otherwise we fall through to the
     // legacy escalate verdict (Runner throws GuardrailEscalateError).
     // FEATURE_158: pass signals to askUser so REPL can render Scope/Risk.
-    const escalateOrAsk = async (reason: string): Promise<GuardrailVerdict> => {
+    const escalateOrAsk = async (
+      reason: string,
+      diagnostics?: AutoModeDecisionDiagnostics,
+    ): Promise<GuardrailVerdict> => {
       if (!config.askUser) {
         return { action: 'escalate', reason };
       }
-      const verdict = await config.askUser(guardedCall, reason, signals);
-      if (verdict === 'allow') return { action: 'allow' };
+      const verdict = await config.askUser(guardedCall, reason, signals, diagnostics);
+      if (verdict === 'allow') return allowFinal();
+      if (verdict === 'timeout') {
+        return { action: 'block', reason: APPROVAL_TIMEOUT_REASON };
+      }
       return { action: 'block', reason };
     };
 
-    // FEATURE_158 — Tier 0: absolute denylist. Runs BEFORE engine check so
-    // catastrophic patterns (rm -rf /, mkfs, dd of=/dev/sd*, fork bomb,
-    // ~/.kodax write) are blocked even when engine is downgraded to 'rules'.
-    // LLM cannot override. denialTracker NOT incremented (Tier 0 isn't a
-    // classifier denial — separate concern from engine downgrade).
+    const allowOrAskOnClassifierFailure = async (
+      reason: string,
+      diagnostics: AutoModeDecisionDiagnostics,
+    ): Promise<GuardrailVerdict> => {
+      try {
+        if (await config.allowOnClassifierFailure?.(guardedCall)) {
+          return allowFinal();
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        config.log?.('warn', `[auto-mode] Accept-edits fallback failed: ${detail}`);
+      }
+      return escalateOrAsk(reason, diagnostics);
+    };
+
+    // FEATURE_158 — Tier 0 identifies catastrophic patterns before the
+    // classifier. It is a mandatory approval boundary, not an irreversible
+    // policy block: interactive users can still authorize an exact action.
+    // denialTracker is not incremented because Tier 0 is not a classifier concern.
     const tier0: AbsoluteDenyResult = [
       checkAbsoluteDeny,
       ...(config.extraAbsoluteDenyChecks ?? []),
@@ -502,7 +771,6 @@ export function createAutoModeToolGuardrail(
         'warn',
         `[auto-mode] Tier 0 absolute denylist matched (${tier0.patternId}): ${tier0.reason}`,
       );
-      return { action: 'block', reason: tier0.reason };
     }
 
     // Tier 1: explicitly exempt tools may opt out through an empty projection.
@@ -522,7 +790,6 @@ export function createAutoModeToolGuardrail(
       config.log?.('warn', `[auto-mode] ${reason}`);
       return escalateOrAsk(reason);
     }
-    let permissionReview: AutoModePermissionReview | undefined;
     const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
     if (requiresReadAnalysis && !config.analyzeCall) {
       return escalateOrAsk('read safety analyzer is unavailable');
@@ -543,15 +810,29 @@ export function createAutoModeToolGuardrail(
         permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
       }
     }
-    if (permissionReview && hasSensitiveReadRisk(permissionReview)) {
-      return escalateOrAsk('sensitive read requires user confirmation');
+    let permissionAction = action;
+    let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
+    if (permissionReview) {
+      permissionAction = serializePermissionReview(permissionReview, action);
+      intentEvidence = buildPermissionIntentEvidence(ctx.messages ?? [], permissionAction);
     }
-    if (permissionReview && isExactSafeRead(permissionReview)) return { action: 'allow' };
+    if (tier0.denied) return escalateOrAsk(tier0.reason);
+    if (
+      permissionReview
+      && isDeterministicallyAllowed(permissionReview, intentEvidence)
+    ) {
+      return allowFinal();
+    }
     if (action === '') {
       if (requiresReadAnalysis && permissionReview) {
-        return escalateOrAsk('read target could not be verified as safe');
+        // Unsafe, protected, or unresolved reads still receive an LLM review
+        // using the structured permission facts even though their legacy tool
+        // projection is empty.
+        permissionAction = serializePermissionReview(permissionReview, 'read');
+        intentEvidence = buildPermissionIntentEvidence(ctx.messages ?? [], permissionAction);
+      } else {
+        return allowFinal();
       }
-      return { action: 'allow' };
     }
 
     // Rules engine: Tier 1 already returned above. Runtime supplies the
@@ -575,35 +856,32 @@ export function createAutoModeToolGuardrail(
         config.log?.('warn', `[auto-mode] ${reason}`);
         return escalateOrAsk(reason);
       }
-      if (decision.action === 'allow') return { action: 'allow' };
-      if (decision.action === 'block') return decision;
+      if (decision.action === 'allow') return allowFinal();
+      if (decision.action === 'block') return escalateOrAsk(decision.reason);
       return escalateOrAsk(decision.reason);
     }
 
     // Resolve the complete override chain before consulting failure trackers.
     // A missing model is a local configuration error, not classifier
-    // infrastructure instability: block without calling the provider, asking
-    // the user for tool approval, advancing either tracker, or downgrading to
-    // rules. Tier 1 and Tier 0 intentionally remain ahead of this check.
+    // infrastructure instability. Apply the same bounded fallback without
+    // calling the provider or advancing either tracker.
     const resolved = resolveClassifierModel(buildResolveOptions(config));
     if (typeof resolved.model !== 'string' || resolved.model.trim().length === 0) {
       const reason = 'auto-mode classifier model is not configured; select a model before using Auto LLM';
       config.log?.('warn', `[auto-mode] ${reason}`);
-      return { action: 'block', reason };
+      return allowOrAskOnClassifierFailure(reason, {
+        source: 'configuration',
+      });
     }
 
-    // Threshold checks — engine downgrade BEFORE making another classify call
-    if (denialShouldFallback(state.denials)) {
-      transitionEngine('rules');
-      config.log?.('warn', '[auto-mode] denial threshold crossed — engine downgraded to rules');
-      return escalateOrAsk(
-        'auto-mode engine downgraded after consecutive denials; user confirmation required',
-      );
-    }
+    // Infrastructure degradation never widens policy to Auto[rules].
     if (breakerShouldFallback(state.breaker, Date.now())) {
-      transitionEngine('rules');
-      config.log?.('warn', '[auto-mode] circuit breaker tripped — engine downgraded to rules');
-      return escalateOrAsk('classifier infrastructure unstable; engine downgraded');
+      return allowOrAskOnClassifierFailure(
+        'classifier infrastructure is degraded; applying Accept-edits fallback',
+        {
+          source: 'classifier_circuit_breaker',
+        },
+      );
     }
 
     // Resolve the configured provider only after the final model check and
@@ -611,14 +889,12 @@ export function createAutoModeToolGuardrail(
     // request happens later inside classify().
     const provider = providerOverride ?? config.resolveProvider(resolved.providerName);
     if (!provider) {
-      return escalateOrAsk(`classifier provider "${resolved.providerName}" is not configured`);
-    }
-
-    let permissionAction = action;
-    let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
-    if (permissionReview) {
-      permissionAction = serializePermissionReview(permissionReview, action);
-      intentEvidence = buildPermissionIntentEvidence(ctx.messages ?? [], permissionAction);
+      return allowOrAskOnClassifierFailure(
+        `classifier provider "${resolved.providerName}" is not configured`,
+        {
+          source: 'configuration',
+        },
+      );
     }
 
     // FEATURE_158: kick off classifier with signals attached. The promise is
@@ -629,9 +905,8 @@ export function createAutoModeToolGuardrail(
     // Issue 143 (WS1): the classifier verdict is ALWAYS adopted, even when the
     // window expires. The window only decides whether we resolve instantly
     // (fast classify) or wait a bit longer (slow/remote provider) — it does NOT
-    // decide "hard-escalate vs not". A late `allow`/`block` is applied directly,
-    // so allow verdicts never surface a confirm dialog; only a genuine
-    // `escalate` verdict (or a classifier timeout) reaches the user. This is the
+    // decide "hard-escalate vs not". A late allow is applied directly and a
+    // late concern requests confirmation. This is the
     // late-verdict adoption (CC's peekSpeculativeClassifierCheck equivalent) that
     // makes auto[llm] usable on remote/slow providers where a single classify
     // round-trip routinely outruns the window. The background classifyPromise is
@@ -675,8 +950,7 @@ export function createAutoModeToolGuardrail(
       if (raceResult.kind === 'window-expired') {
         // Issue 143 (WS1): window expired — do NOT hard-escalate. Wait for the
         // real verdict and adopt it. The existing agent spinner covers the wait;
-        // allow/block resolve without ever showing a dialog, and only an
-        // `escalate` verdict (handled by the switch below) reaches the user. A
+        // allow resolves without a dialog while a concern reaches the user. A
         // late AbortError re-surfaces here and is re-thrown by the catch below.
         decision = await classifyPromise;
       } else {
@@ -688,41 +962,43 @@ export function createAutoModeToolGuardrail(
       }
       // Any other error gets routed through the breaker
       state.breaker = recordBreakerError(state.breaker, Date.now());
-      return escalateOrAsk(
+      return allowOrAskOnClassifierFailure(
         `classifier error: ${err instanceof Error ? err.message : String(err)}`,
+        {
+          source: 'classifier_failure',
+          classifierFailureKind: 'provider_error',
+        },
       );
     }
 
-    // Map decision → verdict + update tracker / breaker.
-    // After recording, immediately re-check thresholds so the engine
-    // downgrades on the SAME call that crosses the line, not the next one.
+    // Map decision to verdict and update diagnostic trackers.
     switch (decision.kind) {
       case 'allow':
         state.denials = recordDenialAllow(state.denials);
-        return { action: 'allow' };
+        return allowFinal();
 
-      case 'block':
-        if (decision.trackDenial !== false) {
-          state.denials = recordDenialBlock(state.denials);
-          if (denialShouldFallback(state.denials)) {
-            transitionEngine('rules');
-            config.log?.('warn', '[auto-mode] denial threshold crossed — engine downgraded to rules');
-          }
-        }
-        return { action: 'block', reason: decision.reason };
+      case 'confirm':
+        state.denials = recordDenialBlock(state.denials);
+        return escalateOrAsk(decision.reason, {
+          source: 'classifier_confirm',
+          classifierAttempts: decision.attempts,
+        });
 
-      case 'escalate':
+      case 'failure':
         state.breaker = recordBreakerError(state.breaker, Date.now());
-        if (breakerShouldFallback(state.breaker, Date.now())) {
-          transitionEngine('rules');
-          config.log?.('warn', '[auto-mode] circuit breaker tripped — engine downgraded to rules');
-        }
-        return escalateOrAsk(decision.reason);
+        return allowOrAskOnClassifierFailure(decision.reason, {
+          source: 'classifier_failure',
+          classifierFailureKind: decision.failureKind,
+          classifierAttempts: decision.attempts,
+        });
     }
   };
 
   const getStats = (): AutoModeStats => ({
     engine: state.engine,
+    classifierHealth: breakerShouldFallback(state.breaker, Date.now())
+      ? 'degraded'
+      : 'healthy',
     denials: state.denials,
     breaker: state.breaker,
   });

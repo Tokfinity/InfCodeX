@@ -13,6 +13,7 @@ import type {
   KodaXManagedTaskStatusEvent,
   KodaXRepoIntelligenceTraceEvent,
   KodaXSidecarMessageEvent,
+  KodaXShellSandboxObservation,
   KodaXTokenUsage,
   KodaXTurnCompletedEvent,
   KodaXTurnFailedEvent,
@@ -63,6 +64,11 @@ type JsonEvent =
       id: string;
       name: string;
       content: string;
+    } & JsonActivityMeta)
+  | ({
+      type: 'tool.sandbox';
+      id: string;
+      observation: KodaXShellSandboxObservation;
     } & JsonActivityMeta)
   | ({ type: 'stream.end' } & JsonActivityMeta)
   | ({ type: 'compact.start' } & JsonActivityMeta)
@@ -376,6 +382,15 @@ export function createJsonEvents(options: JsonEventOutputOptions = {}): KodaXEve
         type: 'tool.progress',
         id: update.id,
         message: update.message,
+        ...activityMetaFields(meta),
+      });
+    },
+
+    onToolSandboxObservation: (update, meta) => {
+      writeJsonLine(stdout, {
+        type: 'tool.sandbox',
+        id: update.id,
+        observation: update.observation,
         ...activityMetaFields(meta),
       });
     },

@@ -34,6 +34,38 @@ describe('parseRuntimeEvent', () => {
       });
   });
 
+  it('accepts only canonical sandbox observation unions', () => {
+    const payload = {
+      update: {
+        id: 'bash-1',
+        observation: {
+          version: 1,
+          state: 'applied',
+          backend: 'windows-restricted-user',
+          policyId: 'kodax-workspace-shell-v1',
+        },
+      },
+    };
+    expect(parseRuntimeEvent(event('tool.sandbox', payload)).ok).toBe(true);
+    expect(parseRuntimeEvent(event('tool.sandbox', {
+      update: {
+        ...payload.update,
+        observation: { ...payload.update.observation, backend: 'raw-process' },
+      },
+    })).ok).toBe(false);
+    expect(parseRuntimeEvent(event('tool.sandbox', {
+      update: {
+        id: 'bash-1',
+        observation: {
+          version: 1,
+          state: 'fallback',
+          reason: 'unknown_failure',
+          execution: 'normal_permission_policy',
+        },
+      },
+    })).ok).toBe(false);
+  });
+
   it('accepts the emitted session settings CAS payload', () => {
     expect(parseRuntimeEvent(event('session.settings.updated', {
       sessionId: 'session-1',

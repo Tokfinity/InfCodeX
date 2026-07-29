@@ -1326,14 +1326,35 @@ const MUTATE_ALL_POSITIONAL_COMMANDS = new Set([
 ]);
 const DESTINATION_ONLY_COMMANDS = new Set(['cp', 'copy']);
 
-function collectPositionalArgs(argv: readonly string[], startIndex = 1): string[] {
+const CMD_MUTATION_SWITCHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  copy: new Set(['/a', '/b', '/d', '/j', '/l', '/n', '/v', '/y', '/-y', '/z']),
+  del: new Set(['/p', '/f', '/s', '/q', '/a']),
+  erase: new Set(['/p', '/f', '/s', '/q', '/a']),
+  move: new Set(['/y', '/-y']),
+  rd: new Set(['/s', '/q']),
+  rmdir: new Set(['/s', '/q']),
+};
+
+function isCmdMutationSwitch(command: string, token: string): boolean {
+  const normalized = token.toLowerCase();
+  const base = normalized.slice(0, normalized.indexOf(':') >= 0
+    ? normalized.indexOf(':')
+    : normalized.length);
+  return CMD_MUTATION_SWITCHES[command]?.has(base) === true;
+}
+
+function collectPositionalArgs(
+  command: string,
+  argv: readonly string[],
+  startIndex = 1,
+): string[] {
   const positional: string[] = [];
   let optionsEnded = false;
   for (let index = startIndex; index < argv.length; index += 1) {
     const token = argv[index]!;
     if (token === '--') {
       optionsEnded = true;
-    } else if (optionsEnded || !token.startsWith('-')) {
+    } else if (optionsEnded || (!token.startsWith('-') && !isCmdMutationSwitch(command, token))) {
       positional.push(token);
     }
   }
@@ -1342,7 +1363,7 @@ function collectPositionalArgs(argv: readonly string[], startIndex = 1): string[
 
 function collectDirectCommandWriteTargets(stage: { readonly argv: readonly string[] }): string[] {
   const command = commandBasename(stage.argv[0] ?? '');
-  const positional = collectPositionalArgs(stage.argv);
+  const positional = collectPositionalArgs(command, stage.argv);
   if (MUTATE_ALL_POSITIONAL_COMMANDS.has(command)) return positional;
   if (DESTINATION_ONLY_COMMANDS.has(command)) {
     const targetDirectoryIndex = stage.argv.findIndex((token) => (

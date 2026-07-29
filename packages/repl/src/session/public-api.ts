@@ -1221,7 +1221,8 @@ export async function listRunningSessions(): Promise<RunningSessionInfo[]> {
 
 export type DeleteSessionResult =
   | { ok: true }
-  | { error: { code: 'session_running'; runningProcess: { pid: number; startedAt: number } } };
+  | { error: { code: 'session_running'; runningProcess: { pid: number; startedAt: number } } }
+  | { error: { code: 'delete_failed' } };
 
 /**
  * Delete a session by ID.
@@ -1250,8 +1251,14 @@ async function deleteSessionImpl(
     }
     await getStorage(sessionsDirOverride).delete(id);
     return { ok: true };
-  } catch {
-    return { ok: true };
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'session.public-api',
+      level: 'error',
+      message: 'Session deletion failed.',
+      detail: { sessionId: id, error },
+    });
+    return { error: { code: 'delete_failed' } };
   }
 }
 
@@ -1270,7 +1277,13 @@ export async function archiveSession(id: string): Promise<boolean> {
 async function archiveSessionImpl(id: string, sessionsDirOverride: string | undefined): Promise<boolean> {
   try {
     return await getStorage(sessionsDirOverride).archive(id);
-  } catch {
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'session.public-api',
+      level: 'error',
+      message: 'Session archive failed.',
+      detail: { sessionId: id, error },
+    });
     return false;
   }
 }
@@ -1283,7 +1296,13 @@ export async function unarchiveSession(id: string): Promise<boolean> {
 async function unarchiveSessionImpl(id: string, sessionsDirOverride: string | undefined): Promise<boolean> {
   try {
     return await getStorage(sessionsDirOverride).unarchive(id);
-  } catch {
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'session.public-api',
+      level: 'error',
+      message: 'Session unarchive failed.',
+      detail: { sessionId: id, error },
+    });
     return false;
   }
 }

@@ -54,6 +54,15 @@ import {
   resolvePermissionModeEffort,
   saveConfig,
 } from '../common/utils.js';
+import {
+  providerSetupRestartInstructions,
+} from '../common/provider-setup.js';
+import { initializeSetupConfiguration } from '../common/setup-config.js';
+import { renderSetupGuide } from '../common/setup-guide.js';
+import {
+  runProviderSetupWizard,
+  type ProviderSetupInteraction,
+} from './provider-setup.js';
 import { probeProviderReasoningEfforts } from '../common/capability-probe.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
 import { nextAgentMode } from '../common/agent-mode.js';
@@ -307,6 +316,81 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /help mode         ') + '# Detailed help for /mode');
       console.log(chalk.dim('  /mode help         ') + '# Same detailed help shortcut');
       console.log();
+    },
+  },
+  {
+    name: 'setup',
+    description: 'Initialize configuration and configure a provider',
+    usage: '/setup [--custom|--help]',
+    handler: async (args, _context, callbacks) => {
+      const customOnly = args.length === 1 && args[0] === '--custom';
+      if (args.length > 0 && !customOnly) {
+        console.log(chalk.red('\n[Usage: /setup [--custom|--help]]'));
+        return;
+      }
+
+      console.log(`\n${renderSetupGuide()}\n`);
+      if (callbacks.prepareSetupSandbox) {
+        const sandbox = await callbacks.prepareSetupSandbox();
+        const label = sandbox.status === 'ready'
+          ? chalk.green('active')
+          : sandbox.status === 'cancelled'
+            ? chalk.yellow('cancelled')
+            : chalk.yellow('not active');
+        console.log(`Sandbox: [${label}]`);
+        for (const line of sandbox.lines) console.log(`  ${line}`);
+        console.log();
+      }
+      const initialized = initializeSetupConfiguration({
+        validateA2A: callbacks.validateSetupA2AConfig,
+      });
+      for (const file of initialized.files) {
+        const marker = file.status === 'created'
+          ? chalk.green('created')
+          : file.status === 'invalid'
+            ? chalk.red('invalid')
+            : file.status === 'missing'
+              ? chalk.yellow('missing')
+              : chalk.dim('existing');
+        console.log(`  [${marker}] ${file.path}`);
+        if (file.diagnostic) console.log(`      ${chalk.red(file.diagnostic)}`);
+      }
+      console.log();
+      if (initialized.files.some((file) => file.status === 'invalid')) {
+        console.log(chalk.red(
+          'Setup stopped: fix the invalid active configuration above, then run /setup again.',
+        ));
+        return;
+      }
+
+      const interaction: ProviderSetupInteraction = {
+        choose: async (message, items) => {
+          const labels = items.map((item) => item.label);
+          const selected = await callbacks.ui.select(message, labels);
+          return items.find((item) => item.label === selected)?.value;
+        },
+        text: (message, defaultValue) => callbacks.ui.input(message, defaultValue),
+        confirm: (message) => callbacks.ui.confirm(message),
+      };
+      const result = await runProviderSetupWizard({ interaction, customOnly });
+      if (result.status === 'cancelled') {
+        console.log(chalk.dim('\nProvider setup cancelled. Configuration files remain initialized.\n'));
+        return;
+      }
+
+      console.log(chalk.green(
+        `\nProvider setup saved: ${result.selection.provider}/${result.selection.model}`,
+      ));
+      console.log(chalk.dim(`Config: ${result.selection.configPath}`));
+      for (const line of providerSetupRestartInstructions({
+        apiKeyEnv: result.selection.apiKeyEnv,
+      })) {
+        console.log(`  ${line}`);
+      }
+      console.log();
+    },
+    detailedHelp: () => {
+      console.log(`\n${renderSetupGuide()}\n`);
     },
   },
   {
@@ -751,6 +835,53 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: 'sandbox',
+    description: 'Inspect the optional ASRT sandbox backend',
+    usage: '/sandbox',
+    handler: async (args, _context, callbacks) => {
+      if (args.length > 0) {
+        console.log(chalk.red('\n[Usage: /sandbox]'));
+        return;
+      }
+      if (!callbacks.inspectSandbox) {
+        console.log(chalk.dim(
+          '\nSandbox diagnostics are unavailable because this host did not provide them.\n',
+        ));
+        return;
+      }
+
+      const report = await callbacks.inspectSandbox();
+      const status = report.ready ? chalk.green('ready') : chalk.yellow('unavailable');
+      console.log(chalk.bold('\nSandbox\n'));
+      console.log(chalk.dim(`  Status:      ${status}`));
+      console.log(chalk.dim(`  Platform:    ${report.platform}`));
+      console.log(chalk.dim(`  Backend:     ${report.backend}`));
+      console.log(chalk.dim(`  ASRT:        ${report.version}`));
+      for (const diagnostic of report.diagnostics) {
+        console.log(chalk.dim(`  Diagnostic:  ${diagnostic}`));
+      }
+      if (!report.ready) {
+        for (const guidance of report.guidance) {
+          console.log(chalk.dim(`  Guidance:    ${guidance}`));
+        }
+      }
+      console.log();
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/sandbox - Inspect Sandbox Readiness\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /sandbox    ') + 'Refresh and display ASRT readiness');
+      console.log();
+      console.log(chalk.dim(
+        'This command is read-only. It never activates ASRT or requests elevation.',
+      ));
+      console.log(chalk.dim(
+        'Use `kodax sandbox setup` explicitly when activation is required.',
+      ));
+      console.log();
+    },
+  },
+  {
     name: 'status',
     aliases: ['info', 'ctx'],
     description: 'Show current session status',
@@ -806,7 +937,9 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.cyan('\nMCP Status\n'));
       if (!mcpProvider) {
         console.log(chalk.yellow('  No MCP provider registered.'));
-        console.log(chalk.dim('  Add mcpServers to ~/.kodax/config.json to enable MCP.\n'));
+        console.log(chalk.dim(
+          '  Add servers to ~/.kodax/integrations/mcp.json or run `kodax mcp add`.\n',
+        ));
         return;
       }
 
@@ -839,6 +972,8 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /mcp            ') + 'Show MCP server status');
       console.log(chalk.dim('  /mcp status     ') + 'Same as /mcp');
       console.log(chalk.dim('  /mcp refresh    ') + 'Force-refresh all MCP server catalogs');
+      console.log(chalk.dim('  Config: ~/.kodax/integrations/mcp.json'));
+      console.log(chalk.dim('  Template: ~/.kodax/integrations/mcp.example.jsonc'));
       console.log();
     },
   },

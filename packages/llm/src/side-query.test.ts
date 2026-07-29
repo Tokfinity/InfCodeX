@@ -310,10 +310,15 @@ describe('sideQuery — cost tracking', () => {
       provider: 'stub',
       model: 'stub-default',
       timeoutMs: 30_000,
+      systemBytes: Buffer.byteLength('sys', 'utf8'),
+      messageBytes: Buffer.byteLength(JSON.stringify(baseMessages), 'utf8'),
       retryCount: 1,
       retryWaitMs: 250,
       terminalPhase: 'completed',
     });
+    expect(result.diagnostics?.promptBytes).toBe(
+      result.diagnostics!.systemBytes + result.diagnostics!.messageBytes,
+    );
     expect(result.diagnostics?.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
@@ -402,6 +407,25 @@ describe('sideQuery — failure modes', () => {
     });
   });
 
+  it('enforces its deadline even when the provider ignores AbortSignal', async () => {
+    const provider = new StubProvider(async () => (
+      new Promise<KodaXStreamResult>((resolve) => {
+        setTimeout(() => resolve(okResult()), 100);
+      })
+    ));
+    const startedAt = performance.now();
+
+    const result = await sideQuery({
+      provider, model: 'm', system: 's',
+      messages: baseMessages, querySource: 'auto_mode',
+      timeoutMs: 10,
+    });
+
+    expect(result.stopReason).toBe('timeout');
+    expect(performance.now() - startedAt).toBeLessThan(80);
+    expect(result.diagnostics?.terminalPhase).toBe('pre_output');
+  });
+
   it('reports whether a timeout happened after streaming began', async () => {
     const provider = new StubProvider(async ({ streamOptions, signal }) => {
       streamOptions?.onTextDelta?.('partial');
@@ -427,6 +451,35 @@ describe('sideQuery — failure modes', () => {
     expect(result.diagnostics?.terminalPhase).toBe('streaming');
     expect(result.diagnostics?.firstOutputMs).toBeGreaterThanOrEqual(0);
     expect(result.diagnostics?.streamMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('distinguishes an upstream lifecycle event and thinking from first text output', async () => {
+    const provider = new StubProvider(async ({ streamOptions, signal }) => {
+      streamOptions?.onHeartbeat?.();
+      streamOptions?.onThinkingDelta?.('checking policy');
+      return new Promise<KodaXStreamResult>((_, reject) => {
+        signal!.addEventListener(
+          'abort',
+          () => reject(new DOMException('Request aborted', 'AbortError')),
+          { once: true },
+        );
+      });
+    });
+
+    const result = await sideQuery({
+      provider,
+      model: 'm',
+      system: 's',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      timeoutMs: 20,
+    });
+
+    expect(result.stopReason).toBe('timeout');
+    expect(result.diagnostics?.terminalPhase).toBe('thinking');
+    expect(result.diagnostics?.firstUpstreamEventMs).toBeGreaterThanOrEqual(0);
+    expect(result.diagnostics?.firstThinkingDeltaMs).toBeGreaterThanOrEqual(0);
+    expect(result.diagnostics?.firstTextDeltaMs).toBeUndefined();
   });
 
   it('returns aborted stopReason when caller signal fires before timeout', async () => {

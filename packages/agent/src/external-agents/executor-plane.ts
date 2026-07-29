@@ -547,6 +547,7 @@ class AgentExecutorPlaneRuntime {
   readonly #eventPumpTails = new Set<Promise<void>>();
   readonly #eventPumpTasks = new Set<string>();
   readonly #taskExecutors = new Map<string, AgentExecutor>();
+  readonly #startControllers = new Map<string, AbortController>();
   readonly #waiters = new Map<string, Set<{
     readonly resolve: (task: AgentTaskSnapshot) => void;
     readonly reject: (error: Error) => void;
@@ -554,12 +555,13 @@ class AgentExecutorPlaneRuntime {
   readonly #startTails = new Map<string, Promise<void>>();
   readonly #taskAdmissionTails = new Map<string, Promise<void>>();
   readonly #taskMutationTails = new Map<string, Promise<void>>();
+  readonly #taskCancellationPromises = new Map<string, Promise<AgentTaskSnapshot>>();
   readonly #runtimeOperationTails = new Set<Promise<void>>();
   #registrationMutationTail: Promise<void> = Promise.resolve();
   #snapshotMutationTail: Promise<void> = Promise.resolve();
   #taskRegistrationSnapshotsNeedRewrite = false;
   #closed = false;
-  #closePromise: Promise<void> | undefined;
+  #cleanupPromise: Promise<void> | undefined;
 
   constructor(private readonly options: PlaneRuntimeOptions) {}
 
@@ -620,10 +622,10 @@ class AgentExecutorPlaneRuntime {
   };
 
   readonly tasks: AgentTaskService = {
-    start: async (input) => {
+    start: async (input, signal) => {
       return this.withRuntimeOperation(async () => {
         const captured = cloneJsonSafe(input, 'Agent task start input', true);
-        return this.startTaskSerialized(captured);
+        return this.startTaskSerialized(captured, signal);
       });
     },
     list: async (filter) => { this.assertOpen(); return this.listTasks(filter); },
@@ -676,19 +678,33 @@ class AgentExecutorPlaneRuntime {
     return summary;
   }
 
-  private async startTaskSerialized(input: AgentTaskStartInput): Promise<AgentTaskSnapshot> {
+  private async startTaskSerialized(
+    input: AgentTaskStartInput,
+    signal?: AbortSignal,
+  ): Promise<AgentTaskSnapshot> {
     const previous = this.#startTails.get(input.agentId) ?? Promise.resolve();
     let release: (() => void) | undefined;
     const tail = new Promise<void>((resolve) => { release = resolve; });
     this.#startTails.set(input.agentId, tail);
-    await previous;
-    try {
-      this.assertOpen();
-      return await this.startTask(input);
-    } finally {
+    let predecessorSettled = false;
+    const releaseQueue = async (): Promise<void> => {
       release?.();
       if (this.#startTails.get(input.agentId) === tail) this.#startTails.delete(input.agentId);
       await this.disposeUnusedExecutors();
+    };
+    try {
+      await waitForExternalStartStep(previous, signal);
+      predecessorSettled = true;
+      this.assertOpen();
+      return await this.startTask(input, signal);
+    } finally {
+      if (predecessorSettled) {
+        await releaseQueue();
+      } else {
+        void previous.then(releaseQueue).catch((error: unknown) => {
+          this.reportBackgroundError(error, { operation: 'executor-dispose' });
+        });
+      }
     }
   }
 
@@ -801,12 +817,17 @@ class AgentExecutorPlaneRuntime {
   }
 
   close(): Promise<void> {
-    if (this.#closePromise) return this.#closePromise;
-    this.#closePromise = this.closeWithinDeadline();
-    return this.#closePromise;
+    if (!this.#cleanupPromise) {
+      const cleanup = this.closeRuntime();
+      this.#cleanupPromise = cleanup;
+      void cleanup.catch(() => {
+        if (this.#cleanupPromise === cleanup) this.#cleanupPromise = undefined;
+      });
+    }
+    return this.closeWithinDeadline(this.#cleanupPromise);
   }
 
-  private async closeWithinDeadline(): Promise<void> {
+  private async closeWithinDeadline(cleanup: Promise<void>): Promise<void> {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
@@ -816,7 +837,7 @@ class AgentExecutorPlaneRuntime {
       }, this.options.closeTimeoutMs);
     });
     try {
-      await Promise.race([this.closeRuntime(), timedOut]);
+      await Promise.race([cleanup, timedOut]);
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
     }
@@ -825,12 +846,16 @@ class AgentExecutorPlaneRuntime {
   private async closeRuntime(): Promise<void> {
     this.#closed = true;
     const closeError = new Error('Agent executor plane is closed.');
+    for (const controller of this.#startControllers.values()) {
+      controller.abort(closeError);
+    }
     for (const waiters of this.#waiters.values()) {
       for (const waiter of waiters) waiter.reject(closeError);
     }
     this.#waiters.clear();
     await Promise.all([...this.#runtimeOperationTails]);
     await Promise.all([...this.#startTails.values()]);
+    await Promise.allSettled([...this.#executorCreations.values()]);
     await Promise.all([...this.#executorOperationTails]);
     const executors = [...new Set([
       ...this.#executors.values(),
@@ -859,7 +884,11 @@ class AgentExecutorPlaneRuntime {
     await Promise.all(retryable.map((executor) => this.disposeExecutor(executor, {
       operation: 'executor-dispose',
     })));
-    this.#pendingExecutorDisposals.clear();
+    if (this.#pendingExecutorDisposals.size > 0) {
+      throw new Error(
+        `${this.#pendingExecutorDisposals.size} external agent executor(s) could not be disposed.`,
+      );
+    }
     await Promise.all([...this.#eventPumpTails]);
   }
 
@@ -948,36 +977,68 @@ class AgentExecutorPlaneRuntime {
     }
   }
 
-  private async startTask(input: AgentTaskStartInput): Promise<AgentTaskSnapshot> {
+  private async startTask(
+    input: AgentTaskStartInput,
+    callerSignal?: AbortSignal,
+  ): Promise<AgentTaskSnapshot> {
     const query = this.queryFromTask(input);
-    const preflight = await this.preflight({
+    const preflight = await waitForExternalStartStep(this.preflight({
       agentId: input.agentId,
       query,
       ...(input.expectedConfigurationRevision
         ? { expectedConfigurationRevision: input.expectedConfigurationRevision }
         : {}),
-    });
+    }), callerSignal);
     if (!preflight.ok) throw new Error(`Agent preflight failed: ${preflight.reasons.join('; ')}`);
+    throwIfExternalStartAborted(callerSignal);
     const registration = this.requireRegistration(input.agentId);
     if (!registration.enabled) throw new Error('Agent registration was disabled during preflight.');
     if (preflight.descriptor?.configurationRevision !== registration.configurationRevision) {
       throw new Error('Agent configuration revision changed during preflight.');
     }
-    const executor = await this.executorForRegistration(registration);
+    const executor = await waitForExternalStartStep(
+      this.executorForRegistration(registration),
+      callerSignal,
+    );
+    throwIfExternalStartAborted(callerSignal);
     const taskId = input.taskId ?? this.options.createTaskId();
     if (this.#tasks.has(taskId)) throw new Error(`Agent task already exists: ${taskId}`);
     const enriched = { ...input, taskId, idempotencyKey: input.idempotencyKey ?? this.options.createIdempotencyKey() };
-    await this.assertExecutorPreflight(executor, enriched);
-    return this.withTaskAdmission(taskId, async () => {
-      // The serialized block is the admission linearization point. It freezes
-      // and persists the route before the task, so a later disable affects only
-      // new admissions and cannot rewrite already-admitted work.
-      const task = await this.admitExternalTask(enriched, registration);
+    await waitForExternalStartStep(
+      this.assertExecutorPreflight(executor, enriched),
+      callerSignal,
+    );
+    throwIfExternalStartAborted(callerSignal);
+    const controller = new AbortController();
+    const forwardCallerAbort = (): void => controller.abort(callerSignal?.reason);
+    callerSignal?.addEventListener('abort', forwardCallerAbort, { once: true });
+    if (callerSignal?.aborted) forwardCallerAbort();
+    try {
+      const task = await this.withTaskAdmission(taskId, async () => {
+        // The serialized block is the admission linearization point. It freezes
+        // and persists the route before the task, so a later disable affects only
+        // new admissions and cannot rewrite already-admitted work.
+        const task = await this.admitExternalTask(enriched, registration);
+        if (task.state !== 'submitted') return task;
+        if (this.#closed) return this.failAdmittedTaskOnClose(task);
+        this.#taskExecutors.set(taskId, executor);
+        this.#startControllers.set(taskId, controller);
+        return task;
+      });
       if (task.state !== 'submitted') return task;
-      if (this.#closed) return this.failAdmittedTaskOnClose(task);
-      this.#taskExecutors.set(taskId, executor);
-      return this.invokeExternalStart(task, enriched, executor);
-    });
+      if (this.#startControllers.get(taskId) !== controller) {
+        return this.failAdmittedTaskOnClose(task);
+      }
+      if (controller.signal.aborted) {
+        return this.cancelAdmittedBeforeExternalStart(task, controller.signal.reason);
+      }
+      return await this.invokeExternalStart(task, enriched, executor, controller.signal);
+    } finally {
+      callerSignal?.removeEventListener('abort', forwardCallerAbort);
+      if (this.#startControllers.get(taskId) === controller) {
+        this.#startControllers.delete(taskId);
+      }
+    }
   }
 
   private async withTaskAdmission<T>(taskId: string, admit: () => Promise<T>): Promise<T> {
@@ -1045,10 +1106,11 @@ class AgentExecutorPlaneRuntime {
     task: AgentTaskSnapshot,
     input: AgentTaskStartInput,
     executor: AgentExecutor,
+    signal: AbortSignal,
   ): Promise<AgentTaskSnapshot> {
     let reference: AgentExecutorTaskReference;
     try {
-      const returnedReference = await executor.start(clone(input));
+      const returnedReference = await executor.start(clone(input), signal);
       try {
         reference = captureExecutorReference(returnedReference);
       } catch (error: unknown) {
@@ -1057,39 +1119,91 @@ class AgentExecutorPlaneRuntime {
         );
       }
     } catch (error: unknown) {
-      const state: AgentTaskSnapshot['state'] = error instanceof AgentStartUncertainError
+      const current = this.#tasks.get(task.taskId);
+      const abortedDuringStart = signal.aborted;
+      const state: AgentTaskSnapshot['state'] = abortedDuringStart
+        ? 'unknown'
+        : error instanceof AgentStartUncertainError
         ? 'unknown'
         : 'failed';
       const message = errorMessage(error);
       const failed: AgentTaskSnapshot = {
-        ...task,
+        ...(current ?? task),
         state,
         error: message,
+        ...(abortedDuringStart
+          ? {
+              cancellation: 'unknown' as const,
+              cancellationError: message,
+            }
+          : {}),
         updatedAt: this.nowIso(),
       };
-      await this.saveTask(failed, 'error', { error: message });
+      await this.saveTask(
+        failed,
+        abortedDuringStart ? 'cancellation' : 'error',
+        { error: message },
+      );
       return clone(failed);
     }
 
-    const accepted: AgentTaskSnapshot = {
-      ...task,
+    let accepted: AgentTaskSnapshot = {
+      ...(this.#tasks.get(task.taskId) ?? task),
       state: 'working',
       executorReference: reference,
       ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
       updatedAt: this.nowIso(),
     };
     try {
-      await this.saveTask(accepted, 'state');
+      accepted = await this.mutateTask(task.taskId, 'state', (current) => (
+        isTerminal(current.state)
+          ? undefined
+          : {
+              ...current,
+              state: 'working' as const,
+              executorReference: reference,
+              ...(reference.remoteTaskId ? { remoteTaskId: reference.remoteTaskId } : {}),
+              updatedAt: this.nowIso(),
+            }
+      ));
+      if (isTerminal(accepted.state)) return accepted;
+      if (signal.aborted || accepted.cancellation === 'requested') {
+        return this.cancelTask(
+          accepted.taskId,
+          typeof signal.reason === 'string' ? signal.reason : undefined,
+        );
+      }
       const remote = await executor.get(reference).catch(() => ({ state: 'working' as const }));
-      const started = this.applyRemoteSnapshot(accepted, remote);
-      await this.saveTask(started, 'state');
-      this.startEventPump(started.taskId, executor, reference);
+      const started = await this.mutateTask(task.taskId, 'state', (current) => (
+        isTerminal(current.state) ? undefined : this.applyRemoteSnapshot(current, remote)
+      ));
+      if (!isTerminal(started.state)) {
+        this.startEventPump(started.taskId, executor, reference);
+      }
       return clone(started);
     } catch (error: unknown) {
       const persisted = this.#tasks.get(accepted.taskId);
       if (persisted && isTerminal(persisted.state)) throw error;
       return this.recoverAcceptedStart(accepted, reference, error);
     }
+  }
+
+  private async cancelAdmittedBeforeExternalStart(
+    task: AgentTaskSnapshot,
+    reason: unknown,
+  ): Promise<AgentTaskSnapshot> {
+    const message = errorMessage(reason ?? 'External Agent start was interrupted.');
+    return this.mutateTask(task.taskId, 'cancellation', (current) => (
+      isTerminal(current.state)
+        ? undefined
+        : {
+            ...current,
+            state: 'canceled' as const,
+            cancellation: 'confirmed' as const,
+            cancellationError: message,
+            updatedAt: this.nowIso(),
+          }
+    ));
   }
 
   private async admitExternalTask(
@@ -1405,7 +1519,20 @@ class AgentExecutorPlaneRuntime {
     return updated;
   }
 
-  private async cancelTask(taskId: string, reason?: string): Promise<AgentTaskSnapshot> {
+  private cancelTask(taskId: string, reason?: string): Promise<AgentTaskSnapshot> {
+    const pending = this.#taskCancellationPromises.get(taskId);
+    if (pending) return pending;
+    let shared: Promise<AgentTaskSnapshot>;
+    shared = this.cancelTaskOnce(taskId, reason).finally(() => {
+      if (this.#taskCancellationPromises.get(taskId) === shared) {
+        this.#taskCancellationPromises.delete(taskId);
+      }
+    });
+    this.#taskCancellationPromises.set(taskId, shared);
+    return shared;
+  }
+
+  private async cancelTaskOnce(taskId: string, reason?: string): Promise<AgentTaskSnapshot> {
     await this.awaitTaskAdmission(taskId);
     const task = this.requireExternalTask(taskId);
     if (isTerminal(task.state)) return clone(task);
@@ -1422,6 +1549,12 @@ class AgentExecutorPlaneRuntime {
         : { ...current, cancellation: 'requested' as const, updatedAt: this.nowIso() }
     ));
     if (isTerminal(requested.state)) return requested;
+    const startController = this.#startControllers.get(taskId);
+    if (startController && !requested.executorReference) {
+      startController.abort(reason ?? `Agent task ${taskId} was canceled during start.`);
+      return requested;
+    }
+    startController?.abort(reason ?? `Agent task ${taskId} was canceled during start.`);
     let remote: AgentExecutorTaskSnapshot;
     try {
       const { executor, reference } = await this.executorRoute(requested);
@@ -2039,6 +2172,37 @@ class AgentExecutorPlaneRuntime {
       for (const [key, registration] of next) this.#taskRegistrationSnapshots.set(key, registration);
     });
   }
+}
+
+async function waitForExternalStartStep<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return operation;
+  throwIfExternalStartAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(externalStartAbortError(signal));
+    signal.addEventListener('abort', abort, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function throwIfExternalStartAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw externalStartAbortError(signal);
+}
+
+function externalStartAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new Error(errorMessage(signal.reason ?? 'External Agent start was interrupted.'));
 }
 
 function defaultTaskId(): string {

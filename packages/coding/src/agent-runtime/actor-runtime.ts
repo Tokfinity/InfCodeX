@@ -5,6 +5,7 @@ import {
   emitKodaXDiagnostic,
   getMessageQueue,
   type AgentActorClient,
+  type AgentActorOwner,
   type AgentBudgetPort,
   type AgentExecutorPlaneBinding,
   type AgentActorStore,
@@ -50,6 +51,8 @@ export interface CodingActorSessionOptions {
   readonly store?: AgentActorStore;
   readonly executor?: AgentTurnExecutor;
   readonly budget?: AgentBudgetPort;
+  readonly owner?: AgentActorOwner;
+  readonly isOwnerAlive?: (owner: AgentActorOwner) => boolean | Promise<boolean>;
 }
 
 interface CodingActorEnvironment {
@@ -87,6 +90,8 @@ export class CodingActorSession {
     this.controller = new AgentActorController({
       maxConcurrentThreadsPerSession: sessionOptions.maxConcurrentThreadsPerSession,
       store: sessionOptions.store,
+      owner: sessionOptions.owner,
+      isOwnerAlive: sessionOptions.isOwnerAlive,
       executor,
       budget: {
         admit: (input) => this.activeBudget?.admit(input) ?? Promise.resolve({ admitted: true }),
@@ -129,6 +134,14 @@ export class CodingActorSession {
 
   rootControl(): AgentActorClient {
     return this.controller.bind('/root');
+  }
+
+  ownerId(): string | undefined {
+    return this.sessionOptions.owner?.ownerId;
+  }
+
+  ownsDurableFence(): boolean {
+    return this.controller.ownsDurableFence();
   }
 
   createWorkflowOwner(parentPath: string, runId: string): Promise<AgentActorClient> {
@@ -179,6 +192,17 @@ export class CodingActorSession {
   async close(reason = 'runtime closed'): Promise<void> {
     await this.controller.shutdown(reason);
     this.turnExecutors.clear();
+    this.environment = undefined;
+  }
+
+  quiesce(reason = 'runtime quiesced'): Promise<void> {
+    return this.controller.quiesce(reason);
+  }
+
+  disposeAfterStoreRemoval(reason = 'session removed'): void {
+    this.controller.disposeAfterStoreRemoval(reason);
+    this.turnExecutors.clear();
+    this.environment = undefined;
   }
 }
 
@@ -445,29 +469,27 @@ async function executeExternalActorTurn(
 ): Promise<AgentExecutionResult> {
   const agentId = metadataString(input.turn.metadata?.agentId);
   if (!binding || !agentId) throw new Error('External Agent execution is not bound to this Runtime.');
-  const taskId = externalTaskId(binding.context.actorId, input.turn.turnId);
-  let task = await binding.plane.tasks.start({
-    taskId,
-    agentId,
-    objective: input.turn.objective,
-    context: {
-      ...binding.context,
-      parentTaskId: input.actor.parentPath ?? binding.context.parentTaskId,
-      ...(metadataString(input.turn.metadata?.workflowRunId)
-        ? { workflowId: metadataString(input.turn.metadata?.workflowRunId) }
-        : {}),
-    },
-    readOnly: input.turn.metadata?.readOnly !== false,
-    ...(metadataString(input.turn.metadata?.expectedConfigurationRevision)
-      ? { expectedConfigurationRevision: metadataString(input.turn.metadata?.expectedConfigurationRevision) }
-      : {}),
-  });
-  if (task.state === 'failed' || task.state === 'rejected') {
-    throw new Error(task.error ?? `External Agent entered ${task.state}.`);
+  if (input.signal.aborted) {
+    throw new Error('External Agent execution was interrupted before start.');
   }
-  let lastProgress = reportExternalProgress(input, task.progress, undefined, onProgress);
+  const taskId = externalTaskId(binding.context.actorId, input.turn.turnId);
+  let task: AgentTaskSnapshot | undefined;
+  let cancellation: Promise<AgentTaskSnapshot> | undefined;
+  const requestCancellation = (): Promise<AgentTaskSnapshot> => {
+    if (cancellation) return cancellation;
+    const attempt = binding.plane.tasks.cancel(
+      taskId,
+      String(input.signal.reason ?? 'interrupted'),
+    );
+    cancellation = attempt;
+    void attempt.catch(() => {
+      if (cancellation === attempt) cancellation = undefined;
+    });
+    return attempt;
+  };
   const cancel = (): void => {
-    void binding.plane.tasks.cancel(taskId, String(input.signal.reason ?? 'interrupted'))
+    if (task !== undefined && isExternalTerminal(task.state)) return;
+    void requestCancellation()
       .catch((error: unknown) => emitKodaXDiagnostic({
         source: 'coding:actors',
         level: 'warn',
@@ -475,34 +497,95 @@ async function executeExternalActorTurn(
       }));
   };
   input.signal.addEventListener('abort', cancel, { once: true });
+  if (input.signal.aborted) cancel();
   try {
+    try {
+      task = await binding.plane.tasks.start({
+        taskId,
+        agentId,
+        objective: input.turn.objective,
+        context: {
+          ...binding.context,
+          parentTaskId: input.actor.parentPath ?? binding.context.parentTaskId,
+          ...(metadataString(input.turn.metadata?.workflowRunId)
+            ? { workflowId: metadataString(input.turn.metadata?.workflowRunId) }
+            : {}),
+        },
+        readOnly: input.turn.metadata?.readOnly !== false,
+        ...(metadataString(input.turn.metadata?.expectedConfigurationRevision)
+          ? { expectedConfigurationRevision: metadataString(input.turn.metadata?.expectedConfigurationRevision) }
+          : {}),
+      }, input.signal);
+    } catch (error: unknown) {
+      if (input.signal.aborted) {
+        try {
+          await requestCancellation();
+        } catch (cancelError: unknown) {
+          emitKodaXDiagnostic({
+            source: 'coding:actors',
+            level: 'warn',
+            message: `External Agent cancellation after an ambiguous start failed: ${
+              cancelError instanceof Error ? cancelError.message : String(cancelError)
+            }`,
+          });
+        }
+      }
+      throw error;
+    }
+    if (task.state === 'failed' || task.state === 'rejected') {
+      throw new Error(task.error ?? `External Agent entered ${task.state}.`);
+    }
+    if (input.signal.aborted && isExternalCancellationFailure(task.cancellation)) {
+      throw new Error(
+        task.cancellationError ?? `External Agent cancellation cannot converge (${task.cancellation}).`,
+      );
+    }
+    let lastProgress = reportExternalProgress(input, task.progress, undefined, onProgress);
     while (!isExternalTerminal(task.state)) {
-      for (const message of await input.drainMailbox()) {
-        if (message.kind !== 'completion') {
-          task = await binding.plane.tasks.sendInput(taskId, { content: message.content });
+      if (input.signal.aborted) {
+        task = await requestCancellation();
+        if (
+          !isExternalTerminal(task.state)
+          && task.cancellation !== 'requested'
+          && task.cancellation !== 'confirmed'
+        ) {
+          throw new Error(
+            `External Agent cancellation was not accepted (${task.cancellation}).`,
+          );
+        }
+      }
+      if (!input.signal.aborted) {
+        for (const message of await input.drainMailbox()) {
+          if (input.signal.aborted) break;
+          if (message.kind !== 'completion') {
+            task = await binding.plane.tasks.sendInput(taskId, { content: message.content });
+          }
         }
       }
       if (!isExternalTerminal(task.state)) {
         await new Promise<void>((resolve) => setTimeout(resolve, 25));
         task = await binding.plane.tasks.get(taskId);
         lastProgress = reportExternalProgress(input, task.progress, lastProgress, onProgress);
+        if (input.signal.aborted && !isExternalTerminal(task.state)) {
+          assertExternalCancellationAccepted(task);
+        }
       }
     }
+    if (task.state !== 'completed') {
+      throw new Error(task.error ?? task.cancellationError ?? `External Agent ended in ${task.state}.`);
+    }
+    return {
+      output: task.output ?? '',
+      ...(task.artifacts && task.artifacts.length > 0
+        ? {
+            artifacts: task.artifacts.map((artifact) => artifact.uri ?? artifact.name),
+            artifactDetails: task.artifacts.map((artifact) => ({ ...artifact })),
+          }
+        : {}),
+    };
   } finally {
     input.signal.removeEventListener('abort', cancel);
   }
-  if (task.state !== 'completed') {
-    throw new Error(task.error ?? task.cancellationError ?? `External Agent ended in ${task.state}.`);
-  }
-  return {
-    output: task.output ?? '',
-    ...(task.artifacts && task.artifacts.length > 0
-      ? {
-          artifacts: task.artifacts.map((artifact) => artifact.uri ?? artifact.name),
-          artifactDetails: task.artifacts.map((artifact) => ({ ...artifact })),
-        }
-      : {}),
-  };
 }
 
 function isExternalTerminal(state: AgentTaskSnapshot['state']): boolean {
@@ -510,6 +593,27 @@ function isExternalTerminal(state: AgentTaskSnapshot['state']): boolean {
     || state === 'failed'
     || state === 'canceled'
     || state === 'rejected';
+}
+
+function isExternalCancellationFailure(
+  cancellation: AgentTaskSnapshot['cancellation'],
+): boolean {
+  return cancellation === 'unknown'
+    || cancellation === 'failed'
+    || cancellation === 'unsupported';
+}
+
+function assertExternalCancellationAccepted(task: AgentTaskSnapshot): void {
+  if (
+    isExternalTerminal(task.state)
+    || task.cancellation === 'requested'
+    || task.cancellation === 'confirmed'
+  ) {
+    return;
+  }
+  throw new Error(
+    task.cancellationError ?? `External Agent cancellation was not accepted (${task.cancellation}).`,
+  );
 }
 
 function reportExternalProgress(

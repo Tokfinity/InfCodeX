@@ -9,24 +9,25 @@
  *
  *   sideQuery.stopReason   parsedOutput   → ClassifyDecision
  *   ───────────────────────────────────────────────────────
- *   end_turn / max_tokens  block          → block (with reason)
+ *   end_turn / max_tokens  block          → confirm (with reason)
  *   end_turn / max_tokens  allow          → allow
- *   end_turn / max_tokens  unparseable    → block (fail-closed)
- *   end_turn / max_tokens  + tool_use     → block (contract violation)
+ *   end_turn / max_tokens  unparseable    → retry, then failure
+ *   end_turn / max_tokens  + tool_use     → retry, then failure
  *                          (sideQuery returns stopReason='error' here)
- *   timeout                —              → escalate (user confirms)
- *   aborted                —              → escalate (treated as caller-abort)
- *   error                  —              → escalate (5xx / 429 / network)
+ *   timeout                —              → retry, then failure
+ *   aborted                —              → throw AbortError to caller
+ *   error                  —              → retry, then failure
  *
- * Why fail-closed on unparseable but escalate on timeout/error:
- *   Unparseable = model spoke but didn't follow the contract → likely
- *     trying to bypass; treating as block is conservative and safe.
- *   Timeout/error = transient; blocking would punish the user for our
- *     infra hiccup. Escalating to a confirm dialog preserves user
- *     agency without putting safety on the line.
+ * Every non-abort failure receives one immediate retry. The caller applies
+ * its configured safety fallback after the second failure; a valid model
+ * concern always means "ask the user", never a direct hard block.
  */
 
-import type { CostTracker, SideQueryDiagnostics } from '@kodax-ai/llm';
+import type {
+  CostTracker,
+  SideQueryDiagnostics,
+  SideQueryResult,
+} from '@kodax-ai/llm';
 import { KodaXBaseProvider, sideQuery } from '@kodax-ai/llm';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
@@ -73,18 +74,37 @@ export interface ClassifyOptions {
   readonly setCostTracker?: (next: CostTracker) => void;
 }
 
+export type ClassifierFailureKind =
+  | 'timeout'
+  | 'provider_error'
+  | 'contract_error'
+  | 'input_budget';
+
+export type ClassifierAttemptOutcome =
+  | 'allow'
+  | 'confirm'
+  | ClassifierFailureKind;
+
+export interface ClassifierAttemptDiagnostics {
+  readonly attempt: number;
+  readonly outcome: ClassifierAttemptOutcome;
+  readonly diagnostics?: SideQueryDiagnostics;
+}
+
 interface ClassifyDecisionDetails {
   readonly reason: string;
-  /** False for a local representation-limit block that should not degrade the engine. */
-  readonly trackDenial?: boolean;
   /** Structured request metadata only; never includes prompt or response text. */
   readonly diagnostics?: SideQueryDiagnostics;
+  readonly attempts: readonly ClassifierAttemptDiagnostics[];
 }
 
 export type ClassifyDecision =
   | ({ readonly kind: 'allow' } & ClassifyDecisionDetails)
-  | ({ readonly kind: 'block' } & ClassifyDecisionDetails)
-  | ({ readonly kind: 'escalate' } & ClassifyDecisionDetails);
+  | ({ readonly kind: 'confirm' } & ClassifyDecisionDetails)
+  | ({
+    readonly kind: 'failure';
+    readonly failureKind: ClassifierFailureKind;
+  } & ClassifyDecisionDetails);
 
 /**
  * The deadline includes connection setup, provider-side queueing, inference,
@@ -98,14 +118,17 @@ export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
 export const MAX_CLASSIFIER_ACTION_BYTES = 16 * 1024;
 /** Defense in depth for rules, signals, and all serialized prompt sections. */
 export const MAX_CLASSIFIER_PROMPT_BYTES = 32 * 1024;
+/** One immediate retry absorbs transient queue, connection, and contract failures. */
+export const CLASSIFIER_MAX_ATTEMPTS = 2;
 const QUERY_SOURCE = 'auto_mode';
 
 export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision> {
   if (utf8Bytes(opts.action) > MAX_CLASSIFIER_ACTION_BYTES) {
     return {
-      kind: opts.intentEvidence ? 'block' : 'escalate',
+      kind: 'failure',
+      failureKind: 'input_budget',
       reason: `classifier input budget exceeded (action is larger than ${MAX_CLASSIFIER_ACTION_BYTES} bytes)`,
-      ...(opts.intentEvidence ? { trackDenial: false } : {}),
+      attempts: [],
     };
   }
   const action = redactClassifierProjection(opts.action);
@@ -124,78 +147,125 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
   });
   if (classifierPromptBytes(prompt.system, prompt.messages) > MAX_CLASSIFIER_PROMPT_BYTES) {
     return {
-      kind: opts.intentEvidence ? 'block' : 'escalate',
+      kind: 'failure',
+      failureKind: 'input_budget',
       reason: `classifier input budget exceeded (prompt is larger than ${MAX_CLASSIFIER_PROMPT_BYTES} bytes)`,
-      ...(opts.intentEvidence ? { trackDenial: false } : {}),
+      attempts: [],
     };
   }
 
-  const result = await sideQuery({
-    provider: opts.provider,
-    model: opts.model,
-    system: prompt.system,
-    messages: prompt.messages,
-    maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
-    timeoutMs: opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
-    abortSignal: opts.abortSignal,
-    querySource: QUERY_SOURCE,
-    costTracker: opts.costTracker,
-  });
+  const attempts: ClassifierAttemptDiagnostics[] = [];
+  let costTracker = opts.costTracker;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
 
-  if (opts.setCostTracker && result.costTracker !== undefined && result.costTracker !== opts.costTracker) {
-    opts.setCostTracker(result.costTracker);
+  for (let attempt = 1; attempt <= CLASSIFIER_MAX_ATTEMPTS; attempt += 1) {
+    const result = await sideQuery({
+      provider: opts.provider,
+      model: opts.model,
+      system: prompt.system,
+      messages: prompt.messages,
+      maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
+      timeoutMs,
+      abortSignal: opts.abortSignal,
+      querySource: QUERY_SOURCE,
+      costTracker,
+    });
+    costTracker = result.costTracker ?? costTracker;
+
+    const interpreted = interpretAttempt(result, timeoutMs);
+    attempts.push({
+      attempt,
+      outcome: interpreted.outcome,
+      diagnostics: result.diagnostics,
+    });
+
+    if (interpreted.outcome === 'allow' || interpreted.outcome === 'confirm') {
+      commitCostTracker(opts, costTracker);
+      return {
+        kind: interpreted.outcome,
+        reason: interpreted.reason,
+        diagnostics: result.diagnostics,
+        attempts,
+      };
+    }
+
+    if (attempt === CLASSIFIER_MAX_ATTEMPTS) {
+      commitCostTracker(opts, costTracker);
+      return {
+        kind: 'failure',
+        failureKind: interpreted.outcome,
+        reason: interpreted.reason,
+        diagnostics: result.diagnostics,
+        attempts,
+      };
+    }
   }
 
+  throw new Error('classifier retry loop exhausted unexpectedly');
+}
+
+interface InterpretedAttempt {
+  readonly outcome: ClassifierAttemptOutcome;
+  readonly reason: string;
+}
+
+function interpretAttempt(
+  result: SideQueryResult,
+  timeoutMs: number,
+): InterpretedAttempt {
   switch (result.stopReason) {
     case 'end_turn':
     case 'max_tokens': {
       const decision = parseClassifierOutput(result.text);
       if (decision.kind === 'unparseable') {
         return {
-          kind: 'block',
-          reason: 'classifier output was unparseable (fail-closed)',
-          diagnostics: result.diagnostics,
+          outcome: 'contract_error',
+          reason: 'classifier output was unparseable (contract violation)',
         };
       }
-      return { ...decision, diagnostics: result.diagnostics };
+      return {
+        outcome: decision.kind === 'block' ? 'confirm' : 'allow',
+        reason: decision.reason,
+      };
     }
 
     case 'timeout':
       return {
-        kind: 'escalate',
+        outcome: 'timeout',
         reason: `classifier timeout (${formatSideQueryDiagnostics(
           result.diagnostics,
-          opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+          timeoutMs,
         )})`,
-        diagnostics: result.diagnostics,
       };
 
     case 'aborted':
-      // Caller-abort means the user cancelled the entire tool-call evaluation
-      // (Ctrl-C upstream). Returning escalate would show a confirm dialog to a
-      // user who has already requested cancellation. Re-throw an AbortError so
-      // the caller's abort chain propagates cleanly.
       throw new DOMException('classify aborted', 'AbortError');
 
     case 'error':
     default: {
       const errMsg = result.error?.message ?? 'unknown error';
-      // Tool-use contract violation comes through as 'error' with a recognizable
-      // message; map to block instead of escalate (the model is misbehaving,
-      // not the network).
-      if (/tool_use/i.test(errMsg)) {
-        return {
-          kind: 'block',
-          reason: `classifier returned tool_use block (contract violation)`,
-          diagnostics: result.diagnostics,
+      return /tool_use/i.test(errMsg)
+        ? {
+          outcome: 'contract_error',
+          reason: 'classifier returned tool_use (contract violation)',
+        }
+        : {
+          outcome: 'provider_error',
+          reason: `classifier error: provider request failed (${formatSideQueryDiagnostics(
+            result.diagnostics,
+            timeoutMs,
+          )})`,
         };
-      }
-      return {
-        kind: 'escalate',
-        reason: `classifier error: ${errMsg}`,
-        diagnostics: result.diagnostics,
-      };
     }
+  }
+}
+
+function commitCostTracker(
+  opts: ClassifyOptions,
+  next: CostTracker | undefined,
+): void {
+  if (opts.setCostTracker && next !== undefined && next !== opts.costTracker) {
+    opts.setCostTracker(next);
   }
 }
 
@@ -209,6 +279,16 @@ function formatSideQueryDiagnostics(
     `model=${value.model}`,
     `timeoutMs=${value.timeoutMs}`,
     `elapsedMs=${value.elapsedMs}`,
+    `promptBytes=${value.promptBytes}`,
+    ...(value.firstUpstreamEventMs !== undefined
+      ? [`firstUpstreamEventMs=${value.firstUpstreamEventMs}`]
+      : []),
+    ...(value.firstThinkingDeltaMs !== undefined
+      ? [`firstThinkingDeltaMs=${value.firstThinkingDeltaMs}`]
+      : []),
+    ...(value.firstTextDeltaMs !== undefined
+      ? [`firstTextDeltaMs=${value.firstTextDeltaMs}`]
+      : []),
     `retries=${value.retryCount}`,
     `retryWaitMs=${value.retryWaitMs}`,
     `phase=${value.terminalPhase}`,

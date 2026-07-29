@@ -962,6 +962,47 @@ describe('F270 canonical collaboration tools', () => {
     expect(controller.get('/root', '/root/parent').actor.state).toBe('idle');
   });
 
+  it('renders an Actor owner conflict with actionable Runtime diagnostics', async () => {
+    const { ctx } = await context();
+    await executeTool('spawn_agent', { task_name: 'worker', objective: 'Work.' }, ctx);
+    if (!ctx.actorControl) throw new Error('Expected Actor control.');
+    const conflictedContext: KodaXToolExecutionContext = {
+      ...ctx,
+      actorControl: {
+        ...ctx.actorControl,
+        async interrupt() {
+          throw Object.assign(
+            new Error('Actor tree is owned by live Runtime rt_other.'),
+            {
+              code: 'actor_owner_conflict',
+              retryable: false,
+              ownerRuntimeId: 'rt_other',
+              currentRevision: 16,
+              localExecutionsAborted: true,
+            },
+          );
+        },
+      },
+    };
+
+    const result = JSON.parse(await executeTool('interrupt_agent', {
+      target: 'worker',
+      reason: 'stop',
+    }, conflictedContext)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'actor_owner_conflict',
+        retryable: false,
+        ownerRuntimeId: 'rt_other',
+        currentRevision: 16,
+        localExecutionsAborted: true,
+        hint: expect.stringContaining('owns this Session'),
+      },
+    });
+  });
+
   it('reports a mailbox wait timeout without consulting Actor events', async () => {
     vi.useFakeTimers();
     const { ctx } = await context();

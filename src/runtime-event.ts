@@ -11,7 +11,7 @@ const RUNTIME_EVENT_TYPES: ReadonlySet<string> = new Set<RuntimeEventType>([
   'run.started', 'run.updated', 'run.progress', 'run.input.queued', 'run.input.delivered',
   'turn.started', 'turn.completed', 'turn.failed',
   'assistant.delta', 'thinking.delta', 'thinking.finished', 'tool.started', 'tool.progress',
-  'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
+  'tool.sandbox', 'tool.finished', 'user_input.requested', 'user_input.resolved', 'permission.requested',
   'permission.resolved', 'permission.grant.changed', 'workflow.started', 'workflow.updated',
   'workflow.finished',
   'context.compaction.started', 'context.compaction.stats', 'context.compaction.finished',
@@ -108,6 +108,39 @@ function validateKnownRuntimeEventPayload(
       || (typeof payload.toolName === 'string' && typeof payload.partialJson === 'string')
     );
     return valid ? undefined : 'requires a tool progress payload.';
+  }
+  if (type === 'tool.sandbox') {
+    const update = isRecord(payload) && isRecord(payload.update)
+      ? payload.update
+      : undefined;
+    const observation = update && isRecord(update.observation)
+      ? update.observation
+      : undefined;
+    const valid = typeof update?.id === 'string'
+      && observation?.version === 1
+      && (
+        observation.state === 'not_selected'
+        || (
+          observation.state === 'fallback'
+          && (
+            observation.reason === 'not_ready'
+            || observation.reason === 'prepare_failed'
+            || observation.reason === 'backend_failed'
+          )
+          && observation.execution === 'normal_permission_policy'
+        )
+        || (
+          observation.state === 'applied'
+          && (
+            observation.backend === 'windows-restricted-user'
+            || observation.backend === 'macos-seatbelt'
+            || observation.backend === 'linux-bubblewrap'
+            || observation.backend === 'unsupported'
+          )
+          && observation.policyId === 'kodax-workspace-shell-v1'
+        )
+      );
+    return valid ? undefined : 'requires a sandbox observation payload.';
   }
   if (type === 'tool.finished') {
     return isRecord(payload) && hasStrings(payload.result, ['id', 'name', 'content'])

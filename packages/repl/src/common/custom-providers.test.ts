@@ -4,7 +4,16 @@
  * fresh temp dir so the real `~/.kodax/config.json` is never touched.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +27,7 @@ import {
   removeCustomProvider,
   upsertCustomProvider,
 } from './custom-providers.js';
+import { CoreConfigWriteConflictError } from './core-config-lock.js';
 
 let tmpHome: string;
 let configPath: string;
@@ -237,6 +247,19 @@ describe('removeCustomProvider', () => {
 });
 
 describe('round-trip — upsert + remove leaves config empty', () => {
+  it('shares the core-config lock with the setup writer', () => {
+    const lockPath = `${configPath}.write.lock`;
+    const lock = openSync(lockPath, 'wx');
+    try {
+      expect(() => upsertCustomProvider(makeProvider('alpha')))
+        .toThrow(CoreConfigWriteConflictError);
+      expect(existsSync(configPath)).toBe(false);
+    } finally {
+      closeSync(lock);
+      rmSync(lockPath, { force: true });
+    }
+  });
+
   it('add → remove returns to no-customProviders state', () => {
     upsertCustomProvider(makeProvider('alpha'));
     expect(listCustomProviders().map((p) => p.name)).toEqual(['alpha']);

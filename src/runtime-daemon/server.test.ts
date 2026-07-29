@@ -373,6 +373,7 @@ describe('runtime daemon dispatcher', () => {
       code: 'conflict' as const,
     });
     const management: RuntimeDaemonManagementController = {
+      armOrphanExitAfterReady() {},
       attachClient() {},
       detachClient() {},
       async runMutation<T>(method: RuntimeDaemonMethod): Promise<T> {
@@ -1033,7 +1034,7 @@ describe('runtime daemon dispatcher', () => {
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
           runtimeAutoModeGuardrail: {
-            version: 3,
+            version: 4,
             owner: 'session-runtime',
             escalationCreatesPermission: true,
             fallbackPersistsEngine: true,
@@ -1067,6 +1068,34 @@ describe('runtime daemon dispatcher', () => {
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });
     }
+  });
+
+  it('advertises orphan exit only when the daemon host actually enabled that policy', async () => {
+    const persistent = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      capabilities: {
+        daemonOrphanExit: { version: 99 },
+      },
+    });
+    const persistentInitialized = await initializeDispatcher(persistent);
+    expect(persistentInitialized.capabilities).not.toHaveProperty('daemonOrphanExit');
+    persistent.close();
+
+    const spaceManaged = createRuntimeDaemonDispatcher({
+      runtime: makeRuntime(),
+      orphanExitEnabled: true,
+    });
+    const spaceInitialized = await initializeDispatcher(spaceManaged);
+    expect(spaceInitialized).toMatchObject({
+      capabilities: {
+        daemonOrphanExit: {
+          version: 1,
+          idleOnly: true,
+          bootstrapGrace: true,
+        },
+      },
+    });
+    spaceManaged.close();
   });
 
   it('routes canonical protocol aliases for external clients', async () => {
@@ -1976,7 +2005,11 @@ describe('runtime daemon dispatcher', () => {
 
   it('forwards concrete permission input without exposing owner-only safety context', async () => {
     const baseRuntime = makeRuntime();
-    const request = vi.fn(async (): Promise<RuntimePermissionDecision> => ({ type: 'reject' }));
+    const request = vi.fn(async (): Promise<RuntimePermissionDecision> => ({
+      type: 'reject',
+      reason: 'permission request timed out',
+      cause: 'approval_timeout',
+    }));
     const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
       ...baseRuntime,
       permissions: {
@@ -2001,6 +2034,13 @@ describe('runtime daemon dispatcher', () => {
     ));
 
     expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.result).toEqual({
+        type: 'reject',
+        reason: 'permission request timed out',
+        cause: 'approval_timeout',
+      });
+    }
     expect(request).toHaveBeenCalledWith({
       sessionId: 'session-1',
       runId: 'run-1',

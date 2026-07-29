@@ -36,6 +36,53 @@ export class AgentRevisionConflictError extends Error {
   }
 }
 
+export class AgentActorStoreConflictError extends Error {
+  readonly code = 'actor_snapshot_conflict' as const;
+
+  constructor(
+    readonly expectedRevision: number,
+    readonly currentRevision: number,
+    scope?: string,
+  ) {
+    super(
+      `Actor snapshot revision conflict${scope ? ` for ${scope}` : ''}: `
+      + `expected ${expectedRevision}, actual ${currentRevision}.`,
+    );
+    this.name = 'AgentActorStoreConflictError';
+  }
+}
+
+export class AgentOwnerConflictError extends Error {
+  readonly code = 'actor_owner_conflict' as const;
+  readonly retryable = false as const;
+
+  constructor(
+    readonly ownerRuntimeId: string | undefined,
+    readonly currentRevision: number,
+    readonly localExecutionsAborted: boolean,
+  ) {
+    super(
+      ownerRuntimeId
+        ? `Actor tree is owned by live Runtime ${ownerRuntimeId}.`
+        : 'Actor tree ownership changed in another Runtime.',
+    );
+    this.name = 'AgentOwnerConflictError';
+  }
+}
+
+export class AgentOwnerUnknownError extends Error {
+  readonly code = 'actor_owner_unknown' as const;
+  readonly retryable = false as const;
+
+  constructor(readonly currentRevision: number) {
+    super(
+      'Actor snapshot has active turns but no Runtime owner identity. '
+      + 'Wait for the owner handoff to finish or stop the pre-v0.7.78 Runtime cleanly before retrying.',
+    );
+    this.name = 'AgentOwnerUnknownError';
+  }
+}
+
 export type AgentControlErrorCode =
   | 'actor_closed'
   | 'actor_not_found'
