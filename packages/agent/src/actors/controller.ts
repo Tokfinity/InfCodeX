@@ -1753,6 +1753,18 @@ function validateOwner(owner: AgentActorOwner): void {
     || !Number.isSafeInteger(owner.pid)
     || owner.pid <= 0
     || owner.startedAt.trim().length === 0
+    || (
+      owner.livenessId !== undefined
+      && (owner.livenessId.trim().length === 0 || owner.livenessId.length > 128)
+    )
+    || (
+      owner.livenessPort !== undefined
+      && (
+        !Number.isSafeInteger(owner.livenessPort)
+        || owner.livenessPort <= 0
+        || owner.livenessPort > 65_535
+      )
+    )
   ) {
     throw new Error('Actor snapshot has an invalid Runtime owner.');
   }

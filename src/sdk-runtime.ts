@@ -144,7 +144,6 @@ import {
 import type {
   AgentArtifactPolicy,
   AgentActorClient,
-  AgentActorOwner,
   AgentActorSnapshot,
   AgentActorStore,
   AgentDataClassification,
@@ -182,6 +181,11 @@ import type {
 } from "@kodax-ai/agent";
 import { createRuntimeAgentExecutorPlaneStore } from "./runtime-agent-store.js";
 import { createRuntimeAgentBindingService } from "./runtime-agent-binding.js";
+import {
+  createRuntimeActorOwnerLiveness,
+  isRuntimeActorOwnerAlive,
+  type RuntimeActorOwnerLiveness,
+} from "./runtime-actor-owner-liveness.js";
 import {
   createAsrtShellSandbox,
   createAsrtSkillScriptRunner,
@@ -6193,7 +6197,27 @@ function createRuntimeAgentActorRegistry(
   defaultContext?: AgentDispatchContext,
 ): RuntimeAgentActorRegistry {
   const sessions = new Map<string, Promise<CodingActorSession>>();
+  let ownerLiveness: Promise<RuntimeActorOwnerLiveness> | undefined;
   let closed = false;
+
+  const getOwnerLiveness = (): Promise<RuntimeActorOwnerLiveness> => {
+    if (ownerLiveness) return ownerLiveness;
+    const created = createRuntimeActorOwnerLiveness({
+      onError(error) {
+        emitKodaXDiagnostic({
+          source: "runtime.actors.owner",
+          level: "error",
+          message: `Runtime Actor owner liveness endpoint failed for ${identity.runtimeId}.`,
+          detail: normalizeError(error),
+        });
+      },
+    });
+    ownerLiveness = created;
+    void created.catch(() => {
+      if (ownerLiveness === created) ownerLiveness = undefined;
+    });
+    return created;
+  };
 
   const claimSession = (
     sessionId: string,
@@ -6240,6 +6264,7 @@ function createRuntimeAgentActorRegistry(
           );
         },
       };
+      const liveness = await getOwnerLiveness();
       const session = new CodingActorSession({
         sessionId,
         store,
@@ -6249,6 +6274,8 @@ function createRuntimeAgentActorRegistry(
           runtimeId: identity.runtimeId,
           pid: process.pid,
           startedAt: identity.startedAt,
+          livenessId: liveness.id,
+          livenessPort: liveness.port,
         },
         isOwnerAlive: isRuntimeActorOwnerAlive,
         ...(plane
@@ -6395,23 +6422,10 @@ function createRuntimeAgentActorRegistry(
       if (errors.length > 1) {
         throw new AggregateError(errors, "Actor registry cleanup failed.");
       }
+      await ownerLiveness?.then((liveness) => liveness.close());
       sessions.clear();
     },
   };
-}
-
-function isRuntimeActorOwnerAlive(owner: AgentActorOwner): boolean {
-  try {
-    process.kill(owner.pid, 0);
-    return true;
-  } catch (error) {
-    return !(
-      typeof error === "object"
-      && error !== null
-      && "code" in error
-      && error.code === "ESRCH"
-    );
-  }
 }
 
 function createRuntimeAgentService(

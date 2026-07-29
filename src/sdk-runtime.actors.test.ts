@@ -151,7 +151,7 @@ describe('F270 Runtime Actor facade', () => {
     await second.close();
   });
 
-  it('treats every non-ESRCH owner liveness probe failure as still alive', async () => {
+  it('keeps a reachable Runtime owner alive when its PID probe is inconclusive', async () => {
     const homeDir = await makeHome();
     const owner = await createKodaXRuntime({ homeDir });
     const contender = await createKodaXRuntime({ homeDir });
@@ -175,6 +175,43 @@ describe('F270 Runtime Actor facade', () => {
       await owner.close();
       await contender.close();
     }
+  });
+
+  it('reclaims a crashed Runtime owner even when its PID has been reused', async () => {
+    const homeDir = await makeHome();
+    const owner = await createKodaXRuntime({ homeDir });
+    const contender = await createKodaXRuntime({ homeDir });
+    const session = await owner.sessions.create({
+      sessionId: 'reused-owner-pid',
+      title: 'Reused Owner PID',
+    });
+    await owner.agents.tree(session.id);
+
+    const storage = new FileSessionStorage({
+      sessionsDir: join(homeDir, '.kodax', 'sessions'),
+    });
+    const owned = await storage.peek(session.id);
+    const staleOwner = owned?.actorSnapshot?.schemaVersion === 2
+      ? owned.actorSnapshot.owner
+      : undefined;
+    if (!staleOwner) throw new Error('Expected a persisted Runtime Actor owner.');
+
+    await owner.close();
+    const released = await storage.peek(session.id);
+    const releasedSnapshot = released?.actorSnapshot;
+    if (!releasedSnapshot || releasedSnapshot.schemaVersion !== 2) {
+      throw new Error('Expected a released schema-v2 Actor snapshot.');
+    }
+    await storage.saveActorSnapshot(session.id, {
+      ...releasedSnapshot,
+      revision: releasedSnapshot.revision + 1,
+      owner: staleOwner,
+    }, releasedSnapshot.revision);
+
+    await expect(contender.agents.tree(session.id)).resolves.toMatchObject({
+      actors: [expect.objectContaining({ path: '/root' })],
+    });
+    await contender.close();
   });
 
   it('releases an initialized Actor owner before deleting its Session', async () => {
@@ -335,12 +372,15 @@ describe('F270 Runtime Actor facade', () => {
       rename.mockRestore();
     }
 
+    const contender = await createKodaXRuntime({ homeDir });
+    await expect(contender.agents.tree(session.id)).rejects.toMatchObject({
+      code: 'actor_owner_conflict',
+    });
     await expect(runtime.close()).resolves.toBeUndefined();
-    const restarted = await createKodaXRuntime({ homeDir });
-    await expect(restarted.agents.tree(session.id)).resolves.toMatchObject({
+    await expect(contender.agents.tree(session.id)).resolves.toMatchObject({
       actors: [expect.objectContaining({ path: '/root' })],
     });
-    await restarted.close();
+    await contender.close();
   });
 
   it('releases the Actor owner only after a Session has been archived', async () => {

@@ -260,6 +260,10 @@ export interface AgentActorOwner {
   readonly runtimeId: string;
   readonly pid: number;
   readonly startedAt: string;
+  /** Opaque host identity for proving that this exact Runtime, not only its PID, remains alive. */
+  readonly livenessId?: string;
+  /** Loopback challenge endpoint paired with livenessId. */
+  readonly livenessPort?: number;
 }
 
 export interface AgentActorSnapshotV1 extends AgentActorSnapshotContents {
