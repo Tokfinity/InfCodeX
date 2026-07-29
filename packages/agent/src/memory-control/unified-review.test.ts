@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXMemoryOutcomeDigest } from '../types.js';
 import type { MemoryReviewModelInput, MemoryReviewPlan } from './types.js';
 import {
+  isUnifiedLearningReviewModelInput,
   normalizeUnifiedLearningReview,
   sanitizeUnifiedLearningReviewInput,
   type LearningReviewEvidencePacket,
@@ -326,6 +327,99 @@ describe('FEATURE_263 unified review normalization', () => {
       },
     });
 
+    expect(result.capabilityDecision).toMatchObject({
+      disposition: 'ready',
+      reasonCodes: expect.arrayContaining(['insufficient_independent_verified_evidence']),
+    });
+  });
+
+  it('accepts intent-only cancelled evidence while keeping Skill promotion closed', () => {
+    const evidenceRef = 'user-intent:cancelled-preference';
+    const cancelledDigest: KodaXMemoryOutcomeDigest = {
+      ...digest,
+      outcome: 'cancelled',
+      objective: 'Run focused tests before reporting success.',
+      approach: 'episode completion',
+      summary: 'Explicit memory intent captured before episode cancellation.',
+      evidenceRefs: [evidenceRef],
+      evidence: [{
+        ref: evidenceRef,
+        grade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T07:00:00.000Z',
+      }],
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef,
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: 'Going forward, run focused tests before reporting success.',
+      },
+    };
+    const cancelledMemoryInput: MemoryReviewModelInput = {
+      trigger: 'explicit_remember',
+      userFeedback: cancelledDigest.memoryIntent?.userQuote ?? '',
+      task: cancelledDigest.memoryIntent?.candidateStatement ?? '',
+      sourceRefs: cancelledDigest.evidenceRefs,
+      candidateRefs: [],
+      warnings: [],
+    };
+    const input = {
+      cacheDomain: 'learning-review' as const,
+      memory: cancelledMemoryInput,
+      evidence: evidence({
+        outcomeDigest: cancelledDigest,
+        verifierFacts: [],
+        priorDigests: [],
+        qualification: {
+          reusableMethodEvidence: false,
+          explicitSkillPreservation: false,
+          independentEpisodeCount: 0,
+          verifiedOutcome: false,
+          exactSkillInvoked: false,
+        },
+      }),
+    };
+
+    expect(isUnifiedLearningReviewModelInput(input)).toBe(true);
+    expect(isUnifiedLearningReviewModelInput({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        outcomeDigest: {
+          ...cancelledDigest,
+          memoryIntent: undefined,
+        },
+      },
+    })).toBe(false);
+    const result = normalizeUnifiedLearningReview(input, {
+      memoryPlan: {
+        ...memoryPlan,
+        trigger: 'episode_completed',
+        sourceRefs: [],
+      },
+      capabilityDecision: {
+        disposition: 'project_canary',
+        reasonCodes: ['reusable_verified_method'],
+        requestedScope: 'project',
+        semanticDisposition: 'allow',
+        operation: 'create',
+        spec: {
+          name: 'cancelled-task-skill',
+          description: 'Must not be promoted from cancelled work.',
+          purpose: 'Demonstrate the closed Skill gate.',
+          triggers: ['A task was cancelled.'],
+          steps: ['Do not promote this.'],
+          verification: ['No verifier evidence exists.'],
+          pitfalls: ['Cancellation is not completion.'],
+        },
+      },
+    });
+
+    expect(result.memoryPlan).toMatchObject({
+      trigger: 'explicit_remember',
+      sourceRefs: [evidenceRef],
+      episodeDigest: { outcome: 'cancelled' },
+    });
     expect(result.capabilityDecision).toMatchObject({
       disposition: 'ready',
       reasonCodes: expect.arrayContaining(['insufficient_independent_verified_evidence']),

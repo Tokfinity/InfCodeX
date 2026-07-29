@@ -917,46 +917,50 @@ export async function runSubstrate(
       const checks = collectVerifiedCheckFacts(finalized.artifactLedger ?? []);
       try {
         const completedAt = new Date().toISOString();
-        await memorySession.complete(finalized.interrupted
-          ? { status: 'cancelled', summary: finalized.lastText, evidence: [] }
-          : {
-              status: finalized.success ? 'succeeded' : 'failed',
-              summary: finalized.lastText,
-              evidence: [
-                ...(acceptedMemoryIntent === undefined
-                  ? []
-                  : [{
-                      ref: acceptedMemoryIntent.evidenceRef,
-                      requestedGrade: 'authoritative' as const,
-                      source: 'user' as const,
-                      observedAt: completedAt,
-                    }]),
+        await memorySession.complete({
+          status: finalized.interrupted
+            ? 'cancelled'
+            : finalized.success ? 'succeeded' : 'failed',
+          summary: finalized.lastText,
+          evidence: [
+            ...(acceptedMemoryIntent === undefined
+              ? []
+              : [{
+                  ref: acceptedMemoryIntent.evidenceRef,
+                  requestedGrade: 'authoritative' as const,
+                  source: 'user' as const,
+                  observedAt: completedAt,
+                }]),
+            ...(finalized.interrupted
+              ? []
+              : [
                 ...(checks.length > 0
                   ? checks.map((check) => ({
-                    ref: check.ref,
-                    requestedGrade: 'verified' as const,
-                    source: check.source,
-                    verdict: check.verdict,
-                    observedAt: check.observedAt,
-                  }))
+                      ref: check.ref,
+                      requestedGrade: 'verified' as const,
+                      source: check.source,
+                      verdict: check.verdict,
+                      observedAt: check.observedAt,
+                    }))
                   : [{
                       ref: `host:run-terminal:${sessionId}`,
                       requestedGrade: 'observed' as const,
                       source: 'host' as const,
                       observedAt: completedAt,
                     }]),
-              ],
-              ...(acceptedMemoryIntent === undefined
-                ? {}
-                : {
-                    memoryIntent: {
-                      operation: acceptedMemoryIntent.operation,
-                      evidenceRef: acceptedMemoryIntent.evidenceRef,
-                      candidateStatement: acceptedMemoryIntent.candidateStatement,
-                      userQuote: acceptedMemoryIntent.userQuote,
-                    },
-                  }),
-            });
+              ]),
+          ],
+          ...(acceptedMemoryIntent === undefined
+            ? {}
+            : {
+                memoryIntent: {
+                  operation: acceptedMemoryIntent.operation,
+                  evidenceRef: acceptedMemoryIntent.evidenceRef,
+                  candidateStatement: acceptedMemoryIntent.candidateStatement,
+                  userQuote: acceptedMemoryIntent.userQuote,
+                },
+              }),
+        });
         await memorySession.close();
       } catch (error) {
         emitResilienceDebug('[memory:episode-finalize:error]', {

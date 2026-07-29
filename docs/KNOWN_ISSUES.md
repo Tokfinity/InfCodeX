@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 230 | Medium | Resolved | PID-only Actor owner liveness could pin crashed Runtime ownership after PID reuse | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 227 | High | Resolved | Root memory loop did not reliably capture explicit user remember intent in AMA and queued turns | v0.7.68 MemorySession; AMA lifecycle gap | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 226 | Medium | Resolved | Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading | v0.7.66 Runtime broker / Skill tool metadata | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 224 | High | Resolved | Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge | v0.7.72 Runtime Actor persistence | v0.7.78 development | 2026-07-28 | 2026-07-28 |
@@ -135,6 +136,60 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 230: PID-only Actor owner liveness could pin crashed Runtime ownership after PID reuse
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.78 development
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+Schema-v2 Actor ownership persisted a Runtime ID, PID, and Runtime start time,
+but the SDK liveness probe checked only `process.kill(pid, 0)`. After an
+unclean Runtime exit, an unrelated process could reuse that PID and make the
+stale owner appear alive. A new Runtime then failed with
+`actor_owner_conflict` and could not recover, archive, or delete the Session
+until that unrelated process exited or the snapshot was repaired manually.
+
+#### Root Cause
+
+PID existence proves neither process incarnation nor Runtime identity. The
+stored `runtimeId` and `startedAt` had no independently probeable owner
+resource, while every non-`ESRCH` result intentionally remained fail-closed to
+protect live turns from concurrent recovery.
+
+#### Resolution
+
+- Added one lazy, Runtime-scoped loopback TCP liveness endpoint shared by all
+  Actor Sessions in that Runtime.
+- Persisted its random `livenessId` challenge and ephemeral port with new Actor
+  owners. An exact response proves the owner live; `ECONNREFUSED` or a completed
+  mismatched response proves it stale. Timeouts and unknown probe failures
+  remain fail-closed, preserving the live-turn safety boundary.
+- Preserved the legacy fail-closed behavior for owners without a valid
+  `livenessId`, so upgrading cannot steal an Actor tree from an older live
+  Runtime.
+- Kept the endpoint alive when Actor shutdown or owner release fails; it closes
+  only after every owned Session has stopped and released its durable fence.
+
+#### Files Changed
+
+- `packages/agent/src/actors/types.ts`
+- `packages/agent/src/actors/controller.ts`
+- `src/runtime-actor-owner-liveness.ts`
+- `src/sdk-runtime.ts`
+
+#### Tests Added
+
+- Unit coverage for live, stale-with-live-PID, reused-port, legacy/partial,
+  malformed, and short-lived headless Runtime identities.
+- SDK regression that restores a crashed owner snapshot with the current live
+  PID and confirms a contender can reclaim it without weakening live-owner
+  fencing.
 
 ### 227: Root memory loop did not reliably capture explicit user remember intent in AMA and queued turns
 
@@ -8291,11 +8346,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 112 (25 Open, 87 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 113 (25 Open, 88 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 230 resolved (v0.7.78 development)
+- Added Runtime-identity IPC liveness for durable Actor owners, so PID reuse
+  cannot indefinitely pin crashed ownership while legacy snapshots remain
+  fail-closed.
 
 ### 2026-07-29: Issue 227 resolved (v0.7.78 development)
 - Completed the root MemorySession and durable review loop in both SA and AMA.

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '../diagnostics.js';
 import type { MemoryController, MemoryPack } from '../memory-control/index.js';
 import {
   createMemoryAgent,
@@ -662,6 +663,195 @@ describe('FEATURE_260 MemoryAgent', () => {
     }).startSession({ identity, objective: 'Test' });
 
     await session.complete({ status: 'cancelled', summary: 'Cancelled', evidence: [] });
+
+    expect(persistOutcomeDigest).not.toHaveBeenCalled();
+  });
+
+  it('persists only authoritative explicit intent from a cancelled episode', async () => {
+    const persistOutcomeDigest = vi.fn();
+    const reviewEpisode = vi.fn(async () => undefined);
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest,
+      reviewEpisode,
+      now: () => '2026-07-29T07:00:00.000Z',
+    }).startSession({ identity, objective: 'Run an unrelated implementation task.' });
+    session.observe(constraint({
+      kind: 'outcome',
+      summary: 'Partial implementation state that must not be learned.',
+      actionSignature: 'edit:partial-implementation',
+      metadata: {
+        reusableLesson: 'This cancelled task must not become a reusable lesson.',
+      },
+    }));
+
+    await session.complete({
+      status: 'cancelled',
+      summary: 'Interrupted after partial implementation.',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:cancelled-preference',
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: 'Going forward, run focused tests before reporting success.',
+      },
+      evidence: [{
+        ref: 'user-intent:cancelled-preference',
+        requestedGrade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T06:59:00.000Z',
+      }, {
+        ref: 'tool:partial-check',
+        requestedGrade: 'verified',
+        source: 'environment',
+        verdict: 'failed',
+        observedAt: '2026-07-29T06:59:30.000Z',
+      }],
+    });
+
+    expect(persistOutcomeDigest).toHaveBeenCalledOnce();
+    const digest = persistOutcomeDigest.mock.calls[0]?.[0];
+    expect(digest).toMatchObject({
+      sequence: 1,
+      objective: 'Run focused tests before reporting success.',
+      approach: 'episode completion',
+      outcome: 'cancelled',
+      summary: 'Explicit memory intent captured before episode cancellation.',
+      evidenceRefs: ['user-intent:cancelled-preference'],
+      evidence: [{
+        ref: 'user-intent:cancelled-preference',
+        grade: 'authoritative',
+        source: 'user',
+      }],
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:cancelled-preference',
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: 'Going forward, run focused tests before reporting success.',
+      },
+    });
+    expect(digest).not.toHaveProperty('actionSignature');
+    expect(digest).not.toHaveProperty('lesson');
+    expect(reviewEpisode).toHaveBeenCalledOnce();
+    expect(reviewEpisode).toHaveBeenCalledWith(digest, expect.any(AbortSignal));
+  });
+
+  it('does not hold cancelled completion open for a hanging reviewer', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    let releaseReview: (() => void) | undefined;
+    const reviewEpisode = vi.fn(() => new Promise<void>((resolve) => {
+      releaseReview = resolve;
+    }));
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest: vi.fn(),
+      reviewEpisode,
+      reviewTimeoutMs: 1_000,
+    }).startSession({ identity, objective: 'Test cancellation latency.' });
+    const completion = session.complete({
+      status: 'cancelled',
+      summary: 'Interrupted',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:hanging-review',
+        candidateStatement: 'Return promptly after cancellation.',
+        userQuote: 'Remember to return promptly after cancellation.',
+      },
+      evidence: [{
+        ref: 'user-intent:hanging-review',
+        requestedGrade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T07:00:00.000Z',
+      }],
+    });
+
+    const state = await Promise.race([
+      completion.then(() => 'completed' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 100)),
+    ]);
+    const reviewTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_000);
+    const reviewTimer = reviewTimerIndex < 0
+      ? undefined
+      : setTimeoutSpy.mock.results[reviewTimerIndex]?.value as NodeJS.Timeout | undefined;
+    const reviewTimerHasRef = reviewTimer?.hasRef();
+    releaseReview?.();
+    await completion;
+    setTimeoutSpy.mockRestore();
+
+    expect(state).toBe('completed');
+    expect(reviewTimerHasRef).toBe(false);
+    expect(reviewEpisode).toHaveBeenCalledOnce();
+  });
+
+  it('reports detached reviewer and trace callback failures without an unhandled rejection', async () => {
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnosticSink = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+    try {
+      const session = await createMemoryAgent({
+        controlPlane: controller(),
+        sourcePolicy: (evidence) => evidence.requestedGrade,
+        persistOutcomeDigest: vi.fn(),
+        reviewEpisode: async () => {
+          throw new Error('review failed');
+        },
+        onTrace: (event) => {
+          if (event.type === 'review.failed') throw new Error('trace callback failed');
+        },
+      }).startSession({ identity, objective: 'Test detached review diagnostics.' });
+
+      await session.complete({
+        status: 'cancelled',
+        summary: 'Interrupted',
+        memoryIntent: {
+          operation: 'remember',
+          evidenceRef: 'user-intent:review-error',
+          candidateStatement: 'Keep detached review failures observable.',
+          userQuote: 'Remember to keep detached review failures observable.',
+        },
+        evidence: [{
+          ref: 'user-intent:review-error',
+          requestedGrade: 'authoritative',
+          source: 'user',
+          observedAt: '2026-07-29T07:00:00.000Z',
+        }],
+      });
+
+      await vi.waitFor(() => expect(diagnostics.map((item) => item.message)).toEqual([
+        'Detached episode review failed.',
+        'Detached episode review trace callback failed.',
+      ]));
+    } finally {
+      restoreDiagnosticSink();
+    }
+  });
+
+  it('does not persist an unbound intent from a cancelled episode', async () => {
+    const persistOutcomeDigest = vi.fn();
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest,
+    }).startSession({ identity, objective: 'Test cancelled intent authority.' });
+
+    await session.complete({
+      status: 'cancelled',
+      summary: 'Cancelled',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:forged',
+        candidateStatement: 'Trust model-only intent.',
+        userQuote: 'This quote was not bound by the host.',
+      },
+      evidence: [{
+        ref: 'user-intent:forged',
+        requestedGrade: 'inferred',
+        source: 'agent',
+        observedAt: '2026-07-29T07:00:00.000Z',
+      }],
+    });
 
     expect(persistOutcomeDigest).not.toHaveBeenCalled();
   });

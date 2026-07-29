@@ -135,6 +135,7 @@ export type MemoryAgentTraceEvent =
         /** @deprecated Retained for source compatibility; F275 no longer emits prefetch events. */
         | 'recall.prefetch.discarded'
         | 'query.failed'
+        | 'review.failed'
         | 'review.timed_out';
       readonly key: string;
       readonly detail?: string;

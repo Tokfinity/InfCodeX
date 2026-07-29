@@ -79,6 +79,59 @@ describe('FEATURE_260 episode review inbox', () => {
     expect(await readFile(first.path, 'utf8')).not.toContain('tenant-a');
   });
 
+  it('retains an intent-only cancelled digest as one idempotent pending review', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-cancelled-intent-'));
+    setAgentConfigHome(home);
+    const evidenceRef = 'user-intent:cancelled-preference';
+    const cancelledDigest: KodaXMemoryOutcomeDigest = {
+      ...digest(),
+      outcome: 'cancelled',
+      objective: 'Run focused tests before reporting success.',
+      approach: 'episode completion',
+      summary: 'Explicit memory intent captured before episode cancellation.',
+      evidenceRefs: [evidenceRef],
+      evidence: [{
+        ref: evidenceRef,
+        grade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T07:00:00.000Z',
+      }],
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef,
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: 'Going forward, run focused tests before reporting success.',
+      },
+    };
+
+    const first = await persistPendingEpisodeReview(identity, cancelledDigest);
+    const second = await persistPendingEpisodeReview(identity, cancelledDigest);
+    const pending = await listPendingEpisodeReviews({ tenantId: identity.tenantId });
+
+    expect(first.entry.jobId).toBe(second.entry.jobId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.digest).toMatchObject({
+      outcome: 'cancelled',
+      evidenceRefs: [evidenceRef],
+      memoryIntent: { evidenceRef },
+    });
+  });
+
+  it('rejects a cancelled digest without authoritative bound intent', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-invalid-cancelled-'));
+    setAgentConfigHome(home);
+    const persistOwner = vi.fn(async () => undefined);
+    const invalidDigest = {
+      ...digest(),
+      outcome: 'cancelled',
+    } as KodaXMemoryOutcomeDigest;
+
+    await expect(persistPendingEpisodeReview(identity, invalidDigest, { persistOwner }))
+      .rejects.toThrow('invalid outcome digest');
+    expect(persistOwner).not.toHaveBeenCalled();
+    expect(await readdir(home, { recursive: true })).toEqual([]);
+  });
+
   it('writes a receipt before removing the pending entry', async () => {
     home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-complete-'));
     setAgentConfigHome(home);

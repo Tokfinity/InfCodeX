@@ -54,7 +54,7 @@ export interface MemoryHandoffMetadata {
   readonly preconditions?: string;
   readonly applicability?: MemoryApplicability;
   readonly requestedLifecycle?: 'active' | 'provisional';
-  readonly episodeOutcome?: 'succeeded' | 'failed';
+  readonly episodeOutcome?: 'succeeded' | 'failed' | 'cancelled';
   readonly verifiedEvidence?: boolean;
   readonly evidenceProjectId?: string;
 }

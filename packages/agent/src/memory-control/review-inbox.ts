@@ -246,6 +246,9 @@ export async function persistPendingEpisodeReview(
     readonly persistOwner?: (entry: PendingEpisodeReviewV2) => Promise<void>;
   } = {},
 ): Promise<{ readonly path: string; readonly entry: PendingEpisodeReviewV2 }> {
+  if (!isOutcomeDigest(digest)) {
+    throw new Error('invalid outcome digest for review inbox');
+  }
   if (digest.sessionId !== identity.sessionId) {
     throw new Error('outcome digest session does not match review-inbox owner');
   }
@@ -2498,7 +2501,9 @@ function isOutcomeDigest(value: unknown): value is KodaXMemoryOutcomeDigest {
     && Number.isSafeInteger(value.sequence)
     && typeof value.objective === 'string'
     && typeof value.approach === 'string'
-    && (value.outcome === 'succeeded' || value.outcome === 'failed')
+    && (value.outcome === 'succeeded'
+      || value.outcome === 'failed'
+      || value.outcome === 'cancelled')
     && typeof value.summary === 'string'
     && (value.actionSignature === undefined || typeof value.actionSignature === 'string')
     && (value.preconditions === undefined || typeof value.preconditions === 'string')
@@ -2507,6 +2512,7 @@ function isOutcomeDigest(value: unknown): value is KodaXMemoryOutcomeDigest {
     && value.evidenceRefs.every((ref) => typeof ref === 'string')
     && (value.evidence === undefined
       || (Array.isArray(value.evidence) && value.evidence.every(isOutcomeEvidence)))
+    && (value.outcome !== 'cancelled' || isIntentOnlyCancelledDigest(value))
     && (value.memoryInfluence === undefined
       || (Array.isArray(value.memoryInfluence) && value.memoryInfluence.every(isMemoryInfluence)))
     && (value.visibility === 'prompt_safe' || value.visibility === 'private' || value.visibility === 'sensitive')
@@ -2523,6 +2529,33 @@ function isOutcomeEvidence(value: unknown): boolean {
     && (value.verdict === undefined || value.verdict === 'passed'
       || value.verdict === 'failed' || value.verdict === 'inconclusive')
     && typeof value.observedAt === 'string';
+}
+
+function isIntentOnlyCancelledDigest(value: Record<string, unknown>): boolean {
+  const intent = value.memoryIntent;
+  const evidence = value.evidence;
+  const evidenceRefs = value.evidenceRefs;
+  if (!isRecord(intent)
+    || (intent.operation !== 'remember' && intent.operation !== 'correct')
+    || typeof intent.evidenceRef !== 'string'
+    || typeof intent.candidateStatement !== 'string'
+    || typeof intent.userQuote !== 'string'
+    || !Array.isArray(evidence)
+    || evidence.length !== 1
+    || !Array.isArray(evidenceRefs)
+    || evidenceRefs.length !== 1) return false;
+  const boundEvidence = evidence[0];
+  return isRecord(boundEvidence)
+    && boundEvidence.ref === intent.evidenceRef
+    && boundEvidence.grade === 'authoritative'
+    && boundEvidence.source === 'user'
+    && evidenceRefs[0] === intent.evidenceRef
+    && value.objective === intent.candidateStatement
+    && value.approach === 'episode completion'
+    && value.actionSignature === undefined
+    && value.preconditions === undefined
+    && value.lesson === undefined
+    && value.memoryInfluence === undefined;
 }
 
 function isMemoryInfluence(value: unknown): boolean {

@@ -134,7 +134,8 @@ function isMemoryMetadata(value: unknown): boolean {
       || value.requestedLifecycle === 'provisional')
     && (value.episodeOutcome === undefined
       || value.episodeOutcome === 'succeeded'
-      || value.episodeOutcome === 'failed')
+      || value.episodeOutcome === 'failed'
+      || value.episodeOutcome === 'cancelled')
     && (value.verifiedEvidence === undefined || typeof value.verifiedEvidence === 'boolean')
     && (value.evidenceProjectId === undefined || typeof value.evidenceProjectId === 'string');
 }

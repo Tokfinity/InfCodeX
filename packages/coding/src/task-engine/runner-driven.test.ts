@@ -2400,6 +2400,86 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
     }
   }, 20_000);
 
+  it('submits a verified AMA memory_intent when the episode is later aborted', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-cancelled-'));
+    const sessionId = 'runner-memory-cancelled';
+    const userRequest = 'Going forward, run focused tests before reporting success.';
+    const abortController = new AbortController();
+    let call = 0;
+    let outcome: KodaXMemoryOutcomeDigest | undefined;
+    const reviewTriggers: string[] = [];
+    try {
+      const run = runManagedTaskViaRunner({
+        ...makeOptions(),
+        abortSignal: abortController.signal,
+        session: { id: sessionId },
+        memoryReviewer: async (input) => {
+          reviewTriggers.push(input.trigger);
+          return {
+            trigger: input.trigger,
+            createdAt: '2026-07-29T07:00:00.000Z',
+            sourceRefs: input.sourceRefs,
+            candidateRefs: input.candidateRefs,
+            actions: [],
+            warnings: [],
+          };
+        },
+        context: {
+          ...makeOptions().context,
+          configHome: home,
+          executionCwd: home,
+          gitRoot: home,
+        },
+        events: {
+          onMemoryOutcomeDigest(digest) {
+            outcome = digest;
+          },
+        },
+      }, userRequest, async () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'remember-before-ama-abort',
+              name: 'memory_intent',
+              input: {
+                operation: 'remember',
+                statement: 'Run focused tests before reporting success.',
+                userQuote: userRequest,
+              },
+            }],
+          };
+        }
+        const error = new Error('managed run interrupted after intent capture');
+        error.name = 'AbortError';
+        throw error;
+      });
+
+      await expect(run).rejects.toThrow('managed run interrupted after intent capture');
+      expect(outcome).toMatchObject({
+        outcome: 'cancelled',
+        objective: 'Run focused tests before reporting success.',
+        summary: 'Explicit memory intent captured before episode cancellation.',
+        evidenceRefs: [expect.stringMatching(/^user-intent:[a-f0-9]{24}$/)],
+        memoryIntent: {
+          operation: 'remember',
+          candidateStatement: 'Run focused tests before reporting success.',
+          userQuote: userRequest,
+        },
+      });
+      expect(outcome?.evidence).toHaveLength(1);
+      expect(outcome?.evidence?.[0]).toMatchObject({
+        grade: 'authoritative',
+        source: 'user',
+      });
+      await vi.waitFor(() => expect(reviewTriggers).toContain('explicit_remember'));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it('reviews a completed AMA episode even when the LLM does not call memory_intent', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-fallback-'));
     const sessionId = 'runner-memory-fallback';

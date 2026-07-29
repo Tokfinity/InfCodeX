@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   type MemoryPackHint,
 } from '../memory-control/index.js';
+import { emitKodaXDiagnostic } from '../diagnostics.js';
 import {
   isRestrictedMemoryContent,
   sanitizePromptSafeMemoryClaim,
@@ -26,6 +27,9 @@ import type {
 } from './types.js';
 import { MEMORY_POLICY_VERSION } from './policy.js';
 import { renderMemoryEvidenceEnvelope } from './reminder-envelope.js';
+
+const CANCELLED_MEMORY_INTENT_SUMMARY =
+  'Explicit memory intent captured before episode cancellation.';
 
 export function createMemoryAgent(options: CreateMemoryAgentOptions): MemoryAgent {
   return new DefaultMemoryAgent(options);
@@ -285,11 +289,7 @@ class DefaultMemorySession implements MemorySession {
   }
 
   private async completeOnce(outcome: MemoryEpisodeOutcome): Promise<void> {
-    if (outcome.status === 'cancelled') return;
-    const objective = sanitizePromptSafeMemoryClaim(this.input.objective, 512);
-    const summary = sanitizePromptSafeMemoryClaim(outcome.summary, 512);
-    if (objective === undefined || summary === undefined) return;
-    const evidence = outcome.evidence.map((item) =>
+    const normalizedEvidence = outcome.evidence.map((item) =>
       applySourcePolicy(item, this.options.sourcePolicy));
     const candidateStatement = outcome.memoryIntent === undefined
       ? undefined
@@ -300,7 +300,7 @@ class DefaultMemorySession implements MemorySession {
     const memoryIntent = outcome.memoryIntent !== undefined
       && candidateStatement !== undefined
       && userQuote !== undefined
-      && evidence.some((item) => (
+      && normalizedEvidence.some((item) => (
         item.ref === outcome.memoryIntent?.evidenceRef
         && item.requestedGrade === 'authoritative'
         && item.source === 'user'
@@ -312,6 +312,28 @@ class DefaultMemorySession implements MemorySession {
           userQuote,
         }
       : undefined;
+    const intentOnlyCancellation = outcome.status === 'cancelled';
+    if (intentOnlyCancellation && memoryIntent === undefined) return;
+    const objectiveSource = intentOnlyCancellation
+      ? memoryIntent?.candidateStatement
+      : this.input.objective;
+    if (objectiveSource === undefined) return;
+    const objective = sanitizePromptSafeMemoryClaim(
+      objectiveSource,
+      512,
+    );
+    const summary = sanitizePromptSafeMemoryClaim(
+      intentOnlyCancellation ? CANCELLED_MEMORY_INTENT_SUMMARY : outcome.summary,
+      512,
+    );
+    if (objective === undefined || summary === undefined) return;
+    const evidence = intentOnlyCancellation && memoryIntent !== undefined
+      ? normalizedEvidence.filter((item) => (
+          item.ref === memoryIntent.evidenceRef
+          && item.requestedGrade === 'authoritative'
+          && item.source === 'user'
+        )).slice(0, 1)
+      : normalizedEvidence;
     const digestValue = buildOutcomeDigest(
       { ...this.input, objective },
       [...this.observations.values()],
@@ -325,10 +347,46 @@ class DefaultMemorySession implements MemorySession {
       this.injectedReceiptIds,
     );
     await this.options.persistOutcomeDigest?.(digestValue);
+    if (outcome.status === 'cancelled') {
+      this.reviewDetached(digestValue);
+      return;
+    }
     await this.reviewWithTimeout(digestValue);
   }
 
-  private async reviewWithTimeout(digestValue: PersistedOutcomeDigest): Promise<void> {
+  private reviewDetached(digestValue: PersistedOutcomeDigest): void {
+    void this.reviewWithTimeout(digestValue, { unrefTimeout: true }).catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      emitKodaXDiagnostic({
+        source: 'memory.agent',
+        level: 'warn',
+        message: 'Detached episode review failed.',
+        detail: { reviewKey: digestValue.reviewKey, error: detail },
+      });
+      try {
+        this.options.onTrace?.({
+          type: 'review.failed',
+          key: digestValue.reviewKey,
+          detail,
+        });
+      } catch (traceError) {
+        emitKodaXDiagnostic({
+          source: 'memory.agent',
+          level: 'warn',
+          message: 'Detached episode review trace callback failed.',
+          detail: {
+            reviewKey: digestValue.reviewKey,
+            error: traceError instanceof Error ? traceError.message : String(traceError),
+          },
+        });
+      }
+    });
+  }
+
+  private async reviewWithTimeout(
+    digestValue: PersistedOutcomeDigest,
+    options: { readonly unrefTimeout?: boolean } = {},
+  ): Promise<void> {
     const review = this.options.reviewEpisode;
     if (review === undefined) return;
     const controller = new AbortController();
@@ -341,6 +399,7 @@ class DefaultMemorySession implements MemorySession {
           controller.abort();
           resolve(true);
         }, timeoutMs);
+        if (options.unrefTimeout) timeout.unref();
       }),
     ]);
     if (timeout !== undefined) clearTimeout(timeout);
@@ -697,11 +756,13 @@ function uniqueCandidates(
 function buildOutcomeDigest(
   input: MemorySessionInput & { readonly episodeId: string },
   observations: readonly MemoryObservation[],
-  outcome: MemoryEpisodeOutcome & { readonly status: 'succeeded' | 'failed' },
+  outcome: MemoryEpisodeOutcome,
   createdAt: string,
   injectedReceiptIds: readonly string[],
 ): PersistedOutcomeDigest {
-  const latestOutcome = [...observations].reverse().find((observation) => observation.kind === 'outcome');
+  const latestOutcome = outcome.status === 'cancelled'
+    ? undefined
+    : [...observations].reverse().find((observation) => observation.kind === 'outcome');
   const reusableLesson = typeof latestOutcome?.metadata?.reusableLesson === 'string'
     ? sanitizePromptSafeMemoryClaim(latestOutcome.metadata.reusableLesson, 512)
     : undefined;
@@ -737,7 +798,7 @@ function buildOutcomeDigest(
       observedAt: evidence.observedAt,
     })),
     ...(outcome.memoryIntent === undefined ? {} : { memoryIntent: outcome.memoryIntent }),
-    ...(injectedReceiptIds.length > 0 ? {
+    ...(outcome.status !== 'cancelled' && injectedReceiptIds.length > 0 ? {
       memoryInfluence: unique(injectedReceiptIds).map((decisionReceiptRef) => ({
         decisionReceiptRef,
         grade: 'exposed' as const,

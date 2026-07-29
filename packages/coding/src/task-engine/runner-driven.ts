@@ -776,32 +776,34 @@ async function finishRunnerMemoryRuntime(
     await runtime.session.complete({
       status: outcome.status,
       summary: outcome.summary,
-      evidence: outcome.status === 'cancelled'
-        ? []
-        : [
-            ...(runtime.acceptedIntent === undefined
-              ? []
-              : [{
-                  ref: runtime.acceptedIntent.evidenceRef,
-                  requestedGrade: 'authoritative' as const,
-                  source: 'user' as const,
-                  observedAt: completedAt,
-                }]),
+      evidence: [
+        ...(runtime.acceptedIntent === undefined
+          ? []
+          : [{
+              ref: runtime.acceptedIntent.evidenceRef,
+              requestedGrade: 'authoritative' as const,
+              source: 'user' as const,
+              observedAt: completedAt,
+            }]),
+        ...(outcome.status === 'cancelled'
+          ? []
+          : [
             ...(checks.length > 0
               ? checks.map((check) => ({
-                  ref: check.ref,
-                  requestedGrade: 'verified' as const,
-                  source: check.source,
-                  verdict: check.verdict,
-                  observedAt: check.observedAt,
-                }))
+                    ref: check.ref,
+                    requestedGrade: 'verified' as const,
+                    source: check.source,
+                    verdict: check.verdict,
+                    observedAt: check.observedAt,
+                  }))
               : [{
                   ref: `host:run-terminal:${sessionId}`,
                   requestedGrade: 'observed' as const,
                   source: 'host' as const,
                   observedAt: completedAt,
                 }]),
-          ],
+            ]),
+      ],
       ...(runtime.acceptedIntent === undefined
         ? {}
         : {
@@ -1056,7 +1058,9 @@ export async function runManagedTaskViaRunner(
       runnerMemoryRuntime,
       initialSessionId,
       {
-        status: optionsWithSessionId.abortSignal?.aborted === true ? 'cancelled' : 'failed',
+        status: optionsWithSessionId.abortSignal?.aborted === true || error.name === 'AbortError'
+          ? 'cancelled'
+          : 'failed',
         summary: error.message,
       },
     );

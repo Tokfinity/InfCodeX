@@ -238,7 +238,9 @@ export function isUnifiedLearningReviewModelInput(
     && typeof digest.reviewKey === 'string'
     && typeof digest.sessionId === 'string'
     && typeof digest.branchId === 'string'
-    && (digest.outcome === 'succeeded' || digest.outcome === 'failed')
+    && (digest.outcome === 'succeeded'
+      || digest.outcome === 'failed'
+      || (digest.outcome === 'cancelled' && isIntentOnlyCancelledDigest(digest)))
     && isStringArray(digest.evidenceRefs)
     && Array.isArray(evidence.verifierFacts)
     && Array.isArray(evidence.priorDigests)
@@ -249,6 +251,33 @@ export function isUnifiedLearningReviewModelInput(
     && Number.isSafeInteger(qualification.independentEpisodeCount)
     && typeof qualification.verifiedOutcome === 'boolean'
     && typeof qualification.exactSkillInvoked === 'boolean';
+}
+
+function isIntentOnlyCancelledDigest(digest: Record<string, unknown>): boolean {
+  const intent = digest.memoryIntent;
+  const evidence = digest.evidence;
+  const evidenceRefs = digest.evidenceRefs;
+  if (!isRecord(intent)
+    || (intent.operation !== 'remember' && intent.operation !== 'correct')
+    || typeof intent.evidenceRef !== 'string'
+    || typeof intent.candidateStatement !== 'string'
+    || typeof intent.userQuote !== 'string'
+    || !Array.isArray(evidence)
+    || evidence.length !== 1
+    || !Array.isArray(evidenceRefs)
+    || evidenceRefs.length !== 1) return false;
+  const boundEvidence = evidence[0];
+  return isRecord(boundEvidence)
+    && boundEvidence.ref === intent.evidenceRef
+    && boundEvidence.grade === 'authoritative'
+    && boundEvidence.source === 'user'
+    && evidenceRefs[0] === intent.evidenceRef
+    && digest.objective === intent.candidateStatement
+    && digest.approach === 'episode completion'
+    && digest.actionSignature === undefined
+    && digest.preconditions === undefined
+    && digest.lesson === undefined
+    && digest.memoryInfluence === undefined;
 }
 
 export function normalizeUnifiedLearningReview(

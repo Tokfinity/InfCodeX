@@ -173,7 +173,11 @@ export interface KodaXMemoryOutcomeDigest {
   readonly objective: string;
   readonly actionSignature?: string;
   readonly approach: string;
-  readonly outcome: 'succeeded' | 'failed';
+  /**
+   * `cancelled` is reserved for a host-bound explicit Memory intent. Ordinary
+   * cancelled episodes do not produce an outcome digest.
+   */
+  readonly outcome: 'succeeded' | 'failed' | 'cancelled';
   readonly summary: string;
   readonly preconditions?: string;
   readonly lesson?: string;

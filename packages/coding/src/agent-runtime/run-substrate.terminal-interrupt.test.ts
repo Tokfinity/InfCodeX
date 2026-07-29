@@ -265,6 +265,108 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
     }
   });
 
+  it('submits a verified memory_intent after a later AbortError interrupts the episode', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-sa-memory-cancelled-'));
+    const sessionId = 'ordinary-memory-cancelled';
+    const userRequest = 'Going forward, run focused tests before reporting success.';
+    let turn = 0;
+    let outcome: KodaXMemoryOutcomeDigest | undefined;
+    const reviewTriggers: string[] = [];
+
+    class CancelledMemoryProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'remember-before-interrupt',
+              name: 'memory_intent',
+              input: {
+                operation: 'remember',
+                statement: 'Run focused tests before reporting success.',
+                userQuote: userRequest,
+              },
+            }],
+            thinkingBlocks: [],
+          };
+        }
+        const error = new Error('user interrupted after intent capture');
+        error.name = 'AbortError';
+        throw error;
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new CancelledMemoryProvider());
+    actorSession = new CodingActorSession({ sessionId });
+    try {
+      const result = await runKodaX({
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        maxIter: 4,
+        lsp: false,
+        memoryReviewer: async (input) => {
+          reviewTriggers.push(input.trigger);
+          return {
+            trigger: input.trigger,
+            createdAt: '2026-07-29T07:00:00.000Z',
+            sourceRefs: input.sourceRefs,
+            candidateRefs: input.candidateRefs,
+            actions: [],
+            warnings: [],
+          };
+        },
+        session: { id: sessionId },
+        context: {
+          actorSession,
+          configHome: home,
+          gitRoot: home,
+          executionCwd: home,
+          repoIntelligenceMode: 'off',
+          interruptInput: {
+            closeInputWindow() {},
+            reopenInputWindow() {},
+          },
+        },
+        events: {
+          onMemoryOutcomeDigest(digest) {
+            outcome = digest;
+          },
+        },
+      }, userRequest);
+
+      expect(result).toMatchObject({ success: true, interrupted: true });
+      expect(outcome).toMatchObject({
+        outcome: 'cancelled',
+        objective: 'Run focused tests before reporting success.',
+        summary: 'Explicit memory intent captured before episode cancellation.',
+        evidenceRefs: [expect.stringMatching(/^user-intent:[a-f0-9]{24}$/)],
+        memoryIntent: {
+          operation: 'remember',
+          candidateStatement: 'Run focused tests before reporting success.',
+          userQuote: userRequest,
+        },
+      });
+      expect(outcome?.evidence).toHaveLength(1);
+      expect(outcome?.evidence?.[0]).toMatchObject({
+        grade: 'authoritative',
+        source: 'user',
+      });
+      await vi.waitFor(() => expect(reviewTriggers).toContain('explicit_remember'));
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('does not expose root memory tools for a parent-only internal run', async () => {
     const sessionId = 'ordinary-parent-only-internal';
     let exposedTools: readonly string[] = [];
