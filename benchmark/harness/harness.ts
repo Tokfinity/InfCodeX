@@ -90,6 +90,8 @@ export interface OneShotInput {
   readonly userMessage: string;
   /** Optional tools advertised to the provider (default: none). */
   readonly tools?: readonly KodaXToolDefinition[];
+  /** Optional production-aligned forced report tool for structured judges. */
+  readonly forcedToolName?: string;
   /** Optional pre-conversation context (default: empty). */
   readonly priorMessages?: readonly KodaXMessage[];
   /**
@@ -155,6 +157,9 @@ export async function runOneShot(
           modelOverride: target.model,
           ...(input.maxOutputTokens !== undefined
             ? { maxOutputTokensOverride: input.maxOutputTokens }
+            : {}),
+          ...(input.forcedToolName !== undefined
+            ? { forcedToolName: input.forcedToolName }
             : {}),
           ...(controller ? { signal: controller.signal } : {}),
           ...(input.ephemeralSuffix !== undefined

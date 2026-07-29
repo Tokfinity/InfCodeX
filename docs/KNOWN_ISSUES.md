@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 235 | High | Resolved | v0.7.78 semantic release gates had no frozen current-policy runners | v0.7.78 release candidate | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 234 | Medium | Resolved | Standalone sandbox environment gate assumed Windows argv transport on POSIX | v0.7.78 standalone sandbox broker tests | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 233 | High | Resolved | Learned Skill canary could trust before all outcomes settled and record a stale artifact identity | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 232 | Medium | Resolved | Workspace shell sandbox did not deny reads from sensitive home credential paths | v0.7.78 ASRT workspace shell sandbox | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -137,6 +138,67 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 235: v0.7.78 semantic release gates had no frozen current-policy runners
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 release candidate
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+The release checklist correctly required bounded paid semantic evaluation for
+FEATURE_263 and FEATURE_277, but the repository did not yet contain executable
+runners for the exact v0.7.78 policies. FEATURE_263 had no current runner.
+FEATURE_277 only had historical v0.7.33 classifier coverage and a v0.7.73
+timeout probe, neither of which froze the intent-aligned v0.7.78 production
+prompt, action projection, cases, provider routes, scorer, and budget.
+
+Running those historical gates would have produced release evidence for old
+semantics and could have pressured the new implementation to conform to stale
+expectations.
+
+#### Root Cause
+
+Feature-level deterministic tests and design-time eval plans were complete, but
+the final release audit had not converted both paid plans into preregistered,
+revisioned, resumable runners. The generic one-shot harness also had no typed
+way to force the production learning-review report tool.
+
+#### Resolution
+
+- Added frozen F263 revision `f263-v0.7.78.2`: a four-call reviewer pilot, an
+  inclusive 54-cell safety panel, and a 24-cell blinded downstream comparison,
+  with a shared 78-call/850,000-token/$10 ceiling.
+- Added frozen F277 revision `f277-v0.7.78.2`: a four-call pilot and inclusive
+  60-cell intent-aligned classifier panel, with a 300,000-token/$6 ceiling.
+- Freeze exact Git/patch identity, production prompt/tool/policy bytes, rendered
+  cases, aliases, pricing and scorer hashes before generation.
+- Persist resumable raw cells and blind-review packets under `os.tmpdir()`;
+  repository tests use a zero-cost fake provider.
+- Require both an in-process opt-in and a feature-specific environment flag
+  plus non-empty owner-authorization record before any provider call.
+- Extend the existing one-shot harness only with an optional
+  `forcedToolName`; ordinary callers remain byte-for-byte unchanged.
+
+#### Files Changed
+
+- `benchmark/harness/harness.ts`
+- `benchmark/harness/harness-model-routing.test.ts`
+- `benchmark/datasets/feature-263/`
+- `benchmark/datasets/feature-277/`
+- `tests/feature-263-learning-release.eval.ts`
+- `tests/feature-277-permission-policy.eval.ts`
+
+#### Tests Added or Updated
+
+- Contract tests pin every case-set hash and fail closed on revision drift.
+- Fake-provider runner tests prove call ceilings, resume behavior, production
+  byte manifests, secret-safe review evidence, and blinded reveal separation.
+- Default eval entry points run manifest-only and make zero external calls.
 
 ### 234: Standalone sandbox environment gate assumed Windows argv transport on POSIX
 
@@ -8246,11 +8308,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 114 (25 Open, 89 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 115 (25 Open, 90 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 235 resolved (v0.7.78 development)
+- Replaced absent/stale semantic release gates with frozen, resumable F263 and
+  F277 current-policy runners.
+- Kept production semantics authoritative: gates consume exact production bytes
+  and fail closed on drift instead of changing implementation to satisfy an old
+  expectation.
+- Added explicit generation and owner-authorization fences; default test runs
+  remain zero-cost.
 
 ### 2026-07-29: Issue 234 resolved (v0.7.78 development)
 - Replaced a Windows-only standalone sandbox environment assertion with exact

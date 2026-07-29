@@ -37,6 +37,32 @@ describe('runOneShot alias fidelity', () => {
     expect(result.usage).toEqual({ inputTokens: 7, outputTokens: 3, totalTokens: 10 });
   });
 
+  it('passes an explicit forced report tool through for production-aligned judges', async () => {
+    await runOneShot('ark/v4flash', {
+      systemPrompt: 'system',
+      userMessage: 'user',
+      tools: [{
+        name: 'commit_review',
+        description: 'Commit the structured review.',
+        input_schema: { type: 'object', properties: {}, required: [] },
+      }],
+      forcedToolName: 'commit_review',
+      maxOutputTokens: 1_200,
+    });
+
+    expect(stream).toHaveBeenCalledWith(
+      [{ role: 'user', content: 'user' }],
+      [expect.objectContaining({ name: 'commit_review' })],
+      'system',
+      undefined,
+      {
+        modelOverride: 'deepseek-v4-flash',
+        forcedToolName: 'commit_review',
+        maxOutputTokensOverride: 1_200,
+      },
+    );
+  });
+
   it('rescored resumed raw output without another provider call', async () => {
     const result = await runBenchmark({
       variants: [{ id: 'proposed', systemPrompt: 'system', userMessage: 'user' }],

@@ -469,11 +469,15 @@ normal REPL history stays quiet and `/sandbox` is the explicit diagnostics entry
 
 All three features are `Completed`: their implementation and feature-level
 acceptance evidence are complete. Publication is tracked independently at the
-version level; required paid semantic release evaluation and the final
-integrated regression matrix remain release-candidate gates, not Feature
-lifecycle states. Automated evidence recorded in the feature documents
-predates the final concurrent-fix integration and must be rerun against the
-exact candidate SHA before release.
+version level. The previously missing current-policy release runners are now
+closed as Issue 235: F263 revision `f263-v0.7.78.2` and F277 revision
+`f277-v0.7.78.2` freeze the exact production bytes, cases, routes, scorer,
+budgets, resumable raw output and blind-review packets. Their paid calls still
+require explicit owner authorization, and the final integrated regression
+matrix remains a release-candidate gate rather than a Feature lifecycle state.
+Automated evidence recorded in the feature documents predates the final
+concurrent-fix integration and must be rerun against the exact candidate SHA
+before release.
 
 ---
 

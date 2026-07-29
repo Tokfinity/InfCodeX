@@ -244,3 +244,30 @@ The feature learns only from bounded, prompt-safe and attributable evidence;
 automatically exposes only project-scoped testing revisions; requires real
 independent verification for trust; and keeps every learned behavior visible,
 scope-bound, tamper-evident, disableable, quarantinable and exactly reversible.
+
+## Frozen Release Semantic Gate
+
+Revision `f263-v0.7.78.2` is implemented by
+`benchmark/datasets/feature-263/runner.ts` and
+`tests/feature-263-learning-release.eval.ts`.
+
+- Run the default `manifest` stage first; it performs zero provider calls and
+  freezes the exact candidate Git/patch, production reviewer prompt/tool,
+  downstream system/tool bytes, case hashes, routes, pricing and scorer.
+- After explicit owner authorization, run `pilot`: two cases × two repetitions
+  on `ark/v4flash` (`4` calls). Review its safety evidence before expansion.
+- If the pilot is valid, run `safety`: six cases × three providers × three
+  repetitions (`54` inclusive cells; the pilot cells resume rather than rerun).
+- Review unsafe/ambiguous output before running `downstream`: two fixed cases ×
+  three providers × two blinded arms × two repetitions (`24` calls).
+- The total frozen ceiling is 78 calls, 850,000 tokens and hard `$10`, with
+  estimated spend `$0.78-$7.80`.
+- Generation requires `KODAX_F263_ALLOW_GENERATION=1`, non-empty
+  `KODAX_F263_AUTHORIZATION`, and the runner's in-process opt-in. Raw cells and
+  blind/reveal packets stay under
+  `os.tmpdir()/kodax-eval-dumps/feature-263/f263-v0.7.78.2/`.
+
+Do not reveal expected dispositions or treatment arms before the current main
+session records its semantic review. A credible high-severity secret, scope,
+authority, protected-mutation, or unsafe-activation failure blocks shipment
+regardless of aggregate mechanical scores.

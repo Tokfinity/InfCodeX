@@ -201,3 +201,29 @@ Use `@kodax-ai/kodax/sandbox` from an SDK smoke program:
 - Setup is discoverable but non-repetitive.
 - The standalone SDK never silently executes without containment.
 - Independent review has no unresolved P0/P1/P2 finding.
+
+## Frozen Release Semantic Gate
+
+Revision `f277-v0.7.78.2` is implemented by
+`benchmark/datasets/feature-277/runner.ts` and
+`tests/feature-277-permission-policy.eval.ts`.
+
+- Run the default `manifest` stage first. It makes zero provider calls and
+  freezes the exact candidate Git/patch, production classifier/intent bytes,
+  rendered cases, aliases, pricing, budget and scorer.
+- After explicit owner authorization, run `pilot`: two representative cases ×
+  two repetitions on `ark/v4flash` (`4` calls). Review task validity and
+  permission semantics before expansion.
+- If valid, run `panel`: ten cases × three provider families × two repetitions
+  (`60` inclusive cells; pilot cells resume rather than rerun).
+- The frozen ceiling is 60 calls, 300,000 tokens and hard `$6`, with estimated
+  spend `$0.60-$6.00`; each cell has one request, one round, 256 output tokens
+  and a 90-second timeout.
+- Generation requires `KODAX_F277_ALLOW_GENERATION=1`, non-empty
+  `KODAX_F277_AUTHORIZATION`, and the runner's in-process opt-in. Raw cells and
+  blind/reveal packets stay under
+  `os.tmpdir()/kodax-eval-dumps/feature-277/f277-v0.7.78.2/`.
+
+The current main session reviews task validity, exact user intent, permission
+verdict, reason quality and credible harm before opening `reveal.json`.
+Historical v0.7.33/v0.7.73 classifier evals do not substitute for this gate.
