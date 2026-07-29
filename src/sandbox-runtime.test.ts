@@ -1136,16 +1136,20 @@ describe('ASRT Skill-script adapter', () => {
       state: 'applied',
       backend: sandboxRuntimeCapability().backend,
     });
-    const childArgv = capturedSpawnArgv.at(-1) ?? [];
-    expect(childArgv).toContain('--env');
-    expect(childArgv).toContain('REPORT_FORMAT=pdf');
     if (process.platform === 'win32') {
+      const childArgv = capturedSpawnArgv.at(-1) ?? [];
+      expect(childArgv).toContain('--env');
+      expect(childArgv).toContain('REPORT_FORMAT=pdf');
       expect(capturedSandboxWrapConfigs.at(-1)).toMatchObject({
         filesystem: {
           denyRead: [sensitiveRead],
           allowRead: [],
           allowWrite: [],
         },
+      });
+    } else {
+      expect(capturedSpawnEnvironments.at(-1)).toMatchObject({
+        REPORT_FORMAT: 'pdf',
       });
     }
   });

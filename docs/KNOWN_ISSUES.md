@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 234 | Medium | Resolved | Standalone sandbox environment gate assumed Windows argv transport on POSIX | v0.7.78 standalone sandbox broker tests | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 233 | High | Resolved | Learned Skill canary could trust before all outcomes settled and record a stale artifact identity | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 232 | Medium | Resolved | Workspace shell sandbox did not deny reads from sensitive home credential paths | v0.7.78 ASRT workspace shell sandbox | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 231 | Medium | Resolved | Explicit memory intent was discarded when the root episode was cancelled | v0.7.78 governed memory intent lifecycle | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -136,6 +137,44 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 234: Standalone sandbox environment gate assumed Windows argv transport on POSIX
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.78 standalone sandbox broker tests
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+The standalone sandbox broker regression asserted that the spawned command
+always contained Windows ASRT `--env NAME=value` arguments. Linux CI correctly
+uses the POSIX sandbox wrapper and passes the caller-owned environment through
+the `spawn()` environment instead, so Node 20 and Node 22 both failed the fast
+suite even though the production environment contract was intact.
+
+#### Root Cause
+
+The initial v0.7.78 test was authored and passed on Windows. It encoded one
+backend's transport representation rather than the cross-platform semantic
+contract.
+
+#### Resolution
+
+- Keep the Windows assertions on the exact `--env` argv injection.
+- On POSIX, assert the exact value in the captured child environment.
+- Leave production containment, credential, and environment behavior unchanged.
+
+#### Files Changed
+
+- `src/sandbox-runtime.test.ts`
+
+#### Tests Added or Updated
+
+- The existing standalone broker regression now validates each platform's
+  actual environment transport without weakening the common value assertion.
 
 ### 233: Learned Skill canary could trust before all outcomes settled and record a stale artifact identity
 
@@ -8207,11 +8246,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 113 (25 Open, 88 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 114 (25 Open, 89 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 234 resolved (v0.7.78 development)
+- Replaced a Windows-only standalone sandbox environment assertion with exact
+  platform-specific transport checks.
+- Preserved production environment and containment behavior; the defect was in
+  the release gate, not the broker implementation.
 
 ### 2026-07-29: Issue 233 resolved (v0.7.78 development)
 - Delayed learned Skill trust until all three exact-revision canary outcomes
