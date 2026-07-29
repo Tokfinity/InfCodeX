@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-28_
+_Last Updated: 2026-07-29_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-28_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 226 | Medium | Resolved | Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading | v0.7.66 Runtime broker / Skill tool metadata | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 224 | High | Resolved | Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge | v0.7.72 Runtime Actor persistence | v0.7.78 development | 2026-07-28 | 2026-07-28 |
 | 223 | High | Resolved | Auto[LLM] timeouts and exact workspace mutations caused spurious or hard permission stops | v0.7.33 | v0.7.78 development | 2026-07-28 | 2026-07-28 |
 | 222 | High | Resolved | Invalid optional integration config aborts daemon cold start and discards child diagnostics | v0.7.69 integration hot reload | v0.7.77 development | 2026-07-28 | 2026-07-28 |
@@ -133,6 +134,87 @@ _Last Updated: 2026-07-28_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 226: Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.66 Runtime broker / Skill tool metadata
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+In Edit mode, a model-triggered `skill` call opened a Runtime permission prompt
+even though the tool only loads and expands local Skill instructions. Rejecting
+the prompt prevented Skill activation and caused the model to retry the
+required Skill call repeatedly. Switching to Auto[LLM] avoided the prompt
+because Auto used a separate guardrail path.
+
+Plan mode also treated the same outer `skill` call as a prohibited side effect.
+For ordinary Skill instructions, the actual file, shell, network, or external
+actions are separate tool calls that retain their own permission checks.
+However, Skill `!`command`` dynamic-context tokens are expanded inline and
+therefore require a separate fail-closed boundary.
+
+Expected behavior: loading static Skill instructions is directly allowed in
+Edit and Plan modes. Concrete downstream actions still follow their own tool
+policy, while inline dynamic commands are disabled unless a non-Plan Runtime
+host supplies a permission-aware executor.
+
+#### Root Cause
+
+- `resolveRuntimePermissionPolicy()` returned unresolved immediately whenever
+  `permissionBroker=client`, before applying the normal Edit-mode policy. The
+  broker selection therefore changed whether approval was required instead of
+  only selecting who answered a genuine escalation.
+- The built-in `skill` definition retained `sideEffect: "mutates-state"` for
+  learned-Skill usage receipts but lacked `planModeAllowed: true`, so the
+  metadata-driven Plan gate blocked the outer loading operation.
+- Without a Runtime-supplied dynamic-context policy, Skill expansion could fall
+  through to the resolver's legacy inline `execSync` path. That execution does
+  not pass through the Runtime tool permission hook and therefore cannot share
+  the outer Skill-loading exemption.
+- Regression coverage asserted that a client-brokered workspace write created
+  a permission request, did not cover Skill loading in either mode, and did not
+  exercise a mutating dynamic-context command.
+
+#### Resolution
+
+- Kept Runtime permission policy authoritative before broker escalation.
+  Already-allowed Edit calls now return directly; unresolved shell/protected
+  operations still enter the selected client or Runtime broker.
+- Marked the built-in `skill` tool as Plan-allowed without reclassifying its
+  learned-Skill bookkeeping as readonly.
+- Prevented Runtime-hosted Skill expansion from using the legacy inline shell
+  fallback. A mediated executor rechecks the live Session mode for every
+  dynamic token: Plan refuses it immediately, while leaving Plan restores the
+  explicitly supplied host executor without restarting the Run.
+- Added Edit/client-broker and Plan Skill cases to the Runtime permission
+  matrix, while retaining blocked Plan edits and client-brokered
+  shell/protected-path prompts.
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`
+- `src/sdk-runtime.test.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/tools/registry.test.ts`
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- Runtime permission matrix verifies that client-brokered Skill loading and
+  workspace writes do not create permission requests in Edit mode.
+- Runtime permission matrix verifies that Skill loading succeeds while file
+  edits remain blocked in Plan mode.
+- Runtime integration expands a real crafted Skill and verifies that Plan mode
+  preserves its static instructions without executing an inline mutating Git
+  command.
+- Live-mode integration verifies both Edit-to-Plan refusal and Plan-to-Edit
+  restoration for an explicitly mediated dynamic-context executor.
+- Tool registry test verifies `isToolPlanModeAllowed("skill")`.
 
 ### 224: Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge
 
@@ -8130,11 +8212,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 110 (25 Open, 85 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 111 (25 Open, 86 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 226 resolved (v0.7.78 development)
+- Applied Edit/Plan policy before client broker escalation so already-allowed
+  calls no longer become permission work.
+- Allowed the outer `skill` loading tool in Plan mode while preserving
+  downstream action-specific permission checks, and disabled inline dynamic
+  commands unless the live mode is non-Plan and the Runtime host supplies a
+  mediated executor.
 
 ### 2026-07-28: Issue 223 resolved (v0.7.78 development)
 - Retried transient Auto[LLM] classifier failures once and added structured

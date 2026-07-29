@@ -6030,9 +6030,33 @@ function buildRunOptions(input: {
           },
         }
       : runtimeWorkspaceShellSandbox ?? callerShellSandbox;
+  const executeSkillDynamicContext = options.skillDynamicContext?.execute;
+  const skillDynamicContext: NonNullable<
+    KodaXOptions["skillDynamicContext"]
+  > =
+    options.skillDynamicContext?.disable === true ||
+    executeSkillDynamicContext === undefined
+      ? { disable: true }
+      : {
+          async execute(command, cwd) {
+            if (
+              replApi.normalizePermissionMode(record.permissionMode) === "plan"
+            ) {
+              throw new Error(
+                "Dynamic context disabled by host. Skill `!`cmd`` blocks are not allowed in Plan mode.",
+              );
+            }
+            return executeSkillDynamicContext(command, cwd);
+          },
+        };
   return {
     ...options,
     provider,
+    // Runtime-hosted Skill expansion must never fall through to the resolver's
+    // inline execSync path, which bypasses tool permission hooks. The wrapper
+    // rechecks live mode so Plan always refuses dynamic commands; other modes
+    // require and preserve an explicit host-mediated executor.
+    skillDynamicContext,
     ...(model !== undefined ? { modelOverride: model } : {}),
     session: {
       ...(options.session ?? {}),
@@ -11957,10 +11981,9 @@ function resolveRuntimePermissionPolicy(
       ? true
       : `${blockReason} Finish the plan before switching to a writable permission mode.`;
   }
-  // `permissionBroker=client` selects who answers an escalation; it must not
-  // replace plan-mode enforcement or the explicit Auto guardrail as the owner
-  // of the initial decision.
-  if (record.permissionBroker === "client") return undefined;
+  // `permissionBroker=client` selects who answers an escalation. The policy
+  // below still owns the initial decision so already-allowed calls never
+  // become permission work merely because a client prompt is available.
   if (tool === "bash") {
     const command = typeof input.command === "string" ? input.command : "";
     if (replApi.isBashReadCommand(command)) return true;

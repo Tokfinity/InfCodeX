@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -17,6 +18,7 @@ import {
   getMessageQueue,
   resolveActiveRootQueueRoute,
   Runner,
+  SkillRegistry,
 } from "@kodax-ai/agent";
 import type {
   GuardrailContext,
@@ -48,6 +50,7 @@ import {
   runtimePermissionHostPlatform,
 } from "./runtime-permission-scope.js";
 import { derivePromptCacheAffinityKey } from "../packages/coding/src/agent-runtime/prompt-cache-affinity.js";
+import { toolSkill } from "../packages/coding/src/tools/skill.js";
 
 const codingMock = vi.hoisted(() => ({
   runManagedTask: vi.fn(),
@@ -5899,6 +5902,10 @@ describe("createKodaXRuntime", () => {
         name: "write",
         input: { path: "client.txt", content: "client" },
       },
+      "client-skill": {
+        name: "skill",
+        input: { skill: "known-issues-tracker" },
+      },
       "protected-write": {
         name: "write",
         input: { path: ".kodax/config.json", content: "{}" },
@@ -5907,6 +5914,10 @@ describe("createKodaXRuntime", () => {
       "plan-edit": {
         name: "edit",
         input: { path: "file.ts", old_string: "a", new_string: "b" },
+      },
+      "plan-skill": {
+        name: "skill",
+        input: { skill: "known-issues-tracker" },
       },
       bridge: {
         name: "tool_call",
@@ -5972,11 +5983,23 @@ describe("createKodaXRuntime", () => {
     await (
       await runtime.runs.start({
         sessionId: session.id,
-        prompt: "protected-write",
+        prompt: "client-skill",
+        permissionBroker: "client",
       })
     ).result;
     await (
-      await runtime.runs.start({ sessionId: session.id, prompt: "accept-bash" })
+      await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "protected-write",
+        permissionBroker: "client",
+      })
+    ).result;
+    await (
+      await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "accept-bash",
+        permissionBroker: "client",
+      })
     ).result;
     await (
       await runtime.runs.start({ sessionId: session.id, prompt: "bridge" })
@@ -5987,16 +6010,283 @@ describe("createKodaXRuntime", () => {
     await (
       await runtime.runs.start({ sessionId: session.id, prompt: "plan-edit" })
     ).result;
+    await (
+      await runtime.runs.start({ sessionId: session.id, prompt: "plan-skill" })
+    ).result;
 
     expect(decisions.get("accept-edit")).toBe(true);
     expect(decisions.get("runtime-write")).toBe(true);
     expect(decisions.get("client-write")).toBe(true);
+    expect(decisions.get("client-skill")).toBe(true);
     expect(decisions.get("protected-write")).toBe(true);
     expect(decisions.get("accept-bash")).toBe(true);
     expect(decisions.get("bridge")).toBe(true);
     expect(decisions.get("plan-edit")).toContain("[Blocked]");
-    expect(requestedTools).toEqual(["write", "write", "bash"]);
+    expect(decisions.get("plan-skill")).toBe(true);
+    expect(requestedTools).toEqual(["write", "bash"]);
     expect(await runtime.permissions.listPending()).toEqual([]);
+    await runtime.close();
+  });
+
+  it("loads a Skill in Plan mode without executing its inline dynamic command", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const projectRoot = path.join(tempRoot, "plan-skill-project");
+    const skillRoot = path.join(projectRoot, ".kodax", "skills", "plan-safe-skill");
+    await fs.mkdir(skillRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(skillRoot, "SKILL.md"),
+      [
+        "---",
+        "name: plan-safe-skill",
+        "description: Plan-safe Skill fixture",
+        "---",
+        "",
+        "Static instructions remain available.",
+        "",
+        "Result: !`git branch -D plan-dynamic-victim`",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    execFileSync("git", ["init"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=KodaX Test",
+        "-c",
+        "user.email=kodax-test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "test fixture",
+      ],
+      { cwd: projectRoot, stdio: "ignore", windowsHide: true },
+    );
+    execFileSync("git", ["branch", "plan-dynamic-victim"], {
+      cwd: projectRoot,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+
+    const skillRegistry = new SkillRegistry(projectRoot, {
+      projectPaths: [path.join(projectRoot, ".kodax", "skills")],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(projectRoot, "builtin-skills"),
+    });
+    await skillRegistry.discover();
+
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Plan Skill Dynamic Context Test",
+    });
+    let expandedSkill = "";
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        const result = Promise.resolve(
+          options.events?.beforeToolExecute?.(
+            "skill",
+            { skill: "plan-safe-skill" },
+            { sessionId: session.id, toolId: "tool-plan-safe-skill" },
+          ),
+        ).then(async (decision) => {
+          expect(decision).toBe(true);
+          expandedSkill = await toolSkill(
+            { skill: "plan-safe-skill" },
+            {
+              backups: new Map(),
+              executionCwd: projectRoot,
+              gitRoot: projectRoot,
+              skillRegistry,
+              skillDynamicContext: options.skillDynamicContext,
+            },
+          );
+          return {
+            success: true,
+            lastText: expandedSkill,
+            messages: [],
+            sessionId: session.id,
+          } satisfies KodaXResult;
+        });
+        return fakeRunningSession(options, result);
+      },
+    );
+
+    await runtime.sessions.updateSettings(session.id, {
+      permissionMode: "plan",
+      executionCwd: projectRoot,
+    });
+    await (
+      await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "Load the plan-safe Skill.",
+        permissionBroker: "client",
+      })
+    ).result;
+
+    expect(expandedSkill).toContain("Static instructions remain available.");
+    expect(expandedSkill).toContain("[Error: Dynamic context disabled by host.");
+    expect(
+      execFileSync("git", ["branch", "--list", "plan-dynamic-victim"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        windowsHide: true,
+      }).trim(),
+    ).toBe("plan-dynamic-victim");
+    await runtime.close();
+  });
+
+  it("rechecks live permission mode before a mediated Skill dynamic command", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const projectRoot = path.join(tempRoot, "live-mode-skill-project");
+    const skillRoot = path.join(projectRoot, ".kodax", "skills", "live-mode-skill");
+    await fs.mkdir(skillRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(skillRoot, "SKILL.md"),
+      [
+        "---",
+        "name: live-mode-skill",
+        "description: Live permission mode Skill fixture",
+        "---",
+        "",
+        "Static live-mode instructions.",
+        "",
+        "Result: !`git branch -D live-dynamic-victim`",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const skillRegistry = new SkillRegistry(projectRoot, {
+      projectPaths: [path.join(projectRoot, ".kodax", "skills")],
+      userPaths: [],
+      pluginPaths: [],
+      builtinPath: path.join(projectRoot, "builtin-skills"),
+    });
+    await skillRegistry.discover();
+
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const capturedOptions = new Map<string, KodaXOptions>();
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        const sessionId = options.session?.id;
+        if (sessionId) capturedOptions.set(sessionId, options);
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const hostExecute = vi.fn(
+      async (command: string): Promise<string> => `HOST:${command}`,
+    );
+    const invokeSkill = async (
+      options: KodaXOptions,
+      sessionId: string,
+      toolId: string,
+    ): Promise<string> => {
+      await expect(
+        options.events?.beforeToolExecute?.(
+          "skill",
+          { skill: "live-mode-skill" },
+          { sessionId, toolId },
+        ),
+      ).resolves.toBe(true);
+      return toolSkill(
+        { skill: "live-mode-skill" },
+        {
+          backups: new Map(),
+          executionCwd: projectRoot,
+          gitRoot: projectRoot,
+          skillRegistry,
+          skillDynamicContext: options.skillDynamicContext,
+        },
+      );
+    };
+
+    const editFirst = await runtime.sessions.create({
+      title: "Live Skill Edit First",
+    });
+    await runtime.sessions.updateSettings(editFirst.id, {
+      permissionMode: "accept-edits",
+      executionCwd: projectRoot,
+    });
+    const editFirstRun = await runtime.runs.start({
+      sessionId: editFirst.id,
+      prompt: "wait",
+      options: { skillDynamicContext: { execute: hostExecute } },
+    });
+    const editFirstOptions = capturedOptions.get(editFirst.id);
+    if (!editFirstOptions) throw new Error("expected edit-first run options");
+
+    await runtime.sessions.updateSettings(editFirst.id, {
+      permissionMode: "plan",
+    });
+    const blockedAfterPlanSwitch = await invokeSkill(
+      editFirstOptions,
+      editFirst.id,
+      "live-skill-plan",
+    );
+    expect(blockedAfterPlanSwitch).toContain(
+      "[Error: Dynamic context disabled by host.",
+    );
+    expect(hostExecute).not.toHaveBeenCalled();
+
+    await runtime.sessions.updateSettings(editFirst.id, {
+      permissionMode: "accept-edits",
+    });
+    const restoredAfterEditSwitch = await invokeSkill(
+      editFirstOptions,
+      editFirst.id,
+      "live-skill-edit",
+    );
+    expect(restoredAfterEditSwitch).toContain(
+      "HOST:git branch -D live-dynamic-victim",
+    );
+    expect(hostExecute).toHaveBeenCalledTimes(1);
+    await runtime.runs.abort(editFirstRun.runId);
+
+    const planFirst = await runtime.sessions.create({
+      title: "Live Skill Plan First",
+    });
+    await runtime.sessions.updateSettings(planFirst.id, {
+      permissionMode: "plan",
+      executionCwd: projectRoot,
+    });
+    const planFirstRun = await runtime.runs.start({
+      sessionId: planFirst.id,
+      prompt: "wait",
+      options: { skillDynamicContext: { execute: hostExecute } },
+    });
+    const planFirstOptions = capturedOptions.get(planFirst.id);
+    if (!planFirstOptions) throw new Error("expected plan-first run options");
+
+    await runtime.sessions.updateSettings(planFirst.id, {
+      permissionMode: "accept-edits",
+    });
+    const restoredFromInitialPlan = await invokeSkill(
+      planFirstOptions,
+      planFirst.id,
+      "initial-plan-to-edit",
+    );
+    expect(restoredFromInitialPlan).toContain(
+      "HOST:git branch -D live-dynamic-victim",
+    );
+    expect(hostExecute).toHaveBeenCalledTimes(2);
+
+    await runtime.runs.abort(planFirstRun.runId);
     await runtime.close();
   });
 

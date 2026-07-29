@@ -300,6 +300,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     },
     handler: toolSkill,
     sideEffect: 'mutates-state',
+    planModeAllowed: true,
     classifierExemptReason: 'Loads local skill instructions; it does not execute the skill or mutate external state.',
     toClassifierInput: () => '',
   },

@@ -499,6 +499,7 @@ describe('v0.7.42 — query API for SDK embedders', () => {
   });
 
   it('isToolPlanModeAllowed: explicit planModeAllowed:true overrides non-readonly', () => {
+    expect(isToolPlanModeAllowed('skill')).toBe(true);
     expect(isToolPlanModeAllowed('exit_plan_mode')).toBe(true);
     expect(isToolPlanModeAllowed('todo_update')).toBe(true);
     expect(isToolPlanModeAllowed('wait_agent')).toBe(true);
