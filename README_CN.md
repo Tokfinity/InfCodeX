@@ -41,18 +41,25 @@
 ```bash
 npm i -g @kodax-ai/kodax
 
-# 选一个你有 API key 的 provider
-export ZHIPU_API_KEY=...        # 或 KIMI_API_KEY / MINIMAX_API_KEY / MIMO_API_KEY /
-                                # ARK_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY /
-                                # OPENAI_API_KEY / QWEN_API_KEY / QWEN_TOKEN_API_KEY / GEMINI_API_KEY
+# 选一个你有 API key 的 provider（`kodax setup --help` 会列出全部）
+export ZHIPU_API_KEY=...        # ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY /
+                                # KIMI_API_KEY / KIMI_CODE_API_KEY / QWEN_API_KEY /
+                                # QWEN_TOKEN_API_KEY / ZHIPU_CODING_API_KEY /
+                                # ZAI_CODING_API_KEY / MINIMAX_CODING_API_KEY /
+                                # MIMO_API_KEY / MIMO_CODING_API_KEY / ARK_CODING_API_KEY
 
 kodax
 ```
 
-就这样。进 REPL，自然语言提问。如果新机器既没有选择 provider，也没有任何
-受支持的 API Key 环境变量，直接运行 `kodax` 会先打开只配置元数据的向导；它不会
-要求输入或保存 Key。选择 provider/model 后，按提示设置对应环境变量、重启终端，
-再运行 `kodax`。需要主动重新配置时可运行 `kodax setup`。
+就这样。进 REPL，自然语言提问。新机器只要还没有选择 provider，交互式运行
+`kodax` 就会先进入 setup，即使已经存在受支持的 API Key 环境变量。setup 会检查
+core、MCP、Extensions、A2A 的活跃配置和注释模板，不覆盖已有文件，也不会要求输入
+或保存 Key。选择 provider/model 后，按提示设置对应环境变量、重启终端，再运行
+`kodax`。使用 `kodax setup --custom` 配置自定义 provider；使用
+`kodax setup --help` 或 REPL `/setup --help` 查看完整路径、环境变量、命令和快捷键。
+交互式 setup 还会检查一次可选 ASRT sandbox：Windows 可能弹出一次 UAC；
+macOS/Linux 会报告 Seatbelt/bubblewrap 所需依赖。拒绝 UAC 或缺少依赖不会破坏普通
+权限管理，日常启动也不会反复提醒。
 
 > **不装 Node 的目标机器**：从 [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) 拿 Bun 编译的单文件二进制（Win / macOS / Linux × x64 + arm64）。详见 [docs/release.md](docs/release.md)。
 
@@ -149,10 +156,11 @@ CLI 也会在配置的 deadline 被终止。详见
 
 **v0.7.72–v0.7.73 Runtime 权限契约：**Auto Mode 的权限决策由 Runtime Session 持有，
 不再由 UI hook 抢先决定。Runtime 会跨 turn 复用 LLM/rules guardrail，先分类、
-仅在 `escalate` 时创建共享 permission 请求，并把自动降级到 rules 的结果持久化到
-session。Session 也可设置 classifier model 和有界 timeout；`auto` 默认使用 LLM
+仅在 `escalate` 时创建共享 permission 请求，并持久化显式选择的 engine。
+Session 也可设置 classifier model 和有界 timeout；`auto` 默认使用 LLM
 分类，没有有效 classifier model 时会在调用 provider 或创建审批前返回可恢复配置错误，
-绝不静默退回 rules。Runtime 权限请求可给出由 Runtime 生成的精确作用域建议：一次允许、
+绝不静默退回 rules。v0.7.78 中 classifier 失败会重试一次，再按 Accept-edits
+安全边界降级，绝不把 engine 改为 rules。Runtime 权限请求可给出由 Runtime 生成的精确作用域建议：一次允许、
 本 Session 允许，或（仅安全场景）持久允许；客户端只能回传不透明 suggestion id，不能从
 预览内容自行扩大范围。持久授权由 daemon 持有并通过 revision 管理。没有宿主审批回调时，
 不会向模型暴露 `exit_plan_mode`。完整 SDK 接入见
@@ -161,8 +169,9 @@ session。Session 也可设置 classifier model 和有界 timeout；`auto` 默�
 **v0.7.74 Auto 切换可靠性：**默认用 `Shift+Tab` 在 `Plan -> Edits -> Auto`
 之间循环，`Shift+Enter` 仍用于换行。进入 Auto 时状态栏会立即显示已解析的
 `Auto[LLM]` 或 `Auto[RULES]`，同一 Session 的 Runtime 设置按键入顺序串行提交，
-快速循环不会让较早的异步结果覆盖最后一次选择。`Auto[RULES]` 可能是自动降级或
-手动选择后的合法粘性状态；使用 `/auto-engine llm` 可显式恢复 LLM 分类。
+快速循环不会让较早的异步结果覆盖最后一次选择。`Auto[RULES]` 是手动选择后的
+合法粘性状态；从 v0.7.78 起它只由显式/持久化选择产生。使用
+`/auto-engine llm` 可显式选择 LLM 分类。
 
 ## 为什么用 KodaX
 
@@ -247,10 +256,26 @@ kodax
 
 ```bash
 kodax setup
+
+# 交互配置自定义 OpenAI/Anthropic-compatible provider
+kodax setup --custom
+
+# 只显示完整指导，不修改文件
+kodax setup --help
 ```
 
-命令会保存 provider/model，告诉你准确的环境变量名，然后退出以便重启终端。
-也可以直接设置 API Key：
+setup 会检查以下活跃文件以及对应的 `*.example.jsonc` 注释模板：
+
+- `~/.kodax/config.json` 与 `~/.kodax/config.example.jsonc`
+- `~/.kodax/integrations/mcp.json`
+- `~/.kodax/integrations/extensions.json`
+- `~/.kodax/integrations/a2a.json`
+
+活跃 `config.json` 仍是严格 JSON；`config.example.jsonc` 第一行指向全部分离配置，
+并注释说明所有受支持的 core 配置项。setup 不覆盖已有文件；创建空的权威分离配置
+前会先保全可读取的旧 `config.json#mcpServers` / `config.json#extensions`。命令会
+先验证已有活动配置；发现无效文件时会报告并停止，不创建或覆盖任何配置。随后才会
+保存 provider/model，告诉你准确的环境变量名，然后退出以便重启终端。也可以直接设置 API Key：
 
 ```bash
 # macOS / Linux
@@ -259,6 +284,29 @@ export ZHIPU_API_KEY=your_api_key
 # PowerShell
 $env:ZHIPU_API_KEY="your_api_key"
 ```
+
+### 2.1 激活可选 sandbox
+
+`kodax setup` 与首次安装 setup 会检查 sandbox。也可以显式检查或激活：
+
+```bash
+kodax sandbox doctor
+kodax sandbox setup
+```
+
+- Windows 使用受限 sandbox 账户和网络策略。普通 Terminal 即可，按提示同意一次
+  UAC；不必先以管理员身份启动 Terminal。
+- macOS 使用 Seatbelt/`sandbox-exec`，需要 ripgrep：
+  `brew install ripgrep`。
+- Linux 使用 bubblewrap，需要 `bubblewrap`、`socat` 和 `ripgrep`，请根据发行版用
+  `apt`、`dnf` 或 `pacman` 安装。
+
+KodaX 不会自动运行 `sudo` 或系统包管理器。sandbox 未激活时，确定性安全操作与
+Auto[LLM] 的权限体验保持一致，只缺少 OS 级 containment；普通运行不会反复打扰。
+在 REPL 中，`/sandbox` 会刷新 ready 状态与诊断，但不会激活 backend 或请求提权。
+逐命令 sandbox 路由属于内部机制，不显示在普通命令历史中。SDK 嵌入方还可通过
+`@kodax-ai/kodax/sandbox` 在 Auto[LLM] 之外独立使用该能力，
+见 [SDK sandbox 指南](docs/SDK_EMBEDDER_GUIDE.md#28-standalone-sandbox-sdk-v0778)。
 
 Qwen Token Plan 需要选择 `qwen-token-plan` 并使用单独的凭据；`QWEN_API_KEY`
 不能用于该路由：
@@ -327,11 +375,12 @@ import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 /
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
 import { listSessions } from '@kodax-ai/kodax/session';         // session 历史工具
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/Worker/daemon 宿主 API
+import { runKodaXSandboxed } from '@kodax-ai/kodax/sandbox';    // 独立 ASRT 受控执行
 import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';    // A2A 1.0 双向接入
 import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in 实验性记忆 SDK
 ```
 
-12 个 SDK 入口（root + 11 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+13 个 SDK 入口（root + 12 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
 
 完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md)。
 
@@ -571,8 +620,8 @@ dist/binary/linux-x64/
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2（火山方舟 Coding Plan — GLM-5.2（别名 `glm-latest`） · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code） |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash（可 `/model` 切换 `deepseek-v4-pro`） |
-| gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | （通过 gemini CLI） |
-| codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | （通过 codex CLI） |
+| gemini-cli | 由 Provider CLI 完成认证（无 KodaX API-key 环境变量） | Prompt-only / CLI bridge | （通过 gemini CLI） |
+| codex-cli | 由 Provider CLI 完成认证（无 KodaX API-key 环境变量） | Prompt-only / CLI bridge | （通过 codex CLI） |
 
 > 不在表里的端点：用上面"自定义 Provider"那一节加进来即可。
 
@@ -756,7 +805,8 @@ kodax a2a serve                  # 仅监听 http://127.0.0.1:8765
 ```
 
 MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户级文件。
-可以通过 `kodax config template <mcp|a2a|extensions>` 查看模板，通过
+可以通过 `kodax config paths` 查看全部活跃/模板路径，通过
+`kodax config template <core|mcp|a2a|extensions>` 查看模板，通过
 `kodax integrations migrate --apply` 迁移旧配置，并用 `kodax mcp`、
 `kodax a2a`、`kodax extensions` 管理。迁移只导入旧
 `config.json#mcpServers` 与 `config.json#extensions`；A2A 没有旧来源，且不会

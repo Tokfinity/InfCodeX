@@ -41,21 +41,30 @@
 ```bash
 npm i -g @kodax-ai/kodax
 
-# Pick any one you have an API key for:
-export ZHIPU_API_KEY=...        # or ANTHROPIC_API_KEY / OPENAI_API_KEY / KIMI_API_KEY /
-                                # MINIMAX_API_KEY / MIMO_API_KEY / ARK_API_KEY / QWEN_API_KEY /
-                                # QWEN_TOKEN_API_KEY /
-                                # DEEPSEEK_API_KEY / GEMINI_API_KEY
+# Pick any one you have an API key for (`kodax setup --help` lists all):
+export ZHIPU_API_KEY=...        # ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY /
+                                # KIMI_API_KEY / KIMI_CODE_API_KEY / QWEN_API_KEY /
+                                # QWEN_TOKEN_API_KEY / ZHIPU_CODING_API_KEY /
+                                # ZAI_CODING_API_KEY / MINIMAX_CODING_API_KEY /
+                                # MIMO_API_KEY / MIMO_CODING_API_KEY / ARK_CODING_API_KEY
 
 kodax
 ```
 
-That's it. You're in the REPL — ask anything in natural language. If this is a
-new machine with no provider selection or supported API-key environment
-variable, the bare `kodax` launch opens a metadata-only setup flow first. It
-never asks for the key itself; after choosing a provider/model, set the named
-environment variable, restart the terminal, and run `kodax` again. Use
-`kodax setup` to rerun that flow explicitly.
+That's it. You're in the REPL — ask anything in natural language. On a new
+machine with no selected provider, bare interactive `kodax` opens setup first,
+even if a supported credential environment variable already exists. Setup
+checks core, MCP, Extensions, and A2A active files plus all annotated templates
+without overwriting existing files. It never asks for the key itself; after
+choosing a provider/model, set the named environment variable, restart the
+terminal, and run `kodax` again. Use `kodax setup` to rerun the flow,
+`kodax setup --custom` for a guided custom provider, and `kodax setup --help`
+(or REPL `/setup --help`) for paths, provider variables, commands, and
+shortcuts. Interactive setup also checks the optional ASRT sandbox once:
+Windows may show a one-time UAC prompt; macOS/Linux report any required
+Seatbelt/bubblewrap dependencies. Declining or missing a dependency does not
+break ordinary permission handling, and normal startup will not keep reminding
+you.
 
 > **No-Node target machines:** download a Bun-compiled single binary for Windows / macOS / Linux × x64 + arm64 from the [GitHub Releases](https://github.com/icetomoyo/KodaX/releases) page. See [docs/release.md](docs/release.md) for the build pipeline.
 
@@ -150,10 +159,29 @@ KodaX reads API keys from environment variables. For built-in providers, the fas
 ```bash
 # Interactive metadata-only provider/model setup (does not collect a key)
 kodax setup
+
+# Guided custom OpenAI/Anthropic-compatible provider
+kodax setup --custom
+
+# Complete guide; does not change files
+kodax setup --help
 ```
 
-The command tells you the exact environment-variable name to set and exits so
-you can restart the terminal. You can also configure it directly:
+Setup checks these active files and matching `*.example.jsonc` references:
+
+- `~/.kodax/config.json` and `~/.kodax/config.example.jsonc`
+- `~/.kodax/integrations/mcp.json`
+- `~/.kodax/integrations/extensions.json`
+- `~/.kodax/integrations/a2a.json`
+
+The core active file remains strict JSON. The first line of the annotated
+`config.example.jsonc` points to all split files and documents every supported
+core setting. Setup preserves existing files and stages readable legacy
+`config.json#mcpServers` / `config.json#extensions` before creating empty
+authoritative split files. It tells you the exact environment-variable name to
+set and exits so you can restart the terminal. Existing active files are
+validated first; an invalid file is reported without creating or overwriting
+configuration. You can also configure it directly:
 
 ```bash
 # macOS / Linux
@@ -162,6 +190,33 @@ export ZHIPU_API_KEY=your_api_key
 # PowerShell
 $env:ZHIPU_API_KEY="your_api_key"
 ```
+
+### 2.1 Activate the optional sandbox
+
+`kodax setup` and first-run setup check sandbox readiness. You can inspect or
+activate it explicitly:
+
+```bash
+kodax sandbox doctor
+kodax sandbox setup
+```
+
+- Windows uses a restricted sandbox account and network policy. A normal
+  terminal is sufficient; approve the one-time UAC prompt.
+- macOS uses Seatbelt/`sandbox-exec` and requires ripgrep
+  (`brew install ripgrep`).
+- Linux uses bubblewrap and requires `bubblewrap`, `socat`, and `ripgrep`
+  (install them with your distro's `apt`, `dnf`, or `pacman`).
+
+KodaX never runs `sudo` or a package manager automatically. If the sandbox is
+not active, deterministic safe operations and Auto[LLM] decisions keep the
+same permission behavior; only OS-level containment is absent. Ordinary runs
+do not repeatedly prompt for setup. In the REPL, `/sandbox` refreshes readiness
+and diagnostics without activating the backend or requesting elevation.
+Per-command sandbox routing remains internal and is not shown in normal command
+history. SDK embedders can use the same capability independently through
+`@kodax-ai/kodax/sandbox`; see the
+[SDK sandbox guide](docs/SDK_EMBEDDER_GUIDE.md#28-standalone-sandbox-sdk-v0778).
 
 For Qwen Token Plan, select `qwen-token-plan` and use its separate credential;
 `QWEN_API_KEY` does not authenticate this route:
@@ -488,11 +543,13 @@ The Space/IDE shared-daemon contract is documented in
 
 **v0.7.72–v0.7.73 Runtime permission contract:** Auto Mode is owned by the Runtime session,
 not by a UI hook. It reuses its LLM/rules guardrail across turns, classifies
-before the shared permission bridge, and persists an automatic fallback to
-rules. The same session settings can select a classifier model and bounded
+before the shared permission bridge, and persists explicit engine selection.
+The same session settings can select a classifier model and bounded
 timeout; `auto` defaults to LLM classification and fails with a recoverable
 configuration error when no effective classifier model exists, rather than
-silently falling back. Runtime permission prompts now offer opaque, exact
+silently falling back. In v0.7.78, classifier failures retry once and then use
+the Accept-edits safety boundary; they never change the engine to rules.
+Runtime permission prompts offer opaque, exact
 allow-once/session/persistent grant suggestions; persistent grants are
 daemon-owned and revisioned. Host plan exit is exposed only when the host
 supplies an approval callback. See the [Runtime Auto Mode integration guide](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773).
@@ -693,7 +750,8 @@ kodax a2a serve                  # loopback http://127.0.0.1:8765
 ```
 
 MCP, A2A, and Extension declarations live in one user file per domain under
-`~/.kodax/integrations/`. Use `kodax config template <mcp|a2a|extensions>`,
+`~/.kodax/integrations/`. Use `kodax config paths`,
+`kodax config template <core|mcp|a2a|extensions>`,
 `kodax integrations migrate --apply`, and the `kodax mcp`, `kodax a2a`, or
 `kodax extensions` commands to manage them. Migration imports only legacy
 `config.json#mcpServers` and `config.json#extensions`; A2A has no legacy source.
@@ -846,10 +904,12 @@ import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config /
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
 import { listSessions } from '@kodax-ai/kodax/session';         // session history helpers
 import { createKodaXRuntime } from '@kodax-ai/kodax/runtime';   // embedded/daemon runtime API
+import { runKodaXSandboxed } from '@kodax-ai/kodax/sandbox';    // standalone ASRT containment
 import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';    // A2A 1.0 client/server edge
+import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in memory SDK
 ```
 
-All 12 SDK entries (root + 11 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+All 13 SDK entries (root + 12 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
 
 For the complete host-facing contract — including embedded/Worker/daemon ownership,
 external-agent registration and task control, session cursor pagination, workflow
@@ -1000,16 +1060,19 @@ KodaX provides 3 permission modes for fine-grained control:
 **Features:**
 - In `accept-edits` mode, choosing "always" can persist safe Bash allow-patterns
 - Plan mode includes system prompt context for LLM awareness
-- Permanent protection zones: `.kodax/`, `~/.kodax/`, paths outside project
+- Sensitive/protected or unresolved targets enter Auto[LLM]/approval review;
+  ordinary reads outside the project are allowed
 - Pattern-based permission: Allow specific Bash commands (e.g., `Bash(npm install)`)
 - Unified diff display for write/edit operations
-- Auto Mode runs guardrail classification before the permission UI; a safe
-  allow verdict does not create a pending approval request. The session records
-  an automatic LLM-to-rules fallback for later turns.
+- Auto Mode first admits exactly modeled safe reads and workspace/temp
+  mutations without classifier latency. Remaining actions are reviewed against
+  bounded user intent and exact operation facts; a safe verdict creates no
+  pending approval request. Classifier failures retry once, then use the
+  Accept-edits safety boundary rather than silently switching to Auto[rules].
 - Shift-Tab cycles `Plan -> Edits -> Auto`; Shift+Enter inserts a newline. Auto
   immediately displays `Auto[LLM]` or `Auto[RULES]`, and rapid mode changes are
-  persisted in input order. `Auto[RULES]` is a valid sticky fallback/manual
-  state; use `/auto-engine llm` to opt back into LLM classification.
+  persisted in input order. `Auto[RULES]` remains an explicit/manual engine;
+  use `/auto-engine llm` to select LLM classification.
 - Runtime-backed prompts can offer exact `allow once`, `allow this session`,
   and `always allow` choices. Return the Runtime-issued opaque suggestion;
   never derive or widen a permission rule from the displayed command or path.
@@ -1368,8 +1431,8 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.2 (Volcengine Ark Coding Plan — GLM-5.2 (alias: `glm-latest`) · Kimi K2.7 Code / K2.6 · MiniMax M3 / M2.7 · DeepSeek V4 Pro / V4 Flash · Doubao Seed 2.0 Code / Pro / Lite · Doubao Seed Code) |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash (`deepseek-v4-pro` via `/model`) |
-| gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | (via gemini CLI) |
-| codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | (via codex CLI) |
+| gemini-cli | Provider CLI authentication (no KodaX API-key variable) | Prompt-only / CLI bridge | (via gemini CLI) |
+| codex-cli | Provider CLI authentication (no KodaX API-key variable) | Prompt-only / CLI bridge | (via codex CLI) |
 
 > **Custom providers**: any OpenAI- or Anthropic-compatible endpoint can be added via `customProviders[]` in `~/.kodax/config.json` (CLI) or `registerCustomProviders()` (library). See the [Quick Start](#2-configure-a-provider) for the configuration shape.
 

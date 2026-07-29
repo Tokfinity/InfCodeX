@@ -35,6 +35,7 @@ are NOT obvious from inspecting the type definitions alone:
 25. [Always-on context compaction and bounded transcript recovery](#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774)
 26. [Agent mailbox control versus SDK event telemetry](#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774)
 27. [Windows GUI background subprocess visibility](#27-windows-gui-background-subprocess-visibility-v0775)
+28. [Standalone sandbox SDK](#28-standalone-sandbox-sdk-v0778)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -3787,6 +3788,10 @@ import { connectKodaXRuntime } from '@kodax-ai/kodax/runtime';
 const runtime = await connectKodaXRuntime({
   profile: 'coder',
   autoStart: true,
+  // Opt in only when this product remains the visible owner of the daemon.
+  // If the product crashes, the daemon stops after its final client is gone
+  // and governed work becomes idle.
+  daemonOrphanExitMs: 30_000,
   homeDir: coderRuntimeBaseDir, // owns <coderRuntimeBaseDir>/.kodax
   clientInfo: {
     name: 'kodax-space',
@@ -3819,7 +3824,7 @@ const runtime = await connectKodaXRuntime({
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
     daemonManagement: 1,
-    runtimeAutoModeGuardrail: 3,
+    runtimeAutoModeGuardrail: 4,
   },
 });
 ```
@@ -3832,21 +3837,35 @@ Coder. Products that depend on same-Run delivery should require
 (for example, SA execution) still return `unsupported_capability`; do not
 silently substitute `delivery:'after_turn'` unless that is the user's intent.
 
-The v0.7.73 SDK requires `runtimeAutoModeGuardrail:3` automatically for
-`autoStart: true`, even when the caller omits it from `requirements`. If the healthy
-profile daemon advertises v1 or v2, the SDK first requires `daemonManagement:1`,
-takes a revision/owner-policy fenced preflight, and replaces it only when no
-active or queued run, Workflow, Agent turn, pending permission/user input, or
-other logical client exists. A busy or still-older daemon is never stopped: the
-connection rejects with `RuntimeDaemonCapabilityUpgradeError`, whose
-`recoverable` and `restartRequired` fields are `true` and whose optional
-`preflight` explains the blockers. Attach-only connections never mutate daemon
-ownership and must request `runtimeAutoModeGuardrail:1` explicitly when they
-depend only on the v1 owner contract, v2 for bounded input, effective-default
-metadata, structured diagnostics, and speculative-window parity, or v3 for
-opaque exact grant suggestions and concrete permission matchers. Capability
-requirements are minimum versions: v3 satisfies v1/v2, v2 satisfies v1, and an
-older daemon never satisfies a newer requirement.
+The SDK requires `runtimeAutoModeGuardrail:3` automatically for ordinary
+`autoStart: true`. Supplying `daemonOrphanExitMs` additionally requires the
+dedicated `daemonOrphanExit:1` capability and passes the option only when
+spawning a new daemon. It does not silently reinterpret an already-running
+persistent daemon: the SDK uses the normal fenced capability-upgrade path and
+replaces it only when preflight proves that doing so is safe. After the daemon
+has observed a logical client, final-client detach arms the requested grace
+period; a new client cancels it, and active/queued runs, Workflow, Agent turns,
+pending permission/user input, or other governed work defer exit until
+preflight is idle. Omit the option for CLI-style daemons that are intentionally
+persistent.
+
+An embedder can inspect `KODAX_RUNTIME_SDK_CAPABILITIES.daemonOrphanExit`
+before calling an auto-start API. This prevents an older SDK from spawning a
+persistent daemon and only then discovering that it cannot honor the requested
+lifecycle policy. The connected daemon capability remains the authoritative
+check that the current host actually enabled the policy.
+
+When a healthy profile daemon is too old, the SDK first requires
+`daemonManagement:1`, takes a revision/owner-policy fenced preflight, and
+replaces it only when no active or queued run, Workflow, Agent turn, pending
+permission/user input, or other logical client exists. A busy or still-older
+daemon is never stopped: the connection rejects with
+`RuntimeDaemonCapabilityUpgradeError`, whose `recoverable` and
+`restartRequired` fields are `true` and whose optional `preflight` explains the
+blockers. Attach-only connections never mutate daemon ownership and must request
+the exact capabilities they depend on. Capability requirements are minimum
+versions: v4 satisfies v1-v3, v3 satisfies v1/v2, v2 satisfies v1, and an older
+daemon never satisfies a newer requirement.
 
 The `coderFeatureMatrix` capability reports daemon availability for managed
 runs, transcript/session operations, Todo projection, managed tasks, Workflow,
@@ -4358,8 +4377,8 @@ guardrails across turns while provider/model, repository boundary, execution
 directory, classifier model, and timeout remain the same. Updating one of
 those inputs selects a new context guardrail by design without copying stale
 state from a queued turn. Active runs, queued runs, explicit settings updates,
-and automatic LLM-to-rules fallback merge through the same Session mutation
-queue; fallback is persisted before a later classification reads the engine.
+and explicit engine changes merge through the same Session mutation queue.
+Classifier infrastructure failures do not mutate the engine to rules.
 
 ### What an embedder should expect
 
@@ -4369,16 +4388,22 @@ The Runtime's execution order is fixed:
 Runtime Auto Mode guardrail -> host permission bridge only for escalate -> tool execution
 ```
 
-Consequently, an LLM/rules `allow` does not create a pending permission request
-just because a host installed a static approval hook. `block` does not become a
-spurious approval prompt. A real `escalate` uses the existing shared
+Exactly modeled ordinary reads and workspace/system-temp mutations are admitted
+before classifier latency, independent of sandbox readiness. Other calls are
+reviewed against the latest genuine user request, bounded user-only intent
+evidence, and exact operation facts. Consequently, an LLM/rules `allow` does
+not create a pending permission request just because a host installed a static
+approval hook. Classifier concerns, critical deterministic matches, and rules
+concerns use the existing shared
 `runtime.permissions` flow, so another authorized client may render and answer
 it. Hosts should subscribe to permission events to display such a request, but
 must not treat a missing request as an error for a safe tool call.
 
 The classifier deadline remains 20 seconds by default and includes connection
 setup, provider Retry-After/backoff, inference, and stream completion. KodaX
-does not solve timeouts by extending that deadline indefinitely. Before the
+retries one timeout/provider/response-contract failure once; a second failure
+uses the Accept-edits safety boundary and never switches to Auto[rules].
+KodaX does not solve timeouts by extending that deadline indefinitely. Before the
 provider call it removes assistant prose/thinking and image paths, limits each
 tool result to 2 KiB and the serialized permission-relevant transcript to
 8 KiB, then enforces 16 KiB action and 32 KiB total-prompt ceilings plus a
@@ -4405,11 +4430,18 @@ session repository safety boundary, whereas relative operands resolve from the
 validated `executionCwd`. In particular, quoted Python/JavaScript/regexp source
 inside a shell command is not a path operand.
 
+Every Runtime permission request has a deadline. If the host does not answer,
+the current operation is not executed and the guardrail returns a stable
+`approval_timeout` result telling the main model to try a safer, narrower, or
+reversible approach, or stop and wait for explicit user approval. A timeout is
+not serialized as an ordinary user rejection.
+
 The user-level `.kodax` directory is a credential/configuration boundary, not
 an ordinary project path. Direct shell mutations, output redirects, and
 recognized nested-shell payloads whose target is provably beneath that
-directory are rejected before LLM classification. The check is segment-safe
-and Windows case-insensitive. KodaX deliberately does not scan arbitrary
+directory are identified before LLM classification and routed to permission
+approval rather than permanently policy-blocked. The check is segment-safe and
+Windows case-insensitive. KodaX deliberately does not scan arbitrary
 quoted language source for path-looking substrings: doing so would turn Python,
 JavaScript, YAML, and regular expressions into false Tier-0 matches. Trusted
 configuration changes should use the KodaX config CLI or SDK configuration API.
@@ -4770,6 +4802,169 @@ the command through another shell. When `shellExecution` is absent, KodaX keeps
 the pre-v0.7.77 platform-shell behavior for compatibility. See
 [`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)
 for cross-project, cache, cancellation, credential, and Windows argv checks.
+
+---
+
+## 28. Standalone sandbox SDK (v0.7.78)
+
+ASRT containment is a public SDK capability, not an Auto[LLM]-only
+implementation detail. Import the dedicated subpath when a host needs to
+sandbox its own commands or scripts:
+
+```ts
+import {
+  activateKodaXSandbox,
+  doctorKodaXSandbox,
+  getKodaXSandboxCapability,
+  getKodaXSandboxSetupGuidance,
+  runKodaXSandboxed,
+} from '@kodax-ai/kodax/sandbox';
+
+const capability = getKodaXSandboxCapability();
+const doctor = await doctorKodaXSandbox({ refresh: true });
+
+if (!doctor.ready) {
+  showSandboxInfo(getKodaXSandboxSetupGuidance(doctor));
+  // Call only from an explicit setup/onboarding action. On Windows this may
+  // display UAC; ordinary SDK calls never invoke it automatically.
+  const activation = await activateKodaXSandbox();
+  if (activation.status !== 'ready') {
+    showSandboxInfo(activation.guidance);
+  }
+}
+```
+
+Platform behavior:
+
+- Windows uses the pinned ASRT restricted-user/WFP setup. The parent terminal
+  does not need to be elevated; the one-time installer requests UAC itself.
+- macOS uses Seatbelt through `sandbox-exec` and requires ripgrep. Guide users
+  to `brew install ripgrep` when doctor reports it missing.
+- Linux uses bubblewrap and requires `bubblewrap`, `socat`, and `ripgrep`.
+  Present the emitted `apt`/`dnf`/`pacman` guidance; do not run `sudo` or a
+  package manager silently.
+
+Do not call `activateKodaXSandbox()` during ordinary Runtime startup, tool
+execution, or a background permission check. KodaX's own first-run/setup UI
+checks once; a declined UAC prompt or missing dependency is reported there and
+is not repeatedly surfaced until the user runs setup again.
+
+### Run a host-owned command with an explicit policy
+
+```ts
+import os from 'node:os';
+import path from 'node:path';
+import { runKodaXSandboxed } from '@kodax-ai/kodax/sandbox';
+
+const result = await runKodaXSandboxed({
+  command: process.execPath,
+  args: ['scripts/generate-report.mjs'],
+  cwd: projectDirectory,
+  filesystem: {
+    allowRead: [projectDirectory, process.execPath],
+    allowWrite: [projectDirectory, os.tmpdir()],
+    denyRead: [path.join(os.homedir(), '.ssh')],
+    denyWrite: [path.join(projectDirectory, '.git', 'config')],
+  },
+  network: {
+    mode: 'allowlist',
+    origins: ['https://api.example.com'],
+  },
+  // false by default: start with KodaX's minimal execution environment.
+  inheritEnvironment: false,
+  env: { REPORT_FORMAT: 'pdf' },
+  timeoutMs: 120_000,
+  maxOutputBytes: 2 * 1024 * 1024,
+});
+
+if (result.status === 'unavailable') {
+  // The command was NOT run. Decide explicitly whether your product should
+  // wait for setup, reject the operation, or use its own non-sandbox path.
+  showSandboxInfo(getKodaXSandboxSetupGuidance(result.doctor));
+} else if (result.exitCode !== 0) {
+  throw new Error(result.stderr || `sandboxed command exited ${result.exitCode}`);
+}
+```
+
+The generic executor supports network `allow`, `deny`, and exact HTTP(S)
+origin `allowlist` modes plus filesystem policy roots, environment inheritance,
+timeout, cancellation, and bounded output. ASRT permits ordinary reads by
+default: `denyRead` removes access and a more specific `allowRead` carves access
+back. `allowWrite` defines the writable roots, while `denyWrite` removes
+subtrees and always takes precedence over `allowWrite`. The HTTP(S) `origins`
+are normalized to the hostname/port pair enforced by ASRT's network proxy. It
+never silently runs without containment: sandbox unavailability is the typed
+`{ status: 'unavailable', sandboxed: false, doctor }` result.
+
+`command` and `args` remain separate process arguments. On Windows KodaX uses
+an encoded bootstrap followed by `shell: false`, so `%VAR%`, `&`, embedded
+quotes, and spaces are not expanded or re-parsed by the host shell. The
+explicit environment policy is overlaid into ASRT's fresh restricted-user
+environment; ASRT-owned proxy, CA, and Git safety variables retain precedence.
+`timeoutMs` covers the complete broker lifecycle, including ASRT
+initialization, the command, and cleanup. Windows ACL initialization on a cold
+path can take tens of seconds, so do not reuse a classifier-scale 20–30 second
+deadline unless that early cancellation is intentional.
+
+This is intentionally different from KodaX's local permission fallback. When
+ASRT is unavailable, Auto[LLM] still makes the same deterministic/LLM/user
+permission decision and an admitted local shell may use the ordinary execution
+path; only OS containment is absent. The same local fallback applies when
+ASRT preparation or backend initialization fails before the target process
+starts. KodaX never retries after the target has started, so a sandbox fault
+cannot duplicate command side effects. Remote A2A admitted Skill scripts
+retain their stronger isolation contract and do not fall back to an
+unsandboxed script. Embedded and daemon Runtime capability metadata expose
+`sandboxRuntime` with the platform backend, ASRT version, supported control
+dimensions, elevation behavior, and fallback semantics.
+
+Local workspace commands reuse one long-lived ASRT session per canonical
+workspace. Session-level ACL/WFP initialization is warmed once; the owner
+coordinates short wrap/cleanup RPCs without locking across the target process
+lifetime, so concurrent and background targets do not block later preparation.
+Per-command target attestation and fallback remain independent. Session reset
+happens only after an idle drain or host-process shutdown, never on the
+interactive command critical path. A cold first command may still wait for
+platform initialization, but later commands must not repeatedly pay that
+setup/reset cost. Abort signals and the command deadline cover that prepare
+wait; a cancelled/timed-out prepare never starts the target or changes to the
+ordinary fallback path. Explicit
+Windows system-temp operations that ASRT cannot safely ACL-manage are not
+selected for containment and keep the already-approved normal execution path.
+
+An unhealthy session fails the current prepare immediately so the host can use
+its normal permission fallback. Cleanup continues out of band. On Windows the
+owner first closes its command input and allows up to 130 seconds for ASRT
+0.0.65's two serial ACL cleanup helpers to finish; only then may process-tree
+termination be forced. The failed workspace session is not replaced until
+that bounded cleanup settles, preventing a replacement from racing stale ACL
+recovery. macOS and Linux use the same EOF-first sequence with a shorter
+bounded termination grace.
+
+Runtime event streams may also contain one terminal `tool.sandbox` observation
+associated with the tool ID. `applied` is emitted only after the in-sandbox
+bootstrap confirms that the real target process reached Node's `spawn` event;
+wrapper startup alone is not sufficient. Before that handshake, a local
+backend failure may fall back to normal execution. After it, KodaX never
+restarts the target:
+
+```ts
+runtime.events.subscribe({ sessionId: session.id, type: 'tool.sandbox' }, (event) => {
+  if (event.type !== 'tool.sandbox') return;
+  const { observation } = event.payload.update;
+  // observation.state: 'applied' | 'fallback' | 'not_selected'
+  diagnostics.recordSandboxRoute(observation);
+});
+```
+
+This event is optional diagnostics, not conversation content. It is never added
+to model-visible messages. Default consumer UX should not render it in startup
+output, command cards, notifications, or conversation history; expose it only
+in an explicit advanced diagnostics view. KodaX's own Ink REPL does not
+subscribe to the event and refreshes human-readable status only when the user
+runs `/sandbox`. Explicit JSON output and SDK subscriptions retain the
+structured event for professional diagnostics. `/sandbox` is read-only and
+never activates the backend or requests elevation.
 
 ---
 

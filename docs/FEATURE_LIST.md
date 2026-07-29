@@ -12,14 +12,14 @@
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.76` (Git tag / GitHub Release; npm publication remains manual) |
-| Current package version | `@kodax-ai/kodax@0.7.77` release-ready candidate (untagged; joint decision `SHIP`) |
+| Current package version | `@kodax-ai/kodax@0.7.78` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `62` |
-| InProgress | `4` |
+| Total tracked features | `64` |
+| InProgress | `6` |
 | Planned | `10` |
 | Completed | `41` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -27,8 +27,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 41 | `273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | v0.7.76 remains the current Git/GitHub release. |
-| InProgress | 4 | `263, 274, 275, 225` | `263` is engineering-complete as the full project-scoped canary Skill Learning Loop and remains InProgress until v0.7.78 release/evaluation. `274` and `275` are release-ready after paid evaluation and a joint `SHIP` decision; they move to Completed only after v0.7.77 is actually released. `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 2 | `264, 265` | `v0.7.80` -> `v0.7.85` |
+| InProgress | 6 | `263, 276, 277, 274, 275, 225` | `263`, `276`, and `277` target v0.7.78 and remain InProgress until that version releases. `274` and `275` are release-ready after paid evaluation and a joint `SHIP` decision; they move to Completed only after v0.7.77 is actually released. `225` remains the bounded v0.7.100 cleanup. |
+| Planned, near-term | 2 | `278, 265` | `v0.7.80` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
@@ -61,7 +61,7 @@
 | `v0.7.75` | `0` |
 | `v0.7.76` | `0` |
 | `v0.7.77` | `2` |
-| `v0.7.78` | `1` |
+| `v0.7.78` | `3` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `0` |
@@ -168,8 +168,8 @@
 > learned carrier. `FEATURE_244`, `231`, `235`, `238`, `232`, `105`, and `108`
 > leave the active roadmap. `FEATURE_266` establishes the shared Learning
 > Center/control plane in `v0.7.70`; `FEATURE_263` closes the released F224
-> Skill Loop in `v0.7.75`; `FEATURE_264` adds a trust-gated Extension learning
-> loop in `v0.7.80`; `FEATURE_265` consolidates Hermes-parity work efficiency and
+> Skill Loop in `v0.7.75`; deterministic Extension work remains explicitly
+> user-authored; `FEATURE_265` consolidates Hermes-parity work efficiency and
 > coding assurance in `v0.7.85`. `v0.7.90` and `v0.7.95` return to stabilization
 > capacity. `FEATURE_225` remains the bounded final cleanup in `v0.7.100`.
 >
@@ -177,10 +177,9 @@
 > `v0.7.70`. It establishes the shared agent-layer Learning Center, Learned
 > Capability Area, durable lifecycle/events/client cursors, human-readable
 > names, Runtime SDK parity, and real Ink/classic notification placement before
-> F263/F264 author capabilities. It does not add a Workflow Loop, Skill
-> reviewer, or Extension generator. The learning sequence is now F260
-> (`v0.7.68`) -> F266 (`v0.7.70`) -> F263 (`v0.7.75`) -> F264 (`v0.7.80`) ->
-> F265 (`v0.7.85`).
+> F263 authors learned Skills. It does not add a Workflow Loop, Skill reviewer,
+> or Extension generator. The learning sequence is now F260 (`v0.7.68`) ->
+> F266 (`v0.7.70`) -> F263 (`v0.7.75`) -> F265 (`v0.7.85`).
 >
 > **2026-07-13 A2A product/config closure**: `FEATURE_267` remains the same
 > bidirectional A2A Feature, now explicitly including the missing no-TypeScript
@@ -355,7 +354,7 @@
 >
 > **2026-07-23 F263 schedule adjustment**: at user direction, `FEATURE_263`
 > moves from `v0.7.75` to `v0.7.77`. `v0.7.75` and `v0.7.76` are therefore
-> feature-free stabilization / bugfix slots. `FEATURE_264`, `FEATURE_265`, and
+> feature-free stabilization / bugfix slots. `FEATURE_265` and
 > all later roadmap targets remain unchanged. This supersedes only the active
 > F263 target in the 2026-07-12 notes; their historical reviewed-out decisions
 > remain unchanged.
@@ -371,7 +370,7 @@
 > **2026-07-25 F274/F263 one-version delay**: at user direction,
 > `FEATURE_274` moves from `v0.7.76` to `v0.7.77`, and `FEATURE_263` moves from
 > `v0.7.77` to `v0.7.78`. `v0.7.76` returns to a feature-free stabilization /
-> bugfix slot. `FEATURE_264`, `FEATURE_265`, and all later roadmap targets remain
+> bugfix slot. `FEATURE_265` and all later roadmap targets remain
 > unchanged. This supersedes only the active targets established by the two
 > schedule notes immediately above.
 >
@@ -383,6 +382,32 @@
 > and run-loop ordering regression. F274 engineering and frozen experiment
 > contracts are also landed. The paid release evaluation completed with a
 > joint `SHIP` decision; no task-effect improvement is claimed.
+>
+> **2026-07-28 F276 setup onboarding completion**: `FEATURE_276` joins
+> `v0.7.78` to make first-run setup initialize and explain the complete split
+> configuration surface. It keeps active `config.json` strict JSON, puts the
+> split-path pointer on the first line of `config.example.jsonc`, adds the
+> custom-only wizard and shared CLI/REPL guide, and never overwrites an
+> existing active file or template.
+>
+> **2026-07-28 F277 Auto[LLM] permission correction**: `FEATURE_277` joins
+> `v0.7.78` to separate deterministic permission decisions, LLM danger review,
+> user approval, and optional ASRT execution containment. Exact safe reads and
+> workspace/temp mutations no longer depend on classifier latency or sandbox
+> activation; setup entrypoints proactively prepare the platform sandbox.
+>
+> **2026-07-29 F278 durable AskUser history projection**: `FEATURE_278` joins
+> `v0.7.80` to expose AskUser questions and answers as a compact structured SDK
+> projection and a distinct REPL history module. It derives from the canonical
+> `tool_use` + `tool_result` pair, survives normal session resume without a
+> second store, and deliberately avoids a new UI-history union member,
+> `InkREPL.tsx` state, Session schema migration, or Runtime event change.
+>
+> **2026-07-29 Extension self-learning removal**: the proposed automatic
+> Extension learning loop is deleted from the roadmap. Extension complexity,
+> authority, dependencies, state, and verification cost vary too widely for one
+> reliable generic self-learning path. Extension authoring remains an explicit
+> user-directed coding task; `v0.7.80` now contains only F278.
 
 ---
 
@@ -391,6 +416,8 @@
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `263` | Evidence-Gated Background Skill Learning Loop | Core / Skills + Self-Improvement | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) |
+| `276` | Complete First-Run Setup and Split-Configuration Onboarding | Enhancement / CLI + Configuration | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) |
+| `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | Core / Permissions + Sandbox | High | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) |
 | `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | Core / Agent Orchestration + Quality | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) |
 | `275` | Governed Event-Triggered Memory Intervention | Core / Memory + Agent Quality | High | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_275-governed-event-triggered-memory-intervention) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
@@ -414,8 +441,39 @@ tests across 23 files, and the complete fast/unit/contract/system suite passes.
 The human guide is
 [FEATURE_263_v0.7.78_TEST_GUIDE](test-guides/FEATURE_263_v0.7.78_TEST_GUIDE.md).
 
-Status remains InProgress until the target version is actually released and any
-paid semantic release evaluation is explicitly authorized and recorded.
+`FEATURE_276` now implements complete first-run split-configuration onboarding:
+missing core/MCP/Extensions/A2A active files and annotated templates are created
+without overwriting existing files, legacy integration declarations are
+preserved, and CLI/REPL share one provider/path/command/shortcut guide. The
+custom-only metadata wizard explains every field without collecting secrets.
+The implementation review additionally makes help return before startup
+side effects, prevents `KODAX_PROVIDER` from bypassing first-run initialization,
+validates every existing active split config before writing, and fences
+concurrent migration/provider writes. The root-owned A2A schema is injected
+without reversing package dependencies, pending legacy MCP/Extensions are
+validated as one preflight inside the public migration entry, and all
+cooperating KodaX core writers—including startup self-healing and legacy
+cleanup—share one lock plus revision recheck. Installed templates show the
+actual `KODAX_HOME`.
+Built-process tests cover help, real initialization, authoritative invalid
+configuration failure, mid-wizard EOF, and `--custom`; the suite is part of the
+normal system/CI gate. The full verification record remains with the feature
+until release. The human guide is
+[FEATURE_276_v0.7.78_TEST_GUIDE](test-guides/FEATURE_276_v0.7.78_TEST_GUIDE.md).
+
+`FEATURE_277` implements the v0.7.78 permission correction defined in its
+design: exact safe operations bypass classifier latency, remaining actions are
+reviewed against bounded user intent and precise side effects, approval timeout
+cancels only the current execution with recovery guidance, classifier failure
+uses one retry plus Accept-edits fallback, and ASRT becomes optional execution
+containment rather than permission authority. Its verification record and human
+guide are maintained in
+[FEATURE_277_v0.7.78_TEST_GUIDE](test-guides/FEATURE_277_v0.7.78_TEST_GUIDE.md);
+normal REPL history stays quiet and `/sandbox` is the explicit diagnostics entry.
+
+All three features remain InProgress until the target version is actually released
+and any required paid semantic release evaluation is explicitly authorized and
+recorded.
 
 ---
 
@@ -760,7 +818,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `264` | Evidence-Gated Extension Learning Loop | Core / Extensions + Self-Improvement | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_264-evidence-gated-extension-learning-loop) |
+| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
@@ -778,7 +836,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `244` | `v0.7.75` | Shelved; reopen only through F265's measured cold-module hot-path gate. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
 | `231` | `v0.7.75` | Cross-process Workflow replay deferred out of active `v0.7.x`. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
 | `235` | `v0.7.75` | Removed; current approval/save/revise lifecycle is sufficient without a Workflow Loop. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
-| `238` | `v0.7.80` | Cancelled; Workflow remains execution-only, while Skills/Extensions are learned carriers. | [v0.7.80](features/v0.7.80.md#2026-07-12-roadmap-review) |
+| `238` | `v0.7.80` | Cancelled; Workflow remains execution-only, while Skills carry learned methods and Extensions remain explicitly authored. | [v0.7.80](features/v0.7.80.md#2026-07-12-roadmap-review) |
 | `232` | `v0.7.85` | Removed as already absorbed by F246 pipeline + same-session reuse. | [v0.7.85](features/v0.7.85.md#2026-07-12-roadmap-review) |
 | `105` | `v0.7.90` | Removed; specialist dispatch and existing judge/Sidecar paths cover concrete need. | [v0.7.90](features/v0.7.90.md#2026-07-12-roadmap-review) |
 | `108` | `v0.7.95` | Removed; local learning belongs in Skills/Extensions and global prompt work stays engineering-led. | [v0.7.95](features/v0.7.95.md#2026-07-12-roadmap-review) |

@@ -6,6 +6,70 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Runtime Actor trees now persist one exclusive owner per Session. A second live
+  Runtime can no longer recover another Runtime's active child turns; stale
+  controllers self-fence on CAS conflict, physically abort local executors,
+  refresh durable state and mailbox events, and expose actionable
+  `actor_owner_conflict` diagnostics. Runtime close and Session deletion release
+  ownership safely; archive/delete retain the owner through the filesystem
+  operation, while deletion quiesces executors before removing the file and
+  then performs a no-write local dispose. A per-Session gate closes Run/Agent
+  admission races with archive/delete, and SA root Runs now claim the same
+  owner fence. Only `ESRCH` permits dead-owner takeover; all other PID-probe
+  failures fail closed. Legacy snapshots with non-terminal turns fail closed
+  during upgrade because their live owner cannot be proven. Archived Sessions
+  reject Run/Agent execution and in-place mutation until unarchived, and
+  archived Actor CAS writes stay in the exact archived file instead of
+  recreating an active duplicate. Failed deletion retains its authoritative
+  snapshot and owner for retry, paired archive moves roll back on sidecar
+  failure, and external task aborts cover queued, preflight, pending, and
+  ambiguous start admission with a prompt `AbortSignal`, A2A request-level
+  propagation, retained per-Agent start ordering, coalesced reference-aware
+  cancellation, and bounded Actor-turn convergence.
+   preflight is byte-for-byte read-only, and Session recovery re-reads under the
+   cross-process lock without bypassing Actor ownership or moving archived data.
+   Stale full Session saves cannot replace the Actor CAS sub-snapshot, and all
+   full rewrites/island maintenance retain the resolved archived path.
+   Failed initialization releases a newly claimed fence and supports
+   same-instance/double-failure cleanup. Raw maintenance and retention reject
+  owned/non-terminal trees, complete Session file sets delete through
+  rollback-safe staging, and cross-process append revalidates and merges stale
+  watermarks plus same-length identity rewrites on the exact resolved path.
+  Runtime client, Worker,
+   hosted-daemon, host, lease, and executor-plane close attempts are shared and
+   retryable after partial failure or timeout.
+- SDK daemon auto-start accepts an opt-in `daemonOrphanExitMs` lifecycle
+  contract. A newly ready daemon arms bootstrap grace even if its launching
+  client crashes before initialize; attach cancels the timer, and loss of the
+  final logical client starts a fresh full grace period. Other clients cancel
+  it, governed active work defers shutdown until terminal/idle state, and only
+  then does the daemon release its endpoint, state, and owner lock. Ordinary
+  CLI persistent daemons remain unchanged. The dedicated
+  `daemonOrphanExit:1` capability reports that the current host actually has
+  the policy enabled, and both Runtime facades safely replace an idle
+  persistent owner before relying on it.
+- Invalid optional MCP, A2A, or Extension configuration no longer aborts
+  daemon cold start. Each domain fails independently to a visible safe-empty
+  state, retains last-known-good data on later invalid edits, watches legacy
+  `config.json` fallbacks, and hot-recovers without mutating user files.
+  Detached bootstrap output is retained in continuously bounded logs, and the
+  daemon advertises the versioned `integrationConfigResilience` contract.
+- Auto[LLM] now retries classifier timeout/provider/contract failures once,
+  enforces its deadline even when a provider ignores cancellation, exposes
+  bounded prompt-size and TTFT phase diagnostics, and then degrades at the
+  Accept-edits boundary without switching to Auto[rules]. Classifier
+  concerns request user confirmation instead of hard-blocking. Exact,
+  explicitly requested workspace copy/move/rename/delete/write/create shell
+  calls can proceed without an LLM round trip independently of sandbox
+  readiness. ASRT adds optional execution containment; unavailable or
+  pre-launch-failed local containment falls back to the ordinary path without
+  another classifier/approval. Admitted commands in one workspace reuse a
+  long-lived ASRT session, so session-level initialization/reset is not paid
+  on every command. Normal history stays quiet, while `/sandbox` provides
+  explicit diagnostics and SDK hosts can opt into structured events.
+
 ## [0.7.77] - 2026-07-27
 
 > Release-ready candidate prepared at `@kodax-ai/kodax@0.7.77`. The Git tag,

@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-27_
+_Last Updated: 2026-07-28_
 
 ---
 
@@ -14,6 +14,11 @@ _Last Updated: 2026-07-27_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 224 | High | Resolved | Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge | v0.7.72 Runtime Actor persistence | v0.7.78 development | 2026-07-28 | 2026-07-28 |
+| 223 | High | Resolved | Auto[LLM] timeouts and exact workspace mutations caused spurious or hard permission stops | v0.7.33 | v0.7.78 development | 2026-07-28 | 2026-07-28 |
+| 222 | High | Resolved | Invalid optional integration config aborts daemon cold start and discards child diagnostics | v0.7.69 integration hot reload | v0.7.77 development | 2026-07-28 | 2026-07-28 |
+| 221 | High | Resolved | FEATURE_276 review found initialization bypass, help side effects, invalid-config, and concurrent overwrite gaps | v0.7.78 development | v0.7.78 development | 2026-07-28 | 2026-07-28 |
+| 220 | Low | Resolved | Integration hot-reload output overwrites the Ink status bar | v0.7.69 integration hot reload | v0.7.77 development | 2026-07-28 | 2026-07-28 |
 | 219 | Medium | Resolved | Daemon start can report healthy while its returned state is still starting | runtime daemon child startup | v0.7.77 development | 2026-07-27 | 2026-07-27 |
 | 218 | High | Resolved | Missing historical image files make every later Provider run fail | image-path history introduction | v0.7.77 development | 2026-07-27 | 2026-07-27 |
 | 217 | High | Resolved | CLI bridge confuses ACP IDs with native CLI resume IDs and shares a default session | CLI bridge introduction | v0.7.77 development | 2026-07-27 | 2026-07-27 |
@@ -128,6 +133,572 @@ _Last Updated: 2026-07-27_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 224: Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.72 Runtime Actor persistence
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-28
+- **Resolved**: 2026-07-28
+
+#### Original Problem
+
+In Session `20260728_203543`, an existing Runtime still owned two physical
+child-Agent executions. At 20:43:19 local time, a second `coder` Runtime daemon
+started and loaded the same durable Actor snapshot. Its controller treated the
+existing `running` turns as crash leftovers and persisted recovery revisions
+14 through 16, while the original controller remained at revision 13 and its
+physical children continued running.
+
+When the original Runtime later attempted `interrupt_agent`, its durable write
+failed with `expected 13, actual 16`. Because interruption committed logical
+state before invoking `AbortController.abort()`, the conflict prevented the
+physical stop signal. `list_agents` and `wait_agent` also remained attached to
+the original controller's process-local snapshot and mailbox, so logical
+durable state, displayed state, wait behavior, and actual execution diverged.
+
+#### Root Cause
+
+- `createRuntimeAgentActorRegistry()` isolated sessions only inside one Runtime
+  instance. The durable Actor snapshot had no Runtime/controller owner, so a
+  second Runtime could construct another controller for the same Session.
+- `AgentActorController.initialize()` unconditionally recovered every
+  non-terminal persisted turn. It could not distinguish a crashed executor
+  from a live executor owned by another Runtime.
+- Actor mutation CAS detected the later revision, but the conflict was an
+  untyped generic error. The stale controller rolled back logical interruption
+  and never physically aborted its locally owned executor.
+- Actor reads and model mailbox waits intentionally use committed process-local
+  state. Without a single-owner fence, two valid local projections could
+  permanently disagree with the one durable snapshot.
+- Session deletion removed the session file before the Actor registry closed
+  its controller, making later owner release fail with `Session not found`.
+- Runtime Run admission and archive/delete checked separate process-local
+  snapshots. A Run could still be preparing before it appeared in the active
+  Run map, leaving a window in which the Session file could be moved.
+- The first owner probe treated several non-`EPERM` operating-system errors as
+  proof that the owner was dead. That was unsafe: only `ESRCH` proves the PID
+  no longer exists.
+- Status preflight used the ordinary Session loader. Its automatic incomplete
+  tool-call recovery could therefore write during observation; it read before
+  taking the Session lock, then rewrote the stale full snapshot, which could
+  overwrite a concurrent Actor owner revision. For archived Sessions it also
+  omitted the resolved path and could recreate an active duplicate.
+
+#### Resolution
+
+- Added Actor snapshot schema v2 with an exclusive owner identity containing a
+  controller token, Runtime ID, PID, and Runtime start time. Runtime Actor
+  controllers claim ownership through the existing cross-process,
+  per-Session file-lock-protected CAS write before recovery or mutation.
+- A contender rejects a live foreign owner with the non-retryable
+  `actor_owner_conflict` error. It may claim a dead owner only after the
+  liveness probe returns `ESRCH`; permission, unknown, and transient probe
+  failures conservatively keep the owner live. Only then may unmatched-turn
+  recovery run. Ownerless controllers fail closed on schema-v2 snapshots.
+  Owner-aware controllers also reject schema-v1 snapshots that still contain
+  non-terminal turns with `actor_owner_unknown`, because an older live Runtime
+  cannot publish the identity needed for a safe takeover. Terminal v1
+  snapshots upgrade automatically.
+- Added a typed `actor_snapshot_conflict` storage error. If a legacy or
+  residual race still produces a CAS conflict, the stale controller
+  permanently self-fences, aborts every physical executor it owns, reloads the
+  durable snapshot, and republishes newly committed events and completion
+  messages so local reads and waiters converge.
+- `interrupt_agent` treats the request as satisfied when the conflict fence
+  physically aborted local execution or the reloaded durable target is already
+  interrupted. Later writes from the stale controller remain rejected.
+- Runtime close now interrupts turns and releases the owner. Session archive,
+  unarchive, and deletion first claim or validate Actor ownership even when the
+  calling Runtime has no local registry entry. They retain that durable owner
+  through the filesystem operation: moves release it only from the moved file;
+  deletion quiesces physical executors without releasing the fence, removes the
+  file, then performs a no-write local dispose. A failed strict deletion keeps
+  both the authoritative snapshot and registry owner for retry instead of
+  reporting success or orphaning the owner.
+- One per-Session operation gate serializes Run admission, Agent mutations, and
+  archive/unarchive/delete. The gate is held until a starting Run is registered,
+  closing the window where `hasActiveRun` previously returned false. Runtime
+  close drains this gate before closing the Actor registry, shares one close
+  attempt across concurrent callers, waits for all cleanup branches, and can
+  retry an Actor owner-release write that failed.
+- Every root Run, including `agentMode: "sa"`, claims the Session Actor owner,
+  so another Runtime cannot move or delete a live SA Run's Session.
+- Archived Sessions reject new Run and Agent execution and every in-place
+  Session mutator with `session_archived` until explicitly unarchived. Actor CAS
+  writes retain exact resolved-path behavior as a defense in depth and cannot
+  recreate an active duplicate. Paired main/sidecar moves roll back the main
+  file when the sidecar move fails and surface an aggregate error if rollback
+  itself cannot complete.
+- External Agent interruption now observes aborts that arrive while task start
+  is queued, in preflight/factory creation, in durable admission, or waiting
+  for a remote reference. The caller `AbortSignal` crosses the task-service and
+  A2A request boundaries, while an aborted queued start retains its per-Agent
+  serialization fence until its predecessor settles. Durable admission
+  releases before the remote start call, cancellation first persists
+  `requested`, and competing abort/cancel paths coalesce onto one formal remote
+  cancel. An aborted ambiguous start without a reference remains visibly
+  `unknown` instead of pretending remote cancellation was confirmed, and the
+  Actor executor exits instead of polling that non-terminal ambiguity forever.
+  The A2A safe-fetch layer composes this caller signal with its request deadline
+  instead of overwriting it.
+- Runtime status preflight reads durable Actor snapshots without claiming
+  otherwise unowned Session trees or invoking Session recovery writes, so
+  observation cannot alter file bytes/mtime or block the Runtime that will
+  execute them. Ordinary incomplete-tool recovery now re-reads under the
+  cross-process Session lock, skips durable/unknown Actor owners, and writes
+  back to the exact resolved active or archived path.
+- Full Session saves preserve the latest stored Actor sub-snapshot regardless
+  of stale caller data; only `saveActorSnapshot` may change it through CAS.
+  Full saves, island maintenance, and sidecar appends also retain the resolved
+  archived path instead of creating an active copy.
+- A newly claimed owner is released by a fenced write if later initialization
+  or unmatched-turn recovery fails. The same controller can safely retry after
+  a successful release, and the Runtime performs another same-owner cleanup if
+  both recovery and the first release write fail. The ownerless handoff
+  snapshot remains protected from raw archive/delete while it contains
+  non-terminal turns.
+- Raw storage archive/unarchive/delete and automatic retention use the same
+  owner checks as the Runtime facade. They cannot move or remove a live-owned
+  tree, an ownerless non-terminal handoff, or a legacy non-terminal tree.
+- Session deletion and retention stage the complete main/sidecar set under
+  ignored tombstone names before unlinking. A staging error rolls every rename
+  back, so a failed delete cannot retain the main file while silently losing
+  compacted history. Cross-process append also revalidates its process-local
+  watermark under the Session file lock and merges unique lineage, artifact,
+  and extension identities when another Runtime advanced or rewrote the file,
+  including same-length rewrites. Append and raw lineage mutators use the exact
+  resolved archived path and cannot recreate an active duplicate.
+- Runtime client, Worker, hosted-daemon, daemon-host, lease, and executor-plane
+  close paths share concurrent attempts. Successful cleanup phases are retained,
+  failed phases can be retried, and a timeout does not permanently cache a
+  rejected wrapper around cleanup that is still progressing.
+- Concurrent controller shutdown is idempotent, and executor settlements that
+  arrive after ownership release do not produce misleading background errors.
+- Model-facing Agent tools now retain the owner Runtime ID, current revision,
+  local-abort fact, and actionable ownership guidance.
+
+#### Files Changed
+
+- `packages/agent/src/actors/{types,errors,controller,index}.ts`
+- `packages/agent/src/external-agents/{types,executor-plane}.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `packages/coding/src/tools/agent-collaboration.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/session/public-api.ts`
+- `src/sdk-runtime.ts`
+- `src/a2a/{client-executor,safe-fetch}.ts`
+- `src/runtime-daemon/{manager,process}.ts`
+
+#### Tests Added or Updated
+
+- Live-owner rejection without recovery and dead-owner takeover before
+  unmatched-turn recovery.
+- Stale-owner CAS fencing, physical abort, durable state refresh, waiter wake,
+  completion republish, and permanent rejection of later stale writes.
+- Owner-aware schema-v2 admission and incompatible newer-schema fail-closed
+  behavior, plus active-v1 upgrade rejection and terminal-v1 upgrade.
+- Concurrent `FileSessionStorage` CAS writes through separate instances.
+- Archived Actor snapshot CAS writes stay in the exact archived file without
+  creating an active/archived duplicate.
+- Two Runtime instances contending for one Session, graceful ownership
+  transfer, foreign-owner archive/deletion rejection, active-Run mutation
+  rejection, and Session deletion before Runtime close.
+- Barrier-controlled Run admission versus archive, SA root-Run ownership,
+  Runtime-close admission draining, archived execution rejection, conservative
+  non-`ESRCH` owner probing, and no-write controller disposal after Session
+  deletion.
+- Concurrent Runtime close sharing and retry, strict delete failure with owner
+  retention, archived in-place mutation rejection, read-only daemon preflight,
+  external-task start cancellation races, and paired archive rollback
+  (including rollback failure reporting).
+- Initialization-failure owner release, raw maintenance/retention owner fences,
+  byte-for-byte read-only preflight, lock-local recovery reads, exact archived
+  recovery/full-save writes, stale full-save Actor-CAS preservation, and
+  retryable close behavior at every Runtime transport layer.
+- Same-controller initialization retry, double-failure owner cleanup,
+  abortable pending starts, atomic delete rollback after sidecar staging, and
+  cross-instance append preservation without duplicate lineage entries.
+- Pre-admission caller abort, retained same-Agent start ordering, coalesced
+  formal cancellation, ambiguous-cancellation Actor convergence, exact archived
+  append/raw lineage mutation, and same-length cross-instance rewrite merging.
+- Structured model-facing `actor_owner_conflict` diagnostics.
+
+See `docs/test-guides/ISSUE_224_v0.7.78_REGRESSION_GUIDE.md`.
+
+### 223: Auto[LLM] timeouts and exact workspace mutations caused spurious or hard permission stops
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.33
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-28
+- **Resolved**: 2026-07-28
+
+#### Original Problem
+
+KodaX Space session `s_11be2ee5-54f4-4740-84ce-b22f1577db73` used
+Auto[LLM] with both the working directory and target under
+`C:\Users\ADMIN\kodax_workspace`, but an ordinary write still requested manual
+authorization. The recorded classifier request timed out after 20 seconds in
+`pre_output` with no provider retry even though its tool projection was only
+about 100 bytes, indicating queue, connection, cold-start, or first-token
+latency rather than the main request's roughly 108K-token context.
+
+Exact user-requested workspace file operations such as copy, move, rename, and
+delete could also be reviewed as generic risky shell execution. A valid LLM
+concern or contract failure could become a hard block instead of a user-owned
+decision, while Runtime shell execution itself did not use the installed
+Anthropic Sandbox Runtime as a workspace write boundary.
+
+#### Root Cause
+
+- Classifier infrastructure and contract failures had no bounded outer retry
+  and did not expose prompt size or first-event/first-thinking/first-text timing.
+- The deadline relied on provider cooperation with `AbortSignal`; an adapter
+  that ignored cancellation could prevent retry and fallback indefinitely.
+- Classifier failures and health thresholds were coupled to fail-closed or
+  rules-engine behavior instead of the narrower Accept-edits fallback.
+- The compact evidence did not mark the current real user request as a distinct
+  authoritative field and could retain synthetic system-reminder messages.
+- Permission analysis could describe exact workspace mutations, but there was
+  no deterministic admission path backed by the OS sandbox. The ordinary bash
+  tool spawned its command directly. Windows mutation switches such as `/Y`,
+  `/Q`, `/S`, and `/A:H` could also be misread as path operands.
+
+#### Resolution
+
+- Added one immediate classifier retry for timeout, provider, and response
+  contract failures. A second failure uses Accept-edits semantics: ordinary
+  workspace edits continue, while executable shell/script calls and
+  outside/protected writes require user authorization. Tier-0 destructive
+  patterns remain hard-denied. The side-query deadline now settles locally
+  even when a provider adapter ignores cancellation.
+- A valid classifier `block=yes` now means user confirmation, not a direct hard
+  block. Repeated concerns or failures retain the user-selected LLM engine;
+  circuit-breaker state reports degraded classifier health without widening to
+  Auto[rules].
+- Added structured per-attempt diagnostics for prompt bytes, elapsed time,
+  provider retry wait, terminal phase, first upstream event, first thinking
+  delta, and first text delta. Runtime permission events expose these facts
+  without prompt or response text.
+- Added a bounded, explicitly marked current-user-intent field and filtered
+  synthetic/system reminder messages from compact permission evidence.
+  Deterministic admission additionally requires untruncated imperative intent,
+  matching operation and target/destination, and no denial or inquiry wording.
+- Exact, explicitly requested workspace mutations whose only risks are their
+  intrinsic remove/overwrite semantics now bypass the LLM review. Direct file
+  tools may proceed immediately; shell calls proceed only after a one-shot
+  Runtime admission and execute through Anthropic Sandbox Runtime with network
+  denied, credentials removed, and writes limited to the workspace/system temp
+  boundary. Host-side input changes are rechecked before execution.
+- Windows `move`, `copy`, `del`, `rd`, and `rmdir` switches are parsed by
+  command semantics rather than as targets. If ASRT is not provisioned, Runtime
+  emits setup guidance and rechecks readiness after a short bounded interval.
+- Ambiguous Windows commands with a quoted trailing directory separator remain
+  incomplete and therefore cannot enter the deterministic fast path.
+
+#### Files Changed
+
+- `packages/llm/src/side-query.ts`
+- `packages/coding/src/guardrails/auto-mode/*`
+- `packages/coding/src/tools/bash.ts`
+- `packages/coding/src/types.ts`
+- `packages/repl/src/interactive/auto-mode-bootstrap.ts`
+- `packages/repl/src/permission/*`
+- `src/sandbox-runtime.ts`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/schema.ts`
+
+#### Tests Added or Updated
+
+- Classifier retry, timeout phase, prompt-byte, TTFT, intent-evidence, response
+  contract, and confirmation semantics.
+- Accept-edits failure fallback for workspace, outside, protected, read-only,
+  and executable calls.
+- Exact workspace copy/move/delete admission and ambiguous Windows parsing.
+- ASRT one-shot request construction, credential filtering, workspace write
+  boundary, and final bash spawn/cleanup.
+- SDK permission diagnostics and Runtime daemon protocol schema coverage.
+
+### 222: Invalid optional integration config aborts daemon cold start and discards child diagnostics
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.69 integration hot reload
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-28
+- **Resolved**: 2026-07-28
+
+#### Original Problem
+
+KodaX Space v0.1.32 with KodaX 0.7.76 could keep Partner usable while every
+Coder request failed with:
+
+`Runtime daemon child exited before becoming healthy (code 1).`
+
+The reported Windows machine had no `~/.kodax/runtime` directory, and the same
+portable package worked on other machines. KodaX 0.1.28-era Space behavior,
+before the daemon host was introduced, did not exercise this startup path.
+
+An independently observed portable-launch error,
+`Cannot find module 'better-sqlite3'`, remains a distinct extraction,
+native-module, or endpoint-protection symptom in the Electron main process. It
+does not explain an already running Space process whose Partner surface works
+and whose Coder daemon alone fails. The daemon bootstrap log applies only when
+the Runtime child is actually spawned; it does not replace the visible
+Electron main-process error for a launch that fails earlier.
+
+#### Context
+
+- MCP, A2A, and filesystem Extensions are optional Coder integration domains.
+  One malformed optional document must not make the core Runtime unusable.
+- User configuration is evidence and must never be silently deleted,
+  overwritten, or normalized after a parse or schema failure.
+- A valid live configuration is last-known-good state. A later malformed edit
+  must preserve that state until a valid revision arrives.
+- Operators need a bounded, non-secret startup artifact even when failure
+  happens before normal Runtime logging is initialized.
+
+#### Root Cause
+
+Daemon startup initialized all integration controllers before advertising
+health. The first invalid `integrations/mcp.json`,
+`integrations/a2a.json`, or `integrations/extensions.json` document threw from
+strict cold-start loading, so the child exited with code 1 before the host
+created normal Runtime artifacts. The detached parent launched the child with
+ignored stdout/stderr, discarding the only concrete exception. MCP and
+Extensions also resolved the ambient KodaX home instead of the daemon's
+explicit `--home`, which could make foreground diagnosis inspect a different
+configuration tree.
+
+#### Resolution
+
+- Each optional integration controller now validates independently. Invalid
+  cold-start input produces a safe empty document only for that domain while
+  retaining a structured diagnostic; it does not modify the source file.
+- A later invalid revision continues using the last-known-good snapshot. File
+  watching accepts a repaired valid revision without restarting the daemon.
+- While a split MCP/Extensions file is absent, the legacy `config.json`
+  dependency participates in both filesystem watching and metadata polling.
+  Diagnostics point to that actual legacy source, and repairing it hot-recovers
+  without creating or deleting configuration.
+- Daemon management reports core health separately from bounded per-domain
+  integration state, source, path, revision, and diagnostic code. A degraded
+  optional domain leaves the daemon ready.
+- `kodax integrations status|validate|reload` evaluates domains independently,
+  reports the affected canonical path, and never prints configuration
+  contents.
+- Detached child stdout/stderr is written through a bounded writer to
+  `~/.kodax/runtime/daemon/<profile>/bootstrap.log`, with one bounded
+  `bootstrap.log.1` rotation. The active file is tail-capped after every
+  post-health write, not only at the next launch. Runtime directories are
+  created before spawn, so early module-load, ABI, policy, and configuration
+  failures leave evidence.
+- Daemons advertise `integrationConfigResilience` v1. Embedders can require
+  this exact behavior instead of relying on a package-version guess.
+- MCP, Extensions, and A2A now all use the exact daemon `--home` boundary.
+- The built-in manual documents domain-specific repair, non-destructive
+  behavior, hot recovery, structured degradation, and bootstrap log paths.
+
+#### Files Changed
+
+- `packages/repl/src/common/integration-config.ts`
+- `src/integration-hot-reload.ts`
+- `src/a2a/runtime-config.ts`
+- `src/kodax_cli.ts`
+- `src/integration-cli.ts`
+- `src/sdk-runtime.ts`
+- `src/runtime-daemon/management.ts`
+- `src/runtime-daemon/host.ts`
+- `src/runtime-daemon/manager.ts`
+- `src/runtime-daemon/process.ts`
+- `src/runtime-daemon/schema.ts`
+- `packages/coding/src/self-knowledge/registry.ts`
+- focused controller, CLI, daemon, smoke, and manual tests
+
+#### Tests Added
+
+- Invalid MCP, A2A, and Extensions cold starts prove independent safe-empty
+  fallback, preserved diagnostics, no file mutation, and hot repair.
+- Strict controllers without an explicit cold-start default retain their
+  previous fail-fast contract.
+- Daemon host tests prove core readiness and structured degraded management
+  state can coexist.
+- CLI tests prove independent validation and content-safe diagnostics.
+- Process tests prove active-log capping, bounded rotation, post-health bounded
+  writes, and actionable early-exit hints.
+- A real daemon smoke test proves invalid A2A under an explicit `--home` starts
+  ready/degraded and reads no ambient integration tree.
+
+### 221: FEATURE_276 review found initialization bypass, help side effects, invalid-config, and concurrent overwrite gaps
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 development
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-28
+- **Resolved**: 2026-07-28
+
+#### Original Problem
+
+The first FEATURE_276 implementation did not yet make every setup boundary
+safe. `KODAX_PROVIDER` could bypass the new-environment gate; `setup --help`
+was checked only after general startup work; existing split configuration was
+classified as `existing` without validating its document contract; and legacy
+integration migration or simultaneous KodaX core-config writers could
+overwrite one another. Templates installed under a
+custom `KODAX_HOME` also retained the literal `~/.kodax` path hint.
+
+#### Context
+
+- Help must be genuinely read-only, including in homes containing legacy
+  migration or retention state.
+- Existing active config is authoritative but cannot be presented as ready
+  when KodaX cannot parse it.
+- Setup may run from two terminals or race another cooperating KodaX process;
+  revision checks performed only before choice normalization are not sufficient.
+- External editors do not participate in KodaX locks; users should not manually
+  edit `config.json` while an interactive setup confirmation is in progress.
+- Active `config.json` remains strict JSON and was not changed to JSONC.
+
+#### Root Cause
+
+The bare-start readiness call treated an environment-derived Provider the same
+as an explicit CLI override. The Commander help boundary lived after startup
+initializers. The setup initializer used existence-only classification, while
+the integration create path relied on a pre-write absence check and rename,
+which can replace a destination. Provider setup checked the revision before
+writing but did not serialize the complete read/check/write transaction.
+Template installation copied source bytes without resolving its documented
+home placeholder.
+
+#### Resolution
+
+- Only an explicit `--provider` may bypass the missing-config first-run gate.
+- Exact `setup -h/--help` returns before hardening, config loading/migration,
+  tracing, managed-child cleanup, and session retention work.
+- Core, MCP, Extensions, and A2A active files are validated before setup writes
+  anything. The root canonical A2A parser is explicitly injected into both
+  REPLs. Pending legacy MCP/Extensions are also validated together before
+  either migration write. Invalid files receive diagnostics, stop setup,
+  preserve all bytes, and return a failure exit code.
+- Integration migration now preflights both pending domains in its public
+  entry, uses create-only atomic linking, and reports typed conflicts.
+  Provider setup, `saveConfig`, Custom Provider CRUD, SDK-home mutations,
+  startup permission/agent self-healing, and legacy cleanup share one
+  core-config writer lock; setup also rechecks the revision after normalizing
+  the choice.
+- Installed templates resolve the first-line path hint and commented paths to
+  the actual `KODAX_HOME`; source templates remain portable.
+- Provider guidance/model examples and self-knowledge shortcut documentation
+  were corrected to the canonical runtime contracts.
+
+#### Files Changed
+
+- `src/kodax_cli.ts`
+- `src/kodax_cli.interactive-exit.test.ts`
+- `src/kodax_cli.setup-boundary.test.ts`
+- `packages/repl/src/common/setup-config.ts`
+- `packages/repl/src/common/setup-config.test.ts`
+- `packages/repl/src/common/core-config-lock.ts`
+- `packages/repl/src/common/core-config-lock.test.ts`
+- `packages/repl/src/common/integration-config.ts`
+- `packages/repl/src/common/integration-config.test.ts`
+- `packages/repl/src/common/provider-setup.ts`
+- `packages/repl/src/common/provider-setup.test.ts`
+- `packages/repl/src/common/custom-providers.ts`
+- `packages/repl/src/common/custom-providers.test.ts`
+- `packages/repl/src/common/utils.ts`
+- `packages/repl/src/common/agent-mode-migration.test.ts`
+- `packages/repl/src/commands/types.ts`
+- `packages/repl/src/interactive/commands.ts`
+- `packages/repl/src/interactive/commands-help.test.ts`
+- `packages/repl/src/interactive/repl.ts`
+- `packages/repl/src/interactive/provider-setup.test.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `src/sdk-runtime.ts`
+- `vitest.test-tiers.ts`
+- `packages/coding/src/self-knowledge/registry.ts`
+- `config-templates/config.example.jsonc`
+- `README.md`
+- `README_CN.md`
+- `docs/test-guides/ISSUE_221_v0.7.78_REGRESSION_GUIDE.md`
+
+#### Tests Added
+
+- Startup tests prove `KODAX_PROVIDER` cannot bypass initialization and that
+  help calls no general startup initializer.
+- Built-process tests prove help is read-only, real setup creates all eight
+  files, and invalid split config preserves bytes and exits unsuccessfully.
+- Schema preflight tests cover invalid core/MCP/Extensions/A2A files.
+- Concurrency tests cover create-only integration writes and the Provider setup
+  lock shared with other KodaX writers; startup self-healing and public legacy
+  cleanup also respect that lock. Immediate and mid-wizard EOF cancel without
+  hanging or writing metadata.
+- The real built-process suite is a normal system/CI test and covers canonical
+  A2A rejection plus Commander `--custom` passthrough.
+- Template, self-knowledge, command-help, build, fast, unit, contract, and
+  system regressions cover the complete repaired surface.
+
+### 220: Integration hot-reload output overwrites the Ink status bar
+
+- **Priority**: Low
+- **Status**: Resolved
+- **Introduced**: v0.7.69 integration hot reload
+- **Fixed**: v0.7.77 development
+- **Created**: 2026-07-28
+- **Resolved**: 2026-07-28
+
+#### Original Problem
+
+While the Ink REPL is running, editing `~/.kodax/integrations/mcp.json`
+successfully hot-reloads the MCP configuration, but the reload message is
+written at the status-bar position and obscures the status bar. The message
+should use the same transient UI treatment as clipboard feedback and disappear
+after a short delay.
+
+#### Context
+
+- Affected surface: fullscreen Ink REPL.
+- Reproduction: start interactive KodaX, edit and save `mcp.json`, and observe
+  the `[integrations] MCP configuration hot-reloaded ...` message.
+- Classic and non-interactive output should continue using normal terminal
+  logging because they do not have an Ink-owned transient notification layer.
+
+#### Root Cause
+
+The CLI integration watcher writes live events through `console.error` while
+the Ink renderer is active. Ink runs with `patchConsole: false`, so the write
+bypasses the React footer layout and lands in the terminal region currently
+occupied by the status bar.
+
+#### Resolution
+
+Integration and A2A configuration events now pass through a small bridge. While
+the Ink REPL is mounted, it subscribes the existing clipboard-style toast
+surface, so successful reloads appear as success notices, diagnostics appear as
+warnings, and both disappear through the existing two-second timer. When no Ink
+subscriber exists, including classic and non-interactive modes, the bridge
+preserves the prior `[integrations]` terminal log.
+
+#### Files Changed
+
+- `src/integration-hot-reload.ts`
+- `src/integration-hot-reload.test.ts`
+- `src/kodax_cli.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/index.ts`
+- `packages/repl/src/index.ts`
+
+#### Tests Added
+
+- Integration event bridge routes live events to transient notices and restores
+  terminal fallback after unsubscribe.
+- Existing hot-reload integration coverage still validates live MCP and
+  Extension reconciliation.
 
 ### 219: Daemon start can report healthy while its returned state is still starting
 
@@ -7559,11 +8130,42 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 105 (25 Open, 80 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 110 (25 Open, 85 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-28: Issue 223 resolved (v0.7.78 development)
+- Retried transient Auto[LLM] classifier failures once and added structured
+  prompt-size, phase, and TTFT diagnostics to Runtime permission events.
+- Replaced hard classifier stops and silent rules widening with user
+  confirmation plus an Accept-edits failure fallback.
+- Routed exact user-authorized workspace mutations through a one-shot ASRT
+  sandbox admission before allowing ordinary shell copy/move/delete operations;
+  fixed Windows mutation-switch parsing, bounded current intent, enforced
+  provider-independent deadlines, and surfaced/rechecked missing ASRT setup.
+
+### 2026-07-28: Issue 222 resolved (v0.7.78 development)
+- Isolated invalid optional MCP, A2A, and Extension configuration from core
+  daemon readiness while preserving last-known-good state and source bytes.
+- Added structured domain health, explicit-home consistency, independent CLI
+  validation, legacy-source hot recovery, continuously bounded bootstrap logs,
+  a versioned Runtime capability, manual guidance, and source/real-process
+  regression coverage.
+
+### 2026-07-28: Issue 221 resolved (v0.7.78 development)
+- Closed FEATURE_276 review gaps in first-run gating, truly read-only help,
+  split-config validation, concurrent migration/provider writes, and custom
+  `KODAX_HOME` template paths.
+- Added real built-process setup coverage plus schema, concurrency, EOF, help,
+  template, and self-knowledge regressions.
+
+### 2026-07-28: Issue 220 resolved (v0.7.77 development)
+- Routed fullscreen Ink integration events through the existing two-second
+  transient toast instead of writing directly over the terminal footer.
+- Preserved classic and non-interactive `[integrations]` logging when no Ink
+  notice subscriber is mounted.
 
 ### 2026-07-27: Issue 217 resolved (v0.7.77 development)
 - Separated generated ACP conversation IDs from native Codex/Gemini resume IDs;
