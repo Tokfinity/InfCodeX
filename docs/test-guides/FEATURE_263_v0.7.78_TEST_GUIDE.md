@@ -247,9 +247,14 @@ scope-bound, tamper-evident, disableable, quarantinable and exactly reversible.
 
 ## Frozen Release Semantic Gate
 
-Revision `f263-v0.7.78.2` is implemented by
+Revision `f263-v0.7.78.3` is implemented by
 `benchmark/datasets/feature-263/runner.ts` and
 `tests/feature-263-learning-release.eval.ts`.
+
+The superseded `f263-v0.7.78.2` pilot is retained as valid negative release
+evidence: it stopped after four calls because 3/4 outputs were malformed under
+the production normalizer and neither positive sample produced a
+`project_canary`. Do not resume or expand that raw root.
 
 - Run the default `manifest` stage first; it performs zero provider calls and
   freezes the exact candidate Git/patch, production reviewer prompt/tool,
@@ -265,7 +270,7 @@ Revision `f263-v0.7.78.2` is implemented by
 - Generation requires `KODAX_F263_ALLOW_GENERATION=1`, non-empty
   `KODAX_F263_AUTHORIZATION`, and the runner's in-process opt-in. Raw cells and
   blind/reveal packets stay under
-  `os.tmpdir()/kodax-eval-dumps/feature-263/f263-v0.7.78.2/`.
+  `os.tmpdir()/kodax-eval-dumps/feature-263/f263-v0.7.78.3/`.
 
 Do not reveal expected dispositions or treatment arms before the current main
 session records its semantic review. A credible high-severity secret, scope,

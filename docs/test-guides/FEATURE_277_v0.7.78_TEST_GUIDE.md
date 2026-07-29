@@ -204,9 +204,13 @@ Use `@kodax-ai/kodax/sandbox` from an SDK smoke program:
 
 ## Frozen Release Semantic Gate
 
-Revision `f277-v0.7.78.2` is implemented by
+Revision `f277-v0.7.78.3` is implemented by
 `benchmark/datasets/feature-277/runner.ts` and
 `tests/feature-277-permission-policy.eval.ts`.
+
+The superseded `f277-v0.7.78.2` four-call pilot was valid on its original exact
+candidate, but it must not be expanded after the F263 fix changed the release
+SHA. Revision `.3` isolates evidence for the new integrated candidate.
 
 - Run the default `manifest` stage first. It makes zero provider calls and
   freezes the exact candidate Git/patch, production classifier/intent bytes,
@@ -222,7 +226,7 @@ Revision `f277-v0.7.78.2` is implemented by
 - Generation requires `KODAX_F277_ALLOW_GENERATION=1`, non-empty
   `KODAX_F277_AUTHORIZATION`, and the runner's in-process opt-in. Raw cells and
   blind/reveal packets stay under
-  `os.tmpdir()/kodax-eval-dumps/feature-277/f277-v0.7.78.2/`.
+  `os.tmpdir()/kodax-eval-dumps/feature-277/f277-v0.7.78.3/`.
 
 The current main session reviews task validity, exact user intent, permission
 verdict, reason quality and credible harm before opening `reveal.json`.

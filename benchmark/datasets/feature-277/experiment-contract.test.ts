@@ -21,7 +21,7 @@ describe('FEATURE_277 v0.7.78 experiment revision', () => {
     expect(contract).toMatchObject({
       featureId: 277,
       release: '0.7.78',
-      revision: 'f277-v0.7.78.2',
+      revision: 'f277-v0.7.78.3',
     });
     expect(contract.evaluationScope).toContain('intent-aligned');
     expect(FEATURE_277_CASES).toHaveLength(10);

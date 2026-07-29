@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 236 | High | Resolved | Production learning reviewer under-specified its unified output shape | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 235 | High | Resolved | v0.7.78 semantic release gates had no frozen current-policy runners | v0.7.78 release candidate | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 234 | Medium | Resolved | Standalone sandbox environment gate assumed Windows argv transport on POSIX | v0.7.78 standalone sandbox broker tests | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 233 | High | Resolved | Learned Skill canary could trust before all outcomes settled and record a stale artifact identity | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -138,6 +139,58 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 236: Production learning reviewer under-specified its unified output shape
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 development
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Problem
+
+The explicitly authorized F263 revision `f263-v0.7.78.2` pilot made four
+production-provider calls. Three results failed the real production normalizer,
+and neither positive reusable-method sample produced the required
+`project_canary` decision. The recurring drift placed `capabilityDecision`
+inside `memoryPlan`; at least one response also emitted
+`requiresApproval=false`.
+
+The safety intent remained conservative: neither adversarial sample disclosed
+the secret or created an unsafe Skill. The failure is nevertheless a release
+blocker because the production reviewer did not demonstrate its positive
+capability path.
+
+#### Root Cause
+
+The tool schema described `capabilityDecision` as a sibling of `memoryPlan` but
+did not require it, while the prompt did not state the sibling relationship.
+The schema constrained `requiresApproval` to `true`, but the prompt did not
+explain that this is an invariant of governed review proposals. A provider
+could therefore produce semantically plausible prose in a shape that the
+production normalizer correctly rejected.
+
+#### Resolution
+
+- Require both top-level carriers in the production report-tool schema.
+- State the sibling relationship and approval invariant directly in the stable
+  system prompt.
+- Keep the strict production normalizer unchanged; do not hoist or silently
+  rewrite malformed model output.
+- Freeze a new experiment revision and require a valid pilot before any F263
+  panel or downstream expansion.
+
+#### Tests Added or Updated
+
+- `learning-reviewer.test.ts` pins the required sibling carriers and explicit
+  approval invariant.
+- Unified-review and focused production-reviewer tests remain green with the
+  strict normalizer unchanged.
+- F263/F277 contract, fake-runner, and zero-call manifest suites pin the new
+  isolated `.3` revisions. Paid `.3` execution remains an independent release
+  gate for the exact committed candidate.
 
 ### 235: v0.7.78 semantic release gates had no frozen current-policy runners
 
@@ -8308,11 +8361,21 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 115 (25 Open, 90 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 116 (25 Open, 91 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 236 resolved (v0.7.78 development)
+- The paid F263 validity pilot stopped expansion after 3/4 malformed production
+  results and 0/2 positive `project_canary` decisions.
+- The failure was reviewed blind before reveal and preserved outside the
+  repository under the frozen `f263-v0.7.78.2` raw root.
+- Required the two top-level carriers and documented the governed approval
+  invariant without changing the strict normalizer or Skill admission policy.
+- Focused regression and zero-call manifest suites pass. A new exact-candidate
+  `.3` pilot remains a release gate; no malformed output is silently accepted.
 
 ### 2026-07-29: Issue 235 resolved (v0.7.78 development)
 - Replaced absent/stale semantic release gates with frozen, resumable F263 and

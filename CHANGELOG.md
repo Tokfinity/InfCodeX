@@ -47,12 +47,18 @@ All notable changes to this project will be documented in this file.
 
 - The v0.7.78 semantic release gates now use frozen, resumable current-policy
   runners instead of absent or historical fixtures. F263 revision
-  `f263-v0.7.78.2` freezes production learning-review and downstream action
-  bytes; F277 revision `f277-v0.7.78.2` freezes the intent-aligned permission
+  `f263-v0.7.78.3` freezes production learning-review and downstream action
+  bytes; F277 revision `f277-v0.7.78.3` freezes the intent-aligned permission
   prompt and exact action evidence. Both default to zero provider calls, require
   explicit owner authorization plus a feature-specific generation flag, keep
   raw/blind-review evidence outside the repository, and fail closed on
   case/prompt/scorer drift.
+- The first F263 paid validity pilot (`f263-v0.7.78.2`) correctly stopped after
+  4 calls: three outputs were rejected by the production normalizer and neither
+  positive sample produced a project canary. The production report contract now
+  requires `memoryPlan` and `capabilityDecision` as top-level siblings and
+  states the governed `requiresApproval=true` invariant without weakening the
+  strict normalizer or changing Skill admission policy.
 - Runtime Actor trees now persist one exclusive owner per Session. A second live
   Runtime can no longer recover another Runtime's active child turns; stale
   controllers self-fence on CAS conflict, physically abort local executors,

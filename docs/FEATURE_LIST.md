@@ -471,13 +471,20 @@ All three features are `Completed`: their implementation and feature-level
 acceptance evidence are complete. Publication is tracked independently at the
 version level. The previously missing current-policy release runners are now
 closed as Issue 235: F263 revision `f263-v0.7.78.2` and F277 revision
-`f277-v0.7.78.2` freeze the exact production bytes, cases, routes, scorer,
+`f277-v0.7.78.2` froze the initial exact production bytes, cases, routes, scorer,
 budgets, resumable raw output and blind-review packets. Their paid calls still
 require explicit owner authorization, and the final integrated regression
 matrix remains a release-candidate gate rather than a Feature lifecycle state.
 Automated evidence recorded in the feature documents predates the final
 concurrent-fix integration and must be rerun against the exact candidate SHA
 before release.
+
+The authorized `f263-v0.7.78.2` pilot then exposed Issue 236 and stopped after
+four calls without panel expansion. The minimal production prompt/schema fix is
+tracked by replacement revisions `f263-v0.7.78.3` and `f277-v0.7.78.3`; both
+must be evaluated against the same new exact release-candidate SHA before
+publication. This release-gate result does not roll completed Feature lifecycle
+records back into implementation status.
 
 ---
 

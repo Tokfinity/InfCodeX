@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createProductionLearningReviewer,
   installProductionLearningReviewer,
+  LEARNING_REVIEW_SYSTEM_PROMPT,
   LEARNING_REVIEW_TOOL,
 } from './learning-reviewer.js';
 
@@ -100,6 +101,19 @@ describe('FEATURE_263 production unified learning reviewer', () => {
       },
       then: { required: ['proposedBody'] },
     });
+  });
+
+  it('makes the unified result shape and approval invariant explicit to the model', () => {
+    expect(LEARNING_REVIEW_TOOL.input_schema.required).toEqual([
+      'memoryPlan',
+      'capabilityDecision',
+    ]);
+    expect(LEARNING_REVIEW_SYSTEM_PROMPT).toContain(
+      'memoryPlan and capabilityDecision as top-level siblings',
+    );
+    expect(LEARNING_REVIEW_SYSTEM_PROMPT).toContain(
+      'Set requiresApproval to true on every Memory action',
+    );
   });
 
   it('makes one forced structured call under a dedicated cache domain', async () => {
