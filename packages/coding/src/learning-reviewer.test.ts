@@ -104,6 +104,9 @@ describe('FEATURE_263 production unified learning reviewer', () => {
   });
 
   it('makes the unified result shape and approval invariant explicit to the model', () => {
+    const capability = LEARNING_REVIEW_TOOL.input_schema.properties?.capabilityDecision;
+    const spec = capability?.properties?.spec;
+
     expect(LEARNING_REVIEW_TOOL.input_schema.required).toEqual([
       'memoryPlan',
       'capabilityDecision',
@@ -114,6 +117,14 @@ describe('FEATURE_263 production unified learning reviewer', () => {
     expect(LEARNING_REVIEW_SYSTEM_PROMPT).toContain(
       'Set requiresApproval to true on every Memory action',
     );
+    expect(LEARNING_REVIEW_SYSTEM_PROMPT).toContain(
+      'lowercase hyphenated slug',
+    );
+    expect(spec?.properties?.name).toMatchObject({
+      type: 'string',
+      pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+      maxLength: 64,
+    });
   });
 
   it('makes one forced structured call under a dedicated cache domain', async () => {

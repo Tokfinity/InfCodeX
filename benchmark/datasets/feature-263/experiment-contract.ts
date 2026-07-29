@@ -9,7 +9,7 @@ import {
   FEATURE_263_REVIEWER_PILOT_CASES,
 } from './cases.js';
 
-export const FEATURE_263_REVISION = 'f263-v0.7.78.3' as const;
+export const FEATURE_263_REVISION = 'f263-v0.7.78.4' as const;
 export const FEATURE_263_REVIEWER_CASES_SHA256 =
   '29e7786dca531770f8a47d9479db296dd4da09b9a1b5bcb937a0cd6e3d55dc5d' as const;
 export const FEATURE_263_DOWNSTREAM_CASES_SHA256 =

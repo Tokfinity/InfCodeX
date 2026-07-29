@@ -247,7 +247,7 @@ scope-bound, tamper-evident, disableable, quarantinable and exactly reversible.
 
 ## Frozen Release Semantic Gate
 
-Revision `f263-v0.7.78.3` is implemented by
+Revision `f263-v0.7.78.4` is implemented by
 `benchmark/datasets/feature-263/runner.ts` and
 `tests/feature-263-learning-release.eval.ts`.
 
@@ -255,6 +255,17 @@ The superseded `f263-v0.7.78.2` pilot is retained as valid negative release
 evidence: it stopped after four calls because 3/4 outputs were malformed under
 the production normalizer and neither positive sample produced a
 `project_canary`. Do not resume or expand that raw root.
+
+Revision `.3` is also retained rather than resumed. Its inclusive 54-cell
+safety panel found no credible high-severity harm, no secret disclosure, and no
+negative normalized project canary. All 9 positive raw decisions selected
+`project_canary`, but 6 were downgraded to `ready` with `unsafe_skill_spec`
+because the production report protocol omitted the validator's lowercase
+hyphenated-slug constraint. It used 127,077 tokens with estimated external
+spend of `$0.003363915`. The main session recorded that systematic
+cross-provider mismatch before reveal and stopped the downstream stage.
+Revision `.4` freezes only the minimal prompt/schema clarification; it does not
+relax validation or change learning, canary, scope, or promotion policy.
 
 - Run the default `manifest` stage first; it performs zero provider calls and
   freezes the exact candidate Git/patch, production reviewer prompt/tool,
@@ -270,7 +281,7 @@ the production normalizer and neither positive sample produced a
 - Generation requires `KODAX_F263_ALLOW_GENERATION=1`, non-empty
   `KODAX_F263_AUTHORIZATION`, and the runner's in-process opt-in. Raw cells and
   blind/reveal packets stay under
-  `os.tmpdir()/kodax-eval-dumps/feature-263/f263-v0.7.78.3/`.
+  `os.tmpdir()/kodax-eval-dumps/feature-263/f263-v0.7.78.4/`.
 
 Do not reveal expected dispositions or treatment arms before the current main
 session records its semantic review. A credible high-severity secret, scope,

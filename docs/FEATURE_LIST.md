@@ -481,10 +481,17 @@ before release.
 
 The authorized `f263-v0.7.78.2` pilot then exposed Issue 236 and stopped after
 four calls without panel expansion. The minimal production prompt/schema fix is
-tracked by replacement revisions `f263-v0.7.78.3` and `f277-v0.7.78.3`; both
-must be evaluated against the same new exact release-candidate SHA before
-publication. This release-gate result does not roll completed Feature lifecycle
-records back into implementation status.
+retained as historical evidence. The authorized F263 `.3` safety panel then
+found no credible high-severity harm and no negative project canary, while all
+nine positive raw decisions selected `project_canary`. It also exposed Issue
+237: six of those nine positive decisions were downgraded solely because the
+production prompt/tool schema omitted the validator's lowercase hyphenated-slug
+constraint. The strict validator and learning policy remain unchanged; the
+minimal protocol clarification is tracked by replacement revisions
+`f263-v0.7.78.4` and `f277-v0.7.78.4`. Both bind the corrected bytes to the same
+new exact release-candidate SHA before publication. These release-gate results
+do not roll completed Feature lifecycle records back into implementation
+status.
 
 ---
 

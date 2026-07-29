@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 237 | High | Resolved | Production learning reviewer omitted the learned Skill slug constraint | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 236 | High | Resolved | Production learning reviewer under-specified its unified output shape | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 235 | High | Resolved | v0.7.78 semantic release gates had no frozen current-policy runners | v0.7.78 release candidate | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 234 | Medium | Resolved | Standalone sandbox environment gate assumed Windows argv transport on POSIX | v0.7.78 standalone sandbox broker tests | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -139,6 +140,66 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 237: Production learning reviewer omitted the learned Skill slug constraint
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 development
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Problem
+
+The explicitly authorized F263 revision `f263-v0.7.78.3` safety panel remained
+conservative but exposed a systematic positive-path protocol mismatch. All nine
+verified-reusable-method cells chose `project_canary` in the raw decision, yet
+only three survived the production normalizer. The other six were downgraded to
+`ready` with `unsafe_skill_spec` solely because their human-readable Skill names
+did not satisfy the production lowercase hyphenated-slug invariant. The
+inclusive panel used 54 calls and 127,077 tokens with estimated external spend
+of `$0.003363915`.
+
+The failure repeated with the same one-of-three success pattern in every
+provider family. No negative case produced a normalized project canary, no
+secret was disclosed, and no credible high-severity safety harm was found.
+Downstream F263 comparison and the F277 panel were stopped rather than expanding
+evidence from a candidate with a known systematic utility mismatch.
+
+#### Root Cause
+
+Production validation already required a canonical lowercase hyphenated Skill
+name of at most 64 characters, but the report tool exposed `spec.name` as an
+unconstrained string and the stable reviewer prompt omitted that invariant.
+Providers therefore made the correct capability decision while emitting a name
+that the strict production validator correctly rejected.
+
+#### Resolution
+
+- Add the existing lowercase hyphenated-slug pattern and 64-character maximum
+  directly to the production report-tool schema.
+- State the same invariant in the stable production reviewer prompt.
+- Keep the strict validator and fail-closed `unsafe_skill_spec` downgrade
+  unchanged; do not slugify or silently repair model output.
+- Freeze fresh F263/F277 revision `.4` raw roots for the next exact candidate;
+  retain `.3` as historical safety/utility evidence and do not resume it.
+
+#### Files Changed
+
+- `packages/coding/src/learning-reviewer.ts`
+- `packages/coding/src/learning-reviewer.test.ts`
+- `benchmark/datasets/feature-263/experiment-contract.ts`
+- `benchmark/datasets/feature-263/experiment-contract.test.ts`
+- `benchmark/datasets/feature-277/experiment-contract.ts`
+- `benchmark/datasets/feature-277/experiment-contract.test.ts`
+
+#### Tests Added or Updated
+
+- `learning-reviewer.test.ts` pins the prompt wording, slug pattern, and maximum
+  name length.
+- Focused production reviewer, unified-review, and learned-Skill tests pass with
+  the strict normalizer and admission policy unchanged.
 
 ### 236: Production learning reviewer under-specified its unified output shape
 
@@ -8361,11 +8422,22 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 116 (25 Open, 91 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 117 (25 Open, 92 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 237 resolved (v0.7.78 development)
+- The authorized F263 `.3` safety panel found no credible high-severity harm and
+  no negative project canary, but only 3/9 positive canaries survived production
+  validation even though all 9 raw decisions selected `project_canary`.
+- Blind review identified one systematic cross-provider mismatch: six
+  human-readable Skill names violated an undocumented production slug invariant.
+- Added the existing slug pattern and length bound to the production prompt and
+  schema without weakening validation, changing policy, or rewriting output.
+- Stopped F263 downstream and the F277 panel; fresh `.4` revisions bind the
+  corrected bytes to one new exact candidate instead of shopping old evidence.
 
 ### 2026-07-29: Issue 236 resolved (v0.7.78 development)
 - The paid F263 validity pilot stopped expansion after 3/4 malformed production

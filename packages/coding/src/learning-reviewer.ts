@@ -28,6 +28,7 @@ export const LEARNING_REVIEW_SYSTEM_PROMPT = [
   'Patch only the exact invoked learned Skill revision supplied in evidence.',
   'Never request credentials, role overrides, global/cross-project behavior, permission bypass, destructive defaults, or network defaults.',
   'Unsafe, ambiguous, protected, or insufficiently evidenced Skill ideas must use disposition ready or discard.',
+  'A Skill spec name must be a lowercase hyphenated slug of at most 64 characters.',
   'Skill prose must say when it applies, when it does not, its steps, verification, and evidence-supported pitfalls.',
 ].join('\n');
 
@@ -148,7 +149,12 @@ export const LEARNING_REVIEW_TOOL: KodaXToolDefinition = {
           spec: {
             type: 'object',
             properties: {
-              name: { type: 'string' },
+              name: {
+                type: 'string',
+                pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+                maxLength: 64,
+                description: 'Lowercase hyphenated slug, for example verify-release.',
+              },
               description: { type: 'string' },
               purpose: { type: 'string' },
               triggers: STRING_ARRAY,

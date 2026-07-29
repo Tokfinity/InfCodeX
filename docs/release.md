@@ -122,7 +122,7 @@ Before tagging, all of the following must be true:
    subpaths; `/sandbox` declarations and
    `dist/sandbox-workspace-session.js` must be present;
 4. FEATURE_263's preregistered paid semantic gate runs only after explicit
-   owner authorization. Frozen revision `f263-v0.7.78.3` uses a four-call
+   owner authorization. Frozen revision `f263-v0.7.78.4` uses a four-call
    reviewer pilot, an inclusive 54-cell safety panel, and a 24-cell blinded
    downstream comparison. Its ceiling is 78 calls, 850,000 tokens, estimated
    `$0.78-$7.80`, and a hard `$10` external-spend cap. Raw output and blind
@@ -130,7 +130,7 @@ Before tagging, all of the following must be true:
    `benchmark/EVAL_GUIDELINES.md`; the owner records the final ship decision.
    The entry point is `tests/feature-263-learning-release.eval.ts`;
 5. FEATURE_277's required classifier semantic eval has a frozen experiment
-   revision `f277-v0.7.78.3`, production-byte fixtures, budgets, raw dump, and
+   revision `f277-v0.7.78.4`, production-byte fixtures, budgets, raw dump, and
    blind review contract before any provider call. It uses a four-call pilot
    and an inclusive 60-cell panel with a 300,000-token ceiling, estimated
    `$0.60-$6.00`, and hard `$6` external-spend cap. Existing v0.7.33/v0.7.73

@@ -47,8 +47,8 @@ All notable changes to this project will be documented in this file.
 
 - The v0.7.78 semantic release gates now use frozen, resumable current-policy
   runners instead of absent or historical fixtures. F263 revision
-  `f263-v0.7.78.3` freezes production learning-review and downstream action
-  bytes; F277 revision `f277-v0.7.78.3` freezes the intent-aligned permission
+  `f263-v0.7.78.4` freezes production learning-review and downstream action
+  bytes; F277 revision `f277-v0.7.78.4` freezes the intent-aligned permission
   prompt and exact action evidence. Both default to zero provider calls, require
   explicit owner authorization plus a feature-specific generation flag, keep
   raw/blind-review evidence outside the repository, and fail closed on
@@ -59,6 +59,16 @@ All notable changes to this project will be documented in this file.
   requires `memoryPlan` and `capabilityDecision` as top-level siblings and
   states the governed `requiresApproval=true` invariant without weakening the
   strict normalizer or changing Skill admission policy.
+- The subsequent F263 `.3` safety panel found no credible high-severity harm:
+  no negative case normalized to a project canary and all nine positive raw
+  decisions selected `project_canary`. It also exposed one systematic utility
+  mismatch: six human-readable Skill names failed the production slug
+  invariant, leaving only 3/9 normalized positive canaries. The production
+  prompt/tool schema now state the existing lowercase hyphenated-slug and
+  64-character constraints. Strict validation, evidence thresholds, scope,
+  canary admission, and promotion policy remain unchanged; downstream expansion
+  stopped and fresh `.4` revisions bind the corrected bytes to one exact
+  candidate.
 - Runtime Actor trees now persist one exclusive owner per Session. A second live
   Runtime can no longer recover another Runtime's active child turns; stale
   controllers self-fence on CAS conflict, physically abort local executors,

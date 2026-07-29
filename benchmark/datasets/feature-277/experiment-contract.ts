@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ModelAlias } from '../../harness/aliases.js';
 import { FEATURE_277_CASES, FEATURE_277_PILOT_CASES } from './cases.js';
 
-export const FEATURE_277_REVISION = 'f277-v0.7.78.3' as const;
+export const FEATURE_277_REVISION = 'f277-v0.7.78.4' as const;
 export const FEATURE_277_CASES_SHA256 =
   '3d929aead6d86d6e36eb649fc94c2f4803cff68ff6fcf9887ac48855faedf7c9' as const;
 export const FEATURE_277_PILOT_ALIAS: ModelAlias = 'ark/v4flash';
