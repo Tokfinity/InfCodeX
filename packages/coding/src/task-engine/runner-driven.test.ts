@@ -12,15 +12,24 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
   buildAssistantMessageFromLlmResult,
   ContextCapacityError,
   createAgentActorController,
+  createMemoryControlPlane,
+  createSessionLineage,
   getMessageQueue,
+  listPendingEpisodeReviews,
+  readLearningProposalStore,
   resolveActiveRootQueueRoute,
+  resolveLearningProposalStore,
+  type KodaXMemoryOutcomeDigest,
+  type KodaXSessionData,
+  type MemoryContextIdentity,
+  type UnifiedLearningReviewModelInput,
 } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
@@ -2110,6 +2119,409 @@ describe('buildRunnerLlmAdapter — empty-completion retry', () => {
 
 describe('runManagedTaskViaRunner — end-to-end', () => {
   // FEATURE_193 v0.7.43: Scout H0_DIRECT emit_scout_verdict flow it deleted (V1 chain retired — Scout role + emit_scout_verdict tool retired)
+
+  it('queues, reviews, and applies an explicit user preference through the AMA Memory loop', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-loop-'));
+    const sessionId = 'runner-explicit-memory-intent';
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-runner-memory',
+      workspaceId: 'workspace-runner-memory',
+      userId: 'user-runner-memory',
+      agentId: 'kodax-coding',
+      projectId: 'project-runner-memory',
+      sessionId,
+    };
+    let sessionData: KodaXSessionData | null = null;
+    let reviewedInput: UnifiedLearningReviewModelInput | undefined;
+    let outcome:
+      | { readonly digest: KodaXMemoryOutcomeDigest; readonly jobId?: string }
+      | undefined;
+    const receipts: Array<{ readonly proposalIds: readonly string[] }> = [];
+    const notices: Array<{
+      readonly summaries: readonly string[];
+      readonly proposalIds: readonly string[];
+    }> = [];
+    const storage = {
+      load: async (id: string) => id === sessionId ? sessionData : null,
+      save: async (id: string, data: KodaXSessionData) => {
+        if (id === sessionId) sessionData = data;
+      },
+      mutateLineage: async (
+        id: string,
+        mutation: (
+          lineage: import('@kodax-ai/agent').KodaXSessionLineage,
+        ) => import('@kodax-ai/agent').KodaXSessionLineage,
+      ) => {
+        if (id !== sessionId || sessionData === null) return false;
+        const lineage = sessionData.lineage ?? createSessionLineage(sessionData.messages);
+        sessionData = { ...sessionData, lineage: mutation(lineage) };
+        return true;
+      },
+      list: async () => sessionData === null
+        ? []
+        : [{ id: sessionId, title: sessionData.title, msgCount: sessionData.messages.length }],
+    };
+    let turn = 0;
+    const durableRequest =
+      'From now on, remember to inspect code and tests before trusting status documents.';
+    const explicitPrompt = `${'Background context. '.repeat(40)}${durableRequest}`;
+
+    try {
+      const result = await runManagedTaskViaRunner({
+        ...makeOptions(),
+        context: {
+          ...makeOptions().context,
+          executionCwd: home,
+          gitRoot: home,
+          configHome: home,
+          memoryIdentity: identity,
+        },
+        session: { id: sessionId, storage },
+        learningReviewer: async (input) => {
+          reviewedInput = input;
+          return {
+            memoryPlan: {
+              trigger: input.memory.trigger,
+              createdAt: '2026-07-29T04:00:00.000Z',
+              sourceRefs: input.memory.sourceRefs,
+              candidateRefs: input.memory.candidateRefs,
+              actions: [{
+                action: 'write_memdir',
+                targetRefIds: [],
+                summary: 'Remember to verify implementation evidence before documentation status.',
+                rationale: 'The user explicitly established a stable working preference.',
+                confidence: 'high',
+                risk: 'low',
+                requiresApproval: true,
+                proposedBody:
+                  'When deciding whether a feature is implemented, inspect code and tests before using documentation as supporting context.',
+                claimKind: 'preference',
+                claimKey: 'verify-code-before-documentation',
+              }],
+              warnings: [],
+            },
+            capabilityDecision: {
+              disposition: 'discard',
+              reasonCodes: ['preference_belongs_in_memory'],
+            },
+          };
+        },
+        events: {
+          onMemoryOutcomeDigest: (digest, metadata) => {
+            outcome = { digest, ...metadata };
+          },
+          onMemoryReviewReceipt: (receipt) => {
+            receipts.push({ proposalIds: receipt.proposalIds });
+          },
+          onMemoryNotice: (notice) => {
+            notices.push({
+              summaries: notice.summaries,
+              proposalIds: notice.proposalIds,
+            });
+          },
+        },
+      }, explicitPrompt, async () => {
+        turn += 1;
+        return turn === 1
+          ? {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'remember-user-preference',
+                name: 'memory_intent',
+                input: {
+                  operation: 'remember',
+                  statement: 'Inspect code and tests before trusting status documents.',
+                  userQuote: durableRequest,
+                },
+              }],
+            }
+          : {
+              textBlocks: [{
+                text: '这条偏好已经提交给受治理的记忆流程；我不会把排队误报成已经持久化。',
+              }],
+              toolBlocks: [],
+            };
+      });
+
+      expect(result.success).toBe(true);
+      expect(outcome?.jobId).toMatch(/^[a-f0-9]{64}$/);
+      expect(outcome?.digest).toMatchObject({
+        objective: explicitPrompt.slice(0, 512),
+        memoryIntent: {
+          operation: 'remember',
+          evidenceRef: expect.stringMatching(/^user-intent:[a-f0-9]{24}$/),
+          candidateStatement: 'Inspect code and tests before trusting status documents.',
+          userQuote: durableRequest,
+        },
+      });
+      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 5_000 });
+      const proposalStore = await readLearningProposalStore(
+        resolveLearningProposalStore(home, home),
+      );
+      expect(proposalStore.proposals).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          proposalId: receipts[0]?.proposalIds[0],
+          status: 'approved',
+        }),
+      ]));
+      await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 5_000 });
+      expect(reviewedInput?.memory.trigger).toBe('explicit_remember');
+      expect(reviewedInput?.evidence.outcomeDigest.memoryIntent).toMatchObject({
+        operation: 'remember',
+        candidateStatement: 'Inspect code and tests before trusting status documents.',
+        userQuote: durableRequest,
+      });
+      expect(reviewedInput?.evidence.outcomeDigest.evidence).toContainEqual(
+        expect.objectContaining({
+          grade: 'authoritative',
+          source: 'user',
+        }),
+      );
+      expect(notices[0]?.summaries.length).toBeGreaterThan(0);
+      expect(notices[0]?.proposalIds.length).toBeGreaterThan(0);
+
+      const controller = createMemoryControlPlane({
+        cwd: home,
+        identity,
+        projectDocs: [],
+        discoverSkills: false,
+      });
+      let appliedStorageUri: string | undefined;
+      await vi.waitFor(async () => {
+        const applied = (await controller.listRefs({ includePrivate: true }))
+          .find((ref) => ref.claimKey === 'verify-code-before-documentation');
+        expect(applied).toMatchObject({
+          claimKind: 'preference',
+          owner: 'user',
+          lifecycle: 'active',
+        });
+        appliedStorageUri = applied?.storageUri;
+        expect(appliedStorageUri).toBeDefined();
+      }, { timeout: 5_000 });
+      await expect(readFile(appliedStorageUri ?? '', 'utf8')).resolves.toContain(
+        'When deciding whether a feature is implemented, inspect code and tests',
+      );
+      expect(sessionData?.lineage?.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'memory_outcome_digest',
+          jobId: outcome?.jobId,
+        }),
+        expect.objectContaining({ type: 'memory_review_receipt' }),
+        expect.objectContaining({ type: 'client_notice' }),
+      ]));
+      await vi.waitFor(async () => {
+        const pending = await listPendingEpisodeReviews(identity);
+        expect(pending).toHaveLength(0);
+      }, { timeout: 5_000 });
+    } finally {
+      await rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
+
+  it('binds AMA memory_intent to a queued user turn', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-follow-up-'));
+    const sessionId = 'runner-memory-follow-up';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const followUp = 'From now on, remember to run focused tests before reporting success.';
+    let call = 0;
+    let outcome: KodaXMemoryOutcomeDigest | undefined;
+    try {
+      const result = await runManagedTaskViaRunner({
+        ...makeOptions(),
+        session: { id: sessionId },
+        memoryReviewer: async (input) => ({
+          trigger: input.trigger,
+          createdAt: '2026-07-29T05:00:00.000Z',
+          sourceRefs: input.sourceRefs,
+          candidateRefs: input.candidateRefs,
+          actions: [],
+          warnings: [],
+        }),
+        context: {
+          ...makeOptions().context,
+          configHome: home,
+          executionCwd: home,
+          gitRoot: home,
+          interruptInput: {
+            closeInputWindow() {},
+            reopenInputWindow() {},
+          },
+        },
+        events: {
+          onMemoryOutcomeDigest(digest) {
+            outcome = digest;
+          },
+        },
+      }, 'Inspect the current implementation.', async () => {
+        call += 1;
+        if (call === 1) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: followUp,
+          });
+          return { textBlocks: [{ text: 'Initial answer.' }], toolBlocks: [] };
+        }
+        if (call === 2) {
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'remember-queued-user-turn',
+              name: 'memory_intent',
+              input: {
+                operation: 'remember',
+                statement: 'Run focused tests before reporting success.',
+                userQuote: followUp,
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'Queued preference captured.' }], toolBlocks: [] };
+      });
+
+      expect(result.success).toBe(true);
+      expect(outcome?.memoryIntent).toMatchObject({
+        operation: 'remember',
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: followUp,
+      });
+    } finally {
+      getMessageQueue().clear();
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('reviews a completed AMA episode even when the LLM does not call memory_intent', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-memory-fallback-'));
+    const sessionId = 'runner-memory-fallback';
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-runner-fallback',
+      workspaceId: 'workspace-runner-fallback',
+      userId: 'user-runner-fallback',
+      agentId: 'kodax-coding',
+      projectId: 'project-runner-fallback',
+      sessionId,
+    };
+    let sessionData: KodaXSessionData | null = null;
+    let reviewedInput: UnifiedLearningReviewModelInput | undefined;
+    let outcome:
+      | { readonly digest: KodaXMemoryOutcomeDigest; readonly jobId?: string }
+      | undefined;
+    const receipts: Array<{
+      readonly jobId?: string;
+      readonly proposalIds: readonly string[];
+    }> = [];
+    const storage = {
+      load: async (id: string) => id === sessionId ? sessionData : null,
+      save: async (id: string, data: KodaXSessionData) => {
+        if (id === sessionId) sessionData = data;
+      },
+      mutateLineage: async (
+        id: string,
+        mutation: (
+          lineage: import('@kodax-ai/agent').KodaXSessionLineage,
+        ) => import('@kodax-ai/agent').KodaXSessionLineage,
+      ) => {
+        if (id !== sessionId || sessionData === null) return false;
+        const lineage = sessionData.lineage ?? createSessionLineage(sessionData.messages);
+        sessionData = { ...sessionData, lineage: mutation(lineage) };
+        return true;
+      },
+      list: async () => sessionData === null
+        ? []
+        : [{ id: sessionId, title: sessionData.title, msgCount: sessionData.messages.length }],
+    };
+
+    try {
+      const result = await runManagedTaskViaRunner({
+        ...makeOptions(),
+        context: {
+          ...makeOptions().context,
+          executionCwd: home,
+          gitRoot: home,
+          configHome: home,
+          memoryIdentity: identity,
+        },
+        session: { id: sessionId, storage },
+        learningReviewer: async (input) => {
+          reviewedInput = input;
+          return {
+            memoryPlan: {
+              trigger: input.memory.trigger,
+              createdAt: '2026-07-29T04:00:00.000Z',
+              sourceRefs: input.memory.sourceRefs,
+              candidateRefs: input.memory.candidateRefs,
+              actions: [],
+              warnings: [],
+            },
+            capabilityDecision: {
+              disposition: 'discard',
+              reasonCodes: ['no_reusable_learning'],
+            },
+          };
+        },
+        events: {
+          onMemoryOutcomeDigest: (digest, metadata) => {
+            outcome = { digest, ...metadata };
+          },
+          onMemoryReviewReceipt: (receipt) => {
+            receipts.push({
+              jobId: receipt.jobId,
+              proposalIds: receipt.proposalIds,
+            });
+          },
+        },
+      }, '我记得昨天已经核对过文档', async () => ({
+        textBlocks: [{
+          text: '这句话是在叙述过去，不是要求我创建长期记忆。',
+        }],
+        toolBlocks: [],
+      }));
+
+      expect(result.success).toBe(true);
+      expect(outcome?.digest.memoryIntent).toBeUndefined();
+      expect(outcome?.jobId).toMatch(/^[a-f0-9]{64}$/);
+      await vi.waitFor(() => expect(receipts).toHaveLength(1), { timeout: 5_000 });
+      expect(receipts[0]).toEqual({
+        jobId: outcome?.jobId,
+        proposalIds: [],
+      });
+      expect(reviewedInput?.memory.trigger).toBe('episode_completed');
+      expect(reviewedInput?.evidence.outcomeDigest.objective)
+        .toBe('我记得昨天已经核对过文档');
+      expect(sessionData?.lineage?.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'memory_outcome_digest',
+          jobId: outcome?.jobId,
+        }),
+        expect.objectContaining({
+          type: 'memory_review_receipt',
+          jobId: outcome?.jobId,
+        }),
+      ]));
+      await vi.waitFor(async () => {
+        const pending = await listPendingEpisodeReviews(identity);
+        expect(pending).toHaveLength(0);
+      }, { timeout: 5_000 });
+    } finally {
+      await rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
 
   it('runs configured guardrails before permission and execution on the managed path', async () => {
     const order: string[] = [];

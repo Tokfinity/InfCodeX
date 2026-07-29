@@ -2343,6 +2343,27 @@ export interface KodaXToolExecutionContext {
     readonly content: string;
     readonly evidenceRefs: readonly string[];
   } | undefined>;
+  /**
+   * Root-session-only submission channel for explicit user Memory intent.
+   * The host validates an exact current-user quote and captures one intent for
+   * end-of-episode governed submission; this callback never creates a durable
+   * review job or writes Memory directly.
+   */
+  memoryIntent?: (input: {
+    readonly operation: 'remember' | 'correct';
+    readonly statement: string;
+    readonly userQuote: string;
+  }) => Promise<
+    | {
+        readonly status: 'captured';
+        readonly operation: 'remember' | 'correct';
+        readonly evidenceRef: string;
+      }
+    | {
+        readonly status: 'rejected';
+        readonly reason: string;
+      }
+  >;
   /** Exact persisted history loader for the current root or isolated worker Session. */
   loadSessionHistory?: () => Promise<KodaXSessionLineage | null>;
   /** Git root directory - Git 鏍圭洰褰?*/

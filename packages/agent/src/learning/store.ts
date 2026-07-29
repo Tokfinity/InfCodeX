@@ -452,10 +452,12 @@ export async function upsertLearningProposal(
   });
 }
 
-export function resolveLearningProposalStore(cwd: string): string {
+export function resolveLearningProposalStore(cwd: string, configHome?: string): string {
   const remote = tryGitRemote(cwd);
   const key = remote ? sanitizeProjectKey(remote) : `local-${hashCwd(cwd)}`;
-  return getAgentConfigPath('projects', key, 'learning', 'proposals.json');
+  return configHome === undefined
+    ? getAgentConfigPath('projects', key, 'learning', 'proposals.json')
+    : join(configHome, 'projects', key, 'learning', 'proposals.json');
 }
 
 export async function updateLearningProposalStatus(

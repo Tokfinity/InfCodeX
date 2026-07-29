@@ -505,4 +505,47 @@ describe('FEATURE_263 unified review normalization', () => {
     expect(sanitized.memory.userFeedback).toContain('[omitted:');
     expect(sanitized.evidence.outcomeDigest.objective).toContain('[omitted:');
   });
+
+  it('exposes structured memory intent only when its ref has authoritative user evidence', () => {
+    const memoryIntent = {
+      operation: 'remember' as const,
+      evidenceRef: 'user-intent:bound',
+      candidateStatement: 'Run focused tests before reporting success.',
+      userQuote: 'Remember to run focused tests before reporting success.',
+    };
+    const boundDigest: KodaXMemoryOutcomeDigest = {
+      ...digest,
+      evidenceRefs: [memoryIntent.evidenceRef],
+      evidence: [{
+        ref: memoryIntent.evidenceRef,
+        grade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T05:00:00.000Z',
+      }],
+      memoryIntent,
+    };
+    const unboundDigest: KodaXMemoryOutcomeDigest = {
+      ...boundDigest,
+      evidence: [{
+        ref: memoryIntent.evidenceRef,
+        grade: 'inferred',
+        source: 'agent',
+        observedAt: '2026-07-29T05:00:00.000Z',
+      }],
+    };
+
+    const bound = sanitizeUnifiedLearningReviewInput({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence({ outcomeDigest: boundDigest, priorDigests: [] }),
+    });
+    const unbound = sanitizeUnifiedLearningReviewInput({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence({ outcomeDigest: unboundDigest, priorDigests: [] }),
+    });
+
+    expect(bound.evidence.outcomeDigest.memoryIntent).toEqual(memoryIntent);
+    expect(unbound.evidence.outcomeDigest.memoryIntent).toBeUndefined();
+  });
 });

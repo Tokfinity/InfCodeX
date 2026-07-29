@@ -62,6 +62,7 @@ import type {
   MemoryReviewPlan,
   MemoryReviewPersistenceDecision,
   MemoryReviewRunner,
+  MemoryReviewTrigger,
   MemoryScope,
   MemorySourceAdapter,
   MemoryVisibility,
@@ -158,7 +159,8 @@ export class MemoryControlPlane implements MemoryController {
 
   constructor(options: CreateMemoryControlPlaneOptions) {
     this.cwd = options.cwd;
-    this.learningStorePath = options.learningStorePath ?? resolveLearningProposalStore(options.cwd);
+    this.learningStorePath = options.learningStorePath
+      ?? resolveLearningProposalStore(options.cwd, options.identity?.configHome);
     this.identity = options.identity;
     this.applicability = options.identity?.projectId !== undefined
       ? { tenantId: options.identity.tenantId, projectId: options.identity.projectId }
@@ -505,7 +507,7 @@ export class MemoryControlPlane implements MemoryController {
     digest: import('../types.js').KodaXMemoryOutcomeDigest,
   ): Promise<MemoryReviewModelInput> {
     return this.prepareReviewInput({
-      trigger: 'episode_completed',
+      trigger: episodeReviewTrigger(digest),
       episodeDigest: digest,
       userFeedback: digest.summary,
       task: digest.objective,
@@ -686,7 +688,7 @@ export class MemoryControlPlane implements MemoryController {
     signal?: AbortSignal,
   ): Promise<MemoryEpisodeReviewResult> {
     const plan = await this.reviewMemoryFeedback({
-      trigger: 'episode_completed',
+      trigger: episodeReviewTrigger(digest),
       episodeDigest: digest,
       userFeedback: digest.summary,
       task: digest.objective,
@@ -2182,6 +2184,26 @@ function hasVerifiedDigestEvidence(
       || evidence.source === 'environment'
       || (evidence.source === 'tool' && evidence.verdict === expectedVerdict)
     )
+  )) === true;
+}
+
+function episodeReviewTrigger(
+  digest: import('../types.js').KodaXMemoryOutcomeDigest,
+): MemoryReviewTrigger {
+  if (!hasAuthoritativeMemoryIntentEvidence(digest)) return 'episode_completed';
+  if (digest.memoryIntent?.operation === 'remember') return 'explicit_remember';
+  if (digest.memoryIntent?.operation === 'correct') return 'user_correction';
+  return 'episode_completed';
+}
+
+function hasAuthoritativeMemoryIntentEvidence(
+  digest: import('../types.js').KodaXMemoryOutcomeDigest,
+): boolean {
+  const evidenceRef = digest.memoryIntent?.evidenceRef;
+  return evidenceRef !== undefined && digest.evidence?.some((evidence) => (
+    evidence.ref === evidenceRef
+    && evidence.grade === 'authoritative'
+    && evidence.source === 'user'
   )) === true;
 }
 

@@ -38,4 +38,15 @@ describe('FEATURE_260 governed memory prompt', () => {
     expect(block).toContain('use memory_recall before unrelated repository exploration');
     expect(block).toContain('verify mutable current preconditions');
   });
+
+  it('submits explicit durable intent semantically without claiming that enqueue means applied', () => {
+    const block = buildMemoryRulesSection('ignored');
+
+    expect(block).toContain('memory_intent');
+    expect(block).toContain('exact quote from the current user message');
+    expect(block).toContain('Do not call it for ordinary narration');
+    expect(block).toContain('captured for end-of-episode governed submission');
+    expect(block).toContain('no durable review job exists yet');
+    expect(block).toContain('Do not claim that Memory was queued, persisted');
+  });
 });

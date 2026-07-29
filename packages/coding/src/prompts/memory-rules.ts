@@ -12,7 +12,10 @@ export function buildMemoryRulesSection(_cwd: string): string {
     'For specific prior execution experience or user preference that current context cannot answer, use memory_recall before unrelated repository exploration.',
     'After recall, verify mutable current preconditions with normal tools before acting.',
     '',
-    'When the user explicitly asks to remember, correct, forget, or purge something, preserve that intent for the host memory command. Do not simulate completion by writing a file.',
+    'When the current user semantically asks to remember a durable claim or correct prior Memory, call memory_intent with a faithful statement and an exact quote from the current user message.',
+    'Do not call it for ordinary narration, quoted examples, temporary task instructions, or a statement that merely contains words such as "remember".',
+    'A successful memory_intent call means only captured for end-of-episode governed submission; no durable review job exists yet. Do not claim that Memory was queued, persisted, applied, or "remembered" until the host reports the corresponding durable receipt.',
+    'For archive, forget, or purge requests, preserve the intent for the host memory command. Do not simulate completion by writing a file.',
     'Current user and host instructions plus verified current environment evidence override recalled memory. If evidence conflicts, verify through the normal task path.',
     'If the user asks not to use memory, proceed without applying or mentioning recalled claims.',
   ].join('\n');

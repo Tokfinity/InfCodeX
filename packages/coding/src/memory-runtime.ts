@@ -150,6 +150,7 @@ export function deriveCodingMemoryIdentity(
   sessionId: string,
 ): MemoryContextIdentity {
   const canonicalCwd = path.resolve(cwd).toLowerCase();
+  const configHome = options.context?.configHome ?? getAgentConfigPath();
   const remote = tryGitRemote(cwd)?.trim();
   const projectId = remote === undefined
     ? `local:${canonicalCwd}`
@@ -158,8 +159,9 @@ export function deriveCodingMemoryIdentity(
     ?? options.context?.gitRoot
     ?? canonicalCwd;
   return {
-    configHome: options.context?.configHome ?? getAgentConfigPath(),
-    tenantId: `local:${options.context?.configHome ?? getAgentConfigPath()}`,
+    configHome,
+    tenantId: `local:${configHome}`,
+    userId: `local:${configHome}`,
     workspaceId,
     agentId: options.context?.agentProfile?.id ?? 'kodax-coding',
     projectId,

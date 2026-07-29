@@ -593,6 +593,7 @@ describe('FEATURE_260 MemoryAgent', () => {
     const digests: PersistedOutcomeDigest[] = [];
     const session = await createMemoryAgent({
       controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
       persistOutcomeDigest: async (digest) => {
         order.push('persist');
         digests.push(digest);
@@ -614,7 +615,18 @@ describe('FEATURE_260 MemoryAgent', () => {
     await session.complete({
       status: 'succeeded',
       summary: 'Implemented scoped recall.',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:remember-scoped-recall',
+        candidateStatement: 'Use scoped recall for prior execution experience.',
+        userQuote: 'Remember to use scoped recall for prior execution experience.',
+      },
       evidence: [{
+        ref: 'user-intent:remember-scoped-recall',
+        requestedGrade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-12T00:58:00.000Z',
+      }, {
         ref: 'tool:test-1',
         requestedGrade: 'verified',
         source: 'environment',
@@ -632,7 +644,13 @@ describe('FEATURE_260 MemoryAgent', () => {
       lesson: 'Run the complete release checks and require a passing result.',
       outcome: 'succeeded',
       summary: 'Implemented scoped recall.',
-      evidenceRefs: ['tool:test-1'],
+      evidenceRefs: ['user-intent:remember-scoped-recall', 'tool:test-1'],
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:remember-scoped-recall',
+        candidateStatement: 'Use scoped recall for prior execution experience.',
+        userQuote: 'Remember to use scoped recall for prior execution experience.',
+      },
     });
   });
 
@@ -664,6 +682,34 @@ describe('FEATURE_260 MemoryAgent', () => {
     expect(persistOutcomeDigest).not.toHaveBeenCalled();
   });
 
+  it('omits unsafe or unbound structured memory intent from a safe episode digest', async () => {
+    const persistOutcomeDigest = vi.fn();
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest,
+    }).startSession({ identity, objective: 'Test safe intent boundaries' });
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'The task completed.',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:unsafe',
+        candidateStatement: 'API_KEY=super-secret-value',
+        userQuote: 'Remember this secret.',
+      },
+      evidence: [{
+        ref: 'user-intent:different',
+        requestedGrade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T05:00:00.000Z',
+      }],
+    });
+
+    expect(persistOutcomeDigest).toHaveBeenCalledOnce();
+    expect(persistOutcomeDigest.mock.calls[0]?.[0].memoryIntent).toBeUndefined();
+  });
+
   it('does not persist sentence-shaped secret material', async () => {
     const persistOutcomeDigest = vi.fn();
     const session = await createMemoryAgent({
@@ -674,6 +720,25 @@ describe('FEATURE_260 MemoryAgent', () => {
     await session.complete({
       status: 'failed',
       summary: 'The pass\u200Bword really is hunter2.',
+      evidence: [],
+    });
+
+    expect(persistOutcomeDigest).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a prompt-safe digest when the user objective contains a secret', async () => {
+    const persistOutcomeDigest = vi.fn();
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      persistOutcomeDigest,
+    }).startSession({
+      identity,
+      objective: 'Please remember that API_KEY=super-secret-value',
+    });
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'The request was handled.',
       evidence: [],
     });
 

@@ -17,6 +17,12 @@ import {
   toolMemoryRecall,
 } from './memory-recall.js';
 import {
+  MEMORY_INTENT_TOOL_DESCRIPTION,
+  MEMORY_INTENT_TOOL_NAME,
+  MEMORY_INTENT_TOOL_SCHEMA,
+  toolMemoryIntent,
+} from './memory-intent.js';
+import {
   SESSION_HISTORY_READ_DESCRIPTION,
   SESSION_HISTORY_READ_SCHEMA,
   SESSION_HISTORY_READ_TOOL_NAME,
@@ -234,6 +240,17 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     input_schema: MEMORY_RECALL_TOOL_SCHEMA,
     handler: toolMemoryRecall,
     sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: MEMORY_INTENT_TOOL_NAME,
+    description: MEMORY_INTENT_TOOL_DESCRIPTION,
+    input_schema: MEMORY_INTENT_TOOL_SCHEMA,
+    handler: toolMemoryIntent,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
+    classifierExemptReason:
+      'Captures only a prompt-bounded in-memory marker; durable review and Memory writes remain host-governed.',
     toClassifierInput: () => '',
   },
   {

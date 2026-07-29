@@ -14,6 +14,7 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 227 | High | Resolved | Root memory loop did not reliably capture explicit user remember intent in AMA and queued turns | v0.7.68 MemorySession; AMA lifecycle gap | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 226 | Medium | Resolved | Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading | v0.7.66 Runtime broker / Skill tool metadata | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 224 | High | Resolved | Concurrent Runtime owners could recover live Actor turns and make interrupt, list, and wait diverge | v0.7.72 Runtime Actor persistence | v0.7.78 development | 2026-07-28 | 2026-07-28 |
 | 223 | High | Resolved | Auto[LLM] timeouts and exact workspace mutations caused spurious or hard permission stops | v0.7.33 | v0.7.78 development | 2026-07-28 | 2026-07-28 |
@@ -134,6 +135,84 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 227: Root memory loop did not reliably capture explicit user remember intent in AMA and queued turns
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.68 MemorySession; AMA lifecycle gap
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-29
+- **Resolved**: 2026-07-29
+
+#### Original Problem
+
+An Action LLM could tell a user that a durable preference had been remembered
+without invoking any governed Memory action. The completed MemorySession and
+post-episode reviewer existed on the standard Agent path, but the production
+Runner/AMA path did not run the equivalent episode lifecycle. Direct Chinese
+remember requests such as “下次记得” were therefore neither captured nor
+submitted to the durable review inbox.
+
+A literal keyword expansion would also be unsafe: narration such as “我记得昨天”
+must not become durable intent, and queued follow-up turns must bind to their
+own original user text rather than the initial task or a generated resume
+preamble.
+
+#### Root Cause
+
+- AMA did not start, complete, persist, or drain the root MemorySession.
+- The Action LLM had no narrow governed tool for semantically declaring an
+  explicit remember/correct intent.
+- The initial implementation bound the tool to a static initial prompt, kept
+  only the last of multiple calls, omitted the candidate statement and verified
+  quote from the review digest, and described an in-memory capture as already
+  queued.
+- Review inbox drains could race a startup lease, and explicit config-home
+  identity was not consistently used by every Memory path.
+
+#### Resolution
+
+- Added the root-only `memory_intent` tool. The LLM performs semantic intent
+  recognition; the host verifies an exact quote in the current original user
+  turn, applies prompt-safety limits, and captures at most one idempotent intent.
+- Added equivalent MemorySession, outcome persistence, governed review, inbox
+  drain, receipt, and client-notice lifecycle to AMA while retaining the
+  standard path.
+- Persisted the sanitized candidate statement and host-verified quote alongside
+  the evidence ref. Explicit triggers now require matching authoritative user
+  evidence, including at the provider-review boundary.
+- Distinguished in-memory `captured` state from a durable queued review job and
+  from an applied Memory receipt.
+- Serialized startup/completion drains and honored explicit config-home
+  identity across Memory and learning proposal stores.
+
+#### Files Changed
+
+- `packages/agent/src/experimental-memory/memory-agent.ts`
+- `packages/agent/src/memory-control/controller.ts`
+- `packages/agent/src/memory-control/unified-review.ts`
+- `packages/agent/src/memory/paths.ts`
+- `packages/agent/src/learning/store.ts`
+- `packages/agent/src/types.ts`
+- `packages/coding/src/agent-runtime/run-substrate.ts`
+- `packages/coding/src/task-engine/runner-driven.ts`
+- `packages/coding/src/tools/memory-intent.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/learning-reviewer.ts`
+- `packages/coding/src/memory-runtime.ts`
+- `packages/coding/src/prompts/memory-rules.ts`
+- `packages/coding/src/self-knowledge/registry.ts`
+
+#### Tests Added
+
+- Semantic tool binding, exact-quote rejection, one-shot idempotency, and state
+  wording tests.
+- Real SA and AMA queued-follow-up tests that call `memory_intent` only after a
+  new user turn.
+- AMA end-to-end durable review/apply and no-tool fallback tests.
+- Long-objective evidence retention, forged-intent authority, config-home
+  isolation, drain serialization, and secret-safety regressions.
 
 ### 226: Runtime client broker prompted for already-allowed Edit calls and Plan blocked Skill loading
 
@@ -8212,11 +8291,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 111 (25 Open, 86 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 112 (25 Open, 87 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-29: Issue 227 resolved (v0.7.78 development)
+- Completed the root MemorySession and durable review loop in both SA and AMA.
+- Added semantic `memory_intent` capture with current-user-turn quote binding,
+  auditable evidence, one-shot idempotency, and truthful lifecycle wording.
 
 ### 2026-07-29: Issue 226 resolved (v0.7.78 development)
 - Applied Edit/Plan policy before client broker escalation so already-allowed

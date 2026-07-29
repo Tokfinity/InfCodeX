@@ -74,6 +74,7 @@ describe('memory runtime hooks', () => {
   });
 
   it('does not treat ordinary coding corrections as memory feedback', () => {
+    expect(detectMemoryReviewTrigger('我记得昨天已经检查过代码。')).toBeUndefined();
     expect(detectMemoryReviewTrigger('Use a Map instead of a plain object here.')).toBeUndefined();
     expect(detectMemoryReviewTrigger('This helper should be async.')).toBeUndefined();
     expect(detectMemoryReviewTrigger('\u5176\u5b9e\u5148\u5199\u6d4b\u8bd5\uff0c\u518d\u6539\u5b9e\u73b0\u3002')).toBeUndefined();
@@ -97,6 +98,7 @@ describe('memory runtime hooks', () => {
     expect(identity).toMatchObject({
       agentId: 'partner-profile',
       sessionId: 'session-1',
+      userId: `local:${home}`,
     });
     expect(identity.tenantId).toContain(home);
     expect(identity.projectId).toContain(path.resolve(cwd).toLowerCase());

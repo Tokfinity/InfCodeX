@@ -212,6 +212,22 @@ describe('FEATURE_260 scoped memory identity', () => {
     expect(isAutoManagedMemoryFile(path.join(root, 'project_stack.md'))).toBe(true);
   });
 
+  it('honors an explicit identity config home without changing global runtime state', () => {
+    const explicitHome = path.join(tempHome, 'explicit-owner');
+    const root = resolveScopedMemoryRoot({
+      ...identity,
+      configHome: explicitHome,
+    }, 'user');
+
+    expect(root).toBe(path.join(
+      explicitHome,
+      'memory-scopes',
+      hashMemoryIdentityComponent('tenant', identity.tenantId),
+      'user',
+      hashMemoryIdentityComponent('user', identity.userId),
+    ));
+  });
+
   it('fails closed when a scoped root lacks the required identity field', () => {
     expect(() => resolveScopedMemoryRoot(identity, 'workspace')).not.toThrow();
     expect(() => resolveScopedMemoryRoot({

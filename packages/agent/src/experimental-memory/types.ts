@@ -1,4 +1,4 @@
-import type { KodaXMemoryOutcomeDigest } from '../types.js';
+import type { KodaXMemoryIntent, KodaXMemoryOutcomeDigest } from '../types.js';
 import type {
   MemoryContextIdentity,
   MemoryController,
@@ -155,6 +155,7 @@ export interface MemoryEpisodeOutcome {
   readonly status: 'succeeded' | 'failed' | 'cancelled';
   readonly summary: string;
   readonly evidence: readonly MemoryEvidenceRef[];
+  readonly memoryIntent?: KodaXMemoryIntent;
 }
 
 export type PersistedOutcomeDigest = KodaXMemoryOutcomeDigest;

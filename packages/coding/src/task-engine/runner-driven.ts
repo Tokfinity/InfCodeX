@@ -43,11 +43,20 @@ import type {
 import {
   Runner,
   buildSystemPrompt,
+  captureEpisodeReviewBranchEpoch,
+  createMemoryControlPlane,
   getMessageQueue,
   maybeDrainMidTurn,
+  persistPendingEpisodeReview,
   readRunnerRecoveryTranscript,
   registerActiveRootQueueRoute,
+  type MemoryContextIdentity,
+  type MemoryController,
 } from '@kodax-ai/agent';
+import {
+  createMemoryAgent,
+  type MemorySession,
+} from '@kodax-ai/agent/experimental-memory';
 // FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
 // the only remaining V2 chain agent is the Worker.
@@ -63,9 +72,26 @@ import {
   saveSessionSnapshot,
 } from '../agent.js';
 import {
+  deriveCodingMemoryIdentity,
+  drainCodingMemoryReviewInbox,
   maybeReviewMemoryFeedbackFromPrompt,
   maybeRunMemoryMaintenanceWindow,
+  persistMemoryOutcomeToSession,
 } from '../memory-runtime.js';
+import { installProductionLearningReviewer } from '../learning-reviewer.js';
+import {
+  buildToolMemoryObservations,
+  codingMemorySourcePolicy,
+} from '../memory/coding-observations.js';
+import { collectVerifiedCheckFacts } from '../memory/verified-checks.js';
+import {
+  createMemoryRecallBinding,
+} from '../tools/memory-recall.js';
+import {
+  createMemoryIntentBinding,
+  MEMORY_INTENT_TOOL_NAME,
+  type AcceptedMemoryIntent,
+} from '../tools/memory-intent.js';
 import type {
   KodaXHarnessProfile,
   KodaXManagedTask,
@@ -505,6 +531,7 @@ interface ManagedLiveTurnController {
   startTurn(input: {
     readonly deliveryKind: KodaXTurnDeliveryKind;
     readonly promptId?: string;
+    readonly userText?: string;
   }): string;
 }
 
@@ -559,6 +586,254 @@ function attachTurnIdsFromUserBoundaries(
   });
 }
 
+interface RunnerMemoryRuntime {
+  readonly controller: MemoryController;
+  readonly identity: MemoryContextIdentity;
+  readonly session: MemorySession;
+  currentUserTurn: {
+    readonly text: string;
+    readonly turnId: string;
+  };
+  reviewDrain: Promise<void>;
+  acceptedIntent?: AcceptedMemoryIntent;
+  observationSequence: number;
+  finished: boolean;
+}
+
+interface StartedRunnerMemoryRuntime {
+  readonly options: KodaXOptions;
+  readonly runtime?: RunnerMemoryRuntime;
+}
+
+function withoutMemoryIntentTool(options: KodaXOptions): KodaXOptions {
+  return {
+    ...options,
+    context: {
+      ...options.context,
+      excludeTools: [
+        ...new Set([
+          ...(options.context?.excludeTools ?? []),
+          MEMORY_INTENT_TOOL_NAME,
+        ]),
+      ],
+    },
+  };
+}
+
+async function startRunnerMemoryRuntime(
+  options: KodaXOptions,
+  prompt: string,
+  sessionId: string,
+  episodeId: string,
+): Promise<StartedRunnerMemoryRuntime> {
+  if (options.context?.currentAgentId !== undefined
+    || options.context?.parentAgentId !== undefined) {
+    return { options: withoutMemoryIntentTool(options) };
+  }
+  const identity = options.context?.memoryIdentity
+    ?? deriveCodingMemoryIdentity(options, resolveExecutionCwd(options.context), sessionId);
+  try {
+    const controller = createMemoryControlPlane({
+      cwd: resolveExecutionCwd(options.context),
+      identity,
+      projectDocs: [],
+      discoverSkills: false,
+      ...(options.memoryReviewer === undefined
+        ? {}
+        : { memoryReviewer: options.memoryReviewer }),
+    });
+    const memoryPack = await controller.buildMemoryPack({
+      task: prompt,
+      identity,
+      maxCandidates: 12,
+      maxHints: 5,
+      includeSnippets: false,
+    });
+    const reviewDrain = drainCodingMemoryReviewInbox(
+      options,
+      identity,
+      controller,
+      sessionId,
+    ).then(() => undefined).catch((error: unknown) => {
+      emitResilienceDebug('[memory:review-inbox:startup-drain-error]', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    const branchEpoch = options.session?.storage === undefined
+      ? undefined
+      : await captureEpisodeReviewBranchEpoch(identity);
+    const session = await createMemoryAgent({
+      controlPlane: controller,
+      initialMemoryPack: memoryPack,
+      sourcePolicy: codingMemorySourcePolicy,
+      ...(options.memoryRecallRunner === undefined
+        ? {}
+        : { recallRunner: options.memoryRecallRunner }),
+      persistOutcomeDigest: async (digest) => {
+        if (digest.visibility === 'prompt_safe'
+          && options.session?.storage !== undefined
+          && branchEpoch !== undefined) {
+          await persistPendingEpisodeReview(identity, digest, {
+            expectedBranchEpoch: branchEpoch,
+            persistOwner: async (entry) => persistMemoryOutcomeToSession(
+              options,
+              sessionId,
+              digest,
+              { jobId: entry.jobId },
+            ),
+          });
+          return;
+        }
+        await persistMemoryOutcomeToSession(options, sessionId, digest);
+      },
+      ...(options.session?.storage === undefined && options.memoryReviewer !== undefined
+        ? {
+            reviewEpisode: async (digest, signal) => {
+              const review = await controller.reviewEpisode(digest, signal);
+              if (signal.aborted) return;
+              options.events?.onMemoryReviewReceipt?.({
+                sessionId,
+                reviewKey: digest.reviewKey,
+                proposalIds: review.proposalIds,
+                completedAt: new Date().toISOString(),
+              });
+              if (review.appliedProposalIds.length > 0) {
+                options.events?.onMemoryNotice?.({
+                  sessionId,
+                  episodeId: digest.id,
+                  summaries: review.decisions
+                    .filter((decision) => (
+                      decision.proposalId !== undefined
+                      && review.appliedProposalIds.includes(decision.proposalId)
+                    ))
+                    .map((decision) => review.plan.actions[decision.actionIndex]?.summary)
+                    .filter((summary): summary is string => summary !== undefined)
+                    .slice(0, 3),
+                  proposalIds: review.appliedProposalIds,
+                });
+              }
+            },
+          }
+        : {}),
+      onTrace: (event) => {
+        emitResilienceDebug(`[memory:${event.type}]`, 'receipt' in event
+          ? { receiptId: event.receipt.id }
+          : {
+              key: event.key,
+              detail: event.detail ?? null,
+            });
+      },
+    }).startSession({
+      identity,
+      objective: prompt,
+      episodeId,
+    });
+    return {
+      runtime: {
+        controller,
+        identity,
+        session,
+        currentUserTurn: {
+          text: options.context?.rawUserInput?.trim() || prompt,
+          turnId: episodeId,
+        },
+        reviewDrain,
+        observationSequence: 0,
+        finished: false,
+      },
+      options: {
+        ...options,
+        context: {
+          ...options.context,
+          memoryIdentity: identity,
+          memoryPack,
+        },
+      },
+    };
+  } catch (error) {
+    emitResilienceDebug('[memory:session-start:error]', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { options: withoutMemoryIntentTool(options) };
+  }
+}
+
+async function finishRunnerMemoryRuntime(
+  options: KodaXOptions,
+  runtime: RunnerMemoryRuntime | undefined,
+  sessionId: string,
+  outcome: {
+    readonly status: 'succeeded' | 'failed' | 'cancelled';
+    readonly summary: string;
+    readonly artifactLedger?: KodaXResult['artifactLedger'];
+  },
+): Promise<void> {
+  if (runtime === undefined || runtime.finished) return;
+  runtime.finished = true;
+  const completedAt = new Date().toISOString();
+  const checks = collectVerifiedCheckFacts(outcome.artifactLedger ?? []);
+  try {
+    await runtime.session.complete({
+      status: outcome.status,
+      summary: outcome.summary,
+      evidence: outcome.status === 'cancelled'
+        ? []
+        : [
+            ...(runtime.acceptedIntent === undefined
+              ? []
+              : [{
+                  ref: runtime.acceptedIntent.evidenceRef,
+                  requestedGrade: 'authoritative' as const,
+                  source: 'user' as const,
+                  observedAt: completedAt,
+                }]),
+            ...(checks.length > 0
+              ? checks.map((check) => ({
+                  ref: check.ref,
+                  requestedGrade: 'verified' as const,
+                  source: check.source,
+                  verdict: check.verdict,
+                  observedAt: check.observedAt,
+                }))
+              : [{
+                  ref: `host:run-terminal:${sessionId}`,
+                  requestedGrade: 'observed' as const,
+                  source: 'host' as const,
+                  observedAt: completedAt,
+                }]),
+          ],
+      ...(runtime.acceptedIntent === undefined
+        ? {}
+        : {
+            memoryIntent: {
+              operation: runtime.acceptedIntent.operation,
+              evidenceRef: runtime.acceptedIntent.evidenceRef,
+              candidateStatement: runtime.acceptedIntent.candidateStatement,
+              userQuote: runtime.acceptedIntent.userQuote,
+            },
+          }),
+    });
+    await runtime.session.close();
+  } catch (error) {
+    emitResilienceDebug('[memory:episode-finalize:error]', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await runtime.session.close({ drain: false }).catch(() => undefined);
+  }
+  runtime.reviewDrain = runtime.reviewDrain.then(
+    () => drainCodingMemoryReviewInbox(
+      options,
+      runtime.identity,
+      runtime.controller,
+      '',
+    ).then(() => undefined),
+  ).catch((error: unknown) => {
+    emitResilienceDebug('[memory:review-inbox:drain-error]', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
 export async function runManagedTaskViaRunner(
   options: KodaXOptions,
   prompt: string,
@@ -573,7 +848,13 @@ export async function runManagedTaskViaRunner(
   // propagates uniformly through createReasoningPlan, buildRunnerLlmAdapter,
   // and the per-iteration L1-L4 resolver inside the Runner loop. When no
   // signal fires, the helper returns the input options reference unchanged.
-  const { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
+  let { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
+  const providerName = effectiveOptions.provider ?? 'anthropic';
+  effectiveOptions = installProductionLearningReviewer(
+    effectiveOptions,
+    resolveProvider(providerName),
+    effectiveOptions.modelOverride ?? effectiveOptions.model,
+  );
   const initialSessionId = effectiveOptions.session?.id
     ?? `runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const releaseActiveRootQueueRoute = registerActiveRootQueueRoute(
@@ -584,7 +865,6 @@ export async function runManagedTaskViaRunner(
   await maybeReviewMemoryFeedbackFromPrompt(effectiveOptions, prompt);
   // Fire onSessionStart early so REPL / CLI listeners bound to session
   // init trigger for AMA runs the same way they trigger for SA runs.
-  const providerName = effectiveOptions.provider ?? 'anthropic';
   // Ad-hoc askUser callers without a stable host session id get a run-local id:
   // checkpoint resume should prefer a safe miss over cross-session attachment.
   const shouldAttachInitialSessionId = Boolean(effectiveOptions.session?.id)
@@ -643,7 +923,7 @@ export async function runManagedTaskViaRunner(
     },
   });
   const liveEvents = withLiveTurnAttribution(durableEvents, liveTurnScopeRef);
-  const optionsWithSessionId: KodaXOptions = {
+  const optionsWithLiveEvents: KodaXOptions = {
     ...baseOptionsWithSessionId,
     context: {
       ...(baseOptionsWithSessionId.context ?? {}),
@@ -651,6 +931,14 @@ export async function runManagedTaskViaRunner(
     },
     events: liveEvents,
   };
+  const startedMemoryRuntime = await startRunnerMemoryRuntime(
+    optionsWithLiveEvents,
+    prompt,
+    initialSessionId,
+    liveTurnScopeRef.current.turnId,
+  );
+  const optionsWithSessionId = startedMemoryRuntime.options;
+  const runnerMemoryRuntime = startedMemoryRuntime.runtime;
   emitSessionStart(liveEvents, { provider: providerName, sessionId: initialSessionId });
   emitTurnStarted(liveEvents, liveTurnScopeRef.current);
   const emitLiveTurnCompleted = (
@@ -682,6 +970,12 @@ export async function runManagedTaskViaRunner(
         ownsContextRevision: liveTurnScope.ownsContextRevision,
       });
       emitTurnStarted(liveEvents, liveTurnScopeRef.current);
+      if (runnerMemoryRuntime !== undefined && input.userText !== undefined) {
+        runnerMemoryRuntime.currentUserTurn = {
+          text: input.userText,
+          turnId: liveTurnScopeRef.current.turnId,
+        };
+      }
       return liveTurnScopeRef.current.turnId;
     },
   };
@@ -693,6 +987,21 @@ export async function runManagedTaskViaRunner(
       plan,
       initialSessionId,
       liveTurnController,
+      runnerMemoryRuntime,
+    );
+    await finishRunnerMemoryRuntime(
+      optionsWithSessionId,
+      runnerMemoryRuntime,
+      initialSessionId,
+      {
+        status: result.interrupted
+          ? 'cancelled'
+          : result.success
+            ? 'succeeded'
+            : 'failed',
+        summary: result.lastText,
+        artifactLedger: result.artifactLedger,
+      },
     );
     if (result.success) {
       emitLiveTurnCompleted(result.interrupted ? 'interrupted' : 'completed');
@@ -742,6 +1051,15 @@ export async function runManagedTaskViaRunner(
         // best-effort.
       }
     }
+    await finishRunnerMemoryRuntime(
+      optionsWithSessionId,
+      runnerMemoryRuntime,
+      initialSessionId,
+      {
+        status: optionsWithSessionId.abortSignal?.aborted === true ? 'cancelled' : 'failed',
+        summary: error.message,
+      },
+    );
     throw err;
   } finally {
     // onComplete fires on every terminal — success, block, or error —
@@ -766,6 +1084,7 @@ async function runManagedTaskViaRunnerInner(
   plan: ReasoningPlan | undefined,
   resolvedSessionId: string,
   liveTurnController: ManagedLiveTurnController,
+  memoryRuntime?: RunnerMemoryRuntime,
 ): Promise<KodaXResult> {
   // F3 parity (v0.7.26) — apply the diff-driven review routing floor so
   // `decision.reviewTarget` / `reviewScale` / diff-driven `primaryTask`
@@ -913,6 +1232,26 @@ async function runManagedTaskViaRunnerInner(
     runtime: extensionRuntime,
     managedProtocolPayloadRef,
   });
+  if (memoryRuntime !== undefined) {
+    substrateBaseCtx.memoryRecall = createMemoryRecallBinding(
+      memoryRuntime.session,
+      () => ({
+        decisionRevision:
+          `ama:${liveTurnController.currentTurnId()}:${memoryRuntime.observationSequence}`,
+        ...(plan?.decision.primaryTask === undefined
+          ? {}
+          : { actionSignature: `task:${plan.decision.primaryTask}` }),
+        throughSequence: memoryRuntime.observationSequence,
+      }),
+    );
+    substrateBaseCtx.memoryIntent = createMemoryIntentBinding({
+      getCurrentUserTurn: () => memoryRuntime.currentUserTurn,
+      sessionId: resolvedSessionId,
+      onAccepted: (intent) => {
+        memoryRuntime.acceptedIntent = intent;
+      },
+    });
+  }
   // FEATURE_097 (v0.7.34) — todo store for the Scout-seeded plan list.
   // Created here so its `onChange` callback can fan changes out to the
   // KodaXEvents bus (`onTodoUpdate`) without each individual mutation
@@ -1769,10 +2108,38 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onTodoDriftWarning?.(event);
     },
   });
+  const memoryObserver: RunnerToolObserver = {
+    onToolResult: (call, result) => {
+      if (memoryRuntime === undefined) return;
+      const observations = buildToolMemoryObservations({
+        toolBlocks: [{
+          type: 'tool_use',
+          id: call.id,
+          name: call.name,
+          input: call.input,
+        }],
+        toolResults: [{
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: result.content,
+          ...(result.isError === true ? { is_error: true } : {}),
+        }],
+        startSequence: memoryRuntime.observationSequence,
+        observedAt: new Date().toISOString(),
+        ...(plan?.decision.primaryTask === undefined
+          ? {}
+          : { decisionActionSignature: `task:${plan.decision.primaryTask}` }),
+      });
+      for (const observation of observations) memoryRuntime.session.observe(observation);
+      memoryRuntime.observationSequence =
+        observations.at(-1)?.sequence ?? memoryRuntime.observationSequence;
+    },
+  };
   const runnerToolObserver = composeToolObservers(
     stallSidecar.observer,
     permissionEventsObserver,
     todoDriftObserver,
+    memoryObserver,
   );
 
   // FEATURE_184 Sidecar Verifier stop-hook wiring — extracted to
@@ -1851,6 +2218,7 @@ async function runManagedTaskViaRunnerInner(
       ? liveTurnController.startTurn({
           deliveryKind: 'queued',
           promptId: prompts[0]?.id,
+          userText: prompts.map((message) => message.content).join('\n'),
         })
       : undefined;
     const messages = prompts.map((message): KodaXMessage => {
@@ -2195,6 +2563,12 @@ async function runManagedTaskViaRunnerInner(
     // never the UI. Route it to the same `onMidTurnUserMessages` sink so it is
     // recorded + rendered in the transcript exactly like a mid-turn message.
     onResumedUserPrompts: (contents, queuedMessageIds) => {
+      if (memoryRuntime !== undefined) {
+        memoryRuntime.currentUserTurn = {
+          text: contents.join('\n'),
+          turnId: liveTurnController.currentTurnId(),
+        };
+      }
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),

@@ -286,15 +286,40 @@ class DefaultMemorySession implements MemorySession {
 
   private async completeOnce(outcome: MemoryEpisodeOutcome): Promise<void> {
     if (outcome.status === 'cancelled') return;
-    if (isRestrictedMemoryContent(outcome.summary)) return;
+    const objective = sanitizePromptSafeMemoryClaim(this.input.objective, 512);
+    const summary = sanitizePromptSafeMemoryClaim(outcome.summary, 512);
+    if (objective === undefined || summary === undefined) return;
+    const evidence = outcome.evidence.map((item) =>
+      applySourcePolicy(item, this.options.sourcePolicy));
+    const candidateStatement = outcome.memoryIntent === undefined
+      ? undefined
+      : sanitizePromptSafeMemoryClaim(outcome.memoryIntent.candidateStatement, 512);
+    const userQuote = outcome.memoryIntent === undefined
+      ? undefined
+      : sanitizePromptSafeMemoryClaim(outcome.memoryIntent.userQuote, 512);
+    const memoryIntent = outcome.memoryIntent !== undefined
+      && candidateStatement !== undefined
+      && userQuote !== undefined
+      && evidence.some((item) => (
+        item.ref === outcome.memoryIntent?.evidenceRef
+        && item.requestedGrade === 'authoritative'
+        && item.source === 'user'
+      ))
+      ? {
+          operation: outcome.memoryIntent.operation,
+          evidenceRef: outcome.memoryIntent.evidenceRef,
+          candidateStatement,
+          userQuote,
+        }
+      : undefined;
     const digestValue = buildOutcomeDigest(
-      this.input,
+      { ...this.input, objective },
       [...this.observations.values()],
       {
-        ...outcome,
         status: outcome.status,
-        evidence: outcome.evidence.map((evidence) =>
-          applySourcePolicy(evidence, this.options.sourcePolicy)),
+        summary,
+        evidence,
+        ...(memoryIntent === undefined ? {} : { memoryIntent }),
       },
       this.options.now?.() ?? new Date().toISOString(),
       this.injectedReceiptIds,
@@ -711,6 +736,7 @@ function buildOutcomeDigest(
       ...(evidence.verdict !== undefined ? { verdict: evidence.verdict } : {}),
       observedAt: evidence.observedAt,
     })),
+    ...(outcome.memoryIntent === undefined ? {} : { memoryIntent: outcome.memoryIntent }),
     ...(injectedReceiptIds.length > 0 ? {
       memoryInfluence: unique(injectedReceiptIds).map((decisionReceiptRef) => ({
         decisionReceiptRef,

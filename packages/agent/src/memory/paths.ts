@@ -149,12 +149,15 @@ export function resolveScopedMemoryRoot(
   if (canonicalId === undefined || canonicalId.length === 0) {
     throw new Error(`${field} is required for ${scope} memory`);
   }
-  return getAgentConfigPath(
+  const segments = [
     'memory-scopes',
     hashMemoryIdentityComponent('tenant', identity.tenantId),
     scope,
     hashMemoryIdentityComponent(scope, canonicalId),
-  );
+  ];
+  return identity.configHome === undefined
+    ? getAgentConfigPath(...segments)
+    : path.join(identity.configHome, ...segments);
 }
 
 /**

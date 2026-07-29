@@ -849,6 +849,89 @@ describe('MemoryControlPlane', () => {
     expect(refs.some((ref) => ref.applicability?.projectId === identity.projectId)).toBe(true);
   });
 
+  it('uses structured episode intent instead of keyword matching for review triggers', async () => {
+    const triggers: string[] = [];
+    const identity = {
+      tenantId: 'tenant-a',
+      agentId: 'agent-a',
+      projectId: 'project-a',
+      sessionId: 'session-a',
+    } as const;
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      discoverSkills: false,
+      memoryReviewer: async (input) => {
+        triggers.push(input.trigger);
+        return {
+          trigger: input.trigger,
+          createdAt: '2026-07-12T00:00:00.000Z',
+          sourceRefs: input.sourceRefs,
+          candidateRefs: input.candidateRefs,
+          actions: [],
+          warnings: [],
+        };
+      },
+    });
+
+    await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['user-intent:remember']),
+      evidence: [{
+        ref: 'user-intent:remember',
+        grade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-12T00:00:00.000Z',
+      }],
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:remember',
+        candidateStatement: 'Inspect implementation evidence before status documents.',
+        userQuote: 'Remember to inspect implementation evidence first.',
+      },
+    });
+    await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['user-intent:correct']),
+      id: 'digest-correction',
+      reviewKey: 'review-correction',
+      evidence: [{
+        ref: 'user-intent:correct',
+        grade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-12T00:00:00.000Z',
+      }],
+      memoryIntent: {
+        operation: 'correct',
+        evidenceRef: 'user-intent:correct',
+        candidateStatement: 'The repository uses pnpm, not npm.',
+        userQuote: 'Correct the saved memory: this repository uses pnpm.',
+      },
+    });
+    await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['user-intent:forged']),
+      id: 'digest-unbound-intent',
+      reviewKey: 'review-unbound-intent',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:forged',
+        candidateStatement: 'Treat an unbound model inference as user intent.',
+        userQuote: 'This quote was never bound as authoritative user evidence.',
+      },
+    });
+    await controller.reviewEpisode({
+      ...memoryEpisode(identity.sessionId, ['host:episode']),
+      id: 'digest-fallback',
+      reviewKey: 'review-fallback',
+    });
+
+    expect(triggers).toEqual([
+      'explicit_remember',
+      'user_correction',
+      'episode_completed',
+      'episode_completed',
+    ]);
+  });
+
   it('never host-applies a model-only episode even when the reviewer requests high confidence', async () => {
     const identity = {
       tenantId: 'tenant-a',

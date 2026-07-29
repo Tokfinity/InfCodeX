@@ -158,13 +158,25 @@ export function sanitizeUnifiedLearningReviewInput(
 function sanitizeOutcomeDigest(
   digest: KodaXMemoryOutcomeDigest,
 ): KodaXMemoryOutcomeDigest {
-  const { lesson, preconditions, ...required } = digest;
+  const { lesson, preconditions, memoryIntent, ...required } = digest;
   const safeLesson = lesson === undefined
     ? undefined
     : sanitizePromptSafeMemoryClaim(lesson, 512);
   const safePreconditions = preconditions === undefined
     ? undefined
     : sanitizePromptSafeMemoryClaim(preconditions, 512);
+  const safeCandidateStatement = memoryIntent === undefined
+    ? undefined
+    : sanitizePromptSafeMemoryClaim(memoryIntent.candidateStatement, 512);
+  const safeUserQuote = memoryIntent === undefined
+    ? undefined
+    : sanitizePromptSafeMemoryClaim(memoryIntent.userQuote, 512);
+  const hasAuthoritativeEvidence = memoryIntent !== undefined
+    && digest.evidence?.some((evidence) => (
+      evidence.ref === memoryIntent.evidenceRef
+      && evidence.grade === 'authoritative'
+      && evidence.source === 'user'
+    )) === true;
   return {
     ...required,
     objective: safeReviewText(digest.objective, 'unsafe objective'),
@@ -181,6 +193,18 @@ function sanitizeOutcomeDigest(
         }),
     ...(safeLesson === undefined ? {} : { lesson: safeLesson }),
     ...(safePreconditions === undefined ? {} : { preconditions: safePreconditions }),
+    ...(!hasAuthoritativeEvidence
+      || safeCandidateStatement === undefined
+      || safeUserQuote === undefined
+      ? {}
+      : {
+          memoryIntent: {
+            operation: memoryIntent.operation,
+            evidenceRef: safeReviewText(memoryIntent.evidenceRef, 'unsafe intent ref'),
+            candidateStatement: safeCandidateStatement,
+            userQuote: safeUserQuote,
+          },
+        }),
   };
 }
 

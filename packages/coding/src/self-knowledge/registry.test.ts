@@ -144,6 +144,11 @@ describe('FEATURE_218 manual registry', () => {
 
     expect(content).toContain('/memory');
     expect(content).toContain('memory_recall');
+    expect(content).toContain('memory_intent');
+    expect(content).toContain('exact quote');
+    expect(content).toContain('captured only');
+    expect(content).toContain('before any durable review job exists');
+    expect(content).toContain('fallback');
     expect(content).toContain('query()');
     expect(content).toContain('low-authority');
     expect(content).toContain('proposal/preview/fingerprint/apply');

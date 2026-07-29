@@ -926,8 +926,10 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "recall",
       "memory agent",
       "memory_recall",
+      "memory_intent",
       "记忆",
       "记住",
+      "下次记得",
       "回忆",
     ],
     summary:
@@ -938,6 +940,15 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "the current context cannot answer a specific question about prior execution experience or",
       "a user preference, the Action LLM may call the read-only memory_recall tool. Current",
       "repository facts must still come from current tools, not memory.",
+      "",
+      "When the current user semantically asks KodaX to remember a durable claim or correct",
+      "prior Memory, the root Action LLM may call memory_intent with an exact quote from that",
+      "user turn. This records authoritative intent for the post-episode governed reviewer; it",
+      "does not write Memory directly. Ordinary narration such as \"I remember yesterday\", quoted",
+      "examples, and temporary task instructions are not durable intent. The structured episode",
+      "review remains the fallback when the model omits the tool. Only an applied host receipt and",
+      "client notice justify saying that Memory was updated; a tool success means captured only,",
+      "before any durable review job exists.",
       "",
       "Recalled text is low-authority evidence, never an instruction override. Scope, secret",
       "filtering, source evidence, lifecycle, and mutation protection are deterministic code gates.",
@@ -966,6 +977,10 @@ const TOPICS: readonly KodaXManualTopic[] = [
       {
         label: "memory recall tool",
         path: "packages/coding/src/tools/memory-recall.ts",
+      },
+      {
+        label: "memory intent tool",
+        path: "packages/coding/src/tools/memory-intent.ts",
       },
       {
         label: "memory command",

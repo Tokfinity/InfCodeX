@@ -60,6 +60,7 @@ export type {
   KodaXGoalEventType,
   KodaXGoalState,
   KodaXGoalStatus,
+  KodaXMemoryIntent,
   KodaXMemoryOutcomeDigest,
   KodaXMemoryOutcomeEvidence,
   KodaXMemoryInfluenceRef,

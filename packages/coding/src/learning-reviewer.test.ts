@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createProductionLearningReviewer,
+  installProductionLearningReviewer,
   LEARNING_REVIEW_TOOL,
 } from './learning-reviewer.js';
 
@@ -62,6 +63,21 @@ function provider(toolInput?: Record<string, unknown>): KodaXBaseProvider {
 }
 
 describe('FEATURE_263 production unified learning reviewer', () => {
+  it('installs the production reviewer only when the host supplied no reviewer', () => {
+    const resolvedProvider = provider();
+    const installed = installProductionLearningReviewer({
+      provider: 'anthropic',
+    }, resolvedProvider, 'review-model');
+    const custom = vi.fn();
+    const preserved = installProductionLearningReviewer({
+      provider: 'anthropic',
+      learningReviewer: custom,
+    }, resolvedProvider, 'review-model');
+
+    expect(installed.learningReviewer).toBeTypeOf('function');
+    expect(preserved.learningReviewer).toBe(custom);
+  });
+
   it('declares every governed Memory action field required by the apply path', () => {
     const memoryPlan = LEARNING_REVIEW_TOOL.input_schema.properties?.memoryPlan;
     const actions = memoryPlan?.properties?.actions;

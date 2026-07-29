@@ -150,7 +150,10 @@ import {
   persistMemoryOutcomeToSession,
 } from '../memory-runtime.js';
 import { prepareCodingLearnedSkillBinding } from '../learned-skill-runtime.js';
-import { createProductionLearningReviewer } from '../learning-reviewer.js';
+import {
+  installProductionLearningReviewer,
+} from '../learning-reviewer.js';
+export { shouldInstallProductionLearningReviewer } from '../learning-reviewer.js';
 import {
   buildCodingMemoryContext,
   type CodingMemoryContext,
@@ -173,6 +176,12 @@ import {
   createMemoryRecallBinding,
   MEMORY_RECALL_TOOL_NAME,
 } from '../tools/memory-recall.js';
+import {
+  activateMemoryIntentTool,
+  createMemoryIntentBinding,
+  MEMORY_INTENT_TOOL_NAME,
+  type AcceptedMemoryIntent,
+} from '../tools/memory-intent.js';
 import {
   activateSessionHistoryTools,
   canActivateSessionHistoryTools,
@@ -500,12 +509,6 @@ function withCompletionEventOnce(events: KodaXEvents): KodaXEvents {
  */
 const MAX_INTERRUPT_CONTINUATION_ITERATIONS = 8;
 
-export function shouldInstallProductionLearningReviewer(
-  options: Pick<KodaXOptions, 'learningReviewer' | 'memoryReviewer'>,
-): boolean {
-  return options.learningReviewer === undefined && options.memoryReviewer === undefined;
-}
-
 export async function runSubstrate(
   options: KodaXOptions,
   prompt: string,
@@ -582,17 +585,11 @@ export async function runSubstrate(
   // window.
   const initialProvider = resolveProvider(turnState.currentProviderName);
   assertProviderConfigured(initialProvider, turnState.currentProviderName);
-  if (shouldInstallProductionLearningReviewer(options)) {
-    options = {
-      ...options,
-      learningReviewer: createProductionLearningReviewer({
-        provider: initialProvider,
-        ...(turnState.currentModelOverride === undefined
-          ? {}
-          : { model: turnState.currentModelOverride }),
-      }),
-    };
-  }
+  options = installProductionLearningReviewer(
+    options,
+    initialProvider,
+    turnState.currentModelOverride,
+  );
   const initialContextWindow =
     initialProvider.getEffectiveContextWindow?.(turnState.currentModelOverride)
     ?? initialProvider.getContextWindow();
@@ -629,6 +626,12 @@ export async function runSubstrate(
     ownsContextRevision: options.context?.ownsContextRevision,
   });
   const liveTurnScopeRef = { current: liveTurnScope };
+  const memoryIntentUserTurnRef = {
+    current: {
+      text: options.context?.rawUserInput?.trim() || prompt,
+      turnId: liveTurnScope.turnId,
+    },
+  };
   events = withDurableCompactionPersistence({
     events,
     storage: options.session?.storage,
@@ -655,7 +658,10 @@ export async function runSubstrate(
   let memoryController: MemoryController | undefined;
   let memoryPack: MemoryPack | undefined;
   let memoryBranchEpoch: number | undefined;
-  if (options.context?.currentAgentId === undefined) {
+  let memoryReviewDrain: Promise<void> = Promise.resolve();
+  let acceptedMemoryIntent: AcceptedMemoryIntent | undefined;
+  if (options.context?.currentAgentId === undefined
+    && options.context?.parentAgentId === undefined) {
     try {
       memoryController = createMemoryControlPlane({
         cwd: resolveExecutionCwd(options.context),
@@ -683,12 +689,12 @@ export async function runSubstrate(
         });
         events.onMemoryReview?.(plan);
       }
-      void drainCodingMemoryReviewInbox(
+      memoryReviewDrain = drainCodingMemoryReviewInbox(
         options,
         memoryIdentity,
         memoryController,
         sessionId,
-      ).catch((error: unknown) => {
+      ).then(() => undefined).catch((error: unknown) => {
         emitResilienceDebug('[memory:review-inbox:startup-drain-error]', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -785,6 +791,10 @@ export async function runSubstrate(
     });
     queue.dequeue(promptFilter);
     const queuedTurnId = startQueuedLiveTurn(prompts[0]?.id);
+    memoryIntentUserTurnRef.current = {
+      text: prompts.map((queued) => queued.content).join('\n'),
+      turnId: queuedTurnId,
+    };
     if (ctx.actorControl !== undefined) {
       ctx.actorTurnRef = {
         actorPath: ctx.actorControl.callerPath,
@@ -823,6 +833,7 @@ export async function runSubstrate(
     options.context?.toolVisibilityPolicy,
   );
   const memoryRecallToolAllowed = configuredActiveTools.includes(MEMORY_RECALL_TOOL_NAME);
+  const memoryIntentToolAllowed = configuredActiveTools.includes(MEMORY_INTENT_TOOL_NAME);
   const sessionHistoryStorage = options.session?.storage;
   const sessionHistoryToolsAllowed = canActivateSessionHistoryTools({
     activeTools: configuredActiveTools,
@@ -837,7 +848,10 @@ export async function runSubstrate(
     // FEATURE_247 (R2): apply the profile tool-visibility policy after the
     // static excludeTools filter, before the model-visible list is built.
     activeTools: activateSessionHistoryTools(
-      activateMemoryRecallTool(configuredActiveTools, false),
+      activateMemoryIntentTool(
+        activateMemoryRecallTool(configuredActiveTools, false),
+        false,
+      ),
       sessionHistoryToolsAllowed,
     ),
     modelSelection: {
@@ -902,25 +916,46 @@ export async function runSubstrate(
     if (memorySession !== undefined) {
       const checks = collectVerifiedCheckFacts(finalized.artifactLedger ?? []);
       try {
+        const completedAt = new Date().toISOString();
         await memorySession.complete(finalized.interrupted
           ? { status: 'cancelled', summary: finalized.lastText, evidence: [] }
           : {
               status: finalized.success ? 'succeeded' : 'failed',
               summary: finalized.lastText,
-              evidence: checks.length > 0
-                ? checks.map((check) => ({
+              evidence: [
+                ...(acceptedMemoryIntent === undefined
+                  ? []
+                  : [{
+                      ref: acceptedMemoryIntent.evidenceRef,
+                      requestedGrade: 'authoritative' as const,
+                      source: 'user' as const,
+                      observedAt: completedAt,
+                    }]),
+                ...(checks.length > 0
+                  ? checks.map((check) => ({
                     ref: check.ref,
                     requestedGrade: 'verified' as const,
                     source: check.source,
                     verdict: check.verdict,
                     observedAt: check.observedAt,
                   }))
-                : [{
-                    ref: `host:run-terminal:${sessionId}`,
-                    requestedGrade: 'observed' as const,
-                    source: 'host' as const,
-                    observedAt: new Date().toISOString(),
-                  }],
+                  : [{
+                      ref: `host:run-terminal:${sessionId}`,
+                      requestedGrade: 'observed' as const,
+                      source: 'host' as const,
+                      observedAt: completedAt,
+                    }]),
+              ],
+              ...(acceptedMemoryIntent === undefined
+                ? {}
+                : {
+                    memoryIntent: {
+                      operation: acceptedMemoryIntent.operation,
+                      evidenceRef: acceptedMemoryIntent.evidenceRef,
+                      candidateStatement: acceptedMemoryIntent.candidateStatement,
+                      userQuote: acceptedMemoryIntent.userQuote,
+                    },
+                  }),
             });
         await memorySession.close();
       } catch (error) {
@@ -953,12 +988,14 @@ export async function runSubstrate(
       });
     }
     if (memoryController !== undefined) {
-      void drainCodingMemoryReviewInbox(
+      memoryReviewDrain = memoryReviewDrain.then(
+        () => drainCodingMemoryReviewInbox(
           options,
           memoryIdentity,
           memoryController,
           '',
-        ).catch((error: unknown) => {
+        ).then(() => undefined),
+      ).catch((error: unknown) => {
         emitResilienceDebug('[memory:review-inbox:drain-error]', {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1141,6 +1178,19 @@ export async function runSubstrate(
                 : {}),
               throughSequence: memoryDecisionBinding.throughSequence,
             });
+    }
+    if (memoryIntentToolAllowed) {
+      runtimeSessionState.activeTools = activateMemoryIntentTool(
+        runtimeSessionState.activeTools,
+        true,
+      );
+      ctx.memoryIntent = createMemoryIntentBinding({
+        getCurrentUserTurn: () => memoryIntentUserTurnRef.current,
+        sessionId,
+        onAccepted: (intent) => {
+          acceptedMemoryIntent = intent;
+        },
+      });
     }
   }
 

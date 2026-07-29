@@ -179,9 +179,24 @@ export interface KodaXMemoryOutcomeDigest {
   readonly lesson?: string;
   readonly evidenceRefs: readonly string[];
   readonly evidence?: readonly KodaXMemoryOutcomeEvidence[];
+  /**
+   * Explicit durable intent captured from the Action LLM and bound by the
+   * host to an exact quote in the current user turn. It is evidence for the
+   * governed reviewer, never proof that Memory was queued or applied.
+   */
+  readonly memoryIntent?: KodaXMemoryIntent;
   readonly memoryInfluence?: readonly KodaXMemoryInfluenceRef[];
   readonly visibility: 'prompt_safe' | 'private' | 'sensitive';
   readonly createdAt: string;
+}
+
+export interface KodaXMemoryIntent {
+  readonly operation: 'remember' | 'correct';
+  readonly evidenceRef: string;
+  /** Sanitized model-derived claim proposed for governed review. */
+  readonly candidateStatement: string;
+  /** Sanitized representation of the exact current-user quote verified by the host. */
+  readonly userQuote: string;
 }
 
 export interface KodaXMemoryOutcomeEvidence {

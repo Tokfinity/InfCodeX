@@ -11,6 +11,7 @@ import type {
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
+import type { KodaXOptions } from './types.js';
 
 const TOOL_NAME = 'commit_episode_learning_review';
 
@@ -177,6 +178,27 @@ export const LEARNING_REVIEW_SCHEMA_SHA256 = createHash('sha256')
 export interface CreateProductionLearningReviewerOptions {
   readonly provider: KodaXBaseProvider;
   readonly model?: string;
+}
+
+export function shouldInstallProductionLearningReviewer(
+  options: Pick<KodaXOptions, 'learningReviewer' | 'memoryReviewer'>,
+): boolean {
+  return options.learningReviewer === undefined && options.memoryReviewer === undefined;
+}
+
+export function installProductionLearningReviewer(
+  options: KodaXOptions,
+  provider: KodaXBaseProvider,
+  model: string | undefined,
+): KodaXOptions {
+  if (!shouldInstallProductionLearningReviewer(options)) return options;
+  return {
+    ...options,
+    learningReviewer: createProductionLearningReviewer({
+      provider,
+      ...(model === undefined ? {} : { model }),
+    }),
+  };
 }
 
 type ReviewInvocation =

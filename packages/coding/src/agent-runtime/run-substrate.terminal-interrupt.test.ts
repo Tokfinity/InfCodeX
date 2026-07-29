@@ -1,8 +1,13 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _resetMessageQueueForTests,
   actorQueueId,
   getMessageQueue,
+  type KodaXMemoryOutcomeDigest,
 } from '@kodax-ai/agent';
 import {
   KodaXBaseProvider,
@@ -153,6 +158,164 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
       maxPriority: 'user',
       mode: 'prompt',
     })).toBe(false);
+  });
+
+  it('binds memory_intent to a queued user turn instead of the initial prompt', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'kodax-sa-memory-follow-up-'));
+    const sessionId = 'ordinary-memory-follow-up';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+    const followUp = 'From now on, remember to run focused tests before reporting success.';
+    let turn = 0;
+    let outcome: KodaXMemoryOutcomeDigest | undefined;
+
+    class MemoryFollowUpProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(messages: KodaXMessage[]): Promise<KodaXStreamResult> {
+        turn += 1;
+        if (turn === 1) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: followUp,
+          });
+          return {
+            textBlocks: [{ type: 'text', text: 'first answer' }],
+            toolBlocks: [],
+            thinkingBlocks: [],
+          };
+        }
+        if (turn === 2) {
+          expect(JSON.stringify(messages.at(-1)?.content)).toContain(followUp);
+          return {
+            textBlocks: [],
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'remember-follow-up',
+              name: 'memory_intent',
+              input: {
+                operation: 'remember',
+                statement: 'Run focused tests before reporting success.',
+                userQuote: followUp,
+              },
+            }],
+            thinkingBlocks: [],
+          };
+        }
+        expect(JSON.stringify(messages.at(-1)?.content))
+          .toContain('captured for end-of-episode governed submission');
+        return {
+          textBlocks: [{ type: 'text', text: 'follow-up captured' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new MemoryFollowUpProvider());
+    actorSession = new CodingActorSession({ sessionId });
+    try {
+      const result = await runKodaX({
+        provider: PROVIDER_NAME,
+        model: 'baseline-model',
+        maxIter: 4,
+        lsp: false,
+        memoryReviewer: async (input) => ({
+          trigger: input.trigger,
+          createdAt: '2026-07-29T05:00:00.000Z',
+          sourceRefs: input.sourceRefs,
+          candidateRefs: input.candidateRefs,
+          actions: [],
+          warnings: [],
+        }),
+        session: { id: sessionId },
+        context: {
+          actorSession,
+          configHome: home,
+          gitRoot: home,
+          executionCwd: home,
+          repoIntelligenceMode: 'off',
+          interruptInput: {
+            closeInputWindow() {},
+            reopenInputWindow() {},
+          },
+        },
+        events: {
+          onMemoryOutcomeDigest(digest) {
+            outcome = digest;
+          },
+        },
+      }, 'Inspect the current implementation.');
+
+      expect(result.success).toBe(true);
+      expect(outcome?.memoryIntent).toMatchObject({
+        operation: 'remember',
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: followUp,
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('does not expose root memory tools for a parent-only internal run', async () => {
+    const sessionId = 'ordinary-parent-only-internal';
+    let exposedTools: readonly string[] = [];
+    let outcome: KodaXMemoryOutcomeDigest | undefined;
+
+    class ParentOnlyInternalProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(
+        _messages: KodaXMessage[],
+        tools: KodaXToolDefinition[],
+      ): Promise<KodaXStreamResult> {
+        exposedTools = tools.map((tool) => tool.name);
+        return {
+          textBlocks: [{ type: 'text', text: 'internal run complete' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new ParentOnlyInternalProvider());
+    const result = await runKodaX({
+      provider: PROVIDER_NAME,
+      model: 'baseline-model',
+      maxIter: 1,
+      lsp: false,
+      session: { id: sessionId },
+      context: {
+        parentAgentId: '/root',
+        gitRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        repoIntelligenceMode: 'off',
+      },
+      events: {
+        onMemoryOutcomeDigest(digest) {
+          outcome = digest;
+        },
+      },
+    }, 'Run one internal task.');
+
+    expect(result.success).toBe(true);
+    expect(exposedTools).not.toContain('memory_intent');
+    expect(exposedTools).not.toContain('memory_recall');
+    expect(outcome).toBeUndefined();
   });
 
   it('bounds continuously accepted terminal input to a fixed continuation allowance', async () => {
