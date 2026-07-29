@@ -971,29 +971,45 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     timeoutMs: number | undefined,
     timeoutLabelMs: number | undefined = timeoutMs,
   ): Promise<void> => {
+    const isTurnTerminal = (): boolean => {
+      const state = actorControl.output(entry.actorPath, entry.turnId).state;
+      return state === 'completed' || state === 'failed' || state === 'interrupted';
+    };
     const isTerminalEvent = (event: AgentEvent): boolean => (
       event.turnId === entry.turnId
       && (event.kind === 'turn_completed'
         || event.kind === 'turn_failed'
         || event.kind === 'turn_interrupted')
     );
+    const interruptOrAcceptTerminal = async (): Promise<boolean> => {
+      if (isTurnTerminal()) return false;
+      try {
+        await actorControl.interrupt(entry.actorPath, 'workflow wait timeout');
+        return true;
+      } catch (error) {
+        if (isTurnTerminal()) return false;
+        throw error;
+      }
+    };
     const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
     let cursor = 0;
     for (;;) {
+      if (isTurnTerminal()) return;
       const events = actorControl.eventSnapshot(cursor);
       const terminal = events.find(isTerminalEvent);
       if (terminal) return;
       cursor = events.at(-1)?.sequence ?? cursor;
       const remaining = deadline === undefined ? undefined : deadline - Date.now();
       if (remaining !== undefined && remaining <= 0) {
-        await actorControl.interrupt(entry.actorPath, 'workflow wait timeout');
-        throw new Error(`workflow task ${entry.name} timed out after ${timeoutLabelMs ?? timeoutMs}ms`);
+        if (await interruptOrAcceptTerminal()) {
+          throw new Error(`workflow task ${entry.name} timed out after ${timeoutLabelMs ?? timeoutMs}ms`);
+        }
+        return;
       }
       const event = await actorControl.wait(cursor, remaining);
-      if (!event) {
-        await actorControl.interrupt(entry.actorPath, 'workflow wait timeout');
-        throw new Error(`workflow task ${entry.name} timed out after ${timeoutLabelMs ?? timeoutMs}ms`);
-      }
+      // AgentActorController.wait() has its own 30s polling window when
+      // timeoutMs is undefined. An empty poll is not a Workflow timeout.
+      if (!event) continue;
       if (isTerminalEvent(event)) return;
       cursor = event.sequence;
     }

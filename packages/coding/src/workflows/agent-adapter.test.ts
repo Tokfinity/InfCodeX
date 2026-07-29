@@ -326,6 +326,93 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(seenSignal?.aborted).toBe(true);
   });
 
+  it('keeps an unbounded wait alive across the Actor polling window', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveChild: (result: KodaXChildExecutionResult) => void = () => {};
+      let seenSignal: AbortSignal | undefined;
+      const backend = createCodingWorkflowBackend({
+        ctx: fakeCtx(),
+        childOptions,
+        generateId: () => 'task-unbounded',
+        runChild: (_bundles, _ctx, options) => {
+          seenSignal = options.abortSignal;
+          return new Promise<KodaXChildExecutionResult>((resolve) => {
+            resolveChild = resolve;
+          });
+        },
+      });
+      const handle = await backend.spawn({ name: 'slow', prompt: 'x', readOnly: true });
+      const outcome = backend.wait(handle.taskId).then(
+        (result) => ({ ok: true as const, result }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(settled).toBe(false);
+      expect(seenSignal?.aborted).toBe(false);
+
+      resolveChild(execResult({ childId: 'task-unbounded', summary: 'done' }));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(outcome).resolves.toMatchObject({
+        ok: true,
+        result: { taskId: 'task-unbounded', status: 'completed', finalText: 'done' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles from Actor output when its terminal event was acknowledged', async () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = fakeCtx();
+      const backend = createCodingWorkflowBackend({
+        ctx,
+        childOptions,
+        generateId: () => 'task-acknowledged',
+        runChild: async () => execResult({
+          childId: 'task-acknowledged',
+          summary: 'done from output',
+        }),
+      });
+      const handle = await backend.spawn({ name: 'acknowledged', prompt: 'x', readOnly: true });
+      await vi.advanceTimersByTimeAsync(0);
+      const actor = ctx.actorControl?.list().actors.find(
+        (candidate) => candidate.path === '/root/acknowledged-1',
+      );
+      const turnId = actor?.latestTurn?.turnId;
+      expect(actor?.latestTurn?.state).toBe('completed');
+      expect(turnId).toBeDefined();
+      await expect(ctx.actorControl?.acknowledgeCompletions([turnId!])).resolves.toBe(1);
+      expect(ctx.actorControl?.eventSnapshot().some(
+        (event) => event.turnId === turnId && event.kind === 'turn_completed',
+      )).toBe(false);
+
+      const outcome = backend.wait(handle.taskId).then(
+        (result) => ({ ok: true as const, result }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(outcome).resolves.toMatchObject({
+        ok: true,
+        result: {
+          taskId: 'task-acknowledged',
+          status: 'completed',
+          finalText: 'done from output',
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks every child as a workflow child so the self-distill digest fires (FEATURE_217)', async () => {
     let seenWorkflowChild: boolean | undefined;
     const backend = createCodingWorkflowBackend({
