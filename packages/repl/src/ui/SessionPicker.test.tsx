@@ -94,6 +94,31 @@ describe('SessionPicker', () => {
     expect(frame).toContain('Selected ID: session-alpha-12345678');
   });
 
+  it('renders session timestamps in the local timezone', () => {
+    const previousTimezone = process.env.TZ;
+    process.env.TZ = 'Asia/Shanghai';
+    try {
+      const { lastFrame } = render(
+        <SessionPicker
+          sessions={[{
+            id: 'local-time-session',
+            title: 'Local time',
+            msgCount: 1,
+            createdAt: '2026-07-29T03:36:34.235Z',
+          }]}
+          onSelect={vi.fn()}
+          onSelectionError={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      expect(lastFrame()).toContain('2026-07-29 11:36');
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
+
   it('selects and exits through the owned TUI input lifecycle', async () => {
     const stdin = new MockInput();
     const stdout = new MockOutput();
