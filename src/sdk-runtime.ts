@@ -204,6 +204,7 @@ import {
   createRuntimeLearningOwner,
   type RuntimeLearningService,
 } from "./runtime-learning.js";
+export type { RuntimeLearningService } from "./runtime-learning.js";
 import {
   createRuntimeDaemonClient,
   type RuntimeDaemonClientTransport,

@@ -66,11 +66,15 @@ function getSkillCommand() {
   return command;
 }
 
-async function invoke(args: readonly string[], cwd: string): Promise<void> {
+async function invoke(
+  args: readonly string[],
+  cwd: string,
+  callbacks: Readonly<Record<string, unknown>> = {},
+): Promise<void> {
   await learnCommand.handler(
     [...args],
     buildContext(cwd) as never,
-    {} as never,
+    callbacks as never,
     {} as never,
   );
 }
@@ -566,5 +570,162 @@ describe('FEATURE_224 /learn command', () => {
 
     expect(log.contains('pending memory proposals')).toBe(true);
     expect(log.contains('p-memory-filter')).toBe(true);
+  });
+
+  it.each([
+    ['promote', '--help'],
+    ['promote', '-h'],
+    ['promote', 'help'],
+  ])('shows dedicated promote help for /learn %s %s', async (...args) => {
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(args, cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('/learn promote <name|slug|capability-id> [--scope user]')).toBe(true);
+    expect(log.contains('testing -> active_learned')).toBe(true);
+    expect(log.contains('ready or active_learned -> promoted_user')).toBe(true);
+    expect(log.contains('never overwrites different formal Skill content')).toBe(true);
+  });
+
+  it('routes /help learn promote to the dedicated promote help', async () => {
+    const help = BUILTIN_COMMANDS.find((entry) => entry.name === 'help');
+    if (!help) throw new Error('test setup expected /help command');
+
+    const { log, restore } = captureOutput();
+    try {
+      await help.handler(['learn', 'promote'], buildContext(cwd) as never, {} as never, {} as never);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('/learn promote <name|slug|capability-id> [--scope user]')).toBe(true);
+    expect(log.contains('Promote is an explicit ownership transfer')).toBe(true);
+  });
+
+  it('routes /learn help promote to the dedicated promote help', async () => {
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(['help', 'promote'], cwd);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('/learn promote <name|slug|capability-id> [--scope user]')).toBe(true);
+  });
+
+  it.each([
+    [['promote', 'release-check', '--scope', 'project'], 'unsupported promote scope: project'],
+    [['promote', 'release-check', '--scope'], 'missing value for --scope'],
+    [['promote', 'release-check', '--scope', 'user', '--scope=user'], 'duplicate --scope option'],
+    [['promote', 'release-check', '--unknown'], 'unknown promote option: --unknown'],
+    [['promote', 'release-check', 'extra'], 'unexpected promote argument: extra'],
+  ] as const)('rejects invalid promote arguments without changing the user catalog', async (args, message) => {
+    const promote = vi.fn(async () => undefined);
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(args, cwd, {
+        learning: {
+          get: vi.fn(async (nameOrSlug: string) => ({ slug: nameOrSlug })),
+          list: vi.fn(async () => ({ items: [], revision: 0 })),
+          promote,
+        },
+      });
+    } finally {
+      restore();
+    }
+
+    expect(log.contains(message)).toBe(true);
+    expect(promote).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['without an explicit flag', ['promote', 'release-check']],
+    ['with a separated scope flag', ['promote', 'release-check', '--scope', 'user']],
+    ['with an inline scope flag', ['promote', 'release-check', '--scope=user']],
+  ])('dispatches promote to the exact user scope %s', async (_label, args) => {
+    const promote = vi.fn(async () => undefined);
+    const get = vi.fn(async () => ({
+      capabilityId: 'lc-release-check',
+      slug: 'release-check',
+    }));
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(args, cwd, {
+        learning: {
+          get,
+          list: vi.fn(async () => ({ items: [], revision: 0 })),
+          promote,
+        },
+      });
+    } finally {
+      restore();
+    }
+
+    expect(get).toHaveBeenCalledWith('release-check');
+    expect(promote).toHaveBeenCalledWith('lc-release-check', 'user');
+    expect(log.contains('promoted release-check to the formal user Skill catalog')).toBe(true);
+  });
+
+  it('preserves an exact capability ID when duplicate slugs need disambiguation', async () => {
+    const promote = vi.fn(async () => undefined);
+    const get = vi.fn(async (capabilityId: string) => ({
+      capabilityId,
+      slug: 'duplicate-release-check',
+    }));
+    const exactId = 'lc-project-b-release-check';
+
+    await invoke(['promote', exactId], cwd, {
+      learning: {
+        get,
+        list: vi.fn(async () => ({
+          items: [
+            { capabilityId: 'lc-project-a-release-check', slug: 'duplicate-release-check' },
+            { capabilityId: exactId, slug: 'duplicate-release-check' },
+          ],
+          revision: 2,
+        })),
+        promote,
+      },
+    });
+
+    expect(get).toHaveBeenCalledWith(exactId);
+    expect(promote).toHaveBeenCalledWith(exactId, 'user');
+  });
+
+  it('shows exact capability IDs when list results contain duplicate slugs', async () => {
+    const { log, restore } = captureOutput();
+    try {
+      await invoke(['list'], cwd, {
+        learning: {
+          list: vi.fn(async () => ({
+            items: [
+              {
+                capabilityId: 'lc-project-a-release-check',
+                slug: 'duplicate-release-check',
+                carrier: 'skill',
+                lifecycle: 'ready',
+                displayName: 'Project A release check',
+              },
+              {
+                capabilityId: 'lc-project-b-release-check',
+                slug: 'duplicate-release-check',
+                carrier: 'skill',
+                lifecycle: 'active_learned',
+                displayName: 'Project B release check',
+              },
+            ],
+            revision: 2,
+          })),
+        },
+      });
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('id=lc-project-a-release-check')).toBe(true);
+    expect(log.contains('id=lc-project-b-release-check')).toBe(true);
   });
 });

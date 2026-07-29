@@ -184,6 +184,40 @@ Expected:
 - another process observing the global event journal receives project Learned
   Area events without an in-process service facade.
 
+Promotion command/help checks:
+
+1. Run `/learn promote --help`, `/learn help promote`, and
+   `/help learn promote`.
+2. Confirm each route distinguishes evidence-driven
+   `testing -> active_learned` from explicit promotion of a reviewed `ready` or
+   `active_learned` revision to `promoted_user`, and explains the normal
+   destination and non-overwrite guarantee.
+3. Run `/learn promote <slug>`, then repeat with a separate candidate using
+   `/learn promote <slug> --scope user`.
+4. Try `--scope project`, a missing scope value, an unknown option, a duplicate
+   scope option, and an extra operand.
+
+Expected:
+
+- both valid forms promote the exact revision to the formal user catalog;
+- every invalid form fails before calling the Runtime mutation;
+- command completion and `/learn help` advertise the dedicated promote help;
+- success output names the formal user Skill catalog rather than only saying
+  the action was accepted.
+
+SDK/transport checks:
+
+- `RuntimeLearningService` is a named `/runtime` SDK type export;
+- inline and Worker `runtime.learning.promote(id, 'user')` copy the exact
+  artifact and return a readable v2 `promoted_user` record;
+- formal `SKILL.md` appears only after a complete atomic publish, temporary
+  files are cleaned, and a repeated successful promote is a no-op;
+- daemon clients send `{ nameOrSlug, scope: 'user' }` under
+  `learning:control`;
+- the daemon rejects any non-user scope;
+- `learning.get` and `learning.list` schemas accept complete F263 v2 records,
+  including scope, artifact, provenance, and canary data.
+
 ### 9. Runtime mode and capability truthfulness
 
 Run the same checks through inline, disposable Worker, and shared daemon modes.

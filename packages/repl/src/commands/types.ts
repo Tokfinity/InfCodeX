@@ -245,7 +245,7 @@ export interface CommandDefinition {
   aliases?: string[];
   description: string;
   usage?: string;
-  detailedHelp?: () => void;
+  detailedHelp?: (args?: readonly string[]) => void;
   handler: CommandHandler;
   source?: CommandSource;
   priority?: CommandPriority;
@@ -289,7 +289,7 @@ export interface Command {
   description: string;
   usage?: string;
   handler: CommandHandler;
-  detailedHelp?: () => void;
+  detailedHelp?: (args?: readonly string[]) => void;
   source?: CommandSource;
   priority?: CommandPriority;
   location?: 'user' | 'project' | 'path';

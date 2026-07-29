@@ -365,7 +365,10 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     result: okSchema,
   },
   'learning.promote': {
-    params: objectSchema({ nameOrSlug: stringSchema, scope: stringSchema }, ['nameOrSlug', 'scope']),
+    params: objectSchema({
+      nameOrSlug: stringSchema,
+      scope: { type: 'string', enum: ['user'] },
+    }, ['nameOrSlug', 'scope']),
     result: okSchema,
   },
   'learning.review': {
@@ -834,19 +837,24 @@ function learningQuerySchema(): RuntimeDaemonJsonSchema {
   });
 }
 
-function learnedCapabilitySchema(): RuntimeDaemonJsonSchema {
-  return objectSchema({
-    schemaVersion: { type: 'integer', enum: [1] },
+function learnedCapabilityCommonProperties(): Record<string, RuntimeDaemonJsonSchema> {
+  return {
     capabilityId: stringSchema,
     displayName: stringSchema,
     slug: stringSchema,
-    carrier: { enum: ['skill', 'extension', 'workflow_handoff'] },
     lifecycle: learningLifecycleSchema(),
     revision: integerSchema,
     createdAt: stringSchema,
     updatedAt: stringSchema,
     source: objectSchema({
-      kind: { enum: ['learning_controller', 'f224_proposal'] },
+      kind: {
+        enum: [
+          'learning_controller',
+          'f224_proposal',
+          'skill_learning_loop',
+          'legacy_manual',
+        ],
+      },
       proposalId: stringSchema,
     }, ['kind']),
     lastAction: {
@@ -856,10 +864,106 @@ function learnedCapabilitySchema(): RuntimeDaemonJsonSchema {
     previousGoodRevision: integerSchema,
     previousLifecycle: learningLifecycleSchema(),
     diagnostics: arraySchema(stringSchema),
+  };
+}
+
+function learnedCapabilityRequired(): readonly string[] {
+  return [
+    'schemaVersion',
+    'capabilityId',
+    'displayName',
+    'slug',
+    'carrier',
+    'lifecycle',
+    'revision',
+    'createdAt',
+    'updatedAt',
+    'source',
+  ];
+}
+
+function learnedCapabilityArtifactSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    kind: { type: 'string', enum: ['skill_markdown'] },
+    relativePath: stringSchema,
+    fingerprint: stringSchema,
+    contentRevision: integerSchema,
+  }, ['kind', 'relativePath', 'fingerprint', 'contentRevision']);
+}
+
+function learnedCapabilityCanarySchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    maxInvocations: { type: 'integer', enum: [3] },
+    invocationCount: integerSchema,
+    verifiedSuccesses: integerSchema,
+    credibleNegatives: integerSchema,
+    binding: objectSchema({
+      bindingId: stringSchema,
+      ownerSessionRef: stringSchema,
+      expiresAt: stringSchema,
+    }, ['bindingId', 'ownerSessionRef', 'expiresAt']),
+    invocations: arraySchema(learnedCapabilityInvocationSchema()),
   }, [
-    'schemaVersion', 'capabilityId', 'displayName', 'slug', 'carrier', 'lifecycle',
-    'revision', 'createdAt', 'updatedAt', 'source',
+    'maxInvocations',
+    'invocationCount',
+    'verifiedSuccesses',
+    'credibleNegatives',
+    'invocations',
   ]);
+}
+
+function learnedCapabilityInvocationSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    invocationId: stringSchema,
+    bindingId: stringSchema,
+    usageSessionHash: stringSchema,
+    artifactRevision: integerSchema,
+    artifactFingerprint: stringSchema,
+    status: {
+      type: 'string',
+      enum: ['pending', 'verified_success', 'credible_negative', 'inconclusive'],
+    },
+    evidenceRefs: arraySchema(stringSchema),
+    invokedAt: stringSchema,
+    completedAt: stringSchema,
+  }, ['invocationId', 'bindingId', 'status', 'evidenceRefs', 'invokedAt']);
+}
+
+function learnedCapabilitySchema(): RuntimeDaemonJsonSchema {
+  const common = learnedCapabilityCommonProperties();
+  const artifact = learnedCapabilityArtifactSchema();
+  const required = learnedCapabilityRequired();
+  const v1 = objectSchema({
+    ...common,
+    schemaVersion: { type: 'integer', enum: [1] },
+    carrier: { enum: ['skill', 'extension', 'workflow_handoff'] },
+  }, required);
+  const v2 = objectSchema({
+    ...common,
+    schemaVersion: { type: 'integer', enum: [2] },
+    carrier: { type: 'string', enum: ['skill'] },
+    scope: objectSchema({
+      configHomeHash: stringSchema,
+      tenantHash: stringSchema,
+      projectHash: stringSchema,
+    }, ['configHomeHash', 'tenantHash', 'projectHash']),
+    artifact,
+    previousGoodArtifact: artifact,
+    provenance: objectSchema({
+      jobId: stringSchema,
+      inputHash: stringSchema,
+      decisionId: stringSchema,
+      actionId: stringSchema,
+    }, ['jobId', 'inputHash', 'decisionId', 'actionId']),
+    canary: learnedCapabilityCanarySchema(),
+  }, [
+    ...required,
+    'scope',
+    'artifact',
+    'provenance',
+    'canary',
+  ]);
+  return { oneOf: [v1, v2] };
 }
 
 function learningLifecycleSchema(): RuntimeDaemonJsonSchema {

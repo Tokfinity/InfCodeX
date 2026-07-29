@@ -1,9 +1,17 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createLearningCenterService } from '@kodax-ai/agent';
+import {
+  LearnedAreaStore,
+  commitLearnedSkillRevision,
+  createLearnedCapabilityScope,
+  createLearningCenterService,
+  resolveProjectLearnedAreaRoot,
+} from '@kodax-ai/agent';
+import type { RuntimeLearningService } from '@kodax-ai/kodax/runtime';
+import type { RuntimeDaemonClientTransport } from './runtime-daemon/client.js';
 import { bindRuntimeLearningClient, createRuntimeLearningOwner } from './runtime-learning.js';
 import { createKodaXRuntime } from './sdk-runtime.js';
 
@@ -30,6 +38,44 @@ async function seedReadyCapability(homeDir: string): Promise<void> {
     updatedAt: '2026-07-17T00:00:00.000Z',
     source: { kind: 'learning_controller' },
   });
+}
+
+async function seedPromotableCapability(homeDir: string): Promise<{
+  readonly capabilityId: string;
+  readonly slug: string;
+  readonly contentNeedle: string;
+}> {
+  const configHome = join(homeDir, '.kodax');
+  const identity = { tenantId: 'tenant-a', projectId: 'project-a' };
+  const projectRoot = resolveProjectLearnedAreaRoot(configHome, identity);
+  const store = new LearnedAreaStore(projectRoot);
+  await store.initialize();
+  const contentNeedle = 'Run the exact release verification suite.';
+  const record = await commitLearnedSkillRevision(store, {
+    scope: createLearnedCapabilityScope(projectRoot, identity),
+    spec: {
+      name: 'runtime-promote-skill',
+      description: 'Use when verifying a release through the Runtime SDK.',
+      purpose: 'Verify one release from reproducible evidence.',
+      triggers: ['A release candidate needs verification.'],
+      steps: [contentNeedle],
+      verification: ['Require a passing check artifact.'],
+      pitfalls: ['Do not treat model self-report as verification.'],
+    },
+    disposition: 'ready',
+    operation: 'create',
+    provenance: {
+      jobId: 'job-runtime-promote',
+      inputHash: 'a'.repeat(64),
+      decisionId: 'decision-runtime-promote',
+      actionId: 'action-runtime-promote',
+    },
+  });
+  return {
+    capabilityId: record.capabilityId,
+    slug: record.slug,
+    contentNeedle,
+  };
 }
 
 describe('runtime.learning inline facade', () => {
@@ -142,5 +188,103 @@ describe('runtime.learning inline facade', () => {
     });
     expect((await restarted.learning.getSnapshot()).ready).toBe(0);
     await restarted.close();
+  });
+
+  it.each(['inline', 'worker'] as const)(
+    'promotes the exact learned Skill through the public %s Runtime learning facade',
+    async (isolation) => {
+      const homeDir = await mkdtemp(join(tmpdir(), `kodax-${isolation}-learning-promote-`));
+      tempDirs.push(homeDir);
+      const seeded = await seedPromotableCapability(homeDir);
+      const runtime = await createKodaXRuntime({ homeDir, isolation });
+      const publicLearning: RuntimeLearningService = runtime.learning;
+
+      await publicLearning.promote(seeded.capabilityId, 'user');
+
+      expect(await publicLearning.get(seeded.capabilityId)).toMatchObject({
+        lifecycle: 'promoted_user',
+        slug: seeded.slug,
+      });
+      expect(await readFile(
+        join(homeDir, '.kodax', 'skills', seeded.slug, 'SKILL.md'),
+        'utf8',
+      )).toContain(seeded.contentNeedle);
+      await runtime.close();
+    },
+  );
+
+  it.each(['inline', 'worker'] as const)(
+    'rejects an unsupported promotion scope without side effects in %s mode',
+    async (isolation) => {
+      const homeDir = await mkdtemp(join(tmpdir(), `kodax-${isolation}-learning-scope-`));
+      tempDirs.push(homeDir);
+      const seeded = await seedPromotableCapability(homeDir);
+      const runtime = await createKodaXRuntime({ homeDir, isolation });
+      try {
+        await expect(runtime.learning.promote(
+          seeded.capabilityId,
+          'project' as unknown as 'user',
+        )).rejects.toThrow();
+        expect(await runtime.learning.get(seeded.capabilityId)).toMatchObject({
+          lifecycle: 'ready',
+        });
+        await expect(access(
+          join(homeDir, '.kodax', 'skills', seeded.slug, 'SKILL.md'),
+        )).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
+
+  it('forwards user-scope promotion through the public daemon Runtime facade', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method, params) {
+        calls.push({ method, params });
+        if (method === 'initialize') {
+          return {
+            identity: {
+              runtimeId: 'learning-promote-daemon',
+              mode: 'daemon',
+              profile: 'default',
+              startedAt: '2026-07-29T00:00:00.000Z',
+              version: '0.7.78',
+            },
+            capabilities: {
+              learningCenter: { version: 1 },
+              skillLearningLoop: {
+                version: 1,
+                activation: 'project_scoped_canary',
+                immutableDecisions: true,
+                recordGatedDiscovery: true,
+                exactUseAttribution: true,
+                rollback: true,
+              },
+            },
+            grantedScopes: ['learning:read', 'learning:control'],
+          };
+        }
+        return { ok: true };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+    const runtime = await createKodaXRuntime({
+      mode: 'daemon',
+      daemonTransport: transport,
+      daemonToken: 'learning-promote-token',
+      clientInfo: { name: 'learning-promote-test', version: '0.7.78' },
+      requirements: { learningCenter: 1, skillLearningLoop: 1 },
+    });
+
+    await runtime.learning.promote('runtime-promote-skill', 'user');
+
+    expect(calls).toContainEqual({
+      method: 'learning.promote',
+      params: { nameOrSlug: 'runtime-promote-skill', scope: 'user' },
+    });
+    await runtime.close();
   });
 });

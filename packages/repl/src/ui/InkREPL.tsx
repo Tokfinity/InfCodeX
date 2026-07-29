@@ -526,6 +526,24 @@ function learningCenterActions(record: LearnedCapabilityRecord): SelectOption[] 
   return actions;
 }
 
+export function buildLearningCenterOptions(
+  records: readonly LearnedCapabilityRecord[],
+): SelectOption[] {
+  const slugCounts = new Map<string, number>();
+  for (const record of records) {
+    slugCounts.set(record.slug, (slugCounts.get(record.slug) ?? 0) + 1);
+  }
+  return records.map((record) => {
+    const duplicateId = (slugCounts.get(record.slug) ?? 0) > 1
+      ? ` · ${record.capabilityId}`
+      : "";
+    return {
+      label: `${record.displayName} · ${record.carrier} · ${record.lifecycle}${duplicateId}`,
+      value: record.capabilityId,
+    };
+  });
+}
+
 async function applyLearningCenterAction(
   binding: LearningBinding,
   slug: string,
@@ -5977,8 +5995,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const openLearningCenter = useCallback(async (requested?: string): Promise<void> => {
     const binding = options.learning;
     if (!binding) return;
-    let slug = requested;
-    if (!slug) {
+    let capabilityKey = requested;
+    if (!capabilityKey) {
       const page = await binding.list({ limit: 200 });
       if (page.items.length === 0) {
         setLearningNotices([{
@@ -5990,22 +6008,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
       const selected = await showSelectDialogWithOptions(
         "Learning Center — type to search",
-        page.items.map((record) => ({
-          label: `${record.displayName} · ${record.carrier} · ${record.lifecycle}`,
-          value: record.slug,
-        })),
+        buildLearningCenterOptions(page.items),
       );
-      slug = Array.isArray(selected) ? selected[0] : selected;
+      capabilityKey = Array.isArray(selected) ? selected[0] : selected;
     }
-    if (!slug) return;
-    const detail = await binding.get(slug);
+    if (!capabilityKey) return;
+    const detail = await binding.get(capabilityKey);
     const selectedAction = await showSelectDialogWithOptions(
       `${detail.displayName} · ${detail.carrier} · ${detail.lifecycle}`,
       learningCenterActions(detail),
     );
     const action = Array.isArray(selectedAction) ? selectedAction[0] : selectedAction;
     if (!action) return;
-    await applyLearningCenterAction(binding, detail.slug, action);
+    await applyLearningCenterAction(binding, detail.capabilityId, action);
     setLearningSnapshot(await binding.getSnapshot());
   }, [options.learning, showSelectDialogWithOptions]);
 

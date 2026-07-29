@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, open, readFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, lstat, mkdir, open, readFile, rm } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import type {
   LearnedCapabilityCanary,
@@ -57,6 +57,7 @@ export function createLearnedSkillActionDriver(
       }
       if (action === 'promote') {
         await promoteExactArtifact(options, current);
+        if (current.lifecycle === 'promoted_user') return current;
         return transitionRecord(current, 'promoted_user', now, { lastAction: action });
       }
       throw new LearningCapabilityError(
@@ -145,13 +146,11 @@ async function promoteExactArtifact(
     ...current.artifact.relativePath.split('/'),
   );
   assertInside(source, learnedAreaRoot);
-  const info = await lstat(source);
-  if (!info.isFile() || info.isSymbolicLink()) {
-    throw new LearningCapabilityError(
-      'store_integrity_error',
-      'learned Skill promotion source is not a regular file',
-    );
-  }
+  await assertRegularFileChain(
+    learnedAreaRoot,
+    source,
+    'learned Skill promotion source contains a symlink or non-regular path',
+  );
   const content = await readFile(source, 'utf8');
   if (sha256(content) !== current.artifact.fingerprint) {
     throw new LearningCapabilityError(
@@ -159,24 +158,102 @@ async function promoteExactArtifact(
       'learned Skill promotion source fingerprint changed',
     );
   }
-  const destination = resolve(options.userSkillsRoot, current.slug, 'SKILL.md');
+  const destination = await preparePromotionDestination(
+    options.userSkillsRoot,
+    current.slug,
+  );
   assertInside(destination, options.userSkillsRoot);
-  await mkdir(dirname(destination), { recursive: true });
+  if (await publishFormalSkill(destination, content)) return;
+  const destinationInfo = await lstat(destination);
+  if (destinationInfo.isSymbolicLink() || !destinationInfo.isFile()) {
+    throw new LearningCapabilityError(
+      'store_integrity_error',
+      'formal user Skill target is not a regular file',
+    );
+  }
+  if (await readFile(destination, 'utf8') !== content) {
+    throw new LearningCapabilityError(
+      'action_failed',
+      `formal user Skill already exists with different content: ${current.slug}`,
+    );
+  }
+}
+
+async function publishFormalSkill(
+  destination: string,
+  content: string,
+): Promise<boolean> {
+  const temporary = join(
+    dirname(destination),
+    `.${basename(destination)}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    const handle = await open(destination, 'wx');
+    handle = await open(temporary, 'wx');
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
     try {
-      await handle.writeFile(content, 'utf8');
-    } finally {
-      await handle.close();
+      await link(temporary, destination);
+      return true;
+    } catch (error) {
+      if (isFileError(error, 'EEXIST')) return false;
+      throw error;
     }
+  } finally {
+    try {
+      await handle?.close();
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+}
+
+async function preparePromotionDestination(
+  userSkillsRoot: string,
+  slug: string,
+): Promise<string> {
+  const root = resolve(userSkillsRoot);
+  await mkdir(root, { recursive: true });
+  await assertRegularDirectory(root, 'formal user Skill root is not a regular directory');
+  const skillDir = resolve(root, slug);
+  assertInside(skillDir, root);
+  try {
+    await mkdir(skillDir);
   } catch (error) {
     if (!isFileError(error, 'EEXIST')) throw error;
-    if (await readFile(destination, 'utf8') !== content) {
-      throw new LearningCapabilityError(
-        'action_failed',
-        `formal user Skill already exists with different content: ${current.slug}`,
-      );
+  }
+  await assertRegularDirectory(
+    skillDir,
+    'formal user Skill path contains a symlink or non-regular directory',
+  );
+  return join(skillDir, 'SKILL.md');
+}
+
+async function assertRegularFileChain(
+  rootDir: string,
+  target: string,
+  message: string,
+): Promise<void> {
+  const root = resolve(rootDir);
+  await assertRegularDirectory(root, message);
+  const parts = relative(root, target).split(sep);
+  let current = root;
+  for (const [index, part] of parts.entries()) {
+    current = join(current, part);
+    const info = await lstat(current);
+    const final = index === parts.length - 1;
+    if (info.isSymbolicLink() || (final ? !info.isFile() : !info.isDirectory())) {
+      throw new LearningCapabilityError('store_integrity_error', message);
     }
+  }
+}
+
+async function assertRegularDirectory(path: string, message: string): Promise<void> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new LearningCapabilityError('store_integrity_error', message);
   }
 }
 

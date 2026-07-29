@@ -218,9 +218,15 @@ export class FileLearningCenterService implements LearningCenterService {
 
   async promote(
     nameOrSlug: string,
-    _scope: 'user',
+    scope: 'user',
     authority?: LearningExplicitUserAuthority,
   ): Promise<void> {
+    if (scope !== 'user') {
+      throw new LearningCapabilityError(
+        'unsupported_action',
+        `unsupported learned Skill promotion scope: ${String(scope)}`,
+      );
+    }
     await this.executeDriverAction(nameOrSlug, 'promote', authority);
   }
 
@@ -318,7 +324,15 @@ export class FileLearningCenterService implements LearningCenterService {
           `${action} is not supported for learned ${current.carrier} capabilities`,
         );
       }
-      await this.recordUnlocked(await driver.execute(action, current));
+      const next = await driver.execute(action, current);
+      if (next === current) {
+        if (action === 'promote' && current.lifecycle === 'promoted_user') return;
+        throw new LearningCapabilityError(
+          'invalid_record',
+          `${action} driver did not produce a new learned capability revision`,
+        );
+      }
+      await this.recordUnlocked(next);
     });
   }
 

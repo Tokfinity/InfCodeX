@@ -1714,6 +1714,42 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
+  it('accepts only explicit user-scope learned Skill promotion over the daemon boundary', async () => {
+    const runtime = makeRuntime();
+    const promote = vi.spyOn(runtime.learning, 'promote');
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      grantedScopes: ['learning:control'],
+    });
+    await initializeDispatcher(dispatcher);
+
+    const accepted = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-learning-promote-user',
+      'learning.promote',
+      { nameOrSlug: 'runtime-test-skill', scope: 'user' },
+    ));
+    const rejected = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-learning-promote-project',
+      'learning.promote',
+      { nameOrSlug: 'runtime-test-skill', scope: 'project' },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(accepted)).toBe(true);
+    expect(promote).toHaveBeenCalledTimes(1);
+    expect(promote).toHaveBeenCalledWith('runtime-test-skill', 'user');
+    expect(isRuntimeDaemonSuccessResponse(rejected)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(rejected)) {
+      expect(rejected.error).toMatchObject({
+        code: 'invalid_params',
+        message: 'Invalid params for learning.promote.',
+      });
+      expect(rejected.error.data).toMatchObject({
+        issues: ['params.scope must be one of: user.'],
+      });
+    }
+    dispatcher.close();
+  });
+
   it('gates context diagnostics by negotiated client capability', async () => {
     const runtime = makeRuntime();
     runtime.emit({

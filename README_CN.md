@@ -127,6 +127,32 @@ daemon Runtime 边界保留结构化 blocked 原因。
 为 `recommend-ship`，随后形成发布确定性契约的联合 `SHIP` 决策。语义记忆选择仍为
 实验性、宿主显式启用能力；本版本不宣称任务质量、token 或延迟改善。
 
+### 将 learned Skill 提升到用户正式目录
+
+自动 canary 激活和用户目录提升不是一回事：
+
+- 独立验证成功会把项目 Learned Area 中的 `testing` 变为
+  `active_learned`；
+- `/learn promote` 是一次显式所有权转移：它把精确 fingerprint 对应、且已审查的
+  `ready` 或 `active_learned` revision 复制到用户正式 Skill 目录，并把生命周期
+  改为 `promoted_user`。
+
+先检查具体 revision，再按名称、slug 或精确 capability ID 提升：
+
+```text
+/learn show normalize-release-notes
+/learn promote normalize-release-notes --scope user
+```
+
+`--scope user` 是目前唯一支持的 scope，也可以省略。错误 scope、未知或重复
+option，以及多余参数都会失败且不改变目录。目标位置是所配置 KodaX home 下的
+`skills/<slug>/SKILL.md`，通常为
+`~/.kodax/skills/<slug>/SKILL.md`；不同内容的同名正式 Skill 永远不会被覆盖。
+
+专属帮助入口为 `/learn promote --help`、`/learn help promote` 和
+`/help learn promote`。在 Ink Learning Center 中可执行 `/learn`，选择一个
+`active_learned` Skill，再选择 **Promote to user catalog**。
+
 同一候选版还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

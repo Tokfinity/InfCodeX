@@ -1548,6 +1548,35 @@ Built-in skills include:
 
 Skills are stored in `~/.kodax/skills/` and can be extended with custom skills.
 
+### Promote a learned Skill to the user catalog
+
+Automatic canary activation and user-catalog promotion are different:
+
+- independently verified canary success changes `testing` to
+  `active_learned` inside the project-scoped Learned Area;
+- `/learn promote` is an explicit ownership transfer that copies one exact
+  reviewed `ready` or `active_learned` revision into the formal user Skill
+  catalog and changes its lifecycle to `promoted_user`.
+
+Inspect the revision first, then promote it by name, slug, or exact capability
+ID:
+
+```text
+/learn show normalize-release-notes
+/learn promote normalize-release-notes --scope user
+```
+
+`--scope user` is the only supported scope and may be omitted. Invalid scopes,
+unknown options, duplicate scope options, and extra operands fail without
+changing the catalog. Promotion writes to the configured KodaX user Skill
+directory—normally `~/.kodax/skills/<slug>/SKILL.md`—and never overwrites
+different formal Skill content.
+
+Use `/learn promote --help`, `/learn help promote`, or
+`/help learn promote` for the dedicated command reference. In the Ink Learning
+Center, open `/learn`, select an `active_learned` Skill, and choose
+**Promote to user catalog**.
+
 ---
 
 ## Commands (CLI)

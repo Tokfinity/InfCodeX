@@ -36,6 +36,7 @@ are NOT obvious from inspecting the type definitions alone:
 26. [Agent mailbox control versus SDK event telemetry](#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774)
 27. [Windows GUI background subprocess visibility](#27-windows-gui-background-subprocess-visibility-v0775)
 28. [Standalone sandbox SDK](#28-standalone-sandbox-sdk-v0778)
+- [Learned Skill promotion reference](#learned-skill-promotion-reference-v0778)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -4965,6 +4966,67 @@ subscribe to the event and refreshes human-readable status only when the user
 runs `/sandbox`. Explicit JSON output and SDK subscriptions retain the
 structured event for professional diagnostics. `/sandbox` is read-only and
 never activates the backend or requests elevation.
+
+---
+
+## Learned Skill promotion reference (v0.7.78)
+
+Promotion is the explicit transfer of one immutable, reviewed `ready` or
+`active_learned` Skill revision into the formal user catalog. It is not the
+evidence-driven `testing -> active_learned` canary transition. The public named
+service type is exported from the Runtime SDK:
+
+```ts
+import {
+  createKodaXRuntime,
+  type RuntimeLearningService,
+} from '@kodax-ai/kodax/runtime';
+
+const runtime = await createKodaXRuntime({
+  requirements: {
+    learningCenter: 1,
+    skillLearningLoop: 1,
+  },
+});
+
+const learning: RuntimeLearningService = runtime.learning;
+const record = await learning.get('normalize-release-notes');
+
+try {
+  await learning.promote(record.capabilityId, 'user');
+} finally {
+  await runtime.close();
+}
+```
+
+`name`, `slug`, and exact `capabilityId` are accepted. Exact IDs are preferred
+when multiple projects expose the same display name or slug. `'user'` is the
+only supported scope. Daemon clients need the server-issued
+`learning:control` scope; advertising a client capability does not grant it.
+Inline, Worker, and daemon facades carry the same v2 learned-record shape and
+promotion method.
+
+The Runtime verifies the source is a regular non-symlink file inside the exact
+project Learned Area and that its content still matches the recorded
+fingerprint. It then creates the configured user Skill destination—normally
+`~/.kodax/skills/<slug>/SKILL.md`—with atomic exclusive-publish semantics.
+Existing identical content is idempotent; the final path appears only after the
+complete temporary file is synced. Different formal content returns an
+`action_failed` error and is never overwritten. On success the canonical
+project record changes to `promoted_user`.
+
+Terminal users can inspect the same contract with:
+
+```text
+/learn promote --help
+/learn help promote
+/help learn promote
+```
+
+The canonical command is
+`/learn promote <name|slug|capability-id> --scope user`; omitting the scope is a
+backward-compatible shorthand for the same user scope. Unknown, duplicate, or
+unsupported options fail before the Runtime mutation.
 
 ---
 

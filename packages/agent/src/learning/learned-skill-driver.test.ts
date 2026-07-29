@@ -1,6 +1,16 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -47,6 +57,35 @@ function spec(step: string): DeclarativeSkillSpec {
     verification: ['Require a passing check artifact.'],
     pitfalls: ['Do not treat model self-report as verification.'],
   };
+}
+
+async function promotionFixture() {
+  const area = await fixture();
+  const created = await commitLearnedSkillRevision(area.store, {
+    scope: createLearnedCapabilityScope(area.rootDir, {
+      tenantId: 'tenant-a',
+      projectId: 'project-a',
+    }),
+    spec: spec('Run the release test suite.'),
+    disposition: 'ready',
+    operation: 'create',
+    provenance: {
+      jobId: 'job-1',
+      inputHash: 'a'.repeat(64),
+      decisionId: 'decision-1',
+      actionId: 'action-1',
+    },
+  });
+  const service = createLearningCenterService({
+    rootDir: area.rootDir,
+    clientIdentity: 'user-a',
+    actionDrivers: [createLearnedSkillActionDriver({
+      learnedAreaRoot: area.rootDir,
+      learnedAreaKind: 'project',
+      userSkillsRoot: area.userSkillsRoot,
+    })],
+  });
+  return { ...area, created, service };
 }
 
 describe('FEATURE_263 learned Skill action driver', () => {
@@ -227,38 +266,131 @@ describe('FEATURE_263 learned Skill action driver', () => {
   });
 
   it('promotes only the exact fingerprint to a non-overwriting user Skill', async () => {
-    const area = await fixture();
-    const created = await commitLearnedSkillRevision(area.store, {
-      scope: createLearnedCapabilityScope(area.rootDir, {
-        tenantId: 'tenant-a',
-        projectId: 'project-a',
-      }),
-      spec: spec('Run the release test suite.'),
-      disposition: 'ready',
-      operation: 'create',
-      provenance: {
-        jobId: 'job-1',
-        inputHash: 'a'.repeat(64),
-        decisionId: 'decision-1',
-        actionId: 'action-1',
-      },
-    });
+    const area = await promotionFixture();
+    const destination = join(area.userSkillsRoot, area.created.slug, 'SKILL.md');
+
+    await expect(area.service.promote(
+      area.created.slug,
+      'project' as unknown as 'user',
+    )).rejects.toMatchObject({ code: 'unsupported_action' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+    await expect(access(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await area.service.promote(area.created.slug, 'user');
+    const promoted = await area.service.get(area.created.slug);
+    expect(promoted).toMatchObject({ lifecycle: 'promoted_user' });
+    expect(await readFile(destination, 'utf8'))
+      .toContain('Run the release test suite.');
+    expect(await readdir(dirname(destination))).toEqual(['SKILL.md']);
+
+    await area.service.promote(area.created.slug, 'user');
+    expect(await area.service.get(area.created.slug)).toEqual(promoted);
+  });
+
+  it('rejects a no-op from an unrelated action driver', async () => {
+    const area = await promotionFixture();
     const service = createLearningCenterService({
       rootDir: area.rootDir,
       clientIdentity: 'user-a',
-      actionDrivers: [createLearnedSkillActionDriver({
-        learnedAreaRoot: area.rootDir,
-        learnedAreaKind: 'project',
-        userSkillsRoot: area.userSkillsRoot,
-      })],
+      actionDrivers: [{
+        carrier: 'skill',
+        actions: ['review'],
+        execute: async (_action, capability) => capability,
+      }],
     });
 
-    await service.promote(created.slug, 'user');
-
-    expect(await service.get(created.slug)).toMatchObject({ lifecycle: 'promoted_user' });
-    expect(await readFile(join(area.userSkillsRoot, created.slug, 'SKILL.md'), 'utf8'))
-      .toContain('Run the release test suite.');
+    await expect(service.review(area.created.capabilityId))
+      .rejects.toMatchObject({ code: 'invalid_record' });
+    expect(await service.get(area.created.capabilityId)).toMatchObject({ lifecycle: 'ready' });
   });
+
+  it('refuses a different formal Skill without changing the learned record', async () => {
+    const area = await promotionFixture();
+    const destination = join(area.userSkillsRoot, area.created.slug, 'SKILL.md');
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, 'human-owned formal Skill', 'utf8');
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'action_failed' });
+    expect(await readFile(destination, 'utf8')).toBe('human-owned formal Skill');
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+  });
+
+  it('refuses a fingerprint-tampered learned artifact', async () => {
+    const area = await promotionFixture();
+    const source = join(area.rootDir, ...area.created.artifact.relativePath.split('/'));
+    await writeFile(source, 'tampered learned Skill', 'utf8');
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'store_integrity_error' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+    await expect(access(join(area.userSkillsRoot, area.created.slug, 'SKILL.md')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a learned artifact reached through a symlinked directory', async () => {
+    const area = await promotionFixture();
+    const source = join(area.rootDir, ...area.created.artifact.relativePath.split('/'));
+    const sourceDir = dirname(source);
+    const outsideDir = join(dirname(area.rootDir), 'outside-learned-revision');
+    await rename(sourceDir, outsideDir);
+    await symlink(outsideDir, sourceDir, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'store_integrity_error' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+  });
+
+  it('refuses a formal Skill directory that is a symlink or junction', async () => {
+    const area = await promotionFixture();
+    const outsideDir = join(dirname(area.rootDir), 'outside-formal-skill');
+    await mkdir(area.userSkillsRoot, { recursive: true });
+    await mkdir(outsideDir);
+    await symlink(
+      outsideDir,
+      join(area.userSkillsRoot, area.created.slug),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'store_integrity_error' });
+    await expect(access(join(outsideDir, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+  });
+
+  it('refuses a formal user Skill root that is a symlink or junction', async () => {
+    const area = await promotionFixture();
+    const outsideDir = join(dirname(area.rootDir), 'outside-formal-root');
+    await mkdir(outsideDir);
+    await symlink(
+      outsideDir,
+      area.userSkillsRoot,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'store_integrity_error' });
+    await expect(access(join(outsideDir, area.created.slug, 'SKILL.md')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses an existing formal Skill target that is a symlink',
+    async () => {
+    const area = await promotionFixture();
+    const source = join(area.rootDir, ...area.created.artifact.relativePath.split('/'));
+    const destination = join(area.userSkillsRoot, area.created.slug, 'SKILL.md');
+    const outsideFile = join(dirname(area.rootDir), 'outside-formal-skill.md');
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(outsideFile, await readFile(source, 'utf8'), 'utf8');
+    await symlink(outsideFile, destination, 'file');
+
+    await expect(area.service.promote(area.created.slug, 'user'))
+      .rejects.toMatchObject({ code: 'store_integrity_error' });
+    expect(await area.service.get(area.created.slug)).toMatchObject({ lifecycle: 'ready' });
+    },
+  );
 
   it('exposes project records through the global Learning Center owner', async () => {
     const configHome = await mkdtemp(join(tmpdir(), 'kodax-global-learning-'));

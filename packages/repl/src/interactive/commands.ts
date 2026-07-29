@@ -293,7 +293,7 @@ export const BUILTIN_COMMANDS: Command[] = [
           commandRegistry.has(name.toLowerCase()) || Boolean(getActiveExtensionCommand(name));
         if (isKnownCommand) {
           // Show detailed help for a specific command.
-          printDetailedHelp(name);
+          printDetailedHelp(name, args.slice(1));
         } else {
           // FEATURE_218 — fall through to the KodaX self-knowledge manual for
           // product topics (/help providers, /help config, ...). Unknown topics
@@ -2603,7 +2603,10 @@ function printManualTopic(topic: string): void {
   console.log();
 }
 
-function printDetailedHelp(commandName: string): void {
+function printDetailedHelp(
+  commandName: string,
+  args: readonly string[] = [],
+): void {
   // Lazy initialization.
   if (commandRegistry.size === 0) {
     initCommandRegistry();
@@ -2629,7 +2632,7 @@ function printDetailedHelp(commandName: string): void {
 
   // If the command has a detailed help function, call it.
   if (cmd.detailedHelp) {
-    cmd.detailedHelp();
+    cmd.detailedHelp(args);
   } else {
     // Otherwise show basic info.
     console.log(chalk.cyan(`\n/${cmd.name}`));
@@ -3184,7 +3187,7 @@ export async function executeCommand(
     }
 
     if (isCommandHelpRequest(parsed.args)) {
-      printDetailedHelp(parsed.command);
+      printDetailedHelp(parsed.command, parsed.args.slice(1));
       return true;
     }
 
