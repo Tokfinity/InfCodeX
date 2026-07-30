@@ -51,13 +51,14 @@ export ZHIPU_API_KEY=...        # ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_
 kodax
 ```
 
-就这样。进 REPL，自然语言提问。新机器只要还没有选择 provider，交互式运行
-`kodax` 就会先进入 setup，即使已经存在受支持的 API Key 环境变量。setup 会检查
-core、MCP、Extensions、A2A 的活跃配置和注释模板，不覆盖已有文件，也不会要求输入
-或保存 Key。选择 provider/model 后，按提示设置对应环境变量、重启终端，再运行
-`kodax`。使用 `kodax setup --custom` 配置自定义 provider；使用
-`kodax setup --help` 或 REPL `/setup --help` 查看完整路径、环境变量、命令和快捷键。
-交互式 setup 还会检查一次可选 ASRT sandbox：Windows 可能弹出一次 UAC；
+就这样。进 REPL，自然语言提问。新机器第一次交互式运行 `kodax` 时，会先检查受支持
+的 API Key 环境变量。如果一个都没有，KodaX 只显示 Windows、macOS 和 Linux 的
+添加方法并退出，不创建配置，也不收集或保存 Key。添加后请关闭当前终端，打开新终端，
+再运行 `kodax`。如果已经存在受支持的环境变量但尚未选择 provider，KodaX 才进入
+provider/model 元数据设置。使用 `kodax setup` 重新运行设置，
+使用 `kodax setup --custom` 配置自定义 provider；使用 `kodax setup --help` 或
+REPL `/setup --help` 查看完整路径、环境变量、命令和快捷键。交互式 setup 还会检查
+一次可选 ASRT sandbox：Windows 可能弹出一次 UAC；
 macOS/Linux 会报告 Seatbelt/bubblewrap 所需依赖。拒绝 UAC 或缺少依赖不会破坏普通
 权限管理，日常启动也不会反复提醒。
 
@@ -328,7 +329,11 @@ setup 会检查以下活跃文件以及对应的 `*.example.jsonc` 注释模板�
 并注释说明所有受支持的 core 配置项。setup 不覆盖已有文件；创建空的权威分离配置
 前会先保全可读取的旧 `config.json#mcpServers` / `config.json#extensions`。命令会
 先验证已有活动配置；发现无效文件时会报告并停止，不创建或覆盖任何配置。随后才会
-保存 provider/model，告诉你准确的环境变量名，然后退出以便重启终端。也可以直接设置 API Key：
+保存 provider/model，告诉你准确的环境变量名，然后退出以便重启终端。配置自定义
+provider 时，setup 要求填写的 `apiKeyEnv` 是环境变量名（例如
+`MY_LLM_API_KEY`），不是 API Key 本身；`config.json` 只保存这个名字。setup 完成后，
+必须把该 provider 的真实 API Key 设置为这个同名环境变量的值；KodaX 不会代为写入
+系统环境变量。也可以直接设置：
 
 ```bash
 # macOS / Linux
@@ -462,6 +467,10 @@ import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-
   ]
 }
 ```
+
+这里的 `"apiKeyEnv": "MY_LLM_API_KEY"` 表示环境变量名，不是 API Key 值。
+请把自定义 provider 的真实 API Key 设置到 `MY_LLM_API_KEY` 环境变量中，然后关闭
+当前终端、打开新终端，再运行 `kodax`。
 
 `userAgentMode` 默认 `"compat"`（发送 `KodaX` 而非上游 SDK 的 User-Agent）；如果你的网关要求原生 SDK header，再切到 `"sdk"`。
 

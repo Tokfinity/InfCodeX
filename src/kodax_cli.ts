@@ -172,6 +172,7 @@ import {
   runInkInteractiveMode,
   runSessionPicker,
   findMostRecentResumableSession,
+  getProviderSetupCatalog,
   inspectProviderSetupReadiness,
   providerSetupRestartInstructions,
   runProviderSetupWizard,
@@ -207,7 +208,11 @@ import {
   sandboxSetupGuidance,
 } from './sandbox-runtime.js';
 import { createReplLearningBinding } from './repl-learning-binding.js';
-import { shouldAutoLaunchProviderSetup } from './provider-setup-cli.js';
+import {
+  hasProviderCredentialEnvironment,
+  renderMissingProviderCredentialGuide,
+  shouldAutoLaunchProviderSetup,
+} from './provider-setup-cli.js';
 export {
   ACP_PERMISSION_MODES,
   getDefaultCommandDir,
@@ -4420,8 +4425,31 @@ complete -c kodax -l version -d 'Show version'`);
       environment: process.env,
       explicitProvider: opts.provider,
     });
+    const credentialEnvironmentNames = [
+      ...getProviderSetupCatalog().map((provider) => provider.apiKeyEnv),
+      ...(config.customProviders ?? []).map((provider) => provider.apiKeyEnv),
+    ];
     if (readiness.status === 'needs-provider') {
+      if (!hasProviderCredentialEnvironment(
+        credentialEnvironmentNames,
+        process.env,
+      )) {
+        process.stdout.write(
+          `\n${renderMissingProviderCredentialGuide(credentialEnvironmentNames)}\n\n`,
+        );
+        return;
+      }
       await executeProviderSetup();
+      return;
+    }
+    if (readiness.status === 'needs-credential') {
+      process.stdout.write(
+        `\n${renderMissingProviderCredentialGuide(
+          readiness.apiKeyEnv
+            ? [readiness.apiKeyEnv]
+            : credentialEnvironmentNames,
+        )}\n\n`,
+      );
       return;
     }
     if (readiness.status === 'invalid-config') {

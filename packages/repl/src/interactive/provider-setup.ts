@@ -81,7 +81,9 @@ export async function runProviderSetupWizard(
     if (!choice) return { status: 'cancelled' };
 
     const summary = summarizeChoice(choice, catalog);
-    if (!await interaction.confirm(`Save ${summary}? No credential value will be written.`)) {
+    if (!await interaction.confirm(
+      `Save ${summary}? config.json will store the environment-variable name only. You must set that variable to the provider's API key after setup. No credential value will be written.`,
+    )) {
       return { status: 'cancelled' };
     }
 
@@ -138,7 +140,12 @@ async function collectCustomChoice(
   if (!baseUrl) return undefined;
   const apiKeyEnv = await requiredText(
     interaction,
-    'Environment-variable name only (for example MY_PROVIDER_API_KEY); KodaX never asks for the credential value',
+    [
+      'Environment-variable name only (for example MY_PROVIDER_API_KEY).',
+      'Do not paste an API key here.',
+      'config.json stores this name only.',
+      'After setup, set this environment variable\'s value to this provider\'s API key.',
+    ].join(' '),
   );
   if (!apiKeyEnv) return undefined;
   const model = await requiredText(

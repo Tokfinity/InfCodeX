@@ -212,7 +212,11 @@ describe('runProviderSetupWizard', () => {
     expect(scripted.prompts[0]).toMatch(/local alias|provider name/i);
     expect(scripted.prompts.join('\n')).toMatch(/provider documentation|api documentation/i);
     expect(scripted.prompts.join('\n')).toMatch(/environment.variable name/i);
-    expect(scripted.prompts.join('\n')).toMatch(/never.*credential value|not.*api key value/i);
+    expect(scripted.prompts.join('\n')).toMatch(/config\.json.*name only/i);
+    expect(scripted.prompts.join('\n')).toMatch(/do not paste.*API key/i);
+    expect(scripted.prompts.join('\n')).toMatch(
+      /set.*environment variable.*value.*provider.*API key/i,
+    );
   });
 
   it('rejects credential-bearing endpoint metadata before confirmation can echo it', async () => {

@@ -39,6 +39,9 @@ describe('renderSetupGuide', () => {
     expect(guide).toContain('Shift+Tab');
     expect(guide).toContain('Alt+M');
     expect(guide).toContain('kodax setup --custom');
+    expect(guide).toMatch(/custom provider.*apiKeyEnv.*name.*config\.json/is);
+    expect(guide).toMatch(/actual API key.*value.*environment variable/is);
+    expect(guide).toMatch(/KodaX does not set.*environment variable/is);
     expect(guide).toContain('kodax sandbox doctor');
     expect(guide).toContain('UAC');
     expect(guide).toContain('brew install ripgrep');

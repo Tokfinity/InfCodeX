@@ -371,15 +371,19 @@ describe('persistProviderSetupChoice', () => {
 });
 
 describe('providerSetupRestartInstructions', () => {
-  it('names the environment variable and restart handoff without printing a key placeholder', () => {
+  it('explains the config-name and environment-value handoff without printing a key placeholder', () => {
     const text = providerSetupRestartInstructions({
       apiKeyEnv: 'ALPHA_API_KEY',
       platform: 'win32',
     }).join('\n');
 
     expect(text).toContain('ALPHA_API_KEY');
+    expect(text).toMatch(/config\.json.*name only/i);
+    expect(text).toMatch(/required next step/i);
+    expect(text).toMatch(/provider.*API key.*value/i);
+    expect(text).toMatch(/KodaX cannot set.*environment variable/i);
     expect(text).toContain('restart');
     expect(text).not.toContain('=');
-    expect(text).not.toMatch(/key value|paste/i);
+    expect(text).not.toMatch(/<your-key>|paste/i);
   });
 });

@@ -52,15 +52,15 @@ kodax
 ```
 
 That's it. You're in the REPL — ask anything in natural language. On a new
-machine with no selected provider, bare interactive `kodax` opens setup first,
-even if a supported credential environment variable already exists. Setup
-checks core, MCP, Extensions, and A2A active files plus all annotated templates
-without overwriting existing files. It never asks for the key itself; after
-choosing a provider/model, set the named environment variable, restart the
-terminal, and run `kodax` again. Use `kodax setup` to rerun the flow,
-`kodax setup --custom` for a guided custom provider, and `kodax setup --help`
-(or REPL `/setup --help`) for paths, provider variables, commands, and
-shortcuts. Interactive setup also checks the optional ASRT sandbox once:
+machine, bare interactive `kodax` first checks for supported API-key environment
+variables. If none exists, KodaX only prints Windows, macOS, and Linux setup
+instructions and exits without creating configuration or collecting a key.
+After setting the variable, close the current terminal, open a new one, and run
+`kodax` again. If a supported credential exists but no provider is selected,
+KodaX opens the provider/model metadata setup. Use `kodax setup` to rerun the
+flow, `kodax setup --custom` for a guided custom provider, and
+`kodax setup --help` (or REPL `/setup --help`) for paths, provider variables,
+commands, and shortcuts. Interactive setup also checks the optional ASRT sandbox once:
 Windows may show a one-time UAC prompt; macOS/Linux report any required
 Seatbelt/bubblewrap dependencies. Declining or missing a dependency does not
 break ordinary permission handling, and normal startup will not keep reminding
@@ -181,7 +181,11 @@ core setting. Setup preserves existing files and stages readable legacy
 authoritative split files. It tells you the exact environment-variable name to
 set and exits so you can restart the terminal. Existing active files are
 validated first; an invalid file is reported without creating or overwriting
-configuration. You can also configure it directly:
+configuration. For a custom provider, setup asks for an `apiKeyEnv` name such
+as `MY_LLM_API_KEY`, not the API key itself. `config.json` stores that name
+only; after setup, set the environment variable with exactly that name to the
+provider's actual API key. KodaX does not set the OS environment variable for
+you. You can also configure it directly:
 
 ```bash
 # macOS / Linux
@@ -256,6 +260,11 @@ If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint, define
   ]
 }
 ```
+
+Here, `"apiKeyEnv": "MY_LLM_API_KEY"` is a reference to an environment-variable
+name, not an API key value. Put the custom provider's actual API key in the
+`MY_LLM_API_KEY` environment variable, then close the current terminal and open
+a new one before running `kodax`.
 
 `userAgentMode` defaults to `"compat"`, which sends `KodaX` instead of the official SDK User-Agent. Switch it to `"sdk"` only when your gateway expects the upstream SDK header.
 For custom reasoning models, `reasoning: { efforts, default }` is the preferred v0.7.57 shape; use `"reasoning": "none"` for models without thinking capability. SDK hosts should render effort pickers from `reasoningProfile.supportedEfforts` / `defaultEffort` rather than assuming a fixed five-option ladder.

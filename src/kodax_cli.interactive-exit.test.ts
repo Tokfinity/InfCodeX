@@ -39,6 +39,7 @@ const originalArgv = process.argv;
 const originalVitest = process.env.VITEST;
 const originalRuntimeMode = process.env.KODAX_RUNTIME_MODE;
 const originalProvider = process.env.KODAX_PROVIDER;
+const originalMockProviderApiKey = process.env.MOCK_PROVIDER_API_KEY;
 const originalExitCode = process.exitCode;
 
 beforeEach(() => {
@@ -47,6 +48,7 @@ beforeEach(() => {
   process.env.VITEST = 'false';
   delete process.env.KODAX_RUNTIME_MODE;
   delete process.env.KODAX_PROVIDER;
+  delete process.env.MOCK_PROVIDER_API_KEY;
   process.exitCode = undefined;
 });
 
@@ -69,6 +71,8 @@ afterEach(() => {
   else process.env.KODAX_RUNTIME_MODE = originalRuntimeMode;
   if (originalProvider === undefined) delete process.env.KODAX_PROVIDER;
   else process.env.KODAX_PROVIDER = originalProvider;
+  if (originalMockProviderApiKey === undefined) delete process.env.MOCK_PROVIDER_API_KEY;
+  else process.env.MOCK_PROVIDER_API_KEY = originalMockProviderApiKey;
 });
 
 function createDeferred(): {
@@ -350,6 +354,12 @@ async function importMainWithMocks(options: {
       runInkInteractiveMode,
       inspectProviderSetupReadiness,
       initializeSetupConfiguration,
+      getProviderSetupCatalog: vi.fn(() => [{
+        name: 'mock-provider',
+        apiKeyEnv: 'MOCK_PROVIDER_API_KEY',
+        defaultModel: 'mock-model',
+        models: ['mock-model'],
+      }]),
       renderSetupGuide,
       providerSetupRestartInstructions: vi.fn(() => []),
       runProviderSetupWizard,
@@ -437,7 +447,7 @@ describe('CLI interactive exit lifecycle', () => {
     }
   });
 
-  it('runs setup before entering the REPL when the first interactive run has no provider config', async () => {
+  it('prints read-only credential guidance when first launch has no provider environment variable', async () => {
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
@@ -455,9 +465,15 @@ describe('CLI interactive exit lifecycle', () => {
 
       await main();
 
-      expect(harness.renderSetupGuide).toHaveBeenCalledOnce();
-      expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
-      expect(harness.runProviderSetupWizard).toHaveBeenCalledWith({ customOnly: undefined });
+      expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'KodaX did not detect a supported provider API key environment variable.',
+      ));
+      expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'MOCK_PROVIDER_API_KEY',
+      ));
+      expect(harness.renderSetupGuide).not.toHaveBeenCalled();
+      expect(harness.initializeSetupConfiguration).not.toHaveBeenCalled();
+      expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
       expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
       expect(harness.runInteractiveMode).not.toHaveBeenCalled();
       expect(harness.createKodaXRuntime).not.toHaveBeenCalled();
@@ -470,13 +486,79 @@ describe('CLI interactive exit lifecycle', () => {
     }
   });
 
-  it('does not let KODAX_PROVIDER bypass first-run initialization when config.json is missing', async () => {
+  it('prints the selected provider variable when an existing config is missing its credential', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      const { main, harness } = await importMainWithMocks({
+        inspectProviderSetupReadiness: () => ({
+          status: 'needs-credential',
+          configPath: 'C:/Users/test/.kodax/config.json',
+          configRevision: 'configured',
+          provider: 'mock-provider',
+          apiKeyEnv: 'MOCK_PROVIDER_API_KEY',
+        }),
+      });
+
+      await main();
+
+      expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'MOCK_PROVIDER_API_KEY',
+      ));
+      expect(harness.initializeSetupConfiguration).not.toHaveBeenCalled();
+      expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
+      expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
+      expect(harness.createKodaXRuntime).not.toHaveBeenCalled();
+    } finally {
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
+  it('keeps metadata setup available when a supported provider credential already exists', async () => {
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    process.env.MOCK_PROVIDER_API_KEY = 'available-outside-kodax';
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    try {
+      const { main, harness } = await importMainWithMocks({
+        inspectProviderSetupReadiness: () => ({
+          status: 'needs-provider',
+          configPath: 'C:/Users/test/.kodax/config.json',
+          configRevision: 'missing',
+        }),
+      });
+
+      await main();
+
+      expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
+      expect(harness.runProviderSetupWizard).toHaveBeenCalledOnce();
+      expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.MOCK_PROVIDER_API_KEY;
+      if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);
+      else Reflect.deleteProperty(process.stdin, 'isTTY');
+      if (stdoutDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutDescriptor);
+      else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+
+  it('does not let KODAX_PROVIDER bypass first-run credential guidance when config.json is missing', async () => {
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
     process.env.KODAX_PROVIDER = 'env-provider';
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     try {
       const { main, harness } = await importMainWithMocks({
@@ -492,8 +574,11 @@ describe('CLI interactive exit lifecycle', () => {
       expect(harness.inspectProviderSetupReadiness).toHaveBeenCalledWith(
         expect.objectContaining({ explicitProvider: undefined }),
       );
-      expect(harness.initializeSetupConfiguration).toHaveBeenCalledOnce();
-      expect(harness.runProviderSetupWizard).toHaveBeenCalledOnce();
+      expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining(
+        'KodaX did not detect a supported provider API key environment variable.',
+      ));
+      expect(harness.initializeSetupConfiguration).not.toHaveBeenCalled();
+      expect(harness.runProviderSetupWizard).not.toHaveBeenCalled();
       expect(harness.runInkInteractiveMode).not.toHaveBeenCalled();
     } finally {
       if (stdinDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinDescriptor);

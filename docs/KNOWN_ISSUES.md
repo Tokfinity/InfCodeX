@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-29_
+_Last Updated: 2026-07-30_
 
 ---
 
@@ -14,6 +14,8 @@ _Last Updated: 2026-07-29_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
+| 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
 | 237 | High | Resolved | Production learning reviewer omitted the learned Skill slug constraint | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 236 | High | Resolved | Production learning reviewer under-specified its unified output shape | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 235 | High | Resolved | v0.7.78 semantic release gates had no frozen current-policy runners | v0.7.78 release candidate | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -140,6 +142,150 @@ _Last Updated: 2026-07-29_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 242: First launch opens metadata setup when no provider credential exists
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.73 first-run provider setup
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-30
+- **Resolved**: 2026-07-30
+
+#### Original Problem
+
+On a first bare interactive launch with no configured provider and no supported
+provider API-key environment variable, KodaX initializes configuration files
+and opens a provider/model wizard. The wizard deliberately cannot write an OS
+environment variable or accept an API-key value, so completing it does not make
+the installation usable and can imply that setup is complete.
+
+Expected behavior is a read-only first-launch credential check. When no
+supported environment variable is detected, KodaX should list the supported
+variable names, show Windows, macOS, and Linux setup methods, tell the user to
+close and restart the terminal, and exit without entering the wizard or writing
+configuration.
+
+#### Context
+
+Environment variables remain the credential source of truth. Explicit
+`kodax setup` still has value for custom providers, provider/model changes,
+configuration templates, and optional sandbox preparation; only automatic
+first-launch behavior is in scope.
+
+#### Proposed Solution
+
+- Detect non-empty built-in and configured custom-provider credential
+  environment variables after shell hydration.
+- If none are present, print a secret-free cross-platform environment setup
+  guide and return without creating files or starting the REPL.
+- If a configured provider is missing its required credential, print the same
+  guide narrowed to that provider's environment-variable name.
+- Preserve explicit `kodax setup` and the existing flow when at least one
+  credential is already available.
+
+#### Resolution
+
+- Bare interactive startup now checks the credential-variable names from the
+  built-in provider catalog and configured custom providers after login-shell
+  environment hydration.
+- If no supported variable has a non-empty value, startup prints a read-only
+  guide with the supported names, persistent Windows PowerShell, macOS zsh, and
+  Linux bash instructions, then exits without initializing setup files or
+  opening the provider/model wizard.
+- If an existing provider selection is missing its credential, the same guide
+  is narrowed to that provider's required environment-variable name.
+- The guide never accepts or persists a key and explicitly tells the user to
+  close the current terminal, open a new terminal, and rerun `kodax`.
+- Automatic metadata setup remains available when a supported credential is
+  already present. Explicit `kodax setup` and `kodax setup --custom` remain
+  available for provider/model changes, configuration preparation, sandbox
+  checks, and CLI-authenticated or custom providers.
+
+#### Files Changed
+
+- `src/provider-setup-cli.ts`
+- `src/kodax_cli.ts`
+- `src/provider-setup-cli.test.ts`
+- `src/kodax_cli.interactive-exit.test.ts`
+- `README.md`
+- `README_CN.md`
+
+#### Tests Added
+
+- Credential detection ignores unrelated and blank environment variables.
+- The guide lists unique provider variables, all three supported OS families,
+  the terminal restart boundary, and the explicit setup escape hatch without
+  including a key value.
+- First launch with no credential prints guidance without initializing config,
+  starting the wizard, REPL, or Runtime.
+- A configured provider missing its credential receives provider-specific
+  guidance.
+- A supported credential preserves the existing metadata-setup path.
+
+### 241: Standalone Bun binary executes every CLI command twice
+
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.7.72 lightweight resume bootstrap
+- **Created**: 2026-07-30
+
+#### Original Problem
+
+The Windows v0.7.78 standalone executable runs ordinary CLI command handlers
+twice. Non-interactive commands print two identical results; first-run provider
+setup renders duplicate prompts, makes one typed digit appear twice across the
+two readers, and asks for final confirmation twice. The selected numeric value
+is still interpreted correctly by each handler.
+
+Expected behavior is one command-handler invocation, one result, and one
+interactive prompt sequence per process.
+
+Reproductions:
+
+- In a fresh `KODAX_HOME`, the official v0.7.78 Windows release binary prints
+  two identical empty A2A documents for `kodax.exe a2a list`.
+- The official v0.7.77 Windows release binary has the same behavior.
+- The official v0.7.71 Windows release binary prints the document once.
+- Running current `dist/kodax_bootstrap.js` or `dist/kodax_cli.js` through Node
+  prints the document once.
+
+#### Context
+
+The defect affects the Bun-compiled standalone executable rather than the
+provider, model, terminal echo setting, or Node/npm distribution. Read-only
+commands duplicate output, while mutating commands can repeat side effects or
+race their own revision checks. First-run setup remains metadata-only and does
+not accept or persist an API-key value, but its two concurrent prompt flows
+make that credential boundary especially confusing.
+
+#### Root Cause
+
+Commit `bd5c56ee` changed the standalone binary entry from
+`dist/kodax_cli.js` to `dist/kodax_bootstrap.js`. The bootstrap dynamically
+loads the CLI and explicitly invokes its exported `main()`. The CLI bundle also
+retains its direct-entry guard:
+
+`import.meta.url === pathToFileURL(process.argv[1]).href`
+
+In the Bun single-file executable, both bundled modules observe the executable
+as their module URL. The CLI therefore classifies itself as the main module and
+auto-invokes `main()` while the bootstrap invokes the same export explicitly.
+Node keeps the bootstrap and CLI as separate file URLs, so the same guard does
+not duplicate the Node/npm path.
+
+#### Proposed Solution
+
+- Give exactly one module ownership of process startup. The minimal fix is to
+  remove automatic startup from the importable CLI module and use a dedicated
+  direct-CLI entry wrapper where direct execution remains required.
+- Add a release-artifact smoke test that runs a side-effect-free command such
+  as `a2a list` against the compiled host binary and asserts one complete JSON
+  document.
+- Add a compiled first-run setup regression that asserts one provider prompt,
+  one model prompt, one confirmation, and metadata-only persistence. Keep API
+  key values outside KodaX; setup should continue to save only provider/model
+  and custom-provider environment-variable names.
 
 ### 237: Production learning reviewer omitted the learned Skill slug constraint
 
@@ -8422,11 +8568,25 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 117 (25 Open, 92 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 119 (26 Open, 93 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-30: Issue 242 resolved (v0.7.79 development)
+- Replaced automatic provider/model setup without a credential with a
+  read-only Windows/macOS/Linux environment-variable guide and an explicit
+  close-and-reopen-terminal boundary.
+- Kept API-key values outside KodaX, avoided setup-file initialization on the
+  guidance path, and preserved explicit setup plus automatic metadata setup
+  when a supported credential already exists.
+
+### 2026-07-30: Issue 241 added
+- Confirmed that Bun-compiled standalone binaries invoke the CLI entry twice,
+  duplicating both read-only output and mutating/interactive command handling.
+- Traced the regression to the v0.7.72 bootstrap entry plus the importable
+  CLI bundle's direct-entry guard. Node/npm execution remains single-shot.
 
 ### 2026-07-29: Issue 237 resolved (v0.7.78 development)
 - The authorized F263 `.3` safety panel found no credible high-severity harm and

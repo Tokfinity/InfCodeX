@@ -284,10 +284,12 @@ export function providerSetupRestartInstructions(input: {
 }): readonly string[] {
   const platform = input.platform ?? process.platform;
   const environmentStep = platform === 'win32'
-    ? `Set the user environment variable "${input.apiKeyEnv}" in Windows Environment Variables.`
-    : `Set the environment variable "${input.apiKeyEnv}" in your shell profile.`;
+    ? `Required next step: use this provider's API key as the value of the user environment variable "${input.apiKeyEnv}" in Windows Environment Variables.`
+    : `Required next step: use this provider's API key as the value of the environment variable "${input.apiKeyEnv}" in your shell profile.`;
   return [
+    `config.json stores the environment-variable name only: "${input.apiKeyEnv}"; it never stores the API key.`,
     environmentStep,
+    'KodaX cannot set this environment variable for you.',
     'Close and restart this terminal so the environment is refreshed.',
     'Then run `kodax` again.',
     'Optional: run `kodax doctor` to verify local configuration without an LLM request.',
