@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-30_
+_Last Updated: 2026-07-31_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-07-30_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 245 | High | Resolved | Windows sandbox runner cannot launch from a user-level global npm install | v0.7.78 Windows ASRT integration | v0.7.78 development | 2026-07-31 | 2026-07-31 |
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
@@ -143,6 +144,62 @@ _Last Updated: 2026-07-30_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 245: Windows sandbox runner cannot launch from a user-level global npm install
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 Windows ASRT integration
+- **Fixed**: v0.7.78 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+On a clean Windows 11 machine installed with `npm install -g`, both
+`kodax sandbox setup` and `kodax sandbox doctor` could report
+`CreateProcessWithLogonW(srt-sandbox): Access is denied (0x80070005)` while
+the Secondary Logon service was running, the `srt-sandbox` account was enabled,
+and the account belonged to the built-in Users group.
+
+The packaged `srt-win.exe` and the inherited process working directory were
+under the real user's private profile, commonly
+`%APPDATA%\npm\node_modules\...` and `%USERPROFILE%`. The dedicated sandbox
+account therefore could not start the WFP verification runner. The diagnostic
+incorrectly suggested a Secondary Logon service failure, and the readiness
+check considered only part of the account-provisioning state.
+
+#### Resolution
+
+- KodaX now copies the packaged runner into a version, architecture, and
+  content-addressed directory under
+  `%KODAX_HOME%\sandbox-runtime\runner`, verifies the bytes, and resolves every
+  Windows ASRT session to that exact copy.
+- The dedicated sandbox account receives read/execute access only to the
+  prepared directory and executable. KodaX does not widen ACLs on the
+  user-owned global npm installation tree.
+- Every sandbox policy explicitly permits runner reads and denies runner
+  writes, including SDK policies whose caller grants write access to a broad
+  parent directory.
+- Doctor and every ASRT initialization child use the prepared directory as
+  their working directory. The doctor WFP probe retains the 30-second bound and
+  reports stable failure codes for runner launch access, Secondary Logon,
+  timeout, inactive fence, and other probe failures.
+- Readiness now checks the account SID, local group/SID, built-in Users
+  membership, sandbox group membership, hidden-logon state, and credential
+  presence before attempting the WFP probe.
+- Preparation is atomic and content-addressed so concurrent KodaX processes do
+  not replace an executable in use. Existing bytes must match before reuse.
+
+#### Verification
+
+- Added Windows regressions that emulate a runner installed beneath a private
+  global npm path, verify the protected copy and read-only ACL grant, require a
+  safe probe working directory, and reject an incompletely provisioned account
+  before WFP execution.
+- Standalone SDK, Skill-script, and workspace-session tests verify that the
+  exact prepared runner is propagated, protected by `denyWrite`, and used as
+  the ASRT child working directory.
 
 ### 243: Runtime Worker omits configured A2A Agents from dispatchable catalog and execution
 
@@ -8655,11 +8712,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 120 (26 Open, 94 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 121 (26 Open, 95 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-31: Issue 245 added and resolved (v0.7.78 development)
+- Prepared a protected content-addressed Windows runner outside private global
+  npm paths, propagated it to every ASRT session, and used its directory for
+  readiness and initialization child processes.
+- Added complete account-state validation, bounded coded WFP diagnostics, and
+  regressions for the reported `CreateProcessWithLogonW` access-denied case.
 
 ### 2026-07-30: Issue 242 resolved (v0.7.79 development)
 - Replaced automatic provider/model setup without a credential with a

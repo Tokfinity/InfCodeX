@@ -1,18 +1,34 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { constants, readdirSync, statSync, writeSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
+  DEFAULT_WINDOWS_PROXY_PORT_RANGE,
   SandboxManager,
+  getSrtWinPath,
   getWindowsSandboxUserStatus,
+  grantWindowsAcl,
   installWindowsSandbox,
-  verifyWindowsWfpEgress,
+  resolveSrtWin,
+  revokeWindowsAcl,
   type SandboxAskCallback,
   type SandboxRuntimeConfig,
 } from '@anthropic-ai/sandbox-runtime';
@@ -523,8 +539,258 @@ let doctorPromise: Promise<SandboxRuntimeDoctorResult> | undefined;
 let doctorExpiresAt = 0;
 const SANDBOX_NOT_READY_RECHECK_MS = 30_000;
 
+interface PreparedWindowsSandboxRunner {
+  readonly path: string;
+  readonly directory: string;
+  readonly srtWin: ReturnType<typeof resolveSrtWin>;
+}
+
+let preparedWindowsRunnerPromise: Promise<PreparedWindowsSandboxRunner> | undefined;
+let preparedWindowsRunner: PreparedWindowsSandboxRunner | undefined;
+let preparedWindowsRunnerGrant: {
+  readonly runner: PreparedWindowsSandboxRunner;
+  readonly sandboxUserSid: string;
+} | undefined;
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isFileSystemError(error: unknown, ...codes: readonly string[]): boolean {
+  return error instanceof Error
+    && 'code' in error
+    && typeof error.code === 'string'
+    && codes.includes(error.code);
+}
+
+async function readFileIfPresent(file: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(file);
+  } catch (error: unknown) {
+    if (isFileSystemError(error, 'ENOENT')) return undefined;
+    throw error;
+  }
+}
+
+async function installWindowsRunnerCopy(
+  source: Buffer,
+  destination: string,
+): Promise<void> {
+  const existing = await readFileIfPresent(destination);
+  if (existing?.equals(source)) return;
+  if (existing !== undefined) {
+    throw new Error(`Prepared Windows sandbox runner failed integrity verification: ${destination}.`);
+  }
+  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, source, { flag: 'wx', mode: 0o700 });
+    try {
+      await rename(temporary, destination);
+    } catch (error: unknown) {
+      const concurrent = await readFileIfPresent(destination);
+      if (!concurrent?.equals(source)) throw error;
+    }
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function prepareWindowsSandboxRunner(): Promise<PreparedWindowsSandboxRunner> {
+  if (preparedWindowsRunnerPromise === undefined) {
+    const preparation = (async () => {
+      const source = await readFile(getSrtWinPath());
+      const contentId = createHash('sha256').update(source).digest('hex').slice(0, 16);
+      const directory = path.join(
+        path.resolve(getAgentConfigHome()),
+        'sandbox-runtime',
+        'runner',
+        KODAX_ASRT_VERSION,
+        process.arch,
+        contentId,
+      );
+      const runnerPath = path.join(directory, 'srt-win.exe');
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await installWindowsRunnerCopy(source, runnerPath);
+      const runner = {
+        path: runnerPath,
+        directory,
+        srtWin: resolveSrtWin({ path: runnerPath }),
+      };
+      preparedWindowsRunner = runner;
+      return runner;
+    })();
+    preparedWindowsRunnerPromise = preparation;
+    void preparation.catch(() => {
+      if (preparedWindowsRunnerPromise === preparation) {
+        preparedWindowsRunnerPromise = undefined;
+        preparedWindowsRunner = undefined;
+      }
+    });
+  }
+  return preparedWindowsRunnerPromise;
+}
+
+function requirePreparedWindowsRunner(): PreparedWindowsSandboxRunner {
+  if (process.platform !== 'win32') {
+    throw new Error('A prepared Windows sandbox runner was requested on a non-Windows platform.');
+  }
+  if (preparedWindowsRunner === undefined) {
+    throw new Error('Windows sandbox runner is not prepared; run the sandbox readiness check first.');
+  }
+  return preparedWindowsRunner;
+}
+
+function releasePreparedWindowsRunnerGrant(): void {
+  if (preparedWindowsRunnerGrant === undefined) return;
+  revokeWindowsAcl({
+    sandboxUserSid: preparedWindowsRunnerGrant.sandboxUserSid,
+    holderPid: process.pid,
+    srtWin: preparedWindowsRunnerGrant.runner.srtWin,
+  });
+  preparedWindowsRunnerGrant = undefined;
+}
+
+function retainPreparedWindowsRunnerGrant(
+  runner: PreparedWindowsSandboxRunner,
+  sandboxUserSid: string,
+): void {
+  if (
+    preparedWindowsRunnerGrant?.runner.path === runner.path
+    && preparedWindowsRunnerGrant.sandboxUserSid === sandboxUserSid
+  ) {
+    return;
+  }
+  process.removeListener('exit', releasePreparedWindowsRunnerGrant);
+  releasePreparedWindowsRunnerGrant();
+  try {
+    grantWindowsAcl({
+      read: [runner.directory, runner.path],
+      write: [],
+      sandboxUserSid,
+      holderPid: process.pid,
+      srtWin: runner.srtWin,
+    });
+  } catch (grantError: unknown) {
+    try {
+      revokeWindowsAcl({
+        sandboxUserSid,
+        holderPid: process.pid,
+        srtWin: runner.srtWin,
+      });
+    } catch (revokeError: unknown) {
+      throw new AggregateError(
+        [grantError, revokeError],
+        'Windows sandbox runner ACL grant failed and its partial grant could not be revoked.',
+      );
+    }
+    throw grantError;
+  }
+  preparedWindowsRunnerGrant = { runner, sandboxUserSid };
+  process.once('exit', releasePreparedWindowsRunnerGrant);
+}
+
+async function bindWindowsWfpProbe(): Promise<{
+  readonly server: ReturnType<typeof createServer>;
+  readonly target: string;
+}> {
+  const [low, high] = DEFAULT_WINDOWS_PROXY_PORT_RANGE;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const server = createServer();
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (typeof address === 'object' && address !== null && (address.port < low || address.port > high)) {
+      return { server, target: `127.0.0.1:${address.port}` };
+    }
+    const closed = once(server, 'close');
+    server.close();
+    await closed;
+  }
+  throw new Error(
+    `[wfp_probe_bind_failed] Could not bind a loopback listener outside `
+    + `the Windows sandbox proxy range [${low},${high}].`,
+  );
+}
+
+function windowsRunnerFailureCode(stderr: string): string {
+  if (/0x80070005|access (?:is )?denied|拒绝访问/i.test(stderr)) {
+    return 'runner_launch_access_denied';
+  }
+  if (/seclogon|secondary logon/i.test(stderr)) return 'secondary_logon_unavailable';
+  return 'wfp_probe_failed';
+}
+
+function windowsRunnerSpawnFailureCode(error: Error): string {
+  if (isFileSystemError(error, 'ETIMEDOUT')) return 'wfp_probe_timeout';
+  if (isFileSystemError(error, 'EACCES', 'EPERM')) return 'runner_launch_access_denied';
+  return 'runner_spawn_failed';
+}
+
+async function verifyPreparedWindowsWfp(
+  runner: PreparedWindowsSandboxRunner,
+): Promise<void> {
+  const { server, target } = await bindWindowsWfpProbe();
+  try {
+    const result = spawnSync(
+      runner.srtWin.exe,
+      [...runner.srtWin.prependArgs, 'wfp', 'verify', '--target', target],
+      {
+        cwd: runner.directory,
+        encoding: 'utf8',
+        timeout: 30_000,
+        windowsHide: true,
+      },
+    );
+    const stderr = (result.stderr ?? '').trim();
+    if (result.error) {
+      throw new Error(
+        `[${windowsRunnerSpawnFailureCode(result.error)}] `
+        + `Windows sandbox runner failed to start: ${result.error.message}`,
+      );
+    }
+    let output: Readonly<Record<string, unknown>>;
+    try {
+      output = JSON.parse((result.stdout ?? '').trim()) as Readonly<Record<string, unknown>>;
+    } catch {
+      const code = result.status === null
+        ? 'wfp_probe_timeout'
+        : windowsRunnerFailureCode(stderr);
+      throw new Error(
+        `[${code}] Windows sandbox WFP probe exited ${String(result.status)}`
+        + `${result.signal ? ` (signal ${result.signal})` : ''}`
+        + ` with unparseable output; stderr: ${stderr || '(empty)'}.`,
+      );
+    }
+    if (result.status === 3) {
+      throw new Error(
+        `[wfp_fence_inactive] Direct outbound access to ${String(output.target ?? target)} succeeded. `
+        + 'Run "kodax sandbox setup" to reinstall the Windows network policy.',
+      );
+    }
+    if (result.status !== 0 || output.egress_probe !== 'blocked') {
+      throw new Error(
+        `[${windowsRunnerFailureCode(stderr)}] Windows sandbox WFP probe to `
+        + `${String(output.target ?? target)} was ${String(output.egress_probe)} `
+        + `(exit ${String(result.status)}): ${stderr || '(empty stderr)'}.`,
+      );
+    }
+  } finally {
+    server.close();
+  }
+}
+
+function windowsSandboxAccountDiagnostics(
+  user: ReturnType<typeof getWindowsSandboxUserStatus>,
+): string[] {
+  const diagnostics: string[] = [];
+  if (!user.provisioned) diagnostics.push('Windows sandbox account does not exist.');
+  if (!user.sid) diagnostics.push('Windows sandbox account SID is unavailable.');
+  if (!user.groupExists || !user.groupSid) diagnostics.push('Windows sandbox local group is unavailable.');
+  if (!user.inBuiltinUsers) diagnostics.push('Windows sandbox account is not in the built-in Users group.');
+  if (!user.inSandboxGroup) diagnostics.push('Windows sandbox account is not in the sandbox-runtime-users group.');
+  if (!user.hiddenFromLogon) diagnostics.push('Windows sandbox account is not hidden from interactive logon.');
+  if (!user.credPresent) diagnostics.push('Windows sandbox account credential is unavailable.');
+  return diagnostics;
 }
 
 function parseBrokerObservation(
@@ -623,12 +889,15 @@ async function inspectSandboxRuntime(): Promise<SandboxRuntimeDoctorResult> {
   }
   if (process.platform === 'win32') {
     try {
-      const user = getWindowsSandboxUserStatus();
-      if (!user.provisioned || !user.credPresent || !user.inSandboxGroup) {
+      const runner = await prepareWindowsSandboxRunner();
+      const user = getWindowsSandboxUserStatus({ srtWin: runner.srtWin });
+      const accountDiagnostics = windowsSandboxAccountDiagnostics(user);
+      if (accountDiagnostics.length > 0 || !user.sid) {
         setupRequired = true;
-        diagnostics.push('Windows sandbox account is not fully provisioned.');
+        diagnostics.push(...accountDiagnostics);
       } else {
-        await verifyWindowsWfpEgress();
+        retainPreparedWindowsRunnerGrant(runner, user.sid);
+        await verifyPreparedWindowsWfp(runner);
       }
     } catch (error: unknown) {
       setupRequired = true;
@@ -951,6 +1220,9 @@ async function runBrokerResult(
       isElectron: process.versions.electron !== undefined,
     });
     const child = spawn(process.execPath, launch.args, {
+      cwd: process.platform === 'win32'
+        ? requirePreparedWindowsRunner().directory
+        : undefined,
       env: launch.env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1051,6 +1323,25 @@ function directorySize(root: string, skipScriptStaging = false): number {
   return total;
 }
 
+function withPreparedWindowsRunner(
+  config: SandboxRuntimeConfig,
+): SandboxRuntimeConfig {
+  if (process.platform !== 'win32') return config;
+  const runner = requirePreparedWindowsRunner();
+  return {
+    ...config,
+    windows: {
+      ...config.windows,
+      srtWin: { path: runner.path },
+    },
+    filesystem: {
+      ...config.filesystem,
+      allowRead: [...new Set([...config.filesystem.allowRead, runner.directory])],
+      denyWrite: [...new Set([...(config.filesystem.denyWrite ?? []), runner.directory])],
+    },
+  };
+}
+
 function sandboxConfig(
   stage: string,
   snapshotRoot: string,
@@ -1059,7 +1350,7 @@ function sandboxConfig(
 ): SandboxRuntimeConfig {
   const home = os.homedir();
   const interpreterRead = path.isAbsolute(interpreter) ? [interpreter] : [];
-  return {
+  return withPreparedWindowsRunner({
     network: {
       allowedDomains: [], deniedDomains: [], strictAllowlist: endpoints.length === 0,
       allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false,
@@ -1070,7 +1361,7 @@ function sandboxConfig(
       allowWrite: [stage],
       denyWrite: [home],
     },
-  };
+  });
 }
 
 function canonicalTempDirectories(): string[] {
@@ -1135,7 +1426,7 @@ function workspaceShellSandboxConfig(
         && !denyRead.some((denied) => isInside(denied, entry));
     });
   const bootstrap = sandboxJavaScriptCommand();
-  return {
+  return withPreparedWindowsRunner({
     network: {
       allowedDomains: [],
       deniedDomains: [],
@@ -1158,7 +1449,7 @@ function workspaceShellSandboxConfig(
         ...existingWorkspaceDenyWrites(workspaceRoot),
       ],
     },
-  };
+  });
 }
 
 function workspaceShellSessionSandboxConfig(
@@ -1234,7 +1525,7 @@ export async function runKodaXSandboxed(
     ...input.env,
   };
   const request: SandboxBrokerRequest = {
-    config: {
+    config: withPreparedWindowsRunner({
       network: {
         allowedDomains: [],
         deniedDomains: [],
@@ -1249,7 +1540,7 @@ export async function runKodaXSandboxed(
         denyRead: normalizedSandboxPaths(input.filesystem.denyRead, cwd),
         denyWrite: normalizedSandboxPaths(input.filesystem.denyWrite, cwd),
       },
-    },
+    }),
     command: input.command,
     args: input.args ?? [],
     cwd,
@@ -1412,6 +1703,9 @@ async function startWorkspaceSessionClient(
     isElectron: process.versions.electron !== undefined,
   });
   const child = spawn(process.execPath, launch.args, {
+    cwd: process.platform === 'win32'
+      ? requirePreparedWindowsRunner().directory
+      : undefined,
     env: launch.env,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
@@ -1710,6 +2004,12 @@ export async function resetAsrtWorkspaceSessionsForTest(): Promise<void> {
   const sessions = [...workspaceSessions.values()];
   workspaceSessions.clear();
   await Promise.allSettled(sessions.map(async (session) => (await session).close()));
+  process.removeListener('exit', releasePreparedWindowsRunnerGrant);
+  releasePreparedWindowsRunnerGrant();
+  doctorPromise = undefined;
+  doctorExpiresAt = 0;
+  preparedWindowsRunnerPromise = undefined;
+  preparedWindowsRunner = undefined;
 }
 
 /**

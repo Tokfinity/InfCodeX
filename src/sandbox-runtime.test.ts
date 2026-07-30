@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { SkillRegistry } from '@kodax-ai/agent';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const capturedBrokerRequests = vi.hoisted(
   () => [] as Array<Readonly<Record<string, unknown>>>,
@@ -16,6 +16,16 @@ const capturedSpawnEnvironments = vi.hoisted(
 );
 const capturedSpawnArgv = vi.hoisted(
   () => [] as string[][],
+);
+const capturedSpawnCwds = vi.hoisted(
+  () => [] as Array<string | undefined>,
+);
+const capturedSyncSpawns = vi.hoisted(
+  () => [] as Array<{
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd?: string;
+  }>,
 );
 const capturedWrappedCommands = vi.hoisted(
   () => [] as string[],
@@ -52,11 +62,67 @@ const workspaceSessionControl = vi.hoisted(() => ({
   releaseWrap: undefined as (() => void) | undefined,
   malformedReady: false,
 }));
+const windowsSandboxMock = vi.hoisted(() => ({
+  runnerSource: '',
+  wfpOutcome: 'blocked' as 'blocked' | 'access_denied' | 'timeout',
+  user: {
+    provisioned: true,
+    sid: 'S-1-5-21-1000',
+    groupExists: true,
+    groupSid: 'S-1-5-21-1001',
+    inBuiltinUsers: true,
+    inSandboxGroup: true,
+    hiddenFromLogon: true,
+    credPresent: true,
+    markerVersion: 1,
+    realUserSid: 'S-1-5-21-1002',
+  },
+  grantFailure: undefined as string | undefined,
+  grants: [] as Array<Readonly<Record<string, unknown>>>,
+  revokes: [] as Array<Readonly<Record<string, unknown>>>,
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
+    spawnSync: vi.fn((
+      command: string,
+      args: readonly string[] = [],
+      options?: { readonly cwd?: string },
+    ) => {
+      capturedSyncSpawns.push({ command, args: [...args], cwd: options?.cwd });
+      if (args.includes('wfp') && args.includes('verify')) {
+        if (windowsSandboxMock.wfpOutcome === 'timeout') {
+          return {
+            status: null,
+            signal: 'SIGTERM',
+            stdout: '',
+            stderr: '',
+            error: Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+          };
+        }
+        if (windowsSandboxMock.wfpOutcome === 'access_denied') {
+          return {
+            status: 1,
+            signal: null,
+            stdout: '',
+            stderr: 'CreateProcessWithLogonW(srt-sandbox): 拒绝访问。 (0x80070005)',
+          };
+        }
+        return {
+          status: 0,
+          signal: null,
+          stdout: JSON.stringify({
+            egress_probe: 'blocked',
+            target: '127.0.0.1:49152',
+            runner_exit: 0,
+          }),
+          stderr: 'BLOCKED',
+        };
+      }
+      return actual.spawnSync(command, args, options);
+    }),
     spawn: vi.fn((
       command: string,
       argsOrOptions?: readonly string[] | object,
@@ -69,6 +135,7 @@ vi.mock('node:child_process', async (importOriginal) => {
       if (options !== undefined) {
         const environment = (options as { readonly env?: NodeJS.ProcessEnv }).env;
         if (environment !== undefined) capturedSpawnEnvironments.push(environment);
+        capturedSpawnCwds.push((options as { readonly cwd?: string }).cwd);
       }
       const child = new EventEmitter() as EventEmitter & {
         stdin: PassThrough;
@@ -291,7 +358,22 @@ vi.mock('@anthropic-ai/sandbox-runtime', async (importOriginal) => {
         });
       },
     },
-    getWindowsSandboxUserStatus: () => ({ provisioned: true, credPresent: true, inSandboxGroup: true }),
+    getSrtWinPath: () => windowsSandboxMock.runnerSource || process.execPath,
+    resolveSrtWin: (config?: { readonly path?: string }) => ({
+      exe: config?.path ?? windowsSandboxMock.runnerSource ?? process.execPath,
+      prependArgs: ['--srt-win'],
+    }),
+    grantWindowsAcl: (options: Readonly<Record<string, unknown>>) => {
+      windowsSandboxMock.grants.push(options);
+      if (windowsSandboxMock.grantFailure !== undefined) {
+        throw new Error(windowsSandboxMock.grantFailure);
+      }
+    },
+    revokeWindowsAcl: (options: Readonly<Record<string, unknown>>) => {
+      windowsSandboxMock.revokes.push(options);
+      return [];
+    },
+    getWindowsSandboxUserStatus: () => ({ ...windowsSandboxMock.user }),
     verifyWindowsWfpEgress: () => Promise.resolve(),
   };
 });
@@ -310,6 +392,16 @@ import {
 
 const tempRoots: string[] = [];
 
+beforeEach(async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-runner-'));
+  tempRoots.push(root);
+  const source = path.join(root, 'package', 'srt-win.exe');
+  await mkdir(path.dirname(source), { recursive: true });
+  await writeFile(source, 'trusted-test-runner', 'utf8');
+  windowsSandboxMock.runnerSource = source;
+  vi.stubEnv('KODAX_HOME', path.join(root, '.kodax'));
+});
+
 afterEach(async () => {
   workspaceSessionControl.releaseReady?.();
   workspaceSessionControl.releaseWrap?.();
@@ -322,6 +414,8 @@ afterEach(async () => {
   capturedBrokerRequests.length = 0;
   capturedSpawnEnvironments.length = 0;
   capturedSpawnArgv.length = 0;
+  capturedSpawnCwds.length = 0;
+  capturedSyncSpawns.length = 0;
   capturedWrappedCommands.length = 0;
   capturedWorkspaceSessionConfigs.length = 0;
   capturedSandboxWrapConfigs.length = 0;
@@ -332,6 +426,23 @@ afterEach(async () => {
   deferredBrokerRead.missing = false;
   sandboxInitialize.mockReset();
   sandboxInitialize.mockResolvedValue();
+  windowsSandboxMock.runnerSource = '';
+  windowsSandboxMock.wfpOutcome = 'blocked';
+  windowsSandboxMock.user = {
+    provisioned: true,
+    sid: 'S-1-5-21-1000',
+    groupExists: true,
+    groupSid: 'S-1-5-21-1001',
+    inBuiltinUsers: true,
+    inSandboxGroup: true,
+    hiddenFromLogon: true,
+    credPresent: true,
+    markerVersion: 1,
+    realUserSid: 'S-1-5-21-1002',
+  };
+  windowsSandboxMock.grantFailure = undefined;
+  windowsSandboxMock.grants.length = 0;
+  windowsSandboxMock.revokes.length = 0;
   sandboxWrapper.mode = 'attest';
   vi.unstubAllEnvs();
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -414,6 +525,9 @@ describe('ASRT workspace shell adapter', () => {
             readonly allowedDomains: readonly string[];
             readonly strictAllowlist: boolean;
           };
+          readonly windows?: {
+            readonly srtWin?: { readonly path?: string };
+          };
         };
         readonly env: Readonly<Record<string, string>>;
         readonly allowAllNetwork?: boolean;
@@ -448,7 +562,14 @@ describe('ASRT workspace shell adapter', () => {
       expect(request.config.filesystem.allowRead).not.toContain(sensitivePathEntry);
       expect(request.config.filesystem.allowRead).toContain(ordinaryHomePathEntry);
       const sessionConfig = capturedWorkspaceSessionConfigs.at(-1) as {
-        readonly filesystem: { readonly denyRead: readonly string[] };
+        readonly filesystem: {
+          readonly allowRead: readonly string[];
+          readonly denyRead: readonly string[];
+          readonly denyWrite: readonly string[];
+        };
+        readonly windows?: {
+          readonly srtWin?: { readonly path?: string };
+        };
       };
       expect(sessionConfig.filesystem.denyRead).toEqual(
         process.platform === 'win32'
@@ -456,6 +577,20 @@ describe('ASRT workspace shell adapter', () => {
           : request.config.filesystem.denyRead,
       );
       if (process.platform === 'win32') {
+        const runnerDirectory = request.config.filesystem.allowRead.find(
+          (entry) => entry.includes(path.join('sandbox-runtime', 'runner')),
+        );
+        expect(runnerDirectory).toBeDefined();
+        expect(request.config.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(request.config.windows?.srtWin?.path).toBe(
+          path.join(runnerDirectory!, 'srt-win.exe'),
+        );
+        expect(sessionConfig.filesystem.allowRead).toContain(runnerDirectory);
+        expect(sessionConfig.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(sessionConfig.windows?.srtWin?.path).toBe(
+          path.join(runnerDirectory!, 'srt-win.exe'),
+        );
+        expect(capturedSpawnCwds).toContain(runnerDirectory);
         expect(request.config.filesystem.allowRead).not.toContain(
           path.resolve(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
         );
@@ -850,17 +985,34 @@ describe('ASRT workspace shell adapter', () => {
           readonly denyWrite: readonly string[];
         };
         readonly network: { readonly strictAllowlist: boolean };
+        readonly windows?: {
+          readonly srtWin?: { readonly path?: string };
+        };
       };
-      readonly endpoints: readonly Array<{ readonly host: string; readonly port: number }>;
+      readonly endpoints: ReadonlyArray<{ readonly host: string; readonly port: number }>;
       readonly env: Readonly<Record<string, string>>;
       readonly allowAllNetwork?: boolean;
     };
-    expect(request.config.filesystem.allowRead).toEqual([path.join(root, 'input')]);
+    const protectedRunnerDirectory = request.config.filesystem.allowRead.find(
+      (entry) => entry.includes(path.join('sandbox-runtime', 'runner')),
+    );
+    expect(request.config.filesystem.allowRead).toContain(path.join(root, 'input'));
     expect(request.config.filesystem.allowWrite).toEqual([path.join(root, 'output')]);
     expect(request.config.filesystem.denyRead).toContain(path.join(os.homedir(), '.ssh'));
-    expect(request.config.filesystem.denyWrite).toEqual([
+    expect(request.config.filesystem.denyWrite).toContain(
       path.join(root, 'output', 'protected'),
-    ]);
+    );
+    if (process.platform === 'win32') {
+      expect(protectedRunnerDirectory).toBeDefined();
+      expect(request.config.filesystem.denyWrite).toContain(protectedRunnerDirectory);
+      expect(request.config.windows?.srtWin?.path).toBe(
+        path.join(protectedRunnerDirectory!, 'srt-win.exe'),
+      );
+      expect(capturedSpawnCwds).toContain(protectedRunnerDirectory);
+    } else {
+      expect(protectedRunnerDirectory).toBeUndefined();
+      expect(request.config.windows).toBeUndefined();
+    }
     expect(request.config.network.strictAllowlist).toBe(false);
     expect(request.endpoints).toEqual([{ host: 'api.example.com', port: 443 }]);
     expect(request.allowAllNetwork).toBe(false);
@@ -954,6 +1106,129 @@ describe('ASRT setup guidance', () => {
 });
 
 describe('ASRT Skill-script adapter', () => {
+  it.runIf(process.platform === 'win32')(
+    'stages a user-installed Windows runner in a protected KodaX directory',
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-asrt-global-npm-'));
+      tempRoots.push(root);
+      const source = path.join(root, 'npm', 'node_modules', 'kodax', 'srt-win.exe');
+      await mkdir(path.dirname(source), { recursive: true });
+      await writeFile(source, 'trusted-runner', 'utf8');
+      windowsSandboxMock.runnerSource = source;
+      const relativeAgentHome = path.relative(process.cwd(), path.join(root, '.kodax'));
+      vi.stubEnv('KODAX_HOME', relativeAgentHome);
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: true,
+        setupRequired: false,
+      });
+
+      const grant = windowsSandboxMock.grants.at(-1) as {
+        readonly read: readonly string[];
+        readonly write: readonly string[];
+        readonly sandboxUserSid: string;
+      };
+      const stagedDirectory = grant.read[0]!;
+      const stagedRunner = path.join(stagedDirectory, 'srt-win.exe');
+      expect(path.isAbsolute(stagedDirectory)).toBe(true);
+      expect(stagedDirectory).toContain(path.resolve(relativeAgentHome));
+      expect(stagedDirectory).toContain(path.join('.kodax', 'sandbox-runtime', 'runner'));
+      expect(stagedRunner).not.toBe(source);
+      await expect(readFile(stagedRunner, 'utf8')).resolves.toBe('trusted-runner');
+      expect(grant.read).toContain(stagedRunner);
+      expect(grant.write).toEqual([]);
+      expect(grant.sandboxUserSid).toBe(windowsSandboxMock.user.sid);
+      expect(capturedSyncSpawns).toContainEqual(expect.objectContaining({
+        command: stagedRunner,
+        cwd: stagedDirectory,
+      }));
+      await doctorSandboxRuntime({ refresh: true });
+      expect(windowsSandboxMock.grants).toHaveLength(1);
+      await resetAsrtWorkspaceSessionsForTest();
+      expect(windowsSandboxMock.revokes).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'reports an incomplete Windows account before attempting the WFP runner',
+    async () => {
+      windowsSandboxMock.user.inBuiltinUsers = false;
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: false,
+        setupRequired: true,
+        diagnostics: expect.arrayContaining([
+          expect.stringMatching(/built-in Users group/i),
+        ]),
+      });
+      expect(windowsSandboxMock.grants).toHaveLength(0);
+      expect(capturedSyncSpawns.some(({ args }) => (
+        args.includes('wfp') && args.includes('verify')
+      ))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'distinguishes a Windows runner access failure from account and WFP policy failures',
+    async () => {
+      windowsSandboxMock.wfpOutcome = 'access_denied';
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: false,
+        setupRequired: true,
+        diagnostics: expect.arrayContaining([
+          expect.stringContaining('[runner_launch_access_denied]'),
+        ]),
+      });
+      expect(windowsSandboxMock.grants).toHaveLength(1);
+      const probe = capturedSyncSpawns.find(({ args }) => (
+        args.includes('wfp') && args.includes('verify')
+      ));
+      expect(probe?.cwd).toContain(path.join('sandbox-runtime', 'runner'));
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'reports a bounded Windows WFP verification timeout distinctly',
+    async () => {
+      windowsSandboxMock.wfpOutcome = 'timeout';
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: false,
+        setupRequired: true,
+        diagnostics: expect.arrayContaining([
+          expect.stringContaining('[wfp_probe_timeout]'),
+        ]),
+      });
+    },
+  );
+
+  it.runIf(process.platform === 'win32')(
+    'revokes a partial Windows runner ACL grant before a bounded retry',
+    async () => {
+      windowsSandboxMock.grantFailure = 'partial ACL grant failed';
+
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: false,
+        setupRequired: true,
+        diagnostics: expect.arrayContaining([
+          expect.stringContaining('partial ACL grant failed'),
+        ]),
+      });
+      expect(windowsSandboxMock.grants).toHaveLength(1);
+      expect(windowsSandboxMock.revokes).toHaveLength(1);
+
+      windowsSandboxMock.grantFailure = undefined;
+      await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
+        ready: true,
+        setupRequired: false,
+      });
+      expect(windowsSandboxMock.grants).toHaveLength(2);
+      await resetAsrtWorkspaceSessionsForTest();
+      expect(windowsSandboxMock.revokes).toHaveLength(2);
+    },
+  );
+
   it('checks the exact installed version and required JavaScript interpreter', async () => {
     await expect(doctorSandboxRuntime({ refresh: true })).resolves.toMatchObject({
       ready: true,
@@ -1015,6 +1290,30 @@ describe('ASRT Skill-script adapter', () => {
         stdout: 'sandbox output', outputs: [path.join('result', 'report.txt')],
       }));
       expect(readFileSync(path.join(root, 'result', 'report.txt'), 'utf8')).toBe('report');
+      const request = capturedBrokerRequests.at(-1) as {
+        readonly config: {
+          readonly filesystem: {
+            readonly allowRead: readonly string[];
+            readonly denyWrite: readonly string[];
+          };
+          readonly windows?: {
+            readonly srtWin?: { readonly path?: string };
+          };
+        };
+      };
+      const runnerDirectory = request.config.filesystem.allowRead.find(
+        (entry) => entry.includes(path.join('sandbox-runtime', 'runner')),
+      );
+      if (process.platform === 'win32') {
+        expect(runnerDirectory).toBeDefined();
+        expect(request.config.filesystem.denyWrite).toContain(runnerDirectory);
+        expect(request.config.windows?.srtWin?.path).toBe(
+          path.join(runnerDirectory!, 'srt-win.exe'),
+        );
+      } else {
+        expect(runnerDirectory).toBeUndefined();
+        expect(request.config.windows).toBeUndefined();
+      }
     } finally {
       await runner.dispose();
     }

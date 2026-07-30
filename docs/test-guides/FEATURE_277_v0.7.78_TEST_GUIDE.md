@@ -87,6 +87,16 @@ Cover POSIX and Windows spellings where available:
 4. On a disposable machine/profile, decline UAC and confirm setup reports
    cancellation/non-readiness without breaking provider/config setup.
 5. Confirm ordinary later startup does not repeat the UAC prompt or reminder.
+6. Install KodaX with `npm install -g` as a non-administrator whose
+   `%APPDATA%\npm` tree is not readable by another local account. Confirm setup
+   and doctor still become ready without changing that npm tree's ACL.
+7. Confirm doctor prepares a content-addressed `srt-win.exe` below
+   `%KODAX_HOME%\sandbox-runtime\runner`, grants the `srt-sandbox` account
+   read/execute but not write access, and runs the WFP probe from that prepared
+   directory.
+8. Remove the sandbox account from the built-in Users group in a disposable VM.
+   Confirm doctor reports the exact incomplete-account condition and does not
+   attempt the WFP probe; rerun setup to repair the account afterward.
 
 ### macOS
 
