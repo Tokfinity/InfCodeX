@@ -83,6 +83,19 @@ export class AgentOwnerUnknownError extends Error {
   }
 }
 
+export class AgentSettlementPersistenceError extends Error {
+  readonly code = 'actor_settlement_not_persisted' as const;
+  readonly retryable = false as const;
+
+  constructor(
+    readonly turnId: string,
+    readonly cause: unknown,
+  ) {
+    super(`Executor settlement for ${turnId} could not be persisted before the retry deadline.`);
+    this.name = 'AgentSettlementPersistenceError';
+  }
+}
+
 export type AgentControlErrorCode =
   | 'actor_closed'
   | 'actor_not_found'

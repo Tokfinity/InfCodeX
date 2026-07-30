@@ -4,7 +4,7 @@ import * as net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createRuntimeDaemonErrorResponse,
@@ -147,11 +147,47 @@ describe('runtime daemon transport', () => {
   it('removes cancelled request ids while still handling a bounded late result', async () => {
     const endpoint = await makeTestEndpoint();
     let requestId: string | undefined;
+    const cancelledRequestIds: string[] = [];
     let accepted: net.Socket | undefined;
     const server = await listen(endpoint, (socket) => {
       accepted = socket;
       const parser = createRuntimeDaemonFrameParser((frame) => {
         if (!isRuntimeDaemonRequest(frame)) return;
+        if (frame.method === 'initialize') {
+          socket.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
+            frame.id,
+            {
+              identity: {},
+              capabilities: {
+                runLifecycleControl: {
+                  version: 2,
+                  structuredStopReceipt: true,
+                  protocolCancellation: true,
+                  responseAcknowledgement: true,
+                },
+              },
+            },
+          ))}\n`);
+          return;
+        }
+        if (frame.method === 'request.ack') {
+          socket.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
+            frame.id,
+            { ok: true },
+          ))}\n`);
+          return;
+        }
+        if (frame.method === 'request.cancel') {
+          const params = frame.params as { requestId?: unknown };
+          if (typeof params.requestId === 'string') {
+            cancelledRequestIds.push(params.requestId);
+          }
+          socket.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
+            frame.id,
+            { ok: true },
+          ))}\n`);
+          return;
+        }
         requestId = frame.id;
       });
       socket.on('data', (chunk) => parser.push(chunk));
@@ -161,6 +197,7 @@ describe('runtime daemon transport', () => {
     cleanupTasks.push(async () => {
       await transport.close?.();
     });
+    await transport.request('initialize', {});
     const controller = new AbortController();
     const lateResults: unknown[] = [];
     const pending = transport.request(
@@ -179,6 +216,8 @@ describe('runtime daemon transport', () => {
     });
     controller.abort(cancelled);
     await expect(pending).rejects.toBe(cancelled);
+    await waitFor(() => cancelledRequestIds.length === 1);
+    expect(cancelledRequestIds).toEqual([requestId]);
     accepted!.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
       requestId!,
       { status: 'late' },
@@ -186,6 +225,41 @@ describe('runtime daemon transport', () => {
     await waitFor(() => lateResults.length === 1);
 
     expect(lateResults).toEqual([{ status: 'late' }]);
+
+    requestId = undefined;
+    const expiredController = new AbortController();
+    const expiredPending = transport.request(
+      'daemon.status',
+      undefined,
+      undefined,
+      {
+        signal: expiredController.signal,
+        onLateResult: (value) => lateResults.push(value),
+      },
+    );
+    await waitFor(() => requestId !== undefined);
+    const expiredRequestId = requestId!;
+    const cancellationsBeforeExpiry = cancelledRequestIds.length;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      expiredController.abort(cancelled);
+      await expect(expiredPending).rejects.toBe(cancelled);
+      await vi.advanceTimersByTimeAsync(30_001);
+    } finally {
+      vi.useRealTimers();
+    }
+    accepted!.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
+      expiredRequestId,
+      { status: 'expired-late' },
+    ))}\n`);
+    await waitFor(
+      () => cancelledRequestIds.length >= cancellationsBeforeExpiry + 2,
+    );
+
+    expect(lateResults).toEqual([{ status: 'late' }]);
+    expect(
+      cancelledRequestIds.filter((id) => id === expiredRequestId),
+    ).toHaveLength(2);
   });
 
   it('rejects daemon error responses and pending requests when closed', async () => {

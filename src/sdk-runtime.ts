@@ -145,6 +145,7 @@ import {
 import type {
   AgentArtifactPolicy,
   AgentActorClient,
+  AgentControllerHealth,
   AgentActorOwner,
   AgentActorSnapshot,
   AgentActorStore,
@@ -1119,6 +1120,8 @@ export type RuntimeSessionDiagnosticErrorCode =
   | "owner_liveness_unconfirmed"
   | "owner_recovery_required"
   | "stop_outcome_unconfirmed"
+  | "actor_settlement_retrying"
+  | "actor_settlement_not_persisted"
   | "run_failed"
   | "terminal_time_unknown";
 
@@ -1353,6 +1356,7 @@ export interface RuntimeObservationInvalidation {
   readonly reason:
     | "event_overflow"
     | "event_order"
+    | "delivery_failed"
     | "runtime_changed"
     | "transport_disconnected";
   readonly runtimeId: string;
@@ -1707,12 +1711,21 @@ export interface RuntimeRunStatus {
   readonly model?: string;
   readonly reasoning?: KodaXReasoningMode;
   readonly error?: string;
+  readonly lifecycleError?: RuntimeRunLifecycleError;
   readonly terminal?: RuntimeTerminalFact;
   readonly continuation?: RuntimeContinuationStatus;
   readonly interruptInputs?: readonly RuntimeInterruptInputStatus[];
   /** Durable Stop request/result; distinct from chat interruptInputs. */
   readonly stop?: RuntimeRunStopStatus;
   readonly requirements?: RuntimeRunRequirements;
+}
+
+export interface RuntimeRunLifecycleError {
+  readonly code:
+    | "actor_settlement_retrying"
+    | "actor_settlement_not_persisted";
+  readonly message: string;
+  readonly retryable: boolean;
 }
 
 export interface RuntimeRunRequirements {
@@ -1757,6 +1770,18 @@ export interface RuntimeRunStopStatus {
     | "failed";
   readonly reason: string;
   readonly resolvedAt?: string;
+}
+
+export interface RuntimeRunStopReceipt {
+  readonly runId: string;
+  readonly sessionId: string;
+  /** True only when this invocation durably created the Stop request. */
+  readonly accepted: boolean;
+  readonly state: RuntimeRunStopStatus["state"];
+  readonly outcome: RuntimeRunStopStatus["outcome"];
+  readonly phase: RuntimeRunPhase;
+  /** Durable Run control-record revision observed by this receipt. */
+  readonly revision: number;
 }
 
 export type RuntimeTerminalCode =
@@ -1808,7 +1833,7 @@ export interface RuntimeRunService {
   await(runId: string): Promise<RuntimeRunResult>;
   get(runId: string): Promise<RuntimeRunStatus>;
   list(filter?: RuntimeRunFilter): Promise<readonly RuntimeRunStatus[]>;
-  abort(runId: string): Promise<void>;
+  abort(runId: string): Promise<RuntimeRunStopReceipt>;
   setModel(runId: string, model: string | undefined): Promise<void>;
   setProvider(runId: string, provider: string): Promise<void>;
   setReasoning(
@@ -2599,6 +2624,9 @@ function createRuntimeSessionDiagnosticsRecord(
       "A Stop was requested, but executor termination is not confirmed.",
     );
   }
+  if (run?.lifecycleError !== undefined) {
+    addError(run.lifecycleError.code, run.lifecycleError.message);
+  }
   if (run?.phase === "failed") {
     addError(
       "run_failed",
@@ -2699,6 +2727,7 @@ interface RuntimeRunRecord {
   autoModeSpeculativeWindowMs?: number;
   reasoning?: KodaXReasoningMode;
   error?: string;
+  lifecycleError?: RuntimeRunLifecycleError;
   terminal?: RuntimeTerminalFact;
   readonly result: Promise<RuntimeRunResult>;
   running?: RunningSession;
@@ -2720,10 +2749,18 @@ interface RuntimeRunRecord {
     readonly error?: Error;
     readonly interruptedAtSignal: boolean;
   };
+  actorHealthBaseState?: RuntimeActorHealthBaseRunState;
   settlementFinished?: boolean;
   terminalEmitted: boolean;
   readonly ownedByRuntime: boolean;
   readonly observedOwner?: AgentActorOwner;
+}
+
+interface RuntimeActorHealthBaseRunState {
+  phase: RuntimeRunPhase;
+  stage?: RuntimeRunStage;
+  error?: string;
+  lifecycleError?: RuntimeRunLifecycleError;
 }
 
 interface RuntimeInterruptInputRecord extends RuntimeInterruptInputStatus {
@@ -2796,6 +2833,12 @@ interface PersistedRuntimeRunStatus {
   readonly revision: number;
 }
 
+interface PersistedRuntimeRunStop {
+  readonly accepted: boolean;
+  readonly status: RuntimeRunStatus;
+  readonly revision: number;
+}
+
 interface RuntimePersistence {
   readonly runtimeDir: string;
   appendEvent(event: RuntimeEvent): void;
@@ -2806,6 +2849,7 @@ interface RuntimePersistence {
   currentEventSeq(): number;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
   saveRunStatus(status: RuntimeRunStatus): RuntimeRunStatus;
+  requestRunStop(runId: string, reason: string): PersistedRuntimeRunStop;
   loadRunStatus(runId: string): PersistedRuntimeRunStatus | undefined;
   loadRunStatuses(): readonly PersistedRuntimeRunStatus[];
   loadSessionSettings(sessionId: string): RuntimeSessionSettings;
@@ -2871,6 +2915,10 @@ const MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES = 256 * 1024;
 const DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 50;
 const MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 200;
 const MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS = 8;
+const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+const RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS = 5 * 60_000;
+const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
+  "kodax-transcript-snapshots-";
 const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
 const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
   "assistant.delta",
@@ -3116,14 +3164,159 @@ export async function createKodaXRuntime(
   );
   const artifacts = createRuntimeArtifactStore();
   const workflows = createRuntimeWorkflowService();
+  const runs = new Map<string, RuntimeRunRecord>();
+  const actorHealthBySession = new Map<string, AgentControllerHealth>();
+  const actorHealthWaiters = new Map<
+    string,
+    Set<(health: AgentControllerHealth) => void>
+  >();
+  const actorHealthChangeWaiters = new Map<
+    string,
+    Set<(health: AgentControllerHealth) => void>
+  >();
+  const waitForActorHealthResolution = (
+    sessionId: string,
+    observed: AgentControllerHealth,
+  ): Promise<AgentControllerHealth> => {
+    const current = actorHealthBySession.get(sessionId) ?? observed;
+    if (current.state !== "recovering") return Promise.resolve(current);
+    return new Promise<AgentControllerHealth>((resolve) => {
+      const waiters = actorHealthWaiters.get(sessionId) ?? new Set();
+      waiters.add(resolve);
+      actorHealthWaiters.set(sessionId, waiters);
+    });
+  };
+  const waitForActorHealthChange = (
+    sessionId: string,
+  ): {
+    readonly promise: Promise<AgentControllerHealth>;
+    close(): void;
+  } => {
+    let resolveChange: ((health: AgentControllerHealth) => void) | undefined;
+    const promise = new Promise<AgentControllerHealth>((resolve) => {
+      resolveChange = resolve;
+    });
+    const waiters = actorHealthChangeWaiters.get(sessionId) ?? new Set();
+    waiters.add(resolveChange!);
+    actorHealthChangeWaiters.set(sessionId, waiters);
+    return {
+      promise,
+      close() {
+        if (resolveChange === undefined) return;
+        waiters.delete(resolveChange);
+        if (waiters.size === 0) actorHealthChangeWaiters.delete(sessionId);
+        resolveChange = undefined;
+      },
+    };
+  };
+  const onActorHealthChanged = (
+    sessionId: string,
+    health: AgentControllerHealth,
+  ): void => {
+    actorHealthBySession.set(sessionId, health);
+    const changeWaiters = actorHealthChangeWaiters.get(sessionId);
+    actorHealthChangeWaiters.delete(sessionId);
+    for (const resolve of changeWaiters ?? []) resolve(health);
+    for (const run of runs.values()) {
+      if (
+        run.sessionId !== sessionId
+        || !run.ownedByRuntime
+        || isTerminalRunPhase(run.phase)
+      ) {
+        continue;
+      }
+      if (run.stop?.state === "unknown") {
+        delete run.actorHealthBaseState;
+        if (health.state === "unknown") {
+          run.lifecycleError = {
+            code: health.code ?? "actor_settlement_not_persisted",
+            message:
+              health.message
+              ?? "Actor executor settlement persistence is not confirmed.",
+            retryable: false,
+          };
+          run.stageChangedAt = new Date().toISOString();
+          const status = statusFromRecord(run);
+          const authoritative = saveRunStatusSafely(
+            bus,
+            persistence,
+            run,
+            status,
+          );
+          if (authoritative === status) {
+            bus.emit("run.updated", status, {
+              sessionId: run.sessionId,
+              runId: run.runId,
+              ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
+            });
+          } else if (authoritative !== undefined) {
+            applyAuthoritativeRunStatus(run, authoritative);
+          }
+        }
+        continue;
+      }
+      if (health.state === "healthy") {
+        const prior = run.actorHealthBaseState;
+        if (prior === undefined) continue;
+        run.phase = prior.phase;
+        run.stage = prior.stage;
+        run.error = prior.error;
+        run.lifecycleError = prior.lifecycleError;
+        delete run.actorHealthBaseState;
+      } else {
+        if (run.actorHealthBaseState === undefined) {
+          run.actorHealthBaseState = {
+            phase: run.phase,
+            stage: run.stage,
+            error: run.error,
+            lifecycleError: run.lifecycleError,
+          };
+        }
+        if (run.phase !== "queued" || health.state === "unknown") {
+          run.phase = health.state;
+        }
+        run.stage = health.state;
+        run.error = health.message;
+        run.lifecycleError = {
+          code: health.code ?? "actor_settlement_retrying",
+          message:
+            health.message
+            ?? "Actor executor settlement persistence is not confirmed.",
+          retryable: health.state === "recovering",
+        };
+      }
+      run.stageChangedAt = new Date().toISOString();
+      const status = statusFromRecord(run);
+      const authoritative = saveRunStatusSafely(
+        bus,
+        persistence,
+        run,
+        status,
+      );
+      if (authoritative === status) {
+        bus.emit("run.updated", status, {
+          sessionId: run.sessionId,
+          runId: run.runId,
+          ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
+        });
+      } else if (authoritative !== undefined) {
+        applyAuthoritativeRunStatus(run, authoritative);
+      }
+    }
+    if (health.state !== "recovering") {
+      const waiters = actorHealthWaiters.get(sessionId);
+      actorHealthWaiters.delete(sessionId);
+      for (const resolve of waiters ?? []) resolve(health);
+    }
+  };
   const actorRegistry = createRuntimeAgentActorRegistry(
     sessionManager,
     identity,
     ownerLiveness,
     agentPlane,
     options.externalAgents?.defaultContext,
+    onActorHealthChanged,
   );
-  const runs = new Map<string, RuntimeRunRecord>();
   const recoveredSessionOrders = new Map<string, number>();
   const persistedStatuses = [
     ...recentRunStatuses(persistence.loadRunStatuses()),
@@ -3226,8 +3419,11 @@ export async function createKodaXRuntime(
     agentPlane,
     defaultAgentContext: options.externalAgents?.defaultContext,
     actorRegistry,
+    waitForActorHealthResolution,
+    waitForActorHealthChange,
     settingsOwner,
   });
+  let closeTranscriptSnapshots: (() => void) | undefined;
   const sessionService = createRuntimeSessionService(
     identity,
     configHome,
@@ -3250,6 +3446,9 @@ export async function createKodaXRuntime(
       permissions.releaseSession(sessionId);
     },
     sessionAdmission,
+    (cleanup) => {
+      closeTranscriptSnapshots = cleanup;
+    },
   );
   const managedWorkspaceRoot = path.join(
     options.homeDir ? path.resolve(options.homeDir) : os.homedir(),
@@ -3294,6 +3493,8 @@ export async function createKodaXRuntime(
         shutdownStarted = true;
       }
       await sessionOperations.close();
+      closeTranscriptSnapshots?.();
+      closeTranscriptSnapshots = undefined;
       if (!actorRegistryClosed) {
         await actorRegistry.close("runtime closed");
         actorRegistryClosed = true;
@@ -4328,6 +4529,7 @@ function createRuntimeSessionService(
   ) => Promise<T>,
   onSessionDeleted: (sessionId: string) => void,
   admission: RuntimeSessionAdmission,
+  registerTranscriptSnapshotCleanup: (cleanup: () => void) => void,
 ): RuntimeSessionService {
   const creatingSessionIds = new Set<string>();
   const toRuntimeSession = (
@@ -4353,54 +4555,344 @@ function createRuntimeSessionService(
     {
       readonly sessionId: string;
       readonly revision: string;
-      readonly transcript: RuntimeTranscript;
+      readonly filePath: string;
+      readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+      readonly byteSize: number;
+      readonly expiresAt: number;
     }
   >();
-  let transcriptChunkCache:
-    | {
-        readonly sessionId: string;
-        readonly revision: string;
-        readonly entryIndex: number;
-        readonly entryId?: string;
-        readonly encoded: Buffer;
+  let transcriptSnapshotBytes = 0;
+  let transcriptSnapshotDir: string | undefined;
+  const deferredTranscriptSnapshotCleanup = new Set<string>();
+  const transcriptSnapshotReaders = new Map<string, number>();
+  let transcriptSnapshotLeaseTimer: ReturnType<typeof setInterval> | undefined;
+  const clearTranscriptSnapshotLease = (): void => {
+    if (transcriptSnapshotLeaseTimer === undefined) return;
+    clearInterval(transcriptSnapshotLeaseTimer);
+    transcriptSnapshotLeaseTimer = undefined;
+  };
+  const refreshTranscriptSnapshotLease = (): void => {
+    if (transcriptSnapshotDir === undefined) return;
+    try {
+      retryDeferredTranscriptSnapshotCleanup();
+      pruneExpiredTranscriptSnapshots();
+      const now = new Date();
+      fs.utimesSync(transcriptSnapshotDir, now, now);
+    } catch (error: unknown) {
+      process.emitWarning(
+        `Unable to refresh transcript snapshot lease: ${normalizeError(error).message}`,
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_LEASE_FAILED" },
+      );
+    }
+  };
+  const pruneStaleTranscriptSnapshotDirs = (): void => {
+    const tempDir = os.tmpdir();
+    const staleBefore = Date.now() - RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS;
+    try {
+      for (const entry of fs.readdirSync(tempDir, { withFileTypes: true })) {
+        if (
+          !entry.isDirectory()
+          || !entry.name.startsWith(RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX)
+        ) {
+          continue;
+        }
+        const candidate = path.join(tempDir, entry.name);
+        if (fs.statSync(candidate).mtimeMs > staleBefore) continue;
+        fs.rmSync(candidate, { recursive: true, force: true });
       }
-    | undefined;
+    } catch (error: unknown) {
+      process.emitWarning(
+        `Unable to prune expired transcript snapshots: ${normalizeError(error).message}`,
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
+      );
+    }
+  };
+  const ensureTranscriptSnapshotDir = (): string => {
+    let retainedDirAvailable = transcriptSnapshotDir === undefined;
+    if (transcriptSnapshotDir !== undefined) {
+      try {
+        retainedDirAvailable = fs.statSync(transcriptSnapshotDir).isDirectory();
+      } catch (error: unknown) {
+        if (
+          !isRecord(error)
+          || (error.code !== "ENOENT" && error.code !== "ENOTDIR")
+        ) {
+          process.emitWarning(
+            `Unable to inspect transcript snapshot directory: ${normalizeError(error).message}`,
+            { code: "KODAX_TRANSCRIPT_SNAPSHOT_DIRECTORY_FAILED" },
+          );
+        }
+        retainedDirAvailable = false;
+      }
+    }
+    if (!retainedDirAvailable) {
+      clearTranscriptSnapshotLease();
+      transcriptSnapshots.clear();
+      transcriptSnapshotBytes = 0;
+      transcriptSnapshotDir = undefined;
+    }
+    if (transcriptSnapshotDir === undefined) {
+      pruneStaleTranscriptSnapshotDirs();
+      transcriptSnapshotDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX),
+      );
+      transcriptSnapshotLeaseTimer = setInterval(
+        refreshTranscriptSnapshotLease,
+        Math.floor(RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS / 2),
+      );
+      transcriptSnapshotLeaseTimer.unref?.();
+    }
+    return transcriptSnapshotDir;
+  };
   const transcriptSnapshotKey = (
     sessionId: string,
     revision: string,
   ): string => `${sessionId}\0${revision}`;
-  const rememberTranscriptSnapshot = (
+  const removeTranscriptSnapshotFile = (filePath: string): void => {
+    if ((transcriptSnapshotReaders.get(filePath) ?? 0) > 0) {
+      deferredTranscriptSnapshotCleanup.add(filePath);
+      return;
+    }
+    try {
+      fs.rmSync(filePath, { force: true });
+      deferredTranscriptSnapshotCleanup.delete(filePath);
+    } catch (error: unknown) {
+      deferredTranscriptSnapshotCleanup.add(filePath);
+      process.emitWarning(
+        `Unable to remove transcript snapshot: ${normalizeError(error).message}`,
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
+      );
+    }
+  };
+  const removeTranscriptSnapshot = (key: string): void => {
+    const snapshot = transcriptSnapshots.get(key);
+    if (snapshot === undefined) return;
+    transcriptSnapshots.delete(key);
+    transcriptSnapshotBytes -= snapshot.byteSize;
+    removeTranscriptSnapshotFile(snapshot.filePath);
+  };
+  const pruneExpiredTranscriptSnapshots = (): void => {
+    const now = Date.now();
+    for (const [key, snapshot] of transcriptSnapshots) {
+      if (snapshot.expiresAt <= now) removeTranscriptSnapshot(key);
+    }
+  };
+  const retryDeferredTranscriptSnapshotCleanup = (): void => {
+    for (const filePath of deferredTranscriptSnapshotCleanup) {
+      removeTranscriptSnapshotFile(filePath);
+    }
+  };
+  const acquireTranscriptSnapshotReader = (
+    filePath: string,
+  ): (() => void) => {
+    transcriptSnapshotReaders.set(
+      filePath,
+      (transcriptSnapshotReaders.get(filePath) ?? 0) + 1,
+    );
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (transcriptSnapshotReaders.get(filePath) ?? 1) - 1;
+      if (remaining > 0) {
+        transcriptSnapshotReaders.set(filePath, remaining);
+        return;
+      }
+      transcriptSnapshotReaders.delete(filePath);
+      if (deferredTranscriptSnapshotCleanup.has(filePath)) {
+        removeTranscriptSnapshotFile(filePath);
+      }
+    };
+  };
+  const readTranscriptSnapshot = async <T>(
+    snapshot: RuntimeTranscriptSnapshotView,
+    read: () => Promise<T>,
+  ): Promise<T> => {
+    const release = acquireTranscriptSnapshotReader(snapshot.filePath);
+    try {
+      return await read();
+    } finally {
+      release();
+    }
+  };
+  const rememberTranscriptSnapshot = async (
     sessionId: string,
     transcript: RuntimeTranscript,
-  ): string => {
-    const revision = createRuntimeTranscriptRevision(transcript);
+    budget: RuntimeReadBudget,
+  ): Promise<string> => {
+    pruneExpiredTranscriptSnapshots();
+    const filePath = path.join(
+      ensureTranscriptSnapshotDir(),
+      `${randomUUID()}.entries`,
+    );
+    const materialization = (async (): Promise<{
+      readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+      readonly revision: string;
+      readonly byteSize: number;
+    }> => {
+      const entries: RuntimeTranscriptSnapshotEntryDescriptor[] = [];
+      const handle = await fs.promises.open(filePath, "wx");
+      const revisionHash = createHash("sha256");
+      revisionHash.update("kodax-transcript-entries-v1\0");
+      let offset = 0;
+      try {
+        for (const entry of transcript.transcriptEntries) {
+          sessionReadOptionsFromBudget(budget);
+          const encoded = Buffer.from(JSON.stringify(entry), "utf8");
+          sessionReadOptionsFromBudget(budget);
+          revisionHash.update(`${encoded.length}:`);
+          revisionHash.update(encoded);
+          const chunkDigests: string[] = [];
+          for (
+            let chunkOffset = 0;
+            chunkOffset < encoded.length;
+            chunkOffset += MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES
+          ) {
+            chunkDigests.push(
+              createHash("sha256")
+                .update(encoded.subarray(
+                  chunkOffset,
+                  Math.min(
+                    encoded.length,
+                    chunkOffset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
+                  ),
+                ))
+                .digest("hex"),
+            );
+          }
+          await writeFileHandleFully(handle, encoded);
+          sessionReadOptionsFromBudget(budget);
+          entries.push({
+            offset,
+            byteLength: encoded.length,
+            chunkDigests,
+            ...(typeof entry.entryId === "string"
+              ? { entryId: entry.entryId }
+              : {}),
+          });
+          offset += encoded.length;
+        }
+      } finally {
+        await handle.close();
+      }
+      sessionReadOptionsFromBudget(budget);
+      return {
+        entries,
+        revision: `sha256:${revisionHash.digest("hex")}`,
+        byteSize: offset,
+      };
+    })();
+    let materialized: {
+      readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+      readonly revision: string;
+      readonly byteSize: number;
+    };
+    try {
+      materialized = await awaitRuntimeReadOperation(
+        () => materialization,
+        budget,
+      );
+      sessionReadOptionsFromBudget(budget);
+    } catch (error: unknown) {
+      void materialization.then(
+        () => removeAbandonedTranscriptSnapshot(filePath),
+        (backgroundError: unknown) => {
+          if (
+            backgroundError !== error
+            && !isExpectedRuntimeReadTermination(error)
+            && !isExpectedRuntimeReadTermination(backgroundError)
+          ) {
+            process.emitWarning(
+              `Transcript snapshot materialization failed after its caller stopped waiting: ${normalizeError(backgroundError).message}`,
+              { code: "KODAX_TRANSCRIPT_SNAPSHOT_BACKGROUND_FAILED" },
+            );
+          }
+          return removeAbandonedTranscriptSnapshot(filePath);
+        },
+      );
+      throw error;
+    }
+    const { entries, revision, byteSize } = materialized;
     const key = transcriptSnapshotKey(sessionId, revision);
-    transcriptSnapshots.delete(key);
+    const retained = transcriptSnapshots.get(key);
+    if (
+      retained !== undefined
+      && retained.expiresAt > Date.now()
+      && fs.existsSync(retained.filePath)
+    ) {
+      removeTranscriptSnapshotFile(filePath);
+      transcriptSnapshots.delete(key);
+      transcriptSnapshots.set(key, retained);
+      refreshTranscriptSnapshotLease();
+      return revision;
+    }
+    removeTranscriptSnapshot(key);
     transcriptSnapshots.set(key, {
       sessionId,
       revision,
-      transcript: structuredClone(transcript),
+      filePath,
+      entries,
+      byteSize,
+      expiresAt: Date.now() + RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS,
     });
-    while (transcriptSnapshots.size > MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS) {
+    refreshTranscriptSnapshotLease();
+    transcriptSnapshotBytes += byteSize;
+    while (
+      transcriptSnapshots.size > MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS
+      || transcriptSnapshotBytes > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES
+    ) {
+      // A disk-backed snapshot larger than the soft cache budget remains
+      // readable as the sole retained boundary. This avoids making resync
+      // permanently impossible for one legitimately large transcript.
+      if (transcriptSnapshots.size === 1) break;
       const oldest = transcriptSnapshots.keys().next().value as
         | string
         | undefined;
       if (oldest === undefined) break;
-      transcriptSnapshots.delete(oldest);
+      removeTranscriptSnapshot(oldest);
     }
     return revision;
   };
   const getTranscriptSnapshot = (
     sessionId: string,
     revision: string,
-  ): RuntimeTranscript | undefined => {
+  ): {
+    readonly revision: string;
+    readonly filePath: string;
+    readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+  } | undefined => {
     const key = transcriptSnapshotKey(sessionId, revision);
     const snapshot = transcriptSnapshots.get(key);
     if (snapshot === undefined) return undefined;
+    if (snapshot.expiresAt <= Date.now()) {
+      removeTranscriptSnapshot(key);
+      return undefined;
+    }
+    if (!fs.existsSync(snapshot.filePath)) {
+      removeTranscriptSnapshot(key);
+      return undefined;
+    }
     transcriptSnapshots.delete(key);
     transcriptSnapshots.set(key, snapshot);
-    return snapshot.transcript;
+    return {
+      revision: snapshot.revision,
+      filePath: snapshot.filePath,
+      entries: snapshot.entries,
+    };
   };
+  const disposeTranscriptSnapshots = (): void => {
+    clearTranscriptSnapshotLease();
+    for (const key of [...transcriptSnapshots.keys()]) {
+      removeTranscriptSnapshot(key);
+    }
+    if (transcriptSnapshotDir !== undefined) {
+      fs.rmSync(transcriptSnapshotDir, { recursive: true, force: true });
+      transcriptSnapshotDir = undefined;
+    }
+    transcriptSnapshotReaders.clear();
+    deferredTranscriptSnapshotCleanup.clear();
+  };
+  registerTranscriptSnapshotCleanup(disposeTranscriptSnapshots);
 
   const captureObservationSnapshot = async (
     sessionId: string,
@@ -4435,16 +4927,32 @@ function createRuntimeSessionService(
       sessionReadOptionsFromBudget(budget);
       const after = bus.currentSessionSeq(sessionId);
       if (before !== after) continue;
-      if (transcript !== null) {
-        rememberTranscriptSnapshot(sessionId, transcript);
+      const transcriptRevision = transcript === null
+        ? createRuntimeTranscriptRevision(transcript)
+        : await rememberTranscriptSnapshot(sessionId, transcript, budget);
+      const retainedTranscript = transcript === null
+        ? undefined
+        : getTranscriptSnapshot(sessionId, transcriptRevision);
+      if (transcript !== null && retainedTranscript === undefined) {
+        throw createRuntimeResyncError(
+          "Transcript snapshot is no longer retained; request a fresh boundary",
+        );
       }
+      const transcriptSlice = transcript === null
+        ? null
+        : await readTranscriptSnapshot(
+            retainedTranscript!,
+            () => createRuntimeTranscriptSlice(
+              retainedTranscript!,
+              budget,
+            ),
+          );
       return {
         runtimeId: identity.runtimeId,
         cursor: after,
-        transcriptRevision: createRuntimeTranscriptRevision(transcript),
+        transcriptRevision,
         session: toRuntimeSession(sessionId, data),
-        transcript:
-          transcript === null ? null : createRuntimeTranscriptSlice(transcript),
+        transcript: transcriptSlice,
         settings,
         runs,
         pendingPermissions,
@@ -4612,57 +5120,66 @@ function createRuntimeSessionService(
     async transcriptPage(input, options) {
       ensureOpen();
       const budget = createRuntimeReadBudget(options);
-      await admission.loadRequired(
-        input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
+      sessionReadOptionsFromBudget(budget);
       const cursorRevision =
         input.cursor === undefined
           ? undefined
           : decodeRuntimeTranscriptCursor(input.cursor).revision;
-      const transcript =
-        cursorRevision === undefined
-          ? await manager.readFullTranscript(
-              input.sessionId,
-              sessionReadOptionsFromBudget(budget),
-            )
-          : getTranscriptSnapshot(input.sessionId, cursorRevision);
-      if (cursorRevision !== undefined && transcript === undefined) {
+      if (cursorRevision !== undefined) {
+        const snapshot = getTranscriptSnapshot(
+          input.sessionId,
+          cursorRevision,
+        );
+        if (snapshot === undefined) {
+          throw createRuntimeResyncError(
+            "Transcript snapshot is no longer retained; request a fresh boundary",
+          );
+        }
+        return readTranscriptSnapshot(
+          snapshot,
+          () => createRuntimeTranscriptSlice(
+            snapshot,
+            budget,
+            input.cursor,
+            input.limit,
+          ),
+        );
+      }
+      await admission.loadRequired(
+        input.sessionId,
+        sessionReadOptionsFromBudget(budget),
+      );
+      const transcript = await manager.readFullTranscript(
+        input.sessionId,
+        sessionReadOptionsFromBudget(budget),
+      );
+      if (transcript === null) return null;
+      const revision = await rememberTranscriptSnapshot(
+        input.sessionId,
+        transcript,
+        budget,
+      );
+      const retained = getTranscriptSnapshot(input.sessionId, revision);
+      if (retained === undefined) {
         throw createRuntimeResyncError(
           "Transcript snapshot is no longer retained; request a fresh boundary",
         );
       }
-      if (transcript !== null && transcript !== undefined) {
-        rememberTranscriptSnapshot(input.sessionId, transcript);
-      }
-      return transcript === null
-        ? null
-        : createRuntimeTranscriptSlice(
-            transcript!,
-            input.cursor,
-            input.limit,
-          );
+      return readTranscriptSnapshot(
+        retained,
+        () => createRuntimeTranscriptSlice(
+          retained,
+          budget,
+          undefined,
+          input.limit,
+        ),
+      );
     },
 
     async transcriptEntryChunk(input, options) {
       ensureOpen();
       const budget = createRuntimeReadBudget(options);
-      await admission.loadRequired(
-        input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      if (
-        transcriptChunkCache?.sessionId === input.sessionId &&
-        transcriptChunkCache.revision === input.revision &&
-        transcriptChunkCache.entryIndex === input.entryIndex
-      ) {
-        return createRuntimeTranscriptEntryChunkFromEncoded(
-          input,
-          transcriptChunkCache.revision,
-          transcriptChunkCache.entryId,
-          transcriptChunkCache.encoded,
-        );
-      }
+      sessionReadOptionsFromBudget(budget);
       const transcript = getTranscriptSnapshot(
         input.sessionId,
         input.revision,
@@ -4672,28 +5189,13 @@ function createRuntimeSessionService(
           "Transcript snapshot is no longer retained; request a fresh boundary",
         );
       }
-      const revision = input.revision;
-      const entry = transcript.transcriptEntries[input.entryIndex];
-      if (entry === undefined) {
-        throw new Error(
-          `Transcript entry index is out of range: ${input.entryIndex}`,
-        );
-      }
-      const encoded = Buffer.from(JSON.stringify(entry), "utf8");
-      transcriptChunkCache = {
-        sessionId: input.sessionId,
-        revision,
-        entryIndex: input.entryIndex,
-        ...(typeof entry.entryId === "string"
-          ? { entryId: entry.entryId }
-          : {}),
-        encoded,
-      };
-      return createRuntimeTranscriptEntryChunkFromEncoded(
-        input,
-        revision,
-        transcriptChunkCache.entryId,
-        encoded,
+      return readTranscriptSnapshot(
+        transcript,
+        () => createRuntimeTranscriptEntryChunkFromSnapshot(
+          input,
+          transcript,
+          budget,
+        ),
       );
     },
 
@@ -4709,7 +5211,11 @@ function createRuntimeSessionService(
         sessionReadOptionsFromBudget(budget),
       );
       if (transcript === null) return null;
-      const revision = rememberTranscriptSnapshot(input.sessionId, transcript);
+      const revision = await rememberTranscriptSnapshot(
+        input.sessionId,
+        transcript,
+        budget,
+      );
       const lineage =
         transcript.lineage ?? createSessionLineage(transcript.messages);
       const search = searchSessionHistory(lineage, {
@@ -4787,6 +5293,10 @@ function createRuntimeSessionService(
             message: `Session observation listener failed for ${event.type}`,
             detail: normalizeError(error),
           });
+          invalidate(
+            "delivery_failed",
+            `Session observation listener failed while delivering ${event.type}; discard local state and resync.`,
+          );
         }
       };
       const subscription = bus.service.subscribe({ sessionId }, (event) => {
@@ -5214,6 +5724,16 @@ function createRuntimeSessionService(
 
 function createRuntimeRunService(deps: {
   readonly actorRegistry: RuntimeAgentActorRegistry;
+  readonly waitForActorHealthResolution: (
+    sessionId: string,
+    observed: AgentControllerHealth,
+  ) => Promise<AgentControllerHealth>;
+  readonly waitForActorHealthChange: (
+    sessionId: string,
+  ) => {
+    readonly promise: Promise<AgentControllerHealth>;
+    close(): void;
+  };
   readonly agentPlane?: AgentExecutorPlane;
   readonly artifacts: RuntimeArtifactStore;
   readonly bus: RuntimeEventBus;
@@ -5380,6 +5900,103 @@ function createRuntimeRunService(deps: {
     return result;
   };
 
+  const finishUnconfirmedRun = (
+    record: RuntimeRunRecord,
+    result: RuntimeRunResult,
+  ): RuntimeRunResult => {
+    if (record.settlementFinished === true) return result;
+    record.settlementFinished = true;
+    releaseAbortSignalSubscription(record);
+    deps.permissions.rejectForRun(record.runId, "runtime run state is unknown");
+    deps.userInputs.rejectForRun(record.runId, "runtime run state is unknown");
+    record.start?.options.guardrails
+      ?.find(isRuntimeAutoModeGuardrail)
+      ?.clearAllowedCalls();
+    resolveRunStart(record, result);
+    releaseActiveQueueRoute(record);
+    // Keep activeRunBySession fenced. No later Run may execute until the
+    // uncertain Actor settlement is explicitly repaired or exported.
+    return result;
+  };
+
+  const awaitActorFinalization = async (
+    record: RuntimeRunRecord,
+  ): Promise<AgentControllerHealth> => {
+    // A synchronous SDK launch failure can queue an Actor settlement before
+    // throwing. Let already-queued settlement reactions publish their health,
+    // then confirm the health again without an interleaving JS turn before a
+    // terminal status is allowed to persist.
+    for (;;) {
+      const actorSession = record.actorSession;
+      if (actorSession === undefined) return { state: "healthy" };
+      const observed = actorSession.health();
+      if (observed.state === "recovering") {
+        await deps.waitForActorHealthResolution(record.sessionId, observed);
+        continue;
+      }
+      if (observed.state === "unknown") return observed;
+      const root = actorSession.rootControl();
+      const tree = root.list();
+      if (tree.activeNonRootTurns > 0) {
+        if (record.stop?.state !== "unknown") {
+          const phaseChanged = record.phase !== "waiting_agent";
+          const countChanged =
+            record.activeSubtaskCount !== tree.activeNonRootTurns;
+          if (phaseChanged) {
+            record.phase = "waiting_agent";
+            record.stage = "waiting_agent";
+            record.stageChangedAt = new Date().toISOString();
+          }
+          record.activeSubtaskCount = tree.activeNonRootTurns;
+          if (phaseChanged || countChanged) publishRunUpdate(record);
+        }
+        const cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
+        if (root.list().activeNonRootTurns === 0) continue;
+        const healthChange = deps.waitForActorHealthChange(record.sessionId);
+        const waitAbort = new AbortController();
+        try {
+          await Promise.race([
+            root.wait(cursor, undefined, waitAbort.signal),
+            healthChange.promise,
+          ]);
+        } finally {
+          waitAbort.abort();
+          healthChange.close();
+        }
+        continue;
+      }
+      await Promise.resolve();
+      const confirmed = actorSession.health();
+      if (confirmed.state === "recovering") continue;
+      if (root.list().activeNonRootTurns > 0) continue;
+      return confirmed;
+    }
+  };
+
+  const unknownActorSettlementResult = (
+    record: RuntimeRunRecord,
+    result?: KodaXResult,
+  ): RuntimeRunResult => ({
+    runId: record.runId,
+    sessionId: record.sessionId,
+    phase: "unknown",
+    ...(result !== undefined ? { result } : {}),
+    error: new Error(
+      record.lifecycleError?.message
+      ?? record.error
+      ?? "Actor settlement persistence is unknown.",
+    ),
+    ...(record.stop !== undefined ? { stop: record.stop } : {}),
+  });
+
+  const finishAccordingToTerminalFact = (
+    record: RuntimeRunRecord,
+    result: RuntimeRunResult,
+  ): RuntimeRunResult =>
+    record.terminalEmitted
+      ? finishRun(record, result)
+      : finishUnconfirmedRun(record, result);
+
   const settleFromExecutorSignal = (
     record: RuntimeRunRecord,
     signal: "completed" | "failed",
@@ -5402,9 +6019,18 @@ function createRuntimeRunService(deps: {
     // turn so the authoritative result (including KodaXResult payload) wins.
     // This fallback runs on the next turn only when the Promise was lost.
     setImmediate(() => {
+      void (async () => {
       if (record.settlementFinished === true) return;
       const latched = record.executorTerminalSignal;
       if (latched === undefined) return;
+      const actorHealth = await awaitActorFinalization(record);
+      if (actorHealth.state === "unknown") {
+        finishUnconfirmedRun(
+          record,
+          unknownActorSettlementResult(record),
+        );
+        return;
+      }
       if (latched.signal === "failed") {
         finishRun(
           record,
@@ -5431,6 +6057,14 @@ function createRuntimeRunService(deps: {
           ? { terminal: record.terminal }
           : {}),
         ...(record.stop !== undefined ? { stop: record.stop } : {}),
+      });
+      })().catch((error: unknown) => {
+        emitKodaXDiagnostic({
+          source: "runtime.run.finalization",
+          level: "error",
+          message: `Failed to settle Runtime run ${record.runId} after its executor terminal signal.`,
+          detail: error,
+        });
       });
     });
   };
@@ -5461,13 +6095,30 @@ function createRuntimeRunService(deps: {
     };
   };
 
+  const canApplyExecutorTerminalSignal = (
+    record: RuntimeRunRecord,
+  ): boolean => {
+    const actorSession = record.actorSession;
+    return (
+      actorSession === undefined
+      || (
+        actorSession.health().state === "healthy"
+        && actorSession.rootControl().list().activeNonRootTurns === 0
+      )
+    );
+  };
+
   const cancelRun = (
     record: RuntimeRunRecord,
     reason: string,
     drain: boolean,
   ): RuntimeRunResult => {
     const executorSignal = record.executorTerminalSignal;
-    if (executorSignal !== undefined && !record.terminalEmitted) {
+    if (
+      executorSignal !== undefined
+      && !record.terminalEmitted
+      && canApplyExecutorTerminalSignal(record)
+    ) {
       if (executorSignal.signal === "failed") {
         return failedRunResult(
           record,
@@ -5491,7 +6142,7 @@ function createRuntimeRunService(deps: {
         ...(record.stop !== undefined ? { stop: record.stop } : {}),
       };
     }
-    if (executorSignal !== undefined) {
+    if (executorSignal !== undefined && record.terminalEmitted) {
       return {
         runId: record.runId,
         sessionId: record.sessionId,
@@ -5506,6 +6157,7 @@ function createRuntimeRunService(deps: {
     if (wasQueued) {
       removeQueuedRun(queueBySession, record);
     }
+    delete record.actorHealthBaseState;
     const requestedAt = new Date().toISOString();
     record.stop ??= {
       requestedAt,
@@ -5529,6 +6181,9 @@ function createRuntimeRunService(deps: {
       record.stage = "unknown";
       record.stageChangedAt = requestedAt;
       record.error = "stop_outcome_unconfirmed";
+      if (record.lifecycleError?.retryable !== false) {
+        delete record.lifecycleError;
+      }
       publishRunUpdate(record);
       const result: RuntimeRunResult = {
         runId: record.runId,
@@ -5626,6 +6281,12 @@ function createRuntimeRunService(deps: {
               : phase === "recovering"
                 ? "recovering"
                 : undefined;
+        const actorBase = record.actorHealthBaseState;
+        if (actorBase !== undefined) {
+          actorBase.phase = phase;
+          if (stage !== undefined) actorBase.stage = stage;
+          return;
+        }
         if (record.phase === phase && (stage === undefined || record.stage === stage)) {
           return;
         }
@@ -5643,6 +6304,16 @@ function createRuntimeRunService(deps: {
           || record.phase === "unknown"
           || record.stop?.state === "unknown"
         ) {
+          return;
+        }
+        const actorBase = record.actorHealthBaseState;
+        if (actorBase !== undefined) {
+          actorBase.stage = stage;
+          if (activeSubtaskCount === undefined) {
+            delete record.activeSubtaskCount;
+          } else {
+            record.activeSubtaskCount = activeSubtaskCount;
+          }
           return;
         }
         const countChanged = record.activeSubtaskCount !== activeSubtaskCount;
@@ -5780,7 +6451,7 @@ function createRuntimeRunService(deps: {
       }
       registerActiveQueueRoute(record);
       void managedResult
-        .then((value): RuntimeRunResult => {
+        .then(async (value): Promise<RuntimeRunResult> => {
           const phase = record.terminalEmitted
             ? record.phase
             : value.interrupted
@@ -5798,6 +6469,10 @@ function createRuntimeRunService(deps: {
                     : {}),
                 }
               : undefined;
+          const actorHealth = await awaitActorFinalization(record);
+          if (actorHealth.state === "unknown") {
+            return unknownActorSettlementResult(record, value);
+          }
           markRunTerminal(
             deps.bus,
             deps.persistence,
@@ -5816,8 +6491,13 @@ function createRuntimeRunService(deps: {
             ...(record.stop !== undefined ? { stop: record.stop } : {}),
           };
         })
-        .catch((error: unknown) => failedRunResult(record, error))
-        .then((result) => finishRun(record, result));
+        .catch(async (error: unknown) => {
+          const actorHealth = await awaitActorFinalization(record);
+          return actorHealth.state === "unknown"
+            ? unknownActorSettlementResult(record)
+            : failedRunResult(record, error);
+        })
+        .then((result) => finishAccordingToTerminalFact(record, result));
       return;
     }
 
@@ -5858,7 +6538,7 @@ function createRuntimeRunService(deps: {
     }
     registerActiveQueueRoute(record);
     void running.result
-      .then((value): RuntimeRunResult => {
+      .then(async (value): Promise<RuntimeRunResult> => {
         const phase = record.terminalEmitted
           ? record.phase
           : value.interrupted
@@ -5866,6 +6546,10 @@ function createRuntimeRunService(deps: {
             : value.success
               ? "completed"
               : "failed";
+        const actorHealth = await awaitActorFinalization(record);
+        if (actorHealth.state === "unknown") {
+          return unknownActorSettlementResult(record, value);
+        }
         markRunTerminal(deps.bus, deps.persistence, record, phase);
         return {
           runId: record.runId,
@@ -5875,8 +6559,13 @@ function createRuntimeRunService(deps: {
           ...(record.stop !== undefined ? { stop: record.stop } : {}),
         };
       })
-      .catch((error: unknown) => failedRunResult(record, error))
-      .then((result) => finishRun(record, result));
+      .catch(async (error: unknown) => {
+        const actorHealth = await awaitActorFinalization(record);
+        return actorHealth.state === "unknown"
+          ? unknownActorSettlementResult(record)
+          : failedRunResult(record, error);
+      })
+      .then((result) => finishAccordingToTerminalFact(record, result));
   };
 
   const startRecord = (
@@ -5886,7 +6575,13 @@ function createRuntimeRunService(deps: {
       launchRecord(record);
       return undefined;
     } catch (error) {
-      finishRun(record, failedRunResult(record, error));
+      void awaitActorFinalization(record).then((actorHealth) => {
+        if (actorHealth.state === "unknown") {
+          finishUnconfirmedRun(record, unknownActorSettlementResult(record));
+          return;
+        }
+        finishRun(record, failedRunResult(record, error));
+      });
       return { error };
     }
   };
@@ -6069,6 +6764,27 @@ function createRuntimeRunService(deps: {
     );
     const actorSession =
       options.agentMode === "sa" ? undefined : ownedActorSession;
+    if (actorSession !== undefined) {
+      const observedHealth = actorSession.health();
+      const health = observedHealth.state === "recovering"
+        ? await deps.waitForActorHealthResolution(
+            input.sessionId,
+            observedHealth,
+          )
+        : observedHealth;
+      if (health.state === "unknown") {
+        throw Object.assign(
+          new Error(
+            health.message
+            ?? "Actor settlement persistence is unknown; the Session cannot start another Run.",
+          ),
+          {
+            code: health.code ?? "actor_settlement_not_persisted",
+            retryable: false as const,
+          },
+        );
+      }
+    }
     const provider = options.provider ?? deps.defaultProvider;
     if (!provider) {
       throw new Error(
@@ -6583,12 +7299,77 @@ function createRuntimeRunService(deps: {
 
     async abort(runId) {
       deps.ensureOpen();
-      const run = getRecord(runId);
-      await deps.sessionAdmission.assertRunAccess(run.sessionId);
-      assertRuntimeOwnsRun(run, deps.runOwner);
-      if (run.phase === "queued" || isActiveRunPhase(run.phase)) {
-        cancelRun(run, "runtime run aborted", true);
+      const run = deps.runs.get(runId);
+      const persisted = deps.persistence.loadRunStatus(runId);
+      const sessionId = run?.sessionId ?? persisted?.status.sessionId;
+      if (sessionId === undefined) {
+        throw new Error(`Runtime run not found: ${runId}`);
       }
+      await deps.sessionAdmission.assertRunAccess(sessionId);
+      if (run !== undefined) assertRuntimeOwnsRun(run, deps.runOwner);
+      if (
+        run?.executorTerminalSignal !== undefined
+        && !run.terminalEmitted
+        && canApplyExecutorTerminalSignal(run)
+      ) {
+        cancelRun(run, "runtime run aborted", false);
+        const terminal = deps.persistence.loadRunStatus(runId);
+        return runtimeRunStopReceipt({
+          accepted: false,
+          status: terminal?.status ?? statusFromRecord(run),
+          revision: terminal?.revision ?? 0,
+        });
+      }
+      const stop = deps.persistence.requestRunStop(
+        runId,
+        "runtime run aborted",
+      );
+      if (run === undefined) return runtimeRunStopReceipt(stop);
+      applyAuthoritativeRunStatus(run, stop.status);
+      if (stop.status.stop?.state === "unknown") {
+        delete run.actorHealthBaseState;
+      }
+      if (stop.accepted) {
+        const wasQueued = stop.status.phase === "cancelled";
+        if (wasQueued) {
+          removeQueuedRun(queueBySession, run);
+        }
+        releaseAbortSignalSubscription(run);
+        run.running?.abort(new Error("runtime run aborted"));
+        run.abortController?.abort(new Error("runtime run aborted"));
+        deps.permissions.rejectForRun(run.runId, "runtime run aborted");
+        deps.userInputs.rejectForRun(run.runId, "runtime run aborted");
+        run.start?.options.guardrails
+          ?.find(isRuntimeAutoModeGuardrail)
+          ?.clearAllowedCalls();
+        run.interruptInputOpen = false;
+        terminalizeQueuedInterruptInputs(run);
+        if (wasQueued) {
+          deps.bus.emit("run.cancelled", stop.status, {
+            sessionId: run.sessionId,
+            runId: run.runId,
+            ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
+          });
+          const result: RuntimeRunResult = {
+            runId: run.runId,
+            sessionId: run.sessionId,
+            phase: run.phase,
+            ...(run.terminal !== undefined ? { terminal: run.terminal } : {}),
+            ...(run.stop !== undefined ? { stop: run.stop } : {}),
+          };
+          resolveRunStart(run, result);
+          releaseActiveQueueRoute(run);
+          releaseActiveRun(run);
+          if (!deps.isClosed()) drainNext(run.sessionId);
+        } else {
+          deps.bus.emit("run.updated", stop.status, {
+            sessionId: run.sessionId,
+            runId: run.runId,
+            ...(run.turnId !== undefined ? { turnId: run.turnId } : {}),
+          });
+        }
+      }
+      return runtimeRunStopReceipt(stop);
     },
 
     async setModel(runId, model) {
@@ -7224,6 +8005,10 @@ function createRuntimeAgentActorRegistry(
   ownerLiveness: RuntimeActorOwnerLiveness,
   plane?: AgentExecutorPlane,
   defaultContext?: AgentDispatchContext,
+  onHealthChanged?: (
+    sessionId: string,
+    health: AgentControllerHealth,
+  ) => void,
 ): RuntimeAgentActorRegistry {
   const sessions = new Map<string, Promise<CodingActorSession>>();
   let closed = false;
@@ -7286,6 +8071,7 @@ function createRuntimeAgentActorRegistry(
           livenessPort: ownerLiveness.port,
         },
         isOwnerAlive: isRuntimeActorOwnerAlive,
+        onHealthChanged: (health) => onHealthChanged?.(sessionId, health),
         ...(plane
           ? {
               executor: createExternalActorTurnExecutor({
@@ -7297,6 +8083,7 @@ function createRuntimeAgentActorRegistry(
       });
       try {
         await session.initialize();
+        onHealthChanged?.(sessionId, session.health());
         return session;
       } catch (error: unknown) {
         if (!session.ownsDurableFence()) throw error;
@@ -8727,6 +9514,92 @@ function createRuntimePersistence(
         return status;
       });
     },
+    requestRunStop(runId, reason) {
+      const file = statusFile(runId);
+      return withRuntimeStatusFileLock(file, () => {
+        const existing = readPersistedRuntimeRunStatus(file);
+        if (existing === undefined) {
+          throw new Error(`Runtime run not found: ${runId}`);
+        }
+        if (
+          existing.owner !== undefined
+          && existing.owner.ownerId !== runOwner.ownerId
+          && !isTerminalRunPhase(existing.status.phase)
+        ) {
+          throw createRuntimeConflictError(
+            `Runtime ${runOwner.runtimeId} does not own run ${runId}`,
+            existing.revision,
+          );
+        }
+        const current = existing.status;
+        if (
+          current.stop !== undefined
+          || current.phase === "unknown"
+          || isTerminalRunPhase(current.phase)
+          || (current.phase !== "queued" && !isActiveRunPhase(current.phase))
+        ) {
+          return {
+            accepted: false,
+            status: current,
+            revision: existing.revision,
+          };
+        }
+        const requestedAt = new Date().toISOString();
+        const {
+          lifecycleError: _discardedLifecycleError,
+          ...currentWithoutLifecycleError
+        } = current;
+        const next: RuntimeRunStatus = current.phase === "queued"
+          ? {
+              ...currentWithoutLifecycleError,
+              phase: "cancelled",
+              stage: "terminal",
+              stageChangedAt: requestedAt,
+              activeSubtaskCount: 0,
+              endedAt: requestedAt,
+              stop: {
+                requestedAt,
+                state: "confirmed",
+                outcome: "cancelled",
+                reason,
+                resolvedAt: requestedAt,
+              },
+              terminal: {
+                revision: 1,
+                kind: "cancelled",
+                code: "cancelled",
+                effectOutcome: "none",
+                message: reason,
+              },
+            }
+          : {
+              ...currentWithoutLifecycleError,
+              phase: "unknown",
+              stage: "unknown",
+              stageChangedAt: requestedAt,
+              error: "stop_outcome_unconfirmed",
+              stop: {
+                requestedAt,
+                state: "unknown",
+                outcome: "unknown",
+                reason,
+              },
+            };
+        const revision = existing.revision + 1;
+        writeRuntimeJsonAtomic(file, {
+          ...next,
+          _runtime: {
+            revision,
+            owner: runOwner,
+          },
+        });
+        return {
+          accepted: true,
+          status: next,
+          revision,
+        };
+      });
+    },
     loadRunStatus(runId) {
       const file = statusFile(runId);
       if (!fs.existsSync(file)) return undefined;
@@ -9107,6 +9980,13 @@ function parseRuntimeRunStatus(value: unknown): RuntimeRunStatus | undefined {
       ? { reasoning: value.reasoning as KodaXReasoningMode }
       : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
+    ...(parseRuntimeRunLifecycleError(value.lifecycleError) !== undefined
+      ? {
+          lifecycleError: parseRuntimeRunLifecycleError(
+            value.lifecycleError,
+          )!,
+        }
+      : {}),
     ...(parseRuntimeTerminalFact(value.terminal) !== undefined
       ? { terminal: parseRuntimeTerminalFact(value.terminal)! }
       : {}),
@@ -9243,6 +10123,27 @@ function parseRuntimeRunStopStatus(
     ...(typeof value.resolvedAt === "string"
       ? { resolvedAt: value.resolvedAt }
       : {}),
+  };
+}
+
+function parseRuntimeRunLifecycleError(
+  value: unknown,
+): RuntimeRunLifecycleError | undefined {
+  if (
+    !isRecord(value)
+    || (
+      value.code !== "actor_settlement_retrying"
+      && value.code !== "actor_settlement_not_persisted"
+    )
+    || typeof value.message !== "string"
+    || typeof value.retryable !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    code: value.code,
+    message: value.message,
+    retryable: value.retryable,
   };
 }
 
@@ -9404,6 +10305,9 @@ function recordFromPersistedStatus(
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.reasoning !== undefined ? { reasoning: status.reasoning } : {}),
     ...(status.error !== undefined ? { error: status.error } : {}),
+    ...(status.lifecycleError !== undefined
+      ? { lifecycleError: status.lifecycleError }
+      : {}),
     ...(status.terminal !== undefined ? { terminal: status.terminal } : {}),
     ...(status.stop !== undefined ? { stop: status.stop } : {}),
     ...(status.continuation !== undefined
@@ -11682,7 +12586,30 @@ function isPartnerSessionIdentity(
 function createRuntimeTranscriptRevision(
   transcript: RuntimeTranscript | null,
 ): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify(transcript)).digest("hex")}`;
+  return transcript === null
+    ? createRuntimeTranscriptRevisionFromSerialized("null")
+    : createRuntimeTranscriptEntriesRevision(transcript.transcriptEntries);
+}
+
+function createRuntimeTranscriptEntriesRevision(
+  entries: readonly SessionTranscriptEntry[],
+  visit?: (entry: SessionTranscriptEntry, encoded: Buffer) => void,
+): string {
+  const hash = createHash("sha256");
+  hash.update("kodax-transcript-entries-v1\0");
+  for (const entry of entries) {
+    const encoded = Buffer.from(JSON.stringify(entry), "utf8");
+    hash.update(`${encoded.length}:`);
+    hash.update(encoded);
+    visit?.(entry, encoded);
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function createRuntimeTranscriptRevisionFromSerialized(
+  serialized: string,
+): string {
+  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
 }
 
 interface RuntimeTranscriptPageCursor {
@@ -11696,6 +12623,19 @@ interface RuntimeTranscriptChunkCursor {
   readonly revision: string;
   readonly entryIndex: number;
   readonly offset: number;
+}
+
+interface RuntimeTranscriptSnapshotEntryDescriptor {
+  readonly offset: number;
+  readonly byteLength: number;
+  readonly chunkDigests: readonly string[];
+  readonly entryId?: string;
+}
+
+interface RuntimeTranscriptSnapshotView {
+  readonly revision: string;
+  readonly filePath: string;
+  readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
 }
 
 function encodeRuntimeTranscriptCursor(
@@ -11746,44 +12686,51 @@ function decodeRuntimeTranscriptCursor(
   throw createRuntimeResyncError("Invalid transcript cursor payload");
 }
 
-function createRuntimeTranscriptSlice(
-  transcript: RuntimeTranscript,
+async function createRuntimeTranscriptSlice(
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
   cursor?: string,
   requestedLimit?: number,
-): RuntimeTranscriptSlice {
-  const revision = createRuntimeTranscriptRevision(transcript);
+): Promise<RuntimeTranscriptSlice> {
   const limit = requestedLimit ?? DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT;
   if (!Number.isSafeInteger(limit) || limit <= 0) {
     throw new Error("transcript page limit must be a positive safe integer");
   }
   const normalizedLimit = Math.min(limit, MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT);
-  let end = transcript.transcriptEntries.length;
+  let end = snapshot.entries.length;
   if (cursor !== undefined) {
     const parsed = decodeRuntimeTranscriptCursor(cursor);
-    if (parsed.kind !== "page" || parsed.revision !== revision) {
+    if (parsed.kind !== "page" || parsed.revision !== snapshot.revision) {
       throw createRuntimeResyncError(
         "Transcript cursor is stale; request a fresh observation snapshot",
       );
     }
-    end = Math.min(parsed.end, transcript.transcriptEntries.length);
+    end = Math.min(parsed.end, snapshot.entries.length);
   }
 
   const entries: RuntimeTranscriptSliceEntry[] = [];
   let encodedBytes = 0;
   let start = end;
   for (let index = end - 1; index >= 0; index -= 1) {
+    sessionReadOptionsFromBudget(budget);
     if (entries.length >= normalizedLimit) break;
-    const entry = transcript.transcriptEntries[index]!;
-    const serialized = JSON.stringify(entry);
-    const byteLength = Buffer.byteLength(serialized, "utf8");
+    const descriptor = snapshot.entries[index]!;
+    const byteLength = descriptor.byteLength;
+    const entry = byteLength <= MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES
+      ? await parseRuntimeTranscriptSnapshotEntry(
+          snapshot,
+          descriptor,
+          budget,
+        )
+      : undefined;
     const item: RuntimeTranscriptSliceEntry = {
       index,
-      ...(typeof entry.entryId === "string" ? { entryId: entry.entryId } : {}),
+      ...(descriptor.entryId !== undefined
+        ? { entryId: descriptor.entryId }
+        : {}),
       byteLength,
       oversized: byteLength > MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES,
-      ...(byteLength <= MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES
-        ? { entry: structuredClone(entry) }
-        : {}),
+      ...(entry !== undefined ? { entry } : {}),
     };
     const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
     if (
@@ -11796,16 +12743,17 @@ function createRuntimeTranscriptSlice(
     encodedBytes += itemBytes;
     start = index;
   }
+  sessionReadOptionsFromBudget(budget);
   const hasMore = start > 0;
   return {
-    revision,
+    revision: snapshot.revision,
     entries,
     hasMore,
     ...(hasMore
       ? {
           nextCursor: encodeRuntimeTranscriptCursor({
             kind: "page",
-            revision,
+            revision: snapshot.revision,
             end: start,
           }),
         }
@@ -11813,15 +12761,20 @@ function createRuntimeTranscriptSlice(
   };
 }
 
-function createRuntimeTranscriptEntryChunkFromEncoded(
+async function createRuntimeTranscriptEntryChunkFromSnapshot(
   input: RuntimeTranscriptEntryChunkInput,
-  revision: string,
-  entryId: string | undefined,
-  encoded: Buffer,
-): RuntimeTranscriptEntryChunk {
-  if (input.revision !== revision) {
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
+): Promise<RuntimeTranscriptEntryChunk> {
+  if (input.revision !== snapshot.revision) {
     throw createRuntimeResyncError(
       "Transcript revision changed; request a fresh observation snapshot",
+    );
+  }
+  const descriptor = snapshot.entries[input.entryIndex];
+  if (descriptor === undefined) {
+    throw new Error(
+      `Transcript entry index is out of range: ${input.entryIndex}`,
     );
   }
   let offset = 0;
@@ -11829,7 +12782,7 @@ function createRuntimeTranscriptEntryChunkFromEncoded(
     const parsed = decodeRuntimeTranscriptCursor(input.cursor);
     if (
       parsed.kind !== "entry" ||
-      parsed.revision !== revision ||
+      parsed.revision !== snapshot.revision ||
       parsed.entryIndex !== input.entryIndex
     ) {
       throw createRuntimeResyncError(
@@ -11838,32 +12791,153 @@ function createRuntimeTranscriptEntryChunkFromEncoded(
     }
     offset = parsed.offset;
   }
-  if (offset > encoded.length) {
+  if (offset > descriptor.byteLength) {
+    throw createRuntimeResyncError("Transcript entry cursor offset is invalid");
+  }
+  if (offset % MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES !== 0) {
     throw createRuntimeResyncError("Transcript entry cursor offset is invalid");
   }
   const nextOffset = Math.min(
-    encoded.length,
+    descriptor.byteLength,
     offset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
   );
-  const hasMore = nextOffset < encoded.length;
+  const encoded = await readRuntimeTranscriptSnapshotBytes(
+    snapshot.filePath,
+    descriptor.offset + offset,
+    nextOffset - offset,
+    budget,
+  );
+  assertRuntimeTranscriptSnapshotDigest(
+    encoded,
+    descriptor.chunkDigests[offset / MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES],
+  );
+  sessionReadOptionsFromBudget(budget);
+  const hasMore = nextOffset < descriptor.byteLength;
   return {
-    revision,
+    revision: snapshot.revision,
     entryIndex: input.entryIndex,
-    ...(entryId !== undefined ? { entryId } : {}),
+    ...(descriptor.entryId !== undefined
+      ? { entryId: descriptor.entryId }
+      : {}),
     encoding: "base64-json",
-    data: encoded.subarray(offset, nextOffset).toString("base64"),
+    data: encoded.toString("base64"),
     hasMore,
     ...(hasMore
       ? {
           nextCursor: encodeRuntimeTranscriptCursor({
             kind: "entry",
-            revision,
+            revision: snapshot.revision,
             entryIndex: input.entryIndex,
             offset: nextOffset,
           }),
         }
       : {}),
   };
+}
+
+async function parseRuntimeTranscriptSnapshotEntry(
+  snapshot: RuntimeTranscriptSnapshotView,
+  descriptor: RuntimeTranscriptSnapshotEntryDescriptor,
+  budget: RuntimeReadBudget,
+): Promise<SessionTranscriptEntry> {
+  const encoded = await readRuntimeTranscriptSnapshotBytes(
+    snapshot.filePath,
+    descriptor.offset,
+    descriptor.byteLength,
+    budget,
+  );
+  assertRuntimeTranscriptSnapshotDigest(encoded, descriptor.chunkDigests[0]);
+  try {
+    return JSON.parse(encoded.toString("utf8")) as SessionTranscriptEntry;
+  } catch (error: unknown) {
+    throw createRuntimeResyncError(
+      `Transcript snapshot entry is corrupt: ${normalizeError(error).message}`,
+    );
+  }
+}
+
+async function readRuntimeTranscriptSnapshotBytes(
+  filePath: string,
+  offset: number,
+  length: number,
+  budget: RuntimeReadBudget,
+): Promise<Buffer> {
+  return awaitRuntimeReadOperation(async () => {
+    const buffer = Buffer.allocUnsafe(length);
+    let handle: fs.promises.FileHandle | undefined;
+    try {
+      handle = await fs.promises.open(filePath, "r");
+      let read = 0;
+      while (read < length) {
+        const result = await handle.read(
+          buffer,
+          read,
+          length - read,
+          offset + read,
+        );
+        if (result.bytesRead === 0) {
+          throw new Error("Transcript snapshot ended unexpectedly.");
+        }
+        read += result.bytesRead;
+      }
+      return buffer;
+    } catch (error: unknown) {
+      throw createRuntimeResyncError(
+        `Transcript snapshot is unavailable: ${normalizeError(error).message}`,
+      );
+    } finally {
+      if (handle !== undefined) await handle.close();
+    }
+  }, budget);
+}
+
+async function writeFileHandleFully(
+  handle: fs.promises.FileHandle,
+  buffer: Buffer,
+): Promise<void> {
+  let written = 0;
+  while (written < buffer.length) {
+    const result = await handle.write(
+      buffer,
+      written,
+      buffer.length - written,
+      null,
+    );
+    if (result.bytesWritten === 0) {
+      throw new Error("Transcript snapshot write made no progress.");
+    }
+    written += result.bytesWritten;
+  }
+}
+
+async function removeAbandonedTranscriptSnapshot(
+  filePath: string,
+): Promise<void> {
+  try {
+    await fs.promises.rm(filePath, { force: true });
+  } catch (error: unknown) {
+    process.emitWarning(
+      `Unable to remove abandoned transcript snapshot: ${normalizeError(error).message}`,
+      { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
+    );
+  }
+}
+
+function isExpectedRuntimeReadTermination(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  return error.code === "read_timeout" || error.code === "read_cancelled";
+}
+
+function assertRuntimeTranscriptSnapshotDigest(
+  encoded: Buffer,
+  expected: string | undefined,
+): void {
+  const actual = createHash("sha256").update(encoded).digest("hex");
+  if (expected === undefined || actual !== expected) {
+    throw createRuntimeResyncError(
+      "Transcript snapshot integrity check failed; request a fresh boundary",
+    );
+  }
 }
 
 function previewQueuedInput(prompt: string): string {
@@ -12821,6 +13895,9 @@ function statusFromRecord(run: RuntimeRunRecord): RuntimeRunStatus {
     ...(run.model !== undefined ? { model: run.model } : {}),
     ...(run.reasoning !== undefined ? { reasoning: run.reasoning } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
+    ...(run.lifecycleError !== undefined
+      ? { lifecycleError: run.lifecycleError }
+      : {}),
     ...(run.terminal !== undefined ? { terminal: run.terminal } : {}),
     ...(run.stop !== undefined ? { stop: run.stop } : {}),
     ...(run.continuation !== undefined
@@ -12854,6 +13931,34 @@ function resultFromStatus(status: RuntimeRunStatus): RuntimeRunResult {
     ...(status.error !== undefined ? { error: new Error(status.error) } : {}),
     ...(status.terminal !== undefined ? { terminal: status.terminal } : {}),
     ...(status.stop !== undefined ? { stop: status.stop } : {}),
+  };
+}
+
+function runtimeRunStopReceipt(
+  stop: PersistedRuntimeRunStop,
+): RuntimeRunStopReceipt {
+  const recorded = stop.status.stop;
+  const outcome: RuntimeRunStopStatus["outcome"] = recorded?.outcome ?? (
+    stop.status.phase === "completed"
+      ? "completed"
+      : stop.status.phase === "failed"
+        ? "failed"
+        : stop.status.phase === "cancelled"
+          ? "cancelled"
+          : stop.status.phase === "interrupted"
+            ? "interrupted"
+            : "unknown"
+  );
+  return {
+    runId: stop.status.runId,
+    sessionId: stop.status.sessionId,
+    accepted: stop.accepted,
+    state: recorded?.state ?? (
+      isTerminalRunPhase(stop.status.phase) ? "confirmed" : "unknown"
+    ),
+    outcome,
+    phase: stop.status.phase,
+    revision: stop.revision,
   };
 }
 
@@ -13015,6 +14120,7 @@ function markRunTerminal(
   terminal?: Omit<RuntimeTerminalFact, "revision" | "kind">,
 ): void {
   if (run.terminalEmitted) return;
+  delete run.actorHealthBaseState;
   run.interruptInputOpen = false;
   terminalizeQueuedInterruptInputs(run);
   run.phase = phase;
@@ -13139,6 +14245,7 @@ function applyAuthoritativeRunStatus(
   run.model = status.model;
   run.reasoning = status.reasoning;
   run.error = status.error;
+  run.lifecycleError = status.lifecycleError;
   run.terminal = status.terminal;
   run.stop = status.stop;
   run.terminalEmitted = isTerminalRunPhase(status.phase);

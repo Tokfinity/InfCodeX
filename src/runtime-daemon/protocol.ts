@@ -52,6 +52,8 @@ export type RuntimeDaemonMethod =
   | 'run.setModel'
   | 'run.setProvider'
   | 'run.setReasoning'
+  | 'request.cancel'
+  | 'request.ack'
   | 'event.subscribe'
   | 'event.unsubscribe'
   | 'event.replay'
@@ -351,6 +353,8 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'run.setModel',
   'run.setProvider',
   'run.setReasoning',
+  'request.cancel',
+  'request.ack',
   'event.subscribe',
   'event.unsubscribe',
   'event.replay',

@@ -95,6 +95,26 @@ describe('runtime daemon protocol schema', () => {
     })).toEqual([]);
   });
 
+  it('accepts optional Session correlation on observation invalidation', () => {
+    const schema =
+      RUNTIME_DAEMON_NOTIFICATION_SCHEMAS['observation.invalidated'];
+    const invalidation = {
+      code: 'observation_invalidated',
+      reason: 'event_overflow',
+      runtimeId: 'runtime-1',
+      message: 'Observation overflowed.',
+    };
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      subscriptionId: 'subscription-1',
+      sessionId: 'session-1',
+      invalidation,
+    })).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      subscriptionId: 'legacy-subscription',
+      invalidation,
+    })).toEqual([]);
+  });
+
   it('carries complete F263 learned Skill records across Worker and daemon facades', () => {
     const record = {
       schemaVersion: 2,

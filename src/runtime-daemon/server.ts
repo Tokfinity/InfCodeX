@@ -5,7 +5,10 @@ import {
   getActiveExtensionRuntime,
 } from "@kodax-ai/coding";
 import type { ExtensionRuntimeContract } from "@kodax-ai/coding";
-import { ExternalAgentRegistrationConflictError } from "@kodax-ai/agent";
+import {
+  emitKodaXDiagnostic,
+  ExternalAgentRegistrationConflictError,
+} from "@kodax-ai/agent";
 
 import type {
   KodaXRuntime,
@@ -182,6 +185,8 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<
     "run.get",
     "run.list",
     "run.await",
+    "request.cancel",
+    "request.ack",
     "event.subscribe",
     "event.unsubscribe",
     "event.replay",
@@ -395,6 +400,15 @@ export function createRuntimeDaemonDispatcher(
   options: RuntimeDaemonDispatcherOptions,
 ): RuntimeDaemonDispatcher {
   const subscriptions = new Map<string, RuntimeSubscription>();
+  const inFlightRequests = new Map<
+    string,
+    {
+      readonly controller: AbortController;
+      readonly subscriptionIds: Set<string>;
+      completed: boolean;
+    }
+  >();
+  const subscriptionRequestIds = new Map<string, string>();
   const runResults = options.runResults ?? createRuntimeDaemonRunResultStore();
   const connectionId = `connection_${randomUUID().replace(/-/g, "")}`;
   const privateReverseBridge = createRuntimeDaemonReverseBridge(options.notify);
@@ -416,6 +430,15 @@ export function createRuntimeDaemonDispatcher(
     const subscription = subscriptions.get(subscriptionId);
     if (!subscription) return false;
     subscriptions.delete(subscriptionId);
+    const requestId = subscriptionRequestIds.get(subscriptionId);
+    subscriptionRequestIds.delete(subscriptionId);
+    if (requestId !== undefined) {
+      const request = inFlightRequests.get(requestId);
+      request?.subscriptionIds.delete(subscriptionId);
+      if (request?.completed === true && request.subscriptionIds.size === 0) {
+        inFlightRequests.delete(requestId);
+      }
+    }
     subscription.close();
     return true;
   };
@@ -445,6 +468,12 @@ export function createRuntimeDaemonDispatcher(
   const handle = async (
     wireRequest: RuntimeDaemonRequest<RuntimeDaemonWireMethod>,
   ): Promise<RuntimeDaemonSuccessResponse | RuntimeDaemonErrorResponse> => {
+    let requestToCleanup:
+      | {
+          readonly id: string;
+          readonly subscriptionIds: Set<string>;
+        }
+      | undefined;
     try {
       if (isRuntimeDaemonRetiredMethod(wireRequest.method)) {
         throw daemonError(
@@ -520,12 +549,62 @@ export function createRuntimeDaemonDispatcher(
         requireRuntimeMethodScope(request.method, grantedScopes);
         requirePersistentGrantScope(request, grantedScopes);
       }
+      if (request.method === "request.cancel") {
+        const requestId = requireStringParam(request.params, "requestId");
+        const inFlight = inFlightRequests.get(requestId);
+        inFlight?.controller.abort(
+          Object.assign(new Error("Runtime daemon request cancelled."), {
+            code: "read_cancelled" as const,
+          }),
+        );
+        for (const subscriptionId of inFlight?.subscriptionIds ?? []) {
+          closeSubscription(subscriptionId);
+        }
+        inFlightRequests.delete(requestId);
+        return createRuntimeDaemonSuccessResponse(request.id, {
+          ok: inFlight !== undefined,
+        });
+      }
+      if (request.method === "request.ack") {
+        const requestId = requireStringParam(request.params, "requestId");
+        const inFlight = inFlightRequests.get(requestId);
+        if (inFlight !== undefined) {
+          for (const subscriptionId of inFlight.subscriptionIds) {
+            subscriptionRequestIds.delete(subscriptionId);
+          }
+          inFlightRequests.delete(requestId);
+        }
+        return createRuntimeDaemonSuccessResponse(request.id, {
+          ok: inFlight !== undefined,
+        });
+      }
+      if (inFlightRequests.has(request.id)) {
+        throw daemonError(
+          "invalid_request",
+          `Runtime daemon request id is already in flight: ${request.id}.`,
+        );
+      }
+      const requestController = new AbortController();
+      const inFlight = {
+        controller: requestController,
+        subscriptionIds: new Set<string>(),
+        completed: false,
+      };
+      inFlightRequests.set(request.id, inFlight);
+      requestToCleanup = {
+        id: request.id,
+        subscriptionIds: inFlight.subscriptionIds,
+      };
       const dispatch = () =>
         dispatchRuntimeDaemonRequest(
           request,
           options,
           runResults,
-          rememberSubscription,
+          (subscriptionId, subscription) => {
+            rememberSubscription(subscriptionId, subscription);
+            inFlight.subscriptionIds.add(subscriptionId);
+            subscriptionRequestIds.set(subscriptionId, request.id);
+          },
           closeSubscription,
           notify,
           () => clientCapabilities,
@@ -533,14 +612,24 @@ export function createRuntimeDaemonDispatcher(
           clientName,
           clientVersion,
           reverseBridge,
+          requestController.signal,
         );
-      const dispatched = await dispatchWithOperation(
-        request,
-        options,
-        clientCapabilities,
-        principalId,
-        dispatch,
-      );
+      let dispatched: unknown;
+      try {
+        dispatched = await dispatchWithOperation(
+          request,
+          options,
+          clientCapabilities,
+          principalId,
+          dispatch,
+        );
+      } catch (error: unknown) {
+        for (const subscriptionId of [...inFlight.subscriptionIds]) {
+          closeSubscription(subscriptionId);
+        }
+        inFlightRequests.delete(request.id);
+        throw error;
+      }
       const result = serializeRuntimeDaemonMethodResult(
         request.method,
         dispatched,
@@ -592,8 +681,19 @@ export function createRuntimeDaemonDispatcher(
         }
         initialized = true;
       }
+      inFlight.completed = true;
+      if (inFlight.subscriptionIds.size === 0) {
+        inFlightRequests.delete(request.id);
+      }
+      requestToCleanup = undefined;
       return createRuntimeDaemonSuccessResponse(request.id, result);
     } catch (error: unknown) {
+      if (requestToCleanup !== undefined) {
+        for (const subscriptionId of [...requestToCleanup.subscriptionIds]) {
+          closeSubscription(subscriptionId);
+        }
+        inFlightRequests.delete(requestToCleanup.id);
+      }
       return createRuntimeDaemonErrorResponse(
         normalizeRuntimeDaemonError(error),
         wireRequest.id,
@@ -604,6 +704,14 @@ export function createRuntimeDaemonDispatcher(
   return {
     handle,
     close() {
+      for (const request of inFlightRequests.values()) {
+        request.controller.abort(
+          Object.assign(new Error("Runtime daemon connection closed."), {
+            code: "read_cancelled" as const,
+          }),
+        );
+      }
+      inFlightRequests.clear();
       for (const id of [...subscriptions.keys()]) {
         closeSubscription(id);
       }
@@ -768,6 +876,7 @@ async function dispatchRuntimeDaemonRequest(
   clientName: string | undefined,
   clientVersion: string | undefined,
   reverseBridge: RuntimeDaemonReverseBridge,
+  requestSignal: AbortSignal,
 ): Promise<unknown> {
   const runtime = options.runtime;
   const runRequirementSource = options.reverseBridgeHub ?? reverseBridge;
@@ -1156,7 +1265,7 @@ async function dispatchRuntimeDaemonRequest(
     case "session.load":
       return runtime.sessions.load(
         requireStringParam(request.params, "sessionId"),
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
     case "session.list":
       return runtime.sessions.list(
@@ -1169,7 +1278,7 @@ async function dispatchRuntimeDaemonRequest(
     case "session.transcript": {
       const transcript = await runtime.sessions.transcript(
         requireStringParam(request.params, "sessionId"),
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
       if (
         transcript !== null &&
@@ -1186,46 +1295,65 @@ async function dispatchRuntimeDaemonRequest(
     case "session.transcript.page":
       return runtime.sessions.transcriptPage(
         requireRecord(request.params) as unknown as RuntimeTranscriptPageInput,
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
     case "session.transcript.entryChunk":
       return runtime.sessions.transcriptEntryChunk(
         requireRecord(
           request.params,
         ) as unknown as RuntimeTranscriptEntryChunkInput,
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
     case "session.transcript.search":
       return runtime.sessions.transcriptSearch(
         requireRecord(
           request.params,
         ) as unknown as RuntimeTranscriptSearchInput,
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
     case "session.observe": {
       const subscriptionId = createSubscriptionId();
+      const sessionId = requireStringParam(request.params, "sessionId");
       const observation = await runtime.sessions.observe(
-        requireStringParam(request.params, "sessionId"),
+        sessionId,
         (event) =>
           notify(
             subscriptionId,
             augmentRuntimeEventRequirements(event, runRequirementSource),
           ),
-        runtimeReadOptions(request.params),
+        runtimeReadOptions(request.params, requestSignal),
       );
+      if (requestSignal.aborted) {
+        observation.close();
+        throw daemonError(
+          "read_cancelled",
+          "Runtime Session observation was cancelled.",
+        );
+      }
       rememberSubscription(subscriptionId, observation);
-      void observation.invalidated.then((invalidation) => {
-        try {
-          options.notify?.(
-            createRuntimeDaemonNotification("observation.invalidated", {
-              subscriptionId,
-              invalidation,
-            }),
-          );
-        } finally {
-          closeSubscription(subscriptionId);
-        }
-      });
+      void observation.invalidated
+        .then((invalidation) => {
+          try {
+            options.notify?.(
+              createRuntimeDaemonNotification("observation.invalidated", {
+                subscriptionId,
+                sessionId,
+                invalidation,
+              }),
+            );
+          } finally {
+            closeSubscription(subscriptionId);
+          }
+        })
+        .catch((error: unknown) => {
+          emitKodaXDiagnostic({
+            source: "runtime.daemon.server",
+            level: "error",
+            message:
+              `Failed to deliver Session observation invalidation for ${sessionId}.`,
+            detail: error,
+          });
+        });
       return {
         subscriptionId,
         snapshot: augmentObservationRunRequirements(
@@ -1422,8 +1550,7 @@ async function dispatchRuntimeDaemonRequest(
       return runtime.runs.await(runId);
     }
     case "run.abort":
-      await runtime.runs.abort(requireStringParam(request.params, "runId"));
-      return { ok: true };
+      return runtime.runs.abort(requireStringParam(request.params, "runId"));
     case "run.model.set": {
       return setRunModel(runtime, request.params);
     }
@@ -1911,6 +2038,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.daemonOrphanExit;
   delete safeOverrides.runtimeAutoModeGuardrail;
   delete safeOverrides.sandboxRuntime;
+  delete safeOverrides.runLifecycleControl;
   const reverseBridgeLimits = runtimeDaemonReverseBridgeLimits();
   return {
     events: true,
@@ -1992,6 +2120,12 @@ function runtimeDaemonCapabilities(
       queuedInputs: true,
     },
     connectionLifecycle: { version: 1 },
+    runLifecycleControl: {
+      version: 1,
+      structuredStopReceipt: true,
+      protocolCancellation: true,
+      responseAcknowledgement: true,
+    },
     typedRuntimeEvents: { version: 1 },
     daemonSafeRunInput: { version: 1 },
     integrationConfigResilience: {
@@ -2715,9 +2849,15 @@ function optionalIntegerField(
   return value as number;
 }
 
-function runtimeReadOptions(value: unknown): RuntimeReadOptions | undefined {
+function runtimeReadOptions(
+  value: unknown,
+  signal: AbortSignal,
+): RuntimeReadOptions {
   const timeoutMs = optionalIntegerField(requireRecord(value), "timeoutMs");
-  return timeoutMs === undefined ? undefined : { timeoutMs };
+  return {
+    signal,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  };
 }
 
 function requireIntegerField(

@@ -9,6 +9,7 @@ import {
   type AgentBudgetPort,
   type AgentExecutorPlaneBinding,
   type AgentActorStore,
+  type AgentControllerHealth,
   type AgentExecutionInput,
   type AgentExecutionResult,
   type AgentMailboxMessage,
@@ -53,6 +54,7 @@ export interface CodingActorSessionOptions {
   readonly budget?: AgentBudgetPort;
   readonly owner?: AgentActorOwner;
   readonly isOwnerAlive?: (owner: AgentActorOwner) => boolean | Promise<boolean>;
+  readonly onHealthChanged?: (health: AgentControllerHealth) => void;
 }
 
 interface CodingActorEnvironment {
@@ -108,6 +110,7 @@ export class CodingActorSession {
         level: 'error',
         message: error instanceof Error ? error.message : String(error),
       }),
+      onHealthChanged: sessionOptions.onHealthChanged,
       onMessageCommitted: (message) => publishRootMailboxMessage(
         this.controller,
         message,
@@ -134,6 +137,10 @@ export class CodingActorSession {
 
   rootControl(): AgentActorClient {
     return this.controller.bind('/root');
+  }
+
+  health(): AgentControllerHealth {
+    return this.controller.healthSnapshot();
   }
 
   ownerId(): string | undefined {

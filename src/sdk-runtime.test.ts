@@ -24,6 +24,10 @@ import {
   SkillRegistry,
 } from "@kodax-ai/agent";
 import type {
+  AgentActorSnapshot,
+  AgentExecutorFactory,
+  AgentTaskState,
+  ExternalAgentRegistration,
   GuardrailContext,
   ManagedRunClassification,
   RunnableTool,
@@ -40,6 +44,7 @@ import type {
   RunningSession,
 } from "@kodax-ai/coding";
 import { resolveProviderModelDescriptors } from "@kodax-ai/coding";
+import { FileSessionStorage } from "@kodax-ai/repl";
 import type { AutoModeBootstrapDeps } from "@kodax-ai/repl";
 import type {
   KodaXRuntime,
@@ -3268,6 +3273,59 @@ describe("createKodaXRuntime", () => {
     });
   });
 
+  it("invalidates an embedded observation when a terminal listener throws", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Observation Listener Failure",
+    });
+    let finishRun: ((result: KodaXResult) => void) | undefined;
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession =>
+        fakeRunningSession(
+          options,
+          new Promise<KodaXResult>((resolve) => {
+            finishRun = resolve;
+          }),
+        ),
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "complete after observation starts",
+    });
+    const delivered: string[] = [];
+    const observation = await runtime.sessions.observe(session.id, (event) => {
+      delivered.push(event.type);
+      if (event.type === "run.completed") {
+        throw new Error("Space reducer failed");
+      }
+    });
+
+    finishRun?.({
+      success: true,
+      lastText: "done",
+      messages: [],
+      sessionId: session.id,
+    });
+    await run.result;
+
+    await expect(observation.invalidated).resolves.toMatchObject({
+      code: "observation_invalidated",
+      reason: "delivery_failed",
+      runtimeId: runtime.identity.runtimeId,
+    });
+    await runtime.sessions.appendNotice({
+      sessionId: session.id,
+      content: "must not be delivered after invalidation",
+    });
+    expect(delivered.at(-1)).toBe("run.completed");
+    await runtime.close();
+  });
+
   it("keeps child activity out of the primary live observation projection", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({
@@ -3366,7 +3424,7 @@ describe("createKodaXRuntime", () => {
     await runtime.sessions.appendNotice({
       sessionId: session.id,
       source: "large-test",
-      content: "x".repeat(9 * 1024 * 1024),
+      content: "x".repeat(20 * 1024 * 1024),
     });
 
     const observation = await runtime.sessions.observe(
@@ -3417,7 +3475,7 @@ describe("createKodaXRuntime", () => {
     };
     expect(recoveredEntry.message?.content).toContain("x".repeat(1024));
     expect(recoveredEntry.message?.content?.length).toBeGreaterThanOrEqual(
-      9 * 1024 * 1024,
+      20 * 1024 * 1024,
     );
 
     await expect(
@@ -3491,6 +3549,664 @@ describe("createKodaXRuntime", () => {
     ]);
     await runtime.close();
   });
+
+  it("continues a fixed transcript snapshot after its source file disappears", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "snapshot-source-sessions");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-source-disappears",
+      title: "Snapshot Source Disappears",
+    });
+    for (const content of ["one", "two", "three"]) {
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-source",
+        content,
+      });
+    }
+    const first = await runtime.sessions.transcriptPage({
+      sessionId: session.id,
+      limit: 1,
+    });
+    expect(first?.nextCursor).toEqual(expect.any(String));
+    const sessionFiles = await fs.readdir(sessionsDir, { recursive: true });
+    const relativeSource = sessionFiles.find(
+      (candidate) => path.basename(candidate) === `${session.id}.jsonl`,
+    );
+    if (relativeSource === undefined) {
+      throw new Error(`Session file not found for ${session.id}`);
+    }
+    const source = path.join(sessionsDir, relativeSource);
+    const movedSource = `${source}.moved`;
+    await fs.rename(source, movedSource);
+
+    const second = await runtime.sessions.transcriptPage({
+      sessionId: session.id,
+      cursor: first!.nextCursor,
+      limit: 1,
+    });
+    expect(second?.revision).toBe(first?.revision);
+    expect(second?.entries[0]?.entry?.message.content).toBe("two");
+    const chunk = await runtime.sessions.transcriptEntryChunk({
+      sessionId: session.id,
+      revision: first!.revision,
+      entryIndex: first!.entries[0]!.index,
+    });
+    expect(
+      Buffer.from(chunk!.data, "base64").toString("utf8"),
+    ).toContain("three");
+    await fs.rename(movedSource, source);
+    await runtime.close();
+  });
+
+  it("reuses the same immutable file for concurrent equal transcript revisions", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-concurrent-sessions"),
+    });
+    let open: ReturnType<typeof vi.spyOn> | undefined;
+    let releaseRead: (() => void) | undefined;
+    let markReadBlocked: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readBlocked = new Promise<void>((resolve) => {
+      markReadBlocked = resolve;
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-concurrent",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-concurrent",
+        content: "same revision",
+      });
+      const baseline = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      const originalOpen = fs.open.bind(fs);
+      let blockNextRead = true;
+      open = vi.spyOn(fs, "open").mockImplementation(
+        async (file, flags, mode) => {
+          if (
+            blockNextRead
+            && String(file).endsWith(".entries")
+            && String(flags) === "r"
+          ) {
+            blockNextRead = false;
+            markReadBlocked?.();
+            await readGate;
+          }
+          return originalOpen(file, flags, mode);
+        },
+      );
+
+      const first = runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      await readBlocked;
+      const second = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      releaseRead?.();
+
+      await expect(first).resolves.toMatchObject({
+        revision: baseline!.revision,
+      });
+      expect(second?.revision).toBe(baseline?.revision);
+    } finally {
+      releaseRead?.();
+      open?.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("keeps an in-flight transcript reader alive across cache eviction", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-reader-lease-sessions"),
+    });
+    let open: ReturnType<typeof vi.spyOn> | undefined;
+    let releaseRead: (() => void) | undefined;
+    let markReadBlocked: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readBlocked = new Promise<void>((resolve) => {
+      markReadBlocked = resolve;
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-reader-lease",
+      });
+      for (const content of ["one", "two"]) {
+        await runtime.sessions.appendNotice({
+          sessionId: session.id,
+          source: "snapshot-reader-lease",
+          content,
+        });
+      }
+      const boundary = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        limit: 1,
+      });
+      const originalOpen = fs.open.bind(fs);
+      let blockNextRead = true;
+      open = vi.spyOn(fs, "open").mockImplementation(
+        async (file, flags, mode) => {
+          if (
+            blockNextRead
+            && String(file).endsWith(".entries")
+            && String(flags) === "r"
+          ) {
+            blockNextRead = false;
+            markReadBlocked?.();
+            await readGate;
+          }
+          return originalOpen(file, flags, mode);
+        },
+      );
+
+      const retainedPage = runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        cursor: boundary!.nextCursor,
+        limit: 1,
+      });
+      await readBlocked;
+      for (let index = 0; index < 8; index += 1) {
+        const pressure = await runtime.sessions.create({
+          sessionId: `snapshot-pressure-${index}`,
+        });
+        await runtime.sessions.appendNotice({
+          sessionId: pressure.id,
+          source: "snapshot-pressure",
+          content: String(index),
+        });
+        await runtime.sessions.transcriptPage({ sessionId: pressure.id });
+      }
+      releaseRead?.();
+
+      await expect(retainedPage).resolves.toMatchObject({
+        revision: boundary!.revision,
+        entries: [expect.objectContaining({
+          entry: expect.objectContaining({
+            message: expect.objectContaining({ content: "one" }),
+          }),
+        })],
+      });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        cursor: boundary!.nextCursor,
+      })).rejects.toMatchObject({ code: "resync_required" });
+    } finally {
+      releaseRead?.();
+      open?.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("requires resync when an immutable transcript snapshot is corrupted", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-integrity-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-integrity",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-integrity",
+        content: `integrity-marker-${"x".repeat(256 * 1024)}`,
+      });
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      const snapshotDirName = (await fs.readdir(os.tmpdir())).find(
+        (name) =>
+          name.startsWith("kodax-transcript-snapshots-")
+          && !snapshotDirsBefore.has(name),
+      );
+      if (snapshotDirName === undefined) {
+        throw new Error("Transcript snapshot directory was not created.");
+      }
+      const snapshotDir = path.join(os.tmpdir(), snapshotDirName);
+      const snapshotFile = path.join(
+        snapshotDir,
+        (await fs.readdir(snapshotDir)).find((name) =>
+          name.endsWith(".entries")
+        )!,
+      );
+      const corrupted = await fs.readFile(snapshotFile);
+      const markerOffset = corrupted.indexOf("integrity-marker");
+      if (markerOffset < 0) throw new Error("Snapshot marker was not found.");
+      corrupted[markerOffset] = corrupted[markerOffset] === 0x69 ? 0x6a : 0x69;
+      await fs.writeFile(snapshotFile, corrupted);
+
+      await expect(runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: first!.revision,
+        entryIndex: 0,
+      })).rejects.toMatchObject({ code: "resync_required" });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("does not return snapshot success after its read budget expires or is cancelled", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(
+      async (file, flags, mode) => {
+        if (String(file).endsWith(".entries")) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 150);
+          });
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-budget-read-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-budget-read",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-budget-read",
+        content: "history",
+      });
+      const timeoutStartedAt = Date.now();
+      await expect(runtime.sessions.transcriptPage(
+        { sessionId: session.id },
+        { timeoutMs: 20 },
+      )).rejects.toMatchObject({ code: "read_timeout" });
+      expect(Date.now() - timeoutStartedAt).toBeLessThan(100);
+
+      const controller = new AbortController();
+      const cancelStartedAt = Date.now();
+      const cancelled = runtime.sessions.transcriptPage(
+        { sessionId: session.id },
+        { signal: controller.signal },
+      );
+      setTimeout(() => controller.abort(), 20);
+      await expect(cancelled).rejects.toMatchObject({
+        code: "read_cancelled",
+      });
+      expect(Date.now() - cancelStartedAt).toBeLessThan(100);
+    } finally {
+      open.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("times out promptly while reading a retained transcript chunk", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-chunk-timeout-sessions"),
+    });
+    let open: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-chunk-timeout",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-chunk-timeout",
+        content: "x".repeat(256 * 1024),
+      });
+      const page = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      const originalOpen = fs.open.bind(fs);
+      open = vi.spyOn(fs, "open").mockImplementation(
+        async (file, flags, mode) => {
+          if (String(file).endsWith(".entries") && String(flags) === "r") {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 150);
+            });
+          }
+          return originalOpen(file, flags, mode);
+        },
+      );
+
+      const startedAt = Date.now();
+      await expect(runtime.sessions.transcriptEntryChunk(
+        {
+          sessionId: session.id,
+          revision: page!.revision,
+          entryIndex: 0,
+        },
+        { timeoutMs: 20 },
+      )).rejects.toMatchObject({ code: "read_timeout" });
+      expect(Date.now() - startedAt).toBeLessThan(100);
+    } finally {
+      open?.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("prunes expired transcript snapshot directories left by a crashed Runtime", async () => {
+    const staleDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "kodax-transcript-snapshots-"),
+    );
+    await fs.writeFile(path.join(staleDir, "orphan.entries"), "old history");
+    const staleAt = new Date(Date.now() - 10 * 60_000);
+    await fs.utimes(staleDir, staleAt, staleAt);
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-stale-dir-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-stale-dir",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-stale-dir",
+        content: "fresh history",
+      });
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      await expect(fs.stat(staleDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await fs.rm(staleDir, { recursive: true, force: true });
+      await runtime.close();
+    }
+  });
+
+  it("rebuilds its snapshot directory after external deletion", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-directory-rebuild-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-directory-rebuild",
+      });
+      for (const content of ["one", "two"]) {
+        await runtime.sessions.appendNotice({
+          sessionId: session.id,
+          source: "snapshot-directory-rebuild",
+          content,
+        });
+      }
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        limit: 1,
+      });
+      const snapshotDirName = (await fs.readdir(os.tmpdir())).find(
+        (name) =>
+          name.startsWith("kodax-transcript-snapshots-")
+          && !snapshotDirsBefore.has(name),
+      );
+      if (snapshotDirName === undefined) {
+        throw new Error("Transcript snapshot directory was not created.");
+      }
+      await fs.rm(path.join(os.tmpdir(), snapshotDirName), {
+        recursive: true,
+        force: true,
+      });
+
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        cursor: first!.nextCursor,
+      })).rejects.toMatchObject({ code: "resync_required" });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      })).resolves.toMatchObject({
+        revision: expect.any(String),
+        entries: expect.any(Array),
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("removes expired snapshot files without requiring another history read", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-heartbeat-ttl-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-heartbeat-ttl",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-heartbeat-ttl",
+        content: "expires without another read",
+      });
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      const snapshotDirName = (await fs.readdir(os.tmpdir())).find(
+        (name) =>
+          name.startsWith("kodax-transcript-snapshots-")
+          && !snapshotDirsBefore.has(name),
+      );
+      if (snapshotDirName === undefined) {
+        throw new Error("Transcript snapshot directory was not created.");
+      }
+      const snapshotDir = path.join(os.tmpdir(), snapshotDirName);
+      expect(
+        (await fs.readdir(snapshotDir)).some((name) =>
+          name.endsWith(".entries")
+        ),
+      ).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+
+      expect(
+        (await fs.readdir(snapshotDir)).some((name) =>
+          name.endsWith(".entries")
+        ),
+      ).toBe(false);
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("contains snapshot cleanup failures inside the lease heartbeat", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(
+      () => undefined,
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-heartbeat-error-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-heartbeat-error",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-heartbeat-error",
+        content: "cleanup failure stays observable",
+      });
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      let snapshotFile: string | undefined;
+      for (const snapshotDirName of await fs.readdir(os.tmpdir())) {
+        if (
+          !snapshotDirName.startsWith("kodax-transcript-snapshots-")
+          || snapshotDirsBefore.has(snapshotDirName)
+        ) {
+          continue;
+        }
+        const snapshotDir = path.join(os.tmpdir(), snapshotDirName);
+        for (const snapshotFileName of await fs.readdir(snapshotDir)) {
+          if (!snapshotFileName.endsWith(".entries")) continue;
+          const candidate = path.join(snapshotDir, snapshotFileName);
+          if (
+            (await fs.stat(candidate)).isFile()
+            && (await fs.readFile(candidate, "utf8")).includes(
+              "cleanup failure stays observable",
+            )
+          ) {
+            snapshotFile = candidate;
+            break;
+          }
+        }
+        if (snapshotFile !== undefined) break;
+      }
+      if (snapshotFile === undefined) {
+        throw new Error("Transcript snapshot file was not created.");
+      }
+      await fs.rm(snapshotFile);
+      await fs.mkdir(snapshotFile);
+
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("Unable to remove transcript snapshot"),
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
+      );
+      await expect(runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: first!.revision,
+        entryIndex: 0,
+      })).rejects.toMatchObject({ code: "resync_required" });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      })).resolves.toMatchObject({
+        entries: expect.any(Array),
+        revision: expect.any(String),
+      });
+      await fs.rm(snapshotFile, { recursive: true });
+      await fs.writeFile(snapshotFile, "retry cleanup");
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      await expect(fs.stat(snapshotFile)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      warning.mockRestore();
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires fixed transcript snapshots with an explicit resync requirement", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-ttl-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-ttl",
+    });
+    for (const content of ["one", "two"]) {
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-ttl",
+        content,
+      });
+    }
+    const first = await runtime.sessions.transcriptPage({
+      sessionId: session.id,
+      limit: 1,
+    });
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now + 6 * 60_000);
+    try {
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        cursor: first!.nextCursor,
+        limit: 1,
+      })).rejects.toMatchObject({ code: "resync_required" });
+    } finally {
+      nowSpy.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("evicts transcript snapshots by total bytes before the count limit", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-budget-sessions"),
+    });
+    const cursors: string[] = [];
+    const ids = Array.from(
+      { length: 8 },
+      (_, index) => `snapshot-budget-${index + 1}`,
+    );
+    for (const id of ids) {
+      const session = await runtime.sessions.create({ sessionId: id });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-budget",
+        content: "x".repeat(9 * 1024 * 1024),
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-budget",
+        content: "tail",
+      });
+      const first = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+        limit: 1,
+      });
+      expect(first?.nextCursor).toEqual(expect.any(String));
+      cursors.push(first!.nextCursor!);
+    }
+
+    await expect(runtime.sessions.transcriptPage({
+      sessionId: ids[0]!,
+      cursor: cursors[0],
+      limit: 1,
+    })).rejects.toMatchObject({ code: "resync_required" });
+    await expect(runtime.sessions.transcriptPage({
+      sessionId: ids.at(-1)!,
+      cursor: cursors.at(-1)!,
+      limit: 1,
+    })).resolves.toMatchObject({
+      revision: expect.any(String),
+    });
+    await runtime.close();
+  }, 30_000);
 
   it("keeps direct and paged transcripts in the same append order across island recovery", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
@@ -4536,6 +5252,390 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("restores the latest executor phase after Actor settlement persistence recovers", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseSettlement: (() => void) | undefined;
+    const settlementGate = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    let terminalAttempts = 0;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      const childTerminal = snapshot.turns.some(
+        (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
+      );
+      if (childTerminal) {
+        terminalAttempts += 1;
+        if (terminalAttempts === 1) throw new Error("transient actor save");
+        if (terminalAttempts === 2) await settlementGate;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-health-phase-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Actor health phase overlay",
+      });
+      let activeEvents: KodaXOptions["events"];
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+        activeEvents = options.events;
+        return new Promise<KodaXResult>(() => undefined);
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "keep executing while child settlement retries",
+        mode: "managed_task",
+      });
+      activeEvents?.onManagedTaskStatus?.({
+        agentMode: "ama",
+        harnessProfile: "H0_DIRECT",
+        phase: "worker",
+        idleWaiting: true,
+        idleWaitingPendingCount: 1,
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail without an attached executor environment.",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "recovering",
+          lifecycleError: {
+            code: "actor_settlement_retrying",
+            retryable: true,
+          },
+        });
+      });
+
+      activeEvents?.onManagedTaskStatus?.({
+        agentMode: "ama",
+        harnessProfile: "H0_DIRECT",
+        phase: "verifying",
+        idleWaiting: false,
+      });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "recovering",
+        stage: "recovering",
+      });
+
+      releaseSettlement?.();
+      await vi.waitFor(async () => {
+        const status = await runtime.runs.get(run.runId);
+        expect(status).toMatchObject({
+          phase: "running",
+          stage: "verifying",
+        });
+        expect(status).not.toHaveProperty("lifecycleError");
+      });
+      await runtime.runs.abort(run.runId);
+    } finally {
+      releaseSettlement?.();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("does not restore a stopped Run to active after Actor settlement recovers", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseSettlement: (() => void) | undefined;
+    const settlementGate = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    let terminalAttempts = 0;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      const childTerminal = snapshot.turns.some(
+        (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
+      );
+      if (childTerminal) {
+        terminalAttempts += 1;
+        if (terminalAttempts === 1) throw new Error("transient actor save");
+        if (terminalAttempts === 2) await settlementGate;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-stop-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Stop during Actor settlement recovery",
+      });
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>(() => undefined),
+      );
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "remain stopped after Actor recovery",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Create a transient Actor settlement.",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "recovering",
+        });
+      });
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        state: "unknown",
+        outcome: "unknown",
+        phase: "unknown",
+      });
+      releaseSettlement?.();
+      await vi.waitFor(async () => {
+        const status = await runtime.runs.get(run.runId);
+        expect(status).toMatchObject({
+          phase: "unknown",
+          stage: "unknown",
+          stop: {
+            state: "unknown",
+            outcome: "unknown",
+          },
+        });
+        expect(status).not.toHaveProperty("lifecycleError");
+      });
+    } finally {
+      releaseSettlement?.();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("preserves Actor settlement unknown diagnostics when external Stop follows it", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (snapshot.turns.some(
+        (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
+      )) {
+        throw new Error("actor storage remains unavailable");
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-stop-unknown-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Stop plus Actor unknown diagnostics",
+      });
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>(() => undefined),
+      );
+      const abortController = new AbortController();
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "retain both unknown facts",
+        mode: "managed_task",
+        options: { abortSignal: abortController.signal },
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail settlement permanently.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: {
+          code: "actor_settlement_not_persisted",
+          retryable: false,
+        },
+      });
+
+      abortController.abort(new Error("host cancelled after Actor unknown"));
+
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        stop: {
+          state: "unknown",
+          outcome: "unknown",
+          reason: "host cancelled after Actor unknown",
+        },
+        lifecycleError: {
+          code: "actor_settlement_not_persisted",
+          retryable: false,
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("does not terminalize a Run before its Actor settlements are durable", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseSettlement: (() => void) | undefined;
+    const settlementGate = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (snapshot.turns.some(
+        (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
+      )) {
+        await settlementGate;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-terminal-gate-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Actor terminal gate",
+      });
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>((resolve) => {
+          finishRoot = resolve;
+        }),
+      );
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "finish only after child durability",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Create a pending settlement.",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "recovering",
+        });
+      });
+      finishRoot?.({
+        success: true,
+        lastText: "root reply is complete",
+        messages: [],
+        sessionId: session.id,
+      });
+      await flushMicrotasks();
+      const pendingStatus = await runtime.runs.get(run.runId);
+      expect(pendingStatus).toMatchObject({
+        phase: "recovering",
+      });
+      expect(pendingStatus).not.toHaveProperty("terminal");
+
+      releaseSettlement?.();
+      await expect(run.result).resolves.toMatchObject({
+        phase: "completed",
+        result: expect.objectContaining({
+          lastText: "root reply is complete",
+        }),
+      });
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "completed",
+      });
+      expect(await runtime.runs.get(run.runId)).not.toHaveProperty(
+        "lifecycleError",
+      );
+    } finally {
+      releaseSettlement?.();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("rejects a later Run when Session Actor settlement state is unknown", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (snapshot.turns.some(
+        (turn) => turn.actorPath === "/root/worker" && turn.state === "failed",
+      )) {
+        throw new Error("actor snapshot storage unavailable");
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-unknown-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Latched Actor unknown health",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Become durably uncertain.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      await expect(runtime.runs.start({
+        sessionId: session.id,
+        prompt: "must not execute against unknown Actor state",
+        mode: "managed_task",
+      })).rejects.toMatchObject({
+        code: "actor_settlement_not_persisted",
+        retryable: false,
+      });
+      expect(codingMock.runManagedTask).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
+
   it("captures read-only Session diagnostics with explicit unknown and Stop outcomes", async () => {
     const {
       captureRuntimeSessionDiagnostics,
@@ -5047,6 +6147,161 @@ describe("createKodaXRuntime", () => {
     });
     await runtime.close();
   });
+
+  it("returns an unknown Stop receipt while a latched completion waits for an active child", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const external = deferredExternalAgentFixture("stop-latched-child");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "stop-latched-child-sessions"),
+      defaultProvider: "mock-provider",
+      externalAgents: {
+        factories: [external.factory],
+        policy: async () => ({ allowed: true }),
+        defaultContext: { actorId: "stop-latched-child-host" },
+      },
+    });
+    let activeEvents: KodaXOptions["events"];
+    try {
+      await runtime.admin.agentRegistrations.upsert(external.registration);
+      const session = await runtime.sessions.create({
+        sessionId: "stop-latched-child",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "deferred",
+        kind: "external",
+        objective: "Remain active while the root executor completes.",
+        metadata: { agentId: external.registration.agentId },
+      });
+      codingMock.startKodaX.mockImplementation(
+        (options: KodaXOptions): RunningSession => {
+          activeEvents = options.events;
+          return fakeRunningSession(
+            options,
+            new Promise<KodaXResult>(() => undefined),
+          );
+        },
+      );
+      const handle = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "complete while a child is still active",
+      });
+      activeEvents?.onComplete?.();
+
+      await expectSettles(
+        runtime.runs.abort(handle.runId),
+        "Stop over latched completion with active child",
+      ).then((receipt) => {
+        expect(receipt).toMatchObject({
+          accepted: true,
+          phase: "unknown",
+          state: "unknown",
+          outcome: "unknown",
+          revision: expect.any(Number),
+        });
+      });
+      await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        stop: {
+          state: "unknown",
+          outcome: "unknown",
+        },
+      });
+    } finally {
+      external.finish();
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    ["external AbortSignal", "abort"],
+    ["Runtime close", "close"],
+  ] as const)(
+    "does not let %s bypass Actor finalization for a latched completion",
+    async (_label, trigger) => {
+      const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+      const key = `terminal-gate-${trigger}`;
+      const external = deferredExternalAgentFixture(key);
+      const runtime = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, `${key}-sessions`),
+        defaultProvider: "mock-provider",
+        externalAgents: {
+          factories: [external.factory],
+          policy: async () => ({ allowed: true }),
+          defaultContext: { actorId: `${key}-host` },
+        },
+      });
+      const abortController = new AbortController();
+      let activeEvents: KodaXOptions["events"];
+      let closing: Promise<void> | undefined;
+      try {
+        await runtime.admin.agentRegistrations.upsert(external.registration);
+        const session = await runtime.sessions.create({ sessionId: key });
+        await runtime.agents.spawn(session.id, {
+          taskName: "deferred",
+          kind: "external",
+          objective: "Keep Actor finalization pending.",
+          metadata: { agentId: external.registration.agentId },
+        });
+        codingMock.startKodaX.mockImplementation(
+          (options: KodaXOptions): RunningSession => {
+            activeEvents = options.events;
+            return fakeRunningSession(
+              options,
+              new Promise<KodaXResult>(() => undefined),
+            );
+          },
+        );
+        const handle = await runtime.runs.start({
+          sessionId: session.id,
+          prompt: "latch completion before cancellation",
+          options: { abortSignal: abortController.signal },
+        });
+        activeEvents?.onComplete?.();
+
+        if (trigger === "abort") {
+          abortController.abort(new Error("host cancelled"));
+          const status = await runtime.runs.get(handle.runId);
+          expect(status).toMatchObject({
+            phase: "unknown",
+            stop: {
+              state: "unknown",
+              outcome: "unknown",
+              reason: "host cancelled",
+            },
+          });
+          expect(status).not.toHaveProperty("terminal");
+        } else {
+          closing = runtime.close();
+          const persisted = JSON.parse(readFileSync(path.join(
+            tempRoot,
+            ".kodax",
+            "runtime",
+            "runs",
+            handle.runId,
+            "status.json",
+          ), "utf8")) as Record<string, unknown>;
+          expect(persisted).toMatchObject({
+            phase: "unknown",
+            stop: {
+              state: "unknown",
+              outcome: "unknown",
+              reason: "runtime closed",
+            },
+          });
+          expect(persisted).not.toHaveProperty("terminal");
+        }
+      } finally {
+        external.finish();
+        if (closing !== undefined) {
+          await closing;
+        } else {
+          await runtime.close();
+        }
+      }
+    },
+  );
 
   it("preserves executor payload and queue serialization when external abort races completion", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
@@ -6520,7 +7775,20 @@ describe("createKodaXRuntime", () => {
       sessionId: session.id,
       prompt: "abort me",
     });
-    await runtime.runs.abort(handle.runId);
+    const receipt = await runtime.runs.abort(handle.runId);
+    expect(receipt).toMatchObject({
+      runId: handle.runId,
+      sessionId: session.id,
+      accepted: true,
+      phase: "unknown",
+      state: "unknown",
+      outcome: "unknown",
+      revision: expect.any(Number),
+    });
+    await expect(runtime.runs.abort(handle.runId)).resolves.toEqual({
+      ...receipt,
+      accepted: false,
+    });
     finishRun?.({
       success: true,
       lastText: "late success",
@@ -6587,6 +7855,85 @@ describe("createKodaXRuntime", () => {
     });
     await runtime.close();
     await expect(handle.result).resolves.toMatchObject({ phase: "unknown" });
+  });
+
+  it("returns an idempotent no-op Stop receipt for a completed run", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Terminal Stop Receipt",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession =>
+        fakeRunningSession(
+          options,
+          Promise.resolve({
+            success: true,
+            lastText: "done",
+            messages: [],
+            sessionId: session.id,
+          }),
+        ),
+    );
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "finish before Stop",
+    });
+    await handle.result;
+
+    await expect(runtime.runs.abort(handle.runId)).resolves.toMatchObject({
+      runId: handle.runId,
+      accepted: false,
+      phase: "completed",
+      state: "confirmed",
+      outcome: "completed",
+      revision: expect.any(Number),
+    });
+    await runtime.close();
+  });
+
+  it("atomically cancels a queued run and returns an idempotent Stop receipt", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      sessionsDir: tempRoot,
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Queued Stop Receipt",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession =>
+        fakeRunningSession(options, new Promise<KodaXResult>(() => undefined)),
+    );
+    const active = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "stay active",
+    });
+    const queued = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "cancel while queued",
+    });
+
+    const receipt = await runtime.runs.abort(queued.runId);
+    expect(receipt).toMatchObject({
+      runId: queued.runId,
+      sessionId: session.id,
+      accepted: true,
+      phase: "cancelled",
+      state: "confirmed",
+      outcome: "cancelled",
+      revision: expect.any(Number),
+    });
+    await expect(runtime.runs.abort(queued.runId)).resolves.toEqual({
+      ...receipt,
+      accepted: false,
+    });
+    await expect(queued.result).resolves.toMatchObject({ phase: "cancelled" });
+    await runtime.close();
+    await expect(active.result).resolves.toMatchObject({ phase: "unknown" });
   });
 
   it("reports an unconfirmed Stop as unknown until the executor settles", async () => {
@@ -6941,6 +8288,78 @@ describe("createKodaXRuntime", () => {
       await runtime.close();
     },
   );
+
+  it("does not terminalize a synchronous launch failure over a queued Actor settlement", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const external = deferredExternalAgentFixture("launch-race");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (snapshot.turns.some(
+        (turn) =>
+          turn.actorPath === "/root/deferred"
+          && turn.state === "completed",
+      )) {
+        throw new Error("launch-race Actor storage unavailable");
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "launch-race-sessions"),
+      defaultProvider: "mock-provider",
+      externalAgents: {
+        factories: [external.factory],
+        policy: async () => ({ allowed: true }),
+        defaultContext: { actorId: "launch-race-host" },
+      },
+    });
+    try {
+      await runtime.admin.agentRegistrations.upsert(external.registration);
+      const session = await runtime.sessions.create({
+        sessionId: "launch-race",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "deferred",
+        kind: "external",
+        objective: "Settle while SDK launch throws.",
+        metadata: { agentId: external.registration.agentId },
+      });
+      codingMock.startKodaX.mockImplementation((): never => {
+        external.finish();
+        throw new Error("synchronous launch failure");
+      });
+
+      await expect(runtime.runs.start({
+        sessionId: session.id,
+        prompt: "do not persist a false terminal",
+      })).rejects.toThrow("synchronous launch failure");
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const [run] = await runtime.runs.list({ sessionId: session.id });
+      expect(run).toMatchObject({
+        phase: "unknown",
+        lifecycleError: {
+          code: "actor_settlement_not_persisted",
+          retryable: false,
+        },
+      });
+      expect(run).not.toHaveProperty("terminal");
+    } finally {
+      external.finish();
+      vi.useRealTimers();
+      save.mockRestore();
+      await runtime.close();
+    }
+  });
 
   it("rejects pending permissions when aborting a run", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
@@ -10967,6 +12386,67 @@ function workflowEvent(
   seq: number,
 ): WorkflowEvent {
   return { type, seq };
+}
+
+function deferredExternalAgentFixture(key: string): {
+  readonly factory: AgentExecutorFactory;
+  readonly registration: ExternalAgentRegistration;
+  readonly finish: () => void;
+} {
+  let taskState: AgentTaskState = "unknown";
+  let finishChild: (() => void) | undefined;
+  const childFinished = new Promise<void>((resolve) => {
+    finishChild = resolve;
+  });
+  const factory: AgentExecutorFactory = {
+    executorId: `${key}-deferred`,
+    protocol: "http",
+    async create() {
+      return {
+        async start(input) {
+          return { idempotencyKey: input.idempotencyKey ?? key };
+        },
+        async *events() {
+          yield { state: "unknown" as const };
+          await childFinished;
+          if (taskState === "unknown") taskState = "completed";
+          yield { state: taskState, output: "child complete" };
+        },
+        async get() { return { state: taskState }; },
+        async sendInput() {},
+        async cancel() {
+          taskState = "canceled";
+          finishChild?.();
+          return { state: taskState };
+        },
+        async reconcile() { return { state: taskState }; },
+        async dispose() { finishChild?.(); },
+      };
+    },
+  };
+  return {
+    factory,
+    registration: {
+      agentId: `external:${key}`,
+      displayName: key,
+      enabled: true,
+      executorId: factory.executorId,
+      protocol: factory.protocol,
+      configurationRevision: `${key}-rev-1`,
+      endpointIdentityHash: `sha256:${key}`,
+      capabilities: {
+        streaming: "supported",
+        durableTasks: "supported",
+        inputRequired: "supported",
+        cancellation: "supported",
+        artifacts: "supported",
+      },
+      effects: { remote: "read", workspace: "proposal" },
+    },
+    finish() {
+      finishChild?.();
+    },
+  };
 }
 
 function fakeRunningSession(

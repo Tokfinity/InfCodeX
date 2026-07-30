@@ -1,5 +1,5 @@
 export { AgentActorController, createAgentActorController } from './controller.js';
-export type { AgentControllerOptions } from './controller.js';
+export type { AgentControllerHealth, AgentControllerOptions } from './controller.js';
 export {
   AgentActorStoreConflictError,
   AgentBudgetExhaustedError,
@@ -8,6 +8,7 @@ export {
   AgentOwnerConflictError,
   AgentOwnerUnknownError,
   AgentRevisionConflictError,
+  AgentSettlementPersistenceError,
 } from './errors.js';
 export type { AgentControlErrorCode } from './errors.js';
 export { AgentTurnScheduler } from './scheduler.js';

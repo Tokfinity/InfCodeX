@@ -4,6 +4,7 @@ import {
   AgentOwnerConflictError,
   AgentOwnerUnknownError,
   AgentRevisionConflictError,
+  AgentSettlementPersistenceError,
 } from './errors.js';
 import { AgentTurnScheduler } from './scheduler.js';
 import type {
@@ -48,8 +49,23 @@ const MAX_OUTPUT_PREVIEW_LENGTH = 8_192;
 const MAX_EVENT_ITEMS = 2_048;
 const INITIAL_SETTLEMENT_RETRY_MS = 10;
 const MAX_SETTLEMENT_RETRY_MS = 1_000;
+const SETTLEMENT_RETRY_DEADLINE_MS = 5_000;
 const SETTLEMENT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+class AgentSettlementAttemptTimeoutError extends Error {
+  constructor() {
+    super('Actor settlement persistence did not finish before its deadline.');
+    this.name = 'AgentSettlementAttemptTimeoutError';
+  }
+}
+
+class AgentSettlementAttemptExpiredError extends Error {
+  constructor() {
+    super('Actor settlement persistence finished after its deadline.');
+    this.name = 'AgentSettlementAttemptExpiredError';
+  }
+}
 
 export interface AgentControllerOptions {
   readonly maxConcurrentThreadsPerSession?: number;
@@ -65,10 +81,18 @@ export interface AgentControllerOptions {
   readonly now?: () => string;
   readonly warn?: (message: string) => void;
   readonly onBackgroundError?: (error: unknown) => void;
+  readonly onHealthChanged?: (health: AgentControllerHealth) => void;
   /** Post-durability event sink. Callback failures never roll back committed actor state. */
   readonly onEventCommitted?: (event: AgentEvent) => void | Promise<void>;
   /** Post-durability mailbox sink. Callback failures never roll back committed actor state. */
   readonly onMessageCommitted?: (message: AgentMailboxMessage) => void | Promise<void>;
+}
+
+export interface AgentControllerHealth {
+  readonly state: 'healthy' | 'recovering' | 'unknown';
+  readonly code?: 'actor_settlement_not_persisted';
+  readonly turnId?: string;
+  readonly message?: string;
 }
 
 interface EventWaiter {
@@ -103,6 +127,7 @@ export class AgentActorController {
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly waiters = new Set<EventWaiter>();
   private readonly pendingSettlements = new Set<Promise<void>>();
+  private readonly settlementRecoveryMessages = new Map<string, string>();
   private readonly scheduler: AgentTurnScheduler;
   private readonly budget: AgentBudgetPort;
   private readonly now: () => string;
@@ -113,7 +138,9 @@ export class AgentActorController {
   private initialized = false;
   private ownershipLost = false;
   private ownershipReleased = false;
+  private shutdownPromise?: Promise<void>;
   private committedSnapshot: AgentActorSnapshot;
+  private health: AgentControllerHealth = { state: 'healthy' };
 
   constructor(private readonly options: AgentControllerOptions = {}) {
     const max = options.maxConcurrentThreadsPerSession ?? DEFAULT_MAX_CONCURRENT_THREADS;
@@ -124,6 +151,10 @@ export class AgentActorController {
     if (max >= 8) options.warn?.(`Agent concurrency is ${max}; available slots include the current Agent.`);
     this.installRoot(options.rootCapabilities ?? defaultRootCapabilities());
     this.committedSnapshot = this.snapshot();
+  }
+
+  healthSnapshot(): AgentControllerHealth {
+    return { ...this.health };
   }
 
   async initialize(): Promise<void> {
@@ -549,6 +580,15 @@ export class AgentActorController {
   /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */
   async shutdown(reason = 'runtime stopped'): Promise<void> {
     if (this.ownershipReleased) return;
+    this.shutdownPromise ??= this.performShutdown(reason).finally(() => {
+      if (!this.ownershipLost && !this.ownershipReleased) {
+        this.shutdownPromise = undefined;
+      }
+    });
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(reason: string): Promise<void> {
     try {
       await this.flushPendingSettlements();
       const aborts = await this.mutate(() => {
@@ -834,7 +874,7 @@ export class AgentActorController {
     turnId: string,
     result: AgentExecutionResult,
   ): Promise<void> {
-    await this.commitExecutionSettlement(() => {
+    await this.commitExecutionSettlement(turnId, () => {
       const turn = this.turns.get(turnId);
       if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'completed', {
@@ -850,7 +890,7 @@ export class AgentActorController {
   }
 
   private async failExecution(turnId: string, error: unknown): Promise<void> {
-    await this.commitExecutionSettlement(() => {
+    await this.commitExecutionSettlement(turnId, () => {
       const turn = this.turns.get(turnId);
       if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'failed', { error: error instanceof Error ? error.message : String(error) });
@@ -858,29 +898,121 @@ export class AgentActorController {
     });
   }
 
-  private async commitExecutionSettlement(settle: () => boolean): Promise<void> {
+  private async commitExecutionSettlement(
+    turnId: string,
+    settle: () => boolean,
+  ): Promise<void> {
+    if (this.ownershipLost || this.ownershipReleased) {
+      this.assertWritableOwner();
+    }
     let retryMs = INITIAL_SETTLEMENT_RETRY_MS;
     let failureReported = false;
+    const deadline = Date.now() + SETTLEMENT_RETRY_DEADLINE_MS;
+    this.settlementRecoveryMessages.set(
+      turnId,
+      `Executor settlement for ${turnId} is awaiting durable persistence.`,
+    );
+    this.publishSettlementHealth();
     while (!this.ownershipLost && !this.ownershipReleased) {
+      const attempt = { active: true };
       try {
-        await this.mutate(settle, (changed) => changed);
+        await raceSettlementAttempt(
+          this.mutate(
+            settle,
+            (changed) => changed,
+            false,
+            () => attempt.active,
+          ),
+          deadline,
+        );
+        this.settlementRecoveryMessages.delete(turnId);
+        if (this.health.state !== 'unknown') {
+          this.publishSettlementHealth();
+        }
         return;
       } catch (error) {
+        attempt.active = false;
         if (
           error instanceof AgentOwnerConflictError
           || this.ownershipLost
           || this.ownershipReleased
         ) {
+          if (this.ownershipLost && !this.ownershipReleased) {
+            this.settlementRecoveryMessages.clear();
+            this.setHealth({
+              state: 'unknown',
+              code: 'actor_settlement_not_persisted',
+              turnId,
+              message:
+                `Actor ownership changed before executor settlement ${turnId} was durably confirmed.`,
+            });
+          }
           throw error;
         }
         if (!failureReported) {
           this.options.onBackgroundError?.(error);
           failureReported = true;
         }
+        this.settlementRecoveryMessages.set(
+          turnId,
+          error instanceof Error ? error.message : String(error),
+        );
+        this.publishSettlementHealth();
+        if (
+          error instanceof AgentSettlementAttemptTimeoutError
+          || Date.now() >= deadline
+        ) {
+          const persistenceError = new AgentSettlementPersistenceError(
+            turnId,
+            error,
+          );
+          this.fenceUnknownSettlement();
+          this.setHealth({
+            state: 'unknown',
+            code: persistenceError.code,
+            turnId,
+            message: persistenceError.message,
+          });
+          throw persistenceError;
+        }
         await waitForSettlementRetry(retryMs);
         retryMs = Math.min(retryMs * 2, MAX_SETTLEMENT_RETRY_MS);
       }
     }
+  }
+
+  private setHealth(health: AgentControllerHealth): void {
+    if (this.health.state === 'unknown' && health.state !== 'unknown') {
+      return;
+    }
+    if (
+      this.health.state === health.state
+      && this.health.turnId === health.turnId
+      && this.health.message === health.message
+    ) {
+      return;
+    }
+    this.health = health;
+    try {
+      this.options.onHealthChanged?.(this.healthSnapshot());
+    } catch (error: unknown) {
+      this.reportBackgroundError(error);
+    }
+  }
+
+  private publishSettlementHealth(): void {
+    const recovering = this.settlementRecoveryMessages.entries().next().value as
+      | [string, string]
+      | undefined;
+    this.setHealth(
+      recovering === undefined
+        ? { state: 'healthy' }
+        : {
+            state: 'recovering',
+            turnId: recovering[0],
+            message: recovering[1],
+          },
+    );
   }
 
   private finishTurn(
@@ -1235,7 +1367,9 @@ export class AgentActorController {
     operation: () => T | Promise<T>,
     shouldCommit: (result: T) => boolean = () => true,
     allowOwnershipClaim = false,
+    commitStillValid?: () => boolean,
   ): Promise<T> {
+    if (!allowOwnershipClaim) this.assertWritableOwner();
     const previousTail = this.mutationTail;
     let release: () => void = () => {};
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
@@ -1254,6 +1388,9 @@ export class AgentActorController {
       const expectedRevision = this.revision;
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);
+      if (commitStillValid?.() === false) {
+        throw new AgentSettlementAttemptExpiredError();
+      }
       this.committedSnapshot = this.snapshot();
       for (const message of appendedMessages(before, this.committedSnapshot)) {
         this.publishCommittedMessage(message);
@@ -1403,6 +1540,16 @@ export class AgentActorController {
         this.revision,
         false,
       );
+    }
+  }
+
+  private fenceUnknownSettlement(): void {
+    this.ownershipLost = true;
+    this.settlementRecoveryMessages.clear();
+    const localAborts = [...new Set(this.abortControllers.values())];
+    replaceMap(this.abortControllers, []);
+    for (const abort of localAborts) {
+      abort.abort('actor settlement persistence is unknown');
     }
   }
 
@@ -1591,6 +1738,25 @@ function moreRestrictedClassification(
 
 function waitForSettlementRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function raceSettlementAttempt<T>(
+  settlement: Promise<T>,
+  deadline: number,
+): Promise<T> {
+  const timeoutMs = Math.max(0, deadline - Date.now());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    settlement,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new AgentSettlementAttemptTimeoutError()),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 function raceSettlementFlush(

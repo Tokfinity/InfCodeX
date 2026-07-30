@@ -3,7 +3,10 @@ import * as os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
-import { ExternalAgentRegistrationConflictError } from '@kodax-ai/agent';
+import {
+  ExternalAgentRegistrationConflictError,
+  setKodaXDiagnosticSink,
+} from '@kodax-ai/agent';
 
 import type {
   KodaXRuntime,
@@ -17,6 +20,7 @@ import type {
   RuntimePermissionDecision,
   RuntimePermissionRespondOptions,
   RuntimeRunResult,
+  RuntimeSessionObservation,
   RuntimeStartRunInput,
 } from '../sdk-runtime.js';
 import {
@@ -1032,6 +1036,12 @@ describe('runtime daemon dispatcher', () => {
           sessionAdmission: { version: 1, partnerDenied: true },
           completeObservationSnapshot: { version: 1, queuedInputs: true },
           connectionLifecycle: { version: 1 },
+          runLifecycleControl: {
+            version: 1,
+            structuredStopReceipt: true,
+            protocolCancellation: true,
+            responseAcknowledgement: true,
+          },
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
           runtimeAutoModeGuardrail: {
@@ -1069,6 +1079,85 @@ describe('runtime daemon dispatcher', () => {
     } finally {
       fs.rmSync(rootDir, { force: true, recursive: true });
     }
+  });
+
+  it('closes a Session observation that resolves after protocol cancellation', async () => {
+    const baseRuntime = makeRuntime();
+    let resolveObservation:
+      | ((observation: RuntimeSessionObservation) => void)
+      | undefined;
+    const observation = createTestObservation('session-1');
+    const closeObservation = vi.spyOn(observation, 'close');
+    const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
+      ...baseRuntime,
+      sessions: {
+        ...baseRuntime.sessions,
+        observe() {
+          return new Promise<RuntimeSessionObservation>((resolve) => {
+            resolveObservation = resolve;
+          });
+        },
+      },
+    };
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+    const pending = dispatcher.handle(createRuntimeDaemonRequest(
+      'req-observe-slow',
+      'session.observe',
+      { sessionId: 'session-1' },
+    ));
+    await Promise.resolve();
+
+    const cancelled = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-cancel-observe',
+      'request.cancel',
+      { requestId: 'req-observe-slow' },
+    ));
+    expect(cancelled).toMatchObject({
+      result: { ok: true },
+    });
+    resolveObservation?.(observation);
+
+    const response = await pending;
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
+    if (!isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.error.code).toBe('read_cancelled');
+    }
+    expect(closeObservation).toHaveBeenCalledTimes(1);
+    dispatcher.close();
+  });
+
+  it('cancels an observation after creation until its response is acknowledged', async () => {
+    const baseRuntime = makeRuntime();
+    const observation = createTestObservation('session-1');
+    const closeObservation = vi.spyOn(observation, 'close');
+    const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
+      ...baseRuntime,
+      sessions: {
+        ...baseRuntime.sessions,
+        async observe() {
+          return observation;
+        },
+      },
+    };
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const observed = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-observe-created',
+      'session.observe',
+      { sessionId: 'session-1' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(observed)).toBe(true);
+
+    const cancelled = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-cancel-created-observe',
+      'request.cancel',
+      { requestId: 'req-observe-created' },
+    ));
+    expect(cancelled).toMatchObject({ result: { ok: true } });
+    expect(closeObservation).toHaveBeenCalledTimes(1);
+    dispatcher.close();
   });
 
   it('advertises orphan exit only when the daemon host actually enabled that policy', async () => {
@@ -1436,6 +1525,7 @@ describe('runtime daemon dispatcher', () => {
         method: 'observation.invalidated',
         params: {
           subscriptionId,
+          sessionId: 'session-1',
           invalidation: {
             code: 'observation_invalidated',
             reason: 'event_overflow',
@@ -1446,6 +1536,58 @@ describe('runtime daemon dispatcher', () => {
       }));
     });
     dispatcher.close();
+  });
+
+  it('contains observation invalidation delivery failures and closes the subscription', async () => {
+    const runtime = makeRuntime();
+    let invalidateObservation:
+      | ((value: RuntimeObservationInvalidation) => void)
+      | undefined;
+    const close = vi.fn();
+    runtime.sessions.observe = async (sessionId) => ({
+      ...createTestObservation(sessionId),
+      close,
+      invalidated: new Promise<RuntimeObservationInvalidation>((resolve) => {
+        invalidateObservation = resolve;
+      }),
+    });
+    const diagnostics: Array<{ readonly message: string }> = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      notify() {
+        throw new Error('notification sink failed');
+      },
+    });
+    try {
+      await initializeDispatcher(dispatcher);
+      const response = await dispatcher.handle(createRuntimeDaemonRequest(
+        'req-observe-notify-failure',
+        'session.observe',
+        { sessionId: 'session-1' },
+      ));
+      expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+
+      invalidateObservation?.({
+        code: 'observation_invalidated',
+        reason: 'event_overflow',
+        runtimeId: 'runtime-test',
+        message: 'Observation handoff overflowed.',
+      });
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(diagnostics).toContainEqual(expect.objectContaining({
+          message: expect.stringContaining(
+            'Failed to deliver Session observation invalidation',
+          ),
+        }));
+      });
+    } finally {
+      dispatcher.close();
+      restoreDiagnostics();
+    }
   });
 
   it('returns the same read-only Session diagnostic contract through the daemon', async () => {
@@ -2279,6 +2421,8 @@ const METHOD_SMOKE_PARAMS = {
   'run.setModel': { runId: 'run-1', model: 'mock-model' },
   'run.setProvider': { runId: 'run-1', provider: 'mock' },
   'run.setReasoning': { runId: 'run-1', reasoning: 'off' },
+  'request.cancel': { requestId: 'request-missing' },
+  'request.ack': { requestId: 'request-missing' },
   'event.subscribe': { filter: { sessionId: 'session-1' } },
   'event.unsubscribe': { subscriptionId: 'sub-missing' },
   'event.replay': { sessionId: 'session-1', limit: 5 },
@@ -2627,7 +2771,17 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       async list() {
         return [];
       },
-      async abort() {},
+      async abort(runId) {
+        return {
+          runId,
+          sessionId: 'session-1',
+          accepted: false,
+          state: 'confirmed',
+          outcome: 'completed',
+          phase: 'completed',
+          revision: 1,
+        };
+      },
       async setModel() {},
       async setProvider() {},
       async setReasoning() {},

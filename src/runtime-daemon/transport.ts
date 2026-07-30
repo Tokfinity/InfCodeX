@@ -227,16 +227,37 @@ export async function createRuntimeDaemonSocketClientTransport(
     }
     lateResults.clear();
   };
+  let supportsRequestLifecycle = false;
+  const sendRequestLifecycleFrame = (
+    method: 'request.cancel' | 'request.ack',
+    requestId: string,
+  ): void => {
+    if (!supportsRequestLifecycle || closed || socket.destroyed) return;
+    const prefix = method === 'request.ack' ? 'ack' : 'cancel';
+    const controlFrame = createRuntimeDaemonRequest(
+      `${prefix}_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+      method,
+      { requestId },
+    );
+    socket.write(`${JSON.stringify(controlFrame)}\n`);
+  };
   const parser = createRuntimeDaemonFrameParser((frame) => {
     if (isRuntimeDaemonSuccessResponse(frame)) {
       const item = pending.get(frame.id);
       if (item) {
         pending.delete(frame.id);
         item.cleanup();
+        if (runtimeDaemonSupportsRequestLifecycle(frame.result)) {
+          supportsRequestLifecycle = true;
+        }
+        sendRequestLifecycleFrame('request.ack', frame.id);
         item.resolve(frame.result);
         return;
       }
       const deliverLateResult = removeLateResult(frame.id);
+      if (frame.id.startsWith('req_')) {
+        sendRequestLifecycleFrame('request.cancel', frame.id);
+      }
       if (deliverLateResult === undefined) return;
       try {
         deliverLateResult(frame.result);
@@ -334,6 +355,7 @@ export async function createRuntimeDaemonSocketClientTransport(
         ));
       }
       let abort: (() => void) | undefined;
+      let sent = false;
       const cleanup = (): void => {
         if (abort !== undefined) {
           control?.signal?.removeEventListener('abort', abort);
@@ -347,6 +369,9 @@ export async function createRuntimeDaemonSocketClientTransport(
             if (pending.get(id) !== item) return;
             pending.delete(id);
             cleanup();
+            if (sent && !socket.destroyed) {
+              sendRequestLifecycleFrame('request.cancel', id);
+            }
             if (control.onLateResult !== undefined) {
               const expiry = setTimeout(() => {
                 lateResults.delete(id);
@@ -365,6 +390,7 @@ export async function createRuntimeDaemonSocketClientTransport(
       });
       if (control?.signal?.aborted) return result;
       socket.write(`${encoded}\n`);
+      sent = true;
       return result.then((value) => {
         if (method === 'initialize' || method === 'runtime.initialize') {
           const initialized = asRecord(value);
@@ -442,6 +468,17 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function runtimeDaemonSupportsRequestLifecycle(value: unknown): boolean {
+  const initialized = asRecord(value);
+  const capabilities = asRecord(initialized?.capabilities);
+  const lifecycle = asRecord(capabilities?.runLifecycleControl);
+  return Number.isSafeInteger(lifecycle?.version)
+    && Number(lifecycle?.version) >= 1
+    && lifecycle.structuredStopReceipt === true
+    && lifecycle.protocolCancellation === true
+    && lifecycle.responseAcknowledgement === true;
 }
 
 export async function createRuntimeDaemonSocketServer(

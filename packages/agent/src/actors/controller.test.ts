@@ -1637,6 +1637,256 @@ describe('F270 actor tree and scheduler', () => {
     ))).toHaveLength(1);
   });
 
+  it('stops retrying a permanently unpersistable settlement and reports unknown health', async () => {
+    vi.useFakeTimers();
+    try {
+      let completionSaveAttempts = 0;
+      const healthChanges = vi.fn();
+      const onBackgroundError = vi.fn();
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const turn = snapshot.turns.find(
+            (candidate) => candidate.actorPath === '/root/worker',
+          );
+          if (turn?.state === 'completed') {
+            completionSaveAttempts += 1;
+            throw new Error('disk remains unavailable');
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError,
+        onHealthChanged: healthChanges,
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Persist or become unknown.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'not durable' });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'running',
+      });
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: turn.turnId,
+      });
+      expect(healthChanges).toHaveBeenCalledWith(expect.objectContaining({
+        state: 'recovering',
+        turnId: turn.turnId,
+      }));
+      expect(healthChanges).toHaveBeenCalledWith(expect.objectContaining({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      }));
+      expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'actor_settlement_not_persisted',
+      }));
+      const attemptsAtDeadline = completionSaveAttempts;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(completionSaveAttempts).toBe(attemptsAtDeadline);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('times out a hung settlement save without accepting a late success', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseLateSave: (() => void) | undefined;
+      const lateSave = new Promise<void>((resolve) => {
+        releaseLateSave = resolve;
+      });
+      const healthChanges = vi.fn();
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const turn = snapshot.turns.find(
+            (candidate) => candidate.actorPath === '/root/worker',
+          );
+          if (turn?.state === 'completed') await lateSave;
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+        onHealthChanged: healthChanges,
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Do not hang finalization.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'late durable result' });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: turn.turnId,
+      });
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'running',
+      });
+
+      await expect(controller.shutdown()).resolves.toBeUndefined();
+      releaseLateSave?.();
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'running',
+      });
+      const unknownCall = healthChanges.mock.calls.findIndex(
+        ([health]) => health.state === 'unknown',
+      );
+      expect(unknownCall).toBeGreaterThanOrEqual(0);
+      expect(
+        healthChanges.mock.calls
+          .slice(unknownCall + 1)
+          .some(([health]) => health.state === 'healthy'),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps unknown settlement health sticky across concurrent late settlements', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseFirstSave: (() => void) | undefined;
+      const firstSave = new Promise<void>((resolve) => {
+        releaseFirstSave = resolve;
+      });
+      const healthChanges = vi.fn();
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          if (snapshot.turns.some((turn) => turn.state === 'completed')) {
+            await firstSave;
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+        onHealthChanged: healthChanges,
+      });
+      await controller.spawn('/root', {
+        taskName: 'worker-a',
+        objective: 'First concurrent settlement.',
+      });
+      await controller.spawn('/root', {
+        taskName: 'worker-b',
+        objective: 'Second concurrent settlement.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'first' });
+      executor.pending[1]?.resolve({ output: 'second' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+      const unknownCall = healthChanges.mock.calls.findIndex(
+        ([health]) => health.state === 'unknown',
+      );
+
+      releaseFirstSave?.();
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      expect(
+        healthChanges.mock.calls
+          .slice(unknownCall + 1)
+          .some(([health]) => health.state !== 'unknown'),
+      ).toBe(false);
+      await expect(controller.shutdown()).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not publish recovering health for executor settlement after shutdown', async () => {
+    const executor = new DeferredExecutor();
+    const healthChanges = vi.fn();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save() {},
+      },
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => false,
+      onHealthChanged: healthChanges,
+    });
+    await controller.spawn('/root', {
+      taskName: 'late-worker',
+      objective: 'Settle after shutdown.',
+    });
+
+    await controller.shutdown();
+    executor.pending[0]?.resolve({ output: 'too late' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(controller.healthSnapshot().state).toBe('healthy');
+    expect(healthChanges).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'recovering' }),
+    );
+  });
+
+  it('reports unknown when an owner conflict interrupts executor settlement', async () => {
+    const state = revisionedActorStore();
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: state.store,
+      owner: FIRST_OWNER,
+      isOwnerAlive: async () => true,
+      onBackgroundError: vi.fn(),
+    });
+    const turn = await controller.spawn('/root', {
+      taskName: 'superseded-worker',
+      objective: 'Lose the durable owner before completion.',
+    });
+    const current = state.read();
+    if (current?.schemaVersion !== 2) {
+      throw new Error('Expected an owned Actor snapshot.');
+    }
+    state.replace({
+      ...current,
+      revision: current.revision + 1,
+      owner: SECOND_OWNER,
+    });
+
+    executor.pending[0]?.resolve({ output: 'not ours to commit' });
+    await vi.waitFor(() => {
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: turn.turnId,
+      });
+    });
+    await expect(controller.shutdown()).resolves.toBeUndefined();
+  });
+
   it('flushes a known executor settlement before shutdown releases its owner', async () => {
     let saved: AgentActorSnapshot | undefined;
     let completionAttempts = 0;

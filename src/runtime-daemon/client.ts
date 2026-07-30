@@ -45,6 +45,7 @@ import type {
   RuntimeRunFilter,
   RuntimeRunHandle,
   RuntimeRunResult,
+  RuntimeRunStopReceipt,
   RuntimeRunStatus,
   RuntimeSession,
   RuntimeSessionDiagnostics,
@@ -158,6 +159,20 @@ export class RuntimePermissionScopeUpgradeRequiredError extends Error {
   }
 }
 
+export class RuntimeRunLifecycleUpgradeRequiredError extends Error {
+  readonly code = 'daemon_upgrade_required' as const;
+  readonly capability = 'runLifecycleControl' as const;
+  readonly requiredVersion = 1 as const;
+  readonly restartRequired = true as const;
+
+  constructor() {
+    super(
+      'Runtime daemon does not advertise structured Stop receipts and protocol-level request cancellation. Upgrade KodaX and restart the daemon.',
+    );
+    this.name = 'RuntimeRunLifecycleUpgradeRequiredError';
+  }
+}
+
 export interface RuntimeDaemonClientOptions {
   readonly identity: RuntimeIdentity;
   readonly transport: RuntimeDaemonClientTransport;
@@ -210,6 +225,12 @@ export function createRuntimeDaemonClient(
   ): Promise<unknown> => {
     try {
       validateRuntimeDaemonReadOptions(readOptions);
+      if (
+        (readOptions?.timeoutMs !== undefined || readOptions?.signal !== undefined)
+        && !supportsRunLifecycleControl(options.capabilities)
+      ) {
+        throw new RuntimeRunLifecycleUpgradeRequiredError();
+      }
     } catch (error: unknown) {
       return Promise.reject(error);
     }
@@ -484,8 +505,13 @@ export function createRuntimeDaemonClient(
       list(filter?: RuntimeRunFilter) {
         return request('run.list', filter) as Promise<readonly RuntimeRunStatus[]>;
       },
-      async abort(runId) {
-        await request('run.abort', { runId });
+      abort(runId) {
+        if (!supportsRunLifecycleControl(options.capabilities)) {
+          return Promise.reject(new RuntimeRunLifecycleUpgradeRequiredError());
+        }
+        return request('run.abort', { runId }).then((value) =>
+          parseRuntimeRunStopReceipt(value, runId)
+        );
       },
       async setModel(runId, model) {
         await request('run.model.set', { runId, model });
@@ -1144,6 +1170,7 @@ async function observeDaemonSession(
     method: RuntimeDaemonMethod,
     params: Readonly<Record<string, unknown>>,
     options?: RuntimeReadOptions,
+    onLateResult?: (value: unknown) => void,
   ) => Promise<unknown>,
   sessionId: string,
   listener: RuntimeEventListener,
@@ -1168,6 +1195,27 @@ async function observeDaemonSession(
   }> = [];
   let local: RuntimeSubscription | undefined;
   let lifecycle: RuntimeSubscription | undefined;
+  const closeResources = (): void => {
+    pending.length = 0;
+    local?.close();
+    local = undefined;
+    lifecycle?.close();
+    lifecycle = undefined;
+    const subscriptionId = remoteSubscriptionId;
+    remoteSubscriptionId = undefined;
+    if (subscriptionId !== undefined) {
+      void request('event.unsubscribe', { subscriptionId }).catch(
+        (error: unknown) => {
+          emitKodaXDiagnostic({
+            source: 'runtime.daemon.client',
+            level: 'warn',
+            message: 'Failed to unsubscribe an invalidated Session observation.',
+            detail: error,
+          });
+        },
+      );
+    }
+  };
   const invalidate = (
     reason: RuntimeObservationInvalidation['reason'],
     message: string,
@@ -1175,6 +1223,7 @@ async function observeDaemonSession(
   ): void => {
     if (closed || invalidated) return;
     invalidated = true;
+    closeResources();
     resolveInvalidated?.({
       code: 'observation_invalidated',
       reason,
@@ -1206,7 +1255,21 @@ async function observeDaemonSession(
     }
     if (cursor !== undefined && event.seq === cursor) return;
     cursor = event.seq;
-    listener(event);
+    try {
+      listener(event);
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'runtime.daemon.client',
+        level: 'error',
+        message: `Session observation listener failed for ${event.type}.`,
+        detail: error,
+      });
+      invalidate(
+        'delivery_failed',
+        `Session observation listener failed while delivering ${event.type}; discard local state and resync.`,
+        runtimeId,
+      );
+    }
   };
   const deliverInvalidation = (
     payload: Record<string, unknown>,
@@ -1240,6 +1303,11 @@ async function observeDaemonSession(
       if (
         notification.method === 'event'
         && !isRuntimeEventForSession(payload.event, sessionId)
+      ) return;
+      if (
+        notification.method === 'observation.invalidated'
+        && typeof payload.sessionId === 'string'
+        && payload.sessionId !== sessionId
       ) return;
       if (pending.length >= MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS) {
         bufferOverflowed = true;
@@ -1326,14 +1394,7 @@ async function observeDaemonSession(
       close() {
         if (closed) return;
         closed = true;
-        pending.length = 0;
-        local?.close();
-        lifecycle?.close();
-        if (remoteSubscriptionId !== undefined) {
-          void request('event.unsubscribe', {
-            subscriptionId: remoteSubscriptionId,
-          }).catch(() => undefined);
-        }
+        closeResources();
       },
     };
     queueMicrotask(() => queueMicrotask(() => {
@@ -1357,12 +1418,7 @@ async function observeDaemonSession(
     return observation;
   } catch (error: unknown) {
     closed = true;
-    pending.length = 0;
-    local?.close();
-    lifecycle?.close();
-    if (remoteSubscriptionId !== undefined) {
-      void request('event.unsubscribe', { subscriptionId: remoteSubscriptionId }).catch(() => undefined);
-    }
+    closeResources();
     throw error;
   }
 }
@@ -1451,6 +1507,7 @@ function parseRuntimeObservationInvalidation(
     || (
       record.reason !== 'event_overflow'
       && record.reason !== 'event_order'
+      && record.reason !== 'delivery_failed'
       && record.reason !== 'runtime_changed'
       && record.reason !== 'transport_disconnected'
     )
@@ -1611,6 +1668,91 @@ function requireRecord(value: unknown): Record<string, unknown> {
     throw new Error('Expected daemon response object.');
   }
   return value as Record<string, unknown>;
+}
+
+function supportsRunLifecycleControl(
+  capabilities: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const lifecycle = capabilities?.runLifecycleControl;
+  if (!lifecycle || typeof lifecycle !== 'object' || Array.isArray(lifecycle)) {
+    return false;
+  }
+  const value = lifecycle as Readonly<Record<string, unknown>>;
+  return Number.isSafeInteger(value.version)
+    && Number(value.version) >= 1
+    && value.structuredStopReceipt === true
+    && value.protocolCancellation === true
+    && value.responseAcknowledgement === true;
+}
+
+function parseRuntimeRunStopReceipt(
+  value: unknown,
+  expectedRunId: string,
+): RuntimeRunStopReceipt {
+  let record: Record<string, unknown>;
+  try {
+    record = requireRecord(value);
+  } catch {
+    throw new RuntimeRunLifecycleUpgradeRequiredError();
+  }
+  const runId = record.runId;
+  const sessionId = record.sessionId;
+  const accepted = record.accepted;
+  const state = record.state;
+  const outcome = record.outcome;
+  const phase = record.phase;
+  const revision = record.revision;
+  const states: readonly RuntimeRunStopReceipt['state'][] = [
+    'unknown',
+    'confirmed',
+  ];
+  const outcomes: readonly RuntimeRunStopReceipt['outcome'][] = [
+    'unknown',
+    'cancelled',
+    'interrupted',
+    'completed',
+    'failed',
+  ];
+  const phases: readonly RuntimeRunStopReceipt['phase'][] = [
+    'queued',
+    'running',
+    'waiting_agent',
+    'recovering',
+    'waiting_permission',
+    'waiting_user_input',
+    'unknown',
+    'completed',
+    'failed',
+    'cancelled',
+    'interrupted',
+  ];
+  if (
+    typeof accepted !== 'boolean'
+    || typeof runId !== 'string'
+    || runId.length === 0
+    || runId !== expectedRunId
+    || typeof sessionId !== 'string'
+    || sessionId.length === 0
+    || typeof state !== 'string'
+    || !states.includes(state as RuntimeRunStopReceipt['state'])
+    || typeof outcome !== 'string'
+    || !outcomes.includes(outcome as RuntimeRunStopReceipt['outcome'])
+    || typeof phase !== 'string'
+    || !phases.includes(phase as RuntimeRunStopReceipt['phase'])
+    || !Number.isSafeInteger(revision)
+    || Number(revision) < 0
+  ) {
+    throw new RuntimeRunLifecycleUpgradeRequiredError();
+  }
+  return {
+    runId,
+    sessionId,
+    accepted,
+    state: state as RuntimeRunStopReceipt['state'],
+    outcome: outcome as RuntimeRunStopReceipt['outcome'],
+    phase: phase as RuntimeRunStopReceipt['phase'],
+    revision: Number(revision),
+  };
 }
 
 function requireStringField(record: Record<string, unknown>, key: string): string {

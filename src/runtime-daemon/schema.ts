@@ -249,7 +249,7 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
   'run.get': { params: runIdParamsSchema(), result: runStatusSchema() },
   'run.list': { params: runFilterSchema(), result: arraySchema(runStatusSchema()) },
   'run.await': { params: runIdParamsSchema(), result: runResultSchema() },
-  'run.abort': { params: runIdParamsSchema(), result: okSchema },
+  'run.abort': { params: runIdParamsSchema(), result: runStopReceiptSchema() },
   'run.model.set': {
     params: objectSchema({ runId: stringSchema, model: stringSchema }, ['runId'], true),
     result: okSchema,
@@ -275,6 +275,14 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     result: okSchema,
   },
 
+  'request.cancel': {
+    params: objectSchema({ requestId: stringSchema }, ['requestId']),
+    result: okSchema,
+  },
+  'request.ack': {
+    params: objectSchema({ requestId: stringSchema }, ['requestId']),
+    result: okSchema,
+  },
   'event.subscribe': { params: filterParamsSchema(eventFilterSchema()), result: subscriptionSchema() },
   'event.unsubscribe': {
     params: objectSchema({ subscriptionId: stringSchema }, ['subscriptionId']),
@@ -600,6 +608,7 @@ export const RUNTIME_DAEMON_NOTIFICATION_SCHEMAS = {
   event: objectSchema({ subscriptionId: stringSchema, event: objectAnySchema }, ['subscriptionId', 'event']),
   'observation.invalidated': objectSchema({
     subscriptionId: stringSchema,
+    sessionId: stringSchema,
     invalidation: objectSchema({
       code: { type: 'string', enum: ['observation_invalidated'] },
       reason: {
@@ -607,6 +616,7 @@ export const RUNTIME_DAEMON_NOTIFICATION_SCHEMAS = {
         enum: [
           'event_overflow',
           'event_order',
+          'delivery_failed',
           'runtime_changed',
           'transport_disconnected',
         ],
@@ -1153,6 +1163,16 @@ function runStatusSchema(): RuntimeDaemonJsonSchema {
     model: stringSchema,
     reasoning: stringSchema,
     error: stringSchema,
+    lifecycleError: objectSchema({
+      code: {
+        enum: [
+          'actor_settlement_retrying',
+          'actor_settlement_not_persisted',
+        ],
+      },
+      message: stringSchema,
+      retryable: booleanSchema,
+    }, ['code', 'message', 'retryable']),
     terminal: runtimeTerminalFactSchema(),
     stop: runStopStatusSchema(),
   }, ['runId', 'sessionId', 'phase', 'startedAt', 'provider'], true);
@@ -1167,6 +1187,8 @@ function sessionDiagnosticsSchema(): RuntimeDaemonJsonSchema {
         'owner_liveness_unconfirmed',
         'owner_recovery_required',
         'stop_outcome_unconfirmed',
+        'actor_settlement_retrying',
+        'actor_settlement_not_persisted',
         'run_failed',
         'terminal_time_unknown',
       ],
@@ -1266,6 +1288,29 @@ function runStopStatusSchema(): RuntimeDaemonJsonSchema {
     reason: stringSchema,
     resolvedAt: stringSchema,
   }, ['requestedAt', 'state', 'outcome', 'reason']);
+}
+
+function runStopReceiptSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    runId: stringSchema,
+    sessionId: stringSchema,
+    accepted: booleanSchema,
+    state: { type: 'string', enum: ['unknown', 'confirmed'] },
+    outcome: {
+      type: 'string',
+      enum: ['unknown', 'cancelled', 'interrupted', 'completed', 'failed'],
+    },
+    phase: runPhaseSchema(),
+    revision: integerSchema,
+  }, [
+    'runId',
+    'sessionId',
+    'accepted',
+    'state',
+    'outcome',
+    'phase',
+    'revision',
+  ]);
 }
 
 function runResultSchema(): RuntimeDaemonJsonSchema {
