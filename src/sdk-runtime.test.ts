@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import nodeFs, { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import * as net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +35,7 @@ import type {
   RunnerLlmResult,
   RunnerToolCall,
   WorkflowEvent,
+  WorkflowProcessEvent,
 } from "@kodax-ai/agent";
 import type {
   AutoModeToolGuardrail,
@@ -65,6 +67,15 @@ const codingMock = vi.hoisted(() => ({
   runManagedTask: vi.fn(),
   startKodaX: vi.fn(),
 }));
+
+const mutableNodeFs = createRequire(import.meta.url)("node:fs") as {
+  appendFileSync: typeof nodeFs.appendFileSync;
+  openSync: typeof nodeFs.openSync;
+  readFileSync: typeof nodeFs.readFileSync;
+  rmSync: typeof nodeFs.rmSync;
+  statSync: typeof nodeFs.statSync;
+  truncateSync: typeof nodeFs.truncateSync;
+};
 
 const replMock = vi.hoisted(() => ({
   bootstrapAutoMode: vi.fn(),
@@ -4384,7 +4395,7 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
-  it("flushes buffered streaming events before replay without dropping deltas", async () => {
+  it("flushes coalesced streaming events before replay without dropping deltas", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({
       homeDir: tempRoot,
@@ -4434,6 +4445,1344 @@ describe("createKodaXRuntime", () => {
       expect.objectContaining({ type: "assistant.delta" }),
     ]);
     expect(eventLog).toContain("buffered delta");
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("flushes pending deltas when a client subscription disconnects", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Subscription Disconnect Flush",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const disconnectedEvents: RuntimeEvent[] = [];
+    const remainingEvents: RuntimeEvent[] = [];
+    const disconnected = runtime.events.subscribe(
+      { sessionId: session.id },
+      (event) => disconnectedEvents.push(event),
+    );
+    runtime.events.subscribe(
+      { sessionId: session.id },
+      (event) => remainingEvents.push(event),
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "disconnect while streaming",
+    });
+    disconnectedEvents.length = 0;
+    remainingEvents.length = 0;
+
+    activeEvents?.onTextDelta?.("flush on disconnect");
+    disconnected.close();
+    await flushMicrotasks();
+
+    expect(
+      disconnectedEvents.filter((event) => event.type === "assistant.delta"),
+    ).toHaveLength(0);
+    expect(
+      remainingEvents.filter((event) => event.type === "assistant.delta")
+        .map(runtimeTextPayload),
+    ).toEqual(["flush on disconnect"]);
+    expect(await fs.readFile(runtimeEventLogPath(tempRoot, run.runId), "utf-8"))
+      .toContain("flush on disconnect");
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("removes all synchronously closed subscribers before disconnect flush", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Shared Connection Disconnect Flush",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const firstEvents: RuntimeEvent[] = [];
+    const secondEvents: RuntimeEvent[] = [];
+    const first = runtime.events.subscribe(
+      { sessionId: session.id },
+      (event) => firstEvents.push(event),
+    );
+    const second = runtime.events.subscribe(
+      { sessionId: session.id },
+      (event) => secondEvents.push(event),
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "disconnect a shared client",
+    });
+    firstEvents.length = 0;
+    secondEvents.length = 0;
+
+    activeEvents?.onTextDelta?.("persist without notifying dead connection");
+    first.close();
+    second.close();
+    await flushMicrotasks();
+
+    expect(firstEvents).toHaveLength(0);
+    expect(secondEvents).toHaveLength(0);
+    expect(await replayRuntimeText(runtime, run.runId)).toBe(
+      "persist without notifying dead connection",
+    );
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("coalesces 25k thinking deltas and long text before sequence allocation and replay", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "sessions");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Streaming Delta Stress",
+    });
+    const thinkingChunk = "abcd";
+    const textChunk = "xy";
+    const thinkingCount = 25_000;
+    const textCount = 10_000;
+    const seen: RuntimeEvent[] = [];
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    let eventAppendCount = 0;
+    runtime.events.subscribe({ sessionId: session.id }, (event) => {
+      seen.push(event);
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        mutableNodeFs.appendFileSync = ((file, data, writeOptions) => {
+          if (String(file).endsWith(`${path.sep}events.jsonl`)) {
+            eventAppendCount += 1;
+          }
+          return appendFileSync(file, data, writeOptions);
+        }) as typeof nodeFs.appendFileSync;
+        syncBuiltinESMExports();
+        queueMicrotask(() => {
+          for (let index = 0; index < thinkingCount; index += 1) {
+            options.events?.onThinkingDelta?.(thinkingChunk, {
+              sessionId: session.id,
+              turnId: "turn-stress",
+              seq: index + 1,
+            });
+          }
+          options.events?.onThinkingEnd?.(
+            thinkingChunk.repeat(thinkingCount),
+            { sessionId: session.id, turnId: "turn-stress" },
+          );
+          for (let index = 0; index < textCount; index += 1) {
+            options.events?.onTextDelta?.(textChunk, {
+              sessionId: session.id,
+              turnId: "turn-stress",
+              seq: thinkingCount + index + 1,
+            });
+          }
+        });
+        return fakeRunningSession(options, Promise.resolve({
+          success: true,
+          lastText: textChunk.repeat(textCount),
+          messages: [],
+          sessionId: session.id,
+        }));
+      },
+    );
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "stress streaming",
+    });
+    try {
+      await run.result;
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+    const replay = await runtime.events.replay({ runId: run.runId });
+    const thinking = replay.filter((event) => event.type === "thinking.delta");
+    const text = replay.filter((event) => event.type === "assistant.delta");
+    const logLines = (await fs.readFile(path.join(
+      tempRoot,
+      ".kodax",
+      "runtime",
+      "runs",
+      encodeURIComponent(run.runId),
+      "events.jsonl",
+    ), "utf-8")).trim().split(/\r?\n/);
+
+    expect(thinking).toHaveLength(13);
+    expect(text).toHaveLength(3);
+    expect(thinking.map(runtimeTextPayload).join("")).toBe(
+      thinkingChunk.repeat(thinkingCount),
+    );
+    expect(text.map(runtimeTextPayload).join("")).toBe(
+      textChunk.repeat(textCount),
+    );
+    expect(seen.filter((event) => event.type === "thinking.delta")).toHaveLength(
+      thinking.length,
+    );
+    expect(eventAppendCount).toBeLessThan(100);
+    expect(logLines).toHaveLength(replay.length);
+    expect(replay.map((event) => event.seq)).toEqual(
+      [...replay.map((event) => event.seq)].sort((left, right) => left - right),
+    );
+
+    await runtime.close();
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const restored = await recreated.events.replay({ runId: run.runId });
+    expect(
+      restored.filter((event) => event.type === "thinking.delta")
+        .map(runtimeTextPayload).join(""),
+    ).toBe(thinkingChunk.repeat(thinkingCount));
+    expect(
+      restored.filter((event) => event.type === "assistant.delta")
+        .map(runtimeTextPayload).join(""),
+    ).toBe(textChunk.repeat(textCount));
+    await recreated.close();
+  });
+
+  it("merges tool input only for one explicit toolId and keeps missing IDs separate", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Tool Input Delta Coalescing",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          options.events?.onToolUseStart?.(
+            { id: "tool-a", name: "edit" },
+            { sessionId: session.id, turnId: "turn-tools", toolId: "tool-a" },
+          );
+          for (const fragment of ['{"path":', '"a.ts"', ',"text":"x"}']) {
+            options.events?.onToolInputDelta?.("edit", fragment, {
+              sessionId: session.id,
+              turnId: "turn-tools",
+              toolId: "tool-a",
+            });
+          }
+          options.events?.onToolUseStart?.(
+            { id: "tool-b", name: "write" },
+            { sessionId: session.id, turnId: "turn-tools", toolId: "tool-b" },
+          );
+          for (const fragment of ['{"path":"b.ts",', '"text":"y"}']) {
+            options.events?.onToolInputDelta?.("write", fragment, {
+              sessionId: session.id,
+              turnId: "turn-tools",
+              toolId: "tool-b",
+            });
+          }
+          options.events?.onToolResult?.(
+            { id: "tool-b", name: "write", content: "ok" },
+            { sessionId: session.id, turnId: "turn-tools", toolId: "tool-b" },
+          );
+          options.events?.onToolInputDelta?.("unknown", "first");
+          options.events?.onToolInputDelta?.("unknown", "second");
+        });
+        return fakeRunningSession(options, Promise.resolve({
+          success: true,
+          lastText: "done",
+          messages: [],
+          sessionId: session.id,
+        }));
+      },
+    );
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "stream tool arguments",
+    });
+    await run.result;
+    const toolInputs = (await runtime.events.replay({
+      runId: run.runId,
+      type: "tool.progress",
+    })).filter(isRuntimeToolInputEvent);
+
+    expect(toolInputs.map((event) => ({
+      toolId: runtimeToolInputId(event),
+      json: runtimeToolInputJson(event),
+    }))).toEqual([
+      { toolId: "tool-a", json: '{"path":"a.ts","text":"x"}' },
+      { toolId: "tool-b", json: '{"path":"b.ts","text":"y"}' },
+      { toolId: undefined, json: "first" },
+      { toolId: undefined, json: "second" },
+    ]);
+    await runtime.close();
+  });
+
+  it("keeps the first and latest consecutive tool progress snapshots", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Latest Tool Progress",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          options.events?.onToolUseStart?.(
+            { id: "tool-progress", name: "bash" },
+            { sessionId: session.id, toolId: "tool-progress" },
+          );
+          for (let index = 0; index < 1_000; index += 1) {
+            options.events?.onToolProgress?.(
+              { id: "tool-progress", message: `step ${index}` },
+              { sessionId: session.id, toolId: "tool-progress" },
+            );
+          }
+          options.events?.onToolResult?.(
+            { id: "tool-progress", name: "bash", content: "done" },
+            { sessionId: session.id, toolId: "tool-progress" },
+          );
+        });
+        return fakeRunningSession(options, Promise.resolve({
+          success: true,
+          lastText: "done",
+          messages: [],
+          sessionId: session.id,
+        }));
+      },
+    );
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "report progress",
+    });
+    await run.result;
+    const progress = (await runtime.events.replay({
+      runId: run.runId,
+      type: "tool.progress",
+    })).filter(isRuntimeToolProgressEvent);
+
+    expect(progress.map(runtimeToolProgressMessage)).toEqual([
+      "step 0",
+      "step 999",
+    ]);
+    await runtime.close();
+  });
+
+  it("preserves leading progress then publishes sustained updates at 20Hz", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Progress Frequency Limit",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const seen: RuntimeEvent[] = [];
+    runtime.events.subscribe({
+      sessionId: session.id,
+      type: "tool.progress",
+    }, (event) => {
+      seen.push(event);
+    });
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "sustained progress",
+    });
+
+    vi.useFakeTimers();
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        activeEvents?.onToolProgress?.({
+          id: "rate-limited-tool",
+          message: `window one ${index}`,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(49);
+      expect(seen).toHaveLength(1);
+      expect(runtimeToolProgressMessage(
+        seen.filter(isRuntimeToolProgressEvent)[0]!,
+      )).toBe("window one 0");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(seen).toHaveLength(2);
+      expect(runtimeToolProgressMessage(
+        seen.filter(isRuntimeToolProgressEvent)[1]!,
+      )).toBe("window one 99");
+
+      for (let index = 0; index < 100; index += 1) {
+        activeEvents?.onToolProgress?.({
+          id: "rate-limited-tool",
+          message: `window two ${index}`,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(50);
+      expect(seen).toHaveLength(3);
+      expect(runtimeToolProgressMessage(
+        seen.filter(isRuntimeToolProgressEvent)[2]!,
+      )).toBe("window two 99");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("keeps one latest progress event per identity when progress streams interleave", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Interleaved Progress Frequency Limit",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const seen: RuntimeEvent[] = [];
+    runtime.events.subscribe({ sessionId: session.id }, (event) => {
+      seen.push(event);
+    });
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "interleaved progress",
+    });
+
+    vi.useFakeTimers();
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        activeEvents?.onToolProgress?.({
+          id: "progress-a",
+          message: `a ${index}`,
+        });
+        activeEvents?.onTextDelta?.(".", {
+          sessionId: session.id,
+          turnId: "turn-interleaved-progress",
+        });
+        activeEvents?.onToolProgress?.({
+          id: "progress-b",
+          message: `b ${index}`,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(50);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const progress = seen.filter(isRuntimeToolProgressEvent);
+    expect(progress.map(runtimeToolProgressMessage)).toEqual([
+      "a 0",
+      "b 0",
+      "a 99",
+      "b 99",
+    ]);
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("keeps latest workflow progress separate for each workflow process", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Parallel Workflow Progress",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "parallel workflow progress",
+    });
+
+    activeEvents?.onWorkflowProcessEvent?.(
+      workflowProgressUpdate("workflow-a", "a 1"),
+    );
+    activeEvents?.onWorkflowProcessEvent?.(
+      workflowProgressUpdate("workflow-b", "b 1"),
+    );
+    activeEvents?.onWorkflowProcessEvent?.(
+      workflowProgressUpdate("workflow-a", "a 2"),
+    );
+    const replay = await runtime.events.replay({
+      runId: run.runId,
+      type: "workflow.updated",
+    });
+
+    expect(replay.map(runtimeWorkflowProgress)).toEqual([
+      { runId: "workflow-b", message: "b 1" },
+      { runId: "workflow-a", message: "a 2" },
+    ]);
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("retries a failed run batch without losing or duplicating another run", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "sessions");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const firstSession = await runtime.sessions.create({
+      title: "Persistence Retry A",
+    });
+    const secondSession = await runtime.sessions.create({
+      title: "Persistence Retry B",
+    });
+    let firstEvents: KodaXOptions["events"];
+    let secondEvents: KodaXOptions["events"];
+    codingMock.startKodaX
+      .mockImplementationOnce((options: KodaXOptions): RunningSession => {
+        firstEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      })
+      .mockImplementationOnce((options: KodaXOptions): RunningSession => {
+        secondEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      });
+    const firstRun = await runtime.runs.start({
+      sessionId: firstSession.id,
+      prompt: "first run",
+    });
+    const secondRun = await runtime.runs.start({
+      sessionId: secondSession.id,
+      prompt: "second run",
+    });
+    const secondEventFile = runtimeEventLogPath(tempRoot, secondRun.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    let failed = false;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (!failed && String(file) === secondEventFile) {
+        failed = true;
+        throw new Error("transient event append failure");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      firstEvents?.onTextDelta?.("first durable delta");
+      secondEvents?.onTextDelta?.("second durable delta");
+      firstEvents?.onToolUseStart?.({ id: "first-boundary", name: "read" });
+      secondEvents?.onToolUseStart?.({ id: "second-boundary", name: "read" });
+      await runtime.events.replay({ runId: secondRun.runId });
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+    expect(failed).toBe(true);
+    await runtime.runs.abort(firstRun.runId);
+    await runtime.runs.abort(secondRun.runId);
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    expect(await replayRuntimeText(recreated, firstRun.runId)).toBe(
+      "first durable delta",
+    );
+    expect(await replayRuntimeText(recreated, secondRun.runId)).toBe(
+      "second durable delta",
+    );
+    await recreated.close();
+  });
+
+  it("reallocates a failed batch above another Runtime's committed watermark", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "sessions");
+    const firstRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const secondRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const firstSession = await firstRuntime.sessions.create({
+      title: "Shared Sequence Retry A",
+    });
+    const secondSession = await secondRuntime.sessions.create({
+      title: "Shared Sequence Retry B",
+    });
+    let firstEvents: KodaXOptions["events"];
+    let secondEvents: KodaXOptions["events"];
+    codingMock.startKodaX
+      .mockImplementationOnce((options: KodaXOptions): RunningSession => {
+        firstEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      })
+      .mockImplementationOnce((options: KodaXOptions): RunningSession => {
+        secondEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      });
+    const firstRun = await firstRuntime.runs.start({
+      sessionId: firstSession.id,
+      prompt: "first shared Runtime",
+    });
+    const secondRun = await secondRuntime.runs.start({
+      sessionId: secondSession.id,
+      prompt: "second shared Runtime",
+    });
+    const firstEventFile = runtimeEventLogPath(tempRoot, firstRun.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    let failed = false;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (!failed && String(file) === firstEventFile) {
+        failed = true;
+        throw new Error("first Runtime append failure");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+
+    let secondWatermark = 0;
+    try {
+      firstEvents?.onTextDelta?.("retry above watermark");
+      firstEvents?.onToolUseStart?.({ id: "first-shared-boundary", name: "read" });
+      secondEvents?.onTextDelta?.("committed between attempts");
+      secondEvents?.onToolUseStart?.({
+        id: "second-shared-boundary",
+        name: "read",
+      });
+      const secondReplay = await secondRuntime.events.replay({
+        runId: secondRun.runId,
+      });
+      secondWatermark = Math.max(...secondReplay.map((event) => event.seq));
+      await firstRuntime.events.replay({ runId: firstRun.runId });
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    expect(failed).toBe(true);
+    const retried = await secondRuntime.events.replay({
+      sinceSeq: secondWatermark,
+    });
+    expect(
+      retried.filter((event) => event.runId === firstRun.runId)
+        .map((event) => event.seq),
+    ).toEqual(expect.arrayContaining([
+      expect.any(Number),
+    ]));
+    expect(
+      retried.filter((event) => event.runId === firstRun.runId)
+        .every((event) => event.seq > secondWatermark),
+    ).toBe(true);
+
+    await firstRuntime.runs.abort(firstRun.runId);
+    await secondRuntime.runs.abort(secondRun.runId);
+    await firstRuntime.close();
+    await secondRuntime.close();
+  });
+
+  it("rolls back a partially appended batch before retrying it", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Partial Event Batch Rollback",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "partial append",
+    });
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    let failed = false;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (!failed && String(file) === eventFile) {
+        failed = true;
+        const content = String(data);
+        appendFileSync(
+          file,
+          content.slice(0, Math.max(1, Math.floor(content.length / 2))),
+          options,
+        );
+        throw new Error("partial event batch append failure");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      activeEvents?.onTextDelta?.("exactly once after partial append");
+      activeEvents?.onToolUseStart?.({
+        id: "partial-append-boundary",
+        name: "read",
+      });
+      await runtime.events.replay({ runId: run.runId });
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    expect(failed).toBe(true);
+    expect(await replayRuntimeText(runtime, run.runId)).toBe(
+      "exactly once after partial append",
+    );
+    const records = (await fs.readFile(eventFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/);
+    expect(() => records.map((record) => JSON.parse(record))).not.toThrow();
+    await fs.appendFile(eventFile, '{"id":"crash-interrupted-tail"');
+    activeEvents?.onTextDelta?.(" and after reconnect repair");
+    activeEvents?.onToolUseStart?.({
+      id: "reconnect-repair-boundary",
+      name: "read",
+    });
+    expect(await replayRuntimeText(runtime, run.runId)).toBe(
+      "exactly once after partial append and after reconnect repair",
+    );
+    expect(() => (nodeFs.readFileSync(eventFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((record) => JSON.parse(record))).not.toThrow();
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    expect(await replayRuntimeText(recreated, run.runId)).toBe(
+      "exactly once after partial append and after reconnect repair",
+    );
+    await recreated.close();
+  });
+
+  it.each(["event", "sequence"] as const)(
+    "fails closed when partial append, rollback, and %s lock cleanup all fail",
+    async (cleanupTarget) => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Indeterminate Event Batch Commit",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "append and rollback both fail",
+    });
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const cleanupLockFile = cleanupTarget === "event"
+      ? `${eventFile}.lock`
+      : path.join(
+          tempRoot,
+          ".kodax",
+          "runtime",
+          "event-sequence.lock",
+        );
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    const rmSync = mutableNodeFs.rmSync;
+    const truncateSync = mutableNodeFs.truncateSync;
+    let appendFailed = false;
+    let cleanupFailed = false;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (!appendFailed && String(file) === eventFile) {
+        appendFailed = true;
+        const content = String(data);
+        appendFileSync(file, content.slice(0, content.length / 2), options);
+        throw new Error("synthetic append failure after partial write");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    mutableNodeFs.truncateSync = ((file, length) => {
+      if (String(file) === eventFile) {
+        throw new Error("synthetic rollback failure");
+      }
+      return truncateSync(file, length);
+    }) as typeof nodeFs.truncateSync;
+    mutableNodeFs.rmSync = ((file, options) => {
+      if (!cleanupFailed && String(file) === cleanupLockFile) {
+        cleanupFailed = true;
+        throw new Error("synthetic lock cleanup failure");
+      }
+      return rmSync(file, options);
+    }) as typeof nodeFs.rmSync;
+    syncBuiltinESMExports();
+
+    try {
+      activeEvents?.onTextDelta?.("must not be retried");
+      activeEvents?.onToolUseStart?.({
+        id: "indeterminate-commit-boundary",
+        name: "read",
+      });
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      mutableNodeFs.rmSync = rmSync;
+      mutableNodeFs.truncateSync = truncateSync;
+      syncBuiltinESMExports();
+    }
+
+    expect(appendFailed).toBe(true);
+    expect(cleanupFailed).toBe(true);
+    const partialContent = await fs.readFile(eventFile, "utf-8");
+    await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
+      "indeterminate",
+    );
+    expect(await fs.readFile(eventFile, "utf-8")).toBe(partialContent);
+    await expect(runtime.close()).rejects.toThrow("indeterminate");
+    },
+  );
+
+  it.each(["event", "sequence"] as const)(
+    "does not retry a committed batch when %s lock cleanup fails",
+    async (cleanupTarget) => {
+      const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+      const runtime = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, "sessions"),
+        defaultProvider: "mock-provider",
+      });
+      const session = await runtime.sessions.create({
+        title: "Committed Event Lock Cleanup Failure",
+      });
+      let activeEvents: KodaXOptions["events"];
+      codingMock.startKodaX.mockImplementation(
+        (options: KodaXOptions): RunningSession => {
+          activeEvents = options.events;
+          return fakeRunningSession(
+            options,
+            new Promise<KodaXResult>(() => undefined),
+          );
+        },
+      );
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "commit before lock cleanup failure",
+      });
+      const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+      const cleanupLockFile = cleanupTarget === "event"
+        ? `${eventFile}.lock`
+        : path.join(
+            tempRoot,
+            ".kodax",
+            "runtime",
+            "event-sequence.lock",
+          );
+      const appendFileSync = mutableNodeFs.appendFileSync;
+      const rmSync = mutableNodeFs.rmSync;
+      let eventAppendCalls = 0;
+      let cleanupFailed = false;
+      mutableNodeFs.appendFileSync = ((file, data, options) => {
+        if (String(file) === eventFile) eventAppendCalls += 1;
+        return appendFileSync(file, data, options);
+      }) as typeof nodeFs.appendFileSync;
+      mutableNodeFs.rmSync = ((file, options) => {
+        if (!cleanupFailed && String(file) === cleanupLockFile) {
+          cleanupFailed = true;
+          throw new Error("synthetic committed lock cleanup failure");
+        }
+        return rmSync(file, options);
+      }) as typeof nodeFs.rmSync;
+      syncBuiltinESMExports();
+
+      try {
+        activeEvents?.onTextDelta?.("persisted once after cleanup failure");
+        activeEvents?.onToolUseStart?.({
+          id: "committed-cleanup-boundary",
+          name: "read",
+        });
+      } finally {
+        mutableNodeFs.appendFileSync = appendFileSync;
+        mutableNodeFs.rmSync = rmSync;
+        syncBuiltinESMExports();
+        rmSync(cleanupLockFile, { force: true });
+      }
+
+      expect(cleanupFailed).toBe(true);
+      expect(eventAppendCalls).toBe(1);
+      const replay = await runtime.events.replay({
+        runId: run.runId,
+        type: "assistant.delta",
+      });
+      expect(replay.map(runtimeTextPayload)).toEqual([
+        "persisted once after cleanup failure",
+      ]);
+      await runtime.runs.abort(run.runId);
+      await runtime.close();
+    },
+  );
+
+  it("does not publish or advance a snapshot cursor before a failed batch is durable", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Persistence Watermark Fence",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "persistence watermark",
+    });
+    const seen: RuntimeEvent[] = [];
+    runtime.events.subscribe({ sessionId: session.id }, (event) => {
+      seen.push(event);
+    });
+    seen.length = 0;
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const appendFileSync = mutableNodeFs.appendFileSync;
+    mutableNodeFs.appendFileSync = ((file, data, options) => {
+      if (String(file) === eventFile) {
+        throw new Error("persistent event append failure");
+      }
+      return appendFileSync(file, data, options);
+    }) as typeof nodeFs.appendFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      activeEvents?.onTextDelta?.("durable before visible");
+      activeEvents?.onToolUseStart?.({ id: "watermark-boundary", name: "read" });
+      expect(seen).toHaveLength(0);
+      await expect(runtime.events.replay({ runId: run.runId })).rejects.toThrow(
+        "persistent event append failure",
+      );
+    } finally {
+      mutableNodeFs.appendFileSync = appendFileSync;
+      syncBuiltinESMExports();
+    }
+
+    const replay = await runtime.events.replay({ runId: run.runId });
+    expect(replay.filter((event) => event.type === "assistant.delta")
+      .map(runtimeTextPayload)).toEqual(["durable before visible"]);
+    expect(seen.map((event) => event.type)).toEqual([
+      "assistant.delta",
+      "tool.started",
+    ]);
+    const observation = await runtime.sessions.observe(
+      session.id,
+      () => undefined,
+    );
+    expect(observation.snapshot.live.assistantTextByRun[run.runId]).toBe(
+      "durable before visible",
+    );
+    expect(observation.snapshot.cursor).toBeGreaterThanOrEqual(replay.at(-1)!.seq);
+    observation.close();
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("does not retry an appended batch when only event-log trimming fails", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "sessions");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Trim Failure Is Not Append Failure",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "trim failure",
+    });
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const readFileSync = mutableNodeFs.readFileSync;
+    const statSync = mutableNodeFs.statSync;
+    mutableNodeFs.statSync = ((file) => {
+      const value = statSync(file);
+      return String(file) === eventFile
+        ? { ...value, size: 17 * 1024 * 1024 }
+        : value;
+    }) as typeof nodeFs.statSync;
+    let trimFailed = false;
+    mutableNodeFs.readFileSync = ((file, options) => {
+      if (!trimFailed && String(file) === eventFile) {
+        trimFailed = true;
+        throw new Error("synthetic trim failure");
+      }
+      return readFileSync(file, options);
+    }) as typeof nodeFs.readFileSync;
+    syncBuiltinESMExports();
+
+    try {
+      activeEvents?.onTextDelta?.("persisted once");
+      activeEvents?.onToolUseStart?.({ id: "trim-boundary", name: "read" });
+    } finally {
+      mutableNodeFs.readFileSync = readFileSync;
+      mutableNodeFs.statSync = statSync;
+      syncBuiltinESMExports();
+    }
+    expect(trimFailed).toBe(true);
+    await runtime.events.replay({ runId: run.runId });
+    const persistedEvents = (await fs.readFile(eventFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as RuntimeEvent);
+    expect(
+      persistedEvents.filter((event) => event.type === "assistant.delta"),
+    ).toHaveLength(1);
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+
+    const recreated = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const replay = await recreated.events.replay({
+      runId: run.runId,
+      type: "assistant.delta",
+    });
+    expect(replay.map(runtimeTextPayload)).toEqual(["persisted once"]);
+    await recreated.close();
+  });
+
+  it("does not retry a committed batch when trim-warning persistence also fails", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Post-Commit Warning Failure",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "warning failure after commit",
+    });
+    const eventFile = runtimeEventLogPath(tempRoot, run.runId);
+    const openSync = mutableNodeFs.openSync;
+    const readFileSync = mutableNodeFs.readFileSync;
+    const statSync = mutableNodeFs.statSync;
+    let sequenceLockCount = 0;
+    mutableNodeFs.statSync = ((file) => {
+      const value = statSync(file);
+      return String(file) === eventFile
+        ? { ...value, size: 17 * 1024 * 1024 }
+        : value;
+    }) as typeof nodeFs.statSync;
+    mutableNodeFs.readFileSync = ((file, options) => {
+      if (String(file) === eventFile) {
+        throw new Error("synthetic trim failure before warning failure");
+      }
+      return readFileSync(file, options);
+    }) as typeof nodeFs.readFileSync;
+    mutableNodeFs.openSync = ((file, flags, mode) => {
+      if (String(file).endsWith("event-sequence.lock")) {
+        sequenceLockCount += 1;
+        if (sequenceLockCount === 2) {
+          throw new Error("synthetic trim-warning sequence failure");
+        }
+      }
+      return openSync(file, flags, mode);
+    }) as typeof nodeFs.openSync;
+    syncBuiltinESMExports();
+
+    try {
+      activeEvents?.onTextDelta?.("committed exactly once");
+      activeEvents?.onToolUseStart?.({
+        id: "post-commit-warning-boundary",
+        name: "read",
+      });
+    } finally {
+      mutableNodeFs.openSync = openSync;
+      mutableNodeFs.readFileSync = readFileSync;
+      mutableNodeFs.statSync = statSync;
+      syncBuiltinESMExports();
+    }
+
+    expect(sequenceLockCount).toBe(2);
+    const replay = await runtime.events.replay({ runId: run.runId });
+    expect(
+      replay.filter((event) => event.type === "assistant.delta")
+        .map(runtimeTextPayload),
+    ).toEqual(["committed exactly once"]);
+    await runtime.runs.abort(run.runId);
+    await runtime.close();
+  });
+
+  it("flushes pending deltas before error and cancellation boundaries", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const errorSession = await runtime.sessions.create({
+      title: "Error Boundary Flush",
+    });
+    let errorEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementationOnce(
+      (options: KodaXOptions): RunningSession => {
+        errorEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const failed = await runtime.runs.start({
+      sessionId: errorSession.id,
+      prompt: "fail after deltas",
+    });
+    errorEvents?.onTextDelta?.("answer before failure");
+    errorEvents?.onThinkingDelta?.("thinking before failure");
+    errorEvents?.onToolProgress?.({
+      id: "error-progress",
+      message: "error progress first",
+    });
+    errorEvents?.onToolProgress?.({
+      id: "error-progress",
+      message: "error progress last",
+    });
+    errorEvents?.onError?.(new Error("stream failed"));
+    await expectSettles(failed.result, "delta error boundary");
+    const failedReplay = await runtime.events.replay({ runId: failed.runId });
+
+    expect(runtimeEventIndex(failedReplay, "assistant.delta")).toBeLessThan(
+      runtimeEventIndex(failedReplay, "runtime.warning"),
+    );
+    expect(runtimeEventIndex(failedReplay, "thinking.delta")).toBeLessThan(
+      runtimeEventIndex(failedReplay, "run.failed"),
+    );
+    expect(
+      failedReplay.filter(isRuntimeToolProgressEvent)
+        .map(runtimeToolProgressMessage),
+    ).toEqual(["error progress first", "error progress last"]);
+
+    const cancelSession = await runtime.sessions.create({
+      title: "Cancel Boundary Flush",
+    });
+    let cancelEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementationOnce(
+      (options: KodaXOptions): RunningSession => {
+        cancelEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const cancelled = await runtime.runs.start({
+      sessionId: cancelSession.id,
+      prompt: "cancel after delta",
+    });
+    cancelEvents?.onTextDelta?.("answer before cancel");
+    cancelEvents?.onToolProgress?.({
+      id: "cancel-progress",
+      message: "cancel progress first",
+    });
+    cancelEvents?.onToolProgress?.({
+      id: "cancel-progress",
+      message: "cancel progress last",
+    });
+    await runtime.runs.abort(cancelled.runId);
+    const cancelledReplay = await runtime.events.replay({
+      runId: cancelled.runId,
+    });
+    expect(runtimeEventIndex(cancelledReplay, "assistant.delta")).toBeLessThan(
+      runtimeEventIndex(cancelledReplay, "run.updated"),
+    );
+    expect(
+      cancelledReplay.filter(isRuntimeToolProgressEvent)
+        .map(runtimeToolProgressMessage),
+    ).toEqual(["cancel progress first", "cancel progress last"]);
+    await runtime.close();
+  });
+
+  it("hands off coalesced snapshot and incremental deltas without gaps or duplicates", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Coalesced Observation Handoff",
+    });
+    let activeEvents: KodaXOptions["events"];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        activeEvents = options.events;
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>(() => undefined),
+        );
+      },
+    );
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "observe streaming",
+    });
+    activeEvents?.onTextDelta?.("before ");
+    activeEvents?.onTextDelta?.("snapshot");
+    const delivered: RuntimeEvent[] = [];
+    const observation = await runtime.sessions.observe(session.id, (event) => {
+      delivered.push(event);
+    });
+    await flushMicrotasks();
+
+    expect(observation.snapshot.live.assistantTextByRun[run.runId]).toBe(
+      "before snapshot",
+    );
+    expect(await fs.readFile(path.join(
+      tempRoot,
+      ".kodax",
+      "runtime",
+      "runs",
+      encodeURIComponent(run.runId),
+      "events.jsonl",
+    ), "utf-8")).toContain("before snapshot");
+    activeEvents?.onTextDelta?.(" after");
+    activeEvents?.onToolUseStart?.(
+      { id: "handoff-boundary", name: "read" },
+      { sessionId: session.id, toolId: "handoff-boundary" },
+    );
+    expect(
+      delivered.filter((event) => event.type === "assistant.delta")
+        .map(runtimeTextPayload).join(""),
+    ).toBe(" after");
+    expect(
+      delivered.every((event) => event.seq > observation.snapshot.cursor),
+    ).toBe(true);
+    const replay = await runtime.events.replay({
+      runId: run.runId,
+      type: "assistant.delta",
+    });
+    expect(replay.map(runtimeTextPayload).join("")).toBe(
+      "before snapshot after",
+    );
+
+    observation.close();
     await runtime.runs.abort(run.runId);
     await runtime.close();
   });
@@ -12486,6 +13835,136 @@ function fakeRunningSession(
     },
     result,
   };
+}
+
+type RuntimeToolInputEvent = RuntimeEvent & {
+  readonly payload: {
+    readonly toolName: string;
+    readonly partialJson: string;
+    readonly meta?: { readonly toolId?: string };
+  };
+};
+
+type RuntimeToolProgressEvent = RuntimeEvent & {
+  readonly payload: {
+    readonly update: { readonly id: string; readonly message: string };
+  };
+};
+
+function runtimeTextPayload(event: RuntimeEvent): string {
+  if (!isTestRecord(event.payload) || typeof event.payload.text !== "string") {
+    throw new Error(`Expected text payload for ${event.type}`);
+  }
+  return event.payload.text;
+}
+
+function isRuntimeToolInputEvent(
+  event: RuntimeEvent,
+): event is RuntimeToolInputEvent {
+  return isTestRecord(event.payload)
+    && typeof event.payload.toolName === "string"
+    && typeof event.payload.partialJson === "string";
+}
+
+function runtimeToolInputId(event: RuntimeToolInputEvent): string | undefined {
+  const meta = event.payload.meta;
+  return meta?.toolId;
+}
+
+function runtimeToolInputJson(event: RuntimeToolInputEvent): string {
+  return event.payload.partialJson;
+}
+
+function isRuntimeToolProgressEvent(
+  event: RuntimeEvent,
+): event is RuntimeToolProgressEvent {
+  return isTestRecord(event.payload)
+    && isTestRecord(event.payload.update)
+    && typeof event.payload.update.id === "string"
+    && typeof event.payload.update.message === "string";
+}
+
+function runtimeToolProgressMessage(event: RuntimeToolProgressEvent): string {
+  return event.payload.update.message;
+}
+
+function workflowProgressUpdate(
+  runId: string,
+  message: string,
+): WorkflowProcessEvent {
+  const now = new Date().toISOString();
+  return {
+    type: "workflow_updated",
+    snapshot: {
+      runId,
+      workflowName: "parallel-review",
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      items: [],
+      counts: {
+        pending: 0,
+        running: 1,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+        skipped: 0,
+      },
+      progress: {
+        spawnedAgents: 1,
+        finishedAgents: 0,
+        activeAgents: 1,
+        failedAgents: 0,
+        stoppedAgents: 0,
+      },
+    },
+    message,
+  };
+}
+
+function runtimeWorkflowProgress(
+  event: RuntimeEvent,
+): { readonly runId: string; readonly message: string | undefined } {
+  const payload = event.payload as WorkflowProcessEvent;
+  return {
+    runId: payload.snapshot.runId,
+    message: payload.type === "workflow_updated" ? payload.message : undefined,
+  };
+}
+
+function runtimeEventLogPath(root: string, runId: string): string {
+  return path.join(
+    root,
+    ".kodax",
+    "runtime",
+    "runs",
+    encodeURIComponent(runId),
+    "events.jsonl",
+  );
+}
+
+async function replayRuntimeText(
+  runtime: KodaXRuntime,
+  runId: string,
+): Promise<string> {
+  const replay = await runtime.events.replay({
+    runId,
+    type: "assistant.delta",
+  });
+  return replay.map(runtimeTextPayload).join("");
+}
+
+function runtimeEventIndex(
+  events: readonly RuntimeEvent[],
+  type: RuntimeEvent["type"],
+): number {
+  const index = events.findIndex((event) => event.type === type);
+  if (index < 0) throw new Error(`Missing Runtime event: ${type}`);
+  return index;
+}
+
+function isTestRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function makeDaemonEndpoint(tempRoot: string): RuntimeDaemonEndpoint {

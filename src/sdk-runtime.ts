@@ -2841,10 +2841,11 @@ interface PersistedRuntimeRunStop {
 
 interface RuntimePersistence {
   readonly runtimeDir: string;
-  appendEvent(event: RuntimeEvent): void;
-  appendDurableEvent(event: RuntimeEvent): void;
+  commitEvents(
+    count: number,
+    create: (firstSeq: number) => readonly RuntimeEvent[],
+  ): readonly RuntimeEvent[];
   close(): void;
-  nextEventSeq(): number;
   nextSessionOrder(sessionId: string): number;
   currentEventSeq(): number;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
@@ -2898,12 +2899,46 @@ class RuntimeContinuationStaleError extends Error {
   }
 }
 
+class RuntimeEventCommitIndeterminateError extends Error {
+  constructor(appendError: unknown, rollbackError: unknown) {
+    super(
+      "Runtime event batch commit is indeterminate; automatic retry is disabled",
+      {
+        cause: new AggregateError(
+          [appendError, rollbackError],
+          "Runtime event append and rollback both failed",
+        ),
+      },
+    );
+    this.name = "RuntimeEventCommitIndeterminateError";
+  }
+
+  includeLockCleanupFailure(cleanupError: unknown): void {
+    Object.defineProperty(this, "cause", {
+      configurable: true,
+      value: new AggregateError(
+        [this.cause, cleanupError],
+        "Runtime event commit and status-lock cleanup both failed",
+      ),
+    });
+  }
+}
+
+class RuntimeStatusLockCleanupError extends Error {
+  constructor(readonly cleanupError: unknown) {
+    super("Runtime status lock cleanup failed after the operation completed", {
+      cause: cleanupError,
+    });
+    this.name = "RuntimeStatusLockCleanupError";
+  }
+}
+
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
 const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
 const MAX_RUNTIME_MEMORY_RUNS = 1_000;
 const MAX_RUNTIME_ARTIFACT_BYTES = 256 * 1024 * 1024;
-const MAX_RUNTIME_BUFFERED_EVENT_BYTES = 64 * 1024;
-const RUNTIME_EVENT_FLUSH_INTERVAL_MS = 10;
+const RUNTIME_EVENT_COALESCE_INTERVAL_MS = 50;
+const MAX_RUNTIME_COALESCED_EVENT_BYTES = 8 * 1024;
 const MAX_RUNTIME_EVENT_FILE_BYTES = 16 * 1024 * 1024;
 const TARGET_RUNTIME_EVENT_FILE_BYTES = MAX_RUNTIME_EVENT_FILE_BYTES / 2;
 const MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES = 128 * 1024;
@@ -2920,12 +2955,6 @@ const RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS = 5 * 60_000;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
   "kodax-transcript-snapshots-";
 const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
-const BUFFERED_RUNTIME_EVENT_TYPES: ReadonlySet<RuntimeEventType> = new Set([
-  "assistant.delta",
-  "thinking.delta",
-  "tool.progress",
-  "run.progress",
-]);
 const RUNTIME_PERMISSION_BRIDGE_TOOLS: ReadonlySet<string> = new Set([
   "tool_call",
   "tool_describe",
@@ -8547,16 +8576,193 @@ function removeQueuedRun(
   }
 }
 
+interface RuntimeEventEmissionScope {
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly turnId?: string;
+}
+
+interface RuntimeEventMergePlan {
+  readonly key: string;
+  readonly mode: "append_text" | "append_tool_input" | "latest";
+  readonly bytes: number;
+  readonly preserveFirst?: boolean;
+}
+
+interface PendingRuntimeEventEmission {
+  readonly type: RuntimeEventType;
+  readonly payload: unknown;
+  readonly scope: RuntimeEventEmissionScope;
+  readonly time: string;
+  readonly merge?: RuntimeEventMergePlan;
+}
+
+function runtimeEventMergePlan(
+  type: RuntimeEventType,
+  payload: unknown,
+  scope: RuntimeEventEmissionScope,
+): RuntimeEventMergePlan | undefined {
+  const value = isRecord(payload) ? payload : undefined;
+  if (
+    (type === "assistant.delta" || type === "thinking.delta")
+    && typeof value?.text === "string"
+  ) {
+    return {
+      key: runtimeEventMergeKey(type, payload, scope),
+      mode: "append_text",
+      bytes: Buffer.byteLength(value.text, "utf-8"),
+    };
+  }
+  if (type === "tool.progress" && typeof value?.partialJson === "string") {
+    const meta = isRecord(value.meta) ? value.meta : undefined;
+    const toolId = typeof meta?.toolId === "string" ? meta.toolId : "";
+    if (toolId.length === 0) return undefined;
+    return {
+      key: runtimeEventMergeKey(type, payload, scope, `tool:${toolId}`),
+      mode: "append_tool_input",
+      bytes: Buffer.byteLength(value.partialJson, "utf-8"),
+    };
+  }
+  if (type === "tool.progress" && isRecord(value?.update)) {
+    const updateId =
+      typeof value.update.id === "string" ? value.update.id : "";
+    if (updateId.length === 0) return undefined;
+    return {
+      key: runtimeEventMergeKey(type, payload, scope, `progress:${updateId}`),
+      mode: "latest",
+      bytes: runtimeEventPayloadBytes(payload),
+      preserveFirst: true,
+    };
+  }
+  if (type === "run.progress" && value?.kind === "managed_task_status") {
+    return {
+      key: runtimeEventMergeKey(type, payload, scope),
+      mode: "latest",
+      bytes: runtimeEventPayloadBytes(payload),
+    };
+  }
+  if (type === "workflow.updated") {
+    const snapshot = isRecord(value?.snapshot) ? value.snapshot : undefined;
+    const workflowRunId =
+      typeof snapshot?.runId === "string" ? snapshot.runId : "";
+    if (workflowRunId.length === 0) return undefined;
+    return {
+      key: runtimeEventMergeKey(
+        type,
+        payload,
+        scope,
+        `workflow:${workflowRunId}`,
+      ),
+      mode: "latest",
+      bytes: runtimeEventPayloadBytes(payload),
+    };
+  }
+  return undefined;
+}
+
+function runtimeEventPayloadBytes(payload: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(payload) ?? "", "utf-8");
+  } catch {
+    return MAX_RUNTIME_COALESCED_EVENT_BYTES;
+  }
+}
+
+function runtimeEventMergeKey(
+  type: RuntimeEventType,
+  payload: unknown,
+  scope: RuntimeEventEmissionScope,
+  qualifier = "",
+): string {
+  const value = isRecord(payload) ? payload : undefined;
+  const meta = isRecord(value?.meta) ? value.meta : undefined;
+  const correlation = isRecord(meta?.workflowCorrelation)
+    ? meta.workflowCorrelation
+    : undefined;
+  const side = [
+    meta?.contextKind,
+    meta?.contextId,
+    meta?.parentContextId,
+    meta?.agentId,
+    meta?.childAgentId,
+    meta?.parentToolId,
+    correlation?.workflowRunId,
+    correlation?.childAgentId,
+    meta?.liveOnly === true ? "live" : "",
+  ].map((part) => typeof part === "string" ? part : "").join("\u0001");
+  return [
+    scope.sessionId,
+    scope.runId,
+    scope.turnId ?? "",
+    type,
+    side,
+    qualifier,
+  ].join("\u0000");
+}
+
+function mergeRuntimeEventEmissions(
+  previous: PendingRuntimeEventEmission,
+  next: PendingRuntimeEventEmission,
+): PendingRuntimeEventEmission {
+  const previousMerge = previous.merge;
+  if (previousMerge === undefined) return next;
+  const mode = previousMerge.mode;
+  const previousPayload = isRecord(previous.payload) ? previous.payload : {};
+  const nextPayload = isRecord(next.payload) ? next.payload : {};
+  if (mode === "append_text") {
+    return {
+      ...previous,
+      payload: {
+        ...previousPayload,
+        ...nextPayload,
+        text: `${previousPayload.text ?? ""}${nextPayload.text ?? ""}`,
+      },
+      merge: {
+        ...previousMerge,
+        bytes: previousMerge.bytes + (next.merge?.bytes ?? 0),
+      },
+    };
+  }
+  if (mode === "append_tool_input") {
+    return {
+      ...previous,
+      payload: {
+        ...previousPayload,
+        ...nextPayload,
+        partialJson:
+          `${previousPayload.partialJson ?? ""}${nextPayload.partialJson ?? ""}`,
+      },
+      merge: {
+        ...previousMerge,
+        bytes: previousMerge.bytes + (next.merge?.bytes ?? 0),
+      },
+    };
+  }
+  return next;
+}
+
 function createRuntimeEventBus(persistence: RuntimePersistence) {
   let closed = false;
   const events: RuntimeEvent[] = [];
   const liveBySession = new Map<string, RuntimeSessionLiveProjectionState>();
   const latestSeqBySession = new Map<string, number>();
+  const pendingEmissions: PendingRuntimeEventEmission[] = [];
+  const notificationQueue: RuntimeEvent[] = [];
+  const preservedLatestKeysByRun = new Map<string, Set<string>>();
   const closeListeners = new Set<() => void>();
   const subscribers = new Set<{
     readonly filter: RuntimeEventFilter;
     readonly listener: RuntimeEventListener;
   }>();
+  let pendingBytes = 0;
+  let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
+  let disconnectFlushScheduled = false;
+  let indeterminatePersistenceError:
+    | RuntimeEventCommitIndeterminateError
+    | undefined;
+  let persistenceFailureReported = false;
+  let deliveringNotifications = false;
+  let notificationIndex = 0;
 
   const matches = (
     event: RuntimeEvent,
@@ -8581,29 +8787,7 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     }
   };
 
-  const createEvent = (
-    type: RuntimeEventType,
-    payload: unknown,
-    scope: {
-      readonly sessionId: string;
-      readonly runId: string;
-      readonly turnId?: string;
-    },
-  ): RuntimeEvent => {
-    const seq = persistence.nextEventSeq();
-    return {
-      id: `evt_${seq}_${randomUUID().replace(/-/g, "").slice(0, 8)}`,
-      seq,
-      time: new Date().toISOString(),
-      sessionId: scope.sessionId,
-      runId: scope.runId,
-      ...(scope.turnId !== undefined ? { turnId: scope.turnId } : {}),
-      type,
-      payload,
-    };
-  };
-
-  const notify = (event: RuntimeEvent): void => {
+  const notifyOne = (event: RuntimeEvent): void => {
     for (const subscriber of [...subscribers]) {
       if (!matches(event, subscriber.filter)) continue;
       try {
@@ -8622,21 +8806,266 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     }
   };
 
+  const notify = (batch: readonly RuntimeEvent[]): void => {
+    notificationQueue.push(...batch);
+    if (deliveringNotifications) return;
+    deliveringNotifications = true;
+    try {
+      while (notificationIndex < notificationQueue.length) {
+        const event = notificationQueue[notificationIndex];
+        notificationIndex += 1;
+        if (event !== undefined) notifyOne(event);
+      }
+    } finally {
+      notificationQueue.splice(0, notificationIndex);
+      notificationIndex = 0;
+      deliveringNotifications = false;
+    }
+  };
+
+  const createEvents = (
+    emissions: readonly PendingRuntimeEventEmission[],
+    firstSeq: number,
+  ): RuntimeEvent[] => {
+    if (emissions.length === 0) return [];
+    return emissions.map((emission, index) => {
+      const seq = firstSeq + index;
+      return {
+        id: `evt_${seq}_${randomUUID().replace(/-/g, "").slice(0, 8)}`,
+        seq,
+        time: emission.time,
+        sessionId: emission.scope.sessionId,
+        runId: emission.scope.runId,
+        ...(emission.scope.turnId !== undefined
+          ? { turnId: emission.scope.turnId }
+          : {}),
+        type: emission.type,
+        payload: emission.payload,
+      };
+    });
+  };
+
+  const commitEvents = (
+    count: number,
+    create: (firstSeq: number) => readonly RuntimeEvent[],
+  ): readonly RuntimeEvent[] => {
+    if (indeterminatePersistenceError !== undefined) {
+      throw indeterminatePersistenceError;
+    }
+    try {
+      return persistence.commitEvents(count, create);
+    } catch (error: unknown) {
+      if (error instanceof RuntimeEventCommitIndeterminateError) {
+        indeterminatePersistenceError = error;
+      }
+      throw error;
+    }
+  };
+
+  const applyAndRemember = (batch: readonly RuntimeEvent[]): void => {
+    for (const event of batch) {
+      latestSeqBySession.set(event.sessionId, event.seq);
+      const live =
+        liveBySession.get(event.sessionId) ??
+        createRuntimeSessionLiveProjectionState();
+      liveBySession.set(event.sessionId, live);
+      applyRuntimeSessionEvent(live, event);
+      remember(event);
+      if (isTerminalRuntimeEvent(event.type)) {
+        preservedLatestKeysByRun.delete(event.runId);
+      }
+    }
+  };
+
+  const clearScheduledFlush = (): void => {
+    if (scheduledFlush !== undefined) {
+      clearTimeout(scheduledFlush);
+      scheduledFlush = undefined;
+    }
+  };
+
+  const nextRunEmissionCount = (): number => {
+    const runId = pendingEmissions[0]?.scope.runId;
+    if (runId === undefined) return 0;
+    let count = 0;
+    while (pendingEmissions[count]?.scope.runId === runId) count += 1;
+    return count;
+  };
+
+  const flushPending = (): void => {
+    clearScheduledFlush();
+    if (indeterminatePersistenceError !== undefined) {
+      throw indeterminatePersistenceError;
+    }
+    while (pendingEmissions.length > 0) {
+      const count = nextRunEmissionCount();
+      const emissions = pendingEmissions.slice(0, count);
+      const committed = commitEvents(
+        count,
+        (firstSeq) => createEvents(emissions, firstSeq),
+      );
+      pendingEmissions.splice(0, count);
+      pendingBytes = Math.max(
+        0,
+        pendingBytes - emissions.reduce(
+          (total, emission) => total + (emission.merge?.bytes ?? 0),
+          0,
+        ),
+      );
+      persistenceFailureReported = false;
+      applyAndRemember(committed);
+      notify(committed);
+    }
+  };
+
+  const scheduleFlush = (): void => {
+    if (scheduledFlush !== undefined) return;
+    scheduledFlush = setTimeout(() => {
+      scheduledFlush = undefined;
+      if (closed) return;
+      try {
+        flushPending();
+      } catch (error: unknown) {
+        if (!persistenceFailureReported) {
+          persistenceFailureReported = true;
+          emitKodaXDiagnostic({
+            source: "runtime.persistence",
+            level: "error",
+            message: "Failed to persist coalesced runtime events",
+            detail: error,
+          });
+        }
+        if (!(error instanceof RuntimeEventCommitIndeterminateError)) {
+          scheduleFlush();
+        }
+      }
+    }, RUNTIME_EVENT_COALESCE_INTERVAL_MS);
+    scheduledFlush.unref?.();
+  };
+
+  const flushPendingSafely = (): void => {
+    try {
+      flushPending();
+    } catch (error: unknown) {
+      if (!persistenceFailureReported) {
+        persistenceFailureReported = true;
+        emitKodaXDiagnostic({
+          source: "runtime.persistence",
+          level: "error",
+          message: "Failed to persist coalesced runtime events",
+          detail: error,
+        });
+      }
+      if (!(error instanceof RuntimeEventCommitIndeterminateError)) {
+        scheduleFlush();
+      }
+    }
+  };
+
+  const replacePendingLatest = (
+    emission: PendingRuntimeEventEmission,
+  ): void => {
+    const merge = emission.merge;
+    if (merge?.mode !== "latest") return;
+    for (let index = pendingEmissions.length - 1; index >= 0; index -= 1) {
+      const candidate = pendingEmissions[index];
+      if (candidate?.merge === undefined) break;
+      if (
+        candidate.merge.mode === "latest"
+        && candidate.merge.key === merge.key
+      ) {
+        pendingEmissions.splice(index, 1);
+        pendingBytes = Math.max(0, pendingBytes - candidate.merge.bytes);
+        break;
+      }
+    }
+    pendingEmissions.push(emission);
+    pendingBytes += merge.bytes;
+  };
+
+  const shouldPreserveFirstLatest = (
+    emission: PendingRuntimeEventEmission,
+  ): boolean => {
+    const merge = emission.merge;
+    if (merge?.mode !== "latest" || merge.preserveFirst !== true) return false;
+    const runKeys =
+      preservedLatestKeysByRun.get(emission.scope.runId) ?? new Set<string>();
+    if (runKeys.has(merge.key)) return false;
+    runKeys.add(merge.key);
+    preservedLatestKeysByRun.set(emission.scope.runId, runKeys);
+    return true;
+  };
+
+  const enqueue = (
+    type: RuntimeEventType,
+    payload: unknown,
+    scope: RuntimeEventEmissionScope,
+  ): void => {
+    const merge = runtimeEventMergePlan(type, payload, scope);
+    const emission: PendingRuntimeEventEmission = {
+      type,
+      payload,
+      scope,
+      time: new Date().toISOString(),
+      ...(merge !== undefined ? { merge } : {}),
+    };
+    if (merge === undefined) {
+      pendingEmissions.push(emission);
+      flushPendingSafely();
+      return;
+    }
+    if (merge.mode === "latest") {
+      if (shouldPreserveFirstLatest(emission)) {
+        pendingEmissions.push(emission);
+        pendingBytes += merge.bytes;
+        flushPendingSafely();
+        return;
+      }
+      replacePendingLatest(emission);
+    } else {
+      const previous = pendingEmissions.at(-1);
+      if (
+        previous?.merge?.key === merge.key
+        && previous.merge.mode === merge.mode
+      ) {
+        const merged = mergeRuntimeEventEmissions(previous, emission);
+        pendingBytes += (merged.merge?.bytes ?? 0) - previous.merge.bytes;
+        pendingEmissions[pendingEmissions.length - 1] = merged;
+      } else {
+        pendingEmissions.push(emission);
+        pendingBytes += merge.bytes;
+      }
+    }
+    if (pendingBytes >= MAX_RUNTIME_COALESCED_EVENT_BYTES) {
+      flushPendingSafely();
+    } else {
+      scheduleFlush();
+    }
+  };
+
   const service: RuntimeEventService = {
     subscribe(filter, listener) {
       if (closed) {
         throw new Error("KodaX runtime event bus is closed");
       }
+      flushPending();
       const subscriber = { filter, listener };
       subscribers.add(subscriber);
       return {
         close() {
           subscribers.delete(subscriber);
+          if (disconnectFlushScheduled) return;
+          disconnectFlushScheduled = true;
+          queueMicrotask(() => {
+            disconnectFlushScheduled = false;
+            if (!closed) flushPendingSafely();
+          });
         },
       };
     },
 
     async replay(filter) {
+      flushPending();
       const source = persistence.replay(filter);
       const replayEvents = new Map<string, RuntimeEvent>();
       for (const event of source) replayEvents.set(event.id, event);
@@ -8671,62 +9100,34 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     emit(
       type: RuntimeEventType,
       payload: unknown,
-      scope: {
-        readonly sessionId: string;
-        readonly runId: string;
-        readonly turnId?: string;
-      },
-    ): RuntimeEvent {
-      const event = createEvent(type, payload, scope);
-      latestSeqBySession.set(event.sessionId, event.seq);
-      const live =
-        liveBySession.get(event.sessionId) ??
-        createRuntimeSessionLiveProjectionState();
-      liveBySession.set(event.sessionId, live);
-      applyRuntimeSessionEvent(live, event);
-      remember(event);
-      const notifyEvents: RuntimeEvent[] = [event];
-      try {
-        persistence.appendEvent(event);
-      } catch (error: unknown) {
-        const warning = createEvent(
-          "runtime.warning",
-          {
-            message: normalizeError(error).message,
-            sourceEventId: event.id,
-          },
-          scope,
-        );
-        remember(warning);
-        notifyEvents.push(warning);
-      }
-      for (const emitted of notifyEvents) notify(emitted);
-      return event;
+      scope: RuntimeEventEmissionScope,
+    ): void {
+      enqueue(type, payload, scope);
     },
     emitDurable(
       type: RuntimeEventType,
       payload: unknown,
-      scope: {
-        readonly sessionId: string;
-        readonly runId: string;
-        readonly turnId?: string;
-      },
+      scope: RuntimeEventEmissionScope,
       afterPersist?: () => void,
     ): RuntimeEvent {
-      const event = createEvent(type, payload, scope);
-      persistence.appendDurableEvent(event);
+      flushPending();
+      const emission: PendingRuntimeEventEmission = {
+        type,
+        payload,
+        scope,
+        time: new Date().toISOString(),
+      };
+      const event = commitEvents(
+        1,
+        (firstSeq) => createEvents([emission], firstSeq),
+      )[0]!;
       afterPersist?.();
-      latestSeqBySession.set(event.sessionId, event.seq);
-      const live =
-        liveBySession.get(event.sessionId) ??
-        createRuntimeSessionLiveProjectionState();
-      liveBySession.set(event.sessionId, live);
-      applyRuntimeSessionEvent(live, event);
-      remember(event);
-      notify(event);
+      applyAndRemember([event]);
+      notify([event]);
       return event;
     },
     projectSession(sessionId: string): RuntimeSessionLiveProjection {
+      flushPending();
       const live = liveBySession.get(sessionId);
       return live === undefined
         ? snapshotRuntimeSessionLiveProjection(
@@ -8735,6 +9136,7 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
         : snapshotRuntimeSessionLiveProjection(live);
     },
     currentSessionSeq(sessionId: string): number {
+      flushPending();
       const current = latestSeqBySession.get(sessionId);
       if (current !== undefined) return current;
       const recovered = latestRuntimeEventSeq(
@@ -8744,6 +9146,7 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       return recovered;
     },
     close() {
+      flushPending();
       closed = true;
       for (const listener of [...closeListeners]) {
         try {
@@ -8959,6 +9362,7 @@ function runtimeToolProjectionKey(event: RuntimeEvent): string {
   const update = isRecord(payload?.update) ? payload.update : undefined;
   const result = isRecord(payload?.result) ? payload.result : undefined;
   const candidate =
+    meta?.toolId ??
     meta?.toolCallId ??
     meta?.toolUseId ??
     tool?.id ??
@@ -9012,10 +9416,6 @@ function createRuntimePersistence(
   const sessionOrdersDir = path.join(runtimeDir, "session-orders");
   const permissionGrantsFile = path.join(runtimeDir, "permission-grants.json");
   const eventSequenceFile = path.join(runtimeDir, "event-sequence");
-  const bufferedEventLines = new Map<string, string[]>();
-  let bufferedEventBytes = 0;
-  let scheduledEventFlush: ReturnType<typeof setTimeout> | undefined;
-  let deferredAppendError: Error | undefined;
   let nextSequence: number | undefined;
   let validatedSequenceFloor: number | undefined;
 
@@ -9096,25 +9496,34 @@ function createRuntimePersistence(
     return maxSeq;
   };
 
-  const allocateEventSeq = (): number => {
+  const reserveEventSeqsLocked = (count: number): number => {
+    if (!Number.isSafeInteger(count) || count <= 0) {
+      throw new Error("Runtime event sequence batch size must be positive");
+    }
+    const cursor = readEventSequenceCursor();
+    const recoveredMax =
+      validatedSequenceFloor === undefined || cursor === undefined
+        ? findMaxPersistedEventSeq()
+        : validatedSequenceFloor;
+    validatedSequenceFloor = Math.max(
+      cursor ?? 0,
+      recoveredMax,
+      validatedSequenceFloor ?? 0,
+    );
+    const first = validatedSequenceFloor + 1;
+    const last = validatedSequenceFloor + count;
+    writeRuntimeJsonAtomic(eventSequenceFile, last);
+    validatedSequenceFloor = last;
+    nextSequence = last + 1;
+    return first;
+  };
+
+  const reserveEventSeqs = (count: number): number => {
     fs.mkdirSync(runtimeDir, { recursive: true });
-    return withRuntimeStatusFileLock(eventSequenceFile, () => {
-      const cursor = readEventSequenceCursor();
-      const recoveredMax =
-        validatedSequenceFloor === undefined || cursor === undefined
-          ? findMaxPersistedEventSeq()
-          : validatedSequenceFloor;
-      validatedSequenceFloor = Math.max(
-        cursor ?? 0,
-        recoveredMax,
-        validatedSequenceFloor ?? 0,
-      );
-      const allocated = validatedSequenceFloor + 1;
-      writeRuntimeJsonAtomic(eventSequenceFile, allocated);
-      validatedSequenceFloor = allocated;
-      nextSequence = allocated + 1;
-      return allocated;
-    });
+    return withRuntimeStatusFileLock(
+      eventSequenceFile,
+      () => reserveEventSeqsLocked(count),
+    );
   };
 
   const findMaxPersistedSessionOrder = (sessionId: string): number => {
@@ -9149,7 +9558,7 @@ function createRuntimePersistence(
   ): void => {
     if (persistenceWarningKeys.has(key)) return;
     persistenceWarningKeys.add(key);
-    const seq = allocateEventSeq();
+    const seq = reserveEventSeqs(1);
     const event: RuntimeEvent = {
       id: `evt_persist_warn_${seq}_${randomUUID().replace(/-/g, "").slice(0, 8)}`,
       seq,
@@ -9272,44 +9681,157 @@ function createRuntimePersistence(
     );
   };
 
-  const flushBufferedEvents = (): void => {
-    if (scheduledEventFlush !== undefined) {
-      clearTimeout(scheduledEventFlush);
-      scheduledEventFlush = undefined;
+  const repairIncompleteEventTail = (file: string): number => {
+    if (!fs.existsSync(file)) return 0;
+    const descriptor = fs.openSync(file, "r");
+    let size = 0;
+    let tail: Buffer;
+    try {
+      size = fs.fstatSync(descriptor).size;
+      if (size === 0) return 0;
+      const lastByte = Buffer.allocUnsafe(1);
+      fs.readSync(descriptor, lastByte, 0, 1, size - 1);
+      if (lastByte[0] === 0x0a) return size;
+      let readBytes = Math.min(
+        size,
+        MAX_RUNTIME_EVENT_SEQUENCE_TAIL_BYTES,
+      );
+      while (true) {
+        tail = Buffer.allocUnsafe(readBytes);
+        fs.readSync(descriptor, tail, 0, readBytes, size - readBytes);
+        if (tail.lastIndexOf(0x0a) >= 0 || readBytes === size) break;
+        readBytes = Math.min(size, readBytes * 2);
+      }
+    } finally {
+      fs.closeSync(descriptor);
     }
-    for (const [runId, lines] of bufferedEventLines) {
-      const content = lines.join("");
-      const contentBytes = Buffer.byteLength(content, "utf-8");
-      const dir = runDir(runId);
-      const file = eventFile(runId);
-      fs.mkdirSync(dir, { recursive: true });
-      withRuntimeStatusFileLock(file, () => {
-        fs.appendFileSync(file, content, "utf-8");
-        trimEventFile(file, runId);
-      });
-      bufferedEventLines.delete(runId);
-      bufferedEventBytes = Math.max(0, bufferedEventBytes - contentBytes);
+    const tailStart = size - tail.length + tail.lastIndexOf(0x0a) + 1;
+    try {
+      const parsed: unknown = JSON.parse(
+        tail.subarray(tail.lastIndexOf(0x0a) + 1).toString("utf-8"),
+      );
+      if (isRuntimeEvent(parsed)) {
+        fs.appendFileSync(file, "\n", "utf-8");
+        return size + 1;
+      }
+    } catch {
+      // A partial final record is rolled back to the last complete line.
     }
-    deferredAppendError = undefined;
+    fs.truncateSync(file, tailStart);
+    return tailStart;
   };
 
-  const scheduleEventFlush = (): void => {
-    if (scheduledEventFlush !== undefined) return;
-    scheduledEventFlush = setTimeout(() => {
-      scheduledEventFlush = undefined;
+  const appendEventBatch = (
+    events: readonly RuntimeEvent[],
+  ): unknown => {
+    const first = events[0];
+    if (first === undefined) return undefined;
+    if (events.some((event) => event.runId !== first.runId)) {
+      throw new Error("Runtime event persistence batches must contain one Run");
+    }
+    const dir = runDir(first.runId);
+    const file = eventFile(first.runId);
+    fs.mkdirSync(dir, { recursive: true });
+    let trimError: unknown;
+    try {
+      withRuntimeStatusFileLock(file, () => {
+        const originalSize = repairIncompleteEventTail(file);
+        const record = events
+          .map((event) => `${JSON.stringify(event)}\n`)
+          .join("");
+        try {
+          fs.appendFileSync(file, record, "utf-8");
+        } catch (appendError: unknown) {
+          if (runtimeErrorCode(appendError) === "EISDIR") {
+            throw appendError;
+          }
+          try {
+            fs.truncateSync(file, originalSize);
+          } catch (rollbackError: unknown) {
+            throw new RuntimeEventCommitIndeterminateError(
+              appendError,
+              rollbackError,
+            );
+          }
+          throw appendError;
+        }
+        try {
+          trimEventFile(file, first.runId);
+        } catch (error: unknown) {
+          trimError = error;
+        }
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof RuntimeStatusLockCleanupError)) throw error;
+      trimError = trimError === undefined
+        ? error.cleanupError
+        : new AggregateError(
+            [trimError, error.cleanupError],
+            "Runtime event trim and status-lock cleanup both failed",
+          );
+    }
+    return trimError;
+  };
+
+  const commitEventBatch = (
+    count: number,
+    create: (firstSeq: number) => readonly RuntimeEvent[],
+  ): readonly RuntimeEvent[] => {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    let trimError: unknown;
+    let completed: readonly RuntimeEvent[] | undefined;
+    let committed: readonly RuntimeEvent[];
+    try {
+      committed = withRuntimeStatusFileLock(eventSequenceFile, () => {
+        const firstSeq = reserveEventSeqsLocked(count);
+        const events = create(firstSeq);
+        if (
+          events.length !== count
+          || events.some((event, index) => event.seq !== firstSeq + index)
+        ) {
+          throw new Error(
+            "Runtime event batch must match its reserved sequence range",
+          );
+        }
+        trimError = appendEventBatch(events);
+        completed = events;
+        return events;
+      });
+    } catch (error: unknown) {
+      if (
+        !(error instanceof RuntimeStatusLockCleanupError)
+        || completed === undefined
+      ) {
+        throw error;
+      }
+      committed = completed;
+      trimError = trimError === undefined
+        ? error.cleanupError
+        : new AggregateError(
+            [trimError, error.cleanupError],
+            "Runtime event file and sequence-lock cleanup both failed",
+        );
+    }
+    const first = committed[0];
+    if (trimError !== undefined && first !== undefined) {
+      const file = eventFile(first.runId);
       try {
-        flushBufferedEvents();
-      } catch (error: unknown) {
-        deferredAppendError = normalizeError(error);
+        pushPersistenceWarning(
+          `${file}:trim`,
+          `Failed to trim runtime event file: ${normalizeError(trimError).message}`,
+          { runId: first.runId, sessionId: first.sessionId, file },
+        );
+      } catch (warningError: unknown) {
         emitKodaXDiagnostic({
           source: "runtime.persistence",
-          level: "error",
-          message: "Failed to flush buffered runtime events",
-          detail: error,
+          level: "warn",
+          message:
+            "Runtime events committed, but their trim warning could not be recorded",
+          detail: warningError,
         });
       }
-    }, RUNTIME_EVENT_FLUSH_INTERVAL_MS);
-    scheduledEventFlush.unref?.();
+    }
+    return committed;
   };
 
   const assertReplayCursorRetained = (
@@ -9370,59 +9892,10 @@ function createRuntimePersistence(
 
   return {
     runtimeDir,
-    appendDurableEvent(event) {
-      flushBufferedEvents();
-      const dir = runDir(event.runId);
-      const file = eventFile(event.runId);
-      fs.mkdirSync(dir, { recursive: true });
-      let trimError: unknown;
-      withRuntimeStatusFileLock(file, () => {
-        fs.appendFileSync(file, `${JSON.stringify(event)}\n`, "utf-8");
-        try {
-          trimEventFile(file, event.runId);
-        } catch (error: unknown) {
-          trimError = error;
-        }
-      });
-      if (trimError !== undefined) {
-        pushPersistenceWarning(
-          `${file}:trim`,
-          `Failed to trim runtime event file: ${normalizeError(trimError).message}`,
-          { runId: event.runId, file },
-        );
-      }
+    commitEvents(count, create) {
+      return commitEventBatch(count, create);
     },
-    appendEvent(event) {
-      const line = `${JSON.stringify(event)}\n`;
-      const lines = bufferedEventLines.get(event.runId) ?? [];
-      lines.push(line);
-      bufferedEventLines.set(event.runId, lines);
-      bufferedEventBytes += Buffer.byteLength(line, "utf-8");
-
-      const previousError = deferredAppendError;
-      deferredAppendError = undefined;
-      try {
-        if (
-          previousError !== undefined ||
-          !BUFFERED_RUNTIME_EVENT_TYPES.has(event.type) ||
-          bufferedEventBytes >= MAX_RUNTIME_BUFFERED_EVENT_BYTES
-        ) {
-          flushBufferedEvents();
-        } else {
-          scheduleEventFlush();
-        }
-      } catch (error: unknown) {
-        scheduleEventFlush();
-        throw error;
-      }
-      if (previousError !== undefined) throw previousError;
-    },
-    close() {
-      flushBufferedEvents();
-    },
-    nextEventSeq() {
-      return allocateEventSeq();
-    },
+    close() {},
     nextSessionOrder(sessionId) {
       fs.mkdirSync(sessionOrdersDir, { recursive: true });
       const file = sessionOrderFile(sessionId);
@@ -9459,15 +9932,6 @@ function createRuntimePersistence(
       );
     },
     replay(filter) {
-      try {
-        flushBufferedEvents();
-      } catch (error: unknown) {
-        pushPersistenceWarning(
-          `${runtimeDir}:event-flush`,
-          `Failed to flush buffered runtime events: ${normalizeError(error).message}`,
-          { runId: filter?.runId },
-        );
-      }
       assertReplayCursorRetained(filter);
       if (filter?.runId) {
         return withPersistenceWarnings(
@@ -9777,12 +10241,44 @@ function withRuntimeStatusFileLock<T>(
       Atomics.wait(waitCell, 0, 0, 10);
     }
   }
+  let operationCompleted = false;
+  let operationResult!: T;
+  let operationError: unknown;
   try {
-    return operation();
-  } finally {
-    fs.closeSync(descriptor);
-    fs.rmSync(lockFile, { force: true });
+    operationResult = operation();
+    operationCompleted = true;
+  } catch (error: unknown) {
+    operationError = error;
   }
+  let cleanupError: unknown;
+  try {
+    fs.closeSync(descriptor);
+  } catch (error: unknown) {
+    cleanupError = error;
+  }
+  try {
+    fs.rmSync(lockFile, { force: true });
+  } catch (error: unknown) {
+    cleanupError = cleanupError === undefined
+      ? error
+      : new AggregateError(
+          [cleanupError, error],
+          "Runtime status lock close and removal both failed",
+        );
+  }
+  if (!operationCompleted) {
+    if (
+      operationError instanceof RuntimeEventCommitIndeterminateError
+      && cleanupError !== undefined
+    ) {
+      operationError.includeLockCleanupFailure(cleanupError);
+    }
+    throw operationError;
+  }
+  if (cleanupError !== undefined) {
+    throw new RuntimeStatusLockCleanupError(cleanupError);
+  }
+  return operationResult;
 }
 
 function runtimeStatusLockOwnerIsDead(lockFile: string): boolean {

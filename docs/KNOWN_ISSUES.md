@@ -15,6 +15,7 @@ _Last Updated: 2026-07-31_
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
 | 245 | High | Resolved | Windows sandbox runner cannot launch from a user-level global npm install | v0.7.78 Windows ASRT integration | v0.7.78 development | 2026-07-31 | 2026-07-31 |
+| 244 | High | Resolved | Runtime streaming deltas create an event, sequence-allocation, and persistence storm | v0.7.64 Runtime event contract | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
@@ -200,6 +201,99 @@ check considered only part of the account-provisioning state.
 - Standalone SDK, Skill-script, and workspace-session tests verify that the
   exact prepared runner is propagated, protected by `denyWrite`, and used as
   the ASRT child working directory.
+
+### 244: Runtime streaming deltas create an event, sequence-allocation, and persistence storm
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.64 Runtime event contract
+- **Created**: 2026-07-31
+- **Fixed**: v0.7.79 development
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+Long Runtime runs can emit tens of thousands of tiny `thinking.delta`,
+`assistant.delta`, and streamed tool-input fragments. A reported production run
+produced roughly 25,000 thinking deltas averaging 3.8 characters and peaking
+around 135 events per second. Every fragment currently becomes a public Runtime
+event, receives its own globally locked sequence allocation, enters replay
+storage, and is delivered separately to live subscribers. A restored Space
+session must therefore keep receiving, sorting, reducing, and rendering this
+micro-event stream even when only a small viewport is visible.
+
+The existing 10ms/64KiB persistence buffer reduces physical
+`events.jsonl` appends, but does not reduce public event count, listener
+notifications, in-memory projection work, or atomic `event-sequence` cursor
+updates. Frontend batching cannot remove that SDK-side amplification.
+
+#### Context
+
+- Components: `src/sdk-runtime.ts`, Runtime event replay/session observation,
+  embedded/Worker/daemon clients, and `src/sdk-runtime.test.ts`.
+- Public names: provider `text.delta` maps to Runtime `assistant.delta`;
+  provider `tool_input.delta` maps to the `tool.progress.partialJson` variant.
+- Required identity: only consecutive events with the same Runtime, Session,
+  Run, Turn, root/child context side, and event kind may merge. Tool-input
+  fragments additionally require the same non-empty `toolId`; a tool name is
+  never sufficient.
+- Structural boundaries, replay/snapshot handoff, cancellation, failure,
+  approvals, tool lifecycle, and terminal Run events must flush pending work
+  immediately.
+
+#### Root Cause
+
+`wrapKodaXEvents()` synchronously forwards every provider/coding callback to
+`createRuntimeEventBus().emit()`. The bus constructs an envelope immediately,
+and `RuntimePersistence.nextEventSeq()` serializes an atomic cursor rewrite for
+every envelope. Persistence buffers serialized JSONL lines afterward, which is
+too late to reduce the dominant event/sequence/subscriber amplification.
+
+#### Proposed Solution
+
+- Add one Runtime-owned ordered emission buffer before envelope construction.
+  Merge consecutive text/thinking fragments and same-`toolId` tool-input
+  fragments for up to 50ms or 8KiB, whichever arrives first.
+- Treat supported progress snapshots as latest-only within the same ordered
+  window. Do not collapse stream/iteration completion or other lifecycle
+  boundaries.
+- Flush the ordered buffer before every non-coalescible event, durable event,
+  subscription/replay/snapshot waterline, and Runtime close.
+- Allocate one contiguous sequence range for each flushed batch and append the
+  batch through one persistence call. Apply live projections and notify
+  subscribers in exact sequence order only after persistence accepts the batch.
+- Preserve exact concatenated text/JSON, use the latest attribution metadata
+  for a merged fragment, and add `meta.toolId` to active-tool projection keys.
+- Add stress and boundary regressions for long thinking/text streams, tool
+  arguments, missing/different tool IDs, latest-only progress, error/cancel
+  boundaries, observation snapshot plus incremental handoff, persistence
+  recreation, and replay ordering/content equivalence.
+
+#### Resolution
+
+- Added a pre-envelope ordered buffer that merges only adjacent compatible
+  assistant/thinking/tool-input fragments, flushing at 50ms or 8KiB. Tool
+  input requires the same explicit non-empty `toolId`; progress preserves its
+  first sample and publishes the trailing latest value at no more than 20Hz.
+- Flushes every structural, lifecycle, replay/snapshot, disconnect, and
+  shutdown boundary before it becomes observable.
+- Reserves one contiguous sequence range and appends one same-Run batch while
+  holding the shared sequence lock. Projection and notification advance only
+  after the append commits; failed retries abandon the reserved range so
+  another Runtime cannot create late lower-sequence events.
+- Rolls back partial appends and repairs an interrupted final JSONL record.
+  If append and rollback both fail, the Runtime latches an indeterminate commit
+  and disables retry. Post-commit trim, warning, or lock-cleanup failures cannot
+  replay an already committed batch.
+- Preserved the one-event-per-line replay format and added stress, cross-Runtime,
+  reconnect/watermark, progress, tool identity, partial-write, cancellation,
+  error, and cleanup-failure regressions.
+
+#### Expected Outcome
+
+Semantic text/tool input and lifecycle ordering remain unchanged while public
+event count, sequence cursor writes, persistence records, subscriber callbacks,
+and projection CPU work fall by orders of magnitude on micro-delta streams.
 
 ### 243: Runtime Worker omits configured A2A Agents from dispatchable catalog and execution
 
@@ -8712,7 +8806,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 121 (26 Open, 95 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 122 (26 Open, 96 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -8724,6 +8818,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   readiness and initialization child processes.
 - Added complete account-state validation, bounded coded WFP diagnostics, and
   regressions for the reported `CreateProcessWithLogonW` access-denied case.
+
+### 2026-07-31: Issue 244 added and resolved (v0.7.79 development)
+- Coalesced compatible Runtime streaming fragments before sequence allocation
+  at 50ms/8KiB, limited progress to first-plus-latest 20Hz delivery, and
+  preserved strict structural flush boundaries.
+- Committed contiguous sequence ranges and same-Run JSONL batches atomically,
+  with cross-Runtime retry ordering, partial-write repair, fail-closed
+  indeterminate commits, and post-commit failure isolation.
+- Added long-stream, tool identity, reconnect/watermark, progress, boundary,
+  persistence-failure, and lock-cleanup regression coverage.
 
 ### 2026-07-30: Issue 242 resolved (v0.7.79 development)
 - Replaced automatic provider/model setup without a credential with a
