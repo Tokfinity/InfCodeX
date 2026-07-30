@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSseTransport, createStdioTransport, createStreamableHttpTransport } from './transport.js';
+import {
+  createMcpTransport,
+  createSseTransport,
+  createStdioTransport,
+  createStreamableHttpTransport,
+} from './transport.js';
 
 // ---------------------------------------------------------------------------
 // Minimal SSE server for testing
@@ -16,10 +21,12 @@ function createTestSseServer(): {
   postEndpoint: string;
   /** Messages POSTed to the endpoint by the transport. */
   receivedMessages: string[];
+  authorizationHeaders: string[];
   /** Send an SSE event to the connected client. */
   sendEvent: (event: string, data: string) => void;
 } {
   const receivedMessages: string[] = [];
+  const authorizationHeaders: string[] = [];
   let sseResponse: http.ServerResponse | undefined;
   let postEndpoint = '';
 
@@ -28,6 +35,12 @@ function createTestSseServer(): {
   };
 
   const server = http.createServer((req, res) => {
+    const authorization = req.headers.authorization;
+    if (authorization !== undefined) {
+      authorizationHeaders.push(Array.isArray(authorization)
+        ? authorization[0] ?? ''
+        : authorization);
+    }
     if (req.method === 'GET' && req.headers.accept?.includes('text/event-stream')) {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -73,6 +86,7 @@ function createTestSseServer(): {
   return {
     server,
     receivedMessages,
+    authorizationHeaders,
     postEndpoint,
     sendEvent,
     start: () => new Promise<{ url: string }>((resolve) => {
@@ -99,9 +113,11 @@ function createTestStreamableHttpServer(): {
   start: () => Promise<{ url: string }>;
   stop: () => Promise<void>;
   receivedMessages: string[];
+  authorizationHeaders: string[];
   mode: 'json' | 'sse';
 } {
   const receivedMessages: string[] = [];
+  const authorizationHeaders: string[] = [];
   const state = { mode: 'json' as 'json' | 'sse' };
 
   const server = http.createServer((req, res) => {
@@ -113,6 +129,10 @@ function createTestStreamableHttpServer(): {
     }
 
     if (req.method === 'POST') {
+      const authorization = req.headers.authorization;
+      authorizationHeaders.push(Array.isArray(authorization)
+        ? authorization[0] ?? ''
+        : authorization ?? '');
       let body = '';
       req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       req.on('end', () => {
@@ -148,6 +168,7 @@ function createTestStreamableHttpServer(): {
   return {
     server,
     receivedMessages,
+    authorizationHeaders,
     get mode() { return state.mode; },
     set mode(m) { state.mode = m; },
     start: () => new Promise<{ url: string }>((resolve) => {
@@ -375,6 +396,71 @@ process.stdin.on('end', () => {
     await expect(readFile(markerPath, 'utf8')).resolves.toBe('closed');
     expect(transport.connected).toBe(false);
   });
+
+  it('expands environment references in stdio child variables without mutating config', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-mcp-stdio-env-reference-'));
+    tempDirs.push(tempDir);
+    const markerPath = path.join(tempDir, 'env.txt');
+    const referenceName = 'KODAX_MCP_STDIO_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    process.env[referenceName] = 'resolved-value';
+    const config = {
+      command: process.execPath,
+      args: ['-e', `
+const fs = require('node:fs');
+process.stdin.resume();
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.MCP_REFERENCE_VALUE ?? '');
+  process.exit(0);
+});
+`],
+      env: {
+        MCP_REFERENCE_VALUE: `prefix-\${env:${referenceName}}-suffix`,
+      },
+    };
+
+    try {
+      const transport = createMcpTransport(config);
+      await transport.open({
+        onMessage: () => {},
+        onError: () => {},
+        onClose: () => {},
+      });
+      await transport.close();
+
+      await expect(readFile(markerPath, 'utf8')).resolves.toBe('prefix-resolved-value-suffix');
+      expect(config.env.MCP_REFERENCE_VALUE).toBe(`prefix-\${env:${referenceName}}-suffix`);
+    } finally {
+      if (previous === undefined) delete process.env[referenceName];
+      else process.env[referenceName] = previous;
+    }
+  });
+
+  it('rejects an unset environment reference before starting the server', () => {
+    const referenceName = 'KODAX_MCP_MISSING_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    delete process.env[referenceName];
+
+    try {
+      expect(() => createMcpTransport({
+        command: process.execPath,
+        env: { MCP_REFERENCE_VALUE: `\${env:${referenceName}}` },
+      })).toThrow(new RegExp(referenceName));
+    } finally {
+      if (previous !== undefined) process.env[referenceName] = previous;
+    }
+  });
+
+  it.each([
+    '${env:}',
+    '${env:INVALID-NAME}',
+    '${env:UNCLOSED',
+  ])('rejects malformed environment reference %s', (reference) => {
+    expect(() => createMcpTransport({
+      command: process.execPath,
+      env: { MCP_REFERENCE_VALUE: reference },
+    })).toThrow(/malformed environment reference/i);
+  });
 });
 
 describe('SSE transport', () => {
@@ -416,6 +502,37 @@ describe('SSE transport', () => {
 
     await transport.close();
   });
+
+  it('expands environment references embedded in SSE headers', async () => {
+    const mock = createTestSseServer();
+    servers.push(mock);
+    const { url } = await mock.start();
+    (mock as { postEndpoint: string }).postEndpoint = `${url}/messages`;
+    const referenceName = 'KODAX_MCP_SSE_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    process.env[referenceName] = 'resolved-sse-token';
+    const config = {
+      type: 'sse' as const,
+      url,
+      headers: { Authorization: `Bearer \${env:${referenceName}}` },
+    };
+
+    try {
+      const transport = createMcpTransport(config);
+      await transport.open({
+        onMessage: () => {},
+        onError: () => {},
+        onClose: () => {},
+      });
+      await transport.close();
+
+      expect(mock.authorizationHeaders).toContain('Bearer resolved-sse-token');
+      expect(config.headers.Authorization).toBe(`Bearer \${env:${referenceName}}`);
+    } finally {
+      if (previous === undefined) delete process.env[referenceName];
+      else process.env[referenceName] = previous;
+    }
+  });
 });
 
 describe('Streamable HTTP transport', () => {
@@ -449,6 +566,87 @@ describe('Streamable HTTP transport', () => {
     expect(parsed.result.echo).toBe('test/json');
 
     await transport.close();
+  });
+
+  it.each(['streamable-http', 'http'] as const)(
+    'expands environment references embedded in %s headers',
+    async (type) => {
+      const mock = createTestStreamableHttpServer();
+      servers.push(mock);
+      const { url } = await mock.start();
+      const referenceName = 'KODAX_MCP_HTTP_ENV_REFERENCE_TEST';
+      const previous = process.env[referenceName];
+      process.env[referenceName] = 'resolved-token';
+      const config = {
+        type,
+        url,
+        headers: { Authorization: `Bearer \${env:${referenceName}}` },
+      };
+
+      try {
+        const transport = createMcpTransport(config);
+        await transport.open({
+          onMessage: () => {},
+          onError: () => {},
+          onClose: () => {},
+        });
+        await transport.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'test/headers',
+          params: {},
+        }));
+        await transport.close();
+
+        expect(mock.authorizationHeaders).toContain('Bearer resolved-token');
+        expect(config.headers.Authorization).toBe(`Bearer \${env:${referenceName}}`);
+      } finally {
+        if (previous === undefined) delete process.env[referenceName];
+        else process.env[referenceName] = previous;
+      }
+    },
+  );
+
+  it('rejects an unset environment reference in HTTP headers', () => {
+    const referenceName = 'KODAX_MCP_MISSING_HTTP_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    delete process.env[referenceName];
+
+    try {
+      expect(() => createMcpTransport({
+        type: 'http',
+        url: 'https://example.test/mcp',
+        headers: { Authorization: `Bearer \${env:${referenceName}}` },
+      })).toThrow(new RegExp(referenceName));
+    } finally {
+      if (previous !== undefined) process.env[referenceName] = previous;
+    }
+  });
+
+  it('rejects invalid resolved HTTP headers without exposing their values', () => {
+    const referenceName = 'KODAX_MCP_INVALID_HTTP_ENV_REFERENCE_TEST';
+    const previous = process.env[referenceName];
+    process.env[referenceName] = 'review-secret\nvalue';
+
+    try {
+      let thrown: unknown;
+      try {
+        createMcpTransport({
+          type: 'streamable-http',
+          url: 'https://example.test/mcp',
+          headers: { Authorization: `Bearer \${env:${referenceName}}` },
+        });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toMatch(/invalid.*header/i);
+      expect((thrown as Error).message).not.toContain('review-secret');
+      expect((thrown as Error).message).not.toContain('value');
+    } finally {
+      if (previous === undefined) delete process.env[referenceName];
+      else process.env[referenceName] = previous;
+    }
   });
 
   it('sends JSON-RPC and receives SSE streamed response', async () => {

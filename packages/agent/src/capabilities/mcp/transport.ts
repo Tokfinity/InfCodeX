@@ -852,6 +852,62 @@ export interface McpTransportOptions {
   httpResolvedTransport?: 'streamable-http' | 'sse';
 }
 
+function resolveEnvironmentValue(value: string): string {
+  let offset = 0;
+  while (true) {
+    const start = value.indexOf('${env:', offset);
+    if (start < 0) {
+      break;
+    }
+    const match = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/.exec(value.slice(start));
+    if (!match?.[0]) {
+      throw new Error('MCP configuration contains a malformed environment reference.');
+    }
+    offset = start + match[0].length;
+  }
+  return value.replace(
+    /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g,
+    (_reference, environmentName: string) => {
+      const resolved = globalThis.process.env[environmentName];
+      if (resolved === undefined) {
+        throw new Error(`MCP environment variable "${environmentName}" is not set.`);
+      }
+      return resolved;
+    },
+  );
+}
+
+function resolveEnvironmentReferences(
+  values: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!values) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(values).map(([name, value]) => [
+      name,
+      resolveEnvironmentValue(value),
+    ]),
+  );
+}
+
+function resolveHttpHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const resolved = resolveEnvironmentReferences(headers);
+  if (!resolved) {
+    return undefined;
+  }
+  for (const [name, value] of Object.entries(resolved)) {
+    try {
+      new Headers([[name, value]]);
+    } catch {
+      throw new Error('Invalid MCP HTTP header configuration.');
+    }
+  }
+  return resolved;
+}
+
 export function createMcpTransport(
   config: KodaXMcpServerConfig,
   options: McpTransportOptions = {},
@@ -866,7 +922,7 @@ export function createMcpTransport(
         command: config.command,
         args: config.args,
         cwd: config.cwd,
-        env: config.env,
+        env: resolveEnvironmentReferences(config.env),
         framing: options.stdioFraming,
       });
     }
@@ -876,7 +932,7 @@ export function createMcpTransport(
       }
       return createSseTransport({
         url: config.url,
-        headers: config.headers,
+        headers: resolveHttpHeaders(config.headers),
       });
     }
     case 'streamable-http': {
@@ -885,7 +941,7 @@ export function createMcpTransport(
       }
       return createStreamableHttpTransport({
         url: config.url,
-        headers: config.headers,
+        headers: resolveHttpHeaders(config.headers),
       });
     }
     case 'http': {
@@ -894,7 +950,7 @@ export function createMcpTransport(
       }
       return createAutoHttpTransport({
         url: config.url,
-        headers: config.headers,
+        headers: resolveHttpHeaders(config.headers),
         preferredTransport: options.httpResolvedTransport,
       });
     }
