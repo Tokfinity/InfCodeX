@@ -140,8 +140,11 @@ import {
   getMessageQueue,
   registerActiveRootQueueRoute,
   resolveLearningProposalStore,
-  searchSessionHistory,
 } from "@kodax-ai/agent";
+import {
+  searchSessionHistoryCooperatively,
+  validateSessionHistorySearchQuery,
+} from "../packages/agent/src/session-lineage/history-retrieval.js";
 import type {
   AgentArtifactPolicy,
   AgentActorClient,
@@ -2951,6 +2954,9 @@ const DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 50;
 const MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT = 200;
 const MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS = 8;
 const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES = 16;
+const RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES = 4 * 1024;
+const RUNTIME_TRANSCRIPT_SNAPSHOT_CLOSE_DRAIN_MS = 250;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS = 5 * 60_000;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
   "kodax-transcript-snapshots-";
@@ -3452,7 +3458,8 @@ export async function createKodaXRuntime(
     waitForActorHealthChange,
     settingsOwner,
   });
-  let closeTranscriptSnapshots: (() => void) | undefined;
+  let beginCloseTranscriptSnapshots: (() => void) | undefined;
+  let closeTranscriptSnapshots: (() => Promise<void>) | undefined;
   const sessionService = createRuntimeSessionService(
     identity,
     configHome,
@@ -3475,7 +3482,8 @@ export async function createKodaXRuntime(
       permissions.releaseSession(sessionId);
     },
     sessionAdmission,
-    (cleanup) => {
+    (beginClose, cleanup) => {
+      beginCloseTranscriptSnapshots = beginClose;
       closeTranscriptSnapshots = cleanup;
     },
   );
@@ -3521,8 +3529,10 @@ export async function createKodaXRuntime(
         userInputs.rejectAll("runtime closed");
         shutdownStarted = true;
       }
+      beginCloseTranscriptSnapshots?.();
       await sessionOperations.close();
-      closeTranscriptSnapshots?.();
+      await closeTranscriptSnapshots?.();
+      beginCloseTranscriptSnapshots = undefined;
       closeTranscriptSnapshots = undefined;
       if (!actorRegistryClosed) {
         await actorRegistry.close("runtime closed");
@@ -4558,7 +4568,10 @@ function createRuntimeSessionService(
   ) => Promise<T>,
   onSessionDeleted: (sessionId: string) => void,
   admission: RuntimeSessionAdmission,
-  registerTranscriptSnapshotCleanup: (cleanup: () => void) => void,
+  registerTranscriptSnapshotCleanup: (
+    beginClose: () => void,
+    cleanup: () => Promise<void>,
+  ) => void,
 ): RuntimeSessionService {
   const creatingSessionIds = new Set<string>();
   const toRuntimeSession = (
@@ -4586,12 +4599,18 @@ function createRuntimeSessionService(
       readonly revision: string;
       readonly filePath: string;
       readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
-      readonly byteSize: number;
       readonly expiresAt: number;
     }
   >();
-  let transcriptSnapshotBytes = 0;
+  let transcriptSnapshotDiskBytes = 0;
+  const transcriptSnapshotFileBytes = new Map<string, number>();
+  const transcriptSnapshotMaterializingFiles = new Set<string>();
+  const transcriptSnapshotOperations = new Set<Promise<unknown>>();
+  let transcriptSnapshotIoCount = 0;
   let transcriptSnapshotDir: string | undefined;
+  let transcriptSnapshotGeneration = 0;
+  let transcriptSnapshotsClosing = false;
+  let transcriptSnapshotsDisposed = false;
   const deferredTranscriptSnapshotCleanup = new Set<string>();
   const transcriptSnapshotReaders = new Map<string, number>();
   let transcriptSnapshotLeaseTimer: ReturnType<typeof setInterval> | undefined;
@@ -4636,7 +4655,49 @@ function createRuntimeSessionService(
       );
     }
   };
+  const releaseTranscriptSnapshotBytes = (filePath: string): void => {
+    const byteSize = transcriptSnapshotFileBytes.get(filePath);
+    if (byteSize === undefined) return;
+    transcriptSnapshotFileBytes.delete(filePath);
+    transcriptSnapshotDiskBytes -= byteSize;
+  };
+  const trackTranscriptSnapshotOperation = <T>(
+    operation: Promise<T>,
+  ): Promise<T> => {
+    transcriptSnapshotOperations.add(operation);
+    void operation.then(
+      () => transcriptSnapshotOperations.delete(operation),
+      () => transcriptSnapshotOperations.delete(operation),
+    );
+    return operation;
+  };
+  const acquireTranscriptSnapshotIo = (): (() => void) => {
+    if (transcriptSnapshotsClosing) {
+      throw new replApi.SessionReadError(
+        "read_cancelled",
+        "Runtime history read cancelled because the Runtime is closing",
+      );
+    }
+    if (
+      transcriptSnapshotIoCount >= MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES
+    ) {
+      throw createRuntimeSnapshotIoCapacityError();
+    }
+    transcriptSnapshotIoCount += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      transcriptSnapshotIoCount -= 1;
+    };
+  };
   const ensureTranscriptSnapshotDir = (): string => {
+    if (transcriptSnapshotsClosing) {
+      throw new replApi.SessionReadError(
+        "read_cancelled",
+        "Runtime history read cancelled because the Runtime is closing",
+      );
+    }
     let retainedDirAvailable = transcriptSnapshotDir === undefined;
     if (transcriptSnapshotDir !== undefined) {
       try {
@@ -4657,7 +4718,15 @@ function createRuntimeSessionService(
     if (!retainedDirAvailable) {
       clearTranscriptSnapshotLease();
       transcriptSnapshots.clear();
-      transcriptSnapshotBytes = 0;
+      for (const filePath of [...transcriptSnapshotFileBytes.keys()]) {
+        if (transcriptSnapshotMaterializingFiles.has(filePath)) continue;
+        if ((transcriptSnapshotReaders.get(filePath) ?? 0) > 0) {
+          deferredTranscriptSnapshotCleanup.add(filePath);
+          continue;
+        }
+        releaseTranscriptSnapshotBytes(filePath);
+        deferredTranscriptSnapshotCleanup.delete(filePath);
+      }
       transcriptSnapshotDir = undefined;
     }
     if (transcriptSnapshotDir === undefined) {
@@ -4665,6 +4734,7 @@ function createRuntimeSessionService(
       transcriptSnapshotDir = fs.mkdtempSync(
         path.join(os.tmpdir(), RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX),
       );
+      transcriptSnapshotGeneration += 1;
       transcriptSnapshotLeaseTimer = setInterval(
         refreshTranscriptSnapshotLease,
         Math.floor(RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS / 2),
@@ -4685,6 +4755,7 @@ function createRuntimeSessionService(
     try {
       fs.rmSync(filePath, { force: true });
       deferredTranscriptSnapshotCleanup.delete(filePath);
+      releaseTranscriptSnapshotBytes(filePath);
     } catch (error: unknown) {
       deferredTranscriptSnapshotCleanup.add(filePath);
       process.emitWarning(
@@ -4693,11 +4764,67 @@ function createRuntimeSessionService(
       );
     }
   };
+  const reserveTranscriptSnapshotBytes = (
+    filePath: string,
+    byteSize: number,
+  ): void => {
+    if (transcriptSnapshotsClosing) {
+      throw new replApi.SessionReadError(
+        "read_cancelled",
+        "Runtime history read cancelled because the Runtime is closing",
+      );
+    }
+    const currentFileBytes = transcriptSnapshotFileBytes.get(filePath) ?? 0;
+    if (
+      currentFileBytes + byteSize
+        > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES
+    ) {
+      throw createRuntimeSnapshotCapacityError();
+    }
+    while (
+      transcriptSnapshotDiskBytes + byteSize
+        > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES
+    ) {
+      const oldest = transcriptSnapshots.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) {
+        throw createRuntimeSnapshotCapacityError();
+      }
+      removeTranscriptSnapshot(oldest);
+    }
+    transcriptSnapshotFileBytes.set(
+      filePath,
+      currentFileBytes + byteSize,
+    );
+    transcriptSnapshotDiskBytes += byteSize;
+  };
+  const reserveTranscriptSnapshotFile = (filePath: string): void => {
+    while (
+      transcriptSnapshotFileBytes.size
+        >= MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES
+    ) {
+      const oldest = transcriptSnapshots.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) throw createRuntimeSnapshotCapacityError();
+      removeTranscriptSnapshot(oldest);
+    }
+    transcriptSnapshotFileBytes.set(filePath, 0);
+    try {
+      reserveTranscriptSnapshotBytes(
+        filePath,
+        RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES,
+      );
+    } catch (error: unknown) {
+      releaseTranscriptSnapshotBytes(filePath);
+      throw error;
+    }
+  };
   const removeTranscriptSnapshot = (key: string): void => {
     const snapshot = transcriptSnapshots.get(key);
     if (snapshot === undefined) return;
     transcriptSnapshots.delete(key);
-    transcriptSnapshotBytes -= snapshot.byteSize;
     removeTranscriptSnapshotFile(snapshot.filePath);
   };
   const pruneExpiredTranscriptSnapshots = (): void => {
@@ -4735,86 +4862,133 @@ function createRuntimeSessionService(
   };
   const readTranscriptSnapshot = async <T>(
     snapshot: RuntimeTranscriptSnapshotView,
+    budget: RuntimeReadBudget,
     read: () => Promise<T>,
   ): Promise<T> => {
     const release = acquireTranscriptSnapshotReader(snapshot.filePath);
+    let releaseIo: (() => void) | undefined;
     try {
-      return await read();
-    } finally {
+      releaseIo = acquireTranscriptSnapshotIo();
+    } catch (error: unknown) {
       release();
+      throw error;
     }
+    const operation = trackTranscriptSnapshotOperation(
+      Promise.resolve().then(read),
+    );
+    const releaseResources = (): void => {
+      release();
+      releaseIo?.();
+    };
+    void operation.then(releaseResources, releaseResources);
+    return awaitRuntimeReadOperation(() => operation, budget);
   };
   const rememberTranscriptSnapshot = async (
     sessionId: string,
     transcript: RuntimeTranscript,
     budget: RuntimeReadBudget,
   ): Promise<string> => {
+    if (transcriptSnapshotsClosing) {
+      throw new replApi.SessionReadError(
+        "read_cancelled",
+        "Runtime history read cancelled because the Runtime is closing",
+      );
+    }
     pruneExpiredTranscriptSnapshots();
+    let snapshotByteSize =
+      RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES;
+    for (const entry of transcript.transcriptEntries) {
+      sessionReadOptionsFromBudget(budget);
+      snapshotByteSize += Buffer.byteLength(JSON.stringify(entry), "utf8");
+      if (snapshotByteSize > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES) {
+        throw createRuntimeSnapshotCapacityError();
+      }
+    }
+    const snapshotDir = ensureTranscriptSnapshotDir();
+    const snapshotGeneration = transcriptSnapshotGeneration;
     const filePath = path.join(
-      ensureTranscriptSnapshotDir(),
+      snapshotDir,
       `${randomUUID()}.entries`,
     );
-    const materialization = (async (): Promise<{
-      readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
-      readonly revision: string;
-      readonly byteSize: number;
-    }> => {
-      const entries: RuntimeTranscriptSnapshotEntryDescriptor[] = [];
-      const handle = await fs.promises.open(filePath, "wx");
-      const revisionHash = createHash("sha256");
-      revisionHash.update("kodax-transcript-entries-v1\0");
-      let offset = 0;
-      try {
-        for (const entry of transcript.transcriptEntries) {
-          sessionReadOptionsFromBudget(budget);
-          const encoded = Buffer.from(JSON.stringify(entry), "utf8");
-          sessionReadOptionsFromBudget(budget);
-          revisionHash.update(`${encoded.length}:`);
-          revisionHash.update(encoded);
-          const chunkDigests: string[] = [];
-          for (
-            let chunkOffset = 0;
-            chunkOffset < encoded.length;
-            chunkOffset += MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES
-          ) {
-            chunkDigests.push(
-              createHash("sha256")
-                .update(encoded.subarray(
-                  chunkOffset,
-                  Math.min(
-                    encoded.length,
-                    chunkOffset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
-                  ),
-                ))
-                .digest("hex"),
-            );
+    const releaseIo = acquireTranscriptSnapshotIo();
+    try {
+      reserveTranscriptSnapshotFile(filePath);
+    } catch (error: unknown) {
+      releaseIo();
+      throw error;
+    }
+    transcriptSnapshotMaterializingFiles.add(filePath);
+    const materialization = trackTranscriptSnapshotOperation(
+      (async (): Promise<{
+        readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+        readonly revision: string;
+      }> => {
+        const entries: RuntimeTranscriptSnapshotEntryDescriptor[] = [];
+        const handle = await fs.promises.open(filePath, "wx");
+        const revisionHash = createHash("sha256");
+        revisionHash.update("kodax-transcript-entries-v1\0");
+        let offset = 0;
+        try {
+          for (const entry of transcript.transcriptEntries) {
+            sessionReadOptionsFromBudget(budget);
+            const encoded = Buffer.from(JSON.stringify(entry), "utf8");
+            sessionReadOptionsFromBudget(budget);
+            reserveTranscriptSnapshotBytes(filePath, encoded.length);
+            revisionHash.update(`${encoded.length}:`);
+            revisionHash.update(encoded);
+            const chunkDigests: string[] = [];
+            for (
+              let chunkOffset = 0;
+              chunkOffset < encoded.length;
+              chunkOffset += MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES
+            ) {
+              chunkDigests.push(
+                createHash("sha256")
+                  .update(encoded.subarray(
+                    chunkOffset,
+                    Math.min(
+                      encoded.length,
+                      chunkOffset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
+                    ),
+                  ))
+                  .digest("hex"),
+              );
+            }
+            await writeFileHandleFully(handle, encoded);
+            sessionReadOptionsFromBudget(budget);
+            entries.push({
+              offset,
+              byteLength: encoded.length,
+              chunkDigests,
+              ...(typeof entry.entryId === "string"
+                ? { entryId: entry.entryId }
+                : {}),
+            });
+            offset += encoded.length;
           }
-          await writeFileHandleFully(handle, encoded);
-          sessionReadOptionsFromBudget(budget);
-          entries.push({
-            offset,
-            byteLength: encoded.length,
-            chunkDigests,
-            ...(typeof entry.entryId === "string"
-              ? { entryId: entry.entryId }
-              : {}),
-          });
-          offset += encoded.length;
+        } finally {
+          await handle.close();
         }
-      } finally {
-        await handle.close();
-      }
-      sessionReadOptionsFromBudget(budget);
-      return {
-        entries,
-        revision: `sha256:${revisionHash.digest("hex")}`,
-        byteSize: offset,
-      };
-    })();
+        sessionReadOptionsFromBudget(budget);
+        return {
+          entries,
+          revision: `sha256:${revisionHash.digest("hex")}`,
+        };
+      })(),
+    );
+    void materialization.then(
+      () => {
+        transcriptSnapshotMaterializingFiles.delete(filePath);
+        releaseIo();
+      },
+      () => {
+        transcriptSnapshotMaterializingFiles.delete(filePath);
+        releaseIo();
+      },
+    );
     let materialized: {
       readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
       readonly revision: string;
-      readonly byteSize: number;
     };
     try {
       materialized = await awaitRuntimeReadOperation(
@@ -4824,7 +4998,7 @@ function createRuntimeSessionService(
       sessionReadOptionsFromBudget(budget);
     } catch (error: unknown) {
       void materialization.then(
-        () => removeAbandonedTranscriptSnapshot(filePath),
+        () => removeTranscriptSnapshotFile(filePath),
         (backgroundError: unknown) => {
           if (
             backgroundError !== error
@@ -4836,44 +5010,42 @@ function createRuntimeSessionService(
               { code: "KODAX_TRANSCRIPT_SNAPSHOT_BACKGROUND_FAILED" },
             );
           }
-          return removeAbandonedTranscriptSnapshot(filePath);
+          removeTranscriptSnapshotFile(filePath);
         },
       );
-      throw error;
+      throw normalizeRuntimeSnapshotMaterializationError(
+        error,
+        transcriptSnapshotsClosing,
+      );
     }
-    const { entries, revision, byteSize } = materialized;
-    const key = transcriptSnapshotKey(sessionId, revision);
-    const retained = transcriptSnapshots.get(key);
+    const { entries, revision } = materialized;
+    if (transcriptSnapshotsClosing) {
+      removeTranscriptSnapshotFile(filePath);
+      throw new replApi.SessionReadError(
+        "read_cancelled",
+        "Runtime history read cancelled because the Runtime is closing",
+      );
+    }
     if (
-      retained !== undefined
-      && retained.expiresAt > Date.now()
-      && fs.existsSync(retained.filePath)
+      snapshotGeneration !== transcriptSnapshotGeneration
+      || !fs.existsSync(filePath)
     ) {
       removeTranscriptSnapshotFile(filePath);
-      transcriptSnapshots.delete(key);
-      transcriptSnapshots.set(key, retained);
-      refreshTranscriptSnapshotLease();
-      return revision;
+      throw createRuntimeResyncError(
+        "Transcript snapshot directory changed; request a fresh boundary",
+      );
     }
+    const key = transcriptSnapshotKey(sessionId, revision);
     removeTranscriptSnapshot(key);
     transcriptSnapshots.set(key, {
       sessionId,
       revision,
       filePath,
       entries,
-      byteSize,
       expiresAt: Date.now() + RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS,
     });
     refreshTranscriptSnapshotLease();
-    transcriptSnapshotBytes += byteSize;
-    while (
-      transcriptSnapshots.size > MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS
-      || transcriptSnapshotBytes > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES
-    ) {
-      // A disk-backed snapshot larger than the soft cache budget remains
-      // readable as the sole retained boundary. This avoids making resync
-      // permanently impossible for one legitimately large transcript.
-      if (transcriptSnapshots.size === 1) break;
+    while (transcriptSnapshots.size > MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS) {
       const oldest = transcriptSnapshots.keys().next().value as
         | string
         | undefined;
@@ -4909,8 +5081,8 @@ function createRuntimeSessionService(
       entries: snapshot.entries,
     };
   };
-  const disposeTranscriptSnapshots = (): void => {
-    clearTranscriptSnapshotLease();
+  const finalizeTranscriptSnapshots = (): void => {
+    if (transcriptSnapshotsDisposed) return;
     for (const key of [...transcriptSnapshots.keys()]) {
       removeTranscriptSnapshot(key);
     }
@@ -4918,10 +5090,66 @@ function createRuntimeSessionService(
       fs.rmSync(transcriptSnapshotDir, { recursive: true, force: true });
       transcriptSnapshotDir = undefined;
     }
+    transcriptSnapshotDiskBytes = 0;
+    transcriptSnapshotFileBytes.clear();
+    transcriptSnapshotMaterializingFiles.clear();
+    transcriptSnapshotIoCount = 0;
     transcriptSnapshotReaders.clear();
     deferredTranscriptSnapshotCleanup.clear();
+    transcriptSnapshotsDisposed = true;
   };
-  registerTranscriptSnapshotCleanup(disposeTranscriptSnapshots);
+  const retryDeferredTranscriptSnapshotFinalization = (
+    attempt = 1,
+  ): void => {
+    try {
+      finalizeTranscriptSnapshots();
+    } catch (error: unknown) {
+      process.emitWarning(
+        `Deferred transcript snapshot cleanup failed: ${normalizeError(error).message}`,
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
+      );
+      if (attempt >= 3) return;
+      const timer = setTimeout(
+        () => retryDeferredTranscriptSnapshotFinalization(attempt + 1),
+        attempt * 100,
+      );
+      timer.unref?.();
+    }
+  };
+  const beginCloseTranscriptSnapshots = (): void => {
+    transcriptSnapshotsClosing = true;
+    clearTranscriptSnapshotLease();
+  };
+  const disposeTranscriptSnapshots = async (): Promise<void> => {
+    beginCloseTranscriptSnapshots();
+    const operations = Promise.allSettled([...transcriptSnapshotOperations]);
+    let drained = false;
+    await Promise.race([
+      operations.then(() => {
+        drained = true;
+      }),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(
+          resolve,
+          RUNTIME_TRANSCRIPT_SNAPSHOT_CLOSE_DRAIN_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+    if (drained) {
+      finalizeTranscriptSnapshots();
+      return;
+    }
+    process.emitWarning(
+      "Runtime closed while transcript snapshot I/O was still pending; temporary files will be cleaned after the I/O settles.",
+      { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLOSE_DEFERRED" },
+    );
+    void operations.then(() => retryDeferredTranscriptSnapshotFinalization());
+  };
+  registerTranscriptSnapshotCleanup(
+    beginCloseTranscriptSnapshots,
+    disposeTranscriptSnapshots,
+  );
 
   const captureObservationSnapshot = async (
     sessionId: string,
@@ -4971,6 +5199,7 @@ function createRuntimeSessionService(
         ? null
         : await readTranscriptSnapshot(
             retainedTranscript!,
+            budget,
             () => createRuntimeTranscriptSlice(
               retainedTranscript!,
               budget,
@@ -5166,6 +5395,7 @@ function createRuntimeSessionService(
         }
         return readTranscriptSnapshot(
           snapshot,
+          budget,
           () => createRuntimeTranscriptSlice(
             snapshot,
             budget,
@@ -5196,6 +5426,7 @@ function createRuntimeSessionService(
       }
       return readTranscriptSnapshot(
         retained,
+        budget,
         () => createRuntimeTranscriptSlice(
           retained,
           budget,
@@ -5220,6 +5451,7 @@ function createRuntimeSessionService(
       }
       return readTranscriptSnapshot(
         transcript,
+        budget,
         () => createRuntimeTranscriptEntryChunkFromSnapshot(
           input,
           transcript,
@@ -5230,6 +5462,7 @@ function createRuntimeSessionService(
 
     async transcriptSearch(input, options) {
       ensureOpen();
+      validateSessionHistorySearchQuery(input.query);
       const budget = createRuntimeReadBudget(options);
       await admission.loadRequired(
         input.sessionId,
@@ -5245,24 +5478,49 @@ function createRuntimeSessionService(
         transcript,
         budget,
       );
-      const lineage =
-        transcript.lineage ?? createSessionLineage(transcript.messages);
-      const search = searchSessionHistory(lineage, {
-        query: input.query,
-        limit: input.limit,
-        role: input.role,
-        scope: input.scope,
-      });
-      const entryIndexById = new Map(
-        transcript.transcriptEntries.map((entry, entryIndex) => [
-          entry.entryId,
-          entryIndex,
-        ]),
+      await yieldToRuntimeReadBudget(budget);
+      const lineage = transcript.lineage;
+      if (lineage === undefined) {
+        sessionReadOptionsFromBudget(budget);
+        return { revision, hits: [] };
+      }
+      const search = await searchSessionHistoryCooperatively(
+        lineage,
+        {
+          query: input.query,
+          limit: input.limit,
+          role: input.role,
+          scope: input.scope,
+        },
+        {
+          revision,
+          checkpoint() {
+            sessionReadOptionsFromBudget(budget);
+          },
+          yieldControl() {
+            return yieldToRuntimeReadBudget(budget);
+          },
+        },
       );
+      sessionReadOptionsFromBudget(budget);
+      const entryIndexById = new Map<string, number>();
+      for (
+        let entryIndex = 0;
+        entryIndex < transcript.transcriptEntries.length;
+        entryIndex += 1
+      ) {
+        if (entryIndex % 256 === 0) {
+          await yieldToRuntimeReadBudget(budget);
+        }
+        const entryId = transcript.transcriptEntries[entryIndex]?.entryId;
+        if (entryId !== undefined) entryIndexById.set(entryId, entryIndex);
+      }
+      sessionReadOptionsFromBudget(budget);
       const hits = search.hits.flatMap((hit): RuntimeTranscriptSearchHit[] => {
         const entryIndex = entryIndexById.get(hit.entryId);
         return entryIndex === undefined ? [] : [{ ...hit, entryIndex }];
       });
+      sessionReadOptionsFromBudget(budget);
       return {
         revision,
         hits,
@@ -12963,6 +13221,16 @@ function awaitRuntimeReadOperation<T>(
   });
 }
 
+async function yieldToRuntimeReadBudget(
+  budget: RuntimeReadBudget,
+): Promise<void> {
+  await awaitRuntimeReadOperation(
+    () => new Promise<void>((resolve) => setImmediate(resolve)),
+    budget,
+  );
+  sessionReadOptionsFromBudget(budget);
+}
+
 function createRuntimeSessionAdmission(
   profile: string,
   manager: SessionManager,
@@ -13358,33 +13626,33 @@ async function readRuntimeTranscriptSnapshotBytes(
   length: number,
   budget: RuntimeReadBudget,
 ): Promise<Buffer> {
-  return awaitRuntimeReadOperation(async () => {
-    const buffer = Buffer.allocUnsafe(length);
-    let handle: fs.promises.FileHandle | undefined;
-    try {
-      handle = await fs.promises.open(filePath, "r");
-      let read = 0;
-      while (read < length) {
-        const result = await handle.read(
-          buffer,
-          read,
-          length - read,
-          offset + read,
-        );
-        if (result.bytesRead === 0) {
-          throw new Error("Transcript snapshot ended unexpectedly.");
-        }
-        read += result.bytesRead;
-      }
-      return buffer;
-    } catch (error: unknown) {
-      throw createRuntimeResyncError(
-        `Transcript snapshot is unavailable: ${normalizeError(error).message}`,
+  const buffer = Buffer.allocUnsafe(length);
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    let read = 0;
+    while (read < length) {
+      const result = await handle.read(
+        buffer,
+        read,
+        length - read,
+        offset + read,
       );
-    } finally {
-      if (handle !== undefined) await handle.close();
+      if (result.bytesRead === 0) {
+        throw new Error("Transcript snapshot ended unexpectedly.");
+      }
+      read += result.bytesRead;
+      sessionReadOptionsFromBudget(budget);
     }
-  }, budget);
+    return buffer;
+  } catch (error: unknown) {
+    if (isExpectedRuntimeReadTermination(error)) throw error;
+    throw createRuntimeResyncError(
+      `Transcript snapshot is unavailable: ${normalizeError(error).message}`,
+    );
+  } finally {
+    if (handle !== undefined) await handle.close();
+  }
 }
 
 async function writeFileHandleFully(
@@ -13403,19 +13671,6 @@ async function writeFileHandleFully(
       throw new Error("Transcript snapshot write made no progress.");
     }
     written += result.bytesWritten;
-  }
-}
-
-async function removeAbandonedTranscriptSnapshot(
-  filePath: string,
-): Promise<void> {
-  try {
-    await fs.promises.rm(filePath, { force: true });
-  } catch (error: unknown) {
-    process.emitWarning(
-      `Unable to remove abandoned transcript snapshot: ${normalizeError(error).message}`,
-      { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLEANUP_FAILED" },
-    );
   }
 }
 
@@ -15630,6 +15885,77 @@ function createRuntimeResyncError(
   return Object.assign(new Error(message), {
     code: "resync_required" as const,
   });
+}
+
+function createRuntimeSnapshotCapacityError(): Error & {
+  readonly code: "overloaded";
+  readonly data: { readonly limitBytes: number };
+} {
+  return Object.assign(
+    new Error(
+      `Transcript snapshot storage limit exceeded (${MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES} bytes)`,
+    ),
+    {
+      code: "overloaded" as const,
+      data: { limitBytes: MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES },
+    },
+  );
+}
+
+function createRuntimeSnapshotIoCapacityError(): Error & {
+  readonly code: "overloaded";
+  readonly data: {
+    readonly resource: "transcript_snapshot_io";
+    readonly limit: number;
+  };
+} {
+  return Object.assign(
+    new Error(
+      `Transcript snapshot I/O limit exceeded (${MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES} operations)`,
+    ),
+    {
+      code: "overloaded" as const,
+      data: {
+        resource: "transcript_snapshot_io" as const,
+        limit: MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES,
+      },
+    },
+  );
+}
+
+function normalizeRuntimeSnapshotMaterializationError(
+  error: unknown,
+  closing: boolean,
+): Error {
+  if (isExpectedRuntimeReadTermination(error)) return error;
+  if (
+    isRecord(error)
+    && (error.code === "overloaded" || error.code === "resync_required")
+  ) {
+    return error instanceof Error
+      ? error
+      : Object.assign(new Error("Transcript snapshot operation failed"), error);
+  }
+  if (closing) {
+    return new replApi.SessionReadError(
+      "read_cancelled",
+      "Runtime history read cancelled because the Runtime is closing",
+    );
+  }
+  if (
+    isRecord(error)
+    && (error.code === "ENOENT" || error.code === "ENOTDIR")
+  ) {
+    return createRuntimeResyncError(
+      "Transcript snapshot storage changed; request a fresh boundary",
+    );
+  }
+  return Object.assign(
+    new Error("Unable to materialize the transcript snapshot", {
+      cause: error,
+    }),
+    { code: "internal_error" as const },
+  );
 }
 
 function createRuntimeInvalidInputError(

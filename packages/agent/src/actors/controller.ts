@@ -950,7 +950,7 @@ export class AgentActorController {
           throw error;
         }
         if (!failureReported) {
-          this.options.onBackgroundError?.(error);
+          this.reportBackgroundError(error);
           failureReported = true;
         }
         this.settlementRecoveryMessages.set(
@@ -1653,11 +1653,49 @@ export class AgentActorController {
   }
 
   private reportBackgroundError(error: unknown): void {
-    if (this.options.onBackgroundError) {
-      this.options.onBackgroundError(error);
+    const callback = this.options.onBackgroundError;
+    if (callback) {
+      try {
+        void Promise.resolve(callback(error)).catch(
+          (callbackError: unknown) => {
+            this.reportBackgroundCallbackFailure(callbackError);
+          },
+        );
+      } catch (callbackError: unknown) {
+        this.reportBackgroundCallbackFailure(callbackError);
+      }
       return;
     }
-    setTimeout(() => { throw error; }, 0);
+    emitActorWarning(
+      `Actor background operation failed: ${errorMessage(error)}`,
+      'KODAX_ACTOR_BACKGROUND_ERROR',
+    );
+  }
+
+  private reportBackgroundCallbackFailure(error: unknown): void {
+    const message =
+      `Actor background error callback failed: ${errorMessage(error)}`;
+    const warn = this.options.warn;
+    if (!warn) {
+      emitActorWarning(
+        message,
+        'KODAX_ACTOR_BACKGROUND_ERROR_CALLBACK_FAILED',
+      );
+      return;
+    }
+    try {
+      void Promise.resolve(warn(message)).catch((warningError: unknown) => {
+        emitActorWarning(
+          `${message}; warning callback also failed: ${errorMessage(warningError)}`,
+          'KODAX_ACTOR_BACKGROUND_ERROR_CALLBACK_FAILED',
+        );
+      });
+    } catch (warningError: unknown) {
+      emitActorWarning(
+        `${message}; warning callback also failed: ${errorMessage(warningError)}`,
+        'KODAX_ACTOR_BACKGROUND_ERROR_CALLBACK_FAILED',
+      );
+    }
   }
 
   private assertExpectedTreeRevision(options: AgentMutationOptions | undefined): void {
@@ -1672,6 +1710,22 @@ export class AgentActorController {
 
 function nonEmptyText(value: string | undefined): string | undefined {
   return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return '[unprintable error]';
+  }
+}
+
+function emitActorWarning(message: string, code: string): void {
+  try {
+    process.emitWarning(message, { code });
+  } catch {
+    // Warning delivery must not create a second background failure.
+  }
 }
 
 function artifactDetails(turn: AgentTurn): readonly AgentArtifactDescriptor[] {

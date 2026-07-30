@@ -5,6 +5,7 @@ import { applySessionCompaction, createSessionLineage } from './kodax-session-li
 import {
   readSessionHistoryEntry,
   searchSessionHistory,
+  searchSessionHistoryCooperatively,
 } from './history-retrieval.js';
 
 function compactedFixture() {
@@ -221,6 +222,132 @@ describe('FEATURE_272 durable Session history retrieval', () => {
     expect(searchSessionHistory(lineage, { query: '0.7.74', scope: 'all' }).hits).toEqual([]);
     expect(readSessionHistoryEntry(lineage, { entryId: placeholder!.id })).toMatchObject({
       status: 'not_found',
+    });
+  });
+
+  it('cooperatively observes cancellation during history indexing and scoring', async () => {
+    const lineage = createSessionLineage(Array.from(
+      { length: 200 },
+      (_, index): KodaXMessage => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `search checkpoint ${index} ${'evidence '.repeat(100)}`,
+      }),
+    ));
+    const cancelled = new Error('search cancelled');
+    let shouldCancel = false;
+    let yields = 0;
+    let checkpoints = 0;
+    let cancellationArmed = false;
+
+    await expect(searchSessionHistoryCooperatively(
+      lineage,
+      { query: 'search checkpoint', scope: 'all' },
+      {
+        revision: 'test-revision',
+        checkpoint() {
+          checkpoints += 1;
+          if (checkpoints === 100) {
+            cancellationArmed = true;
+            setTimeout(() => {
+              shouldCancel = true;
+            }, 0);
+          }
+          if (shouldCancel) throw cancelled;
+        },
+        async yieldControl() {
+          yields += 1;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        },
+      },
+    )).rejects.toBe(cancelled);
+    expect(cancellationArmed).toBe(true);
+    expect(yields).toBeGreaterThan(1);
+  });
+
+  it('keeps cooperative search results identical to the synchronous API', async () => {
+    const timestamp = '2026-07-30T01:02:03.000Z';
+    const lineage = createSessionLineage([
+      { role: 'user', content: 'same score search target', timestamp },
+      { role: 'assistant', content: 'same score search target', timestamp },
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'tool-parity',
+          name: 'read',
+          input: { path: 'same score search target' },
+        }],
+        timestamp,
+      },
+    ]);
+    const options = {
+      query: 'same score search target',
+      scope: 'all' as const,
+      limit: 20,
+    };
+    const expected = searchSessionHistory(lineage, options);
+    const actual = await searchSessionHistoryCooperatively(
+      lineage,
+      options,
+      {
+        revision: expected.revision,
+        checkpoint() {},
+        async yieldControl() {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        },
+      },
+    );
+
+    expect(actual).toEqual(expected);
+  });
+
+  it('rejects unbounded cooperative queries without limiting large transcript entries', async () => {
+    const control = {
+      revision: 'test-revision',
+      checkpoint() {},
+      async yieldControl() {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    };
+    const lineage = createSessionLineage([{
+      role: 'assistant',
+      content: 'searchable',
+    }]);
+    await expect(searchSessionHistoryCooperatively(
+      lineage,
+      { query: 'x'.repeat(16 * 1024 + 1), scope: 'all' },
+      control,
+    )).rejects.toMatchObject({
+      code: 'invalid_params',
+      data: { resource: 'query' },
+    });
+    await expect(searchSessionHistoryCooperatively(
+      lineage,
+      {
+        query: Array.from({ length: 129 }, (_, index) => `term${index}`).join(' '),
+        scope: 'all',
+      },
+      control,
+    )).rejects.toMatchObject({
+      code: 'invalid_params',
+      data: { resource: 'query_terms' },
+    });
+
+    const largeEntry = createSessionLineage([{
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: 'large-tool',
+        name: 'read',
+        input: { content: `${'x'.repeat(512 * 1024)} searchable-tail` },
+      }],
+    }]);
+    await expect(searchSessionHistoryCooperatively(
+      largeEntry,
+      { query: 'searchable-tail', scope: 'all' },
+      control,
+    )).resolves.toMatchObject({
+      hits: [{ entryId: largeEntry.entries[0]?.id }],
     });
   });
 });

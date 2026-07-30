@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import nodeFs, { readFileSync } from "node:fs";
+import nodeFs from "node:fs";
+import { promises as nodeFsPromises, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { createRequire, syncBuiltinESMExports } from "node:module";
@@ -3812,6 +3813,18 @@ describe("createKodaXRuntime", () => {
         revision: first!.revision,
         entryIndex: 0,
       })).rejects.toMatchObject({ code: "resync_required" });
+
+      const recovered = await runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      expect(recovered?.revision).toBe(first?.revision);
+      const recoveredChunk = await runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: recovered!.revision,
+        entryIndex: 0,
+      });
+      expect(Buffer.from(recoveredChunk!.data, "base64").toString("utf8"))
+        .toContain("integrity-marker");
     } finally {
       await runtime.close();
     }
@@ -3867,6 +3880,549 @@ describe("createKodaXRuntime", () => {
     }
   });
 
+  it("rejects one transcript snapshot larger than the hard disk budget", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-hard-budget-sessions"),
+    });
+    try {
+      const retained = await runtime.sessions.create({
+        sessionId: "snapshot-hard-budget-retained",
+      });
+      for (const content of ["retained one", "retained two"]) {
+        await runtime.sessions.appendNotice({
+          sessionId: retained.id,
+          source: "snapshot-hard-budget-retained",
+          content,
+        });
+      }
+      const retainedBoundary = await runtime.sessions.transcriptPage({
+        sessionId: retained.id,
+        limit: 1,
+      });
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-hard-budget",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "snapshot-hard-budget",
+        content: "x".repeat(33 * 1024 * 1024),
+      });
+
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      })).rejects.toMatchObject({ code: "overloaded" });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: retained.id,
+        cursor: retainedBoundary!.nextCursor,
+      })).resolves.toMatchObject({
+        revision: retainedBoundary!.revision,
+      });
+
+      await vi.waitFor(async () => {
+        const snapshotDirNames = (await fs.readdir(os.tmpdir())).filter(
+          (name) =>
+            name.startsWith("kodax-transcript-snapshots-")
+            && !snapshotDirsBefore.has(name),
+        );
+        const byteSizes = await Promise.all(snapshotDirNames.flatMap(
+          async (name) => {
+            const snapshotDir = path.join(os.tmpdir(), name);
+            return Promise.all((await fs.readdir(snapshotDir)).map(
+              async (fileName) =>
+                (await fs.stat(path.join(snapshotDir, fileName))).size,
+            ));
+          },
+        ));
+        expect(byteSizes.flat().reduce((sum, size) => sum + size, 0))
+          .toBeLessThanOrEqual(64 * 1024 * 1024);
+      });
+    } finally {
+      await runtime.close();
+    }
+  }, 30_000);
+
+  it("does not evict retained cursors when a multi-entry snapshot is oversized", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-atomic-budget-sessions"),
+    });
+    try {
+      const retained = await runtime.sessions.create({
+        sessionId: "snapshot-atomic-budget-retained",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: retained.id,
+        source: "snapshot-atomic-budget",
+        content: "r".repeat(18 * 1024 * 1024),
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: retained.id,
+        source: "snapshot-atomic-budget",
+        content: "retained tail",
+      });
+      const retainedBoundary = await runtime.sessions.transcriptPage({
+        sessionId: retained.id,
+        limit: 1,
+      });
+
+      const oversized = await runtime.sessions.create({
+        sessionId: "snapshot-atomic-budget-oversized",
+      });
+      for (const marker of ["a", "b"]) {
+        await runtime.sessions.appendNotice({
+          sessionId: oversized.id,
+          source: "snapshot-atomic-budget",
+          content: marker.repeat(17 * 1024 * 1024),
+        });
+      }
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: oversized.id,
+      })).rejects.toMatchObject({ code: "overloaded" });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: retained.id,
+        cursor: retainedBoundary!.nextCursor,
+      })).resolves.toMatchObject({
+        revision: retainedBoundary!.revision,
+      });
+    } finally {
+      await runtime.close();
+    }
+  }, 30_000);
+
+  it("keeps deleted in-flight snapshot generations inside the hard disk budget", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-concurrent-budget-sessions"),
+    });
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    let releaseFirstWrite: (() => void) | undefined;
+    let markFirstWriteStarted: (() => void) | undefined;
+    const firstWriteGate = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      markFirstWriteStarted = resolve;
+    });
+    let firstSnapshotPath: string | undefined;
+    let blockFirstSnapshotWrite = true;
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        const handle = await originalOpen(file, flags, mode);
+        if (
+          !blockFirstSnapshotWrite
+          || !String(file).endsWith(".entries")
+          || String(flags) !== "wx"
+        ) {
+          return handle;
+        }
+        blockFirstSnapshotWrite = false;
+        firstSnapshotPath = String(file);
+        return {
+          write: async (
+            buffer: Uint8Array,
+            offset?: number,
+            length?: number,
+            position?: number | null,
+          ) => {
+            markFirstWriteStarted?.();
+            await firstWriteGate;
+            return handle.write(buffer, offset, length, position);
+          },
+          close: () => handle.close(),
+        } as unknown as Awaited<ReturnType<typeof originalOpen>>;
+      },
+    );
+    try {
+      const first = await runtime.sessions.create({
+        sessionId: "snapshot-concurrent-budget-first",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: first.id,
+        source: "snapshot-concurrent-budget",
+        content: "a".repeat(20 * 1024 * 1024),
+      });
+      const second = await runtime.sessions.create({
+        sessionId: "snapshot-concurrent-budget-second",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: second.id,
+        source: "snapshot-concurrent-budget",
+        content: "b".repeat(15 * 1024 * 1024),
+      });
+
+      const firstPage = runtime.sessions.transcriptPage({
+        sessionId: first.id,
+      });
+      await firstWriteStarted;
+      await fs.rm(path.dirname(firstSnapshotPath!), {
+        recursive: true,
+        force: true,
+      });
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: second.id,
+      })).rejects.toMatchObject({ code: "overloaded" });
+      releaseFirstWrite?.();
+      await expect(firstPage).rejects.toMatchObject({
+        code: "resync_required",
+      });
+    } finally {
+      releaseFirstWrite?.();
+      open.mockRestore();
+      await runtime.close();
+    }
+  }, 30_000);
+
+  it("bounds concurrent snapshot files before opening more handles", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-file-budget-sessions"),
+    });
+    const sessions = await Promise.all(Array.from(
+      { length: 17 },
+      (_, index) => runtime.sessions.create({
+        sessionId: `snapshot-file-budget-${index}`,
+      }),
+    ));
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    let releaseOpen: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let pendingSnapshotOpens = 0;
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        if (String(file).endsWith(".entries") && String(flags) === "wx") {
+          pendingSnapshotOpens += 1;
+          await openGate;
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      const pending = sessions.slice(0, 16).map((session) =>
+        runtime.sessions.transcriptPage({ sessionId: session.id })
+      );
+      await vi.waitFor(() => {
+        expect(pendingSnapshotOpens).toBe(16);
+      });
+
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: sessions[16]!.id,
+      })).rejects.toMatchObject({
+        code: "overloaded",
+        data: {
+          resource: "transcript_snapshot_io",
+          limit: 16,
+        },
+      });
+
+      releaseOpen?.();
+      await expect(Promise.all(pending)).resolves.toHaveLength(16);
+    } finally {
+      releaseOpen?.();
+      open.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("bounds close while snapshot materialization remains blocked", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-close-materialization"),
+    });
+    const emittedWarning = vi.spyOn(process, "emitWarning").mockImplementation(
+      () => undefined,
+    );
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    let releaseWrite: (() => void) | undefined;
+    let markWriteStarted: (() => void) | undefined;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    let blockFirstSnapshotWrite = true;
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        const handle = await originalOpen(file, flags, mode);
+        if (
+          !blockFirstSnapshotWrite
+          || !String(file).endsWith(".entries")
+          || String(flags) !== "wx"
+        ) {
+          return handle;
+        }
+        blockFirstSnapshotWrite = false;
+        return {
+          write: async (
+            buffer: Uint8Array,
+            offset?: number,
+            length?: number,
+            position?: number | null,
+          ) => {
+            markWriteStarted?.();
+            await writeGate;
+            return handle.write(buffer, offset, length, position);
+          },
+          close: () => handle.close(),
+        } as unknown as Awaited<ReturnType<typeof originalOpen>>;
+      },
+    );
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "snapshot-close-materialization",
+      });
+      for (const content of ["one", "two"]) {
+        await runtime.sessions.appendNotice({
+          sessionId: session.id,
+          source: "snapshot-close-materialization",
+          content,
+        });
+      }
+
+      const page = runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      const pageResult = expect(page).rejects.toMatchObject({
+        code: "read_cancelled",
+      });
+      await writeStarted;
+      let closeSettled = false;
+      const close = runtime.close().finally(() => {
+        closeSettled = true;
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      expect(closeSettled).toBe(false);
+
+      await expect(Promise.race([
+        close,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Runtime close remained blocked")), 1_000);
+        }),
+      ])).resolves.toBeUndefined();
+      expect(closeSettled).toBe(true);
+      expect(emittedWarning).toHaveBeenCalledWith(
+        expect.stringContaining("snapshot I/O was still pending"),
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLOSE_DEFERRED" },
+      );
+
+      releaseWrite?.();
+      await pageResult;
+    } finally {
+      releaseWrite?.();
+      open.mockRestore();
+      emittedWarning.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("retries snapshot directory cleanup after close fails once", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-close-retry-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-close-retry",
+    });
+    await runtime.sessions.appendNotice({
+      sessionId: session.id,
+      source: "snapshot-close-retry",
+      content: "history",
+    });
+    await runtime.sessions.transcriptPage({ sessionId: session.id });
+    const snapshotDirName = (await fs.readdir(os.tmpdir())).find(
+      (name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+        && !snapshotDirsBefore.has(name),
+    );
+    if (snapshotDirName === undefined) {
+      throw new Error("Transcript snapshot directory was not created.");
+    }
+    const snapshotDir = path.join(os.tmpdir(), snapshotDirName);
+    const { createRequire, syncBuiltinESMExports } = await import("node:module");
+    const mutableFs = createRequire(import.meta.url)("node:fs") as {
+      rmSync: typeof import("node:fs").rmSync;
+    };
+    const originalRmSync = mutableFs.rmSync;
+    let failCleanupOnce = true;
+    mutableFs.rmSync = ((file, options) => {
+      if (failCleanupOnce && path.resolve(String(file)) === snapshotDir) {
+        failCleanupOnce = false;
+        throw Object.assign(new Error("snapshot cleanup failed once"), {
+          code: "EACCES",
+        });
+      }
+      return originalRmSync(file, options);
+    }) as typeof import("node:fs").rmSync;
+    syncBuiltinESMExports();
+    try {
+      await expect(runtime.close()).rejects.toThrow(
+        "snapshot cleanup failed once",
+      );
+      await expect(runtime.close()).resolves.toBeUndefined();
+      await expect(fs.stat(snapshotDir)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      mutableFs.rmSync = originalRmSync;
+      syncBuiltinESMExports();
+      await runtime.close();
+    }
+  });
+
+  it("does not recreate snapshot storage when a pre-close read resumes", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-close-race-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-close-race",
+    });
+    const snapshotDirsBefore = new Set(
+      (await fs.readdir(os.tmpdir())).filter((name) =>
+        name.startsWith("kodax-transcript-snapshots-")
+      ),
+    );
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    let releaseOpen: (() => void) | undefined;
+    let markOpenBlocked: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const openBlocked = new Promise<void>((resolve) => {
+      markOpenBlocked = resolve;
+    });
+    let blockSnapshotOpen = true;
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        if (
+          blockSnapshotOpen
+          && String(file).endsWith(".entries")
+          && String(flags) === "wx"
+        ) {
+          blockSnapshotOpen = false;
+          markOpenBlocked?.();
+          await openGate;
+          throw Object.assign(new Error("snapshot directory closed"), {
+            code: "ENOENT",
+          });
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      const page = runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      });
+      await openBlocked;
+      let closeSettled = false;
+      const close = runtime.close().finally(() => {
+        closeSettled = true;
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(closeSettled).toBe(false);
+      releaseOpen?.();
+      await expect(page).rejects.toMatchObject({ code: "read_cancelled" });
+      await expect(close).resolves.toBeUndefined();
+
+      const snapshotDirsAfter = (await fs.readdir(os.tmpdir())).filter(
+        (name) =>
+          name.startsWith("kodax-transcript-snapshots-")
+          && !snapshotDirsBefore.has(name),
+      );
+      expect(snapshotDirsAfter).toEqual([]);
+    } finally {
+      releaseOpen?.();
+      open.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("normalizes transcript snapshot storage failures", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-storage-error-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-storage-error",
+    });
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        if (
+          String(file).endsWith(".entries")
+          && String(flags) === "wx"
+        ) {
+          throw Object.assign(new Error("snapshot storage unavailable"), {
+            code: "EACCES",
+          });
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      })).rejects.toMatchObject({ code: "internal_error" });
+    } finally {
+      open.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("requires resync when transcript snapshot storage disappears", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-storage-missing-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-storage-missing",
+    });
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        if (
+          String(file).endsWith(".entries")
+          && String(flags) === "wx"
+        ) {
+          throw Object.assign(new Error("snapshot storage disappeared"), {
+            code: "ENOENT",
+          });
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      await expect(runtime.sessions.transcriptPage({
+        sessionId: session.id,
+      })).rejects.toMatchObject({ code: "resync_required" });
+    } finally {
+      open.mockRestore();
+      await runtime.close();
+    }
+  });
+
   it("times out promptly while reading a retained transcript chunk", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({
@@ -3874,6 +4430,18 @@ describe("createKodaXRuntime", () => {
       sessionsDir: path.join(tempRoot, "snapshot-chunk-timeout-sessions"),
     });
     let open: ReturnType<typeof vi.spyOn> | undefined;
+    let releaseRead: (() => void) | undefined;
+    let markReadStarted: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    let snapshotPath: string | undefined;
+    const emittedWarning = vi.spyOn(process, "emitWarning").mockImplementation(
+      () => undefined,
+    );
     try {
       const session = await runtime.sessions.create({
         sessionId: "snapshot-chunk-timeout",
@@ -3887,29 +4455,160 @@ describe("createKodaXRuntime", () => {
         sessionId: session.id,
       });
       const originalOpen = fs.open.bind(fs);
+      let blockFirstRead = true;
       open = vi.spyOn(fs, "open").mockImplementation(
         async (file, flags, mode) => {
-          if (String(file).endsWith(".entries") && String(flags) === "r") {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 150);
-            });
+          const handle = await originalOpen(file, flags, mode);
+          if (
+            !blockFirstRead
+            || !String(file).endsWith(".entries")
+            || String(flags) !== "r"
+          ) {
+            return handle;
           }
-          return originalOpen(file, flags, mode);
+          blockFirstRead = false;
+          snapshotPath = String(file);
+          return {
+            read: async (
+              buffer: Uint8Array,
+              offset?: number,
+              length?: number,
+              position?: number | null,
+            ) => {
+              markReadStarted?.();
+              await readGate;
+              return handle.read(buffer, offset, length, position);
+            },
+            close: () => handle.close(),
+          } as unknown as Awaited<ReturnType<typeof originalOpen>>;
         },
       );
 
       const startedAt = Date.now();
-      await expect(runtime.sessions.transcriptEntryChunk(
+      const chunk = runtime.sessions.transcriptEntryChunk(
         {
           sessionId: session.id,
           revision: page!.revision,
           entryIndex: 0,
         },
         { timeoutMs: 20 },
-      )).rejects.toMatchObject({ code: "read_timeout" });
+      );
+      await readStarted;
+      await expect(chunk).rejects.toMatchObject({ code: "read_timeout" });
       expect(Date.now() - startedAt).toBeLessThan(100);
+
+      for (let index = 0; index < 8; index += 1) {
+        const pressure = await runtime.sessions.create({
+          sessionId: `snapshot-timeout-pressure-${index}`,
+        });
+        await runtime.sessions.appendNotice({
+          sessionId: pressure.id,
+          source: "snapshot-timeout-pressure",
+          content: String(index),
+        });
+        await runtime.sessions.transcriptPage({ sessionId: pressure.id });
+      }
+      expect((await fs.stat(snapshotPath!)).isFile()).toBe(true);
+
+      await expect(Promise.race([
+        runtime.close(),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("Runtime close remained blocked")), 1_000);
+        }),
+      ])).resolves.toBeUndefined();
+      expect(emittedWarning).toHaveBeenCalledWith(
+        expect.stringContaining("snapshot I/O was still pending"),
+        { code: "KODAX_TRANSCRIPT_SNAPSHOT_CLOSE_DEFERRED" },
+      );
+
+      releaseRead?.();
+      await vi.waitFor(async () => {
+        await expect(fs.stat(snapshotPath!)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
     } finally {
+      releaseRead?.();
       open?.mockRestore();
+      emittedWarning.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it("bounds concurrent snapshot readers for one retained file", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "snapshot-reader-budget-sessions"),
+    });
+    const session = await runtime.sessions.create({
+      sessionId: "snapshot-reader-budget",
+    });
+    await runtime.sessions.appendNotice({
+      sessionId: session.id,
+      source: "snapshot-reader-budget",
+      content: "reader budget",
+    });
+    const page = await runtime.sessions.transcriptPage({
+      sessionId: session.id,
+    });
+    const originalOpen = nodeFsPromises.open.bind(nodeFsPromises);
+    let releaseReads: (() => void) | undefined;
+    const readGate = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    let openReaders = 0;
+    const open = vi.spyOn(nodeFsPromises, "open").mockImplementation(
+      async (file, flags, mode) => {
+        const handle = await originalOpen(file, flags, mode);
+        if (!String(file).endsWith(".entries") || String(flags) !== "r") {
+          return handle;
+        }
+        openReaders += 1;
+        return {
+          read: async (
+            buffer: Uint8Array,
+            offset?: number,
+            length?: number,
+            position?: number | null,
+          ) => {
+            await readGate;
+            return handle.read(buffer, offset, length, position);
+          },
+          close: () => handle.close(),
+        } as unknown as Awaited<ReturnType<typeof originalOpen>>;
+      },
+    );
+    try {
+      const reads = Array.from(
+        { length: 16 },
+        () => runtime.sessions.transcriptEntryChunk({
+          sessionId: session.id,
+          revision: page!.revision,
+          entryIndex: 0,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(openReaders).toBe(16);
+      });
+
+      await expect(runtime.sessions.transcriptEntryChunk({
+        sessionId: session.id,
+        revision: page!.revision,
+        entryIndex: 0,
+      })).rejects.toMatchObject({
+        code: "overloaded",
+        data: {
+          resource: "transcript_snapshot_io",
+          limit: 16,
+        },
+      });
+
+      releaseReads?.();
+      await expect(Promise.all(reads)).resolves.toHaveLength(16);
+    } finally {
+      releaseReads?.();
+      open.mockRestore();
       await runtime.close();
     }
   });
@@ -4218,6 +4917,103 @@ describe("createKodaXRuntime", () => {
     });
     await runtime.close();
   }, 30_000);
+
+  it("rejects invalid transcript search queries before Session I/O", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "search-validation-sessions"),
+    });
+    try {
+      await expect(runtime.sessions.transcriptSearch({
+        sessionId: "missing-search-validation",
+        query: "x".repeat(16 * 1024 + 1),
+      })).rejects.toMatchObject({
+        code: "invalid_params",
+        data: { resource: "query" },
+      });
+      await expect(runtime.sessions.transcriptSearch({
+        sessionId: "missing-search-validation",
+        query: Array.from(
+          { length: 129 },
+          (_, index) => `term${index}`,
+        ).join(" "),
+      })).rejects.toMatchObject({
+        code: "invalid_params",
+        data: { resource: "query_terms" },
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("rechecks cancellation after transcript snapshot search work", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "search-budget-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "search-budget",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "search-budget",
+        content: "search cancellation marker",
+      });
+      const controller = new AbortController();
+      const input = {
+        sessionId: session.id,
+        get query() {
+          setImmediate(() => controller.abort());
+          return "search cancellation marker";
+        },
+      };
+
+      await expect(runtime.sessions.transcriptSearch(
+        input,
+        { signal: controller.signal },
+      )).rejects.toMatchObject({ code: "read_cancelled" });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("does not return transcript search success after its budget expires", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "search-timeout-sessions"),
+    });
+    try {
+      const session = await runtime.sessions.create({
+        sessionId: "search-timeout",
+      });
+      await runtime.sessions.appendNotice({
+        sessionId: session.id,
+        source: "search-timeout",
+        content: "search timeout marker",
+      });
+      const input = {
+        sessionId: session.id,
+        get query() {
+          const busyUntil = performance.now() + 150;
+          while (performance.now() < busyUntil) {
+            // Simulate a synchronous search stage that crosses its deadline.
+          }
+          return "search timeout marker";
+        },
+      };
+
+      await expect(runtime.sessions.transcriptSearch(
+        input,
+        { timeoutMs: 100 },
+      )).rejects.toMatchObject({ code: "read_timeout" });
+    } finally {
+      await runtime.close();
+    }
+  });
 
   it("keeps direct and paged transcripts in the same append order across island recovery", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");

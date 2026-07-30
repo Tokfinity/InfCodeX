@@ -1697,6 +1697,193 @@ describe('F270 actor tree and scheduler', () => {
     }
   });
 
+  it('keeps settlement recovery progressing when the background error callback throws', async () => {
+    vi.useFakeTimers();
+    try {
+      let completionSaveAttempts = 0;
+      const warnings = vi.fn();
+      const onBackgroundError = vi.fn(() => {
+        throw new Error('diagnostic callback failed');
+      });
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const turn = snapshot.turns.find(
+            (candidate) => candidate.actorPath === '/root/worker',
+          );
+          if (turn?.state === 'completed') {
+            completionSaveAttempts += 1;
+            throw new Error('disk remains unavailable');
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        warn: warnings,
+        onBackgroundError,
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Reach an observable unknown state.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'not durable' });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'running',
+      });
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+        turnId: turn.turnId,
+      });
+      expect(onBackgroundError).toHaveBeenCalled();
+      expect(warnings).toHaveBeenCalledWith(
+        expect.stringContaining('diagnostic callback failed'),
+      );
+      const attemptsAtDeadline = completionSaveAttempts;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(completionSaveAttempts).toBe(attemptsAtDeadline);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('contains an asynchronously rejected background error callback', async () => {
+    let completionSaveAttempts = 0;
+    const warnings = vi.fn();
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      async save(snapshot) {
+        const turn = snapshot.turns.find(
+          (candidate) => candidate.actorPath === '/root/worker',
+        );
+        if (turn?.state === 'completed') {
+          completionSaveAttempts += 1;
+          if (completionSaveAttempts === 1) {
+            throw new Error('completion save failed');
+          }
+        }
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      warn: warnings,
+      onBackgroundError: async () => {
+        throw new Error('async diagnostic callback failed');
+      },
+    });
+    const turn = await controller.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Complete despite diagnostic rejection.',
+    });
+
+    executor.pending[0]?.resolve({ output: 'durable' });
+    await vi.waitFor(() => {
+      expect(controller.output('/root', turn.actorPath, turn.turnId))
+        .toMatchObject({ state: 'completed', output: 'durable' });
+      expect(warnings).toHaveBeenCalledWith(
+        expect.stringContaining('async diagnostic callback failed'),
+      );
+    });
+  });
+
+  it('falls back to a process warning when the warning callback rejects', async () => {
+    let completionSaveAttempts = 0;
+    const emittedWarning = vi.spyOn(process, 'emitWarning').mockImplementation(
+      () => undefined,
+    );
+    try {
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const turn = snapshot.turns.find(
+            (candidate) => candidate.actorPath === '/root/worker',
+          );
+          if (turn?.state === 'completed') {
+            completionSaveAttempts += 1;
+            if (completionSaveAttempts === 1) {
+              throw new Error('completion save failed');
+            }
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        warn: async () => {
+          throw new Error('async warning callback failed');
+        },
+        onBackgroundError: () => {
+          throw new Error('diagnostic callback failed');
+        },
+      });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Complete despite warning rejection.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'durable' });
+      await vi.waitFor(() => {
+        expect(controller.output('/root', turn.actorPath, turn.turnId))
+          .toMatchObject({ state: 'completed', output: 'durable' });
+        expect(emittedWarning).toHaveBeenCalledWith(
+          expect.stringContaining('async warning callback failed'),
+          { code: 'KODAX_ACTOR_BACKGROUND_ERROR_CALLBACK_FAILED' },
+        );
+      });
+    } finally {
+      emittedWarning.mockRestore();
+    }
+  });
+
+  it('emits a coded warning when no background error callback is configured', async () => {
+    let completionSaveAttempts = 0;
+    const emittedWarning = vi.spyOn(process, 'emitWarning').mockImplementation(
+      () => undefined,
+    );
+    try {
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          const turn = snapshot.turns.find(
+            (candidate) => candidate.actorPath === '/root/worker',
+          );
+          if (turn?.state === 'completed') {
+            completionSaveAttempts += 1;
+            if (completionSaveAttempts === 1) {
+              throw new Error('completion save failed');
+            }
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({ executor, store });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Complete with default diagnostics.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'durable' });
+      await vi.waitFor(() => {
+        expect(controller.output('/root', turn.actorPath, turn.turnId))
+          .toMatchObject({ state: 'completed', output: 'durable' });
+        expect(emittedWarning).toHaveBeenCalledWith(
+          expect.stringContaining('completion save failed'),
+          { code: 'KODAX_ACTOR_BACKGROUND_ERROR' },
+        );
+      });
+    } finally {
+      emittedWarning.mockRestore();
+    }
+  });
+
   it('times out a hung settlement save without accepting a late success', async () => {
     vi.useFakeTimers();
     try {
