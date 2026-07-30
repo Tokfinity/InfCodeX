@@ -55,7 +55,11 @@
  */
 
 import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
-import type { StopHookFn, StopHookResult } from '@kodax-ai/agent';
+import {
+  emitKodaXDiagnostic,
+  type StopHookFn,
+  type StopHookResult,
+} from '@kodax-ai/agent';
 
 import type {
   KodaXContextTokenSnapshot,
@@ -73,6 +77,8 @@ import {
 } from '../runtime-session-state.js';
 import { rebaseContextTokenSnapshot } from '../../token-accounting.js';
 import type { ExtensionEventEmitter } from '../stream-handler-wiring.js';
+
+const EXTENSION_TURN_COMPLETE_TIMEOUT_MS = 30_000;
 
 export function appendQueuedRuntimeMessages(
   messages: KodaXMessage[],
@@ -144,12 +150,30 @@ export function createExtensionTurnCompleteStopHook(
     const sessionId = getSessionId();
     if (!sessionId) return undefined;
 
-    const result = await runActiveExtensionHook('turn:complete', {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutResult = new Promise<undefined>((resolve) => {
+      timeout = setTimeout(() => {
+        emitKodaXDiagnostic({
+          source: 'coding:extension-turn-complete',
+          level: 'warn',
+          message: 'Extension turn:complete hook timed out; accepting the completed turn.',
+          detail: {
+            sessionId,
+            timeoutMs: EXTENSION_TURN_COMPLETE_TIMEOUT_MS,
+          },
+        });
+        resolve(undefined);
+      }, EXTENSION_TURN_COMPLETE_TIMEOUT_MS);
+    });
+    const hookResult = runActiveExtensionHook('turn:complete', {
       sessionId,
       lastAssistantText: ctx.lastAssistantText,
       signal: ctx.signal,
       reanimateCount: ctx.reanimateCount,
       reanimateBudget: ctx.reanimateBudget,
+    });
+    const result = await Promise.race([hookResult, timeoutResult]).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
     });
     // `runActiveExtensionHook` returns `ExtensionTurnCompleteHookResult |
     // undefined`. The `void` arm of that union is structurally

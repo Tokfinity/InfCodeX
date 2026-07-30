@@ -62,6 +62,7 @@ export interface RuntimeDaemonSocketClientTransportOptions {
 }
 
 export const RUNTIME_DAEMON_MAX_FRAME_BYTES = 8 * 1024 * 1024;
+const RUNTIME_DAEMON_LATE_RESULT_RETENTION_MS = 30_000;
 
 export class RuntimeDaemonTransportError extends Error {
   constructor(
@@ -207,25 +208,62 @@ export async function createRuntimeDaemonSocketClientTransport(
   const pending = new Map<string, {
     readonly resolve: (value: unknown) => void;
     readonly reject: (error: Error) => void;
+    readonly cleanup: () => void;
   }>();
+  const lateResults = new Map<string, {
+    readonly deliver: (value: unknown) => void;
+    readonly expiry: ReturnType<typeof setTimeout>;
+  }>();
+  const removeLateResult = (id: string): ((value: unknown) => void) | undefined => {
+    const retained = lateResults.get(id);
+    if (retained === undefined) return undefined;
+    lateResults.delete(id);
+    clearTimeout(retained.expiry);
+    return retained.deliver;
+  };
+  const clearLateResults = (): void => {
+    for (const retained of lateResults.values()) {
+      clearTimeout(retained.expiry);
+    }
+    lateResults.clear();
+  };
   const parser = createRuntimeDaemonFrameParser((frame) => {
     if (isRuntimeDaemonSuccessResponse(frame)) {
       const item = pending.get(frame.id);
-      if (!item) return;
-      pending.delete(frame.id);
-      item.resolve(frame.result);
+      if (item) {
+        pending.delete(frame.id);
+        item.cleanup();
+        item.resolve(frame.result);
+        return;
+      }
+      const deliverLateResult = removeLateResult(frame.id);
+      if (deliverLateResult === undefined) return;
+      try {
+        deliverLateResult(frame.result);
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.daemon.transport',
+          level: 'warn',
+          message: 'Runtime daemon late-result handler failed.',
+          detail: error,
+        });
+      }
       return;
     }
     if (isRuntimeDaemonErrorResponse(frame)) {
       if (!frame.id) return;
       const item = pending.get(frame.id);
-      if (!item) return;
-      pending.delete(frame.id);
-      item.reject(new RuntimeDaemonTransportError(
-        frame.error.message,
-        frame.error.code,
-        frame.error.data,
-      ));
+      if (item) {
+        pending.delete(frame.id);
+        item.cleanup();
+        item.reject(new RuntimeDaemonTransportError(
+          frame.error.message,
+          frame.error.code,
+          frame.error.data,
+        ));
+        return;
+      }
+      removeLateResult(frame.id);
       return;
     }
     if (isRuntimeDaemonNotification(frame)) {
@@ -251,6 +289,7 @@ export async function createRuntimeDaemonSocketClientTransport(
       const normalized = normalizeTransportError(error);
       disconnect(normalized.message, true);
       rejectPending(pending, normalized);
+      clearLateResults();
       socket.destroy(normalized);
     }
   });
@@ -258,15 +297,17 @@ export async function createRuntimeDaemonSocketClientTransport(
     closed = true;
     disconnect('Runtime daemon transport closed.', true);
     rejectPending(pending, new Error('Runtime daemon transport closed.'));
+    clearLateResults();
   });
   socket.on('error', (error) => {
     closed = true;
     disconnect(error.message, true);
     rejectPending(pending, error);
+    clearLateResults();
   });
 
   return {
-    request(method, params, operation) {
+    request(method, params, operation, control) {
       if (closed) {
         return Promise.reject(new Error('Runtime daemon transport is closed.'));
       }
@@ -292,9 +333,37 @@ export async function createRuntimeDaemonSocketClientTransport(
           'invalid_params',
         ));
       }
+      let abort: (() => void) | undefined;
+      const cleanup = (): void => {
+        if (abort !== undefined) {
+          control?.signal?.removeEventListener('abort', abort);
+        }
+      };
       const result = new Promise<unknown>((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const item = { resolve, reject, cleanup };
+        pending.set(id, item);
+        if (control?.signal !== undefined) {
+          abort = () => {
+            if (pending.get(id) !== item) return;
+            pending.delete(id);
+            cleanup();
+            if (control.onLateResult !== undefined) {
+              const expiry = setTimeout(() => {
+                lateResults.delete(id);
+              }, RUNTIME_DAEMON_LATE_RESULT_RETENTION_MS);
+              expiry.unref?.();
+              lateResults.set(id, {
+                deliver: control.onLateResult,
+                expiry,
+              });
+            }
+            reject(normalizeTransportAbortReason(control.signal?.reason));
+          };
+          control.signal.addEventListener('abort', abort, { once: true });
+          if (control.signal.aborted) abort();
+        }
       });
+      if (control?.signal?.aborted) return result;
       socket.write(`${encoded}\n`);
       return result.then((value) => {
         if (method === 'initialize' || method === 'runtime.initialize') {
@@ -337,6 +406,7 @@ export async function createRuntimeDaemonSocketClientTransport(
         socket.end();
         socket.destroy();
         rejectPending(pending, new Error('Runtime daemon transport closed.'));
+        clearLateResults();
       }
       await socketClosed;
       lifecycleListeners.clear();
@@ -625,13 +695,23 @@ function closeNetServer(server: net.Server): Promise<void> {
 }
 
 function rejectPending(
-  pending: Map<string, { readonly reject: (error: Error) => void }>,
+  pending: Map<string, {
+    readonly reject: (error: Error) => void;
+    readonly cleanup: () => void;
+  }>,
   error: Error,
 ): void {
   for (const item of pending.values()) {
+    item.cleanup();
     item.reject(error);
   }
   pending.clear();
+}
+
+function normalizeTransportAbortReason(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new Error('Runtime daemon request cancelled.');
 }
 
 function normalizeTransportError(error: unknown): Error {

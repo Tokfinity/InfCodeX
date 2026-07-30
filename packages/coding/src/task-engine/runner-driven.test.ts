@@ -839,6 +839,51 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       'HARD_CAPACITY_PERSISTENCE_SENTINEL',
     );
   });
+
+  it('clears stale crash metadata after a later managed Turn completes', async () => {
+    const save = vi.fn(async () => undefined);
+    const sessionId = 'managed-success-clears-error-metadata';
+    let stored: KodaXSessionData = {
+      messages: [
+        { role: 'user', content: 'previous request' },
+        { role: 'assistant', content: 'previous answer' },
+      ],
+      title: 'Recovered Session',
+      gitRoot: process.cwd(),
+      errorMetadata: {
+        lastError: 'runtime run aborted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    };
+    save.mockImplementation(async (_id, data) => {
+      stored = structuredClone(data);
+    });
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      session: {
+        id: sessionId,
+        storage: {
+          load: vi.fn(async () => structuredClone(stored)),
+          save,
+        },
+      },
+    };
+
+    await expect(runManagedTaskViaRunner(
+      options,
+      'later successful request',
+      async () => ({
+        textBlocks: [{ text: 'later successful answer' }],
+        toolBlocks: [],
+      }),
+    )).resolves.toMatchObject({
+      success: true,
+      lastText: 'later successful answer',
+    });
+
+    expect(stored.errorMetadata).toBeUndefined();
+  });
 });
 
 describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout parity)', () => {

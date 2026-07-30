@@ -120,8 +120,15 @@ function isKodaXContentBlock(value: unknown): value is KodaXContentBlock {
         && isRecord(value.input);
     case 'tool_result':
       return typeof value.tool_use_id === 'string'
-        && typeof value.content === 'string'
-        && (value.is_error === undefined || typeof value.is_error === 'boolean');
+        && (
+          typeof value.content === 'string'
+          || (
+            Array.isArray(value.content)
+            && value.content.every(isKodaXToolResultContentItem)
+          )
+        )
+        && (value.is_error === undefined || typeof value.is_error === 'boolean')
+        && (value.metadata === undefined || isRecord(value.metadata));
     case 'image':
       return typeof value.path === 'string'
         && (value.mediaType === undefined || typeof value.mediaType === 'string');
@@ -130,9 +137,22 @@ function isKodaXContentBlock(value: unknown): value is KodaXContentBlock {
         && (value.signature === undefined || typeof value.signature === 'string');
     case 'redacted_thinking':
       return typeof value.data === 'string';
+    case 'cache-boundary':
+      return value.hint === undefined
+        || value.hint === 'system'
+        || value.hint === 'tools'
+        || value.hint === 'role-prompt';
     default:
       return false;
   }
+}
+
+function isKodaXToolResultContentItem(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === 'text') return typeof value.text === 'string';
+  return value.type === 'image'
+    && typeof value.path === 'string'
+    && (value.mediaType === undefined || typeof value.mediaType === 'string');
 }
 
 export function isKodaXMessage(value: unknown): value is KodaXMessage {

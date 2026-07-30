@@ -42,6 +42,19 @@ describe('runtime daemon protocol schema', () => {
   });
 
   it('includes diagnostic daemon methods in the generated method schema map', () => {
+    expect(RUNTIME_DAEMON_METHOD_SCHEMAS['session.diagnostics']).toMatchObject({
+      params: {
+        required: ['sessionId'],
+        properties: {
+          sessionId: { type: 'string' },
+          runId: { type: 'string' },
+          timeoutMs: { type: 'integer' },
+        },
+      },
+      result: {
+        required: expect.arrayContaining(['schemaVersion', 'observation', 'run']),
+      },
+    });
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['context.budget.get'].params).toMatchObject({
       properties: {
         sessionId: { type: 'string' },
@@ -238,6 +251,33 @@ describe('runtime daemon protocol schema', () => {
       .not.toHaveProperty('toolInput');
     expect(RUNTIME_DAEMON_METHOD_SCHEMAS['permission.list'].result.items?.properties)
       .toHaveProperty('autoModeDiagnostics');
+  });
+
+  it('carries lifecycle stages and unconfirmed Stop outcomes across the daemon facade', () => {
+    const schema = RUNTIME_DAEMON_METHOD_SCHEMAS['run.get'].result;
+    const status = {
+      runId: 'run-1',
+      sessionId: 'session-1',
+      phase: 'unknown',
+      stage: 'unknown',
+      stageChangedAt: '2026-07-30T01:10:00.000Z',
+      activeSubtaskCount: 0,
+      startedAt: '2026-07-30T01:05:13.000Z',
+      provider: 'zhipu',
+      stop: {
+        requestedAt: '2026-07-30T01:14:41.000Z',
+        state: 'unknown',
+        outcome: 'unknown',
+        reason: 'host cancelled',
+      },
+    };
+
+    expect(validateRuntimeDaemonJsonSchema(schema, status)).toEqual([]);
+    expect(validateRuntimeDaemonJsonSchema(schema, {
+      ...status,
+      phase: 'waiting_agent',
+      stage: 'verifying',
+    })).toEqual([]);
   });
 
   it('carries typed approval timeout decisions across permission RPC', () => {

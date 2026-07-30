@@ -37,9 +37,13 @@
  * STATUS: ACTIVE since FEATURE_184 Phase B (v0.7.45).
  */
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 
-import type { StopHookContext } from '@kodax-ai/agent';
+import {
+  setKodaXDiagnosticSink,
+  type KodaXDiagnostic,
+  type StopHookContext,
+} from '@kodax-ai/agent';
 
 import {
   KodaXExtensionRuntime,
@@ -258,5 +262,34 @@ describe('CAP-021: createExtensionTurnCompleteStopHook — Stop Hook bridge', ()
     const result = await hook(baseCtx);
 
     expect(result).toEqual({ abort: true, reason: 'async-halt' });
+  });
+
+  it('CAP-EXT-STOP-011: a hung extension cannot hold finalization open forever', async () => {
+    vi.useFakeTimers();
+    const diagnostics: KodaXDiagnostic[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic);
+    });
+    runtime.registerHook('turn:complete', () => new Promise(() => undefined));
+
+    try {
+      const resultPromise = createExtensionTurnCompleteStopHook(
+        () => 'session-timeout',
+      )(baseCtx);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        source: 'coding:extension-turn-complete',
+        level: 'warn',
+        detail: expect.objectContaining({
+          sessionId: 'session-timeout',
+          timeoutMs: 30_000,
+        }),
+      }));
+    } finally {
+      restoreDiagnostics();
+      vi.useRealTimers();
+    }
   });
 });

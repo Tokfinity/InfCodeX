@@ -359,6 +359,234 @@ describe('session lineage helpers', () => {
     expect(compacted.activeEntryId).toBe(compacted.entries[compacted.entries.length - 1]?.id ?? null);
   });
 
+  it('preserves clone provenance when compaction rematerializes retained messages', () => {
+    const source = createSessionLineage([
+      createTextMessage('user', 'source prompt'),
+      createTextMessage('assistant', 'same retained answer'),
+      createTextMessage('assistant', 'same retained answer'),
+    ]);
+    const forked = forkSessionLineage(source);
+    expect(forked).not.toBeNull();
+    const forkedMessages = messageEntries(forked!);
+
+    const compacted = applySessionCompaction(
+      forked!,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nCompacted summary' },
+        forkedMessages[1]!.message,
+        forkedMessages[2]!.message,
+        createTextMessage('assistant', 'new post-compaction message'),
+      ],
+      { summary: 'Compacted summary' },
+    );
+    const compactionEntryIndex = compacted.entries.findIndex(
+      (entry) => entry.type === 'compaction' && entry.summary === 'Compacted summary',
+    );
+    const rematerialized = compacted.entries
+      .slice(compactionEntryIndex + 1)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message');
+
+    expect(rematerialized).toHaveLength(3);
+    for (let index = 0; index < 2; index += 1) {
+      const retained = forkedMessages[index + 1]!;
+      const clone = rematerialized[index]!;
+      expect(clone.id).not.toBe(retained.id);
+      expect(clone.logicalId).toBe(retained.logicalId);
+      expect(clone.sourceEntryId).toBe(retained.sourceEntryId);
+    }
+    expect(rematerialized[2]!.logicalId).toBe(rematerialized[2]!.id);
+    expect(rematerialized[2]!.sourceEntryId).toBeUndefined();
+  });
+
+  it('keeps the first duplicate system message provenance when compaction deduplicates it', () => {
+    const firstSystem = createTextMessage('system', 'same system context');
+    const secondSystem = createTextMessage('system', 'same system context');
+    const source = createSessionLineage([firstSystem, secondSystem]);
+    const sourceEntries = messageEntries(source);
+
+    const compacted = applySessionCompaction(
+      source,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nSystem summary' },
+        firstSystem,
+        secondSystem,
+      ],
+      { summary: 'System summary' },
+    );
+    const sourceIds = new Set(source.entries.map((entry) => entry.id));
+    const rematerialized = messageEntries(compacted).find((entry) =>
+      !sourceIds.has(entry.id) && entry.message === firstSystem);
+
+    expect(rematerialized?.logicalId).toBe(sourceEntries[0]!.id);
+    expect(rematerialized?.sourceEntryId).toBe(sourceEntries[0]!.id);
+  });
+
+  it('does not give retained provenance to a new same-content message', () => {
+    const retainedMessage = createTextMessage('assistant', 'same bytes');
+    const source = createSessionLineage([
+      createTextMessage('user', 'old prompt'),
+      retainedMessage,
+    ]);
+    const retainedSource = messageEntries(source)[1]!;
+    const newSameContent = createTextMessage('assistant', 'same bytes');
+
+    const compacted = applySessionCompaction(
+      source,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nIdentity summary' },
+        retainedMessage,
+        newSameContent,
+      ],
+      { summary: 'Identity summary' },
+    );
+    const sourceIds = new Set(source.entries.map((entry) => entry.id));
+    const rematerialized = messageEntries(compacted).filter((entry) => !sourceIds.has(entry.id));
+    const retainedClone = rematerialized.find((entry) => entry.message === retainedMessage);
+    const newEntry = rematerialized.find((entry) => entry.message === newSameContent);
+
+    expect(retainedClone?.logicalId).toBe(retainedSource.id);
+    expect(retainedClone?.sourceEntryId).toBe(retainedSource.id);
+    expect(newEntry?.logicalId).toBe(newEntry?.id);
+    expect(newEntry?.sourceEntryId).toBeUndefined();
+  });
+
+  it('does not clone compacted-away identity onto a new same-content prefix message', () => {
+    const oldSameContent = createTextMessage('assistant', 'ambiguous bytes');
+    const retainedTail = createTextMessage('assistant', 'retained tail');
+    const source = createSessionLineage([oldSameContent, retainedTail]);
+    const sourceTail = messageEntries(source)[1]!;
+    const newSameContent = createTextMessage('assistant', 'ambiguous bytes');
+
+    const compacted = applySessionCompaction(
+      source,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nPrefix summary' },
+        newSameContent,
+        retainedTail,
+      ],
+      { summary: 'Prefix summary' },
+    );
+    const sourceIds = new Set(source.entries.map((entry) => entry.id));
+    const rematerialized = messageEntries(compacted).filter((entry) => !sourceIds.has(entry.id));
+    const newEntry = rematerialized.find((entry) => entry.message === newSameContent);
+    const retainedClone = rematerialized.find((entry) => entry.message === retainedTail);
+
+    expect(newEntry?.logicalId).toBe(newEntry?.id);
+    expect(newEntry?.sourceEntryId).toBeUndefined();
+    expect(retainedClone?.logicalId).toBe(sourceTail.id);
+    expect(retainedClone?.sourceEntryId).toBe(sourceTail.id);
+  });
+
+  it('matches a repeated message reference to the retained suffix occurrence', () => {
+    const repeated = createTextMessage('assistant', 'same object twice');
+    const retainedTail = createTextMessage('assistant', 'tail anchor');
+    const source = createSessionLineage([repeated, repeated, retainedTail]);
+    const sourceMessages = messageEntries(source);
+
+    const compacted = applySessionCompaction(
+      source,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nSuffix summary' },
+        repeated,
+        retainedTail,
+      ],
+      { summary: 'Suffix summary' },
+    );
+    const sourceIds = new Set(source.entries.map((entry) => entry.id));
+    const repeatedClone = messageEntries(compacted).find((entry) =>
+      !sourceIds.has(entry.id) && entry.message === repeated);
+
+    expect(repeatedClone?.logicalId).toBe(sourceMessages[1]!.id);
+    expect(repeatedClone?.sourceEntryId).toBe(sourceMessages[1]!.id);
+  });
+
+  it('preserves provenance when a prior compaction checkpoint survives in the protected tail', () => {
+    const first = applySessionCompaction(
+      createSessionLineage([
+        createTextMessage('user', 'old prompt'),
+        createTextMessage('assistant', 'old answer'),
+      ]),
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nFirst summary' },
+        createTextMessage('assistant', 'first protected tail'),
+      ],
+      { summary: 'First summary' },
+    );
+    const firstCheckpoint = first.entries.find(
+      (entry) => entry.type === 'compaction' && entry.summary === 'First summary',
+    )!;
+    const renderedFirstCheckpoint = getSessionMessagesFromLineage(first)[0]!;
+
+    const second = applySessionCompaction(
+      first,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nSecond summary' },
+        renderedFirstCheckpoint,
+        createTextMessage('assistant', 'first protected tail'),
+      ],
+      { summary: 'Second summary' },
+    );
+    const secondCheckpointIndex = second.entries.findIndex(
+      (entry) => entry.type === 'compaction' && entry.summary === 'Second summary',
+    );
+    const clonedCheckpoint = second.entries
+      .slice(secondCheckpointIndex + 1)
+      .find((entry): entry is KodaXSessionMessageEntry =>
+        entry.type === 'message' && entry.message === renderedFirstCheckpoint);
+
+    expect(clonedCheckpoint?.logicalId).toBe(firstCheckpoint.logicalId);
+    expect(clonedCheckpoint?.sourceEntryId).toBe(firstCheckpoint.id);
+  });
+
+  it('inherits rendered branch-summary provenance only for the actual rendered copy', () => {
+    const branchSummary = {
+      type: 'branch_summary' as const,
+      id: 'entry_branch_summary_source',
+      parentId: null,
+      logicalId: 'logical_branch_summary_source',
+      timestamp: '2026-07-30T00:00:00.000Z',
+      summary: 'same rendered branch bytes',
+    };
+    const retainedTail = createTextMessage('assistant', 'retained branch tail');
+    const tailEntry = {
+      type: 'message' as const,
+      id: 'entry_branch_tail',
+      parentId: branchSummary.id,
+      logicalId: 'logical_branch_tail',
+      timestamp: '2026-07-30T00:00:01.000Z',
+      message: retainedTail,
+    };
+    const source: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: tailEntry.id,
+      entries: [branchSummary, tailEntry],
+    };
+    const renderedCopy = getSessionMessagesFromLineage(source)[0]!;
+    const sameBytesButNew = structuredClone(renderedCopy);
+
+    const compact = (candidate: KodaXMessage) => applySessionCompaction(
+      source,
+      [
+        { role: 'system', content: '[对话历史摘要]\n\nBranch summary test' },
+        candidate,
+        retainedTail,
+      ],
+      { summary: 'Branch summary test' },
+    );
+    const rematerialized = (lineage: KodaXSessionLineage, message: KodaXMessage) =>
+      messageEntries(lineage).find((entry) =>
+        !source.entries.some((sourceEntry) => sourceEntry.id === entry.id)
+        && entry.message === message);
+
+    const trueCopy = rematerialized(compact(renderedCopy), renderedCopy);
+    const collision = rematerialized(compact(sameBytesButNew), sameBytesButNew);
+
+    expect(trueCopy?.logicalId).toBe(branchSummary.logicalId);
+    expect(trueCopy?.sourceEntryId).toBe(branchSummary.id);
+    expect(collision?.logicalId).toBe(collision?.id);
+    expect(collision?.sourceEntryId).toBeUndefined();
+  });
+
   it('recognizes the producer checkpoint bytes and keeps attachments on the active path', () => {
     const summary = 'Verified compacted summary';
     const checkpoint: KodaXMessage = {

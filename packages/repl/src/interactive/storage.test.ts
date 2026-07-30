@@ -1999,6 +1999,503 @@ describe('FileSessionStorage', () => {
     );
   });
 
+  it('merges historical island batches with stable topology instead of timestamps', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { setKodaXDiagnosticSink } = await import('@kodax-ai/agent');
+    const sessionsDir = testSessionsDir();
+    const projectDir = path.join(sessionsDir, 'topology-project');
+    const sessionId = 'topology-aware-full-lineage';
+    const timestamp = '2026-07-30T00:00:00.000Z';
+    await mkdir(projectDir, { recursive: true });
+
+    const messageEntry = (
+      id: string,
+      parentId: string | null,
+      content: string,
+    ) => ({
+      id,
+      parentId,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content },
+    });
+    const retainedParent = messageEntry('entry_parent', null, 'retained parent');
+    const overlapPlaceholder = messageEntry('entry_overlap', 'entry_legacy_child', '[compacted]');
+    const retainedNext = messageEntry('entry_retained_next', 'entry_parent', 'retained next');
+    const current = messageEntry('entry_current', null, 'current');
+
+    await writeFile(
+      path.join(projectDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id: sessionId,
+          title: 'Topology-aware recovery',
+          gitRoot: '/tmp/topology-project',
+          createdAt: timestamp,
+          scope: 'user',
+          lineageVersion: 2,
+          activeEntryId: current.id,
+          activeMessageCount: 1,
+          lineageEntryCount: 4,
+        }),
+        ...[retainedParent, overlapPlaceholder, retainedNext, current].map((entry) =>
+          JSON.stringify({ _type: 'lineage_entry', entry })),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const legacyChild = messageEntry('entry_legacy_child', retainedParent.id, 'legacy child');
+    const batchIndependent = messageEntry('entry_batch_independent', null, 'batch independent');
+    const exactOverlap = messageEntry('entry_overlap', legacyChild.id, 'exact overlap');
+    const secondBatchChild = messageEntry('entry_second_batch', exactOverlap.id, 'second batch');
+    const anchoredMiddle = messageEntry('entry_anchored_middle', null, 'anchored middle');
+    const legacyOnly = messageEntry('entry_legacy_only', current.id, 'legacy only');
+    await writeFile(
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      [
+        JSON.stringify({ _type: 'archive_batch', archiveBatchId: 'batch_one' }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_one',
+          entry: legacyChild,
+        }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_one',
+          entry: batchIndependent,
+        }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_one',
+          entry: exactOverlap,
+        }),
+        JSON.stringify({ _type: 'archive_batch', archiveBatchId: 'batch_two' }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_two',
+          entry: secondBatchChild,
+        }),
+        JSON.stringify({ _type: 'archive_batch', archiveBatchId: 'batch_three' }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'batch_three',
+          previousEntryId: retainedNext.id,
+          nextEntryId: current.id,
+          entry: anchoredMiddle,
+        }),
+        '{"_type":"archived_entry","archiveBatchId":"crash_tail","entry":',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFile(
+      path.join(projectDir, `${sessionId}.archive.jsonl`),
+      [
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'legacy_overlap',
+          entry: exactOverlap,
+        }),
+        JSON.stringify({
+          _type: 'archived_entry',
+          archiveBatchId: 'legacy_only',
+          previousEntryId: 42,
+          entry: legacyOnly,
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    const diagnostics: string[] = [];
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      if (diagnostic.source === 'repl:session-storage') {
+        diagnostics.push(diagnostic.message);
+      }
+    });
+    let full: Awaited<ReturnType<typeof storage.loadFullLineage>>;
+    try {
+      full = await storage.loadFullLineage(sessionId);
+    } finally {
+      restoreDiagnostics();
+    }
+    const messages = full?.entries
+      .filter((entry) => entry.type === 'message')
+      .map((entry) => ({ id: entry.id, content: entry.message.content }));
+
+    expect(messages).toEqual([
+      { id: retainedParent.id, content: 'retained parent' },
+      { id: legacyChild.id, content: 'legacy child' },
+      { id: batchIndependent.id, content: 'batch independent' },
+      { id: exactOverlap.id, content: 'exact overlap' },
+      { id: secondBatchChild.id, content: 'second batch' },
+      { id: retainedNext.id, content: 'retained next' },
+      { id: anchoredMiddle.id, content: 'anchored middle' },
+      { id: current.id, content: 'current' },
+      { id: legacyOnly.id, content: 'legacy only' },
+    ]);
+    expect(new Set(messages?.map((entry) => entry.id)).size).toBe(messages?.length);
+    expect(diagnostics).toContain(
+      `Ignored incomplete island sidecar tail ${sessionId}.islands.jsonl:9.`,
+    );
+
+    const expectedIds = messages?.map((entry) => entry.id);
+    expect(await storage.archive(sessionId)).toBe(true);
+    expect((await storage.loadFullLineage(sessionId))?.entries.map((entry) => entry.id))
+      .toEqual(expectedIds);
+    expect(await storage.unarchive(sessionId)).toBe(true);
+    expect((await storage.loadFullLineage(sessionId))?.entries.map((entry) => entry.id))
+      .toEqual(expectedIds);
+  });
+
+  it('keeps exact-main authority after rewind moves a conflicting overlap to the sidecar', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const projectDir = path.join(sessionsDir, 'overlap-authority-project');
+    const sessionId = 'overlap-authority';
+    const timestamp = '2026-07-30T00:00:00.000Z';
+    const rootEntry = {
+      id: 'entry_overlap_root',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'rewind target' },
+    };
+    const mainEntry = {
+      id: 'entry_overlap_authority',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'authoritative main body' },
+    };
+    const tailEntry = {
+      id: 'entry_overlap_tail',
+      parentId: mainEntry.id,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'assistant' as const, content: 'authoritative tail' },
+    };
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(projectDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id: sessionId,
+          title: 'Overlap authority',
+          gitRoot: '/tmp/overlap-authority-project',
+          createdAt: timestamp,
+          scope: 'user',
+          lineageVersion: 2,
+          activeEntryId: tailEntry.id,
+          activeMessageCount: 2,
+          lineageEntryCount: 3,
+        }),
+        JSON.stringify({ _type: 'lineage_entry', entry: rootEntry }),
+        JSON.stringify({ _type: 'lineage_entry', entry: mainEntry }),
+        JSON.stringify({ _type: 'lineage_entry', entry: tailEntry }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      JSON.stringify({
+        _type: 'archived_entry',
+        archiveBatchId: 'overlap',
+        previousEntryId: tailEntry.id,
+        nextEntryId: rootEntry.id,
+        entry: {
+          ...mainEntry,
+          message: { role: 'user', content: 'stale sidecar body' },
+        },
+      }) + '\n',
+      'utf8',
+    );
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect((await storage.loadFullLineage(sessionId))?.entries).toEqual([
+      rootEntry,
+      mainEntry,
+      tailEntry,
+    ]);
+
+    expect(await storage.rewind(sessionId, rootEntry.id)).not.toBeNull();
+    const full = await storage.loadFullLineage(sessionId);
+    expect(full?.entries.map((entry) => entry.id)).toEqual([
+      rootEntry.id,
+      mainEntry.id,
+      tailEntry.id,
+      expect.stringMatching(/^entry_/),
+    ]);
+    expect(full?.entries.find((entry) => entry.id === mainEntry.id)).toEqual(mainEntry);
+  });
+
+  it('limits corrupt parent-cycle fallback to the cycle and preserves downstream topology', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const projectDir = path.join(sessionsDir, 'cycle-fallback-project');
+    const sessionId = 'cycle-fallback';
+    const timestamp = '2026-07-30T00:00:00.000Z';
+    const entry = (id: string, parentId: string | null) => ({
+      id,
+      parentId,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: id },
+    });
+    const current = entry('entry_cycle_current', 'entry_cycle_y');
+    const cycleA = entry('entry_cycle_a', 'entry_cycle_b');
+    const cycleB = entry('entry_cycle_b', 'entry_cycle_a');
+    const downstream = entry('entry_cycle_y', 'entry_cycle_b');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      path.join(projectDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id: sessionId,
+          title: 'Cycle fallback',
+          gitRoot: '/tmp/cycle-fallback-project',
+          createdAt: timestamp,
+          scope: 'user',
+          lineageVersion: 2,
+          activeEntryId: current.id,
+          activeMessageCount: 1,
+          lineageEntryCount: 1,
+        }),
+        JSON.stringify({ _type: 'lineage_entry', entry: current }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      [current, cycleA, cycleB, downstream].map((archived) => JSON.stringify({
+        _type: 'archived_entry',
+        archiveBatchId: 'corrupt_cycle',
+        entry: archived,
+      })).join('\n') + '\n',
+      'utf8',
+    );
+
+    const full = await new FileSessionStorage({ sessionsDir }).loadFullLineage(sessionId);
+    const ids = full?.entries.map((candidate) => candidate.id) ?? [];
+    expect(new Set(ids)).toEqual(new Set([current.id, cycleA.id, cycleB.id, downstream.id]));
+    expect(ids.indexOf(cycleB.id)).toBeLessThan(ids.indexOf(downstream.id));
+    expect(ids.indexOf(downstream.id)).toBeLessThan(ids.indexOf(current.id));
+  });
+
+  it('reads the main transcript and sidecars under the Session write lock', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'locked-full-lineage-read';
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'consistent snapshot' }],
+      title: 'Locked full lineage read',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      lineage: createSessionLineage([{ role: 'user', content: 'consistent snapshot' }]),
+    });
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const reads: Array<ReturnType<typeof storage.loadFullLineage>> = [];
+    let settled = false;
+
+    await withKodaXFileLock(lockPath, async () => {
+      reads.push(storage.loadFullLineage(sessionId).finally(() => {
+        settled = true;
+      }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      expect(settled).toBe(false);
+    });
+
+    const read = reads[0];
+    if (!read) throw new Error('Expected a pending full-lineage read.');
+    expect(await read).not.toBeNull();
+  });
+
+  it('fails strict reads without creating lock artifacts while a writer is active', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-active-writer';
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'consistent snapshot' }],
+      title: 'Strict active writer',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      lineage: createSessionLineage([{ role: 'user', content: 'consistent snapshot' }]),
+    });
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+
+    await withKodaXFileLock(lockPath, async () => {
+      await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+        code: 'data_changed',
+      });
+    });
+
+    const lockQueue = `${lockPath}.queue`;
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(lockQueue)).toBe(true);
+    expect(await fsPromises.readdir(lockQueue)).toEqual([]);
+  });
+
+  it('fails strict reads closed during an in-progress layout migration', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-mid-migration';
+    const projectDir = path.join(sessionsDir, 'migration-target');
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const strandedSidecarPath = path.join(sessionsDir, `${sessionId}.islands.jsonl`);
+    const timestamp = '2026-07-30T00:00:00.000Z';
+    const parent = {
+      id: 'entry_migration_parent',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'parent' },
+    };
+    const child = {
+      id: 'entry_migration_child',
+      parentId: parent.id,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'assistant' as const, content: 'archived child' },
+    };
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(mainPath, [
+      JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Mid migration',
+        gitRoot: '/tmp/test-repo',
+        createdAt: timestamp,
+        lineageVersion: 2,
+        activeEntryId: parent.id,
+        activeMessageCount: 1,
+      }),
+      JSON.stringify({ _type: 'lineage_entry', entry: parent }),
+    ].join('\n') + '\n', 'utf8');
+    await writeFile(strandedSidecarPath, JSON.stringify({
+      _type: 'archived_entry',
+      archiveBatchId: 'migration-batch',
+      entry: child,
+    }) + '\n', 'utf8');
+    await mkdir(path.join(sessionsDir, '.migration-lock'));
+
+    await expect(
+      new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId),
+    ).rejects.toMatchObject({ code: 'data_changed' });
+
+    expect(await readFile(mainPath, 'utf8')).toContain(parent.id);
+    expect(await readFile(strandedSidecarPath, 'utf8')).toContain(child.id);
+    expect(existsSync(path.join(sessionsDir, '.write-locks'))).toBe(false);
+  });
+
+  it('reports a malformed sidecar tail as data_corrupt in strict mode', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-corrupt-sidecar-tail';
+    const mainPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const timestamp = '2026-07-30T00:00:00.000Z';
+    const entry = {
+      id: 'entry_strict_tail',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'retained' },
+    };
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(mainPath, [
+      JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Strict corrupt tail',
+        gitRoot: '/tmp/test-repo',
+        createdAt: timestamp,
+        lineageVersion: 2,
+        activeEntryId: entry.id,
+        activeMessageCount: 1,
+      }),
+      JSON.stringify({ _type: 'lineage_entry', entry }),
+    ].join('\n') + '\n', 'utf8');
+    await writeFile(
+      path.join(sessionsDir, `${sessionId}.islands.jsonl`),
+      '{"_type":"archived_entry","archiveBatchId":"partial","entry":',
+      'utf8',
+    );
+
+    await expect(
+      new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId),
+    ).rejects.toMatchObject({ code: 'data_corrupt' });
+  });
+
+  it('persists private lineage adjacency anchors for newly archived entries', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'sidecar-adjacency-anchors';
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const initial = createSessionLineage([
+      { role: 'user', content: 'retained parent' },
+      { role: 'assistant', content: 'archived child one' },
+      { role: 'assistant', content: 'archived child two' },
+    ]);
+    const retainedParent = initial.entries[0]!;
+    const archivedChildOne = initial.entries[1]!;
+    const archivedChildTwo = initial.entries[2]!;
+    const label = {
+      type: 'label' as const,
+      id: 'label_retained_parent',
+      parentId: null,
+      logicalId: 'label_retained_parent',
+      timestamp: '2026-07-30T00:00:00.000Z',
+      targetId: retainedParent.id,
+      label: 'retain-parent',
+    };
+    const labeled: KodaXSessionLineage = {
+      ...initial,
+      entries: [...initial.entries, label],
+    };
+    const compacted = applySessionCompaction(
+      labeled,
+      [{ role: 'user', content: 'current island' }],
+      { summary: 'old island' },
+    );
+
+    await new FileSessionStorage({ sessionsDir }).save(sessionId, {
+      messages: [{ role: 'user', content: 'current island' }],
+      title: 'Sidecar adjacency anchors',
+      gitRoot,
+      lineage: compacted,
+    });
+
+    const sidecarPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(gitRoot).key,
+      `${sessionId}.islands.jsonl`,
+    );
+    const archived = (await readFile(sidecarPath, 'utf8'))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as {
+        _type?: string;
+        previousEntryId?: string | null;
+        nextEntryId?: string | null;
+        entry?: { id?: string };
+      })
+      .filter((line) => line._type === 'archived_entry');
+    const byId = new Map(archived.map((line) => [line.entry?.id, line]));
+
+    expect(byId.get(archivedChildOne.id)).toMatchObject({
+      previousEntryId: retainedParent.id,
+      nextEntryId: archivedChildTwo.id,
+    });
+    expect(byId.get(archivedChildTwo.id)).toMatchObject({
+      previousEntryId: archivedChildOne.id,
+      nextEntryId: label.id,
+    });
+  });
+
   it('does not replace the exact main file when the island sidecar flush fails', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
@@ -2267,6 +2764,132 @@ describe('FileSessionStorage', () => {
       lastError: 'test error',
     }));
     expect(loaded?.title).toBe('Fallback Updated');
+  });
+
+  it('clears errorMetadata when a full save explicitly supplies undefined', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const messages = [{ role: 'user' as const, content: 'request' }];
+
+    await storage.save('session-error-clear', {
+      messages,
+      title: 'Error Clear',
+      gitRoot,
+      errorMetadata: {
+        lastError: 'runtime run aborted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    });
+    await storage.save('session-error-clear', {
+      messages,
+      title: 'Successful Turn',
+      gitRoot,
+      errorMetadata: undefined,
+    });
+
+    expect((await storage.load('session-error-clear'))?.errorMetadata)
+      .toBeUndefined();
+  });
+
+  it('preserves errorMetadata when a partial full save omits the field', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const messages = [{ role: 'user' as const, content: 'request' }];
+
+    await storage.save('session-error-preserve', {
+      messages,
+      title: 'Error Preserve',
+      gitRoot,
+      errorMetadata: {
+        lastError: 'runtime run aborted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    });
+    await storage.save('session-error-preserve', {
+      messages,
+      title: 'Partial Update',
+      gitRoot,
+    });
+
+    expect((await storage.load('session-error-preserve'))?.errorMetadata)
+      .toMatchObject({
+        lastError: 'runtime run aborted',
+        consecutiveErrors: 1,
+      });
+  });
+
+  it('clears errorMetadata through appendSessionDelta when explicitly undefined', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const firstMessages = [{ role: 'user' as const, content: 'request' }];
+    const firstLineage = createSessionLineage(firstMessages);
+
+    await storage.save('session-error-append-clear', {
+      messages: firstMessages,
+      title: 'Append Error Clear',
+      gitRoot,
+      lineage: firstLineage,
+      errorMetadata: {
+        lastError: 'runtime run aborted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    });
+    const messages = [
+      ...firstMessages,
+      { role: 'assistant' as const, content: 'successful answer' },
+    ];
+    await storage.appendSessionDelta('session-error-append-clear', {
+      messages,
+      title: 'Append Error Clear',
+      gitRoot,
+      lineage: createSessionLineage(messages, firstLineage),
+      errorMetadata: undefined,
+    });
+
+    expect((await storage.load('session-error-append-clear'))?.errorMetadata)
+      .toBeUndefined();
+  });
+
+  it('preserves errorMetadata through appendSessionDelta when omitted', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const firstMessages = [{ role: 'user' as const, content: 'request' }];
+    const firstLineage = createSessionLineage(firstMessages);
+
+    await storage.save('session-error-append-preserve', {
+      messages: firstMessages,
+      title: 'Append Error Preserve',
+      gitRoot,
+      lineage: firstLineage,
+      errorMetadata: {
+        lastError: 'runtime run aborted',
+        lastErrorTime: 1,
+        consecutiveErrors: 1,
+      },
+    });
+    const messages = [
+      ...firstMessages,
+      { role: 'assistant' as const, content: 'partial host update' },
+    ];
+    await storage.appendSessionDelta('session-error-append-preserve', {
+      messages,
+      title: 'Append Error Preserve',
+      gitRoot,
+      lineage: createSessionLineage(messages, firstLineage),
+    });
+
+    expect((await storage.load('session-error-append-preserve'))?.errorMetadata)
+      .toMatchObject({
+        lastError: 'runtime run aborted',
+        consecutiveErrors: 1,
+      });
   });
 
   it('appendSessionDelta fallback persists session tag into the initial meta line', async () => {
@@ -2703,6 +3326,65 @@ describe('FileSessionStorage', () => {
     expect(existsSync(sidecarPath)).toBe(true);
     expect(existsSync(path.join(archivedDir, `${sessionId}.jsonl`))).toBe(false);
     expect(existsSync(path.join(archivedDir, `${sessionId}.islands.jsonl`))).toBe(false);
+  });
+
+  it.each([
+    ['archive', 'islands'],
+    ['archive', 'archive'],
+    ['unarchive', 'islands'],
+    ['unarchive', 'archive'],
+  ] as const)('fails closed for an orphaned %s destination %s sidecar', async (
+    operation,
+    sidecarKind,
+  ) => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = `${operation}-${sidecarKind}-destination-collision`;
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'preserve both sides' }],
+      title: 'Archive destination collision',
+      gitRoot,
+      lineage: createSessionLineage([{ role: 'user', content: 'preserve both sides' }]),
+    });
+    const projectDir = path.join(
+      testSessionsDir(),
+      deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    const archivedDir = path.join(projectDir, 'archived');
+    if (operation === 'unarchive') {
+      expect(await storage.archive(sessionId)).toBe(true);
+    }
+    const sourceDir = operation === 'archive' ? projectDir : archivedDir;
+    const destinationDir = operation === 'archive' ? archivedDir : projectDir;
+    const destinationSidecar = path.join(
+      destinationDir,
+      `${sessionId}.${sidecarKind}.jsonl`,
+    );
+    const destinationBytes = 'orphaned destination history\n';
+    await mkdir(destinationDir, { recursive: true });
+    await writeFile(destinationSidecar, destinationBytes, 'utf8');
+    const fileSet = [sourceDir, destinationDir].flatMap((dir) => [
+      path.join(dir, `${sessionId}.jsonl`),
+      path.join(dir, `${sessionId}.islands.jsonl`),
+      path.join(dir, `${sessionId}.archive.jsonl`),
+    ]);
+    const snapshot = async (): Promise<Record<string, string | null>> =>
+      Object.fromEntries(await Promise.all(fileSet.map(async (filePath) => [
+        filePath,
+        existsSync(filePath) ? await readFile(filePath, 'utf8') : null,
+      ] as const)));
+    const before = await snapshot();
+
+    await expect(storage[operation](sessionId)).rejects.toThrow(
+      'Refusing to overwrite existing Session archive file',
+    );
+
+    expect(await snapshot()).toEqual(before);
+    expect(before[path.join(sourceDir, `${sessionId}.jsonl`)]).not.toBeNull();
+    expect(before[path.join(sourceDir, `${sessionId}.${sidecarKind}.jsonl`)]).toBeNull();
+    expect(before[destinationSidecar]).toBe(destinationBytes);
   });
 
   it('surfaces both the move and rollback errors when paired archive recovery fails', async () => {

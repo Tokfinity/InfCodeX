@@ -144,6 +144,50 @@ describe('runtime daemon transport', () => {
     expect(notifications[0]).toMatchObject({ method: 'event' });
   });
 
+  it('removes cancelled request ids while still handling a bounded late result', async () => {
+    const endpoint = await makeTestEndpoint();
+    let requestId: string | undefined;
+    let accepted: net.Socket | undefined;
+    const server = await listen(endpoint, (socket) => {
+      accepted = socket;
+      const parser = createRuntimeDaemonFrameParser((frame) => {
+        if (!isRuntimeDaemonRequest(frame)) return;
+        requestId = frame.id;
+      });
+      socket.on('data', (chunk) => parser.push(chunk));
+    });
+    cleanupTasks.push(() => closeServer(server));
+    const transport = await createRuntimeDaemonSocketClientTransport(endpoint);
+    cleanupTasks.push(async () => {
+      await transport.close?.();
+    });
+    const controller = new AbortController();
+    const lateResults: unknown[] = [];
+    const pending = transport.request(
+      'daemon.status',
+      undefined,
+      undefined,
+      {
+        signal: controller.signal,
+        onLateResult: (value) => lateResults.push(value),
+      },
+    );
+    await waitFor(() => requestId !== undefined && accepted !== undefined);
+
+    const cancelled = Object.assign(new Error('cancelled by test'), {
+      code: 'read_cancelled',
+    });
+    controller.abort(cancelled);
+    await expect(pending).rejects.toBe(cancelled);
+    accepted!.write(`${JSON.stringify(createRuntimeDaemonSuccessResponse(
+      requestId!,
+      { status: 'late' },
+    ))}\n`);
+    await waitFor(() => lateResults.length === 1);
+
+    expect(lateResults).toEqual([{ status: 'late' }]);
+  });
+
   it('rejects daemon error responses and pending requests when closed', async () => {
     const endpoint = await makeTestEndpoint();
     const server = await listen(endpoint, (socket) => {

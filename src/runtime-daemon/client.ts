@@ -35,19 +35,23 @@ import type {
   RuntimeMcpValidateResult,
   RuntimeModelListFilter,
   RuntimeOperationOptions,
+  RuntimeObservationInvalidation,
   RuntimePermissionDecision,
   RuntimePermissionFilter,
   RuntimePermissionRequest,
   RuntimePermissionRequestInput,
   RuntimePermissionRespondOptions,
+  RuntimeReadOptions,
   RuntimeRunFilter,
   RuntimeRunHandle,
   RuntimeRunResult,
   RuntimeRunStatus,
   RuntimeSession,
+  RuntimeSessionDiagnostics,
   RuntimeSessionObservation,
   RuntimeSessionObservationSnapshot,
   RuntimeSessionSettings,
+  RuntimeSessionStatus,
   RuntimeSessionSummary,
   RuntimeSkillDescribeInput,
   RuntimeSkillDescription,
@@ -76,6 +80,7 @@ import type {
   McpServerToolList,
 } from '@kodax-ai/agent';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import { KODAX_VERSION } from '@kodax-ai/repl';
 import type {
   RuntimeDaemonMethod,
   RuntimeDaemonNotification,
@@ -96,12 +101,18 @@ export interface RuntimeDaemonClientTransport {
     method: RuntimeDaemonMethod,
     params?: unknown,
     operation?: RuntimeDaemonOperationEnvelope,
+    control?: RuntimeDaemonRequestControl,
   ): Promise<unknown>;
   subscribe(listener: (notification: RuntimeDaemonNotification) => void): RuntimeSubscription;
   subscribeLifecycle?(
     listener: (state: RuntimeDaemonTransportLifecycleState) => void,
   ): RuntimeSubscription;
   close?(): Promise<void> | void;
+}
+
+export interface RuntimeDaemonRequestControl {
+  readonly signal?: AbortSignal;
+  readonly onLateResult?: (value: unknown) => void;
 }
 
 export interface RuntimeDaemonTransportLifecycleState {
@@ -182,13 +193,67 @@ export function createRuntimeDaemonClient(
     method: RuntimeDaemonMethod,
     params?: unknown,
     operation?: RuntimeOperationOptions,
+    control?: RuntimeDaemonRequestControl,
   ): Promise<unknown> => options.transport.request(
     method,
     params,
     isRuntimeDaemonMutationMethod(method)
       ? createOperationEnvelope(options.journalEpoch, operation)
       : undefined,
+    control,
   );
+  const readRequest = (
+    method: RuntimeDaemonMethod,
+    params: Readonly<Record<string, unknown>>,
+    readOptions?: RuntimeReadOptions,
+    onLateResult?: (value: unknown) => void,
+  ): Promise<unknown> => {
+    try {
+      validateRuntimeDaemonReadOptions(readOptions);
+    } catch (error: unknown) {
+      return Promise.reject(error);
+    }
+    const controller = new AbortController();
+    let abandoned = false;
+    let lateResultDelivered = false;
+    const deliverLateResult = (value: unknown): void => {
+      if (lateResultDelivered) return;
+      lateResultDelivered = true;
+      try {
+        onLateResult?.(value);
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'runtime.daemon.client',
+          level: 'warn',
+          message: 'Runtime daemon late-result cleanup failed.',
+          detail: error,
+        });
+      }
+    };
+    const operation = request(method, {
+      ...params,
+      ...(readOptions?.timeoutMs !== undefined
+        ? { timeoutMs: readOptions.timeoutMs }
+        : {}),
+    }, undefined, {
+      signal: controller.signal,
+      ...(onLateResult !== undefined
+        ? { onLateResult: deliverLateResult }
+        : {}),
+    });
+    if (onLateResult !== undefined) {
+      void operation.then(
+        (value) => {
+          if (abandoned) deliverLateResult(value);
+        },
+        () => undefined,
+      );
+    }
+    return raceRuntimeDaemonRead(operation, readOptions, (error) => {
+      abandoned = true;
+      controller.abort(error);
+    });
+  };
   const actorControlPlaneError = (): RuntimeDaemonUpgradeRequiredError | undefined => {
     const capability = options.capabilities?.actorControlPlane;
     if (
@@ -298,26 +363,46 @@ export function createRuntimeDaemonClient(
         const { operation, ...transportInput } = input;
         return request('session.create', transportInput, operation) as Promise<RuntimeSession>;
       },
-      load(sessionId) {
-        return request('session.load', { sessionId }) as Promise<RuntimeSession>;
+      load(sessionId, readOptions) {
+        return readRequest('session.load', { sessionId }, readOptions) as Promise<RuntimeSession>;
       },
       list(filter) {
         return request('session.list', filter) as Promise<readonly RuntimeSessionSummary[]>;
       },
-      transcript(sessionId) {
-        return request('session.transcript', { sessionId }) as Promise<RuntimeTranscript | null>;
+      status(sessionId) {
+        return request('session.status', { sessionId }) as Promise<RuntimeSessionStatus>;
       },
-      transcriptPage(input) {
-        return request('session.transcript.page', input) as Promise<RuntimeTranscriptSlice | null>;
+      transcript(sessionId, readOptions) {
+        return readRequest('session.transcript', { sessionId }, readOptions) as Promise<RuntimeTranscript | null>;
       },
-      transcriptEntryChunk(input) {
-        return request('session.transcript.entryChunk', input) as Promise<RuntimeTranscriptEntryChunk | null>;
+      transcriptPage(input, readOptions) {
+        return readRequest('session.transcript.page', input, readOptions) as Promise<RuntimeTranscriptSlice | null>;
       },
-      transcriptSearch(input) {
-        return request('session.transcript.search', input) as Promise<RuntimeTranscriptSearchResult | null>;
+      transcriptEntryChunk(input, readOptions) {
+        return readRequest('session.transcript.entryChunk', input, readOptions) as Promise<RuntimeTranscriptEntryChunk | null>;
       },
-      observe(sessionId, listener) {
-        return observeDaemonSession(options.transport, request, sessionId, listener);
+      transcriptSearch(input, readOptions) {
+        return readRequest('session.transcript.search', input, readOptions) as Promise<RuntimeTranscriptSearchResult | null>;
+      },
+      observe(sessionId, listener, readOptions) {
+        return observeDaemonSession(options.transport, readRequest, sessionId, listener, readOptions);
+      },
+      diagnostics(input) {
+        return readRequest(
+          'session.diagnostics',
+          {
+            sessionId: input.sessionId,
+            ...(input.runId !== undefined ? { runId: input.runId } : {}),
+          },
+          input,
+        ).then((value) => ({
+          ...(value as RuntimeSessionDiagnostics),
+          sdkVersion: KODAX_VERSION,
+          runtimeVersion: options.identity.version,
+          daemonVersion:
+            options.identity.mode === 'daemon' ? options.identity.version : null,
+          runtimeMode: options.identity.mode,
+        }));
       },
       fork(input) {
         return request('session.fork', input) as Promise<RuntimeSession | null>;
@@ -1055,32 +1140,177 @@ function subscribeToDaemonEvents(
 
 async function observeDaemonSession(
   transport: RuntimeDaemonClientTransport,
-  request: RuntimeDaemonClientTransport['request'],
+  request: (
+    method: RuntimeDaemonMethod,
+    params: Readonly<Record<string, unknown>>,
+    options?: RuntimeReadOptions,
+  ) => Promise<unknown>,
   sessionId: string,
   listener: RuntimeEventListener,
+  readOptions?: RuntimeReadOptions,
 ): Promise<RuntimeSessionObservation> {
   let closed = false;
+  let live = false;
   let remoteSubscriptionId: string | undefined;
   let bufferOverflowed = false;
-  const pending: Array<Record<string, unknown>> = [];
-  const local = transport.subscribe((notification) => {
-    if (closed || notification.method !== 'event') return;
+  let cursor: number | undefined;
+  let invalidated = false;
+  let connectionId: string | undefined;
+  let resolveInvalidated:
+    | ((value: RuntimeObservationInvalidation) => void)
+    | undefined;
+  const invalidation = new Promise<RuntimeObservationInvalidation>((resolve) => {
+    resolveInvalidated = resolve;
+  });
+  const pending: Array<{
+    readonly method: 'event' | 'observation.invalidated';
+    readonly payload: Record<string, unknown>;
+  }> = [];
+  let local: RuntimeSubscription | undefined;
+  let lifecycle: RuntimeSubscription | undefined;
+  const invalidate = (
+    reason: RuntimeObservationInvalidation['reason'],
+    message: string,
+    runtimeId: string,
+  ): void => {
+    if (closed || invalidated) return;
+    invalidated = true;
+    resolveInvalidated?.({
+      code: 'observation_invalidated',
+      reason,
+      runtimeId,
+      message,
+    });
+  };
+  const deliver = (
+    payload: Record<string, unknown>,
+    runtimeId: string,
+  ): void => {
+    const event = parseRuntimeEventForClient(payload.event);
+    if (event === undefined) {
+      invalidate(
+        'event_order',
+        'Runtime delivered an invalid observation event; full resync is required.',
+        runtimeId,
+      );
+      return;
+    }
+    if (cursor !== undefined && event.seq < cursor) {
+      if (!live) return;
+      invalidate(
+        'event_order',
+        `Runtime observation event order regressed from ${cursor} to ${event.seq}.`,
+        runtimeId,
+      );
+      return;
+    }
+    if (cursor !== undefined && event.seq === cursor) return;
+    cursor = event.seq;
+    listener(event);
+  };
+  const deliverInvalidation = (
+    payload: Record<string, unknown>,
+    runtimeId: string,
+  ): void => {
+    const parsed = parseRuntimeObservationInvalidation(payload.invalidation);
+    if (parsed === undefined) {
+      invalidate(
+        'event_order',
+        'Runtime delivered an invalid observation invalidation; full resync is required.',
+        runtimeId,
+      );
+      return;
+    }
+    invalidate(parsed.reason, parsed.message, parsed.runtimeId);
+  };
+  local = transport.subscribe((notification) => {
+    if (
+      closed
+      || invalidated
+      || (
+        notification.method !== 'event'
+        && notification.method !== 'observation.invalidated'
+      )
+    ) return;
     const payload = requireRecord(notification.params);
-    if (remoteSubscriptionId === undefined) {
-      if (!isRuntimeEventForSession(payload.event, sessionId)) return;
+    if (
+      remoteSubscriptionId === undefined
+      || !live
+    ) {
+      if (
+        notification.method === 'event'
+        && !isRuntimeEventForSession(payload.event, sessionId)
+      ) return;
       if (pending.length >= MAX_PENDING_SUBSCRIPTION_NOTIFICATIONS) {
         bufferOverflowed = true;
+        invalidate(
+          'event_overflow',
+          'Runtime observation handoff overflowed; full resync is required.',
+          'daemon',
+        );
       } else {
-        pending.push(payload);
+        pending.push({ method: notification.method, payload });
       }
       return;
     }
     if (payload.subscriptionId === remoteSubscriptionId) {
-      deliverRuntimeEvent(payload.event, listener);
+      if (notification.method === 'event') {
+        deliver(payload, 'daemon');
+      } else {
+        deliverInvalidation(payload, 'daemon');
+      }
     }
   });
+  lifecycle = transport.subscribeLifecycle?.((state) => {
+    if (state.state === 'connected') {
+      if (connectionId !== undefined && connectionId !== state.connectionId) {
+        invalidate(
+          'runtime_changed',
+          'Runtime transport connection changed; discard the observation and resync.',
+          'daemon',
+        );
+      }
+      connectionId = state.connectionId;
+      return;
+    }
+    invalidate(
+      'transport_disconnected',
+      state.reason ?? 'Runtime transport disconnected; observation is invalid.',
+      'daemon',
+    );
+  });
+  const unsubscribeLateObservation = (value: unknown): void => {
+    try {
+      const subscriptionId = requireStringField(
+        requireRecord(value),
+        'subscriptionId',
+      );
+      void request('event.unsubscribe', { subscriptionId }).catch(
+        (error: unknown) => {
+          emitKodaXDiagnostic({
+            source: 'runtime.daemon.client',
+            level: 'warn',
+            message: 'Failed to unsubscribe a late Session observation.',
+            detail: error,
+          });
+        },
+      );
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'runtime.daemon.client',
+        level: 'warn',
+        message: 'Ignored an invalid late Session observation response.',
+        detail: error,
+      });
+    }
+  };
   try {
-    const result = requireRecord(await request('session.observe', { sessionId }));
+    const result = requireRecord(await request(
+      'session.observe',
+      { sessionId },
+      readOptions,
+      unsubscribeLateObservation,
+    ));
     remoteSubscriptionId = requireStringField(result, 'subscriptionId');
     if (bufferOverflowed) {
       throw Object.assign(
@@ -1089,18 +1319,16 @@ async function observeDaemonSession(
       );
     }
     const snapshot = requireRecord(result.snapshot) as unknown as RuntimeSessionObservationSnapshot;
-    for (const payload of pending.splice(0)) {
-      if (payload.subscriptionId === remoteSubscriptionId) {
-        deliverRuntimeEvent(payload.event, listener);
-      }
-    }
-    return {
+    cursor = snapshot.cursor;
+    const observation: RuntimeSessionObservation = {
       snapshot,
+      invalidated: invalidation,
       close() {
         if (closed) return;
         closed = true;
         pending.length = 0;
-        local.close();
+        local?.close();
+        lifecycle?.close();
         if (remoteSubscriptionId !== undefined) {
           void request('event.unsubscribe', {
             subscriptionId: remoteSubscriptionId,
@@ -1108,14 +1336,97 @@ async function observeDaemonSession(
         }
       },
     };
+    queueMicrotask(() => queueMicrotask(() => {
+      if (closed || invalidated) return;
+      while (pending.length > 0) {
+        const batch = pending.splice(0);
+        for (const notification of batch) {
+          if (invalidated) break;
+          const { method, payload } = notification;
+          if (payload.subscriptionId === remoteSubscriptionId) {
+            if (method === 'event') {
+              deliver(payload, snapshot.runtimeId);
+            } else {
+              deliverInvalidation(payload, snapshot.runtimeId);
+            }
+          }
+        }
+      }
+      live = true;
+    }));
+    return observation;
   } catch (error: unknown) {
     closed = true;
     pending.length = 0;
-    local.close();
+    local?.close();
+    lifecycle?.close();
     if (remoteSubscriptionId !== undefined) {
       void request('event.unsubscribe', { subscriptionId: remoteSubscriptionId }).catch(() => undefined);
     }
     throw error;
+  }
+}
+
+async function raceRuntimeDaemonRead<T>(
+  operation: Promise<T>,
+  options: RuntimeReadOptions | undefined,
+  interrupt: (error: Error) => void,
+): Promise<T> {
+  validateRuntimeDaemonReadOptions(options);
+  if (options?.signal === undefined && options?.timeoutMs === undefined) {
+    return operation;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        if (options?.timeoutMs !== undefined) {
+          timer = setTimeout(
+            () => {
+              const error = Object.assign(new Error(
+                `Runtime read timed out after ${options.timeoutMs}ms`,
+              ), { code: 'read_timeout' as const });
+              reject(error);
+              interrupt(error);
+            },
+            options.timeoutMs,
+          );
+        }
+        if (options?.signal !== undefined) {
+          abort = () => {
+            const error = Object.assign(
+              new Error('Runtime read cancelled'),
+              { code: 'read_cancelled' as const },
+            );
+            reject(error);
+            interrupt(error);
+          };
+          options.signal.addEventListener('abort', abort, { once: true });
+        }
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (abort !== undefined) {
+      options?.signal?.removeEventListener('abort', abort);
+    }
+  }
+}
+
+function validateRuntimeDaemonReadOptions(
+  options: RuntimeReadOptions | undefined,
+): void {
+  if (options?.signal?.aborted) {
+    throw Object.assign(new Error('Runtime read cancelled'), {
+      code: 'read_cancelled' as const,
+    });
+  }
+  if (options?.timeoutMs !== undefined && (
+    !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0
+  )) {
+    throw new Error('Runtime read timeoutMs must be a positive safe integer');
   }
 }
 
@@ -1124,6 +1435,34 @@ function isRuntimeEventForSession(value: unknown, sessionId: string): boolean {
     && typeof value === 'object'
     && !Array.isArray(value)
     && (value as Record<string, unknown>).sessionId === sessionId;
+}
+
+function parseRuntimeObservationInvalidation(
+  value: unknown,
+): RuntimeObservationInvalidation | undefined {
+  if (
+    value === null
+    || typeof value !== 'object'
+    || Array.isArray(value)
+  ) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    record.code !== 'observation_invalidated'
+    || (
+      record.reason !== 'event_overflow'
+      && record.reason !== 'event_order'
+      && record.reason !== 'runtime_changed'
+      && record.reason !== 'transport_disconnected'
+    )
+    || typeof record.runtimeId !== 'string'
+    || typeof record.message !== 'string'
+  ) return undefined;
+  return {
+    code: 'observation_invalidated',
+    reason: record.reason,
+    runtimeId: record.runtimeId,
+    message: record.message,
+  };
 }
 
 function deliverRuntimeEvent(value: unknown, listener: RuntimeEventListener): void {

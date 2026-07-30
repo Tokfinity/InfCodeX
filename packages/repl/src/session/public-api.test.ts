@@ -12,6 +12,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +22,14 @@ interface SessionApiModule {
   listSessions: (opts?: import('./public-api.js').ListSessionsOptions) => Promise<import('./public-api.js').SessionSummary[]>;
   loadSession: (id: string) => Promise<import('./public-api.js').SessionSummary | null>;
   loadFullTranscript: (id: string) => Promise<import('./public-api.js').FullTranscriptSessionData | null>;
+  readFullTranscript: (
+    id: string,
+    options?: import('./public-api.js').SessionReadOptions,
+  ) => Promise<import('./public-api.js').FullTranscriptSessionData | null>;
+  exportSessionBundle: (
+    id: string,
+    options?: import('./public-api.js').SessionBundleExportOptions,
+  ) => Promise<import('./public-api.js').SessionBundleExportResult>;
   appendClientNotice: (
     id: string,
     opts: import('./public-api.js').AppendClientNoticeOptions,
@@ -328,6 +337,188 @@ describe('Session Management Public SDK', () => {
     expect(result).toBeNull();
   });
 
+  it('strict history reads do not migrate or repair a legacy flat Session', async () => {
+    const id = 'strict-read-only-flat';
+    const sessionPath = path.join(sessionsDir, `${id}.jsonl`);
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id,
+          title: 'Strict read only',
+          gitRoot: '/tmp/test-repo',
+          createdAt: '2026-07-30T00:00:00.000Z',
+          errorMetadata: { consecutiveErrors: 2 },
+        }),
+        JSON.stringify({
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'unfinished-tool',
+            name: 'read',
+            input: { path: 'README.md' },
+          }],
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    );
+    const before = await fs.promises.readFile(sessionPath);
+    const beforeStat = await fs.promises.stat(sessionPath);
+
+    const transcript = await api.readFullTranscript(id);
+
+    expect(transcript?.transcriptEntries).toHaveLength(1);
+    expect(await fs.promises.readFile(sessionPath)).toEqual(before);
+    expect((await fs.promises.stat(sessionPath)).mtimeMs).toBe(beforeStat.mtimeMs);
+    expect(fs.existsSync(path.join(sessionsDir, '.layout.json'))).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, '.write-locks'))).toBe(false);
+    expect(fs.existsSync(sessionPath)).toBe(true);
+  });
+
+  it.each([
+    ['data_corrupt', '{not json}\n'],
+    [
+      'version_incompatible',
+      `${JSON.stringify({
+        _type: 'meta',
+        id: 'strict-error',
+        title: 'Future',
+        gitRoot: '/tmp/test-repo',
+        createdAt: '2026-07-30T00:00:00.000Z',
+        lineageVersion: 99,
+      })}\n`,
+    ],
+  ] as const)('strict history reads expose %s errors', async (code, content) => {
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(sessionsDir, 'strict-error.jsonl'),
+      content,
+      'utf8',
+    );
+
+    await expect(api.readFullTranscript('strict-error')).rejects.toMatchObject({
+      code,
+    });
+    await expect(api.loadFullTranscript('strict-error')).resolves.toBeNull();
+  });
+
+  it('strict history reads support cancellation', async () => {
+    await writeMinimalSession(sessionsDir, 'cancelled-read');
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(api.readFullTranscript('cancelled-read', {
+      signal: controller.signal,
+    })).rejects.toMatchObject({ code: 'read_cancelled' });
+  });
+
+  it('exports an incompatible legacy bundle byte-for-byte without migration', async () => {
+    const id = 'raw-export';
+    await mkdir(sessionsDir, { recursive: true });
+    const mainPath = path.join(sessionsDir, `${id}.jsonl`);
+    const islandsPath = path.join(sessionsDir, `${id}.islands.jsonl`);
+    const main = [
+      JSON.stringify({
+        _type: 'meta',
+        id,
+        title: 'Future Session',
+        gitRoot: '/tmp/test-repo',
+        createdAt: '2026-07-30T00:00:00.000Z',
+        lineageVersion: 99,
+      }),
+      JSON.stringify({ _type: 'future_record', payload: { preserved: true } }),
+      '',
+    ].join('\n');
+    const islands = `${JSON.stringify({
+      _type: 'archive_batch',
+      archiveBatchId: 'batch-1',
+      sessionId: id,
+      archivedAt: '2026-07-30T00:00:01.000Z',
+      entryCount: 1,
+    })}\n{"_type":"archived_entry"`;
+    await writeFile(mainPath, main, 'utf8');
+    await writeFile(islandsPath, islands, 'utf8');
+    const beforeMain = await fs.promises.stat(mainPath);
+    const beforeIslands = await fs.promises.stat(islandsPath);
+
+    const exported = await api.exportSessionBundle(id);
+
+    expect(exported.status).toBe('unsupported');
+    expect(exported.files.map((file) => [file.kind, file.content])).toEqual([
+      ['main', main],
+      ['islands', islands],
+    ]);
+    expect(exported.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unsupported_version', file: mainPath }),
+      expect.objectContaining({ code: 'unsupported_record', file: mainPath }),
+      expect.objectContaining({ code: 'partial_tail', file: islandsPath }),
+    ]));
+    expect(fs.existsSync(path.join(sessionsDir, '.layout.json'))).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, '.write-locks'))).toBe(false);
+    expect((await fs.promises.stat(mainPath)).mtimeMs).toBe(beforeMain.mtimeMs);
+    expect((await fs.promises.stat(islandsPath)).mtimeMs).toBe(beforeIslands.mtimeMs);
+  });
+
+  it('exports arbitrary persisted bytes exactly without creating lock artifacts', async () => {
+    const id = 'raw-binary-export';
+    const mainPath = path.join(sessionsDir, `${id}.jsonl`);
+    const meta = Buffer.from(`${JSON.stringify({
+      _type: 'meta',
+      id,
+      title: 'Raw binary Session',
+      gitRoot: '/tmp/test-repo',
+      createdAt: '2026-07-30T00:00:00.000Z',
+    })}\n`, 'utf8');
+    const bytes = Buffer.concat([meta, Buffer.from([0xff, 0xfe, 0x00, 0x0a])]);
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(mainPath, bytes);
+
+    const exported = await api.exportSessionBundle(id);
+    const file = exported.files[0];
+
+    expect(file).toBeDefined();
+    expect(file?.byteLength).toBe(bytes.length);
+    expect(file?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    expect(Buffer.from(file?.contentBase64 ?? '', 'base64')).toEqual(bytes);
+    expect(fs.existsSync(path.join(sessionsDir, '.write-locks'))).toBe(false);
+  });
+
+  it('fails raw export closed while layout migration is in progress', async () => {
+    const id = 'raw-export-mid-migration';
+    await writeMinimalSession(sessionsDir, id);
+    await mkdir(path.join(sessionsDir, '.migration-lock'));
+    const before = await fs.promises.readFile(path.join(sessionsDir, `${id}.jsonl`));
+
+    await expect(api.exportSessionBundle(id)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+
+    expect(await fs.promises.readFile(path.join(sessionsDir, `${id}.jsonl`)))
+      .toEqual(before);
+    expect(fs.existsSync(path.join(sessionsDir, '.write-locks'))).toBe(false);
+  });
+
+  it('fails raw export closed when one id has multiple main candidates', async () => {
+    const id = 'ambiguous-export';
+    const first = path.join(sessionsDir, 'project-a');
+    const second = path.join(sessionsDir, 'project-b', 'archived');
+    await writeMinimalSession(first, id);
+    await writeMinimalSession(second, id);
+
+    const exported = await api.exportSessionBundle(id);
+
+    expect(exported).toMatchObject({
+      status: 'ambiguous',
+      files: [],
+      candidates: [
+        path.join(first, `${id}.jsonl`),
+        path.join(second, `${id}.jsonl`),
+      ],
+    });
+  });
+
   // ── Test 5: forkSession returns null for missing id (NEVER throws) ────────
   it('forkSession returns null for a missing session without throwing', async () => {
     let threw = false;
@@ -611,6 +802,7 @@ describe('Session Management Public SDK', () => {
       'listSessions',
       'loadSession',
       'loadFullTranscript',
+      'readFullTranscript',
       'appendClientNotice',
       'forkSession',
       'rewindSession',
@@ -975,12 +1167,30 @@ describe('Session Management Public SDK', () => {
     expect(rewound).not.toBeNull();
     expect(active?.lineage?.activeEntryId).toBe(firstEntryId);
     expect(active?.messages.map((message) => message.content)).toEqual(['first prompt']);
-    expect(full?.messages.map((message) => message.content)).toEqual(['first prompt']);
+    expect(full?.messages).toHaveLength(8);
     expect(full?.transcriptEntries.map((entry) => entry.type)).toEqual([
+      'message',
+      'message',
+      'message',
+      'message',
+      'message',
+      'message',
+      'message',
       'message',
       'rewind_marker',
     ]);
-    expect(full?.transcriptEntries[1]).toEqual(expect.objectContaining({
+    expect(full?.transcriptEntries.map((entry) => entry.active)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(full?.transcriptEntries[8]).toEqual(expect.objectContaining({
       type: 'rewind_marker',
       source: 'system',
       active: true,
@@ -1221,14 +1431,73 @@ describe('Session Management Public SDK', () => {
     }));
   });
 
-  it('loadFullTranscript includes entries archived into the islands sidecar', async () => {
+  it('preserves raw append order across compaction, rewind, and multiple archive batches', async () => {
     const overrideDir = path.join(tempHome, 'full-transcript-sidecar-test');
     const projectDir = path.join(overrideDir, 'project-a');
     await mkdir(projectDir, { recursive: true });
     const id = 'sidecar-transcript-001';
     const mainPath = path.join(projectDir, `${id}.jsonl`);
     const sidecarPath = path.join(projectDir, `${id}.islands.jsonl`);
-    const legacySidecarPath = path.join(projectDir, `${id}.archive.jsonl`);
+    const timestamp = '2026-06-16T00:00:00.000Z';
+    const rootCompaction = {
+      id: 'entry_compaction_root',
+      parentId: null,
+      timestamp,
+      type: 'compaction',
+      summary: 'Root checkpoint',
+      firstKeptEntryId: 'entry_retained_parent',
+      tokensBefore: 100,
+      tokensAfter: 20,
+    };
+    const retainedParent = {
+      id: 'entry_retained_parent',
+      parentId: rootCompaction.id,
+      timestamp,
+      type: 'message',
+      message: { role: 'user', content: 'retained parent' },
+    };
+    const middleCompaction = {
+      id: 'entry_compaction_middle',
+      parentId: null,
+      timestamp,
+      type: 'compaction',
+      summary: 'Middle checkpoint',
+      firstKeptEntryId: 'entry_middle_parent',
+      tokensBefore: 80,
+      tokensAfter: 15,
+    };
+    const middleParent = {
+      id: 'entry_middle_parent',
+      parentId: middleCompaction.id,
+      timestamp,
+      type: 'message',
+      message: { role: 'user', content: 'middle parent' },
+    };
+    const currentCompaction = {
+      id: 'entry_compaction_current',
+      parentId: null,
+      timestamp,
+      type: 'compaction',
+      summary: 'Current checkpoint',
+      firstKeptEntryId: 'entry_current',
+      tokensBefore: 60,
+      tokensAfter: 10,
+    };
+    const current = {
+      id: 'entry_current',
+      parentId: currentCompaction.id,
+      timestamp,
+      type: 'message',
+      message: { role: 'assistant', content: 'current tail' },
+    };
+    const mainEntries = [
+      rootCompaction,
+      retainedParent,
+      middleCompaction,
+      middleParent,
+      currentCompaction,
+      current,
+    ];
 
     await writeFile(
       mainPath,
@@ -1242,41 +1511,10 @@ describe('Session Management Public SDK', () => {
           scope: 'user',
           lineageVersion: 2,
           activeEntryId: 'entry_current',
-          activeMessageCount: 1,
-          lineageEntryCount: 3,
+          activeMessageCount: 2,
+          lineageEntryCount: mainEntries.length,
         }),
-        JSON.stringify({
-          _type: 'lineage_entry',
-          entry: {
-            id: 'entry_marker',
-            parentId: null,
-            timestamp: '2026-06-16T00:00:01.000Z',
-            type: 'archive_marker',
-            archiveBatchId: 'batch_old',
-            archivedEntryCount: 2,
-            summary: 'Old island',
-          },
-        }),
-        JSON.stringify({
-          _type: 'lineage_entry',
-          entry: {
-            id: 'entry_old_user',
-            parentId: null,
-            timestamp: '2026-06-15T00:00:00.000Z',
-            type: 'message',
-            message: { role: 'user', content: 'old prompt still in main' },
-          },
-        }),
-        JSON.stringify({
-          _type: 'lineage_entry',
-          entry: {
-            id: 'entry_current',
-            parentId: null,
-            timestamp: '2026-06-16T00:00:02.000Z',
-            type: 'message',
-            message: { role: 'user', content: 'current prompt' },
-          },
-        }),
+        ...mainEntries.map((entry) => JSON.stringify({ _type: 'lineage_entry', entry })),
       ].join('\n') + '\n',
       'utf-8',
     );
@@ -1285,48 +1523,42 @@ describe('Session Management Public SDK', () => {
       [
         JSON.stringify({
           _type: 'archive_batch',
-          archiveBatchId: 'batch_old',
+          archiveBatchId: 'batch_first',
           sessionId: id,
-          archivedAt: '2026-06-16T00:00:03.000Z',
-          entryCount: 2,
+          archivedAt: timestamp,
+          entryCount: 1,
         }),
         JSON.stringify({
           _type: 'archived_entry',
-          archiveBatchId: 'batch_old',
+          archiveBatchId: 'batch_first',
+          previousEntryId: retainedParent.id,
+          nextEntryId: middleCompaction.id,
           entry: {
-            id: 'entry_old_user',
-            parentId: null,
-            timestamp: '2026-06-15T00:00:00.000Z',
+            id: 'entry_archived_child_first',
+            parentId: retainedParent.id,
+            timestamp,
             type: 'message',
-            message: { role: 'user', content: 'old prompt' },
+            message: { role: 'assistant', content: 'first archived child' },
           },
         }),
         JSON.stringify({
-          _type: 'archived_entry',
-          archiveBatchId: 'batch_old',
-          entry: {
-            id: 'entry_old_assistant',
-            parentId: 'entry_old_user',
-            timestamp: '2026-06-15T00:00:01.000Z',
-            type: 'message',
-            message: { role: 'assistant', content: 'old answer' },
-          },
+          _type: 'archive_batch',
+          archiveBatchId: 'batch_second',
+          sessionId: id,
+          archivedAt: timestamp,
+          entryCount: 1,
         }),
-      ].join('\n') + '\n',
-      'utf-8',
-    );
-    await writeFile(
-      legacySidecarPath,
-      [
         JSON.stringify({
           _type: 'archived_entry',
-          archiveBatchId: 'batch_old',
+          archiveBatchId: 'batch_second',
+          previousEntryId: middleParent.id,
+          nextEntryId: currentCompaction.id,
           entry: {
-            id: 'entry_old_user',
-            parentId: null,
-            timestamp: '2026-06-15T00:00:00.000Z',
+            id: 'entry_archived_child_second',
+            parentId: middleParent.id,
+            timestamp,
             type: 'message',
-            message: { role: 'user', content: 'old prompt duplicate' },
+            message: { role: 'assistant', content: 'second archived child' },
           },
         }),
       ].join('\n') + '\n',
@@ -1334,7 +1566,10 @@ describe('Session Management Public SDK', () => {
     );
 
     const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
-      loadSession: (sessionId: string) => Promise<{ messages: Array<{ content: unknown }> } | null>;
+      rewindSession: (
+        sessionId: string,
+        options: { selector: string },
+      ) => Promise<unknown | null>;
       loadFullTranscript: (sessionId: string) => Promise<{
         messages: Array<{ content: unknown }>;
         activeMessages: Array<{ content: unknown }>;
@@ -1343,38 +1578,36 @@ describe('Session Management Public SDK', () => {
           entryId: string;
           logicalId: string;
           sourceEntryId?: string;
+          type: string;
+          payload?: { rewindTargetId?: string };
         }>;
       } | null>;
     };
 
-    const active = await mgr.loadSession(id);
+    const rewound = await mgr.rewindSession(id, { selector: retainedParent.id });
     const full = await mgr.loadFullTranscript(id);
+    const rewindEntryId = full?.transcriptEntries.at(-1)?.entryId;
 
-    expect(active?.messages.map((message) => message.content)).toEqual([
-      'current prompt',
-    ]);
-    expect(full?.messages.map((message) => message.content)).toEqual([
-      'old prompt',
-      'old answer',
-      'current prompt',
-    ]);
-    expect(full?.activeMessages.map((message) => message.content)).toEqual([
-      'current prompt',
-    ]);
-    expect(full?.transcriptEntries.map((entry) => entry.active)).toEqual([
-      false,
-      false,
-      true,
-    ]);
+    expect(rewound).not.toBeNull();
+    expect(full?.activeMessages.at(-1)?.content).toBe('retained parent');
+    expect(full?.messages).toHaveLength(8);
+    expect(rewindEntryId).toMatch(/^entry_/);
     expect(full?.transcriptEntries.map((entry) => ({
       entryId: entry.entryId,
-      logicalId: entry.logicalId,
-      sourceEntryId: entry.sourceEntryId,
+      type: entry.type,
+      active: entry.active,
     }))).toEqual([
-      { entryId: 'entry_old_user', logicalId: 'entry_old_user', sourceEntryId: undefined },
-      { entryId: 'entry_old_assistant', logicalId: 'entry_old_assistant', sourceEntryId: undefined },
-      { entryId: 'entry_current', logicalId: 'entry_current', sourceEntryId: undefined },
+      { entryId: rootCompaction.id, type: 'compaction', active: true },
+      { entryId: retainedParent.id, type: 'message', active: true },
+      { entryId: 'entry_archived_child_first', type: 'message', active: false },
+      { entryId: middleCompaction.id, type: 'compaction', active: false },
+      { entryId: middleParent.id, type: 'message', active: false },
+      { entryId: 'entry_archived_child_second', type: 'message', active: false },
+      { entryId: currentCompaction.id, type: 'compaction', active: false },
+      { entryId: current.id, type: 'message', active: false },
+      { entryId: rewindEntryId, type: 'rewind_marker', active: true },
     ]);
+    expect(full?.transcriptEntries.at(-1)?.payload?.rewindTargetId).toBe(retainedParent.id);
   });
 
   it('listRunningSessions().sessionId is sourced from PersistedSessionState.sessionId', async () => {

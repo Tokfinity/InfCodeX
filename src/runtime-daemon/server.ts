@@ -25,12 +25,14 @@ import type {
   RuntimePermissionDecision,
   RuntimePermissionFilter,
   RuntimePermissionRequestInput,
+  RuntimeReadOptions,
   RuntimeRewindSessionInput,
   RuntimeRunFilter,
   RuntimeRunResult,
   RuntimeRunStatus,
   RuntimeSetActiveEntryInput,
   RuntimeSessionFilter,
+  RuntimeSessionDiagnosticsInput,
   RuntimeSessionSettingsPatch,
   RuntimeSessionObservationSnapshot,
   RuntimeTranscriptEntryChunkInput,
@@ -167,10 +169,12 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<
     "operation.get",
     "session.load",
     "session.list",
+    "session.status",
     "session.transcript",
     "session.transcript.page",
     "session.transcript.entryChunk",
     "session.observe",
+    "session.diagnostics",
     "session.settings.get",
     "session.transcript.search",
     "session.settings.getVersioned",
@@ -1152,14 +1156,20 @@ async function dispatchRuntimeDaemonRequest(
     case "session.load":
       return runtime.sessions.load(
         requireStringParam(request.params, "sessionId"),
+        runtimeReadOptions(request.params),
       );
     case "session.list":
       return runtime.sessions.list(
         optionalRecord(request.params) as RuntimeSessionFilter | undefined,
       );
+    case "session.status":
+      return runtime.sessions.status(
+        requireStringParam(request.params, "sessionId"),
+      );
     case "session.transcript": {
       const transcript = await runtime.sessions.transcript(
         requireStringParam(request.params, "sessionId"),
+        runtimeReadOptions(request.params),
       );
       if (
         transcript !== null &&
@@ -1176,18 +1186,21 @@ async function dispatchRuntimeDaemonRequest(
     case "session.transcript.page":
       return runtime.sessions.transcriptPage(
         requireRecord(request.params) as unknown as RuntimeTranscriptPageInput,
+        runtimeReadOptions(request.params),
       );
     case "session.transcript.entryChunk":
       return runtime.sessions.transcriptEntryChunk(
         requireRecord(
           request.params,
         ) as unknown as RuntimeTranscriptEntryChunkInput,
+        runtimeReadOptions(request.params),
       );
     case "session.transcript.search":
       return runtime.sessions.transcriptSearch(
         requireRecord(
           request.params,
         ) as unknown as RuntimeTranscriptSearchInput,
+        runtimeReadOptions(request.params),
       );
     case "session.observe": {
       const subscriptionId = createSubscriptionId();
@@ -1198,8 +1211,21 @@ async function dispatchRuntimeDaemonRequest(
             subscriptionId,
             augmentRuntimeEventRequirements(event, runRequirementSource),
           ),
+        runtimeReadOptions(request.params),
       );
       rememberSubscription(subscriptionId, observation);
+      void observation.invalidated.then((invalidation) => {
+        try {
+          options.notify?.(
+            createRuntimeDaemonNotification("observation.invalidated", {
+              subscriptionId,
+              invalidation,
+            }),
+          );
+        } finally {
+          closeSubscription(subscriptionId);
+        }
+      });
       return {
         subscriptionId,
         snapshot: augmentObservationRunRequirements(
@@ -1208,6 +1234,12 @@ async function dispatchRuntimeDaemonRequest(
         ),
       };
     }
+    case "session.diagnostics":
+      return runtime.sessions.diagnostics(
+        requireRecord(
+          request.params,
+        ) as unknown as RuntimeSessionDiagnosticsInput,
+      );
     case "session.fork":
       return runtime.sessions.fork(
         requireRecord(request.params) as unknown as RuntimeForkSessionInput,
@@ -2683,6 +2715,11 @@ function optionalIntegerField(
   return value as number;
 }
 
+function runtimeReadOptions(value: unknown): RuntimeReadOptions | undefined {
+  const timeoutMs = optionalIntegerField(requireRecord(value), "timeoutMs");
+  return timeoutMs === undefined ? undefined : { timeoutMs };
+}
+
 function requireIntegerField(
   record: Record<string, unknown>,
   key: string,
@@ -2835,6 +2872,14 @@ function isRuntimeDaemonErrorCode(
     value === "operation_interrupted" ||
     value === "operation_unknown" ||
     value === "control_history_untrusted" ||
+    value === "resync_required" ||
+    value === "read_timeout" ||
+    value === "read_cancelled" ||
+    value === "data_changed" ||
+    value === "observation_invalidated" ||
+    value === "runtime_changed" ||
+    value === "data_corrupt" ||
+    value === "version_incompatible" ||
     value === "credential_unavailable" ||
     value === "host_tool_unavailable" ||
     value === "host_tool_unknown" ||

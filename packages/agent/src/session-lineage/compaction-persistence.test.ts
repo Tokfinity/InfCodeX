@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { KodaXSessionData } from '../index.js';
-import { createSessionLineage } from './kodax-session-lineage.js';
+import {
+  applySessionCompaction,
+  createSessionLineage,
+  getSessionMessagesFromLineage,
+} from './kodax-session-lineage.js';
+import {
+  COMPACTED_HISTORY_RECOVERY_GUIDANCE,
+  COMPACTION_SUMMARY_PREFIX,
+} from './compaction/compaction.js';
 import { persistCompactedSessionHistory } from './compaction-persistence.js';
 
 describe('persistCompactedSessionHistory', () => {
@@ -44,6 +52,89 @@ describe('persistCompactedSessionHistory', () => {
       messages: [{ role: 'user', content: 'checkpoint' }],
       lineage,
     });
+  });
+
+  it('inherits retained provenance across reload and prior inline attachments', async () => {
+    const base = createSessionLineage([{ role: 'assistant', content: 'retained exact tail' }]);
+    const source = base.entries[0]!;
+    const sourceLineage = {
+      ...base,
+      entries: [{
+        ...source,
+        logicalId: 'logical_retained_origin',
+        sourceEntryId: 'entry_retained_origin',
+      }],
+    };
+    const sourceMessage = sourceLineage.entries[0];
+    if (sourceMessage?.type !== 'message') {
+      throw new Error('expected source message');
+    }
+    const firstCompaction = applySessionCompaction(
+      sourceLineage,
+      [
+        {
+          role: 'user',
+          content: `${COMPACTION_SUMMARY_PREFIX}first checkpoint${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
+          _synthetic: true,
+          _source: 'compaction-checkpoint',
+        },
+        sourceMessage.message,
+      ],
+      { summary: 'first checkpoint' },
+      [{
+        role: 'user',
+        content: '[Post-compact: recent operations]\nread file',
+        _synthetic: true,
+        _source: 'compaction-context',
+      }],
+    );
+    const persisted: KodaXSessionData = {
+      title: 'reloaded provenance',
+      gitRoot: 'C:/repo',
+      messages: getSessionMessagesFromLineage(firstCompaction),
+      lineage: firstCompaction,
+    };
+    const preCompactionMessages = structuredClone(persisted.messages);
+    expect(preCompactionMessages.map((message) => message._source)).toEqual([
+      'compaction-checkpoint',
+      'compaction-context',
+      undefined,
+    ]);
+    const retainedCopy = preCompactionMessages.at(-1)!;
+    const lineage = await persistCompactedSessionHistory({
+      storage: {
+        save: async () => {},
+        load: async () => structuredClone(persisted),
+      },
+      sessionId: 'reloaded-session',
+      compactedMessages: [
+        {
+          role: 'user',
+          content: `${COMPACTION_SUMMARY_PREFIX}second checkpoint${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
+          _synthetic: true,
+          _source: 'compaction-checkpoint',
+        },
+        retainedCopy,
+      ],
+      update: {
+        preCompactionMessages,
+        anchor: { summary: 'second checkpoint' },
+      },
+    });
+    const rematerialized = lineage.entries
+      .filter((entry) =>
+        entry.type === 'message' && entry.message.content === 'retained exact tail')
+      .at(-1);
+
+    expect(rematerialized).toEqual(expect.objectContaining({
+      logicalId: 'logical_retained_origin',
+      sourceEntryId: 'entry_retained_origin',
+    }));
+    expect(rematerialized?.id).not.toBe(source.id);
+    expect(lineage.entries).not.toContainEqual(expect.objectContaining({
+      type: 'message',
+      message: expect.objectContaining({ _source: 'compaction-context' }),
+    }));
   });
 
   it('rejects a missing session instead of inventing incomplete metadata', async () => {

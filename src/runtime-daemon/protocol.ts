@@ -19,11 +19,13 @@ export type RuntimeDaemonMethod =
   | 'session.create'
   | 'session.load'
   | 'session.list'
+  | 'session.status'
   | 'session.transcript'
   | 'session.transcript.page'
   | 'session.transcript.entryChunk'
   | 'session.transcript.search'
   | 'session.observe'
+  | 'session.diagnostics'
   | 'session.fork'
   | 'session.notice.append'
   | 'session.rewind'
@@ -210,6 +212,7 @@ export type RuntimeDaemonMutationMethod =
 
 export type RuntimeDaemonNotificationMethod =
   | 'event'
+  | 'observation.invalidated'
   | 'credential.request'
   | 'host_tool.invoke'
   | 'runtime.warning';
@@ -240,6 +243,14 @@ export type RuntimeDaemonErrorCode =
   | 'operation_interrupted'
   | 'operation_unknown'
   | 'control_history_untrusted'
+  | 'resync_required'
+  | 'read_timeout'
+  | 'read_cancelled'
+  | 'data_changed'
+  | 'observation_invalidated'
+  | 'runtime_changed'
+  | 'data_corrupt'
+  | 'version_incompatible'
   | 'credential_unavailable'
   | 'host_tool_unavailable'
   | 'host_tool_unknown'
@@ -307,11 +318,13 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'session.create',
   'session.load',
   'session.list',
+  'session.status',
   'session.transcript',
   'session.transcript.page',
   'session.transcript.entryChunk',
   'session.transcript.search',
   'session.observe',
+  'session.diagnostics',
   'session.fork',
   'session.notice.append',
   'session.rewind',
@@ -518,6 +531,7 @@ const REVERSE_BRIDGE_STATE_METHODS: ReadonlySet<RuntimeDaemonMethod> = new Set([
 
 const NOTIFICATION_METHODS: ReadonlySet<string> = new Set<RuntimeDaemonNotificationMethod>([
   'event',
+  'observation.invalidated',
   'credential.request',
   'host_tool.invoke',
   'runtime.warning',
@@ -543,6 +557,14 @@ const ERROR_CODES: ReadonlySet<string> = new Set<RuntimeDaemonErrorCode>([
   'operation_interrupted',
   'operation_unknown',
   'control_history_untrusted',
+  'resync_required',
+  'read_timeout',
+  'read_cancelled',
+  'data_changed',
+  'observation_invalidated',
+  'runtime_changed',
+  'data_corrupt',
+  'version_incompatible',
   'credential_unavailable',
   'host_tool_unavailable',
   'host_tool_unknown',

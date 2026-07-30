@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
+import { KODAX_VERSION } from '@kodax-ai/repl';
 
 import type {
   RuntimeEvent,
@@ -564,6 +565,207 @@ describe('runtime daemon client proxy', () => {
     await client.close();
   });
 
+  it('hands off the observation snapshot before events and invalidates on disconnect', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const transport = fakeTransport(calls);
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    const seen: RuntimeEvent[] = [];
+    const observation = await client.sessions.observe(
+      'session-1',
+      (event) => seen.push(event),
+    );
+    const event: RuntimeEvent = {
+      id: 'evt-after-snapshot',
+      seq: 1,
+      time: '2026-07-09T00:00:01.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'assistant.delta',
+      payload: { text: 'after snapshot' },
+    };
+
+    transport.emit(createRuntimeDaemonNotification('event', {
+      subscriptionId: 'observe-sub-1',
+      event,
+    }));
+    expect(seen).toEqual([]);
+    await flushAsyncNotifications();
+    expect(seen).toEqual([event]);
+
+    transport.emitLifecycle({
+      state: 'disconnected',
+      connectionId: 'connection-1',
+      reason: 'daemon restarted',
+      reconnectable: true,
+    });
+    await expect(observation.invalidated).resolves.toMatchObject({
+      code: 'observation_invalidated',
+      reason: 'transport_disconnected',
+    });
+    observation.close();
+    await client.close();
+  });
+
+  it('accepts daemon observation invalidation before the observe response', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    let resolveObservation: ((value: unknown) => void) | undefined;
+    const sessionObserveResult = new Promise<unknown>((resolve) => {
+      resolveObservation = resolve;
+    });
+    const transport = fakeTransport(calls, { sessionObserveResult });
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+    const observationPromise = client.sessions.observe(
+      'session-1',
+      () => undefined,
+    );
+    transport.emit(createRuntimeDaemonNotification('observation.invalidated', {
+      subscriptionId: 'observe-sub-invalidated',
+      invalidation: {
+        code: 'observation_invalidated',
+        reason: 'event_overflow',
+        runtimeId: 'runtime-daemon',
+        message: 'Server observation handoff overflowed.',
+      },
+    }));
+    resolveObservation?.({
+      subscriptionId: 'observe-sub-invalidated',
+      snapshot: {
+        runtimeId: 'runtime-daemon',
+        cursor: 0,
+        transcriptRevision: 'sha256:test',
+        session: { id: 'session-1', title: 'Session' },
+        transcript: null,
+        settings: { revision: 0, value: {} },
+        runs: [],
+        pendingPermissions: [],
+        live: {
+          assistantTextByRun: {},
+          thinkingTextByRun: {},
+          activeTools: [],
+          pendingUserInputs: [],
+          managedTasks: [],
+        },
+      },
+    });
+
+    const observation = await observationPromise;
+    let invalidation: unknown;
+    void observation.invalidated.then((value) => {
+      invalidation = value;
+    });
+    await flushAsyncNotifications();
+    expect(invalidation).toEqual({
+      code: 'observation_invalidated',
+      reason: 'event_overflow',
+      runtimeId: 'runtime-daemon',
+      message: 'Server observation handoff overflowed.',
+    });
+    observation.close();
+    await client.close();
+  });
+
+  it('returns stable timeout and cancellation errors for daemon history reads', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const base = fakeTransport(calls);
+    const transport: RuntimeDaemonClientTransport = {
+      ...base,
+      request(method, params, operation) {
+        if (method === 'session.transcript') {
+          return new Promise(() => undefined);
+        }
+        return base.request(method, params, operation);
+      },
+    };
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+
+    await expect(
+      client.sessions.transcript('session-1', { timeoutMs: 1 }),
+    ).rejects.toMatchObject({ code: 'read_timeout' });
+
+    const controller = new AbortController();
+    const cancelled = client.sessions.transcript('session-1', {
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(cancelled).rejects.toMatchObject({ code: 'read_cancelled' });
+    await client.close();
+  });
+
+  it('unsubscribes a Session observation whose response arrives after timeout', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const base = fakeTransport(calls);
+    const transport: RuntimeDaemonClientTransport = {
+      ...base,
+      request(method, params, operation, control) {
+        if (method !== 'session.observe') {
+          return base.request(method, params, operation, control);
+        }
+        calls.push({ method, params });
+        return new Promise((_resolve, reject) => {
+          control?.signal?.addEventListener('abort', () => {
+            reject(control.signal?.reason);
+            queueMicrotask(() => {
+              control.onLateResult?.({
+                subscriptionId: 'observe-sub-late',
+                snapshot: {},
+              });
+            });
+          }, { once: true });
+        });
+      },
+    };
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-client',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-09T00:00:00.000Z',
+        version: '0.7.69',
+      },
+      transport,
+    });
+
+    await expect(client.sessions.observe(
+      'session-1',
+      () => undefined,
+      { timeoutMs: 1 },
+    )).rejects.toMatchObject({ code: 'read_timeout' });
+    await flushAsyncNotifications();
+
+    expect(calls).toContainEqual({
+      method: 'event.unsubscribe',
+      params: { subscriptionId: 'observe-sub-late' },
+    });
+    await client.close();
+  });
+
   it('hydrates serialized daemon run failures as Error instances', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const transport = fakeTransport(calls, {
@@ -796,10 +998,22 @@ describe('runtime daemon client proxy', () => {
 
     await client.sessions.load('session-1');
     await client.sessions.list({ limit: 5 });
+    await client.sessions.status('session-1');
     await client.sessions.transcript('session-1');
     await client.sessions.transcriptSearch({ sessionId: 'session-1', query: 'old detail' });
     const observation = await client.sessions.observe('session-1', () => undefined);
     observation.close();
+    const diagnostic = await client.sessions.diagnostics({
+      sessionId: 'session-1',
+      runId: 'run-1',
+      timeoutMs: 2_000,
+    });
+    expect(diagnostic).toMatchObject({
+      sdkVersion: KODAX_VERSION,
+      runtimeMode: 'daemon',
+      runtimeVersion: '0.7.66',
+      daemonVersion: '0.7.66',
+    });
     await client.sessions.fork({ sessionId: 'session-1' });
     await client.sessions.getSettings('session-1');
     const shellExecution = {
@@ -862,10 +1076,12 @@ describe('runtime daemon client proxy', () => {
     expect(calls.map((call) => call.method)).toEqual([
       'session.load',
       'session.list',
+      'session.status',
       'session.transcript',
       'session.transcript.search',
       'session.observe',
       'event.unsubscribe',
+      'session.diagnostics',
       'session.fork',
       'session.settings.get',
       'session.settings.getVersioned',
@@ -1468,6 +1684,43 @@ function fakeTransport(
       }
       if (method === 'tool.exposure.preview') {
         return { reportOnly: true };
+      }
+      if (method === 'session.status') {
+        return {
+          sessionId: 'session-1',
+          runtimeId: 'runtime-client',
+          phase: 'idle',
+          observedAt: '2026-07-09T00:00:00.000Z',
+        };
+      }
+      if (method === 'session.diagnostics') {
+        return {
+          schemaVersion: 1,
+          captureStartedAt: '2026-07-30T00:00:00.000Z',
+          capturedAt: '2026-07-30T00:00:00.001Z',
+          sdkVersion: '0.7.70',
+          runtimeVersion: '0.7.79',
+          daemonVersion: null,
+          runtimeId: 'runtime-client',
+          runtimeMode: 'embedded',
+          sessionId: 'session-1',
+          observation: {
+            cursor: 0,
+            transcriptRevision: 'sha256:test',
+          },
+          run: {
+            controlRecord: 'unknown',
+            state: 'unknown',
+            stage: 'unknown',
+            terminalTimeKnown: false,
+            activeSubtaskCount: null,
+            activeSubtaskCountSource: 'unknown',
+            errors: [{
+              code: 'run_control_unknown',
+              message: 'No Run control record is available.',
+            }],
+          },
+        };
       }
       if (method === 'provider.cache.diagnostics.get') {
         return {

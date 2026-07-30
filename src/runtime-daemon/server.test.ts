@@ -13,6 +13,7 @@ import type {
   RuntimeEventFilter,
   RuntimeEventListener,
   RuntimeEventReplayFilter,
+  RuntimeObservationInvalidation,
   RuntimePermissionDecision,
   RuntimePermissionRespondOptions,
   RuntimeRunResult,
@@ -1396,6 +1397,95 @@ describe('runtime daemon dispatcher', () => {
     expect(notifications[0]?.params).toMatchObject({ event });
   });
 
+  it('forwards session observation invalidation as a daemon notification', async () => {
+    const runtime = makeRuntime();
+    let invalidateObservation:
+      | ((value: RuntimeObservationInvalidation) => void)
+      | undefined;
+    runtime.sessions.observe = async (sessionId) => ({
+      ...createTestObservation(sessionId),
+      invalidated: new Promise<RuntimeObservationInvalidation>((resolve) => {
+        invalidateObservation = resolve;
+      }),
+    });
+    const notifications: RuntimeDaemonNotification[] = [];
+    const dispatcher = createRuntimeDaemonDispatcher({
+      runtime,
+      notify: (notification) => notifications.push(notification),
+    });
+    await initializeDispatcher(dispatcher);
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-observe-invalidated',
+      'session.observe',
+      { sessionId: 'session-1' },
+    ));
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    if (!isRuntimeDaemonSuccessResponse(response)) return;
+    const subscriptionId = (
+      response.result as { readonly subscriptionId: string }
+    ).subscriptionId;
+
+    invalidateObservation?.({
+      code: 'observation_invalidated',
+      reason: 'event_overflow',
+      runtimeId: 'runtime-test',
+      message: 'Observation handoff overflowed.',
+    });
+    await vi.waitFor(() => {
+      expect(notifications).toContainEqual(expect.objectContaining({
+        method: 'observation.invalidated',
+        params: {
+          subscriptionId,
+          invalidation: {
+            code: 'observation_invalidated',
+            reason: 'event_overflow',
+            runtimeId: 'runtime-test',
+            message: 'Observation handoff overflowed.',
+          },
+        },
+      }));
+    });
+    dispatcher.close();
+  });
+
+  it('returns the same read-only Session diagnostic contract through the daemon', async () => {
+    const runtime = makeRuntime();
+    const diagnostics = vi.spyOn(runtime.sessions, 'diagnostics');
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const response = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-session-diagnostics',
+      'session.diagnostics',
+      {
+        sessionId: 'session-1',
+        runId: 'run-missing',
+        timeoutMs: 2_000,
+      },
+    ));
+
+    expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+    if (isRuntimeDaemonSuccessResponse(response)) {
+      expect(response.result).toMatchObject({
+        schemaVersion: 1,
+        runtimeId: 'runtime-test',
+        sessionId: 'session-1',
+        run: {
+          controlRecord: 'unknown',
+          runId: 'run-missing',
+          activeSubtaskCount: null,
+          activeSubtaskCountSource: 'unknown',
+        },
+      });
+    }
+    expect(diagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      runId: 'run-missing',
+      timeoutMs: 2_000,
+    }));
+    dispatcher.close();
+  });
+
   it('assigns a subscription id before synchronous runtime notifications', async () => {
     const runtime = makeRuntime();
     const event: RuntimeEvent = {
@@ -2143,6 +2233,7 @@ const METHOD_SMOKE_PARAMS = {
   'session.create': { sessionId: 'session-smoke', title: 'Smoke Session' },
   'session.load': { sessionId: 'session-1' },
   'session.list': { limit: 5 },
+  'session.status': { sessionId: 'session-1' },
   'session.transcript': { sessionId: 'session-1' },
   'session.transcript.page': { sessionId: 'session-1' },
   'session.transcript.entryChunk': {
@@ -2152,6 +2243,7 @@ const METHOD_SMOKE_PARAMS = {
   },
   'session.transcript.search': { sessionId: 'session-1', query: 'historical detail' },
   'session.observe': { sessionId: 'session-1' },
+  'session.diagnostics': { sessionId: 'session-1' },
   'session.fork': { sessionId: 'session-1' },
   'session.notice.append': { sessionId: 'session-1', content: 'smoke' },
   'session.rewind': { sessionId: 'session-1', selector: 'entry-1' },
@@ -2385,6 +2477,14 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       async list() {
         return [{ id: 'session-1', title: 'Test Session', msgCount: 0 }];
       },
+      async status(sessionId) {
+        return {
+          sessionId,
+          runtimeId: 'runtime-test',
+          phase: 'idle' as const,
+          observedAt: '2026-07-09T00:00:00.000Z',
+        };
+      },
       async transcript() {
         return null;
       },
@@ -2399,6 +2499,36 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       },
       async observe(sessionId) {
         return createTestObservation(sessionId);
+      },
+      async diagnostics(input) {
+        return {
+          schemaVersion: 1,
+          captureStartedAt: '2026-07-30T00:00:00.000Z',
+          capturedAt: '2026-07-30T00:00:00.001Z',
+          sdkVersion: '0.7.79',
+          runtimeVersion: '0.7.79',
+          daemonVersion: null,
+          runtimeId: 'runtime-test',
+          runtimeMode: 'embedded',
+          sessionId: input.sessionId,
+          observation: {
+            cursor: 0,
+            transcriptRevision: 'sha256:test',
+          },
+          run: {
+            controlRecord: 'unknown',
+            ...(input.runId !== undefined ? { runId: input.runId } : {}),
+            state: 'unknown',
+            stage: 'unknown',
+            terminalTimeKnown: false,
+            activeSubtaskCount: null,
+            activeSubtaskCountSource: 'unknown',
+            errors: [{
+              code: 'run_control_unknown',
+              message: 'No Run control record is available.',
+            }],
+          },
+        };
       },
       async fork() {
         return { id: 'fork-1', title: 'Forked Session' };
@@ -2925,6 +3055,7 @@ function createTestObservation(sessionId: string) {
         managedTasks: [],
       },
     },
+    invalidated: new Promise(() => undefined),
     close() {},
   };
 }

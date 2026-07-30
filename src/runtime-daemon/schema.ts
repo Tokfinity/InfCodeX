@@ -128,20 +128,61 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
 
   'session.create': { params: createSessionParamsSchema(), result: sessionSchema() },
   'session.load': {
-    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    params: objectSchema({
+      sessionId: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
     result: sessionSchema(),
   },
   'session.list': { params: sessionFilterSchema(), result: arraySchema(sessionSchema()) },
-  'session.transcript': { params: objectSchema({ sessionId: stringSchema }, ['sessionId']), result: nullOrObjectSchema },
-  'session.transcript.page': { params: objectAnySchema, result: nullOrObjectSchema },
-  'session.transcript.entryChunk': { params: objectAnySchema, result: nullOrObjectSchema },
+  'session.status': {
+    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    result: objectAnySchema,
+  },
+  'session.transcript': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
+    result: nullOrObjectSchema,
+  },
+  'session.transcript.page': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      cursor: stringSchema,
+      limit: integerSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
+    result: nullOrObjectSchema,
+  },
+  'session.transcript.entryChunk': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      revision: stringSchema,
+      entryIndex: integerSchema,
+      cursor: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId', 'revision', 'entryIndex']),
+    result: nullOrObjectSchema,
+  },
   'session.transcript.search': {
     params: transcriptSearchParamsSchema(),
     result: nullableSchema(transcriptSearchResultSchema()),
   },
   'session.observe': {
-    params: objectSchema({ sessionId: stringSchema }, ['sessionId']),
+    params: objectSchema({
+      sessionId: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
     result: objectAnySchema,
+  },
+  'session.diagnostics': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      runId: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
+    result: sessionDiagnosticsSchema(),
   },
   'session.fork': { params: forkSessionParamsSchema(), result: nullableSchema(sessionSchema()) },
   'session.notice.append': {
@@ -557,6 +598,23 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
 
 export const RUNTIME_DAEMON_NOTIFICATION_SCHEMAS = {
   event: objectSchema({ subscriptionId: stringSchema, event: objectAnySchema }, ['subscriptionId', 'event']),
+  'observation.invalidated': objectSchema({
+    subscriptionId: stringSchema,
+    invalidation: objectSchema({
+      code: { type: 'string', enum: ['observation_invalidated'] },
+      reason: {
+        type: 'string',
+        enum: [
+          'event_overflow',
+          'event_order',
+          'runtime_changed',
+          'transport_disconnected',
+        ],
+      },
+      runtimeId: stringSchema,
+      message: stringSchema,
+    }, ['code', 'reason', 'runtimeId', 'message']),
+  }, ['subscriptionId', 'invalidation']),
   'credential.request': objectAnySchema,
   'host_tool.invoke': objectAnySchema,
   'runtime.warning': objectAnySchema,
@@ -747,6 +805,7 @@ function transcriptSearchParamsSchema(): RuntimeDaemonJsonSchema {
     limit: integerSchema,
     role: { type: 'string', enum: ['user', 'assistant'] },
     scope: { type: 'string', enum: ['compacted', 'all'] },
+    timeoutMs: integerSchema,
   }, ['sessionId', 'query']);
 }
 
@@ -1085,13 +1144,128 @@ function runStatusSchema(): RuntimeDaemonJsonSchema {
     sessionId: stringSchema,
     turnId: stringSchema,
     phase: runPhaseSchema(),
+    stage: runStageSchema(),
+    stageChangedAt: stringSchema,
+    activeSubtaskCount: integerSchema,
     startedAt: stringSchema,
     endedAt: stringSchema,
     provider: stringSchema,
     model: stringSchema,
     reasoning: stringSchema,
     error: stringSchema,
+    terminal: runtimeTerminalFactSchema(),
+    stop: runStopStatusSchema(),
   }, ['runId', 'sessionId', 'phase', 'startedAt', 'provider'], true);
+}
+
+function sessionDiagnosticsSchema(): RuntimeDaemonJsonSchema {
+  const diagnosticError = objectSchema({
+    code: {
+      enum: [
+        'run_control_unknown',
+        'run_status_unknown',
+        'owner_liveness_unconfirmed',
+        'owner_recovery_required',
+        'stop_outcome_unconfirmed',
+        'run_failed',
+        'terminal_time_unknown',
+      ],
+    },
+    message: stringSchema,
+  }, ['code', 'message']);
+  const diagnosticRun = objectSchema({
+    controlRecord: { enum: ['present', 'unknown'] },
+    runId: stringSchema,
+    turnId: stringSchema,
+    state: { enum: ['queued', 'active', 'terminal', 'unknown'] },
+    phase: runPhaseSchema(),
+    stage: runStageSchema(),
+    stageChangedAt: stringSchema,
+    terminalAt: stringSchema,
+    terminalTimeKnown: booleanSchema,
+    terminal: runtimeTerminalFactSchema(),
+    activeSubtaskCount: {
+      oneOf: [integerSchema, { type: 'null' }],
+    },
+    activeSubtaskCountSource: { enum: ['run_status', 'unknown'] },
+    stop: runStopStatusSchema(),
+    interruptInputs: arraySchema(objectAnySchema),
+    errors: arraySchema(diagnosticError),
+  }, [
+    'controlRecord',
+    'state',
+    'stage',
+    'terminalTimeKnown',
+    'activeSubtaskCount',
+    'activeSubtaskCountSource',
+    'errors',
+  ]);
+  return objectSchema({
+    schemaVersion: { type: 'integer', enum: [1] },
+    captureStartedAt: stringSchema,
+    capturedAt: stringSchema,
+    sdkVersion: stringSchema,
+    runtimeVersion: stringSchema,
+    daemonVersion: {
+      oneOf: [stringSchema, { type: 'null' }],
+    },
+    runtimeId: stringSchema,
+    runtimeMode: { enum: ['embedded', 'daemon'] },
+    sessionId: stringSchema,
+    observation: objectSchema({
+      cursor: integerSchema,
+      transcriptRevision: stringSchema,
+    }, ['cursor', 'transcriptRevision']),
+    run: diagnosticRun,
+  }, [
+    'schemaVersion',
+    'captureStartedAt',
+    'capturedAt',
+    'sdkVersion',
+    'runtimeVersion',
+    'daemonVersion',
+    'runtimeId',
+    'runtimeMode',
+    'sessionId',
+    'observation',
+    'run',
+  ]);
+}
+
+function runtimeTerminalFactSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    revision: integerSchema,
+    kind: { enum: ['completed', 'failed', 'cancelled', 'interrupted'] },
+    code: {
+      enum: [
+        'completed',
+        'run_failed',
+        'blocked',
+        'cancelled',
+        'interrupted',
+        'runtime_restarted',
+        'daemon_crashed',
+        'credential_unavailable',
+        'host_not_dispatched',
+        'host_outcome_unknown',
+        'control_history_untrusted',
+      ],
+    },
+    effectOutcome: { enum: ['none', 'known', 'unknown'] },
+    message: stringSchema,
+  }, ['revision', 'kind', 'code', 'effectOutcome']);
+}
+
+function runStopStatusSchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    requestedAt: stringSchema,
+    state: { enum: ['unknown', 'confirmed'] },
+    outcome: {
+      enum: ['unknown', 'cancelled', 'interrupted', 'completed', 'failed'],
+    },
+    reason: stringSchema,
+    resolvedAt: stringSchema,
+  }, ['requestedAt', 'state', 'outcome', 'reason']);
 }
 
 function runResultSchema(): RuntimeDaemonJsonSchema {
@@ -1111,12 +1285,36 @@ function runPhaseSchema(): RuntimeDaemonJsonSchema {
     enum: [
       'queued',
       'running',
+      'waiting_agent',
+      'recovering',
       'waiting_permission',
       'waiting_user_input',
+      'unknown',
       'completed',
       'failed',
       'cancelled',
       'interrupted',
+    ],
+  };
+}
+
+function runStageSchema(): RuntimeDaemonJsonSchema {
+  return {
+    enum: [
+      'queued',
+      'executing',
+      'waiting_agent',
+      'recovering',
+      'finalizing',
+      'terminal',
+      'unknown',
+      'starting',
+      'routing',
+      'preflight',
+      'round',
+      'worker',
+      'upgrade',
+      'verifying',
     ],
   };
 }

@@ -678,7 +678,10 @@ missing-storage warning by itself.
 
 ```ts
 import { runKodaX } from '@kodax-ai/kodax/coding';
-import { createSessionManager } from '@kodax-ai/kodax/session';
+import {
+  createSessionManager,
+  exportSessionBundle,
+} from '@kodax-ai/kodax/session';
 
 // One manager per host process; reuse across runs so the
 // per-session write queue + append-watermark caches stay coherent.
@@ -687,6 +690,7 @@ const {
   listSessions,
   loadSession,
   loadFullTranscript,
+  readFullTranscript,
   appendClientNotice,
   compactSession,
 } = createSessionManager();
@@ -720,6 +724,11 @@ const nextPage = recent.at(-1)?.cursor
   : [];
 const replay = await loadSession('s_my_chat');
 const scrollback = await loadFullTranscript('s_my_chat');
+const historyAbort = new AbortController();
+const strictScrollback = await readFullTranscript('s_my_chat', {
+  timeoutMs: 15_000,
+  signal: historyAbort.signal,
+});
 const compacted = await compactSession('s_my_chat', { dryRun: true });
 
 await appendClientNotice('s_my_chat', {
@@ -751,6 +760,7 @@ interface SessionManager {
   listSessions(...): Promise<SessionSummary[]>;
   loadSession(id): Promise<...>;
   loadFullTranscript(id): Promise<...>;
+  readFullTranscript(id, options?): Promise<...>;
   appendClientNotice(id, opts): Promise<SessionTranscriptEntry | null>;
   compactSession(id, opts?): Promise<CompactSessionResult>;
   forkSession(id, opts?): Promise<...>;
@@ -813,7 +823,8 @@ Legacy entries without persisted provenance use `logicalId === entryId` and omit
 `sourceEntryId`; treat that as "unknown/not cloned", not as content-based proof
 that no older clone exists.
 `loadFullTranscript()` still returns raw append-order scrollback; it does not
-hide compaction notices or silently merge branches.
+hide archived islands or non-active branches, and it does not silently merge
+branches. The host owns branch visibility, folding, and main-chat presentation.
 
 Since v0.7.63, rewind audit markers are represented as
 `type: 'rewind_marker'`. They are useful for host scrollback and audit UI, but
@@ -3891,11 +3902,116 @@ or Host Tool leases; only its hash participates in daemon-owned bridge state.
 Keep all three values in Electron Main. Mutually distrusting processes running
 as the same OS account remain outside this release's threat model.
 
+### Query authoritative Session and Run lifecycle
+
+Use `runtime.runs.get(runId)` for the exact Run and
+`runtime.sessions.status(sessionId)` for the one current Session projection.
+Do not infer completion from assistant text:
+
+```ts
+const run = await runtime.runs.get(runId);
+const sessionStatus = await runtime.sessions.status(sessionId);
+
+switch (run.phase) {
+  case 'running':
+  case 'waiting_agent':
+  case 'recovering':
+  case 'waiting_permission':
+  case 'waiting_user_input':
+    renderActive(run.phase);
+    break;
+  case 'unknown':
+    renderUnconfirmedExecution(run.error);
+    break;
+  case 'completed':
+  case 'cancelled':
+  case 'interrupted':
+  case 'failed':
+    renderTerminal(run.terminal);
+    break;
+}
+```
+
+`phase` answers whether the Run is queued, active, terminal, or unconfirmed.
+Use `stage` for the finer executor location: `executing`,
+`waiting_agent`, `recovering`, managed phases such as `worker` or `verifying`,
+and `finalizing`. In particular, managed status `completed` first appears as
+`phase:'running', stage:'finalizing'`; it is not terminal until the outer
+executor settles. `stageChangedAt` timestamps that transition, and
+`activeSubtaskCount` is present only when the managed executor reported an
+authoritative count. If Runtime shutdown begins after an executor terminal
+callback was latched, that terminal fact is persisted synchronously before the
+owner-liveness endpoint is released. Result-handle resolution and queue drain
+still wait for the executor result or the deferred lost-result fallback.
+Destructive Session mutations remain fenced across the same settlement window.
+
+Run ownership is private persistence metadata, not a public ordering field. A
+second Runtime may observe a live owner's status but cannot abort or mutate
+that Run. A definitely dead owner is recovered to a durable `interrupted`
+result. If liveness cannot be proven either way, the observer returns
+`phase: 'unknown'`; it does not report a successful stop and does not overwrite
+the original non-terminal record. The same rule applies to ownerless legacy
+non-terminal records. A durable terminal event is reconciled before this
+fallback; non-terminal evidence such as an input-delivery event may refine the
+read projection but does not prove that execution stopped. Persisted terminal
+states are monotonic.
+
+`runtime.status.preflight()` treats `queued`, all active/waiting/recovery
+phases, and `unknown` as stop blockers. A host must never infer completion from
+reply text or convert `unknown` into success.
+
+`runtime.runs.abort(runId)` requests Stop; it does not manufacture an
+acknowledgement. Queued work can become `cancelled` immediately. For an active
+executor, inspect `run.stop`: while termination is unconfirmed, the Run reports
+`phase/stage:'unknown'` and `stop.state/outcome:'unknown'`. A later executor
+result confirms the actual outcome, including `completed` when the executor
+ignored Stop and completed normally. Terminal callback order is latched before
+deferred result settlement: Stop cannot rewrite an earlier completion as
+interrupted, and late finalizer/recovery progress cannot revive an unconfirmed
+stopped Run. If the Runtime owner then dies, recovery resolves the pending Stop
+as `confirmed/interrupted`.
+
+For support bundles, use the pure read-only compositor:
+
+```ts
+import { captureRuntimeSessionDiagnostics } from '@kodax-ai/kodax/runtime';
+
+const diagnostic = await captureRuntimeSessionDiagnostics(runtime, {
+  sessionId,
+  runId,
+  timeoutMs: 10_000,
+  signal: abortController.signal,
+});
+```
+
+The schema-versioned result includes SDK/Runtime/daemon versions, Runtime and
+Session identity, observation cursor/transcript revision, Run/Turn identity,
+phase/stage and stage time, terminal fact/time, Run-owned active child count,
+Stop and chat-interrupt records, and structured errors. If the selected Run
+did not persist an authoritative child count, the result returns
+`activeSubtaskCount:null` and `activeSubtaskCountSource:'unknown'`; it never
+attributes a later Session-wide child sample to that Run. If a historical
+Session has no Run control record, it returns `controlRecord:'unknown'` with
+`run_control_unknown`; it never infers completion from transcript text.
+`owner_liveness_unconfirmed`, `owner_recovery_required`,
+`stop_outcome_unconfirmed`, `run_failed`, `run_status_unknown`, and
+`terminal_time_unknown` remain distinct. These are independent facts rather
+than an enum: for example, an unavailable owner and an unconfirmed Stop appear
+together in `errors`. `sdkVersion` is the calling SDK package version;
+`runtimeVersion` and `daemonVersion` identify the connected daemon in daemon
+mode, so a support bundle preserves version skew. One timeout/cancellation
+budget covers the transcript, settings, pending interactions, and owner
+liveness inspection. The helper uses the dedicated
+`sessions.diagnostics()` read boundary: it never runs status preflight,
+resumes, repairs, migrates, takes ownership, or evicts a retained transcript
+page boundary. Embedded and daemon facades use the same schema-validated
+`session.diagnostics` contract.
+
 ### Join atomically and resync after disconnect
 
 `sessions.observe()` installs the live subscription before taking the
 snapshot. Its snapshot contains one authoritative `runtimeId`, cursor,
-`transcriptRevision`, complete transcript, versioned settings, run/queue state,
+`transcriptRevision`, bounded transcript slice, versioned settings, run/queue state,
 queued continuation IDs/order/origin/safe previews, pending permission and
 AskUser requests, and live assistant/thinking/tool/Todo/managed-task
 projection. Run requirements include the current credential/Host Tool
@@ -3918,6 +4034,10 @@ async function openCoderSession(sessionId: string) {
   observedRuntimeId = snapshot.runtimeId;
   lastCursor = snapshot.cursor;
   replaceSessionProjection(snapshot, { runtimeChanged });
+  void observation.invalidated.then((reason) => {
+    discardSessionProjection(reason);
+    scheduleFreshObservation(sessionId);
+  });
   return observation;
 }
 ```
@@ -3944,9 +4064,14 @@ On transport failure, Runtime change, expired history, or `resync_required`,
 discard the local derived projection and call `sessions.observe()` again. Do
 not merge a new snapshot into the old projection. The handshake buffer is
 bounded; overflow fails explicitly instead of dropping events. A Runtime
-restart changes `runtimeId`, marks persisted non-terminal runs with a durable
-terminal fact, and closes old in-memory AskUser/permission requests through the
-reset boundary.
+restart changes `runtimeId`. The observation's `invalidated` promise reports
+`event_overflow`, `event_order`, `runtime_changed`, or
+`transport_disconnected`; after it resolves, no state derived from that
+observation remains authoritative. Restart recovery interrupts only a Run
+whose owner is definitely gone; uncertain external execution is `unknown`.
+Timeout or cancellation removes the daemon request immediately. If a
+third-party transport ignores cancellation and later returns an observation,
+the client compensates by unsubscribing that late observation.
 
 ### Durable mutations, stable ordering, and settings CAS
 
@@ -4613,8 +4738,12 @@ while (page) {
 
 `transcriptEntryChunk()` returns lossless `base64-json` chunks. Concatenate the
 decoded bytes and parse JSON only after `hasMore` becomes false. Page and entry
-cursors are opaque and revision-bound; a changed transcript produces an
-explicit resync error, so restart from a fresh observation. The shared daemon's
+cursors are opaque and revision-bound. Runtime retains a bounded immutable
+snapshot for an in-progress cursor, so new appends do not create duplicates,
+gaps, or an endless moving boundary. Once that snapshot is no longer retained,
+the next read returns `resync_required`; restart from a fresh observation.
+All transcript/history methods accept `{ timeoutMs, signal }` as their final
+read options in embedded and daemon mode. The shared daemon's
 legacy `session.transcript` method rejects payloads above 512 KiB and names the
 page/chunk methods rather than attempting a frame near the 8 MiB ceiling.
 
@@ -4855,6 +4984,21 @@ for await (const event of runtime.learning.subscribe({
   renderLearningEvent(event);
 }
 ```
+
+`loadFullTranscript()` remains the nullable compatibility API.
+`readFullTranscript()` is the strict host/audit API: it reads main and sidecars
+under one Session boundary without migration, execution recovery, takeover, or
+repair. It reports `data_corrupt`, `version_incompatible`, `read_timeout`, and
+`read_cancelled` instead of turning those cases into an empty/null history.
+
+For an old or incompatible Session that cannot safely resume, use the
+top-level `exportSessionBundle(id, options?)`. It returns the exact main,
+`.islands.jsonl`, and legacy `.archive.jsonl` bytes plus hashes and
+compatibility diagnostics. Export is read-only and fails closed on ambiguous
+duplicate main files; it does not choose a Session, migrate it, or claim that
+the task is resumable. Decode each file's `contentBase64` for the canonical
+lossless bytes; `content` is only a UTF-8 compatibility preview. `byteLength`
+and `sha256` are computed from the original bytes.
 
 `runtime.learning` is the authoritative host surface:
 

@@ -12,9 +12,13 @@
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
-import { createSessionLineage, discoverInstances, emitKodaXDiagnostic } from '@kodax-ai/agent';
+import {
+  createSessionLineage,
+  discoverInstances,
+  emitKodaXDiagnostic,
+} from '@kodax-ai/agent';
 import {
   maybeRunReferenceAwareToolOutputGc,
   resolveToolOutputDir,
@@ -29,7 +33,18 @@ import type {
   KodaXTaskResultMetadata,
 } from '@kodax-ai/agent';
 
-import { FileSessionStorage, readSessionFirstLine } from '../interactive/storage.js';
+import {
+  FileSessionStorage,
+  SessionReadError,
+  readStableSessionBundleFiles,
+  readSessionFirstLine,
+  type SessionReadOptions,
+} from '../interactive/storage.js';
+export {
+  type SessionReadErrorCode,
+  type SessionReadOptions,
+} from '../interactive/storage.js';
+export { SessionReadError };
 import { compactSession } from './compact-session.js';
 export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
@@ -260,9 +275,58 @@ function scheduleToolOutputRetention(sessionsDir: string): void {
 }
 
 export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
+  /** Legacy flattened projection. Rewind markers are excluded. */
   readonly messages: KodaXMessage[];
+  /** Messages on the active branch that are eligible for model context. */
   readonly activeMessages: KodaXMessage[];
+  /**
+   * Authoritative raw append-order audit entries, including archived islands
+   * and inactive branches. The host owns visibility, folding, and presentation.
+   */
   readonly transcriptEntries: SessionTranscriptEntry[];
+}
+
+export type SessionBundleExportStatus =
+  | 'ok'
+  | 'partial'
+  | 'unsupported'
+  | 'corrupt'
+  | 'ambiguous'
+  | 'missing';
+
+export interface SessionBundleExportFile {
+  readonly kind: 'main' | 'islands' | 'legacy_archive';
+  readonly path: string;
+  readonly byteLength: number;
+  readonly sha256: string;
+  readonly modifiedAt: string;
+  /** Best-effort UTF-8 projection for inspection and JSONL diagnostics. */
+  readonly content: string;
+  /** Canonical byte-preserving representation. */
+  readonly contentBase64: string;
+}
+
+export interface SessionBundleExportDiagnostic {
+  readonly code:
+    | 'partial_tail'
+    | 'malformed_record'
+    | 'unsupported_record'
+    | 'unsupported_version';
+  readonly file: string;
+  readonly line?: number;
+  readonly message: string;
+}
+
+export interface SessionBundleExportResult {
+  readonly sessionId: string;
+  readonly status: SessionBundleExportStatus;
+  readonly files: readonly SessionBundleExportFile[];
+  readonly candidates?: readonly string[];
+  readonly diagnostics: readonly SessionBundleExportDiagnostic[];
+}
+
+export interface SessionBundleExportOptions extends SessionReadOptions {
+  readonly sessionsDir?: string;
 }
 
 export interface AppendClientNoticeOptions {
@@ -394,6 +458,7 @@ export interface SessionManager {
   listSessions: typeof listSessions;
   loadSession: typeof loadSession;
   loadFullTranscript: typeof loadFullTranscript;
+  readFullTranscript: typeof readFullTranscript;
   appendClientNotice: typeof appendClientNotice;
   forkSession: typeof forkSession;
   rewindSession: typeof rewindSession;
@@ -983,12 +1048,215 @@ async function loadSessionImpl(
 /**
  * Load append-order transcript data by ID.
  *
- * `loadSession` remains the active model-context API. This helper is for UI
- * scrollback: it returns every persisted transcript-bearing lineage entry in
- * append order and keeps the active branch in `activeMessages`.
+ * `loadSession` remains the active model-context API. This helper returns raw
+ * host-facing scrollback/audit data, including archived islands and inactive
+ * branches, in append order. Hosts decide what to show or fold.
  */
 export async function loadFullTranscript(id: string): Promise<FullTranscriptSessionData | null> {
   return loadFullTranscriptImpl(id, undefined);
+}
+
+/**
+ * Strict, boundary-consistent history read.
+ *
+ * Unlike the legacy null-on-error helper, this never migrates or repairs the
+ * Session and preserves structured read errors for the host.
+ */
+export async function readFullTranscript(
+  id: string,
+  options: SessionReadOptions = {},
+): Promise<FullTranscriptSessionData | null> {
+  return readFullTranscriptImpl(id, undefined, options);
+}
+
+/**
+ * Export the exact persisted Session bundle without migration, recovery, or
+ * schema rewriting. Unknown and malformed records remain byte-for-byte intact
+ * and are described by diagnostics instead of being discarded.
+ */
+export async function exportSessionBundle(
+  id: string,
+  options: SessionBundleExportOptions = {},
+): Promise<SessionBundleExportResult> {
+  if (options.signal?.aborted) {
+    throw new SessionReadError('read_cancelled', 'Session bundle export cancelled');
+  }
+  const sessionsDir = path.resolve(options.sessionsDir ?? KODAX_SESSIONS_DIR);
+  const timeoutMs = normalizeBundleExportTimeout(options.timeoutMs);
+  const operation = (async (): Promise<SessionBundleExportResult> => {
+    const snapshot = await readStableSessionBundleFiles(
+      sessionsDir,
+      id,
+      options.signal,
+    );
+    if (snapshot.candidates.length === 0) {
+      return { sessionId: id, status: 'missing', files: [], diagnostics: [] };
+    }
+    if (snapshot.candidates.length > 1) {
+      return {
+        sessionId: id,
+        status: 'ambiguous',
+        files: [],
+        candidates: snapshot.candidates,
+        diagnostics: [],
+      };
+    }
+    const files = snapshot.files.map((file): SessionBundleExportFile => ({
+      kind: file.kind,
+      path: file.path,
+      byteLength: file.bytes.length,
+      sha256: createHash('sha256').update(file.bytes).digest('hex'),
+      modifiedAt: file.modifiedAt,
+      content: file.bytes.toString('utf8'),
+      contentBase64: file.bytes.toString('base64'),
+    }));
+    const diagnostics = files.flatMap(inspectSessionBundleFile);
+    return {
+      sessionId: id,
+      status: bundleExportStatus(diagnostics),
+      files,
+      diagnostics,
+    };
+  })();
+  return raceBundleExport(operation, options, timeoutMs);
+}
+
+function inspectSessionBundleFile(
+  file: SessionBundleExportFile,
+): SessionBundleExportDiagnostic[] {
+  const diagnostics: SessionBundleExportDiagnostic[] = [];
+  const lines = file.content.split(/\r?\n/);
+  let lastRecordIndex = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if ((lines[index] ?? '').trim().length > 0) {
+      lastRecordIndex = index;
+      break;
+    }
+  }
+  for (let index = 0; index <= lastRecordIndex; index += 1) {
+    const line = lines[index] ?? '';
+    if (!line.trim()) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      diagnostics.push({
+        code: index === lastRecordIndex ? 'partial_tail' : 'malformed_record',
+        file: file.path,
+        line: index + 1,
+        message: index === lastRecordIndex
+          ? 'Trailing partial record was preserved verbatim.'
+          : 'Malformed record was preserved verbatim.',
+      });
+      continue;
+    }
+    if (
+      file.kind === 'main'
+      && index === 0
+      && isRecord(value)
+      && value._type === 'meta'
+      && value.lineageVersion !== undefined
+      && value.lineageVersion !== 2
+    ) {
+      diagnostics.push({
+        code: 'unsupported_version',
+        file: file.path,
+        line: 1,
+        message: `Unsupported Session lineage version: ${String(value.lineageVersion)}`,
+      });
+      continue;
+    }
+    if (!isRecognizedBundleRecord(value, file.kind)) {
+      diagnostics.push({
+        code: 'unsupported_record',
+        file: file.path,
+        line: index + 1,
+        message: 'Unknown record was preserved verbatim.',
+      });
+    }
+  }
+  return diagnostics;
+}
+
+function isRecognizedBundleRecord(
+  value: unknown,
+  kind: SessionBundleExportFile['kind'],
+): boolean {
+  if (!isRecord(value)) return false;
+  if (kind !== 'main') {
+    return value._type === 'archive_batch' || value._type === 'archived_entry';
+  }
+  if (
+    value._type === 'meta'
+    || value._type === 'meta_update'
+    || value._type === 'lineage_entry'
+    || value._type === 'artifact_ledger_entry'
+    || value._type === 'extension_record'
+  ) {
+    return true;
+  }
+  return (
+    value.role === 'user'
+    || value.role === 'assistant'
+    || value.role === 'system'
+  ) && (typeof value.content === 'string' || Array.isArray(value.content));
+}
+
+function bundleExportStatus(
+  diagnostics: readonly SessionBundleExportDiagnostic[],
+): SessionBundleExportStatus {
+  if (diagnostics.some((item) => item.code === 'malformed_record')) {
+    return 'corrupt';
+  }
+  if (diagnostics.some((item) => (
+    item.code === 'unsupported_record' || item.code === 'unsupported_version'
+  ))) {
+    return 'unsupported';
+  }
+  return diagnostics.some((item) => item.code === 'partial_tail')
+    ? 'partial'
+    : 'ok';
+}
+
+function normalizeBundleExportTimeout(timeoutMs: number | undefined): number {
+  const normalized = timeoutMs ?? 15_000;
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    throw new Error('Session bundle export timeoutMs must be a positive safe integer');
+  }
+  return normalized;
+}
+
+async function raceBundleExport<T>(
+  operation: Promise<T>,
+  options: SessionReadOptions,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new SessionReadError(
+            'read_timeout',
+            `Session bundle export timed out after ${timeoutMs}ms`,
+          )),
+          timeoutMs,
+        );
+        if (options.signal !== undefined) {
+          abort = () => reject(new SessionReadError(
+            'read_cancelled',
+            'Session bundle export cancelled',
+          ));
+          options.signal.addEventListener('abort', abort, { once: true });
+        }
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (abort !== undefined) options.signal?.removeEventListener('abort', abort);
+  }
 }
 
 async function loadFullTranscriptImpl(
@@ -996,34 +1264,39 @@ async function loadFullTranscriptImpl(
   sessionsDirOverride: string | undefined,
 ): Promise<FullTranscriptSessionData | null> {
   try {
-    const sessionsDir = resolveSessionsDir(sessionsDirOverride);
-    await ensureLayoutMigrated(sessionsDir);
-    const storage = getStorage(sessionsDirOverride);
-    const activeData = await storage.load(id);
-    if (!activeData) {
-      return null;
-    }
-    const lineage = await storage.loadFullLineage(id);
-    if (!lineage) {
-      return {
-        ...activeData,
-        activeMessages: activeData.messages,
-        transcriptEntries: [],
-      };
-    }
-    const transcriptEntries = buildTranscriptEntries(lineage);
-    return {
-      ...activeData,
-      messages: transcriptEntries
-        .filter((entry) => entry.type !== 'rewind_marker')
-        .map((entry) => entry.message),
-      activeMessages: activeData.messages,
-      transcriptEntries,
-      lineage,
-    };
+    return await readFullTranscriptImpl(id, sessionsDirOverride, {});
   } catch {
     return null;
   }
+}
+
+async function readFullTranscriptImpl(
+  id: string,
+  sessionsDirOverride: string | undefined,
+  options: SessionReadOptions,
+): Promise<FullTranscriptSessionData | null> {
+  const snapshot = await getStorage(sessionsDirOverride).readFullSnapshot(
+    id,
+    options,
+  );
+  if (snapshot === null) return null;
+  if (snapshot.lineage === null) {
+    return {
+      ...snapshot.data,
+      activeMessages: snapshot.data.messages,
+      transcriptEntries: [],
+    };
+  }
+  const transcriptEntries = buildTranscriptEntries(snapshot.lineage);
+  return {
+    ...snapshot.data,
+    messages: transcriptEntries
+      .filter((entry) => entry.type !== 'rewind_marker')
+      .map((entry) => entry.message),
+    activeMessages: snapshot.data.messages,
+    transcriptEntries,
+    lineage: snapshot.lineage,
+  };
 }
 
 function normalizeClientNoticeSource(source: string | undefined): string {
@@ -1529,6 +1802,7 @@ export function createSessionManager(opts?: {
       listSessions,
       loadSession,
       loadFullTranscript,
+      readFullTranscript,
       appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
       forkSession,
       rewindSession,
@@ -1549,6 +1823,8 @@ export function createSessionManager(opts?: {
     listSessions: (o) => listSessionsImpl(o, sessionsDir),
     loadSession: (id) => loadSessionImpl(id, sessionsDir),
     loadFullTranscript: (id) => loadFullTranscriptImpl(id, sessionsDir),
+    readFullTranscript: (id, options) =>
+      readFullTranscriptImpl(id, sessionsDir, options ?? {}),
     appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
     forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
     rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir, configHome),

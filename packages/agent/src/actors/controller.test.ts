@@ -1539,27 +1539,153 @@ describe('F270 actor tree and scheduler', () => {
     expect(executor.pending[0]?.input.signal.aborted).toBe(true);
   });
 
-  it('reports durable completion failures through the background error boundary', async () => {
-    let failSave = false;
+  it('retries a failed durable completion commit without duplicating terminal evidence', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    let completionSaveAttempts = 0;
     const onBackgroundError = vi.fn();
+    const onMessageCommitted = vi.fn();
     const store: AgentActorStore = {
       async load() { return undefined; },
-      async save() {
-        if (failSave) throw new Error('completion save failed');
+      async save(snapshot) {
+        const turn = snapshot.turns.find((candidate) => candidate.actorPath === '/root/worker');
+        if (turn?.state === 'completed') {
+          completionSaveAttempts += 1;
+          if (completionSaveAttempts === 1) throw new Error('completion save failed');
+        }
+        saved = structuredClone(snapshot);
       },
     };
     const executor = new DeferredExecutor();
-    const controller = await createAgentActorController({ executor, store, onBackgroundError });
-    await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
-    failSave = true;
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError,
+      onMessageCommitted,
+    });
+    const turn = await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
 
     executor.pending[0]?.resolve({ output: 'done' });
-    await settle();
+    await vi.waitFor(() => {
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'done',
+      });
+    });
 
+    expect(completionSaveAttempts).toBe(2);
+    expect(saved?.turns.find((candidate) => candidate.turnId === turn.turnId)).toMatchObject({
+      state: 'completed',
+      output: 'done',
+    });
+    expect(onBackgroundError).toHaveBeenCalledTimes(1);
     expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
       message: 'completion save failed',
     }));
-    expect(controller.get('/root', '/root/worker').actor.state).toBe('running');
+    expect(onMessageCommitted).toHaveBeenCalledTimes(1);
+    expect(onMessageCommitted).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'completion',
+      turnId: turn.turnId,
+    }));
+    expect(controller.eventSnapshot('/root').filter((event) => (
+      event.kind === 'turn_completed' && event.turnId === turn.turnId
+    ))).toHaveLength(1);
+  });
+
+  it('retries a failed durable executor failure commit without duplicating completion notice', async () => {
+    let failedSaveAttempts = 0;
+    const onBackgroundError = vi.fn();
+    const onMessageCommitted = vi.fn();
+    const store: AgentActorStore = {
+      async load() { return undefined; },
+      async save(snapshot) {
+        const turn = snapshot.turns.find((candidate) => candidate.actorPath === '/root/worker');
+        if (turn?.state === 'failed') {
+          failedSaveAttempts += 1;
+          if (failedSaveAttempts === 1) throw new Error('failure save failed');
+        }
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      onBackgroundError,
+      onMessageCommitted,
+    });
+    const turn = await controller.spawn('/root', { taskName: 'worker', objective: 'Work.' });
+
+    executor.pending[0]?.reject(new Error('executor failed'));
+    await vi.waitFor(() => {
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'failed',
+        error: 'executor failed',
+      });
+    });
+
+    expect(failedSaveAttempts).toBe(2);
+    expect(onBackgroundError).toHaveBeenCalledTimes(1);
+    expect(onBackgroundError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'failure save failed',
+    }));
+    expect(onMessageCommitted).toHaveBeenCalledTimes(1);
+    expect(onMessageCommitted).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'completion',
+      turnId: turn.turnId,
+    }));
+    expect(controller.eventSnapshot('/root').filter((event) => (
+      event.kind === 'turn_failed' && event.turnId === turn.turnId
+    ))).toHaveLength(1);
+  });
+
+  it('flushes a known executor settlement before shutdown releases its owner', async () => {
+    let saved: AgentActorSnapshot | undefined;
+    let completionAttempts = 0;
+    let releaseRetry: (() => void) | undefined;
+    const retryGate = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    const store: AgentActorStore = {
+      async load() { return saved; },
+      async save(snapshot) {
+        const turn = snapshot.turns.find((candidate) => candidate.actorPath === '/root/worker');
+        if (turn?.state === 'completed') {
+          completionAttempts += 1;
+          if (completionAttempts === 1) throw new Error('completion save failed');
+          await retryGate;
+        }
+        saved = structuredClone(snapshot);
+      },
+    };
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store,
+      owner: FIRST_OWNER,
+    });
+    const turn = await controller.spawn('/root', {
+      taskName: 'worker',
+      objective: 'Complete before shutdown.',
+    });
+
+    executor.pending[0]?.resolve({ output: 'durable result' });
+    await vi.waitFor(() => {
+      expect(completionAttempts).toBe(2);
+    });
+    let shutdownSettled = false;
+    const shutdown = controller.shutdown().finally(() => {
+      shutdownSettled = true;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(shutdownSettled).toBe(false);
+
+    releaseRetry?.();
+    await shutdown;
+
+    expect(saved?.owner).toBeUndefined();
+    expect(saved?.turns.find((candidate) => candidate.turnId === turn.turnId)).toMatchObject({
+      state: 'completed',
+      output: 'durable result',
+    });
   });
 
   it('never exposes a terminal turn before its durable commit succeeds', async () => {

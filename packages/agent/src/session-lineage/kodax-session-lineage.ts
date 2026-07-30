@@ -39,6 +39,7 @@ type NavigableSessionEntry = Exclude<
 const ENTRY_ID_LENGTH = 12;
 const MAX_BRANCH_SUMMARY_LENGTH = 600;
 const messageFingerprintCache = new WeakMap<KodaXMessage, string>();
+const messageProvenanceSourceIds = new WeakMap<KodaXMessage, Set<string>>();
 const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch that this conversation came back from:
 
 <summary>
@@ -206,6 +207,58 @@ function sourceEntryIdForClone(entry: KodaXSessionEntry): string {
   return entry.sourceEntryId ?? entry.id;
 }
 
+function recordMessageProvenanceSource(
+  message: KodaXMessage,
+  entry: NavigableSessionEntry,
+): void {
+  const sourceIds = messageProvenanceSourceIds.get(message) ?? new Set<string>();
+  sourceIds.add(entry.id);
+  messageProvenanceSourceIds.set(message, sourceIds);
+}
+
+function entryOwnsCompactionMessage(
+  entry: NavigableSessionEntry,
+  message: KodaXMessage,
+): boolean {
+  return entry.type === 'message'
+    ? entry.message === message
+      || messageProvenanceSourceIds.get(message)?.has(entry.id) === true
+    : messageProvenanceSourceIds.get(message)?.has(entry.id) === true;
+}
+
+function inheritCompactionMessageProvenance(
+  entries: readonly KodaXSessionEntry[],
+  existingIds: ReadonlySet<string>,
+  sourceEntries: readonly NavigableSessionEntry[],
+): KodaXSessionEntry[] {
+  const clones = entries.filter((entry): entry is KodaXSessionMessageEntry =>
+    entry.type === 'message' && !existingIds.has(entry.id));
+  const sourcesByCloneId = new Map<string, NavigableSessionEntry>();
+  let sourceLimit = sourceEntries.length;
+  for (let cloneIndex = clones.length - 1; cloneIndex >= 0; cloneIndex -= 1) {
+    let sourceIndex = sourceLimit - 1;
+    while (
+      sourceIndex >= 0
+      && !entryOwnsCompactionMessage(sourceEntries[sourceIndex]!, clones[cloneIndex]!.message)
+    ) {
+      sourceIndex -= 1;
+    }
+    if (sourceIndex < 0) continue;
+    sourcesByCloneId.set(clones[cloneIndex]!.id, sourceEntries[sourceIndex]!);
+    sourceLimit = sourceIndex;
+  }
+  return entries.map((entry) => {
+    const source = sourcesByCloneId.get(entry.id);
+    return source
+      ? {
+          ...entry,
+          logicalId: logicalIdForEntry(source),
+          sourceEntryId: sourceEntryIdForClone(source),
+        }
+      : entry;
+  });
+}
+
 function cloneLineage(lineage?: KodaXSessionLineage): KodaXSessionLineage {
   // Shallow-copy the entries array so mutations (push) don't affect
   // the original, but share entry objects by reference. This avoids
@@ -241,21 +294,24 @@ function getContextMessagesForEntry(entry: NavigableSessionEntry): KodaXMessage[
       if (entry.reason === 'rewind') {
         return [];
       }
-      return [
-        createSummaryContextMessage(
+      {
+        const message = createSummaryContextMessage(
           entry.summary,
           COMPACTION_SUMMARY_PREFIX,
           COMPACTED_HISTORY_RECOVERY_GUIDANCE,
-        ),
-      ];
-    case 'branch_summary':
-      return [
-        createSummaryContextMessage(
-          entry.summary,
-          BRANCH_SUMMARY_PREFIX,
-          BRANCH_SUMMARY_SUFFIX,
-        ),
-      ];
+        );
+        recordMessageProvenanceSource(message, entry);
+        return [message];
+      }
+    case 'branch_summary': {
+      const message = createSummaryContextMessage(
+        entry.summary,
+        BRANCH_SUMMARY_PREFIX,
+        BRANCH_SUMMARY_SUFFIX,
+      );
+      recordMessageProvenanceSource(message, entry);
+      return [message];
+    }
     case 'archive_marker':
       return [];  // context-silent: archived content is not part of LLM context
     default: {
@@ -476,11 +532,13 @@ export function createSessionLineage(
   let activeEntryId: string | null = null;
 
   for (const message of messages) {
+    if (isPostCompactAttachment(message)) continue;
     const existing: NavigableSessionEntry | undefined = [...(children.get(parentId) ?? [])]
       .reverse()
       .find((entry) => entryMatchesContextMessage(entry, message));
 
     if (existing) {
+      recordMessageProvenanceSource(message, existing);
       activeEntryId = existing.id;
       parentId = existing.id;
       continue;
@@ -722,6 +780,7 @@ export function applySessionCompaction(
   },
   postCompactAttachments: readonly KodaXMessage[] = [],
 ): KodaXSessionLineage {
+  const sourceEntries = lineage ? getSessionLineagePath(lineage) : [];
   const base = cloneLineage(lineage);
   const compactionEntryId = generateEntryId();
   const compactionEntry: KodaXSessionCompactionEntry = {
@@ -784,16 +843,26 @@ export function applySessionCompaction(
     keptMessages = filteredForDedup;
   }
 
+  const existingIds = new Set(base.entries.map((entry) => entry.id));
   const next = createSessionLineage(keptMessages, base);
-  const activePath = getSessionLineagePath(next);
+  const entriesWithProvenance = inheritCompactionMessageProvenance(
+    next.entries,
+    existingIds,
+    sourceEntries,
+  );
+  const nextWithProvenance = {
+    ...next,
+    entries: entriesWithProvenance,
+  };
+  const activePath = getSessionLineagePath(nextWithProvenance);
   const compactionIndex = activePath.findIndex((entry) => entry.id === compactionEntryId);
   const firstKeptEntryId = compactionIndex >= 0
     ? activePath[compactionIndex + 1]?.id
     : undefined;
 
   const result: KodaXSessionLineage = {
-    ...next,
-    entries: next.entries.map((entry) => entry.id === compactionEntryId
+    ...nextWithProvenance,
+    entries: nextWithProvenance.entries.map((entry) => entry.id === compactionEntryId
       ? {
         ...entry,
         firstKeptEntryId,

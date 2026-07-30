@@ -18,6 +18,8 @@ export interface RuntimeActorOwnerLivenessOptions {
   readonly onError: (error: Error) => void;
 }
 
+export type RuntimeActorOwnerState = 'alive' | 'dead' | 'unknown';
+
 export async function createRuntimeActorOwnerLiveness(
   options: RuntimeActorOwnerLivenessOptions,
 ): Promise<RuntimeActorOwnerLiveness> {
@@ -61,20 +63,30 @@ export async function createRuntimeActorOwnerLiveness(
 export async function isRuntimeActorOwnerAlive(
   owner: AgentActorOwner,
 ): Promise<boolean> {
-  if (isPidDefinitelyDead(owner.pid)) return false;
-  if (owner.livenessId === undefined || owner.livenessPort === undefined) return true;
+  return (await inspectRuntimeActorOwner(owner)) !== 'dead';
+}
+
+export async function inspectRuntimeActorOwner(
+  owner: AgentActorOwner,
+): Promise<RuntimeActorOwnerState> {
+  if (isPidDefinitelyDead(owner.pid)) return 'dead';
+  if (owner.livenessId === undefined || owner.livenessPort === undefined) {
+    return 'unknown';
+  }
   if (
     !LIVENESS_ID_PATTERN.test(owner.livenessId)
     || !Number.isSafeInteger(owner.livenessPort)
     || owner.livenessPort <= 0
     || owner.livenessPort > 65_535
   ) {
-    return true;
+    return 'unknown';
   }
   try {
-    return await probe(owner.livenessPort, owner.livenessId);
+    return await probe(owner.livenessPort, owner.livenessId)
+      ? 'alive'
+      : 'dead';
   } catch (error: unknown) {
-    return errorCode(error) !== 'ECONNREFUSED';
+    return errorCode(error) === 'ECONNREFUSED' ? 'dead' : 'unknown';
   }
 }
 

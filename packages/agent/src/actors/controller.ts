@@ -46,6 +46,9 @@ const MAX_PROGRESS_SUMMARY_LENGTH = 240;
 const MAX_LIST_SUMMARY_LENGTH = 480;
 const MAX_OUTPUT_PREVIEW_LENGTH = 8_192;
 const MAX_EVENT_ITEMS = 2_048;
+const INITIAL_SETTLEMENT_RETRY_MS = 10;
+const MAX_SETTLEMENT_RETRY_MS = 1_000;
+const SETTLEMENT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
 export interface AgentControllerOptions {
@@ -99,6 +102,7 @@ export class AgentActorController {
   private readonly eventsLog: AgentEvent[] = [];
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly waiters = new Set<EventWaiter>();
+  private readonly pendingSettlements = new Set<Promise<void>>();
   private readonly scheduler: AgentTurnScheduler;
   private readonly budget: AgentBudgetPort;
   private readonly now: () => string;
@@ -546,6 +550,7 @@ export class AgentActorController {
   async shutdown(reason = 'runtime stopped'): Promise<void> {
     if (this.ownershipReleased) return;
     try {
+      await this.flushPendingSettlements();
       const aborts = await this.mutate(() => {
         const pendingAborts: AbortController[] = [];
         for (const turn of this.turns.values()) {
@@ -789,8 +794,8 @@ export class AgentActorController {
         reportProgress: (update) => this.recordProgress(plan.turn.turnId, update),
       }))
       .then(
-        (result) => this.completeExecution(plan.turn.turnId, result),
-        (error: unknown) => this.failExecution(plan.turn.turnId, error),
+        (result) => this.trackSettlement(this.completeExecution(plan.turn.turnId, result)),
+        (error: unknown) => this.trackSettlement(this.failExecution(plan.turn.turnId, error)),
       )
       .catch((error: unknown) => {
         if (
@@ -803,11 +808,33 @@ export class AgentActorController {
       });
   }
 
+  private trackSettlement(settlement: Promise<void>): Promise<void> {
+    this.pendingSettlements.add(settlement);
+    void settlement.finally(() => {
+      this.pendingSettlements.delete(settlement);
+    }).catch(() => undefined);
+    return settlement;
+  }
+
+  private async flushPendingSettlements(): Promise<void> {
+    const deadline = Date.now() + SETTLEMENT_SHUTDOWN_TIMEOUT_MS;
+    while (this.pendingSettlements.size > 0) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error('Timed out while persisting an executor settlement');
+      }
+      await raceSettlementFlush(
+        Promise.all([...this.pendingSettlements]),
+        remainingMs,
+      );
+    }
+  }
+
   private async completeExecution(
     turnId: string,
     result: AgentExecutionResult,
   ): Promise<void> {
-    await this.mutate(() => {
+    await this.commitExecutionSettlement(() => {
       const turn = this.turns.get(turnId);
       if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'completed', {
@@ -819,16 +846,41 @@ export class AgentActorController {
         ...(result.turnMetadata === undefined ? {} : { turnMetadata: result.turnMetadata }),
       });
       return true;
-    }, (changed) => changed);
+    });
   }
 
   private async failExecution(turnId: string, error: unknown): Promise<void> {
-    await this.mutate(() => {
+    await this.commitExecutionSettlement(() => {
       const turn = this.turns.get(turnId);
       if (!turn || isTerminal(turn.state)) return false;
       this.finishTurn(turnId, 'failed', { error: error instanceof Error ? error.message : String(error) });
       return true;
-    }, (changed) => changed);
+    });
+  }
+
+  private async commitExecutionSettlement(settle: () => boolean): Promise<void> {
+    let retryMs = INITIAL_SETTLEMENT_RETRY_MS;
+    let failureReported = false;
+    while (!this.ownershipLost && !this.ownershipReleased) {
+      try {
+        await this.mutate(settle, (changed) => changed);
+        return;
+      } catch (error) {
+        if (
+          error instanceof AgentOwnerConflictError
+          || this.ownershipLost
+          || this.ownershipReleased
+        ) {
+          throw error;
+        }
+        if (!failureReported) {
+          this.options.onBackgroundError?.(error);
+          failureReported = true;
+        }
+        await waitForSettlementRetry(retryMs);
+        retryMs = Math.min(retryMs * 2, MAX_SETTLEMENT_RETRY_MS);
+      }
+    }
   }
 
   private finishTurn(
@@ -1535,6 +1587,28 @@ function moreRestrictedClassification(
     sensitive: 2,
   };
   return rank[source] > rank[requested] ? source : requested;
+}
+
+function waitForSettlementRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function raceSettlementFlush(
+  settlement: Promise<readonly void[]>,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    settlement.then(() => undefined),
+    new Promise<void>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('Timed out while persisting an executor settlement')),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 export async function createAgentActorController(

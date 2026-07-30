@@ -90,15 +90,73 @@ interface PersistedMetaUpdateLine {
   scope?: string;
 }
 
-interface PersistedArchivedEntryLine {
+interface PersistedArchivedEntryCore {
   _type: 'archived_entry';
   archiveBatchId: string;
   entry: KodaXSessionEntry;
 }
 
+interface PersistedArchivedEntryLine extends PersistedArchivedEntryCore {
+  previousEntryId?: string | null;
+  nextEntryId?: string | null;
+}
+
+interface ArchivedLineageRecord extends PersistedArchivedEntryLine {
+  readonly streamId: number;
+}
+
 const ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const;
 const SESSION_WRITE_LOCK_TIMEOUT_MS = 60_000;
+const DEFAULT_SESSION_READ_TIMEOUT_MS = 15_000;
 let sessionTempSequence = 0;
+
+function normalizeSessionReadTimeout(timeoutMs: number | undefined): number {
+  const normalized = timeoutMs ?? DEFAULT_SESSION_READ_TIMEOUT_MS;
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    throw new Error('Session read timeoutMs must be a positive safe integer');
+  }
+  return normalized;
+}
+
+function throwIfSessionReadAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new SessionReadError('read_cancelled', 'Session history read cancelled');
+}
+
+async function raceSessionRead<T>(
+  operation: Promise<T>,
+  options: SessionReadOptions,
+): Promise<T> {
+  const timeoutMs = normalizeSessionReadTimeout(options.timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new SessionReadError(
+            'read_timeout',
+            `Session history read timed out after ${timeoutMs}ms`,
+          )),
+          timeoutMs,
+        );
+        if (options.signal !== undefined) {
+          abort = () => reject(new SessionReadError(
+            'read_cancelled',
+            'Session history read cancelled',
+          ));
+          options.signal.addEventListener('abort', abort, { once: true });
+        }
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (abort !== undefined) {
+      options.signal?.removeEventListener('abort', abort);
+    }
+  }
+}
 
 async function replaceSessionFile(tempPath: string, targetPath: string): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
@@ -159,6 +217,202 @@ interface ResolvedSessionSnapshot {
   data: SessionData;
   createdAt?: string;
   filePath: string;
+}
+
+export type SessionReadErrorCode =
+  | 'data_corrupt'
+  | 'data_changed'
+  | 'version_incompatible'
+  | 'read_timeout'
+  | 'read_cancelled';
+
+export class SessionReadError extends Error {
+  constructor(
+    readonly code: SessionReadErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SessionReadError';
+  }
+}
+
+export interface SessionReadOptions {
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface SessionReadSnapshot {
+  readonly data: SessionData;
+  readonly lineage: KodaXSessionLineage | null;
+}
+
+export interface StableSessionBundleFile {
+  readonly kind: 'main' | 'islands' | 'legacy_archive';
+  readonly path: string;
+  readonly bytes: Buffer;
+  readonly modifiedAt: string;
+}
+
+export interface StableSessionBundleSnapshot {
+  readonly candidates: readonly string[];
+  readonly files: readonly StableSessionBundleFile[];
+}
+
+function sessionWriteLockPath(sessionsDir: string, id: string): string {
+  const key = createHash('sha256').update(id, 'utf8').digest('hex');
+  return path.join(sessionsDir, '.write-locks', `${key}.lock`);
+}
+
+function assertStableSessionReadBoundary(sessionsDir: string, id: string): void {
+  const activePath = [
+    sessionWriteLockPath(sessionsDir, id),
+    path.join(sessionsDir, '.migration-lock'),
+    path.join(sessionsDir, '.migration-journal.jsonl'),
+  ].find((candidate) => fsSync.existsSync(candidate));
+  if (activePath !== undefined) {
+    throw new SessionReadError(
+      'data_changed',
+      `Session data changed during the read boundary: ${path.basename(activePath)}`,
+    );
+  }
+}
+
+async function findStableSessionCandidates(
+  sessionsDir: string,
+  id: string,
+): Promise<string[]> {
+  const candidates: string[] = [];
+  const flat = path.join(sessionsDir, `${id}.jsonl`);
+  if (fsSync.existsSync(flat)) candidates.push(flat);
+  let entries: import('fs').Dirent[] = [];
+  try {
+    entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const projectDir = path.join(sessionsDir, entry.name);
+    for (const candidate of [
+      path.join(projectDir, `${id}.jsonl`),
+      path.join(projectDir, 'archived', `${id}.jsonl`),
+    ]) {
+      if (fsSync.existsSync(candidate)) candidates.push(candidate);
+    }
+  }
+  return candidates.sort();
+}
+
+async function readStableBundleFile(
+  kind: StableSessionBundleFile['kind'],
+  filePath: string,
+): Promise<StableSessionBundleFile | null> {
+  try {
+    const bytes = await fs.readFile(filePath);
+    const snapshot = await fs.stat(filePath);
+    return {
+      kind,
+      path: filePath,
+      bytes,
+      modifiedAt: snapshot.mtime.toISOString(),
+    };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function sameStableBundleSnapshot(
+  left: StableSessionBundleSnapshot,
+  right: StableSessionBundleSnapshot,
+): boolean {
+  if (
+    left.candidates.length !== right.candidates.length
+    || left.files.length !== right.files.length
+  ) {
+    return false;
+  }
+  for (let index = 0; index < left.candidates.length; index += 1) {
+    if (left.candidates[index] !== right.candidates[index]) return false;
+  }
+  for (let index = 0; index < left.files.length; index += 1) {
+    const leftFile = left.files[index]!;
+    const rightFile = right.files[index]!;
+    if (
+      leftFile.kind !== rightFile.kind
+      || leftFile.path !== rightFile.path
+      || !leftFile.bytes.equals(rightFile.bytes)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Capture a read-only, cross-file Session snapshot. Two identical passes plus
+ * read-only writer/migrator checks give callers one stable boundary without
+ * creating lock files or migration artifacts.
+ */
+export async function readStableSessionBundleFiles(
+  sessionsDirInput: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<StableSessionBundleSnapshot> {
+  const sessionsDir = path.resolve(sessionsDirInput);
+  const capture = async (): Promise<StableSessionBundleSnapshot> => {
+    throwIfSessionReadAborted(signal);
+    assertStableSessionReadBoundary(sessionsDir, id);
+    const candidates = await findStableSessionCandidates(sessionsDir, id);
+    const files: StableSessionBundleFile[] = [];
+    if (candidates.length === 1) {
+      const mainPath = candidates[0]!;
+      const directory = path.dirname(mainPath);
+      const descriptors = [
+        { kind: 'main' as const, filePath: mainPath },
+        {
+          kind: 'islands' as const,
+          filePath: path.join(directory, `${id}.islands.jsonl`),
+        },
+        {
+          kind: 'legacy_archive' as const,
+          filePath: path.join(directory, `${id}.archive.jsonl`),
+        },
+      ];
+      for (const descriptor of descriptors) {
+        const file = await readStableBundleFile(descriptor.kind, descriptor.filePath);
+        if (file !== null) files.push(file);
+      }
+      if (files[0]?.kind !== 'main') {
+        throw new SessionReadError(
+          'data_changed',
+          'Session main file moved during the read boundary',
+        );
+      }
+    }
+    assertStableSessionReadBoundary(sessionsDir, id);
+    const verifiedCandidates = await findStableSessionCandidates(sessionsDir, id);
+    if (
+      candidates.length !== verifiedCandidates.length
+      || candidates.some((candidate, index) => candidate !== verifiedCandidates[index])
+    ) {
+      throw new SessionReadError(
+        'data_changed',
+        'Session layout changed during the read boundary',
+      );
+    }
+    return { candidates, files };
+  };
+
+  const first = await capture();
+  const second = await capture();
+  if (!sameStableBundleSnapshot(first, second)) {
+    throw new SessionReadError(
+      'data_changed',
+      'Session files changed during the read boundary',
+    );
+  }
+  return second;
 }
 
 function reportStorageDiagnostic(level: 'info' | 'warn' | 'error', message: string, detail?: unknown): void {
@@ -298,11 +552,15 @@ function isPersistedLineageEntryLine(
     && isKodaXSessionEntry(value.entry);
 }
 
-function isPersistedArchivedEntryLine(value: unknown): value is PersistedArchivedEntryLine {
+function isPersistedArchivedEntryLine(value: unknown): value is PersistedArchivedEntryCore {
   return isRecord(value)
     && value._type === 'archived_entry'
     && typeof value.archiveBatchId === 'string'
     && isKodaXSessionEntry(value.entry);
+}
+
+function archivedEntryAnchor(value: unknown): string | null | undefined {
+  return typeof value === 'string' || value === null ? value : undefined;
 }
 
 function isCompactedPlaceholder(entry: KodaXSessionEntry): boolean {
@@ -314,17 +572,250 @@ function isCompactedPlaceholder(entry: KodaXSessionEntry): boolean {
     && entry.message.content[0].text === '[compacted]';
 }
 
+function mergeConcurrentLineageEntries(
+  persistedEntries: readonly KodaXSessionEntry[],
+  incomingEntries: readonly KodaXSessionEntry[],
+): KodaXSessionEntry[] {
+  const merged = new Map<string, KodaXSessionEntry>();
+  for (const entry of persistedEntries) merged.set(entry.id, entry);
+  for (const entry of incomingEntries) {
+    const persisted = merged.get(entry.id);
+    if (!persisted || isCompactedPlaceholder(persisted)) merged.set(entry.id, entry);
+  }
+  return [...merged.values()];
+}
+
+function addOrderingEdge(
+  edges: Map<string, Set<string>>,
+  knownIds: ReadonlySet<string>,
+  beforeId: string | null | undefined,
+  afterId: string | null | undefined,
+): void {
+  if (!beforeId || !afterId || beforeId === afterId) return;
+  if (!knownIds.has(beforeId) || !knownIds.has(afterId)) return;
+  const targets = edges.get(beforeId) ?? new Set<string>();
+  targets.add(afterId);
+  edges.set(beforeId, targets);
+}
+
+function addSequenceEdges(
+  edges: Map<string, Set<string>>,
+  knownIds: ReadonlySet<string>,
+  ids: readonly string[],
+): void {
+  const seen = new Set<string>();
+  let previousId: string | undefined;
+  for (const id of ids) {
+    if (!knownIds.has(id) || seen.has(id)) continue;
+    addOrderingEdge(edges, knownIds, previousId, id);
+    previousId = id;
+    seen.add(id);
+  }
+}
+
+function pushMin(heap: number[], value: number): void {
+  let index = heap.length;
+  heap.push(value);
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent]! <= value) break;
+    heap[index] = heap[parent]!;
+    index = parent;
+  }
+  heap[index] = value;
+}
+
+function popMin(heap: number[]): number | undefined {
+  const first = heap[0];
+  const last = heap.pop();
+  if (first === undefined || last === undefined || heap.length === 0) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    const child = right < heap.length && heap[right]! < heap[left]! ? right : left;
+    if (heap[child]! >= last) break;
+    heap[index] = heap[child]!;
+    index = child;
+  }
+  heap[index] = last;
+  return first;
+}
+
+function orderingIndegrees(
+  preferredIds: readonly string[],
+  edges: ReadonlyMap<string, ReadonlySet<string>>,
+): Map<string, number> {
+  const indegree = new Map(preferredIds.map((id) => [id, 0]));
+  for (const targets of edges.values()) {
+    for (const target of targets) indegree.set(target, (indegree.get(target) ?? 0) + 1);
+  }
+  return indegree;
+}
+
+function popEligibleIndex(
+  heap: number[],
+  preferredIds: readonly string[],
+  emitted: ReadonlySet<string>,
+  eligible: (id: string) => boolean,
+): number | undefined {
+  while (heap.length > 0) {
+    const index = popMin(heap)!;
+    const id = preferredIds[index]!;
+    if (!emitted.has(id) && eligible(id)) return index;
+  }
+  return undefined;
+}
+
+function findParentCycleNode(
+  preferredIds: readonly string[],
+  emitted: ReadonlySet<string>,
+  parentByChild: ReadonlyMap<string, string>,
+): string | undefined {
+  const start = preferredIds.find((id) => !emitted.has(id));
+  if (!start) return undefined;
+  const visited = new Set<string>();
+  let current: string | undefined = start;
+  while (current && !emitted.has(current)) {
+    if (visited.has(current)) return current;
+    visited.add(current);
+    current = parentByChild.get(current);
+  }
+  return undefined;
+}
+
+function releaseOrderingTargets(
+  id: string,
+  edges: ReadonlyMap<string, ReadonlySet<string>>,
+  indegree: Map<string, number>,
+  emitted: ReadonlySet<string>,
+  onReady: (target: string) => void,
+): void {
+  for (const target of edges.get(id) ?? []) {
+    if (emitted.has(target)) continue;
+    const remaining = indegree.get(target) ?? 0;
+    if (remaining <= 0) continue;
+    indegree.set(target, remaining - 1);
+    if (remaining === 1) onReady(target);
+  }
+}
+
+function stablePriorityTopologicalOrder(
+  preferredIds: readonly string[],
+  hardEdges: ReadonlyMap<string, ReadonlySet<string>>,
+  softEdges: ReadonlyMap<string, ReadonlySet<string>>,
+  parentByChild: ReadonlyMap<string, string>,
+): string[] {
+  const indexById = new Map(preferredIds.map((id, index) => [id, index]));
+  const hardIndegree = orderingIndegrees(preferredIds, hardEdges);
+  const softIndegree = orderingIndegrees(preferredIds, softEdges);
+  const ready: number[] = [];
+  const hardReady: number[] = [];
+  const emitted = new Set<string>();
+  const ordered: string[] = [];
+  const queueIfReady = (id: string): void => {
+    if (hardIndegree.get(id) === 0) pushMin(hardReady, indexById.get(id)!);
+    if (hardIndegree.get(id) === 0 && softIndegree.get(id) === 0) {
+      pushMin(ready, indexById.get(id)!);
+    }
+  };
+  for (const id of preferredIds) queueIfReady(id);
+  while (ordered.length < preferredIds.length) {
+    let index = popEligibleIndex(ready, preferredIds, emitted, (id) =>
+      hardIndegree.get(id) === 0 && softIndegree.get(id) === 0);
+    index ??= popEligibleIndex(hardReady, preferredIds, emitted, (id) =>
+      hardIndegree.get(id) === 0);
+    if (index === undefined) {
+      const cycleNode = findParentCycleNode(preferredIds, emitted, parentByChild);
+      if (!cycleNode) break;
+      hardIndegree.set(cycleNode, 0);
+      queueIfReady(cycleNode);
+      continue;
+    }
+    const id = preferredIds[index]!;
+    emitted.add(id);
+    ordered.push(id);
+    releaseOrderingTargets(id, hardEdges, hardIndegree, emitted, queueIfReady);
+    releaseOrderingTargets(id, softEdges, softIndegree, emitted, queueIfReady);
+  }
+  return ordered;
+}
+
 function mergeFullLineageEntries(
-  archivedEntries: readonly KodaXSessionEntry[],
+  archivedRecords: readonly ArchivedLineageRecord[],
   mainEntries: readonly KodaXSessionEntry[],
 ): KodaXSessionEntry[] {
   const merged = new Map<string, KodaXSessionEntry>();
-  for (const entry of archivedEntries) merged.set(entry.id, entry);
+  const archivedAuthority = new Map<string, ArchivedLineageRecord>();
+  const fallbackIds: string[] = [];
+  for (const record of archivedRecords) {
+    const current = archivedAuthority.get(record.entry.id);
+    if (!current) fallbackIds.push(record.entry.id);
+    if (!current || shouldPreferArchivedRecord(record, current)) {
+      archivedAuthority.set(record.entry.id, record);
+    }
+  }
+  for (const [id, record] of archivedAuthority) merged.set(id, record.entry);
   for (const entry of mainEntries) {
     const archived = merged.get(entry.id);
-    if (!archived || isCompactedPlaceholder(archived)) merged.set(entry.id, entry);
+    if (!archived) fallbackIds.push(entry.id);
+    if (!archived || !isCompactedPlaceholder(entry)) merged.set(entry.id, entry);
   }
-  return [...merged.values()];
+  const knownIds = new Set(merged.keys());
+  const relativeEdges = new Map<string, Set<string>>();
+  addSequenceEdges(relativeEdges, knownIds, mainEntries.map((entry) => entry.id));
+  const exactMainIds = new Set(
+    mainEntries
+      .filter((entry) => !isCompactedPlaceholder(entry))
+      .map((entry) => entry.id),
+  );
+  const priorArchiveEntryByStream = new Map<string, string>();
+  for (const record of archivedRecords) {
+    const streamKey = `${record.streamId}:${record.archiveBatchId}`;
+    const isOrderingAuthority = archivedAuthority.get(record.entry.id) === record
+      && !exactMainIds.has(record.entry.id);
+    if (!isOrderingAuthority) {
+      priorArchiveEntryByStream.delete(streamKey);
+      continue;
+    }
+    addOrderingEdge(
+      relativeEdges,
+      knownIds,
+      priorArchiveEntryByStream.get(streamKey),
+      record.entry.id,
+    );
+    priorArchiveEntryByStream.set(streamKey, record.entry.id);
+    addOrderingEdge(relativeEdges, knownIds, record.previousEntryId, record.entry.id);
+    addOrderingEdge(relativeEdges, knownIds, record.entry.id, record.nextEntryId);
+  }
+  const parentEdges = new Map<string, Set<string>>();
+  const parentByChild = new Map<string, string>();
+  for (const entry of merged.values()) {
+    addOrderingEdge(parentEdges, knownIds, entry.parentId, entry.id);
+    if (entry.parentId && knownIds.has(entry.parentId) && entry.parentId !== entry.id) {
+      parentByChild.set(entry.id, entry.parentId);
+    }
+  }
+  return stablePriorityTopologicalOrder(
+    fallbackIds,
+    parentEdges,
+    relativeEdges,
+    parentByChild,
+  ).map((id) => merged.get(id)!);
+}
+
+function shouldPreferArchivedRecord(
+  candidate: ArchivedLineageRecord,
+  current: ArchivedLineageRecord,
+): boolean {
+  const candidateExact = !isCompactedPlaceholder(candidate.entry);
+  const currentExact = !isCompactedPlaceholder(current.entry);
+  if (candidateExact !== currentExact) return candidateExact;
+  if (candidate.streamId !== current.streamId) {
+    return candidate.streamId < current.streamId;
+  }
+  return true;
 }
 
 function mergeConcurrentAppendData(
@@ -336,7 +827,7 @@ function mergeConcurrentAppendData(
   const lineage = incomingLineage && persistedLineage
     ? {
         ...incomingLineage,
-        entries: mergeFullLineageEntries(
+        entries: mergeConcurrentLineageEntries(
           persistedLineage.entries,
           incomingLineage.entries,
         ),
@@ -367,8 +858,9 @@ function mergeConcurrentAppendData(
 function reconcileCompactionLineage(
   incoming: KodaXSessionLineage,
   persistedMain: KodaXSessionLineage | undefined,
-  archivedEntries: readonly KodaXSessionEntry[],
+  archivedRecords: readonly ArchivedLineageRecord[],
 ): KodaXSessionLineage {
+  const archivedEntries = archivedRecords.map((record) => record.entry);
   const authoritative = persistedTopologySupersedesIncoming(incoming, persistedMain)
     ? mergeContextSilentLineageEntries(persistedMain!, incoming)
     : incoming;
@@ -631,9 +1123,9 @@ function buildSessionData(
           : undefined,
         scope: snapshot.meta?.scope ?? 'user',
         uiHistory: normalizeKodaXSessionUiHistory(snapshot.meta?.uiHistory),
-        errorMetadata: isSessionErrorMetadata(snapshot.meta?.errorMetadata)
-          ? { ...snapshot.meta!.errorMetadata }
-          : undefined,
+        ...(isSessionErrorMetadata(snapshot.meta?.errorMetadata)
+          ? { errorMetadata: { ...snapshot.meta!.errorMetadata } }
+          : {}),
       extensionState: isKodaXExtensionSessionState(snapshot.meta?.extensionState)
         ? snapshot.meta?.extensionState
         : undefined,
@@ -678,20 +1170,26 @@ function createSessionMeta(
   };
 }
 
-async function readPersistedSessionFile(filePath: string): Promise<PersistedSessionSnapshot | null> {
+async function readPersistedSessionFile(
+  filePath: string,
+  strict = false,
+  contentOverride?: string,
+): Promise<PersistedSessionSnapshot | null> {
   // Read directly and treat a missing file as "no session" rather than doing a
   // separate `existsSync` precheck — the precheck was TOCTOU-racy: a concurrent
   // deletion (another window, or opt-in session retention cleanup) between the
   // check and the read would surface as an uncaught ENOENT crash instead of a
   // graceful null. `load()` already treats null as "session not found".
-  let rawContent: string;
-  try {
-    rawContent = await fs.readFile(filePath, 'utf-8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-      return null;
+  let rawContent = contentOverride;
+  if (rawContent === undefined) {
+    try {
+      rawContent = await fs.readFile(filePath, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        return null;
+      }
+      throw error;
     }
-    throw error;
   }
   const trimmedContent = rawContent.trim();
   if (!trimmedContent) {
@@ -708,9 +1206,22 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
 
   const lines = trimmedContent.split('\n');
   for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index]!.trim().length === 0) {
+      continue;
+    }
     try {
       const parsed = JSON.parse(lines[index]!);
       if (index === 0 && isRecord(parsed) && parsed._type === 'meta') {
+        if (
+          strict
+          && parsed.lineageVersion !== undefined
+          && parsed.lineageVersion !== 2
+        ) {
+          throw new SessionReadError(
+            'version_incompatible',
+            `Unsupported Session lineage version in ${path.basename(filePath)}: ${String(parsed.lineageVersion)}`,
+          );
+        }
         snapshot.meta = parsed as unknown as KodaXSessionMeta;
         continue;
       }
@@ -757,8 +1268,21 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
         continue;
       }
 
+      if (strict) {
+        throw new SessionReadError(
+          'version_incompatible',
+          `Unsupported Session record at ${path.basename(filePath)}:${index + 1}`,
+        );
+      }
       snapshot.malformedCount += 1;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof SessionReadError) throw error;
+      if (strict) {
+        throw new SessionReadError(
+          'data_corrupt',
+          `Malformed Session record at ${path.basename(filePath)}:${index + 1}`,
+        );
+      }
       snapshot.malformedCount += 1;
     }
   }
@@ -885,8 +1409,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   private sessionWriteLockPath(id: string): string {
-    const key = createHash('sha256').update(id, 'utf8').digest('hex');
-    return path.join(this.sessionsDir, '.write-locks', `${key}.lock`);
+    return sessionWriteLockPath(this.sessionsDir, id);
   }
 
   // ── Append watermarks ──
@@ -1053,13 +1576,19 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return matches[0]!;
   }
 
-  private async readSession(id: string): Promise<ResolvedSessionSnapshot | null> {
-    await this.ensureMigrated();
+  private async readSession(
+    id: string,
+    options: { readonly migrate?: boolean; readonly strict?: boolean } = {},
+  ): Promise<ResolvedSessionSnapshot | null> {
+    if (options.migrate !== false) await this.ensureMigrated();
     const filePath = await this.resolveSessionLocation(id);
     if (!filePath) {
       return null;
     }
-    const snapshot = await readPersistedSessionFile(filePath);
+    const snapshot = await readPersistedSessionFile(
+      filePath,
+      options.strict === true,
+    );
     if (!snapshot) {
       return null;
     }
@@ -1068,7 +1597,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return buildSessionData(snapshot, filePath);
   }
 
-  private async readArchivedEntries(id: string, sessionPath?: string): Promise<KodaXSessionEntry[]> {
+  private async readArchivedEntries(
+    id: string,
+    sessionPath?: string,
+    strict = false,
+    contentOverrides?: ReadonlyMap<string, string | null>,
+  ): Promise<ArchivedLineageRecord[]> {
     const located = sessionPath ?? await this.resolveSessionLocation(id);
     if (!located) return [];
     const dir = path.dirname(located);
@@ -1076,15 +1610,21 @@ export class FileSessionStorage implements KodaXSessionStorage {
       path.join(dir, `${id}.islands.jsonl`),
       path.join(dir, `${id}.archive.jsonl`),
     ];
-    const entries: KodaXSessionEntry[] = [];
-    const seen = new Set<string>();
-    for (const sidecarPath of paths) {
+    const entries: ArchivedLineageRecord[] = [];
+    for (let streamId = 0; streamId < paths.length; streamId += 1) {
+      const sidecarPath = paths[streamId]!;
       let content: string;
-      try {
-        content = await fs.readFile(sidecarPath, 'utf-8');
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw error;
+      if (contentOverrides?.has(sidecarPath)) {
+        const contentOverride = contentOverrides.get(sidecarPath);
+        if (contentOverride === null || contentOverride === undefined) continue;
+        content = contentOverride;
+      } else {
+        try {
+          content = await fs.readFile(sidecarPath, 'utf-8');
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw error;
+        }
       }
       const lines = content.split(/\r?\n/);
       let lastRecordIndex = -1;
@@ -1099,20 +1639,39 @@ export class FileSessionStorage implements KodaXSessionStorage {
         if (!line.trim()) continue;
         try {
           const parsed: unknown = JSON.parse(line);
-          if (isPersistedArchivedEntryLine(parsed) && !seen.has(parsed.entry.id)) {
-            seen.add(parsed.entry.id);
-            entries.push(parsed.entry);
-          }
-        } catch (error: unknown) {
-          // A crash can leave one partial tail record. Earlier flushed records
-          // and the main session remain authoritative and readable.
-          if (index !== lastRecordIndex) {
-            reportStorageDiagnostic(
-              'warn',
-              `Skipped malformed island sidecar record ${path.basename(sidecarPath)}:${index + 1}.`,
-              error,
+          if (isPersistedArchivedEntryLine(parsed)) {
+            const record = parsed as PersistedArchivedEntryCore & Record<string, unknown>;
+            entries.push({
+              ...parsed,
+              previousEntryId: archivedEntryAnchor(record.previousEntryId),
+              nextEntryId: archivedEntryAnchor(record.nextEntryId),
+              streamId,
+            });
+          } else if (isRecord(parsed) && parsed._type === 'archive_batch') {
+            continue;
+          } else if (strict) {
+            throw new SessionReadError(
+              'version_incompatible',
+              `Unsupported island sidecar record at ${path.basename(sidecarPath)}:${index + 1}`,
             );
           }
+        } catch (error: unknown) {
+          if (error instanceof SessionReadError) throw error;
+          if (strict) {
+            throw new SessionReadError(
+              'data_corrupt',
+              `Malformed island sidecar record at ${path.basename(sidecarPath)}:${index + 1}`,
+            );
+          }
+          // A crash can leave one partial tail record. Earlier flushed records
+          // and the main session remain authoritative and readable.
+          reportStorageDiagnostic(
+            'warn',
+            index === lastRecordIndex
+              ? `Ignored incomplete island sidecar tail ${path.basename(sidecarPath)}:${index + 1}.`
+              : `Skipped malformed island sidecar record ${path.basename(sidecarPath)}:${index + 1}.`,
+            error,
+          );
         }
       }
     }
@@ -1124,6 +1683,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     data: SessionData,
     entries: readonly KodaXSessionEntry[],
     archiveBatchId: string,
+    sourceEntries: readonly KodaXSessionEntry[],
     exactSessionPath?: string,
   ): Promise<void> {
     if (entries.length === 0) return;
@@ -1132,6 +1692,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       : this.resolveWriteDir(id, data);
     await fs.mkdir(archiveDir, { recursive: true });
     const archivePath = path.join(archiveDir, `${id}.islands.jsonl`);
+    const positionById = new Map(sourceEntries.map((entry, index) => [entry.id, index]));
     const handle = await fs.open(archivePath, 'a');
     try {
       await handle.write(JSON.stringify({
@@ -1142,9 +1703,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
         entryCount: entries.length,
       }) + '\n');
       for (const entry of entries) {
+        const index = positionById.get(entry.id);
         await handle.write(JSON.stringify({
           _type: 'archived_entry',
           archiveBatchId,
+          ...(index === undefined
+            ? {}
+            : {
+                previousEntryId: sourceEntries[index - 1]?.id ?? null,
+                nextEntryId: sourceEntries[index + 1]?.id ?? null,
+              }),
           entry,
         }) + '\n');
       }
@@ -1252,18 +1820,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
       actorSnapshot: existing?.data.actorSnapshot ?? data.actorSnapshot,
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
-      errorMetadata: data.errorMetadata ?? existing?.data.errorMetadata,
+      // Full snapshots use own-property presence as a three-state contract:
+      // omitted preserves a partial writer's value, an object records a
+      // failure, and explicit undefined clears stale crash metadata after a
+      // later successful Turn.
+      errorMetadata: Object.prototype.hasOwnProperty.call(data, 'errorMetadata')
+        ? data.errorMetadata
+        : existing?.data.errorMetadata,
       tag: data.tag ?? existing?.data.tag,
       // FEATURE_173 no-regress guard — a lineage-less snapshot whose messages
       // are a prefix of the persisted active path reuses the existing lineage
       // instead of regressing `activeEntryId` (the dual-writer corruption).
       lineage: resolveSnapshotLineage(data, existing?.data.lineage),
     };
-    const archivedEntries = await this.readArchivedEntries(id);
+    const archivedRecords = await this.readArchivedEntries(id);
     const reconciledLineage = reconcileCompactionLineage(
       merged.lineage!,
       existing?.data.lineage,
-      archivedEntries,
+      archivedRecords,
     );
     const archiveResult = archiveOldIslands(reconciledLineage);
     await this.appendIslandArchive(
@@ -1271,6 +1845,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       merged,
       archiveResult.archivedEntries,
       archiveResult.archiveBatchId,
+      reconciledLineage.entries,
       existing?.filePath,
     );
     const persisted: SessionData = { ...merged, lineage: archiveResult.slimmedLineage };
@@ -1316,6 +1891,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
         || (data.tag !== undefined && data.tag !== cached.tag)
         || data.extensionState !== undefined
         || data.actorSnapshot !== undefined
+        // A JSONL meta_update cannot encode explicit undefined. Force the
+        // full merge path so a successful Turn can remove stale error state.
+        || Object.prototype.hasOwnProperty.call(data, 'errorMetadata')
         || (
           data.extensionRecords !== undefined
           && cached.extensionCount > 0
@@ -1439,6 +2017,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         resolved.data,
         archivedEntries,
         archiveBatchId,
+        resolved.data.lineage.entries,
         resolved.filePath,
       );
 
@@ -1513,8 +2092,85 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   /** Read Session data without recovery writes or append-watermark mutation. */
   async peek(id: string): Promise<SessionData | null> {
-    const resolved = await this.readSession(id);
+    const resolved = await this.readSession(id, { migrate: false });
     return resolved ? structuredClone(resolved.data) : null;
+  }
+
+  /** Strict read-only Session load. It never migrates or repairs persisted data. */
+  async read(
+    id: string,
+    options: SessionReadOptions = {},
+  ): Promise<SessionData | null> {
+    throwIfSessionReadAborted(options.signal);
+    const resolved = await raceSessionRead(
+      this.readSession(id, { migrate: false, strict: true }),
+      options,
+    );
+    return resolved ? structuredClone(resolved.data) : null;
+  }
+
+  /** Stable read-only main + sidecar snapshot with no lock or migration writes. */
+  async readFullSnapshot(
+    id: string,
+    options: SessionReadOptions = {},
+  ): Promise<SessionReadSnapshot | null> {
+    throwIfSessionReadAborted(options.signal);
+    const operation = (async (): Promise<SessionReadSnapshot | null> => {
+      const bundle = await readStableSessionBundleFiles(
+        this.sessionsDir,
+        id,
+        options.signal,
+      );
+      if (bundle.candidates.length === 0) return null;
+      if (bundle.candidates.length > 1) {
+        throw new SessionReadError(
+          'data_changed',
+          `Ambiguous Session id ${id} has multiple persisted main files`,
+        );
+      }
+      const main = bundle.files.find((file) => file.kind === 'main');
+      if (main === undefined) {
+        throw new SessionReadError(
+          'data_changed',
+          'Session main file moved during the read boundary',
+        );
+      }
+      const persisted = await readPersistedSessionFile(
+        main.path,
+        true,
+        main.bytes.toString('utf8'),
+      );
+      if (persisted === null) return null;
+      const resolved = buildSessionData(persisted, main.path);
+      const directory = path.dirname(main.path);
+      const sidecars = new Map<string, string | null>([
+        [path.join(directory, `${id}.islands.jsonl`), null],
+        [path.join(directory, `${id}.archive.jsonl`), null],
+      ]);
+      for (const file of bundle.files) {
+        if (file.kind !== 'main') sidecars.set(file.path, file.bytes.toString('utf8'));
+      }
+      const archivedEntries = await this.readArchivedEntries(
+        id,
+        main.path,
+        true,
+        sidecars,
+      );
+      const lineage = resolved.data.lineage === undefined
+        ? null
+        : {
+            ...resolved.data.lineage,
+            entries: mergeFullLineageEntries(
+              archivedEntries,
+              resolved.data.lineage.entries,
+            ),
+          };
+      return {
+        data: structuredClone(resolved.data),
+        lineage,
+      };
+    })();
+    return raceSessionRead(operation, options);
   }
 
   async load(id: string): Promise<SessionData | null> {
@@ -1651,16 +2307,20 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   async loadFullLineage(id: string): Promise<KodaXSessionLineage | null> {
     await this.ensureMigrated();
-    const sessionPath = await this.resolveSessionLocation(id);
-    if (!sessionPath) return null;
-    const resolved = await this.readSession(id);
-    if (!resolved?.data.lineage) return null;
-    const archivedEntries = await this.readArchivedEntries(id, sessionPath);
-    if (archivedEntries.length === 0) return resolved.data.lineage;
-    return {
-      ...resolved.data.lineage,
-      entries: mergeFullLineageEntries(archivedEntries, resolved.data.lineage.entries),
-    };
+    return withKodaXFileLock(
+      this.sessionWriteLockPath(id),
+      async () => {
+        const resolved = await this.readSession(id);
+        if (!resolved?.data.lineage) return null;
+        const archivedEntries = await this.readArchivedEntries(id, resolved.filePath);
+        if (archivedEntries.length === 0) return resolved.data.lineage;
+        return {
+          ...resolved.data.lineage,
+          entries: mergeFullLineageEntries(archivedEntries, resolved.data.lineage.entries),
+        };
+      },
+      SESSION_WRITE_LOCK_TIMEOUT_MS,
+    );
   }
 
   async setActiveEntry(
@@ -1716,11 +2376,30 @@ export class FileSessionStorage implements KodaXSessionStorage {
         if (!lineage) return;
         await fence(getActiveMemoryOutcomeReviewIds(lineage));
 
+        const archivedEntries = await this.readArchivedEntries(id, resolved.filePath);
+        const fullEntriesBeforeRewind = archivedEntries.length === 0
+          ? resolved.data.lineage.entries
+          : mergeFullLineageEntries(archivedEntries, resolved.data.lineage.entries);
+        const retainedIds = new Set(lineage.entries.map((entry) => entry.id));
+        const removedEntries = resolved.data.lineage.entries.filter(
+          (entry) => !retainedIds.has(entry.id),
+        );
+        const rewindMarker = lineage.entries.at(-1);
+        if (rewindMarker?.type !== 'rewind_marker') return;
+
         const nextData: SessionData = {
           ...resolved.data,
           messages: getSessionMessagesFromLineage(lineage),
           lineage,
         };
+        await this.appendIslandArchive(
+          id,
+          nextData,
+          removedEntries,
+          rewindMarker.id,
+          [...fullEntriesBeforeRewind, rewindMarker],
+          resolved.filePath,
+        );
         await this.writeSessionInternal(
           id,
           nextData,
@@ -2140,17 +2819,25 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   /**
-   * Move a session + its island sidecar between two directories. Propagates a
+   * Move a session + modern and legacy island sidecars between two directories. Propagates a
    * non-ENOENT rename error (e.g. Windows file-in-use) so a partial move is
    * surfaced as a failure instead of silently splitting main + sidecar.
    */
   private async movePair(id: string, fromDir: string, toDir: string): Promise<void> {
+    const reservedNames = [`${id}.jsonl`, `${id}.islands.jsonl`, `${id}.archive.jsonl`];
+    for (const name of reservedNames) {
+      if (fsSync.existsSync(path.join(toDir, name))) {
+        throw new Error(`Refusing to overwrite existing Session archive file: ${name}`);
+      }
+    }
     await fs.mkdir(toDir, { recursive: true });
+    const names = reservedNames.filter(
+      (name) => fsSync.existsSync(path.join(fromDir, name)),
+    );
     const moved: string[] = [];
     try {
-      for (const name of [`${id}.jsonl`, `${id}.islands.jsonl`]) {
+      for (const name of names) {
         const src = path.join(fromDir, name);
-        if (!fsSync.existsSync(src)) continue;
         await fs.rename(src, path.join(toDir, name));
         moved.push(name);
       }
