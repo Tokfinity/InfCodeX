@@ -16,10 +16,10 @@
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `65` |
 | InProgress | `1` |
-| Planned | `10` |
+| Planned | `11` |
 | Completed | `47` |
-| Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 281` |
+| Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -28,10 +28,10 @@
 |---|---:|---|---|
 | Completed | 47 | `281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `281` is engineering-complete for v0.7.79 development; `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate. v0.7.77 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 2 | `278, 265` | `v0.7.80` -> `v0.7.85` |
+| Planned, near-term | 5 | `280, 278, 279, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
-| Reviewed out, 2026-07-12 | 7 | `244, 231, 235, 238, 232, 105, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review. |
+| Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
 
 > v0.7.49 / v0.7.50 workflow split：`FEATURE_217` remains the human-facing workflow mode. Manual testing reopened required UI/UX and reliability deltas inside [v0.7.49](features/v0.7.49.md#13-v0749-completion-delta): bounded live progress with phase index / running 智能体 wording / preserved progress row / elapsed time / completed-child token usage, localized assistant-style launch notes, result-bearing child-agent digests or folded long-report notices, non-`info` agentic transcript, clear separation between `finished/spawned` progress and lifetime `maxAgents` cap, final synthesis, generated final-result contract lint, implicit `tokenBudget` stripping, generated task-command crash hardening, tighter AMAW invocation policy, wait timeout propagation, no default total workflow wall-clock timeout, terminal cleanup for un-awaited children, accurate template read/write metadata, capsule min-version preflight, manual run cleanup controls, and the closed minimal saved-workflow named reuse delta (`/workflow <savedName>` plus `/workflow rerun <runId|savedName>` with help/completion). `FEATURE_229` in v0.7.50 is the platform layer: it standardizes the same process as agent-layer snapshot/events, SDK subscription/polling, Space-style host policy and lifecycle controls, terminal-state helpers, workflow identity/lifecycle controls beyond named reuse (`display name | revise | rename | revision provenance`), REPL-as-consumer rendering, conservative retention, and durable source/provenance/resultSummary persistence; it is not the first implementation of the user-visible UX.
 
@@ -62,10 +62,10 @@
 | `v0.7.76` | `0` |
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
-| `v0.7.79` | `1` |
-| `v0.7.80` | `1` |
+| `v0.7.79` | `2` |
+| `v0.7.80` | `2` |
 | `v0.7.85` | `1` |
-| `v0.7.90` | `0` |
+| `v0.7.90` | `1` |
 | `v0.7.95` | `0` |
 | `v0.7.100` | `1` |
 | `v0.8.5` | `3` |
@@ -408,7 +408,52 @@
 > Extension learning loop is deleted from the roadmap. Extension complexity,
 > authority, dependencies, state, and verification cost vary too widely for one
 > reliable generic self-learning path. Extension authoring remains an explicit
-> user-directed coding task; `v0.7.80` now contains only F278.
+> user-directed coding task. `v0.7.80` now contains F278 and the independently
+> scoped F279.
+>
+> **2026-07-30 F279 same-Runtime root Task messaging**: `FEATURE_279` joins
+> `v0.7.80` after the Codex/KodaX collaboration review. F270/F273 already cover
+> the complete same-Session Actor tree, so F279 addresses the missing
+> Runtime-authenticated root Session-to-Session route while treating its
+> persistence/Runner/ownership work as a primary v0.7.80 change. It reuses the target
+> root's durable Actor mailbox, safe-boundary Runner delivery, stable pending
+> IDs, and post-transcript acknowledgement; it does not merge Actor trees,
+> create a second bus/store, impersonate user input, or auto-start an idle
+> target Run. v1 is root-only, same canonical project/Runtime, bounded
+> single-recipient messaging; desktop task routing/UI labels, cross-process
+> standalone delivery, handoff, wait/read receipts, broadcast, and remote A2A
+> remain out of scope.
+>
+> **2026-07-30 F280 cache-stable prompt/tool optimization**: `FEATURE_280`
+> consumes `v0.7.79` to reduce real multi-turn model cost without weakening
+> tool selection, arguments, permissions, recovery, or cache reuse. It freezes
+> stable prompt/tool projections per task, bounds built-in discovery results,
+> adds a qualified exact/unique MCP call-ready fast path, and evaluates
+> 6.5/6.0/5.5k compact tool projections with the direct-callable set unchanged
+> before any separate exposure experiment; 5/4.5k remain pressure candidates.
+> The first KodaX/Claude Code/Codex/Hermes inventory audit found that KodaX's
+> 78-definition registry is not itself the cost defect, while its ordinary
+> 59-67 model-visible surface is materially broader. The design therefore
+> prioritizes stable compact projections and additive, run-frozen exposure over
+> aggressive all-family merging. A complete 78-to-Codex crosswalk further
+> adopts registry/projection separation, hidden compatibility aliases,
+> canonical Ask input, and no-unlock search history; Codex-like plan, persistent
+> shell session, patch, namespace, and code-mode surfaces remain independently
+> gated challengers.
+>
+> **2026-07-30 F105 parity-first virtual Provider decision**: `FEATURE_105`
+> returns in `v0.7.90` as a faithful KodaX adaptation of Hermes Agent's
+> Mixture-of-Agents virtual Provider. `moa:<preset>` behaves as one logical
+> provider/model while tool-free reference slots run concurrently and one
+> configured aggregator remains the acting, streaming, tool-capable model.
+> Scope includes presets, `/moa` one-turn use, session/SDK selection,
+> `user_turn | per_iteration | every_n:N` cadence, exact retry/cache behavior,
+> partial failure, abort/late accounting, privacy, physical provider/model cost,
+> effective aggregator capability/cache/replay identity, auxiliary unwrapping,
+> and recursive-MoA rejection. The previous planner/role-router/Decision-Packet
+> redesign is withdrawn as an architectural regression. Post-parity research
+> into Self-MoA, roles, structured evidence, blind aggregation, and learned
+> routing remains unplanned; no superiority claim is part of F105.
 
 ---
 
@@ -836,8 +881,11 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.79` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
 | `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
+| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
+| `105` | Mixture-of-Agents Virtual Provider | Core / LLM Provider + Test-Time Scaling | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |
@@ -856,7 +904,6 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `235` | `v0.7.75` | Removed; current approval/save/revise lifecycle is sufficient without a Workflow Loop. | [v0.7.75](features/v0.7.75.md#2026-07-12-roadmap-review) |
 | `238` | `v0.7.80` | Cancelled; Workflow remains execution-only, while Skills carry learned methods and Extensions remain explicitly authored. | [v0.7.80](features/v0.7.80.md#2026-07-12-roadmap-review) |
 | `232` | `v0.7.85` | Removed as already absorbed by F246 pipeline + same-session reuse. | [v0.7.85](features/v0.7.85.md#2026-07-12-roadmap-review) |
-| `105` | `v0.7.90` | Removed; specialist dispatch and existing judge/Sidecar paths cover concrete need. | [v0.7.90](features/v0.7.90.md#2026-07-12-roadmap-review) |
 | `108` | `v0.7.95` | Removed; local learning belongs in Skills/Extensions and global prompt work stays engineering-led. | [v0.7.95](features/v0.7.95.md#2026-07-12-roadmap-review) |
 
 ---
