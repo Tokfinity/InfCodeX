@@ -19,6 +19,9 @@ _Last Updated: 2026-07-31_
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
+| 240 | High | Resolved | Runtime lifecycle can remain active after executor settlement and history reads can hang or mutate legacy Sessions | Runtime SDK lifecycle and transcript observation | v0.7.79 development | 2026-07-30 | 2026-07-30 |
+| 239 | High | Resolved | Session archive can pair a moved main file with an orphan destination sidecar | sidecar-aware Session archive/unarchive | v0.7.79 development | 2026-07-30 | 2026-07-30 |
+| 238 | High | Resolved | Durable island recovery can violate transcript append order and compaction clone provenance | v0.7.74 durable compacted-history recovery | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 237 | High | Resolved | Production learning reviewer omitted the learned Skill slug constraint | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 236 | High | Resolved | Production learning reviewer under-specified its unified output shape | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
 | 235 | High | Resolved | v0.7.78 semantic release gates had no frozen current-policy runners | v0.7.78 release candidate | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -524,6 +527,250 @@ not duplicate the Node/npm path.
   one model prompt, one confirmation, and metadata-only persistence. Keep API
   key values outside KodaX; setup should continue to save only provider/model
   and custom-provider environment-variable names.
+
+### 240: Runtime lifecycle can remain active after executor settlement and history reads can hang or mutate legacy Sessions
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: Runtime SDK lifecycle and transcript observation
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-30
+- **Resolved**: 2026-07-30
+
+#### Problem
+
+An executor could emit a complete reply while its result promise or first Actor
+snapshot save was lost, leaving Run/Actor state permanently active. A second
+Runtime opening the same store also unconditionally recovered every
+non-terminal Run as crashed, even when the original executor was still alive.
+At the same time, Runtime history reads used migration/recovery-capable Session
+loading, lacked caller deadlines, and could mix an old main-file read with a
+new sidecar boundary or silently downgrade incompatible/corrupt data.
+
+The Space 0.1.34 field Session
+`s_ce44c832-3994-4c4d-895a-57590853abe7` made the lifecycle ambiguity
+concrete. Turn `turn_009c106ea37f4cf8` began at 2026-07-30 09:05:13 CST and
+persisted its complete assistant text at 09:08:09, while the UI still reported
+thinking roughly seven minutes later and Stop still had no terminal outcome
+roughly nine minutes later. All 14 tool calls have matching successful results;
+there is no child, external, or A2A Agent. One of three Todo items remained
+`in_progress`, but Todo state is not itself a terminal gate. A non-empty Todo
+does invoke the already-bounded Sidecar verifier; the separate extension
+`turn:complete` hook was the unbounded finalization path found by code review
+and therefore a plausible hang point, not a conclusion recoverable from this
+historical JSONL alone.
+
+The supplied JSONL contains no `runId`, `runtimeId`, terminal transition,
+finalizer state, or Stop result, so it cannot retrospectively prove whether
+the executor was in a finalizer, had ended without a delivered observation, or
+was still alive. It also shows an older `lastError=runtime run aborted` and
+`consecutiveErrors=1` surviving three later persisted Turns. That was a
+separate merge bug: an explicit successful snapshot clear was interpreted as
+"preserve the previous error".
+
+#### Resolution
+
+- Run persistence now carries private owner-liveness and revision metadata.
+  A live owner remains authoritative across Runtime instances; a definitely
+  dead owner is recovered to `interrupted`, while an owner that cannot be
+  proven alive or dead is exposed as `unknown` without mutating its files.
+  Ownerless legacy non-terminal records are also `unknown`; durable terminal
+  events are reconciled first, while durable input-delivery evidence is applied
+  only to the read projection. Status writes are serialized and a persisted
+  terminal state cannot regress or publish a conflicting terminal event.
+- Run phases now explicitly include `waiting_agent`, `recovering`, and
+  `unknown`. `runtime.sessions.status(sessionId)` returns one authoritative
+  Session projection from the current Run set in embedded and daemon modes.
+  Stop preflight treats every non-terminal and `unknown` Run as a blocker.
+- Run status also carries a fine-grained `stage`, `stageChangedAt`, and an
+  authoritative `activeSubtaskCount` when the managed executor reports one.
+  Managed status `completed` now means `stage: finalizing`: it closes the
+  interrupt window but does not terminalize or release the Session until the
+  outer executor result/callback settles.
+- Stop is a durable request/result record. A queued Run can be cancelled
+  immediately; an active Run becomes `phase/stage: unknown` with
+  `stop.state/outcome: unknown` until the executor confirms what happened. If
+  an executor ignores Stop and completes, the final status truthfully records
+  `stop.outcome: completed`. Runtime close follows the same fail-closed rule.
+  A terminal callback is latched before deferred result settlement, so a later
+  Stop cannot rewrite an earlier completion as interrupted. Conversely, late
+  verifier/recovery progress cannot revive a stopped `unknown` Run. Crash
+  recovery resolves a pending Stop to `confirmed/interrupted`. Runtime close
+  synchronously persists an already-latched executor terminal signal before
+  releasing owner liveness, so another Runtime cannot recover that Run through
+  the transient pre-terminal snapshot. It does not resolve the Run handle or
+  drain the Session queue until the real executor result or the deferred
+  lost-result fallback settles, preserving the full result payload and
+  same-Session serialization.
+  Rewind, active-entry changes, compaction, archive, and deletion remain fenced
+  until that settlement finishes, even though the terminal phase is already
+  durable.
+- Executor terminal callbacks settle a Run even if the executor result promise
+  is lost, while giving the same-turn result promise priority so its full
+  `KodaXResult` is retained. Conflicting callbacks emit only the first terminal.
+  Actor completion/failure settlement retries a failed durable commit with
+  bounded backoff. Runtime shutdown flushes known settlements before releasing
+  the owner/liveness fence, without duplicating terminal events or mailbox
+  completion notices.
+- Extension `turn:complete` hooks now have a 30-second fail-open watchdog and a
+  structured diagnostic, preventing a third-party finalizer from keeping a
+  complete reply active forever. The first-party Sidecar verifier retains its
+  independent 15-second bound.
+- Successful Session snapshots now clear stale `errorMetadata`; omission still
+  preserves it. Full saves and append-delta saves both honor this three-state
+  contract.
+- Strict history reads acquire one Session boundary, read main and sidecars
+  without migration, takeover, recovery, or repair, and expose stable
+  `data_corrupt`, `version_incompatible`, `read_timeout`,
+  `read_cancelled`, and `resync_required` errors. Paging retains a bounded
+  immutable snapshot so active appends do not invalidate an in-progress read.
+- Observation handoff now returns the snapshot before draining buffered events.
+  Its bounded queue fails closed, and the returned `invalidated` promise
+  reports overflow, event-order regression, transport loss, or Runtime change.
+  Daemon timeout/cancellation removes the pending request and compensates a
+  late observation response by unsubscribing it.
+- `exportSessionBundle()` provides a read-only, byte-preserving export and
+  compatibility diagnostic path for legacy, partial, corrupt, unsupported, or
+  ambiguous Session bundles. `contentBase64` is the canonical lossless payload;
+  byte lengths and hashes are computed from the original bytes.
+- `captureRuntimeSessionDiagnostics()` uses a dedicated read-only Session
+  diagnostic boundary in embedded and daemon modes. It reports
+  SDK/Runtime/daemon versions, `runId`/`turnId`, phase/stage, terminal time,
+  the Run-owned active child count when recorded, Stop and interrupt records,
+  observation
+  cursor/revision, and stable structured errors. Missing historical control
+  data is explicitly `run_control_unknown`; the helper never resumes or takes
+  ownership of a Session, invokes recovery/preflight, or consumes transcript
+  paging-cache capacity. An absent Run-owned child count is returned as
+  `activeSubtaskCount:null` with source `unknown`, rather than borrowing a
+  later Session-wide sample. Failed Runs retain their structured failure
+  reason. Owner, Stop, failure, and terminal-time errors are independent facts:
+  the error array preserves every applicable code instead of selecting one.
+  The helper applies the same timeout/cancellation budget to transcript,
+  settings, permission, and owner-liveness inspection as history reads. In
+  daemon mode `sdkVersion` identifies the calling SDK while
+  `runtimeVersion`/`daemonVersion` identify the connected daemon, preserving
+  version-skew evidence.
+- Global event sequence and per-Session Run order allocation are serialized
+  across Runtime processes. Cursor recovery expands past oversized tail records
+  and validates a stale cursor against durable logs; retention writes a
+  conservative watermark before replacing an event file, forcing resync rather
+  than silently losing a gap.
+- The message guard accepts persisted multimodal tool results and cache-boundary
+  hints instead of silently discarding those valid historical records.
+
+### 239: Session archive can pair a moved main file with an orphan destination sidecar
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: sidecar-aware Session archive/unarchive
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-30
+- **Resolved**: 2026-07-30
+
+#### Problem
+
+When a source directory contained only `<id>.jsonl` but the destination already
+contained an orphan `<id>.islands.jsonl` or legacy
+`<id>.archive.jsonl`, archive/unarchive moved the main file successfully and
+silently paired it with unrelated history.
+
+#### Resolution
+
+Modern and legacy sidecars are treated as one collision domain with their main
+Session file. Archive and unarchive fail closed if any destination member
+exists without its matching source member. Regression fixtures cover modern
+and legacy sidecars in both directions and verify that all source and
+destination bytes remain unchanged.
+
+### 238: Durable island recovery can violate transcript append order and compaction clone provenance
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 durable compacted-history recovery
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-30
+- **Resolved**: 2026-07-30
+
+#### Problem
+
+`FileSessionStorage.loadFullLineage()` currently inserts every durable-island
+sidecar entry before every retained main-file entry. When archive maintenance
+retains a parent in the main file but moves its child into a sidecar, SDK
+`loadFullTranscript()` can therefore expose the child before its parent and
+break the documented raw append-order contract. The same recovered lineage
+feeds Runtime transcript paging, so direct and paged transcript projections
+must share one deterministic order across multiple archive batches, overlapping
+physical copies, equal timestamps, and a crash-truncated sidecar tail.
+
+Separately, `applySessionCompaction()` rematerializes protected tail messages
+under the new compaction island through `createSessionLineage()`. Those physical
+copies receive unrelated `logicalId` values and lose the original
+`sourceEntryId`, contradicting the existing clone-provenance contract.
+
+#### Root Cause
+
+- `mergeFullLineageEntries()` uses map insertion order over
+  `archivedEntries` followed by `mainEntries`; deduplication is stable, but no
+  original-position or parent-topology constraint participates in ordering.
+- Existing sidecars store entry bodies and batch IDs but no internal adjacency
+  anchors, so historical cross-file interleaving can be only partially
+  reconstructed.
+- `applySessionCompaction()` creates a fresh physical message chain without
+  transferring identity from matching entries on the pre-compaction active
+  path.
+
+#### Proposed Solution
+
+- Persist internal previous/next lineage anchors on newly archived sidecar
+  records without adding public timestamp or sequence fields.
+- Merge unique main/sidecar entries with a stable topology-aware ordering:
+  honor exact anchors, parent-before-child, main-file order, and per-batch
+  archive order; use deterministic source order as the fallback for legacy
+  sidecars and retain every unique record even when constraints are damaged.
+- Preserve the exact sidecar body over an evicted overlap while keeping one
+  logical entry per stable physical ID.
+- Transfer logical/source identity from matching pre-compaction active-path
+  messages to their newly materialized physical copies.
+- Add regression coverage for retained-parent/archived-child, multiple batches,
+  overlap, equal timestamps, malformed sidecar tails, direct-vs-paged order,
+  and compaction provenance.
+
+#### Resolution
+
+- New island records persist module-private previous/next entry anchors. Legacy
+  records without anchors retain deterministic stream/batch order; invalid
+  anchor metadata is ignored without dropping a valid entry body.
+- Full recovery now applies parent edges as hard constraints and main, batch,
+  and adjacency order as stable soft constraints. It never uses timestamps,
+  retains every unique physical entry ID, prefers exact main bodies over stale
+  exact sidecars, prefers the latest exact canonical-islands copy after its
+  main copy is evicted, and still restores exact sidecar bodies over main
+  `[compacted]` placeholders without letting the legacy sidecar override the
+  canonical stream.
+- Full-lineage reads share the per-Session file lock with maintenance and
+  archive moves. Modern and legacy sidecars move and roll back with the main
+  file, while destination collisions fail closed instead of overwriting
+  orphaned history.
+- Compaction rematerialization inherits provenance from retained message
+  references using suffix-oriented monotonic matching. Rendered compaction and
+  branch-summary messages and messages explicitly reconciled to a persisted
+  entry carry module-private provenance IDs. Content equality alone never
+  proves that an unrelated message is a clone, while a storage reload does not
+  break an already reconciled copy relationship. Reconciliation treats prior
+  post-compaction attachments as context-only so they cannot create a temporary
+  branch that replaces the retained tail's identity.
+- Rewind archives every removed main-file entry before replacing the main
+  snapshot, preserving both raw audit records and the adjacency witnesses
+  needed to place earlier sidecar batches.
+- Regression coverage now includes retained-parent/archived-child recovery,
+  independent entries within an archive batch, multiple sidecar streams,
+  overlap authority, equal timestamps, malformed tails and anchors, parent
+  cycles, archive/unarchive, read/move locking, destination collisions,
+  direct/paged parity, repeated message identity, prior checkpoint clones, and
+  a combined compaction/rewind/multi-batch raw-transcript fixture, including
+  reload/two-round attachment provenance and conflicting overlap authority
+  after rewind.
 
 ### 237: Production learning reviewer omitted the learned Skill slug constraint
 
@@ -8806,7 +9053,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 122 (26 Open, 96 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 125 (26 Open, 99 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
@@ -8842,6 +9089,34 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   duplicating both read-only output and mutating/interactive command handling.
 - Traced the regression to the v0.7.72 bootstrap entry plus the importable
   CLI bundle's direct-entry guard. Node/npm execution remains single-shot.
+
+### 2026-07-30: Issue 240 resolved
+- Separated managed finalization from executor termination, added durable
+  stage/subtask and fail-closed Stop outcome status, and bounded extension
+  `turn:complete` finalizers. Latched terminal callbacks and progress barriers
+  preserve completion/Stop event order across late callbacks and recovery.
+- Added a dedicated read-only, timeout/cancel-aware Runtime Session diagnostic
+  boundary and aligned its strict daemon schema with embedded behavior without
+  consuming transcript-page cache capacity. The final review also made owner
+  and Stop errors independently reportable, preserved client/daemon version
+  skew, and enforced the deadline while owner liveness is unresponsive.
+- Persisted a latched executor terminal synchronously during Runtime close
+  before releasing the owner-liveness endpoint.
+- Corrected successful snapshot clearing of stale crash metadata without
+  regressing partial or cross-instance Session writers.
+
+### 2026-07-30: Issue 239 resolved
+- Made archive/unarchive fail closed when a destination contains an orphan
+  modern or legacy sidecar, preserving every source and destination file.
+
+### 2026-07-30: Issue 238 resolved
+- Restored append-order transcript recovery with private adjacency anchors,
+  stable parent-aware legacy fallback, full-record preservation, and locked
+  main/sidecar snapshot reads.
+- Preserved retained-message logical/source identity across compaction without
+  adding public timestamp or sequence fields.
+- Added storage, public SDK, Runtime paging, and provenance regressions for the
+  observed and adversarial edge cases.
 
 ### 2026-07-29: Issue 237 resolved (v0.7.78 development)
 - The authorized F263 `.3` safety panel found no credible high-severity harm and
