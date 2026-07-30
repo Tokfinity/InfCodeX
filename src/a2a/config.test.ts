@@ -179,6 +179,81 @@ describe('FEATURE_267/268 A2A integration config', () => {
     })).toThrow(/fragment/i);
   });
 
+  it('requires explicit persisted authorization for non-loopback HTTP agents', () => {
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        intranet: {
+          cardUrl: 'http://10.20.30.40/agent-card.json',
+          effect: 'read',
+        },
+      },
+    })).toThrow(/HTTPS|loopback/i);
+
+    const parsed = parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        intranet: {
+          cardUrl: 'http://10.20.30.40/agent-card.json',
+          network: {
+            allowPrivateAddresses: true,
+            allowInsecureHttp: true,
+          },
+          effect: 'read',
+        },
+      },
+    });
+    expect(parsed.agents.intranet?.network).toEqual({
+      allowPrivateAddresses: true,
+      allowInsecureHttp: true,
+    });
+  });
+
+  it('strictly validates persisted outbound network authorization', () => {
+    const agent = (network: unknown) => ({
+      version: 2,
+      agents: {
+        invalid: {
+          cardUrl: 'https://agent.example/card',
+          network,
+          effect: 'read',
+        },
+      },
+    });
+    expect(() => parseA2AIntegrationDocument(agent({
+      allowPrivateAddresses: 'yes',
+      allowInsecureHttp: false,
+    }))).toThrow(/allowPrivateAddresses.*boolean/i);
+    expect(() => parseA2AIntegrationDocument(agent({
+      allowPrivateAddresses: false,
+      allowInsecureHttp: false,
+      wildcard: true,
+    }))).toThrow(/unknown field/i);
+
+    expect(() => parseA2AIntegrationDocument({
+      version: 2,
+      agents: {
+        oauth: {
+          cardUrl: 'http://10.20.30.40/card',
+          network: {
+            allowPrivateAddresses: true,
+            allowInsecureHttp: true,
+          },
+          authentication: {
+            type: 'oauth2-client-credentials',
+            scheme: 'oauth',
+            issuer: 'https://identity.example.com',
+            tokenUrl: 'http://10.20.30.41/token',
+            clientId: 'kodax',
+            clientSecretEnv: 'CLIENT_SECRET',
+            scopes: [],
+          },
+          effect: 'read',
+        },
+      },
+    })).toThrow(/tokenUrl.*HTTPS|HTTPS.*tokenUrl/i);
+  });
+
   it('applies the shared OAuth URI rules while preserving exact issuer and resource strings', () => {
     const oauthAuthentication = (overrides: Readonly<Record<string, unknown>> = {}) => ({
       type: 'oauth2-client-credentials',

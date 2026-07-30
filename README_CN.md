@@ -846,6 +846,10 @@ kodax a2a add research https://agent.example/.well-known/agent-card.json --effec
 kodax a2a test research
 kodax a2a call research "总结这个主题"
 
+# 显式授权私网明文端点（可用时仍应优先 HTTPS）
+kodax a2a add intranet http://10.20.30.40/.well-known/agent-card.json \
+  --allow-private --allow-insecure-http --effect read
+
 # 先保存受 OAuth 保护的 Agent，再热启用/停用
 export RESEARCH_A2A_CLIENT_SECRET='由你的授权服务器分配'
 # PowerShell：$env:RESEARCH_A2A_CLIENT_SECRET='由你的授权服务器分配'
@@ -883,7 +887,11 @@ MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户�
 确认。`a2a add --disabled` 默认仍会校验 Card，除非显式使用 `--no-test`；`a2a test`
 只做 discovery/security planning，不会申请 OAuth token。示例中的固定
 `KODAX_A2A_TOKEN` 是运维侧预先提供的兼容凭据，并非 KodaX 自行生成或签发。
-停用条目可随时重新启用。
+停用条目可随时重新启用。私网地址访问与非 loopback 明文 HTTP 是两项独立、
+持久化且默认拒绝的权限（`--allow-private` 与 `--allow-insecure-http`）；精确
+loopback HTTP 无需这两项授权。OAuth token endpoint 仍保持更严格的
+HTTPS 或精确 loopback 规则。Worker-hosted SDK Runtime 可通过
+`worker: { configuredA2A: true }` 让 Worker owner 装载同一配置执行平面。
 `a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
 公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
 或任务存储变更必须显式重启服务。

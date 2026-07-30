@@ -773,6 +773,10 @@ kodax a2a add research https://agent.example/.well-known/agent-card.json --effec
 kodax a2a test research
 kodax a2a call research "Summarize this topic"
 
+# Explicitly authorize a private plaintext endpoint (prefer HTTPS when available)
+kodax a2a add intranet http://10.20.30.40/.well-known/agent-card.json \
+  --allow-private --allow-insecure-http --effect read
+
 # Stage an OAuth-protected Agent, then hot-activate/deactivate it
 export RESEARCH_A2A_CLIENT_SECRET='provisioned-by-your-authorization-server'
 # PowerShell: $env:RESEARCH_A2A_CLIENT_SECRET='provisioned-by-your-authorization-server'
@@ -816,7 +820,12 @@ the Card by default unless `--no-test` is supplied, while `a2a test` performs
 discovery/security planning without requesting an OAuth token. The fixed
 `KODAX_A2A_TOKEN` example is an operator-provisioned compatibility credential;
 KodaX does not generate or issue it. Disabled entries remain available for
-later re-enable. `a2a serve` loads
+later re-enable. Private-address access and non-loopback plaintext HTTP are
+independent, persisted, default-deny permissions (`--allow-private` and
+`--allow-insecure-http`); exact loopback HTTP remains available without either.
+OAuth token endpoints retain their stricter HTTPS-or-exact-loopback rule.
+Worker-hosted SDK Runtimes can load this same configured plane inside the Worker
+owner with `worker: { configuredA2A: true }`. `a2a serve` loads
 its configured MCP/Extension capability surface before listening and pins that
 execution authority; it hot-reloads publication, authentication, and limits.
 

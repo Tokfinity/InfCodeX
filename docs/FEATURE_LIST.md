@@ -14,19 +14,19 @@
 | Current released version | `v0.7.77` (Git tag / GitHub Release / npm) |
 | Current package version | `@kodax-ai/kodax@0.7.78` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `64` |
+| Total tracked features | `65` |
 | InProgress | `1` |
 | Planned | `10` |
-| Completed | `46` |
+| Completed | `47` |
 | Reviewed out of active roadmap | `7` (`105, 108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 281` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 46 | `277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate; v0.7.77 remains the current Git/GitHub/npm release. |
+| Completed | 47 | `281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `281` is engineering-complete for v0.7.79 development; `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate. v0.7.77 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 2 | `278, 265` | `v0.7.80` -> `v0.7.85` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -62,6 +62,7 @@
 | `v0.7.76` | `0` |
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
+| `v0.7.79` | `1` |
 | `v0.7.80` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `0` |
@@ -876,6 +877,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
+| `281` | Explicit A2A Network Authorization | `v0.7.79` development | [v0.7.79](features/v0.7.79.md#feature_281-explicit-a2a-network-authorization) | Adds independent persisted private-address and non-loopback plaintext-HTTP permissions across config, CLI discovery/call, Runtime reconciliation, registration fingerprints, and execution. Exact loopback HTTP remains implicit; all broader authority remains default deny. |
 | `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) | Engineering and feature-level acceptance are complete. Publication remains governed by the independent semantic-eval, integrated CI, binary, tag, and release-asset gates. |
 | `276` | Complete First-Run Setup and Split-Configuration Onboarding | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) | Engineering and feature-level acceptance are complete, including create-only split configuration, shared writer fencing, built-process setup coverage, and sandbox preparation guidance. |
 | `263` | Evidence-Gated Background Skill Learning Loop | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) | Engineering and feature-level acceptance are complete. The explicitly authorized paid semantic evaluation remains a release-candidate decision rather than a Feature lifecycle state. |

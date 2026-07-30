@@ -241,6 +241,150 @@ describe('configured A2A Runtime integration', () => {
     }
   });
 
+  it('activates and dispatches an explicitly authorized private HTTP Agent', async () => {
+    const root = tempRoot();
+    const configHome = path.join(root, '.kodax');
+    const runtimeHome = path.join(root, 'runtime-private-http');
+    writeA2A(configHome, {
+      version: 2,
+      agents: {
+        intranet: {
+          cardUrl: 'http://10.20.30.40/card',
+          enabled: true,
+          network: {
+            allowPrivateAddresses: true,
+            allowInsecureHttp: true,
+          },
+          effect: 'read',
+        },
+      },
+    });
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === '/card') {
+        return new Response(JSON.stringify({
+          name: 'Intranet Agent',
+          description: 'Runs on an explicitly trusted private HTTP endpoint.',
+          version: '1.0.0',
+          supportedInterfaces: [{
+            url: `${url.origin}/a2a`,
+            protocolBinding: 'JSONRPC',
+            protocolVersion: '1.0',
+          }],
+          capabilities: { streaming: false },
+          defaultInputModes: ['text/plain'],
+          defaultOutputModes: ['text/plain'],
+          skills: [{ id: 'general', name: 'General', description: 'General tasks', tags: [] }],
+        }), { headers: { 'content-type': 'application/json' } });
+      }
+      const request = JSON.parse(String(init?.body)) as { readonly id: string };
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        result: {
+          message: {
+            messageId: 'intranet-result',
+            role: 'ROLE_AGENT',
+            parts: [{ text: 'private HTTP completed', mediaType: 'text/plain' }],
+          },
+        },
+      }), { headers: { 'content-type': 'application/json' } });
+    });
+    const integration = createConfiguredA2ARuntimeIntegration({
+      configHome,
+      fetch: fetchImpl as typeof fetch,
+    });
+    const runtime = await createKodaXRuntime({
+      mode: 'embedded',
+      homeDir: runtimeHome,
+      externalAgents: integration.runtimeOptions,
+    });
+    const handle = await integration.start(runtime);
+    try {
+      const listings = await runtime.agents.listDispatchable({ actorId: 'runtime-config-test' });
+      expect(listings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          descriptor: expect.objectContaining({ agentId: 'external:intranet' }),
+        }),
+      ]));
+      const registration = persistedRegistrations(runtimeHome)
+        .find((entry) => entry.agentId === 'external:intranet');
+      expect(registration?.executorConfig?.network).toEqual({
+        allowPrivateAddresses: true,
+        allowInsecureHttp: true,
+      });
+
+      const session = await runtime.sessions.create({
+        sessionId: 'runtime-private-http', title: 'Private HTTP A2A',
+      });
+      const started = await runtime.agents.spawn(session.id, {
+        taskName: 'intranet',
+        kind: 'external',
+        objective: 'Complete the private task.',
+        metadata: { agentId: 'external:intranet' },
+      });
+      const deadline = Date.now() + 2_000;
+      let completed = await runtime.agents.output(session.id, '/root/intranet', started.turnId);
+      while (completed.state === 'accepted' || completed.state === 'running') {
+        if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${started.turnId}.`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        completed = await runtime.agents.output(session.id, '/root/intranet', started.turnId);
+      }
+      expect(completed).toMatchObject({
+        state: 'completed',
+        output: 'private HTTP completed',
+      });
+
+      const grantedRevision = registration?.configurationRevision;
+      writeA2A(configHome, {
+        version: 2,
+        agents: {
+          intranet: {
+            cardUrl: 'http://127.0.0.1/card',
+            enabled: true,
+            network: {
+              allowPrivateAddresses: true,
+              allowInsecureHttp: true,
+            },
+            effect: 'read',
+          },
+        },
+      });
+      await handle.reload();
+      const loopbackGranted = persistedRegistrations(runtimeHome)
+        .find((entry) => entry.agentId === 'external:intranet');
+      expect(loopbackGranted?.configurationRevision).not.toBe(grantedRevision);
+      expect(loopbackGranted?.executorConfig?.network).toEqual({
+        allowPrivateAddresses: true,
+        allowInsecureHttp: true,
+      });
+
+      writeA2A(configHome, {
+        version: 2,
+        agents: {
+          intranet: {
+            cardUrl: 'http://127.0.0.1/card',
+            enabled: true,
+            effect: 'read',
+          },
+        },
+      });
+      await handle.reload();
+      const revoked = persistedRegistrations(runtimeHome)
+        .find((entry) => entry.agentId === 'external:intranet');
+      expect(revoked?.configurationRevision).not.toBe(
+        loopbackGranted?.configurationRevision,
+      );
+      expect(revoked?.executorConfig?.network).toEqual({
+        allowPrivateAddresses: false,
+        allowInsecureHttp: false,
+      });
+    } finally {
+      handle.close();
+      await runtime.close();
+    }
+  });
+
   it('preserves unrelated registrations and performs no discovery for disabled configuration', async () => {
     const root = tempRoot();
     const configHome = path.join(root, '.kodax');

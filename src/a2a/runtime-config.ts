@@ -20,6 +20,7 @@ import {
   readA2AIntegration,
   type A2AIntegrationDocument,
   type A2AOutboundAgentConfig,
+  type A2AOutboundNetworkConfig,
 } from './config.js';
 import { A2A_EXECUTOR_ID, type A2ANetworkPolicy } from './types.js';
 
@@ -47,14 +48,23 @@ function isExactLoopback(hostname: string): boolean {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1';
 }
 
-function networkPolicy(urls: readonly URL[]): A2ANetworkPolicy {
+const DEFAULT_OUTBOUND_NETWORK: A2AOutboundNetworkConfig = {
+  allowPrivateAddresses: false,
+  allowInsecureHttp: false,
+};
+
+function networkPolicy(
+  urls: readonly URL[],
+  access: A2AOutboundNetworkConfig = DEFAULT_OUTBOUND_NETWORK,
+): A2ANetworkPolicy {
   const loopback = urls.map((url) => isExactLoopback(url.hostname));
   if (loopback.some(Boolean) && !loopback.every(Boolean)) {
     throw new Error('Configured A2A Agent and OAuth endpoints must not mix loopback and public origins.');
   }
   return {
     allowedOrigins: [...new Set(urls.map((url) => url.origin))],
-    allowPrivateAddresses: loopback.every(Boolean),
+    allowPrivateAddresses: access.allowPrivateAddresses || loopback.every(Boolean),
+    allowInsecureHttp: access.allowInsecureHttp,
     requestTimeoutMs: 10_000,
     maxResponseBytes: 1_000_000,
     maxRedirects: 3,
@@ -77,6 +87,20 @@ function registrationNetworkUrls(registration: ExternalAgentRegistration): reado
     if (typeof tokenUrl === 'string') urls.push(new URL(tokenUrl));
   }
   return urls;
+}
+
+function registrationNetworkAccess(
+  registration: ExternalAgentRegistration,
+): A2AOutboundNetworkConfig {
+  const network = registration.executorConfig?.network;
+  if (network === null || typeof network !== 'object' || Array.isArray(network)) {
+    return DEFAULT_OUTBOUND_NETWORK;
+  }
+  const source = network as Readonly<Record<string, unknown>>;
+  return {
+    allowPrivateAddresses: source.allowPrivateAddresses === true,
+    allowInsecureHttp: source.allowInsecureHttp === true,
+  };
 }
 
 function environmentCredentialBroker(): AgentCredentialBroker {
@@ -157,6 +181,7 @@ function configFingerprint(config: A2AOutboundAgentConfig): string {
     config.cardUrl,
     config.credentialEnv ?? null,
     authentication,
+    config.network ?? DEFAULT_OUTBOUND_NETWORK,
     config.effect,
   ])).digest('hex');
 }
@@ -182,9 +207,14 @@ function configuredRegistrationRevision(fingerprint: string, revision: string): 
 function markConfiguredRegistration(
   registration: ExternalAgentRegistration,
   fingerprint: string,
+  config: A2AOutboundAgentConfig,
 ): ExternalAgentRegistration {
   return {
     ...registration,
+    executorConfig: {
+      ...registration.executorConfig,
+      network: config.network ?? DEFAULT_OUTBOUND_NETWORK,
+    },
     managementOwner: CONFIG_OWNER,
     configurationRevision: configuredRegistrationRevision(fingerprint, registration.configurationRevision),
   };
@@ -197,7 +227,10 @@ export function createConfiguredA2ARuntimeIntegration(input: {
 }): ConfiguredA2ARuntimeIntegration {
   const runtimeOptions: RuntimeExternalAgentsOptions = {
     factories: [createA2AAgentExecutorFactory((registration) => ({
-      networkPolicy: networkPolicy(registrationNetworkUrls(registration)),
+      networkPolicy: networkPolicy(
+        registrationNetworkUrls(registration),
+        registrationNetworkAccess(registration),
+      ),
       maxTaskResponseBytes: CONFIGURED_A2A_TASK_RESPONSE_BYTES,
       pollIntervalMs: 500,
       ...(input.fetch ? { fetch: input.fetch } : {}),
@@ -290,16 +323,20 @@ export function createConfiguredA2ARuntimeIntegration(input: {
         try {
           const url = new URL(config.cardUrl);
           const urls = [url, ...(config.authentication ? [new URL(config.authentication.tokenUrl)] : [])];
-          networkPolicy(urls);
+          networkPolicy(urls, config.network);
           const discovered = await discoverA2ARegistration(
             registrationInput(name, config),
             {
-              networkPolicy: networkPolicy([url]),
+              networkPolicy: networkPolicy([url], config.network),
               pollIntervalMs: 500,
               ...(input.fetch ? { fetch: input.fetch } : {}),
             },
           );
-          const registration = markConfiguredRegistration(discovered.registration, fingerprint);
+          const registration = markConfiguredRegistration(
+            discovered.registration,
+            fingerprint,
+            config,
+          );
           await runtime.admin.agentRegistrations.upsert(registration, {
             expectedConfigurationRevision,
             expectedManagementOwner,

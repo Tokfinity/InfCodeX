@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Configured outbound A2A Agents now support independent, persisted,
+  default-deny authorization for private addresses and non-loopback plaintext
+  HTTP through `--allow-private` and `--allow-insecure-http`.
+- Worker-hosted embedded Runtimes can opt into the built-in configured A2A
+  plane with `worker.configuredA2A`, including list/describe/preflight and real
+  external Actor dispatch.
+
+### Fixed
+
+- `list_dispatchable_agents` no longer falls back to native/constructed Agents
+  in an opted-in Runtime Worker: the Worker bundle now owns A2A discovery,
+  registration, execution, reconciliation, and shutdown.
+
 ## [0.7.78] - 2026-07-29
 
 ### Added

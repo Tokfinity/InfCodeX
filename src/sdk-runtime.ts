@@ -3507,6 +3507,7 @@ async function createWorkerHostedKodaXRuntime(
       defaultProvider: options.defaultProvider,
       defaultModel: options.defaultModel,
       permissionTimeoutMs: options.permissionTimeoutMs,
+      configuredA2A: options.worker?.configuredA2A,
     },
     options.worker,
   );

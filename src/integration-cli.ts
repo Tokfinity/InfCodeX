@@ -209,13 +209,37 @@ function assertLoopbackHostname(hostname: string): void {
 function networkPolicy(
   origins: readonly string[],
   allowPrivateAddresses: boolean,
+  allowInsecureHttp = false,
 ): A2ANetworkPolicy {
   return {
     allowedOrigins: [...new Set(origins)],
     allowPrivateAddresses,
+    allowInsecureHttp,
     requestTimeoutMs: 15_000,
     maxResponseBytes: 2_097_152,
     maxRedirects: 3,
+  };
+}
+
+interface A2ANetworkOverrides {
+  readonly allowPrivate?: boolean;
+  readonly allowInsecureHttp?: boolean;
+}
+
+function configuredNetworkAccess(
+  config: A2AOutboundAgentConfig,
+  overrides: A2ANetworkOverrides,
+): {
+  readonly allowPrivateAddresses: boolean;
+  readonly allowInsecureHttp: boolean;
+} {
+  return {
+    allowPrivateAddresses:
+      config.network?.allowPrivateAddresses === true ||
+      overrides.allowPrivate === true,
+    allowInsecureHttp:
+      config.network?.allowInsecureHttp === true ||
+      overrides.allowInsecureHttp === true,
   };
 }
 
@@ -252,7 +276,7 @@ function configuredRegistrationInput(
 
 async function discoverConfiguredAgent(
   name: string,
-  allowPrivate: boolean,
+  overrides: A2ANetworkOverrides,
   requireEnabled = false,
 ): Promise<{
   readonly config: A2AIntegrationDocument["agents"][string];
@@ -264,11 +288,15 @@ async function discoverConfiguredAgent(
   if (requireEnabled && !config.enabled)
     throw new Error(`Configured A2A Agent is disabled: ${name}.`);
   const cardUrl = new URL(config.cardUrl);
-  const privateAccess = privateAllowed(cardUrl, allowPrivate);
+  const access = configuredNetworkAccess(config, overrides);
   const discovered = await discoverA2ARegistration(
     configuredRegistrationInput(name, config),
     {
-      networkPolicy: networkPolicy([cardUrl.origin], privateAccess),
+      networkPolicy: networkPolicy(
+        [cardUrl.origin],
+        privateAllowed(cardUrl, access.allowPrivateAddresses),
+        access.allowInsecureHttp,
+      ),
       pollIntervalMs: 500,
     },
   );
@@ -324,13 +352,14 @@ async function waitForA2ATask(
 async function callConfiguredAgent(
   name: string,
   prompt: string,
-  allowPrivate: boolean,
+  overrides: A2ANetworkOverrides,
 ): Promise<AgentTaskSnapshot> {
   const { config, registration } = await discoverConfiguredAgent(
     name,
-    allowPrivate,
+    overrides,
     true,
   );
+  const access = configuredNetworkAccess(config, overrides);
   const cardUrl = new URL(config.cardUrl);
   const plane = await createAgentExecutorPlane({
     factories: [
@@ -346,9 +375,10 @@ async function callConfiguredAgent(
               endpointUrl.origin,
               ...(tokenUrl ? [tokenUrl.origin] : []),
             ],
-            privateAllowed(endpointUrl, allowPrivate) &&
+            privateAllowed(endpointUrl, access.allowPrivateAddresses) &&
               (tokenUrl === undefined ||
-                privateAllowed(tokenUrl, allowPrivate)),
+                privateAllowed(tokenUrl, access.allowPrivateAddresses)),
+            access.allowInsecureHttp,
           ),
           maxTaskResponseBytes: CONFIGURED_A2A_TASK_RESPONSE_BYTES,
           pollIntervalMs: 500,
@@ -1117,6 +1147,14 @@ function configureA2ACommands(program: Command, version: string): void {
       "Store without activating the Agent for orchestration",
     )
     .option(
+      "--allow-private",
+      "Persist permission to connect to private network addresses",
+    )
+    .option(
+      "--allow-insecure-http",
+      "Persist permission to use plaintext HTTP beyond exact loopback",
+    )
+    .option(
       "--effect <effect>",
       "none, read, write, or unknown",
       parseEffect,
@@ -1138,6 +1176,8 @@ function configureA2ACommands(program: Command, version: string): void {
           oauthResource?: string;
           oauthClientAuth?: string;
           disabled?: boolean;
+          allowPrivate?: boolean;
+          allowInsecureHttp?: boolean;
           effect: A2AOutboundEffect;
           test?: boolean;
         },
@@ -1177,6 +1217,15 @@ function configureA2ACommands(program: Command, version: string): void {
                 },
               }
             : {}),
+          ...(options.allowPrivate === true ||
+          options.allowInsecureHttp === true
+            ? {
+                network: {
+                  allowPrivateAddresses: options.allowPrivate === true,
+                  allowInsecureHttp: options.allowInsecureHttp === true,
+                },
+              }
+            : {}),
           effect: options.effect,
         };
         const candidate = parseA2AIntegrationDocument({
@@ -1190,7 +1239,11 @@ function configureA2ACommands(program: Command, version: string): void {
             {
               networkPolicy: networkPolicy(
                 [url.origin],
-                privateAllowed(url, false),
+                privateAllowed(
+                  url,
+                  candidate.network?.allowPrivateAddresses === true,
+                ),
+                candidate.network?.allowInsecureHttp === true,
               ),
               pollIntervalMs: 500,
             },
@@ -1230,12 +1283,10 @@ function configureA2ACommands(program: Command, version: string): void {
     });
   a2a
     .command("test <name>")
-    .option("--allow-private")
-    .action(async (name: string, options: { allowPrivate?: boolean }) => {
-      const result = await discoverConfiguredAgent(
-        name,
-        options.allowPrivate === true,
-      );
+    .option("--allow-private", "One-shot private network authorization")
+    .option("--allow-insecure-http", "One-shot plaintext HTTP authorization")
+    .action(async (name: string, options: A2ANetworkOverrides) => {
+      const result = await discoverConfiguredAgent(name, options);
       json({
         ok: true,
         name: result.card.name,
@@ -1245,20 +1296,15 @@ function configureA2ACommands(program: Command, version: string): void {
     });
   a2a
     .command("call <name> <prompt>")
-    .option("--allow-private")
+    .option("--allow-private", "One-shot private network authorization")
+    .option("--allow-insecure-http", "One-shot plaintext HTTP authorization")
     .action(
       async (
         name: string,
         prompt: string,
-        options: { allowPrivate?: boolean },
+        options: A2ANetworkOverrides,
       ) => {
-        json(
-          await callConfiguredAgent(
-            name,
-            prompt,
-            options.allowPrivate === true,
-          ),
-        );
+        json(await callConfiguredAgent(name, prompt, options));
       },
     );
   configureA2AExpose(a2a, version);

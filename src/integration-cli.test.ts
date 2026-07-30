@@ -215,17 +215,23 @@ describe("integration CLI", () => {
     expect(listed.agents.managed?.enabled).toBe(false);
   });
 
-  it("does not offer a non-persistent private-network override when adding an Agent", async () => {
-    await expect(
-      runCommand([
-        "a2a",
-        "add",
-        "private-only",
-        "https://10.0.0.1/.well-known/agent-card.json",
-        "--allow-private",
-        "--no-test",
-      ]),
-    ).rejects.toThrow(/unknown option.*allow-private/i);
+  it("persists explicit private-network and plaintext HTTP authorization when adding an Agent", async () => {
+    await runCommand([
+      "a2a",
+      "add",
+      "private-http",
+      "http://10.0.0.1/.well-known/agent-card.json",
+      "--allow-private",
+      "--allow-insecure-http",
+      "--no-test",
+    ]);
+    const listed = JSON.parse(await runCommand(["a2a", "list"])) as {
+      readonly agents: Readonly<Record<string, { readonly network?: unknown }>>;
+    };
+    expect(listed.agents["private-http"]?.network).toEqual({
+      allowPrivateAddresses: true,
+      allowInsecureHttp: true,
+    });
   });
 
   it("requires an explicit stopped-daemon confirmation to migrate a non-empty v1 file", async () => {

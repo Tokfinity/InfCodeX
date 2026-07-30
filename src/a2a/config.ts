@@ -30,11 +30,17 @@ export interface A2AOAuth2ClientCredentialsConfig {
   readonly clientAuthentication: 'client-secret-basic' | 'client-secret-post';
 }
 
+export interface A2AOutboundNetworkConfig {
+  readonly allowPrivateAddresses: boolean;
+  readonly allowInsecureHttp: boolean;
+}
+
 export interface A2AOutboundAgentConfig {
   readonly cardUrl: string;
   readonly enabled: boolean;
   readonly credentialEnv?: string;
   readonly authentication?: A2AOAuth2ClientCredentialsConfig;
+  readonly network?: A2AOutboundNetworkConfig;
   readonly effect: A2AOutboundEffect;
 }
 
@@ -293,10 +299,17 @@ function parseOutboundAgent(
     source,
     version === 1
       ? ['cardUrl', 'credentialEnv', 'effect']
-      : ['cardUrl', 'enabled', 'credentialEnv', 'authentication', 'effect'],
+      : ['cardUrl', 'enabled', 'credentialEnv', 'authentication', 'network', 'effect'],
     label,
   );
-  const cardUrl = parseHttpUrl(source.cardUrl, `${label}.cardUrl`, true);
+  const network = source.network === undefined
+    ? undefined
+    : parseOutboundNetwork(source.network, `${label}.network`);
+  const cardUrl = parseHttpUrl(
+    source.cardUrl,
+    `${label}.cardUrl`,
+    network?.allowInsecureHttp === true,
+  );
   const effect = source.effect;
   if (!['none', 'read', 'write', 'unknown'].includes(String(effect))) {
     throw new Error(`${label}.effect is invalid.`);
@@ -316,11 +329,30 @@ function parseOutboundAgent(
     ...(credentialEnv ? { credentialEnv } : {}),
     ...(source.authentication === undefined
       ? {} : { authentication: parseOutboundAuthentication(source.authentication, `${label}.authentication`) }),
+    ...(network === undefined ? {} : { network }),
     effect: effect as A2AOutboundEffect,
   };
 }
 
-function parseHttpUrl(value: unknown, label: string, requireHttps: boolean): string {
+function parseOutboundNetwork(
+  value: unknown,
+  label: string,
+): A2AOutboundNetworkConfig {
+  const source = record(value, label);
+  noUnknown(source, ['allowPrivateAddresses', 'allowInsecureHttp'], label);
+  if (typeof source.allowPrivateAddresses !== 'boolean') {
+    throw new Error(`${label}.allowPrivateAddresses must be a boolean.`);
+  }
+  if (typeof source.allowInsecureHttp !== 'boolean') {
+    throw new Error(`${label}.allowInsecureHttp must be a boolean.`);
+  }
+  return {
+    allowPrivateAddresses: source.allowPrivateAddresses,
+    allowInsecureHttp: source.allowInsecureHttp,
+  };
+}
+
+function parseHttpUrl(value: unknown, label: string, allowInsecureHttp: boolean): string {
   const raw = text(value, label);
   let parsed: URL;
   try {
@@ -333,8 +365,9 @@ function parseHttpUrl(value: unknown, label: string, requireHttps: boolean): str
   }
   if (parsed.hash) throw new Error(`${label} must not contain a fragment.`);
   const loopback = isExactLoopback(parsed.hostname);
-  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback && requireHttps)) {
-    throw new Error(`${label} must use HTTPS or explicit loopback HTTP.`);
+  if (parsed.protocol !== 'https:'
+    && !(parsed.protocol === 'http:' && (loopback || allowInsecureHttp))) {
+    throw new Error(`${label} must use HTTPS, exact loopback HTTP, or explicitly authorized plaintext HTTP.`);
   }
   return parsed.toString();
 }

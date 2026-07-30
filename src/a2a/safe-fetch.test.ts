@@ -27,6 +27,7 @@ describe('safe A2A fetch', () => {
     await expect(assertSafeA2AUrl(new URL('http://[::ffff:127.0.0.1]:4000/a2a'), {
       allowedOrigins: ['http://[::ffff:7f00:1]:4000'],
       allowPrivateAddresses: false,
+      allowInsecureHttp: true,
       requestTimeoutMs: 1_000,
       maxResponseBytes: 1_024,
       maxRedirects: 0,
@@ -42,6 +43,55 @@ describe('safe A2A fetch', () => {
       requestTimeoutMs: 1_000,
       maxResponseBytes: 1_024,
       maxRedirects: 0,
+    })).resolves.toBeUndefined();
+  });
+
+  it('requires explicit plaintext authorization for public HTTP targets', async () => {
+    lookup.mockResolvedValueOnce([{ address: '198.51.101.1', family: 4 }]);
+    const denied = {
+      allowedOrigins: ['http://agent.example'],
+      allowPrivateAddresses: false,
+      requestTimeoutMs: 1_000,
+      maxResponseBytes: 1_024,
+      maxRedirects: 0,
+    } as const;
+    await expect(assertSafeA2AUrl(new URL('http://agent.example/a2a'), denied))
+      .rejects.toThrow(/must use HTTPS/i);
+
+    lookup.mockResolvedValueOnce([{ address: '198.51.101.1', family: 4 }]);
+    await expect(assertSafeA2AUrl(new URL('http://agent.example/a2a'), {
+      ...denied,
+      allowInsecureHttp: true,
+    })).resolves.toBeUndefined();
+  });
+
+  it('keeps private-address and plaintext HTTP authorization independent', async () => {
+    lookup.mockResolvedValueOnce([{ address: '10.20.30.40', family: 4 }]);
+    await expect(assertSafeA2AUrl(new URL('http://intranet.example/a2a'), {
+      allowedOrigins: ['http://intranet.example'],
+      allowPrivateAddresses: true,
+      allowInsecureHttp: false,
+      requestTimeoutMs: 1_000,
+      maxResponseBytes: 1_024,
+      maxRedirects: 0,
+    })).rejects.toThrow(/plaintext HTTP.*explicitly allowed/i);
+
+    lookup.mockResolvedValueOnce([{ address: '10.20.30.40', family: 4 }]);
+    const plaintextOnly = {
+      allowedOrigins: ['http://intranet.example'],
+      allowPrivateAddresses: false,
+      allowInsecureHttp: true,
+      requestTimeoutMs: 1_000,
+      maxResponseBytes: 1_024,
+      maxRedirects: 0,
+    } as const;
+    await expect(assertSafeA2AUrl(new URL('http://intranet.example/a2a'), plaintextOnly))
+      .rejects.toThrow(/private network/i);
+
+    lookup.mockResolvedValueOnce([{ address: '10.20.30.40', family: 4 }]);
+    await expect(assertSafeA2AUrl(new URL('http://intranet.example/a2a'), {
+      ...plaintextOnly,
+      allowPrivateAddresses: true,
     })).resolves.toBeUndefined();
   });
 
@@ -86,16 +136,25 @@ describe('safe A2A fetch', () => {
     if (address === null || typeof address === 'string') throw new Error('Expected TCP server address.');
     const origin = `http://rebind.test:${address.port}`;
 
+    await expect(safeA2AFetch(new URL(`${origin}/a2a`), {}, {
+      allowedOrigins: [origin],
+      allowPrivateAddresses: true,
+      requestTimeoutMs: 1_000,
+      maxResponseBytes: 1_024,
+      maxRedirects: 0,
+    })).rejects.toThrow(/plaintext HTTP.*explicitly allowed/i);
+
     const result = await safeA2AFetch(new URL(`${origin}/a2a`), {}, {
       allowedOrigins: [origin],
       allowPrivateAddresses: true,
+      allowInsecureHttp: true,
       requestTimeoutMs: 1_000,
       maxResponseBytes: 1_024,
       maxRedirects: 0,
     });
 
     expect(decodeUtf8(result.body)).toBe('pinned');
-    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(lookup).toHaveBeenCalledTimes(2);
     expect(acceptEncoding).toBe('identity');
   });
 });

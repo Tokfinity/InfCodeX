@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import * as net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -191,6 +192,153 @@ describe("createKodaXRuntime", () => {
     await expect(runtime.status.snapshot()).rejects.toThrow(
       /Worker transport is closed/i,
     );
+  }, 60_000);
+
+  it("loads configured A2A inside the Worker owner for listing and dispatch", async () => {
+    let baseUrl = "";
+    const methods: string[] = [];
+    const server = createServer(async (request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/card") {
+        response.end(
+          JSON.stringify({
+            name: "Worker A2A Agent",
+            description: "A configured Agent owned by the Runtime Worker.",
+            version: "1.0.0",
+            supportedInterfaces: [
+              {
+                url: `${baseUrl}/rpc`,
+                protocolBinding: "JSONRPC",
+                protocolVersion: "1.0",
+              },
+            ],
+            capabilities: { streaming: false },
+            defaultInputModes: ["text/plain"],
+            defaultOutputModes: ["text/plain"],
+            skills: [
+              {
+                id: "general",
+                name: "General",
+                description: "General tasks",
+                tags: [],
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+        readonly id: string;
+        readonly method: string;
+      };
+      methods.push(payload.method);
+      response.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {
+            message: {
+              messageId: "worker-result",
+              role: "ROLE_AGENT",
+              parts: [
+                {
+                  text: "worker A2A completed",
+                  mediaType: "text/plain",
+                },
+              ],
+            },
+          },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Expected Worker A2A test server address.");
+    }
+    baseUrl = `http://127.0.0.1:${address.port}`;
+    const configDir = path.join(tempRoot, ".kodax", "integrations");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(configDir, "a2a.json"),
+      `${JSON.stringify({
+        version: 2,
+        agents: {
+          "worker-a2a": {
+            cardUrl: `${baseUrl}/card`,
+            enabled: true,
+            effect: "read",
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    let runtime: KodaXRuntime | undefined;
+    try {
+      const { createKodaXRuntime } = await import("./sdk-runtime.js");
+      runtime = await createKodaXRuntime({
+        mode: "embedded",
+        isolation: "worker",
+        homeDir: tempRoot,
+        sessionsDir: path.join(tempRoot, "worker-a2a-sessions"),
+        worker: { configuredA2A: true },
+        requirements: { externalAgents: true },
+      });
+      await expect(
+        runtime.agents.listDispatchable({ actorId: "worker-a2a-test" }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            descriptor: expect.objectContaining({
+              agentId: "external:worker-a2a",
+            }),
+          }),
+        ]),
+      );
+
+      const session = await runtime.sessions.create({
+        sessionId: "worker-a2a-session",
+        title: "Worker A2A dispatch",
+      });
+      const started = await runtime.agents.spawn(session.id, {
+        taskName: "worker-a2a",
+        kind: "external",
+        objective: "Complete through the Worker-owned A2A plane.",
+        metadata: { agentId: "external:worker-a2a" },
+      });
+      const deadline = Date.now() + 5_000;
+      let completed = await runtime.agents.output(
+        session.id,
+        "/root/worker-a2a",
+        started.turnId,
+      );
+      while (completed.state === "accepted" || completed.state === "running") {
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for ${started.turnId}.`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        completed = await runtime.agents.output(
+          session.id,
+          "/root/worker-a2a",
+          started.turnId,
+        );
+      }
+      expect(completed).toMatchObject({
+        state: "completed",
+        output: "worker A2A completed",
+      });
+      expect(methods).toContain("SendMessage");
+    } finally {
+      await runtime?.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   }, 60_000);
 
   it("fails closed when a connected Runtime lacks a required capability", async () => {

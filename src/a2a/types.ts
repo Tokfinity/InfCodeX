@@ -137,6 +137,8 @@ export interface A2AJsonRpcResponse {
 export interface A2ANetworkPolicy {
   readonly allowedOrigins: readonly string[];
   readonly allowPrivateAddresses: boolean;
+  /** Explicitly permits plaintext HTTP beyond exact loopback targets. */
+  readonly allowInsecureHttp?: boolean;
   readonly requestTimeoutMs: number;
   readonly maxResponseBytes: number;
   readonly maxRedirects: number;

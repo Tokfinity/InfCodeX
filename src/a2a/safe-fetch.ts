@@ -18,6 +18,13 @@ function isLoopbackAddress(address: string): boolean {
     : family === 6 && LOOPBACK_ADDRESSES.check(address, 'ipv6');
 }
 
+function isExactLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1';
+}
+
 function isPrivateIpv4(address: string): boolean {
   const octets = address.split('.').map(Number);
   const [a, b, c, d] = octets;
@@ -86,8 +93,10 @@ async function validateA2AUrl(url: URL, policy: A2ANetworkPolicy): Promise<Valid
     && !addresses.every((entry) => isLoopbackAddress(entry.address))) {
     throw new A2AError(-32602, 'A2A localhost target must resolve only to loopback addresses.');
   }
-  if (url.protocol === 'http:' && !addresses.every((entry) => isPrivateAddress(entry.address))) {
-    throw new A2AError(-32602, 'Public A2A targets must use HTTPS.');
+  const exactLoopbackHttp = isExactLoopbackHostname(hostname)
+    && addresses.every((entry) => isLoopbackAddress(entry.address));
+  if (url.protocol === 'http:' && !exactLoopbackHttp && policy.allowInsecureHttp !== true) {
+    throw new A2AError(-32602, 'Non-loopback A2A targets must use HTTPS unless plaintext HTTP is explicitly allowed.');
   }
   if (!policy.allowPrivateAddresses && addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new A2AError(-32602, 'A2A private network targets are not allowed.');

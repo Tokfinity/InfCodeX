@@ -2396,6 +2396,7 @@ The important creation options are:
 | `isolation` | `'inline'` | Embedded-only. `'worker'` creates a private Runtime Worker; daemon rejects any explicit isolation because it is already process-isolated. |
 | `worker.resourceLimits` | unset | Optional V8 heap/stack limits; requires `isolation: 'worker'`. |
 | `worker.shutdownTimeoutMs` | `2000` | Grace before the parent terminates the Runtime Worker. |
+| `worker.configuredA2A` | `false` | Explicitly lets the Worker owner load and reconcile `<homeDir>/.kodax/integrations/a2a.json`; installs the full list/describe/spawn/task plane inside the Worker. |
 | `requirements.hardDispose` | `false` | Rejects inline and daemon forms; prevents an accidental weaker ownership form. |
 | `homeDir` | unset | When omitted, use the exact resolved `KODAX_HOME`. When set, this is the base directory that owns `.kodax`, with the same meaning as CLI `daemon --home`; daemon state/config live under `<homeDir>/.kodax`. |
 | `profile` | `'default'` | Daemon uniqueness and runtime configuration namespace. |
@@ -2504,7 +2505,9 @@ const runtime = await createKodaXRuntime({
   worker: {
     resourceLimits: { maxOldGenerationSizeMb: 1024 },
     shutdownTimeoutMs: 2000,
+    configuredA2A: true,
   },
+  requirements: { externalAgents: true },
 });
 
 try {
@@ -2525,6 +2528,12 @@ process, so daemon + worker is rejected.
 Worker `resourceLimits` bound parts of the V8 heap only. They do not cover every
 kind of native/external memory and do not make Node code safe to treat as
 untrusted. Worker isolation is a fault boundary, not a security sandbox.
+
+Configured A2A is loaded by the Worker owner, not serialized from a parent
+factory closure. `worker.configuredA2A` is therefore an explicit opt-in. When
+enabled, the Worker reconciles the same user document as the CLI/daemon path,
+advertises `externalAgents`, and backs `listDispatchable`, `describe`,
+`preflight`, and external Actor dispatch with one real executor plane.
 
 Callers that cannot accept a silent fallback can require the capability:
 
@@ -2923,7 +2932,7 @@ daemon DTO boundary. Install factories where the Runtime owner executes:
 | Private in-process owner | `createKodaXRuntime({ mode: 'embedded', isolation: 'inline', externalAgents })` |
 | New locally hosted daemon owner | `createKodaXRuntime({ mode: 'daemon', profile: '<unique>', externalAgents })` |
 | Existing daemon | Configure its owner, then attach with `connectKodaXRuntime({ requirements: { externalAgents: true } })`; a client cannot inject factories. |
-| Runtime Worker | The Worker owner must install factories itself; passing `externalAgents` from the parent is rejected. |
+| Runtime Worker | Use `worker: { configuredA2A: true }` for the built-in configured A2A plane. Custom factories must still be installed by a custom Worker owner; passing function-valued `externalAgents` from the parent is rejected. |
 
 When `mode: 'daemon'` and `externalAgents` are supplied, the caller must win a
 new in-process daemon lease. KodaX rejects an already-running profile instead of
@@ -3513,6 +3522,23 @@ kodax a2a test reviewer
 kodax a2a call reviewer "Review this document"
 ```
 
+Private-address access and plaintext HTTP beyond exact loopback are independent
+persisted permissions. Both default to false; private HTTP requires both:
+
+```bash
+kodax a2a add intranet http://10.20.30.40/.well-known/agent-card.json \
+  --allow-private --allow-insecure-http --effect read
+```
+
+Private HTTPS requires only `--allow-private`. Public HTTP requires only
+`--allow-insecure-http`, but TLS remains the recommended deployment. The flags
+are persisted under the Agent's `network` block and are honored by Card
+discovery, interface execution, Runtime registration, and task execution.
+Private-address permission also applies to HTTPS OAuth endpoints, but OAuth
+token endpoints deliberately retain the stricter HTTPS-or-exact-loopback
+protocol rule; Agent-transport plaintext authorization does not weaken OAuth.
+`a2a test` and `a2a call` also accept the flags as one-shot overrides.
+
 The no-code OAuth path stores only the environment-variable name for the client
 secret. It can be staged disabled and hot-activated later:
 
@@ -3535,8 +3561,9 @@ Embedded CLI Runtimes and the user-owned daemon automatically reconcile these
 entries as `external:<name>`. Discovery/update failure retains that entry's
 last-known-good registration; another entry can still update. The environment
 broker resolves `credentialEnv` only at call time. Automatic Runtime
-registration accepts public HTTPS and exact loopback targets; explicit private
-network access remains an operator action on the direct CLI/SDK path.
+registration accepts public HTTPS and exact loopback targets; private-address
+and non-loopback plaintext access require their independent persisted operator
+permissions.
 
 `enabled` is desired state in `a2a.json`, not a fabricated cross-process live
 flag. `a2a list` reports configured entries and that desired state. The owning

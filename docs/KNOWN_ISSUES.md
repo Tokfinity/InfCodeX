@@ -14,6 +14,7 @@ _Last Updated: 2026-07-30_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
 | 237 | High | Resolved | Production learning reviewer omitted the learned Skill slug constraint | v0.7.78 development | v0.7.78 development | 2026-07-29 | 2026-07-29 |
@@ -142,6 +143,92 @@ _Last Updated: 2026-07-30_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 243: Runtime Worker omits configured A2A Agents from dispatchable catalog and execution
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.66 Worker-hosted Runtime
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-30
+- **Resolved**: 2026-07-30
+
+#### Original Problem
+
+A v0.7.78 Runtime Worker with an enabled loopback A2A Agent returned only
+`native:kodax-child` and constructed local Agents from
+`list_dispatchable_agents`. The configured `external:mock-callee` entry was
+absent, and an explicit external spawn would fail even though
+`kodax a2a test` and `kodax a2a call` succeeded against the same Card.
+
+The supplied session log and analysis correctly localized the missing
+Worker-owned executor plane. One evidence detail required correction:
+`kodax a2a call` creates a temporary CLI-owned executor plane for that call; it
+does not prove that a daemon registry contains the Agent.
+
+#### Context
+
+Function-valued custom executor factories cannot be structured-cloned across a
+Worker boundary. The existing SDK therefore rejected parent-side
+`externalAgents` injection, but the bundled Worker owner offered no serializable
+way to install KodaX's built-in configured A2A integration itself. Without a
+plane, catalog fallback was truthfully limited to local descriptors.
+
+#### Root Cause
+
+`src/runtime-worker/entry.ts` created an inline embedded Runtime from primitive
+bootstrap fields only. It did not construct
+`createConfiguredA2ARuntimeIntegration`, pass its `runtimeOptions` into the
+inner Runtime, reconcile `a2a.json`, or close its watcher during shutdown.
+Consequently `dist/runtime-worker.js` contained no reachable configured A2A
+executor/registration path and advertised `externalAgents: false`.
+
+#### Proposed Solution
+
+- Add one serializable, explicit `worker.configuredA2A` bootstrap permission.
+- Resolve the same `<homeDir>/.kodax` configuration boundary inside the Worker.
+- Let the Worker owner construct the built-in integration and complete
+  reconciliation before it advertises readiness.
+- Reuse the real executor plane for list, describe, preflight, spawn, task
+  lifecycle, and cancellation rather than projecting catalog-only entries.
+- Close the integration controller before Runtime Worker shutdown.
+
+#### Resolution
+
+- `RuntimeWorkerOptions` now accepts `configuredA2A`, defaulting to false so an
+  SDK host explicitly opts into ambient user integration.
+- The parent sends only the boolean bootstrap fact. The Worker owner resolves
+  its config home, constructs the configured A2A integration, installs the
+  executor plane in the inner Runtime, and reconciles registrations before the
+  initialize response.
+- Initialization advertises the real external-Agent capability. The same plane
+  backs `listDispatchable`, `describe`, `preflight`, and external Actor task
+  execution.
+- Initialization failure closes a partially created Runtime, while normal
+  shutdown closes the A2A watcher before closing the dispatcher and port.
+- The bundle build now includes the reachable A2A executor and continues to
+  pass the Runtime Worker sidecar and child-process audits.
+
+#### Files Changed
+
+- `src/runtime-worker/protocol.ts`
+- `src/runtime-worker/entry.ts`
+- `src/sdk-runtime.ts`
+- `src/sdk-runtime.test.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `README.md`
+- `README_CN.md`
+- `CHANGELOG.md`
+
+#### Tests Added
+
+- A real loopback A2A server is configured under an isolated Worker home.
+- Runtime initialization requires and receives the `externalAgents`
+  capability.
+- The Worker catalog contains `external:worker-a2a`.
+- A Worker-owned external Actor dispatch sends a real A2A `SendMessage` request
+  and reaches a completed output.
+- Worker close releases the configured integration and server connection.
 
 ### 242: First launch opens metadata setup when no provider credential exists
 
@@ -8568,7 +8655,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 119 (26 Open, 93 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 120 (26 Open, 94 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

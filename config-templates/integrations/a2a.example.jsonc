@@ -73,6 +73,22 @@
     //   "effect": "read"
     // },
 
+    // Private addresses and plaintext HTTP are separate, default-deny
+    // permissions. Exact loopback HTTP needs neither. Private HTTP needs both;
+    // private HTTPS needs only allowPrivateAddresses. Prefer TLS whenever it is
+    // available. The equivalent CLI flags are `--allow-private` and
+    // `--allow-insecure-http`. OAuth token endpoints keep their stricter
+    // HTTPS-or-exact-loopback rule even when Agent transport HTTP is allowed.
+    // "intranet": {
+    //   "cardUrl": "http://10.20.30.40/.well-known/agent-card.json",
+    //   "enabled": true,
+    //   "network": {
+    //     "allowPrivateAddresses": true,
+    //     "allowInsecureHttp": true
+    //   },
+    //   "effect": "read"
+    // },
+
     // Standards-based machine-to-machine OAuth2 example. The external
     // Authorization Server issues access tokens; KodaX obtains and caches them
     // only in process memory. `tokenUrl` must exactly match the selected Card
