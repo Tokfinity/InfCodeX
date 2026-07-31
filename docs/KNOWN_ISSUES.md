@@ -18,7 +18,7 @@ _Last Updated: 2026-07-31_
 | 244 | High | Resolved | Runtime streaming deltas create an event, sequence-allocation, and persistence storm | v0.7.64 Runtime event contract | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
-| 241 | High | Open | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | - | 2026-07-30 | - |
+| 241 | High | Resolved | Standalone Bun binary executes every CLI command twice | v0.7.72 lightweight resume bootstrap | v0.7.79 development | 2026-07-30 | 2026-07-31 |
 | 240 | High | Resolved | Runtime lifecycle can remain active after executor settlement and history reads can hang or mutate legacy Sessions | Runtime SDK lifecycle and transcript observation | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 239 | High | Resolved | Session archive can pair a moved main file with an orphan destination sidecar | sidecar-aware Session archive/unarchive | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 238 | High | Resolved | Durable island recovery can violate transcript append order and compaction clone provenance | v0.7.74 durable compacted-history recovery | v0.7.79 development | 2026-07-30 | 2026-07-30 |
@@ -467,9 +467,11 @@ first-launch behavior is in scope.
 ### 241: Standalone Bun binary executes every CLI command twice
 
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.72 lightweight resume bootstrap
+- **Fixed**: v0.7.79 development
 - **Created**: 2026-07-30
+- **Resolved**: 2026-07-31
 
 #### Original Problem
 
@@ -515,18 +517,27 @@ auto-invokes `main()` while the bootstrap invokes the same export explicitly.
 Node keeps the bootstrap and CLI as separate file URLs, so the same guard does
 not duplicate the Node/npm path.
 
-#### Proposed Solution
+#### Resolution
 
-- Give exactly one module ownership of process startup. The minimal fix is to
-  remove automatic startup from the importable CLI module and use a dedicated
-  direct-CLI entry wrapper where direct execution remains required.
-- Add a release-artifact smoke test that runs a side-effect-free command such
-  as `a2a list` against the compiled host binary and asserts one complete JSON
-  document.
-- Add a compiled first-run setup regression that asserts one provider prompt,
-  one model prompt, one confirmation, and metadata-only persistence. Keep API
-  key values outside KodaX; setup should continue to save only provider/model
-  and custom-provider environment-variable names.
+- Restricted the CLI module's direct-entry path to non-bundled execution. The
+  Bun standalone build already freezes `KODAX_BUNDLED=true`, so its bootstrap
+  is now the sole startup owner and invokes `main()` exactly once.
+- Preserved direct `node dist/kodax_cli.js` execution and the non-bundled
+  Runtime daemon child path. No Actor ownership, CAS, or liveness rule was
+  weakened; the observed owner conflict was the correct fence against the two
+  live Runtimes created by the duplicate entry.
+- Made the binary build run the compiled host artifact with a fresh
+  `KODAX_HOME`, execute `a2a list`, and require stdout to parse as exactly one
+  valid A2A v2 document. Concatenated duplicate documents now fail the build.
+
+#### Verification
+
+- Added direct-entry unit coverage for bundled, direct Node, and imported CLI
+  ownership cases.
+- Verified the Node bootstrap, direct CLI, and npm CJS shim each emit one A2A
+  v2 document.
+- Built and executed the real Bun standalone artifact; its `a2a list` output
+  is one document and the host-artifact smoke gate passes.
 
 ### 240: Runtime lifecycle can remain active after executor settlement and history reads can hang or mutate legacy Sessions
 
@@ -9053,11 +9064,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 125 (26 Open, 99 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 125 (25 Open, 100 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-31: Issue 241 resolved (v0.7.79 development)
+- Assigned standalone process startup exclusively to the bootstrap while
+  preserving direct Node CLI and daemon execution.
+- Added a real compiled-artifact smoke gate that rejects duplicate A2A JSON
+  documents.
 
 ### 2026-07-31: Issue 245 added and resolved (v0.7.78 development)
 - Prepared a protected content-addressed Windows runner outside private global

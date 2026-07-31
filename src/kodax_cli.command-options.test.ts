@@ -5,8 +5,20 @@ import { mergeCommandOptionsWithGlobals } from './cli_option_helpers.js';
 import {
   configureKodaXRootCommand,
   configureKodaXSetupCommand,
+  shouldAutoStartCli,
   showKodaXSetupHelpIfRequested,
 } from './kodax_cli.js';
+
+describe('KodaX CLI entry ownership', () => {
+  it('leaves bundled startup to the bootstrap without breaking direct Node execution', () => {
+    const executableUrl = 'file:///opt/kodax/kodax';
+
+    expect(shouldAutoStartCli(executableUrl, executableUrl, true)).toBe(false);
+    expect(shouldAutoStartCli(executableUrl, executableUrl, false)).toBe(true);
+    expect(shouldAutoStartCli('file:///opt/kodax/kodax_cli.js', executableUrl, false))
+      .toBe(false);
+  });
+});
 
 describe('KodaX root/subcommand option ownership', () => {
   it('gives `kodax setup --help` the shared guide and custom-provider option', () => {

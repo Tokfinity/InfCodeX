@@ -5013,6 +5013,7 @@ complete -c kodax -l version -d 'Show version'`);
  * 1. When run directly (e.g., `node dist/kodax_cli.js`), we should execute main()
  * 2. When imported for testing, we should NOT execute main()
  * 3. When imported by the lightweight bootstrap, we should NOT execute main()
+ * 4. In a Bun standalone bundle, only the bootstrap owns process startup
  *
  * Detection logic:
  * - Direct execution: import.meta.url === pathToFileURL(process.argv[1]).href
@@ -5024,7 +5025,19 @@ const metaUrl = import.meta.url;
 const scriptUrl = scriptPath ? pathToFileURL(scriptPath).href : '';
 
 // Only direct execution owns automatic startup. Importers call main() explicitly.
-const isMainModule = scriptPath && metaUrl === scriptUrl;
+export function shouldAutoStartCli(
+  moduleUrl: string,
+  entryUrl: string,
+  bundled: boolean,
+): boolean {
+  return !bundled && moduleUrl === entryUrl;
+}
+
+const isMainModule = scriptPath && shouldAutoStartCli(
+  metaUrl,
+  scriptUrl,
+  process.env.KODAX_BUNDLED === 'true',
+);
 
 if (isMainModule) {
   main().catch((e) => {

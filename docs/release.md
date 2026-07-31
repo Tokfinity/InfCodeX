@@ -71,7 +71,11 @@ node scripts/build-binary.mjs --skip-tsc
 node scripts/build-binary.mjs --clean
 ```
 
-Output lives under `dist/binary/<target>/`. Smoke-test with:
+Output lives under `dist/binary/<target>/`. When the requested targets include
+the current host, the build itself runs that artifact with an isolated
+`KODAX_HOME` and requires `a2a list` to emit exactly one A2A v2 JSON document.
+Cross-compiled targets cannot be executed by this gate. A supplementary manual
+version smoke is:
 
 ```bash
 dist/binary/linux-x64/kodax --version
@@ -381,7 +385,7 @@ substituted at compile time as string literals:
 | Define                       | Value                  | Purpose                                          |
 | ---------------------------- | ---------------------- | ------------------------------------------------ |
 | `process.env.NODE_ENV`       | `"production"`         | React strips dev-only profiling code (saves ~100 MB/turn) |
-| `process.env.KODAX_BUNDLED`  | `"true"`               | Switches `getDefaultSkillPaths()` to sidecar mode |
+| `process.env.KODAX_BUNDLED`  | `"true"`               | Selects sidecar paths and gives the bootstrap exclusive CLI startup ownership |
 | `process.env.KODAX_VERSION`  | `<version>`            | Source of truth for `kodax --version` (no fs read) |
 
 These flags only exist in compiled binaries. **npm install / `npm link` /

@@ -32,7 +32,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -222,6 +223,50 @@ function buildOne(target, version) {
   console.log(`    ✓ ${target}: ${binaryPath}`);
 }
 
+function verifyHostBinary(binaryPath) {
+  const smokeHome = mkdtempSync(join(tmpdir(), 'kodax-binary-smoke-'));
+  try {
+    const result = spawnSync(binaryPath, ['a2a', 'list'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KODAX_HOME: smokeHome,
+        KODAX_TRACING: '0',
+      },
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error(
+        `Standalone smoke failed (exit ${result.status}): ${result.stderr.trim()}`,
+      );
+    }
+
+    let document;
+    try {
+      document = JSON.parse(result.stdout.trim());
+    } catch {
+      throw new Error('Standalone smoke must emit exactly one JSON document.');
+    }
+    if (
+      document === null
+      || typeof document !== 'object'
+      || Array.isArray(document)
+      || document.version !== 2
+      || document.agents === null
+      || typeof document.agents !== 'object'
+      || Array.isArray(document.agents)
+    ) {
+      throw new Error('Standalone smoke emitted an invalid A2A list document.');
+    }
+    console.log(`    ✓ standalone smoke: one A2A v2 document`);
+  } finally {
+    rmSync(smokeHome, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const args = parseCliArgs();
   if (args.help) printHelpAndExit();
@@ -268,13 +313,12 @@ async function main() {
     buildOne(target, version);
   }
 
-  console.log(`\n✓ build complete → ${OUT_ROOT}`);
-  console.log(`  Smoke-test (host platform only):`);
   const hostTarget = (() => { try { return detectCurrentTarget(); } catch { return null; } })();
   if (hostTarget && targets.includes(hostTarget)) {
     const ext = TARGETS[hostTarget].ext;
-    console.log(`    ${join(OUT_ROOT, hostTarget, `kodax${ext}`)} --version`);
+    verifyHostBinary(join(OUT_ROOT, hostTarget, `kodax${ext}`));
   }
+  console.log(`\n✓ build complete → ${OUT_ROOT}`);
 }
 
 main().catch((err) => {

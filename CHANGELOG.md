@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Standalone Bun binaries now let only the bootstrap own CLI startup, avoiding
+  duplicate command execution and startup-time Actor ownership conflicts. The
+  host-target binary build now rejects artifacts that emit more than one A2A
+  document.
 - `list_dispatchable_agents` no longer falls back to native/constructed Agents
   in an opted-in Runtime Worker: the Worker bundle now owns A2A discovery,
   registration, execution, reconciliation, and shutdown.

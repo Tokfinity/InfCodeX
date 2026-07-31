@@ -64,6 +64,16 @@ describe('GitHub release workflow', () => {
       .toContain('--skip-tsc');
   });
 
+  it('rejects standalone binaries that emit more than one A2A document', () => {
+    const source = readFileSync(resolve('scripts/build-binary.mjs'), 'utf8');
+
+    expect(source).toContain("['a2a', 'list']");
+    expect(source).toContain('JSON.parse');
+    expect(source).toContain('KODAX_HOME');
+    expect(source).toContain('mkdtempSync');
+    expect(source).toContain('verifyHostBinary(join(OUT_ROOT, hostTarget');
+  });
+
   it('caches the packaged Electron smoke toolchain in CI and releases', () => {
     const release = parse(
       readFileSync(resolve('.github/workflows/release.yml'), 'utf8'),
