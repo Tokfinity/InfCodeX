@@ -21,6 +21,29 @@ export const SKILL_CREATOR_TOOLS = {
 
 export type SkillCreatorToolAction = keyof typeof SKILL_CREATOR_TOOLS;
 
+export const INTERNAL_SKILL_DISPATCH_ENV = 'KODAX_INTERNAL_SKILL_DISPATCH';
+
+export function consumeInternalSkillDispatchFlag(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env[INTERNAL_SKILL_DISPATCH_ENV] !== '1') return false;
+  delete env[INTERNAL_SKILL_DISPATCH_ENV];
+  return true;
+}
+
+export interface SkillToolLaunchOptions {
+  readonly bundled: boolean;
+  readonly executable: string;
+  readonly electron: boolean;
+  readonly env: NodeJS.ProcessEnv;
+}
+
+export interface SkillToolLaunch {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: NodeJS.ProcessEnv;
+}
+
 export function resolveSkillCreatorToolPath(
   action: SkillCreatorToolAction,
   builtinPath: string = getDefaultSkillPaths().builtinPath
@@ -33,25 +56,55 @@ export function resolveSkillCreatorToolPath(
   );
 }
 
+export function prepareSkillToolLaunch(
+  action: SkillCreatorToolAction,
+  scriptPath: string,
+  args: string[],
+  options: SkillToolLaunchOptions,
+): SkillToolLaunch {
+  if (options.bundled) {
+    const env: NodeJS.ProcessEnv = {
+      ...options.env,
+      [INTERNAL_SKILL_DISPATCH_ENV]: '1',
+    };
+    delete env.BUN_BE_BUN;
+    delete env.ELECTRON_RUN_AS_NODE;
+    return {
+      command: options.executable,
+      args: ['__skill-tool', action, ...args],
+      env,
+    };
+  }
+
+  const launch = prepareInternalNodeLaunch({
+    args: [scriptPath, ...args],
+    env: options.env,
+    isElectron: options.electron,
+  });
+  return { command: options.executable, ...launch };
+}
+
 export async function defaultSkillToolRunner(
   scriptPath: string,
-  args: string[]
+  args: string[],
+  action: SkillCreatorToolAction,
 ): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    const launch = prepareInternalNodeLaunch({
-      args: [scriptPath, ...args],
+    const launch = prepareSkillToolLaunch(action, scriptPath, args, {
+      bundled: process.env.KODAX_BUNDLED === 'true',
+      executable: process.execPath,
+      electron: process.versions.electron !== undefined,
       env: process.env,
-      isElectron: process.versions.electron !== undefined,
     });
-    const child = spawn(process.execPath, launch.args, {
+    const child = spawn(launch.command, launch.args, {
       stdio: 'inherit',
       detached: process.platform !== 'win32',
       env: launch.env,
     });
     const unregisterManagedChild = registerManagedChildProcess(child, {
       kind: 'skill-cli',
-      command: process.execPath,
-      args: [scriptPath, ...args],
+      command: launch.command,
+      args: launch.args,
     });
     const cleanupOnProcessExit = (): void => killChildProcessTreeSync(child);
     process.once('exit', cleanupOnProcessExit);
@@ -74,10 +127,12 @@ export async function defaultSkillToolRunner(
 export async function runSkillCreatorTool(
   action: SkillCreatorToolAction,
   args: string[],
-  runner: (scriptPath: string, args: string[]) => Promise<number> = defaultSkillToolRunner
+  runner?: (scriptPath: string, args: string[]) => Promise<number>,
 ): Promise<void> {
   const scriptPath = resolveSkillCreatorToolPath(action);
-  const exitCode = await runner(scriptPath, args);
+  const exitCode = runner
+    ? await runner(scriptPath, args)
+    : await defaultSkillToolRunner(scriptPath, args, action);
   if (exitCode !== 0) {
     throw new Error(`skill ${action} failed with exit code ${exitCode}`);
   }

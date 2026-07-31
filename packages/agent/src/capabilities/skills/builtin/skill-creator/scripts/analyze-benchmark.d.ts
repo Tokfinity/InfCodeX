@@ -44,3 +44,4 @@ export function analyzeBenchmark(
   analysisJsonPath: string;
   analysisMdPath: string;
 }>;
+export declare function main(argv?: string[]): Promise<void>;

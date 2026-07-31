@@ -55,6 +55,28 @@ function context(
   return { backups: new Map(), executionCwd, shellExecution };
 }
 
+async function waitForFileText(filePath: string, timeoutMs = 5_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(filePath, 'utf8');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 afterEach(() => {
   clearShellExecutionEnvironmentCache();
   vi.unstubAllEnvs();
@@ -273,10 +295,10 @@ describe('resolved shell execution', () => {
 
   it('stops an in-flight environment probe when its only waiter is cancelled', async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), 'kodax-shell-mid-cancel-'));
-    const marker = path.join(cwd, 'probe-side-effect.txt');
+    const pidFile = path.join(cwd, 'probe-child.pid');
     const script = [
-      'setTimeout(()=>require("node:fs").writeFileSync(',
-      `${JSON.stringify(marker)},"ran"),500)`,
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)},String(process.pid));`,
+      'setTimeout(()=>{},5000)',
     ].join('');
     const encoded = Buffer.from(script).toString('base64');
     const setup =
@@ -293,12 +315,12 @@ describe('resolved shell execution', () => {
         abortSignal: controller.signal,
       },
     );
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    const probePid = Number(await waitForFileText(pidFile));
+    expect(Number.isInteger(probePid) && probePid > 0).toBe(true);
     controller.abort();
 
     expect(await pending).toContain('[Cancelled] Operation cancelled by user');
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 700));
-    expect(existsSync(marker)).toBe(false);
+    expect(isPidAlive(probePid)).toBe(false);
   });
 
   it('keeps a shared environment probe alive for a remaining waiter', async () => {
@@ -457,6 +479,20 @@ describe('shell probe argv contract', () => {
 
     expect(command).not.toContain('ELECTRON_RUN_AS_NODE');
     expect(command).not.toContain('--import');
+  });
+
+  it('runs the standalone executable as Bun for the JavaScript environment helper', () => {
+    const command = buildNodeEnvironmentHelper(
+      process.platform === 'win32' ? 'powershell' : 'bash',
+      '__KODAX_ENV_TEST__',
+      process.platform === 'win32' ? 'C:\\KodaX\\kodax.exe' : '/opt/kodax/kodax',
+      false,
+      true,
+    );
+
+    expect(command).toContain('BUN_BE_BUN');
+    expect(command).toContain('-e');
+    expect(command).not.toContain('ELECTRON_RUN_AS_NODE');
   });
 
   it('places pwsh login first and does not contradict interactive mode', () => {

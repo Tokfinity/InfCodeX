@@ -4,9 +4,10 @@ import { accessSync, constants as fsConstants, realpathSync, statSync } from 'no
 import { delimiter, isAbsolute, join, resolve, win32 } from 'node:path';
 import iconv from 'iconv-lite';
 import {
+  BUN_BE_BUN_ENV,
   ELECTRON_RUN_AS_NODE_ENV,
   killChildProcessTree,
-  prepareInternalNodeLaunch,
+  prepareJavaScriptChildLaunch,
   registerManagedChildProcess,
 } from '@kodax-ai/agent';
 
@@ -31,6 +32,7 @@ import {
 const MAX_PROBE_OUTPUT_BYTES = 3 * 1024 * 1024;
 const MAX_SHELL_ENV_CACHE_ENTRIES = 64;
 const NODE_ENV_HELPER_SOURCE = [
+  `delete process.env.${BUN_BE_BUN_ENV};`,
   'const s=process.argv[1];',
   "process.stdout.write(s+Buffer.from(JSON.stringify(process.env)).toString('base64')+s);",
 ].join('');
@@ -162,6 +164,11 @@ function waitForInFlightResolution(
   entry.waiters += 1;
   return new Promise((resolveValue, reject) => {
     let finished = false;
+    const releaseWaiter = (): boolean => {
+      signal?.removeEventListener('abort', onAbort);
+      entry.waiters -= 1;
+      return entry.waiters === 0 && !entry.settled;
+    };
     const finish = (
       outcome:
         | { readonly value: ResolvedShellExecution }
@@ -169,14 +176,23 @@ function waitForInFlightResolution(
     ): void => {
       if (finished) return;
       finished = true;
-      signal?.removeEventListener('abort', onAbort);
-      entry.waiters -= 1;
-      if (entry.waiters === 0 && !entry.settled) entry.controller.abort();
+      if (releaseWaiter()) entry.controller.abort();
       if ('value' in outcome) resolveValue(outcome.value);
       else reject(outcome.error);
     };
     const onAbort = (): void => {
-      finish({ error: shellResolutionAbortError() });
+      if (finished) return;
+      finished = true;
+      const abortsResolution = releaseWaiter();
+      if (!abortsResolution) {
+        reject(shellResolutionAbortError());
+        return;
+      }
+      entry.controller.abort();
+      void entry.promise.then(
+        () => reject(shellResolutionAbortError()),
+        () => reject(shellResolutionAbortError()),
+      );
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     void entry.promise.then(
@@ -360,28 +376,39 @@ export function buildNodeEnvironmentHelper(
   sentinel: string,
   executable = process.execPath,
   isElectron = process.versions.electron !== undefined,
+  isBundled = process.env.KODAX_BUNDLED === 'true',
 ): string {
-  const launch = prepareInternalNodeLaunch({
+  const launch = prepareJavaScriptChildLaunch({
     args: ['-e', NODE_ENV_HELPER_EXPRESSION, sentinel],
     env: {},
+    executable,
+    isBundled,
     isElectron,
   });
   let command: string;
   if (kind === 'pwsh' || kind === 'powershell') {
-    command = `& ${quotePowerShell(executable)} ${launch.args.map(quotePowerShell).join(' ')}`;
+    command = `& ${quotePowerShell(launch.command)} ${launch.args.map(quotePowerShell).join(' ')}`;
   } else if (kind === 'cmd') {
-    command = [quoteCmd(executable), ...launch.args.map(quoteCmd)].join(' ');
+    command = [quoteCmd(launch.command), ...launch.args.map(quoteCmd)].join(' ');
   } else {
-    command = [quotePosix(executable), ...launch.args.map(quotePosix)].join(' ');
+    command = [quotePosix(launch.command), ...launch.args.map(quotePosix)].join(' ');
   }
-  if (launch.env[ELECTRON_RUN_AS_NODE_ENV] !== '1') return command;
+  const bootstrapEnv = [BUN_BE_BUN_ENV, ELECTRON_RUN_AS_NODE_ENV]
+    .filter((name) => launch.env[name] === '1');
+  if (bootstrapEnv.length === 0) return command;
   if (kind === 'pwsh' || kind === 'powershell') {
-    return `& { $env:${ELECTRON_RUN_AS_NODE_ENV} = '1'; ${command} }`;
+    const assignments = bootstrapEnv
+      .map((name) => `$env:${name} = '1';`)
+      .join(' ');
+    return `& { ${assignments} ${command} }`;
   }
   if (kind === 'cmd') {
-    return `set "${ELECTRON_RUN_AS_NODE_ENV}=1" && ${command}`;
+    const assignments = bootstrapEnv
+      .map((name) => `set "${name}=1"`)
+      .join(' && ');
+    return `${assignments} && ${command}`;
   }
-  return `${ELECTRON_RUN_AS_NODE_ENV}=1 ${command}`;
+  return `${bootstrapEnv.map((name) => `${name}=1`).join(' ')} ${command}`;
 }
 
 function combineProbeSetup(
@@ -694,6 +721,8 @@ function captureProcess(
     const chunks: Buffer[] = [];
     let bytes = 0;
     let settled = false;
+    let termination: Promise<void> | undefined;
+    let terminationError: Error | undefined;
     const finish = (error?: Error, exitCode: number | null = null): void => {
       if (settled) return;
       settled = true;
@@ -703,35 +732,43 @@ function captureProcess(
       if (error !== undefined) reject(error);
       else resolveOutput({ stdout: Buffer.concat(chunks), exitCode });
     };
+    const finishAfterTermination = (error: Error): void => {
+      terminationError ??= error;
+      termination ??= killChildProcessTree(child);
+      void termination.then(
+        () => finish(terminationError),
+        () => finish(terminationError),
+      );
+    };
     const timer = setTimeout(() => {
-      void killChildProcessTree(child).finally(() => {
-        finish(new Error('shell environment probe timed out'));
-      });
+      finishAfterTermination(new Error('shell environment probe timed out'));
     }, input.timeoutMs);
     const onAbort = (): void => {
-      void killChildProcessTree(child).finally(() => {
-        finish(shellResolutionAbortError());
-      });
+      finishAfterTermination(shellResolutionAbortError());
     };
     input.signal?.addEventListener('abort', onAbort, { once: true });
     if (input.signal?.aborted) onAbort();
     child.stdout?.on('data', (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > MAX_PROBE_OUTPUT_BYTES) {
-        void killChildProcessTree(child).finally(() => {
-          finish(new Error('shell environment probe output exceeds the size limit'));
-        });
+        finishAfterTermination(
+          new Error('shell environment probe output exceeds the size limit'),
+        );
         return;
       }
       chunks.push(chunk);
     });
     child.stderr?.resume();
     child.on('error', () => {
+      if (input.signal?.aborted || termination !== undefined) {
+        finishAfterTermination(terminationError ?? shellResolutionAbortError());
+        return;
+      }
       finish(new Error('configured shell could not be started'));
     });
     child.on('close', (code) => {
-      if (input.signal?.aborted) {
-        finish(shellResolutionAbortError(), code);
+      if (termination !== undefined) {
+        finishAfterTermination(terminationError ?? shellResolutionAbortError());
         return;
       }
       if (code !== 0 && input.acceptNonZeroExit !== true) {

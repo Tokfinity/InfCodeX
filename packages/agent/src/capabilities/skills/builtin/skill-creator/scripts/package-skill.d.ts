@@ -36,3 +36,4 @@ export function writeSkillPackage(
   outputPath: string,
   options?: { createdAt?: string }
 ): Promise<{ manifest: SkillPackageManifest; bytes: Uint8Array; outputPath: string }>;
+export declare function main(argv?: string[]): Promise<void>;

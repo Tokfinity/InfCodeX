@@ -302,18 +302,29 @@ function postWorkerMessage(worker: Worker, message: unknown): void {
   }
 }
 
-function resolveHandlerWorkerUrl(): URL {
-  if (import.meta.url.endsWith('.ts')) {
-    const compiled = new URL('../../dist/construction/handler-worker.js', import.meta.url);
+export function resolveHandlerWorkerUrl(options: {
+  readonly moduleUrl?: string;
+  readonly bundled?: boolean;
+  readonly executablePath?: string;
+} = {}): URL {
+  const moduleUrl = options.moduleUrl ?? import.meta.url;
+  if (moduleUrl.endsWith('.ts')) {
+    const compiled = new URL('../../dist/construction/handler-worker.js', moduleUrl);
     if (existsSync(fileURLToPath(compiled))) return compiled;
-    return new URL('./handler-worker.ts', import.meta.url);
+    return new URL('./handler-worker.ts', moduleUrl);
   }
-  if (process.env.KODAX_BUNDLED === 'true') {
-    return pathToFileURL(join(dirname(process.execPath), 'constructed-handler-worker.js'));
+  if ((options.bundled ?? process.env.KODAX_BUNDLED === 'true')) {
+    return pathToFileURL(join(
+      dirname(options.executablePath ?? process.execPath),
+      'constructed-handler-worker.js',
+    ));
   }
-  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const currentDir = dirname(fileURLToPath(moduleUrl));
   if (basename(currentDir) === 'chunks') {
     return pathToFileURL(join(dirname(currentDir), 'constructed-handler-worker.js'));
   }
-  return new URL('./handler-worker.js', import.meta.url);
+  if (basename(currentDir) === 'construction') {
+    return new URL('./handler-worker.js', moduleUrl);
+  }
+  return pathToFileURL(join(currentDir, 'constructed-handler-worker.js'));
 }

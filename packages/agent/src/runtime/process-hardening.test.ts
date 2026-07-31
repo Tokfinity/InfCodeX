@@ -6,8 +6,10 @@ import { execFileSync } from 'node:child_process';
 
 import {
   applyProcessHardening,
+  prepareJavaScriptChildLaunch,
   prepareInternalNodeLaunch,
   stripHardenedEnvVars,
+  BUN_BE_BUN_ENV,
   ELECTRON_RUN_AS_NODE_ENV,
   HARDENED_ENV_VARS,
   HARDENING_OPT_OUT_ENV,
@@ -17,6 +19,7 @@ describe('process hardening', () => {
   beforeEach(() => {
     for (const name of HARDENED_ENV_VARS) delete process.env[name];
     delete process.env[ELECTRON_RUN_AS_NODE_ENV];
+    delete process.env[BUN_BE_BUN_ENV];
     delete process.env[HARDENING_OPT_OUT_ENV];
   });
 
@@ -24,6 +27,7 @@ describe('process hardening', () => {
     vi.unstubAllEnvs();
     for (const name of HARDENED_ENV_VARS) delete process.env[name];
     delete process.env[ELECTRON_RUN_AS_NODE_ENV];
+    delete process.env[BUN_BE_BUN_ENV];
     delete process.env[HARDENING_OPT_OUT_ENV];
   });
 
@@ -109,6 +113,48 @@ describe('process hardening', () => {
       expect(launch.args).toEqual(args);
       expect(launch.args).not.toBe(args);
       expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+      expect(launch.env.KODAX_SENTINEL).toBe('preserved');
+    });
+  });
+
+  describe('prepareJavaScriptChildLaunch', () => {
+    it('uses the standalone executable as Bun without treating it as a KodaX self-entry', () => {
+      const parentEnv = {
+        ELECTRON_RUN_AS_NODE: 'stale',
+        KODAX_SENTINEL: 'preserved',
+      };
+
+      const launch = prepareJavaScriptChildLaunch({
+        args: ['server.js', '--stdio'],
+        env: parentEnv,
+        executable: 'C:/KodaX/kodax.exe',
+        isBundled: true,
+        isElectron: false,
+      });
+
+      expect(launch).toEqual({
+        command: 'C:/KodaX/kodax.exe',
+        args: ['server.js', '--stdio'],
+        env: {
+          BUN_BE_BUN: '1',
+          KODAX_SENTINEL: 'preserved',
+        },
+      });
+      expect(parentEnv.ELECTRON_RUN_AS_NODE).toBe('stale');
+    });
+
+    it('keeps ordinary Node behavior and removes a stale Bun bootstrap variable', () => {
+      const launch = prepareJavaScriptChildLaunch({
+        args: ['helper.js'],
+        env: { BUN_BE_BUN: '1', KODAX_SENTINEL: 'preserved' },
+        executable: '/usr/bin/node',
+        isBundled: false,
+        isElectron: false,
+      });
+
+      expect(launch.command).toBe('/usr/bin/node');
+      expect(launch.args).toEqual(['helper.js']);
+      expect(launch.env.BUN_BE_BUN).toBeUndefined();
       expect(launch.env.KODAX_SENTINEL).toBe('preserved');
     });
   });

@@ -177,6 +177,7 @@ function buildOne(target, version) {
       // at first import. Single quotes survive the round-trip intact.
       `--define`, `process.env.NODE_ENV='production'`,
       `--define`, `process.env.KODAX_BUNDLED='true'`,
+      `--define`, `process.env.KODAX_MODULE_BUNDLE='true'`,
       `--define`, `process.env.KODAX_VERSION='${version}'`,
       '--outfile', binaryPath,
     ],
@@ -262,6 +263,89 @@ function verifyHostBinary(binaryPath) {
       throw new Error('Standalone smoke emitted an invalid A2A list document.');
     }
     console.log(`    ✓ standalone smoke: one A2A v2 document`);
+
+    const bunChildResult = spawnSync(binaryPath, [
+      '-e',
+      'process.stdout.write("kodax-bun-child")',
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BUN_BE_BUN: '1',
+      },
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    if (bunChildResult.error) throw bunChildResult.error;
+    if (
+      bunChildResult.status !== 0
+      || bunChildResult.stdout !== 'kodax-bun-child'
+    ) {
+      throw new Error(
+        `Standalone Bun child smoke failed (exit ${bunChildResult.status}): `
+        + `${bunChildResult.stderr.trim()}\n${bunChildResult.stdout.trim()}`,
+      );
+    }
+    console.log(`    ✓ standalone smoke: JavaScript child Bun mode`);
+
+    const skillResult = spawnSync(binaryPath, [
+      'skill',
+      'validate',
+      join(dirname(binaryPath), 'builtin', 'skill-creator'),
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KODAX_HOME: smokeHome,
+        KODAX_TRACING: '0',
+      },
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    if (skillResult.error) throw skillResult.error;
+    if (
+      skillResult.status !== 0
+      || !skillResult.stdout.includes('Skill is valid.')
+    ) {
+      throw new Error(
+        `Standalone skill dispatcher smoke failed (exit ${skillResult.status}): `
+        + `${skillResult.stderr.trim()}\n${skillResult.stdout.trim()}`,
+      );
+    }
+    console.log(`    ✓ standalone smoke: bundled skill dispatcher`);
+
+    const packagePath = join(smokeHome, 'skill-creator.skill');
+    const packageResult = spawnSync(binaryPath, [
+      'skill',
+      'package',
+      join(dirname(binaryPath), 'builtin', 'skill-creator'),
+      '--output',
+      packagePath,
+    ], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KODAX_HOME: smokeHome,
+        KODAX_TRACING: '0',
+      },
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    if (packageResult.error) throw packageResult.error;
+    if (
+      packageResult.status !== 0
+      || !existsSync(packagePath)
+      || readFileSync(packagePath).byteLength === 0
+    ) {
+      throw new Error(
+        `Standalone skill package smoke failed (exit ${packageResult.status}): `
+        + `${packageResult.stderr.trim()}\n${packageResult.stdout.trim()}`,
+      );
+    }
+    console.log(`    ✓ standalone smoke: bundled YAML and fflate dependencies`);
   } finally {
     rmSync(smokeHome, { recursive: true, force: true });
   }

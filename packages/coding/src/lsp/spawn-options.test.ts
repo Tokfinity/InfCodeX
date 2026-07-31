@@ -17,6 +17,7 @@ describe('spawnLspProcess background options', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('hides native language-server windows in GUI hosts', () => {
@@ -64,6 +65,28 @@ describe('spawnLspProcess background options', () => {
       ['server.mjs', '--stdio'],
       expect.objectContaining({
         env: expect.not.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+        shell: false,
+        windowsHide: true,
+      }),
+    );
+  });
+
+  it('runs JavaScript language servers through Bun mode in a standalone executable', () => {
+    vi.stubEnv('KODAX_BUNDLED', 'true');
+
+    spawnLspProcess(process.execPath, ['server.mjs', '--stdio'], {
+      env: { KODAX_SENTINEL: 'preserved' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ['server.mjs', '--stdio'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          BUN_BE_BUN: '1',
+          KODAX_SENTINEL: 'preserved',
+        }),
         shell: false,
         windowsHide: true,
       }),

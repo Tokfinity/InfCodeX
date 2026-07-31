@@ -4,6 +4,7 @@
  * 会话管理 - Session ID 生成和消息处理
  */
 
+import { randomUUID } from 'node:crypto';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 const DEFAULT_SESSION_TITLE = 'Untitled Session';
@@ -54,12 +55,17 @@ function formatSessionTitle(text: string): string {
  * directory layout the same id could otherwise exist in two project folders
  * and make `loadSession(id)` ambiguous. See ADR-038 §7.
  */
-export async function generateSessionId(): Promise<string> {
+export function generateSessionIdSync(): string {
   const now = new Date();
   const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
   const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-  const suffix = `${now.getMilliseconds().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const suffix = `${now.getMilliseconds().toString(36)}${randomUUID().replaceAll('-', '')}`;
   return `${datePart}_${timePart}_${suffix}`;
+}
+
+/** Preserve the established async public API for existing consumers. */
+export async function generateSessionId(): Promise<string> {
+  return generateSessionIdSync();
 }
 
 /**

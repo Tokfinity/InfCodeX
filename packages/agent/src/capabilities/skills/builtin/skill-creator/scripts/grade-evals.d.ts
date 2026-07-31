@@ -71,3 +71,4 @@ export function gradeWorkspace(
   processed_runs: Array<Record<string, unknown>>;
   skipped_runs: string[];
 }>;
+export declare function main(argv?: string[]): Promise<void>;

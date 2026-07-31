@@ -30,6 +30,9 @@ export const HARDENING_OPT_OUT_ENV = 'KODAX_DISABLE_HARDENING';
 /** Electron bootstrap switch. It must never survive in long-running KodaX code. */
 export const ELECTRON_RUN_AS_NODE_ENV = 'ELECTRON_RUN_AS_NODE';
 
+/** Makes a Bun standalone executable behave as the Bun JavaScript runtime. */
+export const BUN_BE_BUN_ENV = 'BUN_BE_BUN';
+
 /**
  * Runs before the requested Node entrypoint and removes the Electron-only
  * bootstrap switch. The switch is still present when the OS creates the
@@ -43,10 +46,20 @@ export interface InternalNodeLaunch {
   readonly env: NodeJS.ProcessEnv;
 }
 
+export interface JavaScriptChildLaunch extends InternalNodeLaunch {
+  readonly command: string;
+}
+
 export interface PrepareInternalNodeLaunchOptions {
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv;
   readonly isElectron: boolean;
+}
+
+export interface PrepareJavaScriptChildLaunchOptions
+  extends PrepareInternalNodeLaunchOptions {
+  readonly executable?: string;
+  readonly isBundled?: boolean;
 }
 
 function hardeningDisabled(): boolean {
@@ -84,6 +97,36 @@ export function prepareInternalNodeLaunch(
     args: ['--import', ELECTRON_NODE_ENV_SCRUB_IMPORT, ...options.args],
     env: { ...env, [ELECTRON_RUN_AS_NODE_ENV]: '1' },
   };
+}
+
+/**
+ * Prepare a child that must interpret JavaScript rather than re-enter KodaX.
+ *
+ * Node and Electron use their normal executable contracts. A Bun-compiled
+ * standalone has no separate interpreter binary, so `BUN_BE_BUN=1` switches
+ * the executable to Bun mode for this child only.
+ */
+export function prepareJavaScriptChildLaunch(
+  options: PrepareJavaScriptChildLaunchOptions,
+): JavaScriptChildLaunch {
+  const command = options.executable ?? process.execPath;
+  if (options.isBundled ?? process.env.KODAX_BUNDLED === 'true') {
+    const env: NodeJS.ProcessEnv = {
+      ...options.env,
+      [BUN_BE_BUN_ENV]: '1',
+    };
+    delete env[ELECTRON_RUN_AS_NODE_ENV];
+    return { command, args: [...options.args], env };
+  }
+
+  const env: NodeJS.ProcessEnv = { ...options.env };
+  delete env[BUN_BE_BUN_ENV];
+  const launch = prepareInternalNodeLaunch({
+    args: options.args,
+    env,
+    isElectron: options.isElectron,
+  });
+  return { command, ...launch };
 }
 
 /**

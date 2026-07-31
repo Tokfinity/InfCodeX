@@ -327,8 +327,8 @@ function parseArgs(argv) {
   return args;
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
   if (!args.skillPath || !args.evalsPath || !args.workspaceDir) {
     console.error('Usage: node scripts/run-eval.js --skill-path <dir> --evals <evals.json> --workspace <dir> [--provider anthropic] [--runs 1]');
     process.exit(1);
@@ -345,7 +345,8 @@ async function main() {
   }
 }
 
-const isDirectRun = process.argv[1]
+const isDirectRun = process.env.KODAX_MODULE_BUNDLE !== 'true'
+  && process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectRun) {

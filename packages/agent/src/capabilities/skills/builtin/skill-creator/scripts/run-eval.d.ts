@@ -64,3 +64,4 @@ export function runEvalWorkspace(
   runs_per_config: number;
   reports: Array<Record<string, unknown>>;
 }>;
+export declare function main(argv?: string[]): Promise<void>;

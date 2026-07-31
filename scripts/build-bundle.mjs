@@ -267,6 +267,7 @@ const commonOptions = {
     'process.env.DEV': '"false"',
     'process.env.NODE_ENV': '"production"',
     'process.env.KODAX_VERSION': JSON.stringify(rootPkg.version),
+    'process.env.KODAX_MODULE_BUNDLE': '"true"',
   },
   // Output ESM with .js extensions in source — keep the import structure
   // that already works in dev (--import tsx).

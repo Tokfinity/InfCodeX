@@ -35,9 +35,34 @@ public static class KodaXNativeProcessSnapshot {
   private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry32 entry);
   [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
   private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry32 entry);
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FileTime {
+    public uint Low;
+    public uint High;
+  }
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetProcessTimes(IntPtr process, out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
+  [DllImport("kernel32.dll")]
+  private static extern void GetSystemTimeAsFileTime(out FileTime systemTime);
   [DllImport("kernel32.dll")]
   private static extern bool CloseHandle(IntPtr handle);
+  private static ulong ReadCreationTime(uint processId) {
+    var process = OpenProcess(0x1000, false, processId);
+    if (process == IntPtr.Zero) return 0;
+    try {
+      FileTime creation, exit, kernel, user;
+      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return 0;
+      return ((ulong)creation.High << 32) | creation.Low;
+    } finally {
+      CloseHandle(process);
+    }
+  }
   public static string ReadRows() {
+    FileTime cutoffTime;
+    GetSystemTimeAsFileTime(out cutoffTime);
+    var cutoff = (((ulong)cutoffTime.High << 32) | cutoffTime.Low) / 10000;
     var snapshot = CreateToolhelp32Snapshot(2, 0);
     if (snapshot == new IntPtr(-1)) return string.Empty;
     var rows = new StringBuilder();
@@ -46,7 +71,10 @@ public static class KodaXNativeProcessSnapshot {
     try {
       if (!Process32First(snapshot, ref entry)) return string.Empty;
       do {
-        rows.Append(entry.th32ProcessID).Append(',').Append(entry.th32ParentProcessID).Append('\n');
+        var creationTime = ReadCreationTime(entry.th32ProcessID) / 10000;
+        if (creationTime == 0 || creationTime <= cutoff) {
+          rows.Append(entry.th32ProcessID).Append(',').Append(entry.th32ParentProcessID).Append(',').Append(creationTime).Append('\n');
+        }
         entry.dwSize = (uint)Marshal.SizeOf(entry);
       } while (Process32Next(snapshot, ref entry));
       return rows.ToString();
@@ -181,66 +209,127 @@ async function waitForWindowsPidExit(pid: number, timeoutMs: number): Promise<bo
   return !signalTargetExists(pid);
 }
 
-async function waitForWindowsPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
-  const uniquePids = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
-  if (uniquePids.length === 0) {
-    return true;
-  }
-
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (uniquePids.every((pid) => !signalTargetExists(pid))) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return uniquePids.every((pid) => !signalTargetExists(pid));
+interface WindowsProcessIdentity {
+  readonly pid: number;
+  readonly parentPid: number;
+  readonly creationTime: string;
 }
 
-function readWindowsPidListJson(stdout: string): number[] {
+function parseWindowsProcessSnapshotJson(stdout: string): WindowsProcessIdentity[] {
   const trimmed = stdout.trim();
   if (!trimmed) return [];
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    const values = Array.isArray(parsed) ? parsed : [parsed];
-    return values
-      .map((value) => Number(value))
-      .filter((pid) => Number.isFinite(pid) && pid > 0);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows.flatMap((row) => {
+      if (typeof row !== 'object' || row === null) return [];
+      const record = row as Record<string, unknown>;
+      const pid = Number(record.pid);
+      const parentPid = Number(record.parentPid);
+      const creationTime = typeof record.creationTime === 'string'
+        ? record.creationTime
+        : String(record.creationTime ?? '0');
+      if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(parentPid)) return [];
+      return [{ pid, parentPid, creationTime }];
+    });
   } catch {
     return [];
   }
 }
 
-function getWindowsChildPidsViaWmic(parentPid: number): number[] {
-  const result = spawnSync('wmic', [
+function parseWmicCreationTime(
+  value: string,
+): { readonly identity: string; readonly unixMs: number } | undefined {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{6})([+-])(\d{3})$/.exec(value);
+  if (!match) return undefined;
+  const [, year, month, day, hour, minute, second, fraction, sign, offset] = match;
+  const localMs = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    Number(fraction.slice(0, 3)),
+  );
+  const offsetMs = Number(offset) * 60_000 * (sign === '+' ? 1 : -1);
+  const unixMs = localMs - offsetMs;
+  if (!Number.isFinite(unixMs)) return undefined;
+  return {
+    identity: (BigInt(unixMs) + 11_644_473_600_000n).toString(),
+    unixMs,
+  };
+}
+
+function readWindowsProcessSnapshotFallback(): WindowsProcessIdentity[] | undefined {
+  const script = [
+    '$cutoff = [DateTime]::UtcNow',
+    '$items = try { @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { @(Get-WmiObject Win32_Process -ErrorAction Stop) }',
+    '$rows = @($items | ForEach-Object {',
+    "  $creationTime = '0'",
+    '  try {',
+    '    $created = $_.CreationDate',
+    '    if ($created -isnot [DateTime]) { $created = [System.Management.ManagementDateTimeConverter]::ToDateTime([string]$created) }',
+    '    $created = $created.ToUniversalTime()',
+    '    if ($created -le $cutoff) { $creationTime = ([long][Math]::Floor($created.ToFileTimeUtc() / 10000)).ToString() }',
+    '  } catch {}',
+    '  [PSCustomObject]@{ pid = [int]$_.ProcessId; parentPid = [int]$_.ParentProcessId; creationTime = $creationTime }',
+    '})',
+    '$rows | ConvertTo-Json -Compress',
+  ].join('\n');
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ], {
+    encoding: 'utf8',
+    timeout: DEFAULT_TASKKILL_MS,
+    windowsHide: true,
+  });
+  if (!result.error && result.status === 0) {
+    const snapshot = parseWindowsProcessSnapshotJson(result.stdout);
+    if (snapshot.length > 0) return snapshot;
+  }
+
+  const cutoffUnixMs = Date.now();
+  const wmic = spawnSync('wmic', [
     'process',
-    'where',
-    `ParentProcessId=${parentPid}`,
     'get',
-    'ProcessId',
+    'CreationDate,ParentProcessId,ProcessId',
     '/format:list',
   ], {
     encoding: 'utf8',
     timeout: DEFAULT_TASKKILL_MS,
     windowsHide: true,
   });
-  if (result.error || result.status !== 0) {
-    return [];
-  }
-
-  const pids: number[] = [];
-  const pattern = /ProcessId=(\d+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(result.stdout)) !== null) {
-    const pid = Number(match[1]);
-    if (Number.isFinite(pid) && pid > 0 && pid !== parentPid) {
-      pids.push(pid);
-    }
-  }
-  return pids;
+  if (wmic.error || wmic.status !== 0) return undefined;
+  const snapshot = wmic.stdout.split(/\r?\n\s*\r?\n/).flatMap((block) => {
+    const values = new Map(
+      block.split(/\r?\n/).flatMap((line): Array<[string, string]> => {
+        const separator = line.indexOf('=');
+        return separator < 0 ? [] : [[line.slice(0, separator), line.slice(separator + 1)]];
+      }),
+    );
+    const pid = Number(values.get('ProcessId'));
+    const parentPid = Number(values.get('ParentProcessId'));
+    const creationTime = values.get('CreationDate');
+    const parsedCreationTime = creationTime === undefined
+      ? undefined
+      : parseWmicCreationTime(creationTime);
+    if (
+      !Number.isFinite(pid)
+      || pid <= 0
+      || !Number.isFinite(parentPid)
+      || parsedCreationTime === undefined
+      || parsedCreationTime.unixMs > cutoffUnixMs
+    ) return [];
+    return [{ pid, parentPid, creationTime: parsedCreationTime.identity }];
+  });
+  return snapshot.length > 0 ? snapshot : undefined;
 }
 
-function collectWindowsDescendantPidsNative(parentPid: number): number[] {
+function readWindowsProcessSnapshotNative(): WindowsProcessIdentity[] | undefined {
   const script = [
     "$source = @'",
     NATIVE_PARENT_PROCESS_SOURCE,
@@ -258,73 +347,86 @@ function collectWindowsDescendantPidsNative(parentPid: number): number[] {
     timeout: DEFAULT_TASKKILL_MS,
     windowsHide: true,
   });
-  if (result.error || result.status !== 0) return [];
-  return collectDescendantsFromProcessRows(result.stdout, parentPid);
+  if (result.error || result.status !== 0) return undefined;
+  const snapshot = result.stdout.split(/\r?\n/).flatMap((line) => {
+    const [pidText, parentText, creationTime = '0'] = line.split(',', 3);
+    const pid = Number(pidText);
+    const parentPid = Number(parentText);
+    if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(parentPid)) return [];
+    return [{ pid, parentPid, creationTime }];
+  });
+  return snapshot.length > 0 ? snapshot : undefined;
 }
 
-function collectDescendantsFromProcessRows(stdout: string, parentPid: number): number[] {
-  const children = new Map<number, number[]>();
-  for (const line of stdout.split(/\r?\n/)) {
-    const [pidText, parentText] = line.split(',', 2);
-    const pid = Number(pidText);
-    const parent = Number(parentText);
-    if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(parent)) continue;
-    children.set(parent, [...(children.get(parent) ?? []), pid]);
+function readWindowsProcessSnapshot(): WindowsProcessIdentity[] | undefined {
+  const nativeSnapshot = readWindowsProcessSnapshotNative();
+  return nativeSnapshot ?? readWindowsProcessSnapshotFallback();
+}
+
+function collectDescendantIdentities(
+  snapshot: readonly WindowsProcessIdentity[],
+  parentPid: number,
+): WindowsProcessIdentity[] {
+  const children = new Map<number, WindowsProcessIdentity[]>();
+  for (const identity of snapshot) {
+    children.set(identity.parentPid, [
+      ...(children.get(identity.parentPid) ?? []),
+      identity,
+    ]);
   }
 
-  const descendants: number[] = [];
+  const descendants: WindowsProcessIdentity[] = [];
   const pending = [parentPid];
   const seen = new Set<number>([parentPid]);
   while (pending.length > 0) {
     const parent = pending.shift();
     if (parent === undefined) break;
     for (const child of children.get(parent) ?? []) {
-      if (seen.has(child)) continue;
-      seen.add(child);
+      if (seen.has(child.pid)) continue;
+      seen.add(child.pid);
       descendants.push(child);
-      pending.push(child);
+      pending.push(child.pid);
     }
   }
   return descendants;
 }
 
-function getWindowsChildPids(parentPid: number): number[] {
-  // Mirror the llm copy: CIM first, partial stdout accepted, WMIC fallback.
-  const script = [
-    `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid}"`,
-    'if ($null -eq $children) { exit 0 }',
-    '$children | Select-Object -ExpandProperty ProcessId | ConvertTo-Json -Compress',
-  ].join('; ');
-  const result = spawnSync('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    script,
-  ], {
-    encoding: 'utf8',
-    timeout: DEFAULT_TASKKILL_MS,
-    windowsHide: true,
-  });
-  if (!result.error && result.status === 0) {
-    const pids = readWindowsPidListJson(result.stdout);
-    if (pids.length > 0) return pids;
-  }
-  const partialPids = readWindowsPidListJson(result.stdout);
-  if (partialPids.length > 0) return partialPids;
-  return getWindowsChildPidsViaWmic(parentPid);
+function currentCapturedWindowsPids(
+  captured: readonly WindowsProcessIdentity[],
+): Set<number> | undefined {
+  const snapshot = readWindowsProcessSnapshot();
+  if (snapshot === undefined) return undefined;
+  const uncertainPids = new Set(
+    snapshot
+      .filter((identity) => identity.creationTime === '0')
+      .map((identity) => identity.pid),
+  );
+  if (captured.some((identity) => uncertainPids.has(identity.pid))) return undefined;
+  const currentKeys = new Set(
+    snapshot
+      .filter((identity) => identity.creationTime !== '0')
+      .map((identity) => `${identity.pid}:${identity.creationTime}`),
+  );
+  return new Set(
+    captured
+      .filter((identity) => identity.creationTime !== '0')
+      .filter((identity) => currentKeys.has(`${identity.pid}:${identity.creationTime}`))
+      .map((identity) => identity.pid),
+  );
 }
 
-function collectWindowsDescendantPids(pid: number, seen = new Set<number>()): number[] {
-  const descendants: number[] = [];
-  for (const childPid of getWindowsChildPids(pid)) {
-    if (seen.has(childPid)) {
-      continue;
-    }
-    seen.add(childPid);
-    descendants.push(childPid);
-    descendants.push(...collectWindowsDescendantPids(childPid, seen));
+async function waitForCapturedWindowsProcessesExit(
+  captured: readonly WindowsProcessIdentity[],
+  timeoutMs: number,
+): Promise<boolean> {
+  if (captured.length === 0) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const currentPids = currentCapturedWindowsPids(captured);
+    if (currentPids !== undefined && currentPids.size === 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return descendants;
+  return currentCapturedWindowsPids(captured)?.size === 0;
 }
 
 async function killWindowsPid(pid: number, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
@@ -336,6 +438,15 @@ async function killWindowsPid(pid: number, signal: NodeJS.Signals, timeoutMs: nu
   return waitForWindowsPidExit(pid, timeoutMs);
 }
 
+async function killCapturedWindowsProcess(
+  identity: WindowsProcessIdentity,
+  signal: NodeJS.Signals,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (currentCapturedWindowsPids([identity])?.has(identity.pid) !== true) return true;
+  return killWindowsPid(identity.pid, signal, timeoutMs);
+}
+
 export async function killPidTree(
   pid: number,
   options: ProcessTreeKillOptions = {},
@@ -344,38 +455,48 @@ export async function killPidTree(
     const taskkillMs = options.taskkillMs ?? DEFAULT_TASKKILL_MS;
     const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
 
-    const taskkillSucceeded = await runTaskkill(pid, taskkillMs);
-    if (taskkillSucceeded && await waitForWindowsPidsExit([pid], forceMs)) {
+    // Snapshot parent links before taskkill can detach a missed descendant.
+    // Once the root exits, Windows no longer exposes the relationship needed
+    // to find and terminate that orphan reliably.
+    const snapshot = readWindowsProcessSnapshot();
+    const rootIdentity = snapshot?.find(
+      (identity) => identity.pid === pid && identity.creationTime !== '0',
+    );
+    const descendantIdentities = collectDescendantIdentities(snapshot ?? [], pid)
+      .filter((identity) => identity.creationTime !== '0');
+    const killOrder = [...descendantIdentities].reverse();
+    const captured = rootIdentity === undefined
+      ? descendantIdentities
+      : [rootIdentity, ...descendantIdentities];
+
+    const taskkillSucceeded = rootIdentity !== undefined
+      && currentCapturedWindowsPids([rootIdentity])?.has(pid) === true
+      && await runTaskkill(pid, taskkillMs);
+    if (taskkillSucceeded && await waitForCapturedWindowsProcessesExit(captured, forceMs)) {
       return;
     }
 
     // `taskkill /t` depends on Windows management services and can fail under
-    // load. Snapshot parent links before direct-killing the root so orphaned
-    // descendants remain addressable without WMI.
-    let descendantPids = collectWindowsDescendantPidsNative(pid);
-    if (descendantPids.length === 0) {
-      descendantPids = collectWindowsDescendantPids(pid);
-    }
-    const killOrder = [...descendantPids].reverse();
-    const targets = [pid, ...descendantPids];
+    // load. Use the pre-taskkill snapshot so missed descendants remain
+    // addressable even after the root has exited.
 
-    for (const childPid of killOrder) {
-      if (signalTargetExists(childPid)) {
-        await killWindowsPid(childPid, 'SIGTERM', forceMs);
-      }
+    for (const identity of killOrder) {
+      await killCapturedWindowsProcess(identity, 'SIGTERM', forceMs);
     }
-    await killWindowsPid(pid, 'SIGTERM', forceMs);
-    if (await waitForWindowsPidsExit(targets, forceMs)) {
+    if (rootIdentity !== undefined) {
+      await killCapturedWindowsProcess(rootIdentity, 'SIGTERM', forceMs);
+    }
+    if (await waitForCapturedWindowsProcessesExit(captured, forceMs)) {
       return;
     }
 
-    for (const childPid of killOrder) {
-      if (signalTargetExists(childPid)) {
-        await killWindowsPid(childPid, 'SIGKILL', forceMs);
-      }
+    for (const identity of killOrder) {
+      await killCapturedWindowsProcess(identity, 'SIGKILL', forceMs);
     }
-    await killWindowsPid(pid, 'SIGKILL', forceMs);
-    await waitForWindowsPidsExit(targets, forceMs);
+    if (rootIdentity !== undefined) {
+      await killCapturedWindowsProcess(rootIdentity, 'SIGKILL', forceMs);
+    }
+    await waitForCapturedWindowsProcessesExit(captured, forceMs);
     return;
   }
 
@@ -392,13 +513,21 @@ export async function killPidTree(
 
 export function killPidTreeSync(pid: number): void {
   if (process.platform === 'win32') {
-    const descendantPids = collectWindowsDescendantPids(pid);
-    spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    for (const childPid of descendantPids.reverse()) {
-      spawnSync('taskkill', ['/pid', String(childPid), '/t', '/f'], {
+    const snapshot = readWindowsProcessSnapshot();
+    const rootIdentity = snapshot?.find(
+      (identity) => identity.pid === pid && identity.creationTime !== '0',
+    );
+    const descendantIdentities = collectDescendantIdentities(snapshot ?? [], pid)
+      .filter((identity) => identity.creationTime !== '0');
+    if (rootIdentity !== undefined && currentCapturedWindowsPids([rootIdentity])?.has(pid) === true) {
+      spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    }
+    for (const identity of [...descendantIdentities].reverse()) {
+      if (currentCapturedWindowsPids([identity])?.has(identity.pid) !== true) continue;
+      spawnSync('taskkill', ['/pid', String(identity.pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
       });

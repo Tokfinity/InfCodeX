@@ -383,8 +383,8 @@ function parseArgs(argv) {
   return args;
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
   if (!args.workspaceDir) {
     console.error('Usage: node scripts/grade-evals.js <workspace> [--provider anthropic] [--configs with_skill,without_skill] [--overwrite]');
     process.exit(1);
@@ -394,7 +394,8 @@ async function main() {
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
 
-const isDirectRun = process.argv[1]
+const isDirectRun = process.env.KODAX_MODULE_BUNDLE !== 'true'
+  && process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectRun) {

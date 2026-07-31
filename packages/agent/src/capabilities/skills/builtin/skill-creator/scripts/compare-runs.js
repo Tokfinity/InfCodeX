@@ -307,8 +307,8 @@ function parseArgs(argv) {
   return args;
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
   if (!args.workspaceDir) {
     console.error('Usage: node scripts/compare-runs.js <workspace> [--config-a with_skill] [--config-b without_skill] [--output comparison.json]');
     process.exit(1);
@@ -322,7 +322,8 @@ async function main() {
   }, null, 2)}\n`);
 }
 
-const isDirectRun = process.argv[1]
+const isDirectRun = process.env.KODAX_MODULE_BUNDLE !== 'true'
+  && process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectRun) {

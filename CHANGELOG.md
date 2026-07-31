@@ -21,6 +21,16 @@ All notable changes to this project will be documented in this file.
   duplicate command execution and startup-time Actor ownership conflicts. The
   host-target binary build now rejects artifacts that emit more than one A2A
   document.
+- REPL Session IDs are collision-resistant under concurrent startup. Standalone
+  JavaScript children, bundled Skill tools, shell probes, and project-local LSPs
+  now use explicit interpreter ownership; Windows programmable commands use
+  portable module URLs with visible diagnostics, and Runtime bundles resolve
+  the constructed-handler sidecar from their published layout. Final-waiter
+  shell-probe cancellation now completes bounded process-tree cleanup before
+  returning for cancellation, timeout, and output overflow. Windows fallback
+  termination verifies the pre-snapshotted root and every descendant by process
+  creation identity in both Agent and LLM launch paths, with CIM/WMI/WMIC
+  snapshot fallback when the native helper is unavailable.
 - `list_dispatchable_agents` no longer falls back to native/constructed Agents
   in an opted-in Runtime Worker: the Worker bundle now owns A2A discovery,
   registration, execution, reconciliation, and shutdown.

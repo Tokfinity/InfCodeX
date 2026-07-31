@@ -15,6 +15,7 @@ import type {
   KodaXSessionRuntimeInfo,
   KodaXSessionUiHistoryItem,
 } from '@kodax-ai/agent';
+import { generateSessionIdSync } from '@kodax-ai/agent';
 
 // Interactive mode - 交互模式
 export type InteractiveMode = 'code' | 'ask';
@@ -77,10 +78,7 @@ export async function createInteractiveContext(options: {
 
 // Generate session ID - 生成会话 ID
 export function generateSessionId(): string {
-  const now = new Date();
-  const date = now.toISOString().split('T')[0]!.replace(/-/g, '');
-  const time = now.toTimeString().split(' ')[0]!.replace(/:/g, '');
-  return `${date}_${time}`;
+  return generateSessionIdSync();
 }
 
 // Update context access time - 更新上下文访问时间

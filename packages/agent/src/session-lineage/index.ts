@@ -36,6 +36,7 @@ export {
 
 export {
   generateSessionId,
+  generateSessionIdSync,
   extractTitleFromMessages,
 } from './session.js';
 

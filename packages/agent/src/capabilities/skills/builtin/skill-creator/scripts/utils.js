@@ -33,6 +33,10 @@ import YAML from 'yaml';
 
 let _cachedSdk = null;
 
+export function setKodaXSDKForSkillCreator(sdk) {
+  _cachedSdk = sdk;
+}
+
 export async function loadKodaXSDK() {
   if (_cachedSdk) return _cachedSdk;
 

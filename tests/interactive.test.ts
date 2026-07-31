@@ -34,7 +34,7 @@ describe('InteractiveContext', () => {
 
     expect(context.messages).toEqual([]);
     expect(context.sessionId).toBeDefined();
-    expect(context.sessionId).toMatch(/^\d{8}_\d{6}$/); // YYYYMMDD_HHMMSS format
+    expect(context.sessionId).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
     expect(context.title).toBe('');
     // mode 已移至 CurrentConfig 管理
     expect(context.createdAt).toBeDefined();
@@ -618,13 +618,19 @@ describe('Context Management Detailed', () => {
   });
 
   it('should create unique session IDs', async () => {
-    const context1 = await createInteractiveContext({});
-    await new Promise(r => setTimeout(r, 10));
-    const context2 = await createInteractiveContext({});
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-31T12:34:56.789Z'));
+    try {
+      const contexts = await Promise.all(
+        Array.from({ length: 1_000 }, () => createInteractiveContext({})),
+      );
+      const sessionIds = contexts.map((context) => context.sessionId);
 
-    // Session IDs should match the format and likely be different
-    expect(context1.sessionId).toMatch(/^\d{8}_\d{6}$/);
-    expect(context2.sessionId).toMatch(/^\d{8}_\d{6}$/);
+      expect(new Set(sessionIds).size).toBe(sessionIds.length);
+      expect(sessionIds.every((id) => /^\d{8}_\d{6}_[a-z0-9]+$/.test(id))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('should track lastAccessed time', async () => {

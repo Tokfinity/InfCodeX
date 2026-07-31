@@ -60,3 +60,4 @@ export function compareWorkspace(
   outputPath: string;
   markdownPath: string;
 }>;
+export declare function main(argv?: string[]): Promise<void>;

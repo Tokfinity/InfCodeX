@@ -110,7 +110,14 @@ import {
   type CliOptions,
   validateCliModeSelection,
 } from './cli_option_helpers.js';
-import { runSkillCreatorTool } from './skill_cli.js';
+import {
+  consumeInternalSkillDispatchFlag,
+  runSkillCreatorTool,
+} from './skill_cli.js';
+import {
+  dispatchSkillCreatorTool,
+  isSkillCreatorDispatchAction,
+} from '../packages/agent/src/capabilities/skills/skill-creator-dispatcher.js';
 import {
   archiveAcpPollutionCandidates,
   findAcpPollutionCandidates,
@@ -147,6 +154,7 @@ import {
   KODAX_TOOLS,
   KodaXTerminalError,
   bootstrapTracing,
+  estimateTokens,
   shutdownDefaultLspService,
   generateSessionId,
 } from '@kodax-ai/coding';
@@ -3289,6 +3297,19 @@ async function main() {
   // addons. Opt-out: KODAX_DISABLE_HARDENING=1. Debug-preserving (no
   // PR_SET_DUMPABLE). No-op on Windows.
   applyProcessHardening();
+  if (argv[0] === '__skill-tool') {
+    if (!consumeInternalSkillDispatchFlag()) {
+      throw new Error('Internal skill tool entry is not available directly.');
+    }
+    if (!isSkillCreatorDispatchAction(argv[1])) {
+      throw new Error(`Unknown internal skill tool: ${argv[1] ?? '(missing)'}`);
+    }
+    await dispatchSkillCreatorTool(argv[1], argv.slice(2), {
+      estimateTokens,
+      runKodaX,
+    });
+    return;
+  }
   if (argv[0] === '__asrt-broker') {
     if (!argv[1]) throw new Error('Missing internal ASRT broker request.');
     process.exitCode = await runAsrtBrokerProcess(argv[1]);

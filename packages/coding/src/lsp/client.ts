@@ -292,7 +292,7 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
     detached: process.platform !== 'win32',
-  }) as ChildProcessWithoutNullStreams;
+  }, launch.kind) as ChildProcessWithoutNullStreams;
   const unregisterManagedChild = registerManagedChildProcess(proc, {
     kind: `lsp:${serverId}`,
     command: launch.command,

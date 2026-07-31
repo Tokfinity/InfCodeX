@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { pathToFileURL } from 'node:url';
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { KodaXResult } from '@kodax-ai/coding';
 
 export const KODAX_COMMANDS_DIR = path.join(os.homedir(), '.kodax', 'commands');
@@ -22,7 +24,19 @@ export function getDefaultCommandDir(): string {
   return KODAX_COMMANDS_DIR;
 }
 
-export async function loadCommands(commandDir?: string): Promise<Map<string, KodaXCommand>> {
+export function resolveProgrammableCommandModuleUrl(
+  modulePath: string,
+): URL {
+  const extension = path.extname(modulePath);
+  if (extension !== '.js' && extension !== '.ts') {
+    throw new Error(`Unsupported programmable command module extension: ${extension || '<none>'}.`);
+  }
+  return pathToFileURL(path.resolve(modulePath));
+}
+
+export async function loadCommands(
+  commandDir?: string,
+): Promise<Map<string, KodaXCommand>> {
   const commands = new Map<string, KodaXCommand>();
   const dir = commandDir ?? KODAX_COMMANDS_DIR;
 
@@ -52,9 +66,10 @@ export async function loadCommands(commandDir?: string): Promise<Map<string, Kod
       }
 
       if (extension === '.js' || extension === '.ts') {
+        const modulePath = path.join(dir, fileName);
         try {
-          const modulePath = path.join(dir, fileName);
-          const mod = await import(modulePath);
+          const moduleUrl = resolveProgrammableCommandModuleUrl(modulePath);
+          const mod = await import(moduleUrl.href);
           for (const [key, value] of Object.entries(mod)) {
             if (key.startsWith('command_') && typeof value === 'function') {
               const functionName = key.replace('command_', '');
@@ -68,8 +83,15 @@ export async function loadCommands(commandDir?: string): Promise<Map<string, Kod
               });
             }
           }
-        } catch {
-          // Ignore malformed programmable commands so the rest of the directory stays usable.
+        } catch (error: unknown) {
+          emitKodaXDiagnostic({
+            source: 'cli:commands',
+            level: 'warn',
+            message: extension === '.ts'
+              ? `Failed to load TypeScript programmable command ${modulePath}; enable a TypeScript loader or compile it to .js.`
+              : `Failed to load programmable command module ${modulePath}.`,
+            detail: error,
+          });
         }
       }
     }

@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   killChildProcessTree,
@@ -112,10 +115,18 @@ describe('process tree cleanup', () => {
     expect(calls).toContainEqual({ pid: -12345, signal: 'SIGKILL' });
   });
 
-  it.skipIf(process.platform !== 'win32')('kills a nested Windows child process tree', async () => {
+  it.skipIf(process.platform !== 'win32')('kills a snapshotted Windows child when taskkill times out', async () => {
+    const fixtureDir = await mkdtemp(path.join(tmpdir(), 'kodax-process-tree-'));
+    const stopFile = path.join(fixtureDir, 'stop');
+    const nestedScript = [
+      'const {existsSync}=require("node:fs");',
+      `const stopFile=${JSON.stringify(stopFile)};`,
+      'setInterval(()=>{if(existsSync(stopFile))process.exit(0)},25);',
+      'setTimeout(()=>process.exit(0),30000)',
+    ].join('');
     const root = spawn(process.execPath, [
       '-e',
-      'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",windowsHide:true}); process.stdout.write(`${child.pid}\\n`); setInterval(()=>{},1000);',
+      `const {spawn}=require("node:child_process"); const child=spawn(process.execPath,["-e",${JSON.stringify(nestedScript)}],{stdio:"ignore",windowsHide:true}); process.stdout.write(String(child.pid)+"\\n"); setInterval(()=>{},1000);`,
     ], {
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
@@ -123,11 +134,13 @@ describe('process tree cleanup', () => {
     const nestedPid = await readSpawnedPid(root);
 
     try {
-      await killChildProcessTree(root);
+      await killChildProcessTree(root, { taskkillMs: 0 });
       await waitForPidExit(nestedPid, 10_000);
     } finally {
+      await writeFile(stopFile, 'stop');
       if (root.exitCode === null && root.signalCode === null) root.kill('SIGKILL');
-      if (isPidAlive(nestedPid)) process.kill(nestedPid, 'SIGKILL');
+      await waitForPidExit(nestedPid, 2_000).catch(() => undefined);
+      await rm(fixtureDir, { recursive: true, force: true });
     }
   }, 20_000);
 });

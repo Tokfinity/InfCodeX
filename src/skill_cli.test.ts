@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  consumeInternalSkillDispatchFlag,
+  INTERNAL_SKILL_DISPATCH_ENV,
+  prepareSkillToolLaunch,
   resolveSkillCreatorToolPath,
   runSkillCreatorTool,
   toFileUrl,
 } from './skill_cli.js';
 
 describe('skill CLI helpers', () => {
+  it('consumes the internal dispatcher flag before tool code can spawn children', () => {
+    const env = { [INTERNAL_SKILL_DISPATCH_ENV]: '1', KODAX_SENTINEL: 'preserved' };
+
+    expect(consumeInternalSkillDispatchFlag(env)).toBe(true);
+    expect(env).toEqual({ KODAX_SENTINEL: 'preserved' });
+    expect(consumeInternalSkillDispatchFlag(env)).toBe(false);
+  });
+
   it('resolves builtin skill-creator tool paths', () => {
     const toolPath = resolveSkillCreatorToolPath('package', 'C:/tmp/builtin');
 
@@ -40,5 +51,52 @@ describe('skill CLI helpers', () => {
       .toBe('C:/tmp/builtin/skill-creator/scripts/analyze-benchmark.js');
     expect(resolveSkillCreatorToolPath('compare', 'C:/tmp/builtin').replace(/\\/g, '/'))
       .toBe('C:/tmp/builtin/skill-creator/scripts/compare-runs.js');
+  });
+
+  it('uses a guarded self-entry for bundled skill tools instead of interpreting a sidecar script', () => {
+    const launch = prepareSkillToolLaunch(
+      'validate',
+      'C:/KodaX/builtin/skill-creator/scripts/quick-validate.js',
+      ['C:/skills/example'],
+      {
+        bundled: true,
+        executable: 'C:/KodaX/kodax.exe',
+        electron: false,
+        env: { KODAX_SENTINEL: 'preserved' },
+      },
+    );
+
+    expect(launch.command).toBe('C:/KodaX/kodax.exe');
+    expect(launch.args).toEqual([
+      '__skill-tool',
+      'validate',
+      'C:/skills/example',
+    ]);
+    expect(launch.env).toMatchObject({
+      KODAX_INTERNAL_SKILL_DISPATCH: '1',
+      KODAX_SENTINEL: 'preserved',
+    });
+    expect(launch.env.BUN_BE_BUN).toBeUndefined();
+  });
+
+  it('keeps Node script execution for non-bundled skill tools', () => {
+    const launch = prepareSkillToolLaunch(
+      'validate',
+      '/opt/kodax/builtin/skill-creator/scripts/quick-validate.js',
+      ['/tmp/example'],
+      {
+        bundled: false,
+        executable: '/usr/bin/node',
+        electron: false,
+        env: {},
+      },
+    );
+
+    expect(launch.command).toBe('/usr/bin/node');
+    expect(launch.args).toEqual([
+      '/opt/kodax/builtin/skill-creator/scripts/quick-validate.js',
+      '/tmp/example',
+    ]);
+    expect(launch.env.KODAX_INTERNAL_SKILL_DISPATCH).toBeUndefined();
   });
 });

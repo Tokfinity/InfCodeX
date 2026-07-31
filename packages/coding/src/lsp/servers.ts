@@ -18,6 +18,7 @@ import { isAutoInstallEnabled, runInstallCommand } from './acquirer.js';
 export interface LspServerLaunch {
   readonly command: string;
   readonly args: readonly string[];
+  readonly kind?: 'javascript';
   readonly initializationOptions?: Record<string, unknown>;
 }
 
@@ -70,6 +71,7 @@ function discoverTypescript({ root, moduleUrl }: DiscoverContext): LspServerLaun
   return {
     command: launch.command,
     args: [...launch.args, '--stdio'],
+    kind: launch.kind,
     initializationOptions: { tsserver: { path: tsserver } },
   };
 }
@@ -91,7 +93,11 @@ function discoverPyright({ root }: DiscoverContext): LspServerLaunch | undefined
   const fromProject = resolveNodePackageBin('pyright', root, 'pyright-langserver');
   const launch = fromProject ?? globalLaunch('pyright-langserver');
   if (!launch) return undefined;
-  return { command: launch.command, args: [...launch.args, '--stdio'] };
+  return {
+    command: launch.command,
+    args: [...launch.args, '--stdio'],
+    kind: launch.kind,
+  };
 }
 
 const PYRIGHT: LspServerInfo = {

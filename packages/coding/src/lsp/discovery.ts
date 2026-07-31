@@ -47,6 +47,7 @@ export function whichGlobal(command: string): string | undefined {
 export interface LaunchCommand {
   readonly command: string;
   readonly args: readonly string[];
+  readonly kind: 'javascript';
 }
 
 function requireFrom(root: string): NodeRequire {
@@ -88,7 +89,7 @@ export function resolveNodePackageBin(
   if (!entryRel) return undefined;
   const entry = path.join(path.dirname(pkgJsonPath), entryRel);
   if (!isFile(entry)) return undefined;
-  return { command: process.execPath, args: [entry] };
+  return { command: process.execPath, args: [entry], kind: 'javascript' };
 }
 
 /**

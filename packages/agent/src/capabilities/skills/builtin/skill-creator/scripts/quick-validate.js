@@ -127,8 +127,8 @@ export async function validateSkillDirectory(skillDir) {
   return result;
 }
 
-async function main() {
-  const skillDir = process.argv[2];
+export async function main(argv = process.argv) {
+  const skillDir = argv[2];
   if (!skillDir) {
     console.error('Usage: node scripts/quick-validate.js <skill-directory>');
     process.exit(1);
@@ -155,7 +155,8 @@ async function main() {
   process.exit(result.valid ? 0 : 1);
 }
 
-const isDirectRun = process.argv[1]
+const isDirectRun = process.env.KODAX_MODULE_BUNDLE !== 'true'
+  && process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectRun) {

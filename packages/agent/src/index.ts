@@ -394,14 +394,18 @@ export {
 // FEATURE_208 (v0.7.45): process hardening (debug-preserving subset).
 export {
   applyProcessHardening,
+  prepareJavaScriptChildLaunch,
   prepareInternalNodeLaunch,
   stripHardenedEnvVars,
   ELECTRON_NODE_ENV_SCRUB_IMPORT,
   ELECTRON_RUN_AS_NODE_ENV,
+  BUN_BE_BUN_ENV,
   HARDENED_ENV_VARS,
   HARDENING_OPT_OUT_ENV,
   type InternalNodeLaunch,
+  type JavaScriptChildLaunch,
   type PrepareInternalNodeLaunchOptions,
+  type PrepareJavaScriptChildLaunchOptions,
 } from './runtime/process-hardening.js';
 
 export {

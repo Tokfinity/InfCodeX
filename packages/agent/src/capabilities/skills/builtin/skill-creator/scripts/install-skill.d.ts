@@ -27,3 +27,4 @@ export function installSkill(
   inputPath: string,
   options?: { skillsDir?: string; force?: boolean }
 ): Promise<InstalledSkillResult>;
+export declare function main(argv?: string[]): Promise<void>;

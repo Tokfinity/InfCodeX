@@ -14,6 +14,11 @@ _Last Updated: 2026-07-31_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 252 | High | Resolved | Cancelled shell environment probes can return before descendants terminate | configured-shell environment probing | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 251 | High | Resolved | Published Runtime Worker resolves a handler sidecar that is not shipped | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 250 | Medium | Resolved | Windows programmable commands use non-portable module paths and hide load failures | programmable command support | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 249 | High | Resolved | Standalone executable re-enters KodaX when launching JavaScript children | Bun standalone child integrations | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 248 | High | Resolved | REPL Session IDs collide for contexts created in the same second | legacy REPL Session ID generator | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 245 | High | Resolved | Windows sandbox runner cannot launch from a user-level global npm install | v0.7.78 Windows ASRT integration | v0.7.78 development | 2026-07-31 | 2026-07-31 |
 | 244 | High | Resolved | Runtime streaming deltas create an event, sequence-allocation, and persistence storm | v0.7.64 Runtime event contract | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
@@ -148,6 +153,179 @@ _Last Updated: 2026-07-31_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 252: Cancelled shell environment probes can return before descendants terminate
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: configured-shell environment probing
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+When the final caller cancelled an in-flight configured-shell environment
+probe, its waiter returned the cancellation result immediately after signalling
+the shared resolver. Process-tree termination continued in the background. On
+Windows, `taskkill /t` success was also verified against only the root PID, and
+descendants were discovered only after the root could already be gone. A missed
+Node child could become untraceable and continue running after cancellation.
+
+#### Resolution
+
+Cancellation remains immediate for a caller that leaves another shared waiter,
+but the final waiter now awaits the bounded probe promise and its process-tree
+cleanup before returning. Windows termination snapshots descendants before
+`taskkill`, verifies the root and every captured descendant, and uses the same
+snapshot for direct fallback termination if any target survives. Captured PIDs
+are matched against their Windows process creation identity immediately before
+direct termination so PID reuse cannot target an unrelated process. CIM/WMI and
+WMIC identity-bearing snapshots back up the native Toolhelp path, and timeout
+or output-overflow completion observes the same cleanup barrier as cancellation.
+The same contract is applied to the dependency-light LLM process-tree
+implementation.
+
+#### Verification
+
+- Replaced the timing-only marker test with a deterministic child-PID handshake
+  and post-cancellation liveness assertion.
+- Repeated the formerly failing cancellation regression three times after the
+  fix; all runs passed.
+- The real nested Windows process-tree test and all 21 shell resolver tests pass.
+
+### 251: Published Runtime Worker resolves a handler sidecar that is not shipped
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.66 Worker-hosted Runtime
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+The constructed-handler client assumed its worker was always named
+`handler-worker.js` beside the importing module. That is true for the
+independently built coding package, but the root npm and Runtime Worker bundles
+ship only `dist/constructed-handler-worker.js`. A constructed tool could
+therefore fail only after deployment with a missing worker sidecar.
+
+#### Resolution
+
+Worker resolution now distinguishes the four real layouts: package-local
+`dist/construction`, root distribution bundles, split SDK chunks, and a Bun
+standalone executable. Root and bundled layouts select the published
+`constructed-handler-worker.js`; package-local development retains its existing
+`handler-worker.js` contract.
+
+#### Verification
+
+- Added five resolver tests covering every layout and a real Worker startup.
+- Rebuilt the npm bundle and verified both worker sidecars are present.
+- Rebuilt and smoked the win-x64 standalone artifact with the sidecars beside
+  the executable.
+
+### 250: Windows programmable commands use non-portable module paths and hide load failures
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: programmable command support
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+Programmable `.js` and `.ts` commands were imported from raw absolute
+filesystem strings. Node treats a Windows drive letter as a URL scheme, so the
+same command that worked on POSIX failed with `ERR_UNSUPPORTED_ESM_URL_SCHEME`
+on Windows. The catch block then discarded the exception, leaving users with a
+missing command and no diagnosis.
+
+#### Resolution
+
+Programmable modules are now imported through canonical `file:` URLs. TypeScript
+loading is attempted against the actual runtime instead of assuming only Bun
+supports it, preserving Node native type stripping and configured loaders.
+Failures emit an actionable diagnostic; TypeScript diagnostics suggest enabling
+a loader or compiling the command to JavaScript while discovery continues.
+
+#### Verification
+
+- Added six tests for JavaScript and TypeScript file URLs, real command loading,
+  loader-capable TypeScript execution, and non-fatal error diagnostics.
+- Rebuilt the root CLI bundle and declaration artifacts successfully.
+
+### 249: Standalone executable re-enters KodaX when launching JavaScript children
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: Bun standalone child integrations
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+Several integrations treated `process.execPath` as a general JavaScript
+interpreter. In a Bun-compiled distribution it is the KodaX executable, so a
+Skill tool, configured-shell environment helper, or project-local Node LSP
+could re-enter the CLI instead of running the requested script. Skill sidecars
+also depend on packages that are compiled into KodaX but are not separately
+installed beside the executable.
+
+#### Resolution
+
+- Added a shared JavaScript-child launch contract. A Bun standalone child uses
+  `BUN_BE_BUN=1`; Node and Electron retain their existing interpreter modes.
+- Project-local Node LSP discoveries now carry JavaScript ownership through to
+  spawn, while legacy custom launches still infer it from `process.execPath`.
+- Bundled Skill tools use a guarded private dispatcher inside a fresh KodaX
+  child, so `yaml`, `fflate`, and SDK dependencies stay embedded. Its one-shot
+  authorization flag is consumed before any tool or descendant process runs.
+- Added explicit module-bundle guards to the Skill script graph and matching
+  compile-time definitions to npm and standalone builds.
+
+#### Verification
+
+- Added and ran 57 focused Node, Electron, Skill, shell-probe, and LSP tests.
+- The real win-x64 executable executed a JavaScript `-e` child, validated the
+  built-in Skill, and produced a non-empty `.skill` package.
+- The artifact smoke proves the packaged YAML and fflate dependencies work
+  without a sibling `node_modules` directory.
+
+### 248: REPL Session IDs collide for contexts created in the same second
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: legacy REPL Session ID generator
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+The REPL generated Session IDs from `YYYYMMDD_HHMMSS` only. Two legitimate
+contexts created in the same second received the same storage identity, making
+rapid startup, recovery, or concurrent clients overwrite or ambiguously load
+one another. A previous test checked only the format and never asserted the two
+IDs differed.
+
+#### Resolution
+
+The Agent package now owns a shared synchronous generator using the readable
+local timestamp plus milliseconds and a UUID. The established asynchronous
+`generateSessionId()` API delegates to it, and both classic and Ink REPL paths
+reuse the same primitive.
+
+#### Verification
+
+- Generated 1,000 unique synchronous IDs and 1,000 unique asynchronous IDs
+  while wall-clock time was frozen.
+- Created 1,000 REPL contexts at one frozen instant and asserted every Session
+  identity was distinct.
+- Existing title extraction and Session API compatibility tests remain intact.
 
 ### 245: Windows sandbox runner cannot launch from a user-level global npm install
 
@@ -9064,11 +9242,23 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 125 (25 Open, 100 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 130 (25 Open, 105 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-31: Issues 248-252 added and resolved (v0.7.79 development)
+- Unified collision-resistant Session identity generation across Agent and REPL.
+- Distinguished standalone JavaScript children from KodaX self-entry, embedded
+  Skill dispatch, configured-shell probes, and project-local LSP startup.
+- Made programmable command imports Windows-safe and load failures observable
+  without pre-judging Node, Bun, or loader TypeScript support.
+- Aligned constructed-handler worker resolution with every published sidecar
+  layout and verified a real Worker startup.
+- Made final-waiter shell probe cancellation wait for bounded process cleanup,
+  verify the root and every pre-snapshotted Windows descendant by creation
+  identity, and fail closed when identity snapshots are unavailable.
 
 ### 2026-07-31: Issue 241 resolved (v0.7.79 development)
 - Assigned standalone process startup exclusively to the bootstrap while

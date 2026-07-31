@@ -154,8 +154,8 @@ function parseArgs(argv) {
   return args;
 }
 
-async function main() {
-  const args = parseArgs(process.argv);
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
   if (!args.input) {
     console.error('Usage: node scripts/install-skill.js <skill-dir-or-archive> [--dest <skills-dir>] [--force]');
     process.exit(1);
@@ -165,7 +165,8 @@ async function main() {
   console.log(`Installed ${result.skillName} to ${result.installedTo}`);
 }
 
-const isDirectRun = process.argv[1]
+const isDirectRun = process.env.KODAX_MODULE_BUNDLE !== 'true'
+  && process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectRun) {

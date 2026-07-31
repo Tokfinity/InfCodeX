@@ -39,6 +39,28 @@ describe('resolveNodePackageBin', () => {
   it('returns undefined for a package that is not installed', () => {
     expect(resolveNodePackageBin('definitely-not-a-real-lsp-xyz', process.cwd())).toBeUndefined();
   });
+
+  it('marks project-local package bins as JavaScript children', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-lsp-package-'));
+    try {
+      const packageDir = path.join(root, 'node_modules', 'example-lsp');
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.writeFile(
+        path.join(packageDir, 'package.json'),
+        JSON.stringify({ name: 'example-lsp', bin: 'server.js' }),
+        'utf8',
+      );
+      await fs.writeFile(path.join(packageDir, 'server.js'), '', 'utf8');
+
+      expect(resolveNodePackageBin('example-lsp', root)).toMatchObject({
+        command: process.execPath,
+        args: [path.join(packageDir, 'server.js')],
+        kind: 'javascript',
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('resolveTsserver', () => {

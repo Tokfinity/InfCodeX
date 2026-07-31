@@ -12,3 +12,4 @@ export function initSkill(options: InitSkillOptions): Promise<{
   skillDir: string;
   created: string[];
 }>;
+export declare function main(argv?: string[]): Promise<void>;

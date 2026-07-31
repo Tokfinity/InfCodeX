@@ -6,3 +6,4 @@ export interface SkillValidationResult {
 }
 
 export function validateSkillDirectory(skillDir: string): Promise<SkillValidationResult>;
+export declare function main(argv?: string[]): Promise<void>;
