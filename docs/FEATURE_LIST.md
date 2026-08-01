@@ -14,12 +14,12 @@
 | Current released version | `v0.7.77` (Git tag / GitHub Release / npm) |
 | Current package version | `@kodax-ai/kodax@0.7.78` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `65` |
+| Total tracked features | `67` |
 | InProgress | `1` |
-| Planned | `11` |
+| Planned | `13` |
 | Completed | `47` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 47 | `281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `281` is engineering-complete for v0.7.79 development; `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate. v0.7.77 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 5 | `280, 278, 279, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
+| Planned, near-term | 7 | `280, 278, 279, 282, 283, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -63,7 +63,7 @@
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
 | `v0.7.79` | `2` |
-| `v0.7.80` | `2` |
+| `v0.7.80` | `4` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `1` |
 | `v0.7.95` | `0` |
@@ -423,6 +423,24 @@
 > single-recipient messaging; desktop task routing/UI labels, cross-process
 > standalone delivery, handoff, wait/read receipts, broadcast, and remote A2A
 > remain out of scope.
+>
+> **2026-08-01 F282/F283 long-Session continuity design**: `FEATURE_282`
+> replaces ADR-057's unbounded active all-query residency with a bounded recent
+> exact-query projection while preserving every genuine query in canonical
+> durable lineage. It upgrades the existing CAP-028/CAP-062 path into one
+> mandatory, capability-aware, durable physical-capacity emergency transaction;
+> no second rail, vector index, or 64K admission gate is added. Public guidance
+> recommends at least 64K and classifies smaller windows as high-risk/
+> best-effort. Each F282 checkpoint also carries a bounded lossy Query Digest
+> updated from the previous digest plus a bounded consecutive exact backlog
+> through the active archive boundary; it never resends all historical queries on every
+> compaction, and exact lineage/search/read remain authoritative. `FEATURE_283`
+> remains independent: builtin history search gains local BM25-style/character
+> n-gram recall plus adaptive bounded `sideQuery()` expansion/rerank when
+> lexical confidence is insufficient. LLM assistance is builtin, not an
+> Extension. Only a future optional local embedding/dense layer uses the
+> existing Extension wrapper seam; embeddings, external services, and vector
+> databases are not v0.7.80 dependencies.
 >
 > **2026-07-30 F280 cache-stable prompt/tool optimization**: `FEATURE_280`
 > consumes `v0.7.79` to reduce real multi-turn model cost without weakening
@@ -884,6 +902,8 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.79` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
 | `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
 | `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
+| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
+| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `105` | Mixture-of-Agents Virtual Provider | Core / LLM Provider + Test-Time Scaling | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
