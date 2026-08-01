@@ -33,6 +33,7 @@ const MIN_WAIT_MS = 10_000;
 const MAX_WAIT_MS = 3_600_000;
 const ROOT_SENDS_PER_TURN = 20;
 const CHILD_SENDS_PER_TURN = 5;
+const turnAdmissionTails = new WeakMap<object, Promise<void>>();
 
 type MailboxWaitStatus =
   | 'mailbox'
@@ -139,9 +140,11 @@ export async function toolSpawnAgent(
           : toActorStrategyMetadataValue(qualityStrategy),
       ),
     };
-    const turn = qualityStrategy === undefined
-      ? await client.spawn(spawn)
-      : await spawnStrategyTurn(client, spawn, qualityStrategy);
+    const turn = await withTurnAdmission(client, () => (
+      qualityStrategy === undefined
+        ? client.spawn(spawn)
+        : spawnStrategyTurn(client, spawn, qualityStrategy)
+    ));
     return render({ ok: true, ...turn });
   } catch (error) {
     return renderActorError('spawn_agent', error);
@@ -203,9 +206,11 @@ export async function toolFollowupTask(
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
     const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
     const objective = requiredString(input, 'objective');
-    const result = qualityStrategy === undefined
-      ? await client.followup(actorPath, objective)
-      : await followupStrategyTurn(client, actorPath, objective, qualityStrategy);
+    const result = await withTurnAdmission(client, () => (
+      qualityStrategy === undefined
+        ? client.followup(actorPath, objective)
+        : followupStrategyTurn(client, actorPath, objective, qualityStrategy)
+    ));
     return render({ ok: true, actorPath, ...result });
   } catch (error) {
     return renderActorError('followup_task', error);
@@ -515,9 +520,9 @@ async function spawnStrategyTurn(
   strategy: NonNullable<Awaited<ReturnType<typeof buildStoredActorStrategy>>>,
 ): Promise<Awaited<ReturnType<AgentActorClient['spawn']>>> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const expectedTreeRevision = assertStageCanAcceptTurn(client, strategy);
+    const mutationOptions = assertStageCanAcceptTurn(client, strategy);
     try {
-      return await client.spawn(input, { expectedTreeRevision });
+      return await client.spawn(input, mutationOptions);
     } catch (error) {
       if (!isRevisionConflict(error) || attempt > 0) throw error;
     }
@@ -533,19 +538,39 @@ async function followupStrategyTurn(
 ): Promise<Awaited<ReturnType<AgentActorClient['followup']>>> {
   const metadata = { qualityStrategy: toActorStrategyMetadataValue(strategy) };
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const expectedTreeRevision = assertStageCanAcceptTurn(client, strategy);
+    const mutationOptions = assertStageCanAcceptTurn(client, strategy);
     try {
       return await client.followup(
         actorPath,
         objective,
         metadata,
-        { expectedTreeRevision },
+        mutationOptions,
       );
     } catch (error) {
       if (!isRevisionConflict(error) || attempt > 0) throw error;
     }
   }
   throw new Error('quality_strategy admission could not stabilize.');
+}
+
+async function withTurnAdmission<T>(
+  client: AgentActorClient,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const admissionScope = client.admissionScope ?? client;
+  const previous = turnAdmissionTails.get(admissionScope) ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  turnAdmissionTails.set(admissionScope, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (turnAdmissionTails.get(admissionScope) === current) {
+      turnAdmissionTails.delete(admissionScope);
+    }
+  }
 }
 
 function isRevisionConflict(error: unknown): boolean {

@@ -131,8 +131,10 @@ export class AgentActorController {
   private readonly scheduler: AgentTurnScheduler;
   private readonly budget: AgentBudgetPort;
   private readonly now: () => string;
+  private readonly admissionScope = Object.freeze({});
   private mutationTail: Promise<void> = Promise.resolve();
   private revision = 0;
+  private admissionRevision = 0;
   private snapshotSchemaVersion: 1 | 2;
   private durableOwner?: AgentActorOwner;
   private initialized = false;
@@ -216,6 +218,7 @@ export class AgentActorController {
     this.requireCommittedActor(callerPath);
     return Object.freeze({
       callerPath,
+      admissionScope: this.admissionScope,
       spawn: (input: AgentSpawnInput, options?: AgentMutationOptions) => (
         this.spawn(callerPath, input, options)
       ),
@@ -356,6 +359,7 @@ export class AgentActorController {
     try {
       const plan = await this.mutate(async () => {
         this.assertExpectedTreeRevision(options);
+        this.assertExpectedAdmissionRevision(options);
         const created = await this.prepareSpawn(callerPath, input);
         admittedTurnId = created.turn.turnId;
         return created;
@@ -431,6 +435,7 @@ export class AgentActorController {
     try {
       const result = await this.mutate(async () => {
         this.assertExpectedTreeRevision(options);
+        this.assertExpectedAdmissionRevision(options);
         const actor = this.requireControl(callerPath, targetPath);
         if (
           options?.expectedRevision !== undefined
@@ -636,6 +641,8 @@ export class AgentActorController {
       )).length,
       maxConcurrentThreads: this.committedSnapshot.maxConcurrentThreads,
       revision: this.committedSnapshot.revision,
+      admissionRevision:
+        this.committedSnapshot.admissionRevision ?? this.committedSnapshot.revision,
     };
   }
 
@@ -1385,6 +1392,9 @@ export class AgentActorController {
         replaceMap(this.abortControllers, [...beforeAborts.entries()]);
         return result;
       }
+      if (actorAdmissionChanged(before.actors, [...this.actors.values()])) {
+        this.admissionRevision += 1;
+      }
       const expectedRevision = this.revision;
       this.revision += 1;
       await this.options.store?.save(this.snapshot(), expectedRevision);
@@ -1419,6 +1429,7 @@ export class AgentActorController {
   private snapshot(): AgentActorSnapshot {
     const contents = {
       revision: this.revision,
+      admissionRevision: this.admissionRevision,
       maxConcurrentThreads: this.scheduler.maxConcurrentThreads,
       actors: [...this.actors.values()],
       turns: [...this.turns.values()],
@@ -1444,6 +1455,7 @@ export class AgentActorController {
     this.snapshotSchemaVersion = snapshot.schemaVersion;
     this.durableOwner = snapshot.schemaVersion === 2 ? snapshot.owner : undefined;
     this.revision = snapshot.revision;
+    this.admissionRevision = snapshot.admissionRevision ?? snapshot.revision;
     replaceMap(this.actors, snapshot.actors.map((actor) => [actor.path, actor]));
     replaceMap(this.turns, snapshot.turns.map((turn) => [turn.turnId, turn]));
     replaceMap(this.mailboxes, Object.entries(snapshot.mailboxes).map(([path, messages]) => [path, [...messages]]));
@@ -1706,6 +1718,18 @@ export class AgentActorController {
       throw new AgentRevisionConflictError(options.expectedTreeRevision, this.revision);
     }
   }
+
+  private assertExpectedAdmissionRevision(options: AgentMutationOptions | undefined): void {
+    if (
+      options?.expectedAdmissionRevision !== undefined
+      && this.admissionRevision !== options.expectedAdmissionRevision
+    ) {
+      throw new AgentRevisionConflictError(
+        options.expectedAdmissionRevision,
+        this.admissionRevision,
+      );
+    }
+  }
 }
 
 function nonEmptyText(value: string | undefined): string | undefined {
@@ -1948,6 +1972,22 @@ function appendedMessages(
   return messages;
 }
 
+function actorAdmissionChanged(
+  before: readonly AgentActor[],
+  after: readonly AgentActor[],
+): boolean {
+  if (before.length !== after.length) return true;
+  const afterByPath = new Map(after.map((actor) => [actor.path, actor]));
+  return before.some((actor) => {
+    const current = afterByPath.get(actor.path);
+    return current === undefined
+      || current.state !== actor.state
+      || current.currentTurnId !== actor.currentTurnId
+      || current.turnIds.length !== actor.turnIds.length
+      || current.turnIds.some((turnId, index) => turnId !== actor.turnIds[index]);
+  });
+}
+
 interface ActorSnapshotConflictFact {
   readonly expectedRevision: number;
   readonly currentRevision: number;
@@ -2002,6 +2042,12 @@ function isMetadataRecord(
 function validateSnapshot(snapshot: AgentActorSnapshot, configuredMax: number): void {
   if (snapshot.schemaVersion !== 1 && snapshot.schemaVersion !== 2) {
     throw new Error('Unsupported actor snapshot schema.');
+  }
+  if (
+    snapshot.admissionRevision !== undefined
+    && (!Number.isSafeInteger(snapshot.admissionRevision) || snapshot.admissionRevision < 0)
+  ) {
+    throw new Error('Actor snapshot has an invalid admission revision.');
   }
   if (snapshot.schemaVersion === 2 && snapshot.owner) validateOwner(snapshot.owner);
   if (snapshot.maxConcurrentThreads !== configuredMax) {

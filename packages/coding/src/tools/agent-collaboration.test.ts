@@ -2,6 +2,7 @@ import {
   _resetMessageQueueForTests,
   createAgentActorController,
   getMessageQueue,
+  type AgentActorClient,
   type AgentActorController,
   type AgentExecutionInput,
   type AgentExecutionResult,
@@ -40,6 +41,16 @@ class DeferredExecutor implements AgentTurnExecutor {
 
   execute(input: AgentExecutionInput): Promise<AgentExecutionResult> {
     return new Promise((resolve) => this.pending.push({ input, resolve }));
+  }
+}
+
+class ProgressingDeferredExecutor extends DeferredExecutor {
+  override async execute(input: AgentExecutionInput): Promise<AgentExecutionResult> {
+    await input.reportProgress({
+      kind: 'status',
+      summary: `Started ${input.actor.taskName}`,
+    });
+    return super.execute(input);
   }
 }
 
@@ -150,6 +161,139 @@ describe('F270 canonical collaboration tools', () => {
       ok: false,
       error: { code: 'agent_control_failed' },
     });
+  });
+
+  it('admits a full parallel strategy wave while children report startup progress', async () => {
+    const { ctx } = await context(new ProgressingDeferredExecutor());
+    const names = ['review-agent', 'review-core', 'review-commits'];
+
+    const results = await Promise.all(names.map(async (taskName) => JSON.parse(await executeTool(
+      'spawn_agent',
+      {
+        task_name: taskName,
+        objective: `Review ${taskName}.`,
+        quality_strategy: {
+          schemaVersion: 1,
+          stageId: `stage-${taskName}`,
+          pattern: 'fan-out-and-synthesize',
+          role: 'investigator',
+          laneRelation: 'coverage',
+        },
+      },
+      ctx,
+    )) as Record<string, unknown>));
+
+    expect(results).toEqual(names.map(() => expect.objectContaining({ ok: true })));
+    expect(ctx.actorControl?.list().activeNonRootTurns).toBe(3);
+  });
+
+  it('coordinates parallel strategy admissions across separate clients for one Actor tree', async () => {
+    const executor = new ProgressingDeferredExecutor();
+    const { ctx, controller } = await context(executor);
+    const names = ['bound-review-agent', 'bound-review-core', 'bound-review-commits'];
+    const contexts = names.map(() => ({
+      ...ctx,
+      actorControl: controller.bind('/root'),
+    }));
+
+    const results = await Promise.all(names.map(async (taskName, index) => JSON.parse(
+      await executeTool('spawn_agent', {
+        task_name: taskName,
+        objective: `Review ${taskName}.`,
+        quality_strategy: {
+          schemaVersion: 1,
+          stageId: `stage-${taskName}`,
+          pattern: 'fan-out-and-synthesize',
+          role: 'investigator',
+          laneRelation: 'coverage',
+        },
+      }, contexts[index]),
+    ) as Record<string, unknown>));
+
+    expect(results).toEqual(names.map(() => expect.objectContaining({ ok: true })));
+    expect(controller.list('/root').activeNonRootTurns).toBe(3);
+  });
+
+  it('retains the tree-revision fence for legacy clients without admission revisions', async () => {
+    const { ctx, executor } = await context();
+    const current = ctx.actorControl;
+    if (!current) throw new Error('Expected Actor control.');
+    const observedOptions: Array<Parameters<AgentActorClient['spawn']>[1]> = [];
+    const legacyControl: AgentActorClient = {
+      ...current,
+      list: () => {
+        const { admissionRevision: ignored, ...snapshot } = current.list();
+        void ignored;
+        return snapshot;
+      },
+      spawn: (input, options) => {
+        observedOptions.push(options);
+        return current.spawn(input, options);
+      },
+    };
+    const legacyCtx = { ...ctx, actorControl: legacyControl };
+
+    const result = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'legacy-strategy',
+      objective: 'Use the legacy revision fence.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'legacy-stage',
+        pattern: 'fan-out-and-synthesize',
+        role: 'investigator',
+        laneRelation: 'coverage',
+      },
+    }, legacyCtx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ ok: true });
+    expect(observedOptions).toEqual([
+      { expectedTreeRevision: expect.any(Number) },
+    ]);
+    expect(executor.pending).toHaveLength(1);
+  });
+
+  it('admits parallel attributed follow-ups on idle actors while they restart progress', async () => {
+    const executor = new ProgressingDeferredExecutor();
+    const { ctx } = await context(executor);
+    const names = ['followup-agent', 'followup-core', 'followup-commits'];
+    for (const taskName of names) {
+      await executeTool('spawn_agent', {
+        task_name: taskName,
+        objective: `Initial ${taskName}.`,
+      }, ctx);
+    }
+    await vi.waitFor(() => {
+      expect(executor.pending).toHaveLength(names.length);
+    });
+    for (const pending of executor.pending.slice(0, names.length)) {
+      pending.resolve({ output: 'Initial pass complete.' });
+    }
+    await vi.waitFor(() => {
+      expect(ctx.actorControl?.list().activeNonRootTurns).toBe(0);
+    });
+    ctx.actorTurnRef = { actorPath: '/root', turnId: 'root-turn-2' };
+
+    const results = await Promise.all(names.map(async (target) => JSON.parse(await executeTool(
+      'followup_task',
+      {
+        target,
+        objective: `Continue ${target}.`,
+        quality_strategy: {
+          schemaVersion: 1,
+          stageId: `followup-${target}`,
+          pattern: 'fan-out-and-synthesize',
+          role: 'investigator',
+          laneRelation: 'coverage',
+        },
+      },
+      ctx,
+    )) as Record<string, unknown>));
+
+    expect(results).toEqual(names.map(() => expect.objectContaining({
+      ok: true,
+      delivery: 'started_turn',
+    })));
+    expect(ctx.actorControl?.list().activeNonRootTurns).toBe(3);
   });
 
   it('rejects unknown and unreadable strategy targets before creating an Actor', async () => {

@@ -4,6 +4,7 @@ import {
   AgentControlError,
   type AgentActorClient,
   type AgentMetadataValue,
+  type AgentMutationOptions,
   type AgentTurnState,
 } from '@kodax-ai/agent';
 
@@ -158,8 +159,11 @@ export function parseActorTurnEvidenceRef(value: string): ActorTurnIdentity | un
 export function assertStageCanAcceptTurn(
   client: AgentActorClient,
   strategy: StoredActorStrategyMetadata,
-): number {
+): AgentMutationOptions {
   const snapshot = client.list();
+  const mutationOptions = snapshot.admissionRevision === undefined
+    ? { expectedTreeRevision: snapshot.revision }
+    : { expectedAdmissionRevision: snapshot.admissionRevision };
   const matches = snapshot.actors.flatMap((actor) => (
     client.get(actor.path).turns.flatMap((turn) => {
       const stored = readStoredActorStrategy(turn.metadata?.qualityStrategy);
@@ -170,7 +174,7 @@ export function assertStageCanAcceptTurn(
         : [];
     })
   ));
-  if (matches.length === 0) return snapshot.revision;
+  if (matches.length === 0) return mutationOptions;
   if (matches.some(({ stored }) => (
     stored.pattern !== strategy.pattern
     || stored.laneRelation !== strategy.laneRelation
@@ -186,7 +190,7 @@ export function assertStageCanAcceptTurn(
       `quality_strategy stage ${strategy.stageId} is closed and cannot be reopened.`,
     );
   }
-  return snapshot.revision;
+  return mutationOptions;
 }
 
 export function readStoredActorStrategy(

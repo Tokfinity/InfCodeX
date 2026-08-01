@@ -14,6 +14,7 @@ _Last Updated: 2026-07-31_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 252 | High | Resolved | Cancelled shell environment probes can return before descendants terminate | configured-shell environment probing | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 251 | High | Resolved | Published Runtime Worker resolves a handler sidecar that is not shipped | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 250 | Medium | Resolved | Windows programmable commands use non-portable module paths and hide load failures | programmable command support | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -153,6 +154,60 @@ _Last Updated: 2026-07-31_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 253: Parallel quality-strategy admissions conflict on unrelated Actor progress
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.77 quality-strategy admission
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+A parallel `spawn_agent` wave with `quality_strategy` metadata read one global
+Actor-tree revision for every branch. The first accepted child advanced that
+revision, then ordinary child progress advanced it again before the remaining
+branches retried. Because strategy admission allowed only one revalidation,
+valid sibling branches could exhaust the retry and fail with
+`revision_conflict` despite available capacity and a still-valid stage.
+
+The conflict was introduced with revision-fenced strategy admission in v0.7.77;
+the intervening v0.7.79 changes did not create it. Existing tests exercised
+strategy spawns sequentially and did not cover a progress-producing parallel
+wave.
+
+#### Resolution
+
+Actor snapshots now carry an additive admission revision that changes only when
+Actor or Turn state relevant to admission changes. Progress and mailbox updates
+continue to advance the full tree revision for persistence and general
+optimistic concurrency, but no longer invalidate strategy admission. Older
+snapshots and custom clients remain compatible by falling back to the full tree
+revision.
+
+The Coding collaboration adapter also serializes only the short admission
+critical section, using a stable scope shared by every client bound to the same
+Actor tree. Child execution remains parallel. The existing bounded
+revalidation remains in place for genuine concurrent stage, capacity, and
+terminal-state changes.
+
+#### Verification
+
+- A RED regression reproduced the reported behavior exactly: one of three
+  parallel strategy spawns succeeded and two failed with `revision_conflict`.
+- Three parallel strategy spawns now all succeed while the first child emits
+  progress, including when each call uses a separate client binding; the
+  equivalent attributed follow-up wave also succeeds.
+- Controller coverage proves progress and mailbox append/drain do not advance
+  the admission revision, while a real Turn-admission change still rejects a
+  stale admission mutation. A field-less legacy snapshot derives the safe full
+  revision fallback and persists the independent fence on its next admission.
+- Independent review repeated the separate-client three-way admission stress
+  test 20 times; every round admitted all three Turns.
+- Agent and Coding builds pass, together with the Actor and collaboration test
+  suites.
 
 ### 252: Cancelled shell environment probes can return before descendants terminate
 
@@ -9242,11 +9297,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 130 (25 Open, 105 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 131 (25 Open, 106 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-07-31: Issue 253 added and resolved (v0.7.79 development)
+- Split Actor admission fencing from progress/mailbox revisions and serialized
+  only the short collaboration admission section, preserving parallel child
+  execution while eliminating spurious strategy `revision_conflict` failures.
 
 ### 2026-07-31: Issues 248-252 added and resolved (v0.7.79 development)
 - Unified collision-resistant Session identity generation across Agent and REPL.

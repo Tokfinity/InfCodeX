@@ -936,6 +936,74 @@ describe('F270 actor tree and scheduler', () => {
       .not.toContain('/root/stale-spawn');
   });
 
+  it('fences turn admission without treating child progress as an admission change', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    await controller.spawn('/root', { taskName: 'active', objective: 'Stay active.' });
+    const expectedAdmissionRevision = controller.list('/root').admissionRevision;
+    expect(expectedAdmissionRevision).toEqual(expect.any(Number));
+    if (expectedAdmissionRevision === undefined) throw new Error('Missing admission revision.');
+
+    await executor.pending[0]?.input.reportProgress({
+      kind: 'status',
+      summary: 'Startup progress.',
+    });
+    expect(controller.list('/root').admissionRevision).toBe(expectedAdmissionRevision);
+    await controller.send('/root', '/root/active', 'Mailbox update.');
+    expect(controller.list('/root').admissionRevision).toBe(expectedAdmissionRevision);
+    await expect(executor.pending[0]?.input.drainMailbox()).resolves.toMatchObject([
+      { content: 'Mailbox update.' },
+    ]);
+    expect(controller.list('/root').admissionRevision).toBe(expectedAdmissionRevision);
+
+    await expect(controller.spawn(
+      '/root',
+      { taskName: 'accepted', objective: 'Start after progress.' },
+      { expectedAdmissionRevision },
+    )).resolves.toMatchObject({ actorPath: '/root/accepted' });
+    await expect(controller.spawn(
+      '/root',
+      { taskName: 'stale-admission', objective: 'Must not start.' },
+      { expectedAdmissionRevision },
+    )).rejects.toMatchObject({
+      code: 'revision_conflict',
+      expectedRevision: expectedAdmissionRevision,
+      currentRevision: expectedAdmissionRevision + 1,
+    });
+  });
+
+  it('derives and persists an admission revision when loading an older snapshot', async () => {
+    const state = revisionedActorStore();
+    const executor = new DeferredExecutor();
+    const original = await createAgentActorController({ store: state.store, executor });
+    await original.spawn('/root', { taskName: 'legacy-target', objective: 'Become idle.' });
+    executor.pending[0]?.resolve({ output: 'idle' });
+    await settle();
+    await original.send('/root', '/root/legacy-target', 'Persist a mailbox-only revision.');
+    const saved = state.read();
+    if (!saved) throw new Error('Expected a persisted Actor snapshot.');
+    const { admissionRevision: ignored, ...legacySnapshot } = saved;
+    void ignored;
+    state.replace(legacySnapshot);
+
+    const recovered = await createAgentActorController({ store: state.store });
+    expect(recovered.list('/root')).toMatchObject({
+      revision: saved.revision,
+      admissionRevision: saved.revision,
+    });
+    await recovered.send('/root', '/root/legacy-target', 'Advance only the full revision.');
+    expect(recovered.list('/root').admissionRevision).toBe(saved.revision);
+
+    await recovered.spawn(
+      '/root',
+      { taskName: 'post-upgrade', objective: 'Persist the derived fence.' },
+      { expectedAdmissionRevision: saved.revision },
+    );
+    expect(state.read()).toMatchObject({
+      admissionRevision: saved.revision + 1,
+    });
+  });
+
   it('merges executor-observed facts into durable turn metadata at completion', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });

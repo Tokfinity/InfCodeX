@@ -147,6 +147,8 @@ export interface AgentTreeSnapshot {
   readonly activeNonRootTurns: number;
   readonly maxConcurrentThreads: number;
   readonly revision: number;
+  /** Turn-admission state revision; absent only on older/custom clients. */
+  readonly admissionRevision?: number;
 }
 
 export interface AgentTurnSummary {
@@ -235,6 +237,8 @@ export interface AgentMutationOptions {
   readonly expectedRevision?: number;
   /** Optimistic tree revision checked inside the serialized durable mutation. */
   readonly expectedTreeRevision?: number;
+  /** Optimistic turn-admission revision, excluding progress and mailbox writes. */
+  readonly expectedAdmissionRevision?: number;
 }
 
 export interface AgentTurnExecutor {
@@ -243,6 +247,8 @@ export interface AgentTurnExecutor {
 
 interface AgentActorSnapshotContents {
   readonly revision: number;
+  /** Added after schema v2; legacy snapshots derive it from revision on load. */
+  readonly admissionRevision?: number;
   readonly maxConcurrentThreads: number;
   readonly actors: readonly AgentActor[];
   readonly turns: readonly AgentTurn[];
@@ -286,6 +292,8 @@ export interface AgentActorStore {
 /** Runtime-bound actor control surface. The caller path is minted by Runtime. */
 export interface AgentActorClient {
   readonly callerPath: string;
+  /** Stable in-process identity shared by clients bound to the same Actor tree. */
+  readonly admissionScope?: object;
   spawn(input: AgentSpawnInput, options?: AgentMutationOptions): Promise<AgentTurnRef>;
   send(
     targetPath: string,

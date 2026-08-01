@@ -513,6 +513,15 @@ children for bounded parallel investigation or specialist work. Children do
 not own final response. When pending children remain and the
 main Worker has no useful work, idle-yield is the wait mechanism.
 
+The full Actor revision remains the persistence and general mutation fence.
+Strategy admission uses a separate admission revision that advances only for
+Actor/Turn state relevant to accepting work; progress and mailbox updates do
+not invalidate it. Coding serializes only the brief admission section, keyed by
+a stable identity shared by every client bound to the same Actor tree, so
+validation and mutation are ordered while admitted child Turns continue to
+execute concurrently. Legacy snapshots and custom clients fall back to the
+full revision and per-client admission identity.
+
 `packages/coding/src/orchestration/pattern-catalog.ts` is the shared semantic
 source for the six AMA/Workflow pattern names.
 `pattern-strategy.ts` validates optional `quality_strategy` metadata at the
