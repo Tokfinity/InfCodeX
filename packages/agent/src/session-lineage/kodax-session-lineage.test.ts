@@ -31,6 +31,73 @@ function messageEntries(lineage: KodaXSessionLineage): KodaXSessionMessageEntry[
   return lineage.entries.filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message');
 }
 
+function legacyPollutedLineageFixture(): KodaXSessionLineage {
+  const assistant: KodaXMessage = {
+    role: 'assistant',
+    content: [
+      { type: 'thinking', thinking: 'inspect the old Session', signature: 'sig-old' },
+      { type: 'text', text: 'I will inspect it.' },
+      { type: 'tool_use', id: 'tool-old', name: 'read', input: { path: 'old.ts' } },
+    ],
+  };
+  const toolResult: KodaXMessage = {
+    role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: 'tool-old', content: 'old result' }],
+  };
+  const entry = (
+    id: string,
+    parentId: string | null,
+    message: KodaXMessage,
+  ): KodaXSessionMessageEntry => ({
+    type: 'message',
+    id,
+    parentId,
+    logicalId: id,
+    timestamp: '2026-07-29T00:00:00.000Z',
+    message,
+  });
+  const root = entry('entry_legacy_root', null, createTextMessage('user', 'original query'));
+  const activeAssistant = entry('entry_legacy_active_assistant', root.id, assistant);
+  const activeToolResult = entry('entry_legacy_active_result', activeAssistant.id, toolResult);
+  const activeFollowup = entry(
+    'entry_legacy_active_followup',
+    activeToolResult.id,
+    createTextMessage('user', 'follow-up'),
+  );
+  const activeResponse = entry(
+    'entry_legacy_active_response',
+    activeFollowup.id,
+    createTextMessage('assistant', 'follow-up answer'),
+  );
+  const replayAssistant = entry('entry_legacy_replay_assistant', root.id, assistant);
+  const replayCarrier = entry(
+    'entry_legacy_compaction_context',
+    replayAssistant.id,
+    {
+      role: 'system',
+      content: '[Post-compact: legacy context carrier]',
+      _synthetic: true,
+      _source: 'compaction-context',
+    },
+  );
+  return JSON.parse(JSON.stringify({
+    version: 2,
+    activeEntryId: activeResponse.id,
+    // v0.7.78 could leave a later same-content replay sibling whose physical
+    // compaction-context child diverted content-based reconciliation away from
+    // the actual active path after a JSON round-trip.
+    entries: [
+      root,
+      activeAssistant,
+      activeToolResult,
+      activeFollowup,
+      activeResponse,
+      replayAssistant,
+      replayCarrier,
+    ],
+  })) as KodaXSessionLineage;
+}
+
 describe('session lineage helpers', () => {
   it('creates an empty lineage for empty message lists', () => {
     const lineage = createSessionLineage([]);
@@ -85,6 +152,95 @@ describe('session lineage helpers', () => {
     );
     const after = second.entries.filter((e) => e.type === 'message').length;
     expect(after).toBe(before);
+  });
+
+  it('upgrades a v0.7.78 polluted active context without replaying historical entries', () => {
+    const legacy = legacyPollutedLineageFixture();
+    const activeMessages = getSessionMessagesFromLineage(legacy);
+    const beforeIds = legacy.entries.map((entry) => entry.id);
+
+    const reconciled = createSessionLineage(structuredClone(activeMessages), legacy);
+
+    expect(reconciled.entries.map((entry) => entry.id)).toEqual(beforeIds);
+    expect(reconciled.activeEntryId).toBe(legacy.activeEntryId);
+    expect(getSessionMessagesFromLineage(reconciled)).toEqual(activeMessages);
+  });
+
+  it('adds only one intentional query after a v0.7.78 polluted active context', () => {
+    const legacy = legacyPollutedLineageFixture();
+    const beforeIds = new Set(legacy.entries.map((entry) => entry.id));
+    const repeatedButNewQuery = createTextMessage('user', 'original query');
+    const messages = [
+      ...structuredClone(getSessionMessagesFromLineage(legacy)),
+      repeatedButNewQuery,
+    ];
+
+    const reconciled = createSessionLineage(messages, legacy);
+    const added = reconciled.entries.filter((entry) => !beforeIds.has(entry.id));
+
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({
+      type: 'message',
+      parentId: legacy.activeEntryId,
+      message: repeatedButNewQuery,
+    });
+    expect(added[0]?.id).not.toBe('entry_legacy_root');
+    expect(getSessionMessagesFromLineage(reconciled)).toEqual(messages);
+  });
+
+  it('keeps the v0.7.78 handoff idempotent across repeated reconciliation', () => {
+    const legacy = legacyPollutedLineageFixture();
+    const messages = [
+      ...structuredClone(getSessionMessagesFromLineage(legacy)),
+      createTextMessage('user', 'one new query'),
+    ];
+    const first = createSessionLineage(messages, legacy);
+    const firstIds = first.entries.map((entry) => entry.id);
+
+    const second = createSessionLineage(structuredClone(messages), JSON.parse(
+      JSON.stringify(first),
+    ) as KodaXSessionLineage);
+
+    expect(second.entries.map((entry) => entry.id)).toEqual(firstIds);
+    expect(second.activeEntryId).toBe(first.activeEntryId);
+    expect(getSessionMessagesFromLineage(second)).toEqual(messages);
+  });
+
+  it('preserves legacy thinking and tool provenance through immediate compaction', () => {
+    const legacy = legacyPollutedLineageFixture();
+    const activeMessages = getSessionMessagesFromLineage(legacy);
+    const reconciliationMessages = structuredClone(activeMessages);
+    const reconciled = createSessionLineage(reconciliationMessages, legacy);
+    const retainedMessages = reconciliationMessages.slice(1, 3);
+    const retainedSources = getSessionLineagePath(reconciled)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
+      .slice(1, 3);
+
+    const compacted = applySessionCompaction(
+      reconciled,
+      [
+        { role: 'system', content: `${COMPACTION_SUMMARY_PREFIX}Legacy upgrade summary` },
+        ...retainedMessages,
+      ],
+      { summary: 'Legacy upgrade summary' },
+    );
+    const compactionIndex = compacted.entries.findIndex(
+      (entry) => entry.type === 'compaction' && entry.summary === 'Legacy upgrade summary',
+    );
+    const rematerialized = compacted.entries
+      .slice(compactionIndex + 1)
+      .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message');
+
+    expect(rematerialized).toHaveLength(2);
+    expect(rematerialized.map((entry) => entry.message)).toEqual(retainedMessages);
+    for (let index = 0; index < rematerialized.length; index += 1) {
+      expect(rematerialized[index]).toMatchObject({
+        logicalId: retainedSources[index]!.logicalId,
+        sourceEntryId: retainedSources[index]!.id,
+      });
+    }
+    expect(rematerialized[0]!.parentId).toBe(compacted.entries[compactionIndex]!.id);
+    expect(rematerialized[1]!.parentId).toBe(rematerialized[0]!.id);
   });
 
   it('reuses existing history and branches cleanly from an earlier node', () => {
@@ -396,6 +552,44 @@ describe('session lineage helpers', () => {
     }
     expect(rematerialized[2]!.logicalId).toBe(rematerialized[2]!.id);
     expect(rematerialized[2]!.sourceEntryId).toBeUndefined();
+  });
+
+  it('remaps a cloned compaction firstKeptEntryId into the fork', () => {
+    const source = createSessionLineage([
+      createTextMessage('user', 'first request'),
+      createTextMessage('assistant', 'first answer'),
+      createTextMessage('user', 'retained request'),
+    ]);
+    const retained = messageEntries(source).at(-1)!;
+    const compacted = applySessionCompaction(
+      source,
+      [
+        {
+          role: 'user',
+          content: `${COMPACTION_SUMMARY_PREFIX}summary${COMPACTED_HISTORY_RECOVERY_GUIDANCE}`,
+          _synthetic: true,
+          _source: 'compaction-checkpoint',
+        },
+        retained.message,
+        createTextMessage('assistant', 'post-compaction answer'),
+      ],
+      { summary: 'summary' },
+    );
+
+    const forked = forkSessionLineage(compacted);
+    const compaction = forked?.entries.find(
+      (entry) => entry.type === 'compaction',
+    );
+
+    expect(compaction?.type).toBe('compaction');
+    if (compaction?.type !== 'compaction') return;
+    expect(compaction.firstKeptEntryId).not.toBe(
+      compacted.entries.find((entry) => entry.type === 'compaction')
+        ?.firstKeptEntryId,
+    );
+    expect(forked?.entries.some(
+      (entry) => entry.id === compaction.firstKeptEntryId,
+    )).toBe(true);
   });
 
   it('keeps the first duplicate system message provenance when compaction deduplicates it', () => {

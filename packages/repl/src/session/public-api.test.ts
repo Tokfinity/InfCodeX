@@ -26,6 +26,10 @@ interface SessionApiModule {
     id: string,
     options?: import('./public-api.js').SessionReadOptions,
   ) => Promise<import('./public-api.js').FullTranscriptSessionData | null>;
+  readConversationHistory: (
+    id: string,
+    options?: import('./public-api.js').SessionReadOptions,
+  ) => Promise<import('./public-api.js').SessionConversationHistoryData | null>;
   exportSessionBundle: (
     id: string,
     options?: import('./public-api.js').SessionBundleExportOptions,
@@ -34,8 +38,8 @@ interface SessionApiModule {
     id: string,
     opts: import('./public-api.js').AppendClientNoticeOptions,
   ) => Promise<import('./public-api.js').SessionTranscriptEntry | null>;
-  forkSession: (id: string, opts?: { selector?: string; sessionId?: string; title?: string }) => Promise<{ sessionId: string; data: unknown } | null>;
-  rewindSession: (id: string, opts?: { selector?: string }) => Promise<unknown | null>;
+  forkSession: (id: string, opts?: import('./public-api.js').ForkSessionOptions) => Promise<{ sessionId: string; data: unknown } | null>;
+  rewindSession: (id: string, opts?: import('./public-api.js').RewindSessionOptions) => Promise<unknown | null>;
   setActiveEntry: (id: string, selector: string) => Promise<unknown | null>;
   deleteSession: (id: string) => Promise<{ ok: true } | { error: { code: string } }>;
   listRunningSessions: () => Promise<Array<{ pid: number; startedAt: number; cwd: string; sessionId: string | undefined }>>;
@@ -410,6 +414,9 @@ describe('Session Management Public SDK', () => {
     controller.abort();
 
     await expect(api.readFullTranscript('cancelled-read', {
+      signal: controller.signal,
+    })).rejects.toMatchObject({ code: 'read_cancelled' });
+    await expect(api.readConversationHistory('cancelled-read', {
       signal: controller.signal,
     })).rejects.toMatchObject({ code: 'read_cancelled' });
   });
@@ -803,6 +810,8 @@ describe('Session Management Public SDK', () => {
       'loadSession',
       'loadFullTranscript',
       'readFullTranscript',
+      'readConversationHistory',
+      'readSessionCapture',
       'appendClientNotice',
       'forkSession',
       'rewindSession',
@@ -856,6 +865,89 @@ describe('Session Management Public SDK', () => {
   });
 
   // ── Test 13b: v0.7.43 — manager.storage.save writes into the same dir reads see ──
+  it('indexes paths discovered by filtered listSessions for a later strict read', async () => {
+    const overrideDir = path.join(tempHome, 'filtered-list-location-index');
+    const projectDir = path.join(overrideDir, 'manual-project');
+    const sessionId = 'filtered-list-indexed-session';
+    await mkdir(projectDir, { recursive: true });
+    await writeMinimalSession(projectDir, sessionId, {
+      runtimeInfo: { surface: 'acp' },
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    });
+    const manager = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      listSessions: (opts?: { surface?: string }) => Promise<Array<{ id: string }>>;
+      readSessionCapture: (id: string) => Promise<unknown>;
+    };
+
+    expect(await manager.listSessions({ surface: 'acp' })).toEqual([
+      expect.objectContaining({ id: sessionId }),
+    ]);
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    try {
+      await expect(manager.readSessionCapture(sessionId)).resolves.not.toBeNull();
+      expect(readdir.mock.calls.filter(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(overrideDir),
+      )).toHaveLength(0);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('accepts revision-fenced conversation boundaries on standalone mutations', async () => {
+    const historyBoundary = {
+      boundaryId: 'entry_boundary',
+      sourceRevision: 'sha256:boundary',
+    };
+
+    await expect(api.forkSession('ghost-session-id', {
+      historyBoundary,
+    })).resolves.toBeNull();
+    await expect(api.rewindSession('ghost-session-id', {
+      historyBoundary,
+    })).resolves.toBeNull();
+  });
+
+  it('keeps a filtered-list locator hint non-authoritative after traversal failure', async () => {
+    const overrideDir = path.join(tempHome, 'filtered-list-incomplete-index');
+    const projectDirs = [
+      path.join(overrideDir, 'incomplete-a'),
+      path.join(overrideDir, 'incomplete-b'),
+    ];
+    const sessionId = 'filtered-list-incomplete-session';
+    const manager = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      listSessions: (opts?: { surface?: string }) => Promise<Array<{ id: string }>>;
+      readSessionCapture: (id: string) => Promise<unknown>;
+    };
+    await manager.listSessions({ surface: 'acp' });
+    for (const projectDir of projectDirs) {
+      await writeMinimalSession(projectDir, sessionId, {
+        runtimeInfo: { surface: 'acp' },
+        lineageVersion: 2,
+        activeEntryId: null,
+        activeMessageCount: 0,
+      });
+    }
+    const originalReaddir = fs.promises.readdir.bind(fs.promises);
+    const readdir = vi.spyOn(fs.promises, 'readdir').mockImplementation(
+      async (directory, options) => {
+        if (path.resolve(String(directory)) === path.resolve(projectDirs[1]!)) {
+          throw Object.assign(new Error('project unreadable'), { code: 'EACCES' });
+        }
+        return originalReaddir(directory, options as never);
+      },
+    );
+    try {
+      expect(await manager.listSessions({ surface: 'acp' })).toHaveLength(1);
+    } finally {
+      readdir.mockRestore();
+    }
+    await expect(manager.readSessionCapture(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
   it('createSessionManager.storage routes writes into the manager-owned sessionsDir', async () => {
     const overrideDir = path.join(tempHome, 'storage-rw-test');
     await mkdir(overrideDir, { recursive: true });

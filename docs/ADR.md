@@ -149,6 +149,24 @@
 > no longer override auto-resume/resume discovery or trigger the caller-ID
 > missing-storage warning.
 >
+> **v0.7.79 conversation-history addendum:** raw transcript APIs remain an
+> append-order physical audit. Ordinary chat recovery uses a separate
+> `readConversationHistory()` / Runtime `sessions.conversation*` projection.
+> It folds copies only from persisted provenance or a unique compaction-boundary
+> lineage suffix, reports `resolved` / `partial` / `ambiguous`, and retains all
+> candidates when evidence is insufficient. Immutable pages carry the same
+> projection revision, while fork/rewind accept a physical boundary plus the
+> captured source revision and fail closed if either is stale or missing. This
+> avoids content-, timestamp-, and `turnId`-based guesses without changing the
+> raw audit format. Conflicting or dangling provenance never authorizes a fold;
+> diagnostic evidence is bounded separately from preserved conversation data.
+> An inactive compaction epoch or non-leaf ancestor may be crossed only when a
+> contiguous retained prefix has exact provenance and its complete parent path
+> predates the compaction in strict append order; legacy content matching never
+> receives that cross-epoch authority.
+> A post-compaction fork keeps active context compact and carries only a proven
+> provenance seed needed to reproduce the selected ordinary-history prefix.
+>
 > **v0.7.60 CAP-099 addendum:** SDK transcript entries now expose clone provenance (`logicalId` / `sourceEntryId`) so hosts can fold cloned or forked history without guessing from role, content, timestamp, or `[compacted]` placeholders. `loadFullTranscript()` remains raw append-order scrollback; it does not silently merge branches or hide compaction notices.
 
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。

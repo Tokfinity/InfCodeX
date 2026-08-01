@@ -1,7 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'fs';
+import fsSync, { existsSync } from 'fs';
 import fsPromises from 'fs/promises';
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2337,6 +2337,710 @@ describe('FileSessionStorage', () => {
     expect(existsSync(lockPath)).toBe(false);
     expect(existsSync(lockQueue)).toBe(true);
     expect(await fsPromises.readdir(lockQueue)).toEqual([]);
+  });
+
+  it('reads each strict Session bundle payload at most once', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-single-payload-read';
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'read once' }],
+      title: 'Strict single payload read',
+      gitRoot,
+      lineage: createSessionLineage([{ role: 'user', content: 'read once' }]),
+    });
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const payloadPaths = [
+      path.join(projectDir, `${sessionId}.jsonl`),
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      path.join(projectDir, `${sessionId}.archive.jsonl`),
+    ];
+    await writeFile(payloadPaths[1]!, '', 'utf8');
+    await writeFile(payloadPaths[2]!, '', 'utf8');
+
+    const readFileSpy = vi.spyOn(fsPromises, 'readFile');
+    const openSpy = vi.spyOn(fsPromises, 'open');
+    const snapshot = await storage.readFullSnapshot(sessionId);
+    expect(snapshot).not.toBeNull();
+    for (const payloadPath of payloadPaths) {
+      const readFileCalls = readFileSpy.mock.calls.filter(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(payloadPath),
+      ).length;
+      const openCalls = openSpy.mock.calls.filter(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(payloadPath),
+      ).length;
+      expect(readFileCalls + openCalls).toBe(1);
+    }
+  });
+
+  it('fails a discovery-based strict capture when a duplicate appears mid-read', async () => {
+    const { readStableSessionBundleFiles } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-location-topology-change';
+    const firstDir = path.join(sessionsDir, 'topology-a');
+    const secondDir = path.join(sessionsDir, 'topology-b');
+    const firstPath = path.join(firstDir, `${sessionId}.jsonl`);
+    const secondPath = path.join(secondDir, `${sessionId}.jsonl`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await writeFile(firstPath, payload, 'utf8');
+    const originalOpen = fsPromises.open.bind(fsPromises);
+    let releaseOpen: (() => void) | undefined;
+    let markOpenStarted: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    const openStarted = new Promise<void>((resolve) => {
+      markOpenStarted = resolve;
+    });
+    const open = vi.spyOn(fsPromises, 'open').mockImplementation(
+      async (file, flags, mode) => {
+        if (path.resolve(String(file)) === path.resolve(firstPath)) {
+          markOpenStarted?.();
+          await openGate;
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      const capture = readStableSessionBundleFiles(sessionsDir, sessionId);
+      await openStarted;
+      await mkdir(secondDir, { recursive: true });
+      await writeFile(secondPath, payload, 'utf8');
+      releaseOpen?.();
+      await expect(capture).rejects.toMatchObject({ code: 'data_changed' });
+    } finally {
+      releaseOpen?.();
+      open.mockRestore();
+    }
+  });
+
+  it('does not grant strict locator authority when the sessions-root traversal fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-incomplete-root-traversal';
+    const flatPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(flatPath, `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Incomplete root traversal',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`, 'utf8');
+
+    const originalReaddir = fsPromises.readdir.bind(fsPromises);
+    const readdir = vi.spyOn(fsPromises, 'readdir').mockImplementation(
+      async (directory, options) => {
+        if (path.resolve(String(directory)) === path.resolve(sessionsDir)) {
+          throw Object.assign(new Error('sessions root unreadable'), { code: 'EACCES' });
+        }
+        return originalReaddir(directory, options as never);
+      },
+    );
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+        .rejects.toMatchObject({ code: 'data_changed' });
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it.each(['main', 'archived'] as const)(
+    'fails strict candidate discovery closed when a project %s path is inaccessible',
+    async (candidateKind) => {
+      const { FileSessionStorage, readStableSessionBundleFiles } = await import('./storage.js');
+      const sessionsDir = testSessionsDir();
+      const sessionId = `strict-inaccessible-project-${candidateKind}`;
+      const firstDir = path.join(sessionsDir, 'accessible-project');
+      const secondDir = path.join(sessionsDir, 'inaccessible-project');
+      const inaccessiblePath = candidateKind === 'main'
+        ? path.join(secondDir, `${sessionId}.jsonl`)
+        : path.join(secondDir, 'archived', `${sessionId}.jsonl`);
+      const payload = `${JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Inaccessible project candidate',
+        createdAt: '2026-07-31T00:00:00.000Z',
+        scope: 'user',
+        lineageVersion: 2,
+        activeEntryId: null,
+        activeMessageCount: 0,
+      })}\n`;
+      await mkdir(firstDir, { recursive: true });
+      await mkdir(path.dirname(inaccessiblePath), { recursive: true });
+      await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+      const originalStat = fsSync.statSync.bind(fsSync);
+      const stat = vi.spyOn(fsSync, 'statSync').mockImplementation(
+        (candidate, options) => {
+          if (path.resolve(String(candidate)) === path.resolve(inaccessiblePath)) {
+            throw Object.assign(new Error('candidate inaccessible'), { code: 'EACCES' });
+          }
+          return originalStat(candidate, options as never);
+        },
+      );
+      try {
+        await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+          .rejects.toMatchObject({ code: 'data_changed' });
+        await expect(readStableSessionBundleFiles(sessionsDir, sessionId))
+          .rejects.toMatchObject({ code: 'data_changed' });
+      } finally {
+        stat.mockRestore();
+      }
+    },
+  );
+
+  it('invalidates a verified strict locator when another process adds a project candidate', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-cross-process-topology-change';
+    const firstDir = path.join(sessionsDir, 'cross-process-a');
+    const secondDir = path.join(sessionsDir, 'cross-process-b');
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Cross-process topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    await expect(storage.readFullSnapshot(sessionId)).resolves.not.toBeNull();
+
+    // A raw filesystem write models a second process whose topology mutation
+    // is invisible to this process-local positive locator cache.
+    await mkdir(secondDir, { recursive: true });
+    await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('invalidates a verified strict locator for a cross-process candidate in an existing project', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-existing-project-topology-change';
+    const firstDir = path.join(sessionsDir, 'existing-project-a');
+    const secondDir = path.join(sessionsDir, 'existing-project-b');
+    const topologyEpochPath = path.join(sessionsDir, '.location-topology');
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Existing project topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    await writeFile(topologyEpochPath, 'epoch-before\n', 'utf8');
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    await expect(storage.readFullSnapshot(sessionId)).resolves.not.toBeNull();
+
+    // Simulate the durable topology epoch advanced by another SDK process
+    // before it exposes a same-ID main file in an already-known project.
+    await writeFile(topologyEpochPath, 'epoch-after\n', 'utf8');
+    await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('invalidates a verified locator after a legacy writer uses the Session lock', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-legacy-writer-topology-change';
+    const firstDir = path.join(sessionsDir, 'legacy-writer-a');
+    const secondDir = path.join(sessionsDir, 'legacy-writer-b');
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Legacy writer topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    // Pre-create both the old global lock directory and this Session's queue
+    // so the legacy write does not alter the sessions-root identity.
+    await mkdir(`${lockPath}.queue`, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    await expect(storage.readFullSnapshot(sessionId)).resolves.not.toBeNull();
+
+    await withKodaXFileLock(lockPath, async () => {
+      await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    });
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('fails a cached strict capture when the verified root topology changes mid-read', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'strict-cached-topology-change';
+    const firstDir = path.join(sessionsDir, 'cached-topology-a');
+    const secondDir = path.join(sessionsDir, 'cached-topology-b');
+    const firstPath = path.join(firstDir, `${sessionId}.jsonl`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Cached topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await writeFile(firstPath, payload, 'utf8');
+    const storage = new FileSessionStorage({ sessionsDir });
+    await expect(storage.readFullSnapshot(sessionId)).resolves.not.toBeNull();
+
+    const originalOpen = fsPromises.open.bind(fsPromises);
+    let releaseOpen: (() => void) | undefined;
+    let markOpenStarted: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => { releaseOpen = resolve; });
+    const openStarted = new Promise<void>((resolve) => { markOpenStarted = resolve; });
+    const open = vi.spyOn(fsPromises, 'open').mockImplementation(
+      async (file, flags, mode) => {
+        if (path.resolve(String(file)) === path.resolve(firstPath)) {
+          markOpenStarted?.();
+          await openGate;
+        }
+        return originalOpen(file, flags, mode);
+      },
+    );
+    try {
+      const capture = storage.readFullSnapshot(sessionId);
+      await openStarted;
+      await mkdir(secondDir, { recursive: true });
+      await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+      releaseOpen?.();
+      await expect(capture).rejects.toMatchObject({ code: 'data_changed' });
+    } finally {
+      releaseOpen?.();
+      open.mockRestore();
+    }
+  });
+
+  it('shares known Session locations and re-verifies them after lifecycle moves', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'process-location-index';
+    const writer = new FileSessionStorage({ sessionsDir });
+    await writer.save(sessionId, {
+      messages: [{ role: 'user', content: 'indexed' }],
+      title: 'Process location index',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      lineage: createSessionLineage([{ role: 'user', content: 'indexed' }]),
+    });
+    const root = path.resolve(sessionsDir);
+    const assertIndexedRead = async (
+      expectedPresent: boolean,
+      expectIndexed = true,
+    ): Promise<void> => {
+      const readdirSpy = vi.spyOn(fsPromises, 'readdir');
+      const snapshot = await new FileSessionStorage({ sessionsDir })
+        .readFullSnapshot(sessionId);
+      expect(snapshot !== null).toBe(expectedPresent);
+      const rootReads = readdirSpy.mock.calls.filter(
+        ([candidate]) => path.resolve(String(candidate)) === root,
+      );
+      expect(rootReads.length === 0).toBe(expectIndexed);
+      readdirSpy.mockRestore();
+    };
+
+    await assertIndexedRead(true);
+    expect(await writer.archive(sessionId)).toBe(true);
+    await assertIndexedRead(true, false);
+    await assertIndexedRead(true);
+    expect(await writer.unarchive(sessionId)).toBe(true);
+    await assertIndexedRead(true, false);
+    await assertIndexedRead(true);
+    await writer.delete(sessionId);
+    await assertIndexedRead(false, false);
+  });
+
+  it('indexes Session paths discovered by list for later id-only reads', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'list-location-index';
+    const projectDir = path.join(sessionsDir, 'manually-discovered-project');
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const timestamp = '2026-07-31T00:00:00.000Z';
+    const entry = {
+      id: 'entry_list_location_index',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'discovered by list' },
+    };
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(mainPath, [
+      JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'List location index',
+        createdAt: timestamp,
+        scope: 'user',
+        lineageVersion: 2,
+        activeEntryId: entry.id,
+        activeMessageCount: 1,
+      }),
+      JSON.stringify({ _type: 'lineage_entry', entry }),
+    ].join('\n') + '\n', 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect((await storage.list(undefined, { limit: 10 }))
+      .some((session) => session.id === sessionId)).toBe(true);
+    const readdirSpy = vi.spyOn(fsPromises, 'readdir');
+    await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+      .resolves.not.toBeNull();
+    expect(readdirSpy.mock.calls.filter(
+      ([candidate]) => path.resolve(String(candidate)) === path.resolve(sessionsDir),
+    )).toHaveLength(0);
+  });
+
+  it('invalidates a list-derived locator after a legacy Session writer completes', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'list-legacy-writer-topology-change';
+    const firstDir = path.join(sessionsDir, 'list-legacy-writer-a');
+    const secondDir = path.join(sessionsDir, 'list-legacy-writer-b');
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'List legacy writer topology change',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    await mkdir(`${lockPath}.queue`, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect((await storage.list(undefined, { limit: 10 }))
+      .some((session) => session.id === sessionId)).toBe(true);
+
+    await withKodaXFileLock(lockPath, async () => {
+      await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    });
+    await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+      .rejects.toMatchObject({ code: 'data_changed' });
+  });
+
+  it('keeps a list-derived locator authoritative after an unrelated legacy write', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const firstId = 'list-unrelated-writer-first';
+    const secondId = 'list-unrelated-writer-second';
+    const projectDir = path.join(sessionsDir, 'list-unrelated-writer-project');
+    const secondLockKey = createHash('sha256').update(secondId, 'utf8').digest('hex');
+    const secondLockPath = path.join(
+      sessionsDir,
+      '.write-locks',
+      `${secondLockKey}.lock`,
+    );
+    const payload = (id: string): string => `${JSON.stringify({
+      _type: 'meta',
+      id,
+      title: id,
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(`${secondLockPath}.queue`, { recursive: true });
+    await writeFile(path.join(projectDir, `${firstId}.jsonl`), payload(firstId), 'utf8');
+    await writeFile(path.join(projectDir, `${secondId}.jsonl`), payload(secondId), 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect(await storage.list(undefined, { limit: 10 })).toHaveLength(2);
+    await withKodaXFileLock(secondLockPath, async () => {
+      await writeFile(
+        path.join(projectDir, `${secondId}.jsonl`),
+        payload(secondId),
+        'utf8',
+      );
+    });
+
+    const firstRead = vi.spyOn(fsPromises, 'readdir');
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(firstId))
+        .resolves.not.toBeNull();
+      expect(firstRead.mock.calls.some(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(sessionsDir),
+      )).toBe(false);
+    } finally {
+      firstRead.mockRestore();
+    }
+    const secondRead = vi.spyOn(fsPromises, 'readdir');
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(secondId))
+        .resolves.not.toBeNull();
+      expect(secondRead.mock.calls.some(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(sessionsDir),
+      )).toBe(true);
+    } finally {
+      secondRead.mockRestore();
+    }
+  });
+
+  it('invalidates a list-derived locator after a legacy writer held the lock throughout listing', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'list-active-legacy-writer';
+    const firstDir = path.join(sessionsDir, 'list-active-writer-a');
+    const secondDir = path.join(sessionsDir, 'list-active-writer-b');
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Active legacy writer',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    await mkdir(`${lockPath}.queue`, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+    let releaseWriter: (() => void) | undefined;
+    let markWriterStarted: (() => void) | undefined;
+    const writerGate = new Promise<void>((resolve) => { releaseWriter = resolve; });
+    const writerStarted = new Promise<void>((resolve) => { markWriterStarted = resolve; });
+    const writer = withKodaXFileLock(lockPath, async () => {
+      markWriterStarted?.();
+      await writerGate;
+      await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    });
+    await writerStarted;
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect((await storage.list(undefined, { limit: 10 }))
+      .some((session) => session.id === sessionId)).toBe(true);
+    releaseWriter?.();
+    await writer;
+
+    await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+      .rejects.toMatchObject({ code: 'data_changed' });
+  });
+
+  it('keeps strict ambiguity fail-closed after a default list hides archived summaries', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'list-location-ambiguity';
+    const projectDir = path.join(sessionsDir, 'ambiguous-list-project');
+    const activePath = path.join(projectDir, `${sessionId}.jsonl`);
+    const archivedDir = path.join(projectDir, 'archived');
+    const archivedPath = path.join(archivedDir, `${sessionId}.jsonl`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Ambiguous list location',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(archivedDir, { recursive: true });
+    await writeFile(activePath, payload, 'utf8');
+    await writeFile(archivedPath, payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    const listed = await storage.list(undefined, { limit: 10 });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: sessionId });
+    expect(listed[0]?.archived).toBeUndefined();
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('does not treat a project-scoped list location as globally verified', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'scoped-list-location-ambiguity';
+    const projectRoots = process.platform === 'win32'
+      ? ['C:/scoped-list-a', 'C:/scoped-list-b']
+      : ['/scoped-list-a', '/scoped-list-b'];
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Scoped list ambiguity',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    for (const projectRoot of projectRoots) {
+      const projectDir = path.join(
+        sessionsDir,
+        deriveProjectKeyFromRoot(projectRoot).key,
+      );
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(path.join(projectDir, `${sessionId}.jsonl`), payload, 'utf8');
+    }
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect(await storage.list(projectRoots[0], { limit: 10 })).toHaveLength(1);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'rewrite one legacy duplicate' }],
+      title: 'Scoped list ambiguity rewrite',
+      gitRoot: projectRoots[0]!,
+      lineage: createSessionLineage([
+        { role: 'user', content: 'rewrite one legacy duplicate' },
+      ]),
+    });
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('drops a partial location hint when its file disappears before indexing', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'vanished-partial-location';
+    const mainPath = path.join(sessionsDir, 'vanished-project', `${sessionId}.jsonl`);
+    await mkdir(path.dirname(mainPath), { recursive: true });
+    await writeFile(mainPath, '{}\n', 'utf8');
+    await rm(mainPath);
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    storage.indexSessionLocations([mainPath], false);
+    await expect(storage.readFullSnapshot(sessionId)).resolves.toBeNull();
+  });
+
+  it('does not treat an empty hinted payload as proof that the id is globally missing', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'empty-hinted-location-ambiguity';
+    const projectRoots = process.platform === 'win32'
+      ? ['C:/empty-hint-a', 'C:/empty-hint-b']
+      : ['/empty-hint-a', '/empty-hint-b'];
+    const projectDirs = projectRoots.map((projectRoot) => path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(projectRoot).key,
+    ));
+    await Promise.all(projectDirs.map((projectDir) => mkdir(projectDir, {
+      recursive: true,
+    })));
+    await writeFile(
+      path.join(projectDirs[0]!, `${sessionId}.jsonl`),
+      '',
+      'utf8',
+    );
+    await writeFile(
+      path.join(projectDirs[1]!, `${sessionId}.jsonl`),
+      `${JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Other duplicate',
+        createdAt: '2026-07-31T00:00:00.000Z',
+        scope: 'user',
+      })}\n`,
+      'utf8',
+    );
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    expect(await storage.list(projectRoots[0], { limit: 10 })).toEqual([]);
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'replace empty hinted payload' }],
+      title: 'Replaced empty hint',
+      gitRoot: projectRoots[0]!,
+      lineage: createSessionLineage([
+        { role: 'user', content: 'replace empty hinted payload' },
+      ]),
+    });
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
+  });
+
+  it('does not verify a global list index when one project traversal fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'incomplete-global-list-index';
+    const projectDirs = [
+      path.join(sessionsDir, 'incomplete-list-a'),
+      path.join(sessionsDir, 'incomplete-list-b'),
+    ];
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Incomplete global list',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.list(undefined, { limit: 10 });
+    for (const projectDir of projectDirs) {
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(path.join(projectDir, `${sessionId}.jsonl`), payload, 'utf8');
+    }
+    const originalReaddir = fsPromises.readdir.bind(fsPromises);
+    const readdir = vi.spyOn(fsPromises, 'readdir').mockImplementation(
+      async (directory, options) => {
+        if (path.resolve(String(directory)) === path.resolve(projectDirs[1]!)) {
+          throw Object.assign(new Error('project unreadable'), { code: 'EACCES' });
+        }
+        return originalReaddir(directory, options as never);
+      },
+    );
+    try {
+      expect(await storage.list(undefined, { limit: 10 })).toHaveLength(1);
+    } finally {
+      readdir.mockRestore();
+    }
+    await expect(storage.readFullSnapshot(sessionId)).rejects.toMatchObject({
+      code: 'data_changed',
+    });
   });
 
   it('fails strict reads closed during an in-progress layout migration', async () => {

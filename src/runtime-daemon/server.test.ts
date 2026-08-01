@@ -933,7 +933,7 @@ describe('runtime daemon dispatcher', () => {
     }
   });
 
-  it('authorizes paged transcript reads with the session observation scope', async () => {
+  it('authorizes paged transcript and conversation reads with the session observation scope', async () => {
     const dispatcher = createRuntimeDaemonDispatcher({
       runtime: makeRuntime(),
       grantedScopes: ['session:observe'],
@@ -955,10 +955,28 @@ describe('runtime daemon dispatcher', () => {
       'session.transcript.search',
       { sessionId: 'session-1', query: 'old detail' },
     ));
+    const conversation = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-conversation',
+      'session.conversation',
+      { sessionId: 'session-1' },
+    ));
+    const conversationPage = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-conversation-page',
+      'session.conversation.page',
+      { sessionId: 'session-1' },
+    ));
+    const conversationChunk = await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-scoped-conversation-chunk',
+      'session.conversation.entryChunk',
+      { sessionId: 'session-1', revision: 'rev-1', entryIndex: 0 },
+    ));
 
     expect(isRuntimeDaemonSuccessResponse(page)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(chunk)).toBe(true);
     expect(isRuntimeDaemonSuccessResponse(search)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(conversation)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(conversationPage)).toBe(true);
+    expect(isRuntimeDaemonSuccessResponse(conversationChunk)).toBe(true);
     dispatcher.close();
   });
 
@@ -1019,6 +1037,12 @@ describe('runtime daemon dispatcher', () => {
             defaultScope: 'compacted',
             citedEntries: true,
           },
+          conversationHistory: {
+            version: 1,
+            immutablePaging: true,
+            revisionedBoundaries: true,
+            ambiguityReporting: true,
+          },
           skillLearningLoop: {
             version: 1,
             activation: 'project_scoped_canary',
@@ -1044,6 +1068,7 @@ describe('runtime daemon dispatcher', () => {
           },
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
+          runtimeEventCoalescing: { version: 1 },
           runtimeAutoModeGuardrail: {
             version: 4,
             owner: 'session-runtime',
@@ -1088,6 +1113,7 @@ describe('runtime daemon dispatcher', () => {
       | undefined;
     const observation = createTestObservation('session-1');
     const closeObservation = vi.spyOn(observation, 'close');
+    let reusedWaitSignal: AbortSignal | undefined;
     const runtime: KodaXRuntime & { emit(event: RuntimeEvent): void } = {
       ...baseRuntime,
       sessions: {
@@ -1095,6 +1121,17 @@ describe('runtime daemon dispatcher', () => {
         observe() {
           return new Promise<RuntimeSessionObservation>((resolve) => {
             resolveObservation = resolve;
+          });
+        },
+      },
+      agents: {
+        ...baseRuntime.agents,
+        wait(_sessionId, _afterSequence, _timeoutMs, options) {
+          reusedWaitSignal = options?.signal;
+          return new Promise<undefined>((resolve) => {
+            options?.signal?.addEventListener('abort', () => resolve(undefined), {
+              once: true,
+            });
           });
         },
       },
@@ -1116,14 +1153,155 @@ describe('runtime daemon dispatcher', () => {
     expect(cancelled).toMatchObject({
       result: { ok: true },
     });
-    resolveObservation?.(observation);
-
     const response = await pending;
     expect(isRuntimeDaemonSuccessResponse(response)).toBe(false);
     if (!isRuntimeDaemonSuccessResponse(response)) {
       expect(response.error.code).toBe('read_cancelled');
     }
-    expect(closeObservation).toHaveBeenCalledTimes(1);
+    const reused = dispatcher.handle(createRuntimeDaemonRequest(
+      'req-observe-slow',
+      'agents.wait',
+      { sessionId: 'session-1', timeoutMs: 30_000 },
+    ));
+    await Promise.resolve();
+    resolveObservation?.(observation);
+    await vi.waitFor(() => expect(closeObservation).toHaveBeenCalledTimes(1));
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-observe-slow',
+      'run.get',
+      { runId: 'run-still-running' },
+    ))).resolves.toMatchObject({ error: { code: 'invalid_request' } });
+    await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-cancel-reused-observe-id',
+      'request.cancel',
+      { requestId: 'req-observe-slow' },
+    ));
+    await expect(reused).resolves.toMatchObject({
+      error: { code: 'read_cancelled' },
+    });
+    expect(reusedWaitSignal?.aborted).toBe(true);
+    dispatcher.close();
+  });
+
+  it('cancels waiters without cancelling Runs and fences late request-id cleanup', async () => {
+    const runtime = makeRuntime();
+    let resolveRun: ((result: RuntimeRunResult) => void) | undefined;
+    const runResult = new Promise<RuntimeRunResult>((resolve) => {
+      resolveRun = resolve;
+    });
+    let agentWaitSignal: AbortSignal | undefined;
+    vi.spyOn(runtime.runs, 'await').mockReturnValue(runResult);
+    const abortRun = vi.spyOn(runtime.runs, 'abort');
+    vi.spyOn(runtime.agents, 'wait').mockImplementation(
+      (_sessionId, _afterSequence, _timeoutMs, options) => {
+        agentWaitSignal = options?.signal;
+        return new Promise<undefined>((resolve) => {
+          options?.signal?.addEventListener('abort', () => resolve(undefined), {
+            once: true,
+          });
+        });
+      },
+    );
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const first = dispatcher.handle(createRuntimeDaemonRequest(
+      'req-reused-after-cancel',
+      'run.await',
+      { runId: 'run-still-running' },
+    ));
+    await Promise.resolve();
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-cancel-run-waiter',
+      'request.cancel',
+      { requestId: 'req-reused-after-cancel' },
+    ))).resolves.toMatchObject({ result: { ok: true } });
+    await expect(first).resolves.toMatchObject({
+      error: { code: 'read_cancelled' },
+    });
+    expect(abortRun).not.toHaveBeenCalled();
+
+    const second = dispatcher.handle(createRuntimeDaemonRequest(
+      'req-reused-after-cancel',
+      'agents.wait',
+      { sessionId: 'session-1', timeoutMs: 30_000 },
+    ));
+    await Promise.resolve();
+    resolveRun?.({
+      runId: 'run-still-running',
+      sessionId: 'session-1',
+      phase: 'completed',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-reused-after-cancel',
+      'run.get',
+      { runId: 'run-still-running' },
+    ))).resolves.toMatchObject({
+      error: { code: 'invalid_request' },
+    });
+    await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-cancel-agent-waiter',
+      'request.cancel',
+      { requestId: 'req-reused-after-cancel' },
+    ));
+    await expect(second).resolves.toMatchObject({
+      error: { code: 'read_cancelled' },
+    });
+    expect(agentWaitSignal?.aborted).toBe(true);
+    dispatcher.close();
+  });
+
+  it('does not let control frames reuse an active request id or ack unfinished work', async () => {
+    const runtime = makeRuntime();
+    let waitSignal: AbortSignal | undefined;
+    vi.spyOn(runtime.agents, 'wait').mockImplementation(
+      (_sessionId, _afterSequence, _timeoutMs, options) => {
+        waitSignal = options?.signal;
+        return new Promise<undefined>((resolve) => {
+          options?.signal?.addEventListener('abort', () => resolve(undefined), {
+            once: true,
+          });
+        });
+      },
+    );
+    const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+    await initializeDispatcher(dispatcher);
+
+    const pending = dispatcher.handle(createRuntimeDaemonRequest(
+      'req-control-fence',
+      'agents.wait',
+      { sessionId: 'session-1', timeoutMs: 30_000 },
+    ));
+    await Promise.resolve();
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-control-fence',
+      'request.cancel',
+      { requestId: 'req-control-fence' },
+    ))).resolves.toMatchObject({ error: { code: 'invalid_request' } });
+    expect(waitSignal?.aborted).toBe(false);
+
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-early-ack',
+      'request.ack',
+      { requestId: 'req-control-fence' },
+    ))).resolves.toMatchObject({ result: { ok: false } });
+    await expect(dispatcher.handle(createRuntimeDaemonRequest(
+      'req-control-fence',
+      'run.get',
+      { runId: 'run-still-running' },
+    ))).resolves.toMatchObject({ error: { code: 'invalid_request' } });
+
+    await dispatcher.handle(createRuntimeDaemonRequest(
+      'req-final-cancel',
+      'request.cancel',
+      { requestId: 'req-control-fence' },
+    ));
+    await expect(pending).resolves.toMatchObject({
+      error: { code: 'read_cancelled' },
+    });
     dispatcher.close();
   });
 
@@ -1162,13 +1340,20 @@ describe('runtime daemon dispatcher', () => {
 
   it('advertises orphan exit only when the daemon host actually enabled that policy', async () => {
     const persistent = createRuntimeDaemonDispatcher({
-      runtime: makeRuntime(),
+      runtime: {
+        ...makeRuntime(),
+        capabilities: {},
+      },
       capabilities: {
         daemonOrphanExit: { version: 99 },
+        runtimeEventCoalescing: { version: 99 },
       },
     });
     const persistentInitialized = await initializeDispatcher(persistent);
     expect(persistentInitialized.capabilities).not.toHaveProperty('daemonOrphanExit');
+    expect(persistentInitialized.capabilities).not.toHaveProperty(
+      'runtimeEventCoalescing',
+    );
     persistent.close();
 
     const spaceManaged = createRuntimeDaemonDispatcher({
@@ -1243,6 +1428,7 @@ describe('runtime daemon dispatcher', () => {
         events: true,
         contextDiagnostics: true,
         actorControlPlane: { version: 1, methodNamespace: 'agents' },
+        runtimeEventCoalescing: { version: 1 },
       });
     }
     if (isRuntimeDaemonSuccessResponse(activeEntry)) {
@@ -2384,6 +2570,13 @@ const METHOD_SMOKE_PARAMS = {
     entryIndex: 0,
   },
   'session.transcript.search': { sessionId: 'session-1', query: 'historical detail' },
+  'session.conversation': { sessionId: 'session-1' },
+  'session.conversation.page': { sessionId: 'session-1' },
+  'session.conversation.entryChunk': {
+    sessionId: 'session-1',
+    revision: 'sha256:conversation-smoke',
+    entryIndex: 0,
+  },
   'session.observe': { sessionId: 'session-1' },
   'session.diagnostics': { sessionId: 'session-1' },
   'session.fork': { sessionId: 'session-1' },
@@ -2608,6 +2801,9 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
       startedAt: '2026-07-09T00:00:00.000Z',
       version: '0.7.66',
     },
+    capabilities: {
+      runtimeEventCoalescing: { version: 1 },
+    },
     sessions: {
       async create(input) {
         return {
@@ -2639,6 +2835,15 @@ function makeRuntime(): KodaXRuntime & { emit(event: RuntimeEvent): void } {
         return null;
       },
       async transcriptSearch() {
+        return null;
+      },
+      async conversation() {
+        return null;
+      },
+      async conversationPage() {
+        return null;
+      },
+      async conversationEntryChunk() {
         return null;
       },
       async observe(sessionId) {

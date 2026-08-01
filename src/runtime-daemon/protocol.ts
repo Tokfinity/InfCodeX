@@ -24,6 +24,9 @@ export type RuntimeDaemonMethod =
   | 'session.transcript.page'
   | 'session.transcript.entryChunk'
   | 'session.transcript.search'
+  | 'session.conversation'
+  | 'session.conversation.page'
+  | 'session.conversation.entryChunk'
   | 'session.observe'
   | 'session.diagnostics'
   | 'session.fork'
@@ -325,6 +328,9 @@ export const RUNTIME_DAEMON_METHODS: readonly RuntimeDaemonMethod[] = [
   'session.transcript.page',
   'session.transcript.entryChunk',
   'session.transcript.search',
+  'session.conversation',
+  'session.conversation.page',
+  'session.conversation.entryChunk',
   'session.observe',
   'session.diagnostics',
   'session.fork',

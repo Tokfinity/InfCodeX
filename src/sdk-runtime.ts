@@ -7,6 +7,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -120,6 +121,11 @@ import type {
   DeleteSessionResult,
   FullTranscriptSessionData,
   SessionManager,
+  SessionConversationHistoryData,
+  SessionConversationHistoryEntry,
+  SessionConversationHistoryIssue,
+  SessionConversationHistoryStatus,
+  SessionReadCapture,
   SessionReadOptions,
   SessionSummary,
   SessionTranscriptEntry,
@@ -665,6 +671,7 @@ export interface ConnectKodaXRuntimeOptions {
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
+  runtimeEventCoalescing: 1,
 } as const);
 
 export interface RuntimeCapabilityRequirements {
@@ -697,6 +704,8 @@ export interface RuntimeCapabilityRequirements {
   readonly transcriptPaging?: 1;
   /** Require deterministic exact-history search over merged persisted lineage. */
   readonly transcriptSearch?: 1;
+  /** Require SDK-resolved ordinary history with explicit legacy ambiguity. */
+  readonly conversationHistory?: 1;
   readonly connectionLifecycle?: 1;
   readonly typedRuntimeEvents?: 1;
   readonly daemonSafeRunInput?: 1;
@@ -705,6 +714,8 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonManagement?: 1;
   /** Require an auto-started daemon whose current host has orphan idle-exit enabled. */
   readonly daemonOrphanExit?: 1;
+  /** Require source-level bounded coalescing before sequence allocation and persistence. */
+  readonly runtimeEventCoalescing?: 1;
   /** Optional integration failures are isolated, observable, and hot-recoverable. */
   readonly integrationConfigResilience?: 1;
   readonly actorControlPlane?: 1;
@@ -861,6 +872,7 @@ export interface RuntimeAgentService {
     sessionId: string,
     afterSequence?: number,
     timeoutMs?: number,
+    options?: Readonly<Pick<RuntimeReadOptions, "signal">>,
   ): Promise<AgentEvent | undefined>;
 }
 
@@ -1070,7 +1082,7 @@ export interface RuntimeRunSessionLoadedEventPayload {
   readonly iteration?: number;
 }
 
-/** `session.loaded` is emitted both for an explicit SDK load and a run provider session bind. */
+/** Durable compatibility event emitted when a run binds its provider session. */
 export type RuntimeSessionLoadedEventPayload =
   RuntimeSession | RuntimeRunSessionLoadedEventPayload;
 
@@ -1084,6 +1096,35 @@ export interface RuntimeSessionSummary extends RuntimeSession {
 }
 
 export type RuntimeTranscript = FullTranscriptSessionData;
+
+export interface RuntimeConversationHistory extends SessionConversationHistoryData {
+  /** Content-derived identity shared by direct and paged conversation reads. */
+  readonly revision: string;
+}
+
+export interface RuntimeConversationHistorySliceEntry {
+  readonly index: number;
+  readonly boundaryId?: string;
+  readonly byteLength: number;
+  readonly oversized: boolean;
+  readonly entry?: SessionConversationHistoryEntry;
+}
+
+export interface RuntimeConversationHistorySlice {
+  readonly revision: string;
+  readonly sourceRevision: string;
+  readonly status: SessionConversationHistoryStatus;
+  readonly issues: readonly SessionConversationHistoryIssue[];
+  readonly entries: readonly RuntimeConversationHistorySliceEntry[];
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
+export interface RuntimeConversationHistoryPageInput {
+  readonly sessionId: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+}
 
 export interface RuntimeTranscriptSliceEntry {
   readonly index: number;
@@ -1190,6 +1231,23 @@ export interface RuntimeTranscriptEntryChunk {
   readonly nextCursor?: string;
 }
 
+export interface RuntimeConversationHistoryEntryChunk {
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly boundaryId?: string;
+  readonly encoding: "base64-json";
+  readonly data: string;
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
+export interface RuntimeConversationHistoryEntryChunkInput {
+  readonly sessionId: string;
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly cursor?: string;
+}
+
 export interface RuntimeTranscriptSearchInput {
   readonly sessionId: string;
   readonly query: string;
@@ -1224,6 +1282,12 @@ export interface RuntimeForkSessionInput {
   readonly selector?: string;
   readonly newSessionId?: string;
   readonly title?: string;
+  readonly historyBoundary?: RuntimeConversationHistoryBoundary;
+}
+
+export interface RuntimeConversationHistoryBoundary {
+  readonly entryId: string;
+  readonly sourceRevision: string;
 }
 
 export interface RuntimeSessionSettings {
@@ -1273,6 +1337,7 @@ export interface RuntimeAppendNoticeInput {
 export interface RuntimeRewindSessionInput {
   readonly sessionId: string;
   readonly selector?: string;
+  readonly historyBoundary?: RuntimeConversationHistoryBoundary;
 }
 
 export interface RuntimeSetActiveEntryInput {
@@ -1392,6 +1457,18 @@ export interface RuntimeSessionService {
     input: RuntimeTranscriptSearchInput,
     options?: RuntimeReadOptions,
   ): Promise<RuntimeTranscriptSearchResult | null>;
+  conversation(
+    sessionId: string,
+    options?: RuntimeReadOptions,
+  ): Promise<RuntimeConversationHistory | null>;
+  conversationPage(
+    input: RuntimeConversationHistoryPageInput,
+    options?: RuntimeReadOptions,
+  ): Promise<RuntimeConversationHistorySlice | null>;
+  conversationEntryChunk(
+    input: RuntimeConversationHistoryEntryChunkInput,
+    options?: RuntimeReadOptions,
+  ): Promise<RuntimeConversationHistoryEntryChunk | null>;
   observe(
     sessionId: string,
     listener: RuntimeEventListener,
@@ -2735,6 +2812,7 @@ interface RuntimeRunRecord {
   readonly result: Promise<RuntimeRunResult>;
   running?: RunningSession;
   abortController?: AbortController;
+  actorFinalizationAbortController?: AbortController;
   mode: RuntimeRunMode;
   readonly origin?: RuntimeRunStatus["origin"];
   readonly continuation?: Omit<RuntimeContinuationStatus, "state">;
@@ -2887,6 +2965,10 @@ interface RuntimeSessionAdmission {
     sessionId: string,
     options?: RuntimeReadOptions,
   ): Promise<KodaXSessionData>;
+  captureRequired(
+    sessionId: string,
+    options?: RuntimeReadOptions,
+  ): Promise<SessionReadCapture>;
   loadExecutable(sessionId: string): Promise<KodaXSessionData>;
 }
 
@@ -2936,8 +3018,17 @@ class RuntimeStatusLockCleanupError extends Error {
   }
 }
 
+class RuntimeStatusLockTimeoutError extends Error {
+  constructor(readonly lockFile: string) {
+    super(`Runtime status lock timed out: ${lockFile}`);
+    this.name = "RuntimeStatusLockTimeoutError";
+  }
+}
+
 const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000;
 const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
+const MAX_RUNTIME_PENDING_EVENTS = 1_024;
+const MAX_RUNTIME_PENDING_EVENT_BYTES = 1024 * 1024;
 const MAX_RUNTIME_MEMORY_RUNS = 1_000;
 const MAX_RUNTIME_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const RUNTIME_EVENT_COALESCE_INTERVAL_MS = 50;
@@ -2960,6 +3051,7 @@ const RUNTIME_TRANSCRIPT_SNAPSHOT_CLOSE_DRAIN_MS = 250;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS = 5 * 60_000;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
   "kodax-transcript-snapshots-";
+const RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS = 5_000;
 const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
 const RUNTIME_PERMISSION_BRIDGE_TOOLS: ReadonlySet<string> = new Set([
   "tool_call",
@@ -3048,6 +3140,7 @@ export async function createKodaXRuntime(
         ? {
             ...options.requirements,
             runtimeAutoModeGuardrail: 4 as const,
+            runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
               ? { daemonOrphanExit: 1 as const }
               : {}),
@@ -3095,6 +3188,12 @@ export async function createKodaXRuntime(
       defaultScope: "compacted",
       citedEntries: true,
     },
+    conversationHistory: {
+      version: 1,
+      immutablePaging: true,
+      revisionedBoundaries: true,
+      ambiguityReporting: true,
+    },
     learningCenter: { version: 1 },
     skillLearningLoop: {
       version: 1,
@@ -3106,6 +3205,7 @@ export async function createKodaXRuntime(
     },
     actorControlPlane: { version: 1, methodNamespace: "agents" },
     sandboxRuntime: sandboxRuntimeCapability(),
+    runtimeEventCoalescing: { version: 1 },
     runtimeAutoModeGuardrail: {
       version: 4,
       owner: "session-runtime",
@@ -3550,8 +3650,8 @@ export async function createKodaXRuntime(
         ownerLivenessClosed = true;
       }
       if (!busClosed) {
-        busClosed = true;
         bus.close();
+        busClosed = true;
       }
     })();
     closeAttempt = attempt;
@@ -3850,6 +3950,7 @@ function assertRuntimeCapabilities(
     requirements?.contextCompaction === undefined &&
     requirements?.transcriptPaging === undefined &&
     requirements?.transcriptSearch === undefined &&
+    requirements?.conversationHistory === undefined &&
     requirements?.connectionLifecycle === undefined &&
     requirements?.typedRuntimeEvents === undefined &&
     requirements?.daemonSafeRunInput === undefined &&
@@ -3857,6 +3958,7 @@ function assertRuntimeCapabilities(
     requirements?.durableRecoveryQueries === undefined &&
     requirements?.daemonManagement === undefined &&
     requirements?.daemonOrphanExit === undefined &&
+    requirements?.runtimeEventCoalescing === undefined &&
     requirements?.integrationConfigResilience === undefined &&
     requirements?.actorControlPlane === undefined &&
     requirements?.runtimeAutoModeGuardrail === undefined
@@ -3900,6 +4002,7 @@ function assertRuntimeCapabilities(
     ["contextCompaction", requirements.contextCompaction],
     ["transcriptPaging", requirements.transcriptPaging],
     ["transcriptSearch", requirements.transcriptSearch],
+    ["conversationHistory", requirements.conversationHistory],
     ["connectionLifecycle", requirements.connectionLifecycle],
     ["typedRuntimeEvents", requirements.typedRuntimeEvents],
     ["daemonSafeRunInput", requirements.daemonSafeRunInput],
@@ -3907,6 +4010,7 @@ function assertRuntimeCapabilities(
     ["durableRecoveryQueries", requirements.durableRecoveryQueries],
     ["daemonManagement", requirements.daemonManagement],
     ["daemonOrphanExit", requirements.daemonOrphanExit],
+    ["runtimeEventCoalescing", requirements.runtimeEventCoalescing],
     ["integrationConfigResilience", requirements.integrationConfigResilience],
     ["actorControlPlane", requirements.actorControlPlane],
     ["runtimeAutoModeGuardrail", requirements.runtimeAutoModeGuardrail],
@@ -4228,6 +4332,7 @@ async function connectKodaXRuntimeInternal(
         ? {
             ...options.requirements,
             runtimeAutoModeGuardrail: 4 as const,
+            runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
               ? { daemonOrphanExit: 1 as const }
               : {}),
@@ -4237,6 +4342,10 @@ async function connectKodaXRuntimeInternal(
       {
         name: "runtimeAutoModeGuardrail",
         version: requirements?.runtimeAutoModeGuardrail,
+      },
+      {
+        name: "runtimeEventCoalescing",
+        version: requirements?.runtimeEventCoalescing,
       },
       {
         name: "daemonOrphanExit",
@@ -4596,12 +4705,40 @@ function createRuntimeSessionService(
     string,
     {
       readonly sessionId: string;
+      readonly view: RuntimeHistorySnapshotViewKind;
       readonly revision: string;
+      readonly sourceRevision: string;
       readonly filePath: string;
       readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+      readonly conversation?: RuntimeConversationSnapshotMetadata;
       readonly expiresAt: number;
     }
   >();
+  const transcriptRevisionBySource = new Map<string, string>();
+  const sessionCaptureFlights = new Map<string, {
+    readonly controller: AbortController;
+    readonly promise: Promise<SessionReadCapture>;
+    waiters: number;
+    settled: boolean;
+  }>();
+  const transcriptMaterializationFlights = new Map<string, {
+    readonly controller: AbortController;
+    readonly promise: Promise<string>;
+    waiters: number;
+    settled: boolean;
+  }>();
+  const materializedSessionCaptureFlights = new Map<string, {
+    readonly controller: AbortController;
+    readonly sessionSeq: number;
+    readonly sourceGeneration: number;
+    readonly promise: Promise<{
+      readonly capture: SessionReadCapture;
+      readonly revision: string;
+    }>;
+    waiters: number;
+    settled: boolean;
+  }>();
+  const materializedSessionSourceGenerations = new Map<string, number>();
   let transcriptSnapshotDiskBytes = 0;
   const transcriptSnapshotFileBytes = new Map<string, number>();
   const transcriptSnapshotMaterializingFiles = new Set<string>();
@@ -4718,6 +4855,7 @@ function createRuntimeSessionService(
     if (!retainedDirAvailable) {
       clearTranscriptSnapshotLease();
       transcriptSnapshots.clear();
+      transcriptRevisionBySource.clear();
       for (const filePath of [...transcriptSnapshotFileBytes.keys()]) {
         if (transcriptSnapshotMaterializingFiles.has(filePath)) continue;
         if ((transcriptSnapshotReaders.get(filePath) ?? 0) > 0) {
@@ -4746,7 +4884,13 @@ function createRuntimeSessionService(
   const transcriptSnapshotKey = (
     sessionId: string,
     revision: string,
-  ): string => `${sessionId}\0${revision}`;
+    view: RuntimeHistorySnapshotViewKind,
+  ): string => `${view}\0${sessionId}\0${revision}`;
+  const transcriptSourceKey = (
+    sessionId: string,
+    sourceRevision: string,
+    view: RuntimeHistorySnapshotViewKind,
+  ): string => `${view}\0${sessionId}\0${sourceRevision}`;
   const removeTranscriptSnapshotFile = (filePath: string): void => {
     if ((transcriptSnapshotReaders.get(filePath) ?? 0) > 0) {
       deferredTranscriptSnapshotCleanup.add(filePath);
@@ -4825,6 +4969,14 @@ function createRuntimeSessionService(
     const snapshot = transcriptSnapshots.get(key);
     if (snapshot === undefined) return;
     transcriptSnapshots.delete(key);
+    const sourceKey = transcriptSourceKey(
+      snapshot.sessionId,
+      snapshot.sourceRevision,
+      snapshot.view,
+    );
+    if (transcriptRevisionBySource.get(sourceKey) === snapshot.revision) {
+      transcriptRevisionBySource.delete(sourceKey);
+    }
     removeTranscriptSnapshotFile(snapshot.filePath);
   };
   const pruneExpiredTranscriptSnapshots = (): void => {
@@ -4881,12 +5033,68 @@ function createRuntimeSessionService(
       releaseIo?.();
     };
     void operation.then(releaseResources, releaseResources);
-    return awaitRuntimeReadOperation(() => operation, budget);
+    try {
+      return await awaitRuntimeReadOperation(() => operation, budget);
+    } catch (error: unknown) {
+      if (isRuntimeTranscriptSnapshotInvalidError(error)) {
+        const invalid = [...transcriptSnapshots.entries()].find(
+          ([, candidate]) => candidate.filePath === snapshot.filePath,
+        );
+        if (invalid !== undefined) removeTranscriptSnapshot(invalid[0]);
+      }
+      throw error;
+    }
   };
-  const rememberTranscriptSnapshot = async (
+  const readSessionCapture = async (
     sessionId: string,
-    transcript: RuntimeTranscript,
     budget: RuntimeReadBudget,
+  ): Promise<SessionReadCapture> => {
+    sessionReadOptionsFromBudget(budget);
+    let flight = sessionCaptureFlights.get(sessionId);
+    if (flight === undefined) {
+      const controller = new AbortController();
+      const promise = trackTranscriptSnapshotOperation(
+        admission.captureRequired(sessionId, {
+          signal: controller.signal,
+        }),
+      );
+      flight = {
+        controller,
+        promise,
+        waiters: 0,
+        settled: false,
+      };
+      sessionCaptureFlights.set(sessionId, flight);
+      const createdFlight = flight;
+      const settle = (): void => {
+        createdFlight.settled = true;
+        if (sessionCaptureFlights.get(sessionId) === createdFlight) {
+          sessionCaptureFlights.delete(sessionId);
+        }
+      };
+      void promise.then(settle, settle);
+    }
+    flight.waiters += 1;
+    try {
+      return await awaitRuntimeReadOperation(() => flight!.promise, budget);
+    } finally {
+      flight.waiters -= 1;
+      if (flight.waiters === 0 && !flight.settled) {
+        if (sessionCaptureFlights.get(sessionId) === flight) {
+          sessionCaptureFlights.delete(sessionId);
+        }
+        flight.controller.abort();
+      }
+    }
+  };
+  const materializeTranscriptSnapshot = async (
+    sessionId: string,
+    historyEntries: readonly RuntimeHistorySnapshotEntry[],
+    sourceRevision: string,
+    budget: RuntimeReadBudget,
+    view: RuntimeHistorySnapshotViewKind,
+    revisionContext = "",
+    conversation?: RuntimeConversationSnapshotMetadata,
   ): Promise<string> => {
     if (transcriptSnapshotsClosing) {
       throw new replApi.SessionReadError(
@@ -4895,15 +5103,9 @@ function createRuntimeSessionService(
       );
     }
     pruneExpiredTranscriptSnapshots();
-    let snapshotByteSize =
-      RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES;
-    for (const entry of transcript.transcriptEntries) {
-      sessionReadOptionsFromBudget(budget);
-      snapshotByteSize += Buffer.byteLength(JSON.stringify(entry), "utf8");
-      if (snapshotByteSize > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES) {
-        throw createRuntimeSnapshotCapacityError();
-      }
-    }
+    const conversationMetadataBytes = conversation === undefined
+      ? 0
+      : Buffer.byteLength(JSON.stringify(conversation), "utf8");
     const snapshotDir = ensureTranscriptSnapshotDir();
     const snapshotGeneration = transcriptSnapshotGeneration;
     const filePath = path.join(
@@ -4911,9 +5113,40 @@ function createRuntimeSessionService(
       `${randomUUID()}.entries`,
     );
     const releaseIo = acquireTranscriptSnapshotIo();
+    let snapshotByteSize =
+      RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES
+      + conversationMetadataBytes;
+    try {
+      for (
+        let entryIndex = 0;
+        entryIndex < historyEntries.length;
+        entryIndex += 1
+      ) {
+        if (entryIndex > 0 && entryIndex % 256 === 0) {
+          await yieldToRuntimeReadBudget(budget);
+        }
+        sessionReadOptionsFromBudget(budget);
+        snapshotByteSize += Buffer.byteLength(
+          JSON.stringify(historyEntries[entryIndex]!),
+          "utf8",
+        );
+        if (snapshotByteSize > MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES) {
+          throw createRuntimeSnapshotCapacityError();
+        }
+      }
+    } catch (error: unknown) {
+      releaseIo();
+      throw error;
+    }
     try {
       reserveTranscriptSnapshotFile(filePath);
+      const remainingSnapshotBytes = snapshotByteSize
+        - RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES;
+      if (remainingSnapshotBytes > 0) {
+        reserveTranscriptSnapshotBytes(filePath, remainingSnapshotBytes);
+      }
     } catch (error: unknown) {
+      releaseTranscriptSnapshotBytes(filePath);
       releaseIo();
       throw error;
     }
@@ -4924,16 +5157,28 @@ function createRuntimeSessionService(
         readonly revision: string;
       }> => {
         const entries: RuntimeTranscriptSnapshotEntryDescriptor[] = [];
-        const handle = await fs.promises.open(filePath, "wx");
         const revisionHash = createHash("sha256");
-        revisionHash.update("kodax-transcript-entries-v1\0");
+        revisionHash.update(view === "transcript"
+          ? "kodax-transcript-entries-v1\0"
+          : "kodax-conversation-history-v1\0");
+        if (revisionContext.length > 0) {
+          revisionHash.update(`${Buffer.byteLength(revisionContext, "utf8")}:`);
+          revisionHash.update(revisionContext);
+        }
+        const handle = await fs.promises.open(filePath, "wx");
         let offset = 0;
         try {
-          for (const entry of transcript.transcriptEntries) {
+          for (
+            let entryIndex = 0;
+            entryIndex < historyEntries.length;
+            entryIndex += 1
+          ) {
+            if (entryIndex > 0 && entryIndex % 256 === 0) {
+              await yieldToRuntimeReadBudget(budget);
+            }
             sessionReadOptionsFromBudget(budget);
+            const entry = historyEntries[entryIndex]!;
             const encoded = Buffer.from(JSON.stringify(entry), "utf8");
-            sessionReadOptionsFromBudget(budget);
-            reserveTranscriptSnapshotBytes(filePath, encoded.length);
             revisionHash.update(`${encoded.length}:`);
             revisionHash.update(encoded);
             const chunkDigests: string[] = [];
@@ -4942,17 +5187,15 @@ function createRuntimeSessionService(
               chunkOffset < encoded.length;
               chunkOffset += MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES
             ) {
-              chunkDigests.push(
-                createHash("sha256")
-                  .update(encoded.subarray(
-                    chunkOffset,
-                    Math.min(
-                      encoded.length,
-                      chunkOffset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
-                    ),
-                  ))
-                  .digest("hex"),
-              );
+              chunkDigests.push(createHash("sha256")
+                .update(encoded.subarray(
+                  chunkOffset,
+                  Math.min(
+                    encoded.length,
+                    chunkOffset + MAX_RUNTIME_TRANSCRIPT_CHUNK_BYTES,
+                  ),
+                ))
+                .digest("hex"));
             }
             await writeFileHandleFully(handle, encoded);
             sessionReadOptionsFromBudget(budget);
@@ -4960,9 +5203,7 @@ function createRuntimeSessionService(
               offset,
               byteLength: encoded.length,
               chunkDigests,
-              ...(typeof entry.entryId === "string"
-                ? { entryId: entry.entryId }
-                : {}),
+              ...runtimeHistoryEntryDescriptorIdentity(entry),
             });
             offset += encoded.length;
           }
@@ -5035,15 +5276,22 @@ function createRuntimeSessionService(
         "Transcript snapshot directory changed; request a fresh boundary",
       );
     }
-    const key = transcriptSnapshotKey(sessionId, revision);
+    const key = transcriptSnapshotKey(sessionId, revision, view);
     removeTranscriptSnapshot(key);
     transcriptSnapshots.set(key, {
       sessionId,
+      view,
       revision,
+      sourceRevision,
       filePath,
       entries,
+      ...(conversation !== undefined ? { conversation } : {}),
       expiresAt: Date.now() + RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS,
     });
+    transcriptRevisionBySource.set(
+      transcriptSourceKey(sessionId, sourceRevision, view),
+      revision,
+    );
     refreshTranscriptSnapshotLease();
     while (transcriptSnapshots.size > MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS) {
       const oldest = transcriptSnapshots.keys().next().value as
@@ -5057,12 +5305,9 @@ function createRuntimeSessionService(
   const getTranscriptSnapshot = (
     sessionId: string,
     revision: string,
-  ): {
-    readonly revision: string;
-    readonly filePath: string;
-    readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
-  } | undefined => {
-    const key = transcriptSnapshotKey(sessionId, revision);
+    view: RuntimeHistorySnapshotViewKind = "transcript",
+  ): RuntimeTranscriptSnapshotView | undefined => {
+    const key = transcriptSnapshotKey(sessionId, revision, view);
     const snapshot = transcriptSnapshots.get(key);
     if (snapshot === undefined) return undefined;
     if (snapshot.expiresAt <= Date.now()) {
@@ -5077,9 +5322,150 @@ function createRuntimeSessionService(
     transcriptSnapshots.set(key, snapshot);
     return {
       revision: snapshot.revision,
+      view: snapshot.view,
+      sourceRevision: snapshot.sourceRevision,
       filePath: snapshot.filePath,
       entries: snapshot.entries,
+      ...(snapshot.conversation !== undefined
+        ? { conversation: snapshot.conversation }
+        : {}),
     };
+  };
+  const rememberTranscriptSnapshot = async (
+    sessionId: string,
+    historyEntries: readonly RuntimeHistorySnapshotEntry[],
+    sourceRevision: string,
+    budget: RuntimeReadBudget,
+    view: RuntimeHistorySnapshotViewKind = "transcript",
+    revisionContext = "",
+    conversation?: RuntimeConversationSnapshotMetadata,
+  ): Promise<string> => {
+    sessionReadOptionsFromBudget(budget);
+    pruneExpiredTranscriptSnapshots();
+    const sourceKey = transcriptSourceKey(sessionId, sourceRevision, view);
+    const retainedRevision = transcriptRevisionBySource.get(sourceKey);
+    if (
+      retainedRevision !== undefined
+      && getTranscriptSnapshot(sessionId, retainedRevision, view) !== undefined
+    ) {
+      return retainedRevision;
+    }
+    let flight = transcriptMaterializationFlights.get(sourceKey);
+    if (flight === undefined) {
+      const controller = new AbortController();
+      const materializationBudget = createRuntimeReadBudget({
+        signal: controller.signal,
+      });
+      const promise = materializeTranscriptSnapshot(
+        sessionId,
+        historyEntries,
+        sourceRevision,
+        materializationBudget,
+        view,
+        revisionContext,
+        conversation,
+      );
+      flight = {
+        controller,
+        promise,
+        waiters: 0,
+        settled: false,
+      };
+      transcriptMaterializationFlights.set(sourceKey, flight);
+      const createdFlight = flight;
+      const settle = (): void => {
+        createdFlight.settled = true;
+        if (transcriptMaterializationFlights.get(sourceKey) === createdFlight) {
+          transcriptMaterializationFlights.delete(sourceKey);
+        }
+      };
+      void promise.then(settle, settle);
+    }
+    flight.waiters += 1;
+    try {
+      return await awaitRuntimeReadOperation(() => flight!.promise, budget);
+    } finally {
+      flight.waiters -= 1;
+      if (flight.waiters === 0 && !flight.settled) {
+        if (transcriptMaterializationFlights.get(sourceKey) === flight) {
+          transcriptMaterializationFlights.delete(sourceKey);
+        }
+        flight.controller.abort();
+      }
+    }
+  };
+  const readMaterializedSessionCapture = async (
+    sessionId: string,
+    budget: RuntimeReadBudget,
+  ): Promise<{
+    readonly capture: SessionReadCapture;
+    readonly revision: string;
+  }> => {
+    sessionReadOptionsFromBudget(budget);
+    const sessionSeq = bus.currentSessionSeq(sessionId);
+    const sourceGeneration =
+      materializedSessionSourceGenerations.get(sessionId) ?? 0;
+    let flight = materializedSessionCaptureFlights.get(sessionId);
+    if (
+      flight !== undefined
+      && (
+        flight.sessionSeq !== sessionSeq
+        || flight.sourceGeneration !== sourceGeneration
+      )
+    ) {
+      materializedSessionCaptureFlights.delete(sessionId);
+      flight = undefined;
+    }
+    if (flight === undefined) {
+      const controller = new AbortController();
+      const sharedBudget = createRuntimeReadBudget({ signal: controller.signal });
+      const promise = trackTranscriptSnapshotOperation((async () => {
+        const capture = await readSessionCapture(sessionId, sharedBudget);
+        const revision = await rememberTranscriptSnapshot(
+          sessionId,
+          capture.transcript.transcriptEntries,
+          capture.sourceRevision,
+          sharedBudget,
+        );
+        return { capture, revision };
+      })());
+      flight = {
+        controller,
+        sessionSeq,
+        sourceGeneration,
+        promise,
+        waiters: 0,
+        settled: false,
+      };
+      materializedSessionCaptureFlights.set(sessionId, flight);
+      const createdFlight = flight;
+      const settle = (): void => {
+        createdFlight.settled = true;
+        if (materializedSessionCaptureFlights.get(sessionId) === createdFlight) {
+          materializedSessionCaptureFlights.delete(sessionId);
+        }
+      };
+      void promise.then(settle, settle);
+    }
+    flight.waiters += 1;
+    try {
+      return await awaitRuntimeReadOperation(() => flight!.promise, budget);
+    } finally {
+      flight.waiters -= 1;
+      if (flight.waiters === 0 && !flight.settled) {
+        if (materializedSessionCaptureFlights.get(sessionId) === flight) {
+          materializedSessionCaptureFlights.delete(sessionId);
+        }
+        flight.controller.abort();
+      }
+    }
+  };
+  const invalidateMaterializedSessionCapture = (sessionId: string): void => {
+    materializedSessionSourceGenerations.set(
+      sessionId,
+      (materializedSessionSourceGenerations.get(sessionId) ?? 0) + 1,
+    );
+    materializedSessionCaptureFlights.delete(sessionId);
   };
   const finalizeTranscriptSnapshots = (): void => {
     if (transcriptSnapshotsDisposed) return;
@@ -5092,6 +5478,7 @@ function createRuntimeSessionService(
     }
     transcriptSnapshotDiskBytes = 0;
     transcriptSnapshotFileBytes.clear();
+    transcriptRevisionBySource.clear();
     transcriptSnapshotMaterializingFiles.clear();
     transcriptSnapshotIoCount = 0;
     transcriptSnapshotReaders.clear();
@@ -5119,6 +5506,19 @@ function createRuntimeSessionService(
   const beginCloseTranscriptSnapshots = (): void => {
     transcriptSnapshotsClosing = true;
     clearTranscriptSnapshotLease();
+    for (const flight of sessionCaptureFlights.values()) {
+      flight.controller.abort();
+    }
+    sessionCaptureFlights.clear();
+    for (const flight of transcriptMaterializationFlights.values()) {
+      flight.controller.abort();
+    }
+    transcriptMaterializationFlights.clear();
+    for (const flight of materializedSessionCaptureFlights.values()) {
+      flight.controller.abort();
+    }
+    materializedSessionCaptureFlights.clear();
+    materializedSessionSourceGenerations.clear();
   };
   const disposeTranscriptSnapshots = async (): Promise<void> => {
     beginCloseTranscriptSnapshots();
@@ -5162,15 +5562,8 @@ function createRuntimeSessionService(
       attempt += 1
     ) {
       const before = bus.currentSessionSeq(sessionId);
-      const data = await admission.loadRequired(
-        sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      const [transcript, runs, pendingPermissions] = await Promise.all([
-        manager.readFullTranscript(
-          sessionId,
-          sessionReadOptionsFromBudget(budget),
-        ),
+      const [materialized, runs, pendingPermissions] = await Promise.all([
+        readMaterializedSessionCapture(sessionId, budget),
         awaitRuntimeReadOperation(() => listRuns(sessionId), budget),
         awaitRuntimeReadOperation(
           () => listPendingPermissions(sessionId),
@@ -5181,35 +5574,29 @@ function createRuntimeSessionService(
         () => settingsOwner.read(sessionId),
         budget,
       );
+      const { capture, revision: transcriptRevision } = materialized;
       sessionReadOptionsFromBudget(budget);
       const after = bus.currentSessionSeq(sessionId);
       if (before !== after) continue;
-      const transcriptRevision = transcript === null
-        ? createRuntimeTranscriptRevision(transcript)
-        : await rememberTranscriptSnapshot(sessionId, transcript, budget);
-      const retainedTranscript = transcript === null
-        ? undefined
-        : getTranscriptSnapshot(sessionId, transcriptRevision);
-      if (transcript !== null && retainedTranscript === undefined) {
+      const retainedTranscript = getTranscriptSnapshot(
+        sessionId,
+        transcriptRevision,
+      );
+      if (retainedTranscript === undefined) {
         throw createRuntimeResyncError(
           "Transcript snapshot is no longer retained; request a fresh boundary",
         );
       }
-      const transcriptSlice = transcript === null
-        ? null
-        : await readTranscriptSnapshot(
-            retainedTranscript!,
-            budget,
-            () => createRuntimeTranscriptSlice(
-              retainedTranscript!,
-              budget,
-            ),
-          );
+      const transcriptSlice = await readTranscriptSnapshot(
+        retainedTranscript,
+        budget,
+        () => createRuntimeTranscriptSlice(retainedTranscript, budget),
+      );
       return {
         runtimeId: identity.runtimeId,
         cursor: after,
         transcriptRevision,
-        session: toRuntimeSession(sessionId, data),
+        session: toRuntimeSession(sessionId, capture.data),
         transcript: transcriptSlice,
         settings,
         runs,
@@ -5232,15 +5619,8 @@ function createRuntimeSessionService(
       attempt += 1
     ) {
       const before = bus.currentSessionSeq(input.sessionId);
-      await admission.loadRequired(
-        input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      const [transcript, runs] = await Promise.all([
-        manager.readFullTranscript(
-          input.sessionId,
-          sessionReadOptionsFromBudget(budget),
-        ),
+      const [capture, runs] = await Promise.all([
+        readSessionCapture(input.sessionId, budget),
         awaitRuntimeReadOperation(
           () => inspectRuns(input.sessionId),
           budget,
@@ -5252,7 +5632,7 @@ function createRuntimeSessionService(
       return {
         runtimeId: identity.runtimeId,
         cursor: after,
-        transcriptRevision: createRuntimeTranscriptRevision(transcript),
+        transcriptRevision: createRuntimeTranscriptRevision(capture.transcript),
         runs,
       };
     }
@@ -5268,11 +5648,15 @@ function createRuntimeSessionService(
     sessionOperations.run(sessionId, async () => {
       ensureOpen();
       const data = await admission.loadExecutable(sessionId);
-      return withActorSessionFileMutation(
-        sessionId,
-        "mutate",
-        () => mutation(data),
-      );
+      try {
+        return await withActorSessionFileMutation(
+          sessionId,
+          "mutate",
+          () => mutation(data),
+        );
+      } finally {
+        invalidateMaterializedSessionCapture(sessionId);
+      }
     });
 
   return {
@@ -5334,9 +5718,7 @@ function createRuntimeSessionService(
         sessionId,
         sessionReadOptionsFromBudget(budget),
       );
-      const session = toRuntimeSession(sessionId, data);
-      bus.emit("session.loaded", session, { sessionId, runId: sessionId });
-      return session;
+      return toRuntimeSession(sessionId, data);
     },
 
     async list(filter) {
@@ -5365,13 +5747,8 @@ function createRuntimeSessionService(
     async transcript(sessionId, options) {
       ensureOpen();
       const budget = createRuntimeReadBudget(options);
-      await admission.loadRequired(
-        sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      return manager.readFullTranscript(
-        sessionId,
-        sessionReadOptionsFromBudget(budget),
+      return structuredClone(
+        (await readSessionCapture(sessionId, budget)).transcript,
       );
     },
 
@@ -5404,20 +5781,13 @@ function createRuntimeSessionService(
           ),
         );
       }
-      await admission.loadRequired(
+      const materialized = await readMaterializedSessionCapture(
         input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      const transcript = await manager.readFullTranscript(
-        input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      if (transcript === null) return null;
-      const revision = await rememberTranscriptSnapshot(
-        input.sessionId,
-        transcript,
         budget,
       );
+      const capture = materialized.capture;
+      const transcript = capture.transcript;
+      const revision = materialized.revision;
       const retained = getTranscriptSnapshot(input.sessionId, revision);
       if (retained === undefined) {
         throw createRuntimeResyncError(
@@ -5464,20 +5834,13 @@ function createRuntimeSessionService(
       ensureOpen();
       validateSessionHistorySearchQuery(input.query);
       const budget = createRuntimeReadBudget(options);
-      await admission.loadRequired(
+      const materialized = await readMaterializedSessionCapture(
         input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      const transcript = await manager.readFullTranscript(
-        input.sessionId,
-        sessionReadOptionsFromBudget(budget),
-      );
-      if (transcript === null) return null;
-      const revision = await rememberTranscriptSnapshot(
-        input.sessionId,
-        transcript,
         budget,
       );
+      const capture = materialized.capture;
+      const transcript = capture.transcript;
+      const revision = materialized.revision;
       await yieldToRuntimeReadBudget(budget);
       const lineage = transcript.lineage;
       if (lineage === undefined) {
@@ -5525,6 +5888,119 @@ function createRuntimeSessionService(
         revision,
         hits,
       };
+    },
+
+    async conversation(sessionId, options) {
+      ensureOpen();
+      const budget = createRuntimeReadBudget(options);
+      const capture = await readSessionCapture(sessionId, budget);
+      sessionReadOptionsFromBudget(budget);
+      const history = replApi.conversationHistoryFromCapture(
+        capture,
+        () => sessionReadOptionsFromBudget(budget),
+      );
+      await yieldToRuntimeReadBudget(budget);
+      const revision = createRuntimeConversationHistoryRevision(history);
+      sessionReadOptionsFromBudget(budget);
+      const result = structuredClone({ ...history, revision });
+      sessionReadOptionsFromBudget(budget);
+      return result;
+    },
+
+    async conversationPage(input, options) {
+      ensureOpen();
+      const budget = createRuntimeReadBudget(options);
+      sessionReadOptionsFromBudget(budget);
+      const cursorRevision = input.cursor === undefined
+        ? undefined
+        : decodeRuntimeTranscriptCursor(input.cursor).revision;
+      if (cursorRevision !== undefined) {
+        const snapshot = getTranscriptSnapshot(
+          input.sessionId,
+          cursorRevision,
+          "conversation",
+        );
+        if (snapshot === undefined) {
+          throw createRuntimeResyncError(
+            "Conversation snapshot is no longer retained; request a fresh boundary",
+          );
+        }
+        return readTranscriptSnapshot(
+          snapshot,
+          budget,
+          () => createRuntimeConversationHistorySlice(
+            snapshot,
+            budget,
+            input.cursor,
+            input.limit,
+          ),
+        );
+      }
+      const capture = await readSessionCapture(input.sessionId, budget);
+      sessionReadOptionsFromBudget(budget);
+      const history = replApi.conversationHistoryFromCapture(
+        capture,
+        () => sessionReadOptionsFromBudget(budget),
+      );
+      const metadata: RuntimeConversationSnapshotMetadata = {
+        sourceRevision: history.sourceRevision,
+        status: history.status,
+        issues: history.issues,
+      };
+      const revision = await rememberTranscriptSnapshot(
+        input.sessionId,
+        history.entries,
+        history.sourceRevision,
+        budget,
+        "conversation",
+        runtimeConversationRevisionContext(history),
+        metadata,
+      );
+      const retained = getTranscriptSnapshot(
+        input.sessionId,
+        revision,
+        "conversation",
+      );
+      if (retained === undefined) {
+        throw createRuntimeResyncError(
+          "Conversation snapshot is no longer retained; request a fresh boundary",
+        );
+      }
+      return readTranscriptSnapshot(
+        retained,
+        budget,
+        () => createRuntimeConversationHistorySlice(
+          retained,
+          budget,
+          undefined,
+          input.limit,
+        ),
+      );
+    },
+
+    async conversationEntryChunk(input, options) {
+      ensureOpen();
+      const budget = createRuntimeReadBudget(options);
+      sessionReadOptionsFromBudget(budget);
+      const snapshot = getTranscriptSnapshot(
+        input.sessionId,
+        input.revision,
+        "conversation",
+      );
+      if (snapshot === undefined) {
+        throw createRuntimeResyncError(
+          "Conversation snapshot is no longer retained; request a fresh boundary",
+        );
+      }
+      return readTranscriptSnapshot(
+        snapshot,
+        budget,
+        () => createRuntimeConversationEntryChunkFromSnapshot(
+          input,
+          snapshot,
+          budget,
+        ),
+      );
     },
 
     async observe(sessionId, listener, options) {
@@ -5659,14 +6135,37 @@ function createRuntimeSessionService(
 
     async fork(input) {
       ensureOpen();
+      if (input.selector !== undefined && input.historyBoundary !== undefined) {
+        throw new Error("fork accepts either selector or historyBoundary, not both");
+      }
       const source = await admission.loadRequired(input.sessionId);
-      const forked = await manager.forkSession(input.sessionId, {
-        ...(input.selector !== undefined ? { selector: input.selector } : {}),
-        ...(input.newSessionId !== undefined
-          ? { sessionId: input.newSessionId }
-          : {}),
-        ...(input.title !== undefined ? { title: input.title } : {}),
-      });
+      let forked: Awaited<ReturnType<SessionManager["forkSession"]>>;
+      try {
+        forked = input.historyBoundary === undefined
+          ? await manager.forkSession(input.sessionId, {
+              ...(input.selector !== undefined ? { selector: input.selector } : {}),
+              ...(input.newSessionId !== undefined
+                ? { sessionId: input.newSessionId }
+                : {}),
+              ...(input.title !== undefined ? { title: input.title } : {}),
+            })
+          : await manager.storage.fork(
+              input.sessionId,
+              input.historyBoundary.entryId,
+              {
+                ...(input.newSessionId !== undefined
+                  ? { sessionId: input.newSessionId }
+                  : {}),
+                ...(input.title !== undefined ? { title: input.title } : {}),
+                historyBoundary: {
+                  sourceRevision: input.historyBoundary.sourceRevision,
+                },
+              },
+            );
+      } catch (error: unknown) {
+        throw normalizeConversationBoundaryMutationError(error);
+      }
+      if (!forked && input.historyBoundary !== undefined) return null;
       if (!forked) {
         const sessionId = input.newSessionId ?? (await generateSessionId());
         const data: KodaXSessionData = {
@@ -5763,9 +6262,27 @@ function createRuntimeSessionService(
     async rewind(input) {
       return mutateActiveSession(input.sessionId, async () => {
         assertSessionMutationAllowed(input.sessionId, activeRunOwner);
-        const data = await manager.rewindSession(input.sessionId, {
-          ...(input.selector !== undefined ? { selector: input.selector } : {}),
-        });
+        if (input.selector !== undefined && input.historyBoundary !== undefined) {
+          throw new Error("rewind accepts either selector or historyBoundary, not both");
+        }
+        let data: KodaXSessionData | null;
+        try {
+          data = input.historyBoundary === undefined
+            ? await manager.rewindSession(input.sessionId, {
+                ...(input.selector !== undefined ? { selector: input.selector } : {}),
+              })
+            : await manager.storage.rewind(
+                input.sessionId,
+                input.historyBoundary.entryId,
+                {
+                  historyBoundary: {
+                    sourceRevision: input.historyBoundary.sourceRevision,
+                  },
+                },
+              );
+        } catch (error: unknown) {
+          throw normalizeConversationBoundaryMutationError(error);
+        }
         if (!data) return null;
         const session = toRuntimeSession(input.sessionId, data);
         bus.emit(
@@ -5930,6 +6447,7 @@ function createRuntimeSessionService(
             }
           },
         );
+        invalidateMaterializedSessionCapture(sessionId);
       });
     },
 
@@ -5953,6 +6471,7 @@ function createRuntimeSessionService(
             }
           },
         );
+        invalidateMaterializedSessionCapture(sessionId);
       });
     },
 
@@ -6002,6 +6521,7 @@ function createRuntimeSessionService(
             });
           }
         });
+        invalidateMaterializedSessionCapture(sessionId);
         settingsOwner.release(sessionId);
         onSessionDeleted(sessionId);
       });
@@ -6213,50 +6733,124 @@ function createRuntimeRunService(deps: {
     // throwing. Let already-queued settlement reactions publish their health,
     // then confirm the health again without an interleaving JS turn before a
     // terminal status is allowed to persist.
-    for (;;) {
-      const actorSession = record.actorSession;
-      if (actorSession === undefined) return { state: "healthy" };
-      const observed = actorSession.health();
-      if (observed.state === "recovering") {
-        await deps.waitForActorHealthResolution(record.sessionId, observed);
-        continue;
-      }
-      if (observed.state === "unknown") return observed;
-      const root = actorSession.rootControl();
-      const tree = root.list();
-      if (tree.activeNonRootTurns > 0) {
-        if (record.stop?.state !== "unknown") {
-          const phaseChanged = record.phase !== "waiting_agent";
-          const countChanged =
-            record.activeSubtaskCount !== tree.activeNonRootTurns;
-          if (phaseChanged) {
-            record.phase = "waiting_agent";
-            record.stage = "waiting_agent";
-            record.stageChangedAt = new Date().toISOString();
+    const cancellationController =
+      record.actorFinalizationAbortController ??= new AbortController();
+    const cancellationTimedOut = (): AgentControllerHealth => ({
+      state: "unknown",
+      code: "actor_settlement_not_persisted",
+      message:
+        "Actor cancellation finalization could not be confirmed within the bounded grace period.",
+    });
+    const finalizationAbort = new AbortController();
+    let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
+    let resolveCancellationTimeout:
+      ((health: AgentControllerHealth) => void) | undefined;
+    const cancellationTimeout = new Promise<AgentControllerHealth>((resolve) => {
+      resolveCancellationTimeout = resolve;
+    });
+    const startCancellationTimer = (): void => {
+      if (cancellationTimer !== undefined) return;
+      cancellationTimer = setTimeout(() => {
+        finalizationAbort.abort(new Error("Actor cancellation grace expired"));
+        resolveCancellationTimeout?.(cancellationTimedOut());
+      }, RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS);
+      cancellationTimer.unref?.();
+    };
+    cancellationController.signal.addEventListener(
+      "abort",
+      startCancellationTimer,
+      { once: true },
+    );
+    if (
+      cancellationController.signal.aborted
+      || record.stop !== undefined
+      || deps.isClosed()
+      || record.running?.aborted === true
+      || record.abortController?.signal.aborted === true
+      || record.start?.options.abortSignal?.aborted === true
+    ) {
+      startCancellationTimer();
+    }
+
+    const finalize = async (): Promise<AgentControllerHealth> => {
+      for (;;) {
+        if (finalizationAbort.signal.aborted) return cancellationTimedOut();
+        const actorSession = record.actorSession;
+        if (actorSession === undefined) return { state: "healthy" };
+        const observed = actorSession.health();
+        if (observed.state === "recovering") {
+          const healthChange = deps.waitForActorHealthChange(record.sessionId);
+          let resolveAbort: (() => void) | undefined;
+          const abortWait = new Promise<void>((resolve) => {
+            resolveAbort = resolve;
+          });
+          const handleFinalizationAbort = (): void => resolveAbort?.();
+          finalizationAbort.signal.addEventListener(
+            "abort",
+            handleFinalizationAbort,
+            { once: true },
+          );
+          try {
+            await Promise.race([
+              healthChange.promise,
+              abortWait,
+            ]);
+          } finally {
+            finalizationAbort.signal.removeEventListener(
+              "abort",
+              handleFinalizationAbort,
+            );
+            resolveAbort = undefined;
+            healthChange.close();
           }
-          record.activeSubtaskCount = tree.activeNonRootTurns;
-          if (phaseChanged || countChanged) publishRunUpdate(record);
+          continue;
         }
-        const cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
-        if (root.list().activeNonRootTurns === 0) continue;
-        const healthChange = deps.waitForActorHealthChange(record.sessionId);
-        const waitAbort = new AbortController();
-        try {
-          await Promise.race([
-            root.wait(cursor, undefined, waitAbort.signal),
-            healthChange.promise,
-          ]);
-        } finally {
-          waitAbort.abort();
-          healthChange.close();
+        if (observed.state === "unknown") return observed;
+        const root = actorSession.rootControl();
+        const tree = root.list();
+        if (tree.activeNonRootTurns > 0) {
+          if (record.stop?.state !== "unknown") {
+            const phaseChanged = record.phase !== "waiting_agent";
+            const countChanged =
+              record.activeSubtaskCount !== tree.activeNonRootTurns;
+            if (phaseChanged) {
+              record.phase = "waiting_agent";
+              record.stage = "waiting_agent";
+              record.stageChangedAt = new Date().toISOString();
+            }
+            record.activeSubtaskCount = tree.activeNonRootTurns;
+            if (phaseChanged || countChanged) publishRunUpdate(record);
+          }
+          const cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
+          if (root.list().activeNonRootTurns === 0) continue;
+          const healthChange = deps.waitForActorHealthChange(record.sessionId);
+          try {
+            await Promise.race([
+              root.wait(cursor, undefined, finalizationAbort.signal),
+              healthChange.promise,
+            ]);
+          } finally {
+            healthChange.close();
+          }
+          continue;
         }
-        continue;
+        await Promise.resolve();
+        const confirmed = actorSession.health();
+        if (confirmed.state === "recovering") continue;
+        if (root.list().activeNonRootTurns > 0) continue;
+        return confirmed;
       }
-      await Promise.resolve();
-      const confirmed = actorSession.health();
-      if (confirmed.state === "recovering") continue;
-      if (root.list().activeNonRootTurns > 0) continue;
-      return confirmed;
+    };
+
+    try {
+      return await Promise.race([finalize(), cancellationTimeout]);
+    } finally {
+      cancellationController.signal.removeEventListener(
+        "abort",
+        startCancellationTimer,
+      );
+      if (cancellationTimer !== undefined) clearTimeout(cancellationTimer);
+      finalizationAbort.abort();
     }
   };
 
@@ -6456,6 +7050,7 @@ function createRuntimeRunService(deps: {
     releaseAbortSignalSubscription(record);
     record.running?.abort(new Error(reason));
     record.abortController?.abort(new Error(reason));
+    record.actorFinalizationAbortController?.abort(new Error(reason));
     deps.permissions.rejectForRun(record.runId, reason);
     deps.userInputs.rejectForRun(record.runId, reason);
     record.start?.options.guardrails
@@ -7613,6 +8208,11 @@ function createRuntimeRunService(deps: {
       );
       if (run === undefined) return runtimeRunStopReceipt(stop);
       applyAuthoritativeRunStatus(run, stop.status);
+      if (stop.status.stop !== undefined) {
+        run.actorFinalizationAbortController?.abort(
+          new Error("runtime run aborted"),
+        );
+      }
       if (stop.status.stop?.state === "unknown") {
         delete run.actorHealthBaseState;
       }
@@ -8615,9 +9215,9 @@ function createRuntimeAgentService(
         (root) => root.eventSnapshot(afterSequence),
       );
     },
-    async wait(sessionId, afterSequence, timeoutMs) {
+    async wait(sessionId, afterSequence, timeoutMs, options) {
       const root = await withRoot(sessionId, (actorRoot) => actorRoot);
-      return root.wait(afterSequence, timeoutMs);
+      return root.wait(afterSequence, timeoutMs, options?.signal);
     },
   };
 }
@@ -8926,6 +9526,31 @@ function runtimeEventPayloadBytes(payload: unknown): number {
   }
 }
 
+function runtimePendingEmissionBytes(
+  emission: PendingRuntimeEventEmission,
+): number {
+  const serialized = JSON.stringify(emission);
+  if (serialized === undefined) {
+    throw new Error("Runtime event emission is not serializable");
+  }
+  return Buffer.byteLength(serialized, "utf-8");
+}
+
+function snapshotRuntimeEventPayload(payload: unknown): unknown {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(payload);
+  } catch (error: unknown) {
+    throw new Error("Runtime event payload is not serializable", {
+      cause: error,
+    });
+  }
+  if (serialized === undefined) {
+    throw new Error("Runtime event payload is not serializable");
+  }
+  return JSON.parse(serialized) as unknown;
+}
+
 function runtimeEventMergeKey(
   type: RuntimeEventType,
   payload: unknown,
@@ -9015,12 +9640,13 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
   let pendingBytes = 0;
   let scheduledFlush: ReturnType<typeof setTimeout> | undefined;
   let disconnectFlushScheduled = false;
-  let indeterminatePersistenceError:
-    | RuntimeEventCommitIndeterminateError
-    | undefined;
+  let terminalPersistenceError: RuntimeEventCommitIndeterminateError | undefined;
+  let persistenceBackpressureError: Error | undefined;
+  let closeError: Error | undefined;
   let persistenceFailureReported = false;
   let deliveringNotifications = false;
   let notificationIndex = 0;
+  let pendingSerializedBytes = 0;
 
   const matches = (
     event: RuntimeEvent,
@@ -9107,14 +9733,20 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     count: number,
     create: (firstSeq: number) => readonly RuntimeEvent[],
   ): readonly RuntimeEvent[] => {
-    if (indeterminatePersistenceError !== undefined) {
-      throw indeterminatePersistenceError;
+    if (terminalPersistenceError !== undefined) {
+      throw terminalPersistenceError;
     }
     try {
       return persistence.commitEvents(count, create);
     } catch (error: unknown) {
       if (error instanceof RuntimeEventCommitIndeterminateError) {
-        indeterminatePersistenceError = error;
+        terminalPersistenceError = error;
+        persistenceBackpressureError = undefined;
+        clearScheduledFlush();
+        pendingEmissions.splice(0, pendingEmissions.length);
+        pendingBytes = 0;
+        pendingSerializedBytes = 0;
+        preservedLatestKeysByRun.clear();
       }
       throw error;
     }
@@ -9152,21 +9784,38 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
 
   const flushPending = (): void => {
     clearScheduledFlush();
-    if (indeterminatePersistenceError !== undefined) {
-      throw indeterminatePersistenceError;
+    if (terminalPersistenceError !== undefined) {
+      throw terminalPersistenceError;
     }
     while (pendingEmissions.length > 0) {
       const count = nextRunEmissionCount();
       const emissions = pendingEmissions.slice(0, count);
-      const committed = commitEvents(
-        count,
-        (firstSeq) => createEvents(emissions, firstSeq),
-      );
+      let committed: readonly RuntimeEvent[];
+      try {
+        committed = commitEvents(
+          count,
+          (firstSeq) => createEvents(emissions, firstSeq),
+        );
+      } catch (error: unknown) {
+        if (terminalPersistenceError === undefined) {
+          persistenceBackpressureError = normalizeError(error);
+          clearScheduledFlush();
+        }
+        throw error;
+      }
+      persistenceBackpressureError = undefined;
       pendingEmissions.splice(0, count);
       pendingBytes = Math.max(
         0,
         pendingBytes - emissions.reduce(
           (total, emission) => total + (emission.merge?.bytes ?? 0),
+          0,
+        ),
+      );
+      pendingSerializedBytes = Math.max(
+        0,
+        pendingSerializedBytes - emissions.reduce(
+          (total, emission) => total + runtimePendingEmissionBytes(emission),
           0,
         ),
       );
@@ -9177,6 +9826,11 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
   };
 
   const scheduleFlush = (): void => {
+    if (
+      closed
+      || terminalPersistenceError !== undefined
+      || persistenceBackpressureError !== undefined
+    ) return;
     if (scheduledFlush !== undefined) return;
     scheduledFlush = setTimeout(() => {
       scheduledFlush = undefined;
@@ -9193,9 +9847,9 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
             detail: error,
           });
         }
-        if (!(error instanceof RuntimeEventCommitIndeterminateError)) {
-          scheduleFlush();
-        }
+        // A determinate failure retains the current batch for an explicit
+        // replay/close retry. Do not spin in the background or accept more
+        // provider output while persistence is unavailable.
       }
     }, RUNTIME_EVENT_COALESCE_INTERVAL_MS);
     scheduledFlush.unref?.();
@@ -9214,10 +9868,20 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
           detail: error,
         });
       }
-      if (!(error instanceof RuntimeEventCommitIndeterminateError)) {
-        scheduleFlush();
-      }
+      // The failure latch is cleared only by a later explicit successful
+      // flush, keeping background retries and queue growth bounded.
     }
+  };
+
+  const commitEmissionDirectly = (
+    emission: PendingRuntimeEventEmission,
+  ): void => {
+    const committed = commitEvents(
+      1,
+      (firstSeq) => createEvents([emission], firstSeq),
+    );
+    applyAndRemember(committed);
+    notify(committed);
   };
 
   const replacePendingLatest = (
@@ -9234,11 +9898,16 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       ) {
         pendingEmissions.splice(index, 1);
         pendingBytes = Math.max(0, pendingBytes - candidate.merge.bytes);
+        pendingSerializedBytes = Math.max(
+          0,
+          pendingSerializedBytes - runtimePendingEmissionBytes(candidate),
+        );
         break;
       }
     }
     pendingEmissions.push(emission);
     pendingBytes += merge.bytes;
+    pendingSerializedBytes += runtimePendingEmissionBytes(emission);
   };
 
   const shouldPreserveFirstLatest = (
@@ -9259,16 +9928,37 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
     payload: unknown,
     scope: RuntimeEventEmissionScope,
   ): void => {
-    const merge = runtimeEventMergePlan(type, payload, scope);
+    if (closed) throw new Error("KodaX runtime event bus is closed");
+    if (terminalPersistenceError !== undefined) {
+      throw terminalPersistenceError;
+    }
+    if (persistenceBackpressureError !== undefined) {
+      throw persistenceBackpressureError;
+    }
+    const payloadSnapshot = snapshotRuntimeEventPayload(payload);
+    const merge = runtimeEventMergePlan(type, payloadSnapshot, scope);
     const emission: PendingRuntimeEventEmission = {
       type,
-      payload,
+      payload: payloadSnapshot,
       scope,
       time: new Date().toISOString(),
       ...(merge !== undefined ? { merge } : {}),
     };
+    const serializedBytes = runtimePendingEmissionBytes(emission);
+    if (serializedBytes > MAX_RUNTIME_PENDING_EVENT_BYTES) {
+      flushPending();
+      commitEmissionDirectly(emission);
+      return;
+    }
+    if (
+      pendingEmissions.length >= MAX_RUNTIME_PENDING_EVENTS
+      || pendingSerializedBytes + serializedBytes > MAX_RUNTIME_PENDING_EVENT_BYTES
+    ) {
+      flushPending();
+    }
     if (merge === undefined) {
       pendingEmissions.push(emission);
+      pendingSerializedBytes += serializedBytes;
       flushPendingSafely();
       return;
     }
@@ -9276,22 +9966,41 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       if (shouldPreserveFirstLatest(emission)) {
         pendingEmissions.push(emission);
         pendingBytes += merge.bytes;
+        pendingSerializedBytes += serializedBytes;
         flushPendingSafely();
         return;
       }
       replacePendingLatest(emission);
     } else {
       const previous = pendingEmissions.at(-1);
-      if (
+      const canMerge =
         previous?.merge?.key === merge.key
-        && previous.merge.mode === merge.mode
+        && previous.merge.mode === merge.mode;
+      if (
+        canMerge
+        && previous.merge.bytes + merge.bytes
+          > MAX_RUNTIME_COALESCED_EVENT_BYTES
       ) {
+        flushPendingSafely();
+        if (terminalPersistenceError !== undefined) {
+          throw terminalPersistenceError;
+        }
+        if (persistenceBackpressureError !== undefined) {
+          throw persistenceBackpressureError;
+        }
+        pendingEmissions.push(emission);
+        pendingBytes += merge.bytes;
+        pendingSerializedBytes += serializedBytes;
+      } else if (canMerge) {
         const merged = mergeRuntimeEventEmissions(previous, emission);
         pendingBytes += (merged.merge?.bytes ?? 0) - previous.merge.bytes;
+        pendingSerializedBytes += runtimePendingEmissionBytes(merged)
+          - runtimePendingEmissionBytes(previous);
         pendingEmissions[pendingEmissions.length - 1] = merged;
       } else {
         pendingEmissions.push(emission);
         pendingBytes += merge.bytes;
+        pendingSerializedBytes += serializedBytes;
       }
     }
     if (pendingBytes >= MAX_RUNTIME_COALESCED_EVENT_BYTES) {
@@ -9404,34 +10113,52 @@ function createRuntimeEventBus(persistence: RuntimePersistence) {
       return recovered;
     },
     close() {
-      flushPending();
-      closed = true;
-      for (const listener of [...closeListeners]) {
+      if (closed) {
+        if (closeError !== undefined) throw closeError;
+        return;
+      }
+      let failure: Error | undefined;
+      try {
+        flushPending();
+      } catch (error: unknown) {
+        failure = normalizeError(error);
+      } finally {
+        closed = true;
+        clearScheduledFlush();
+        pendingEmissions.splice(0, pendingEmissions.length);
+        pendingBytes = 0;
+        pendingSerializedBytes = 0;
+        for (const listener of [...closeListeners]) {
+          try {
+            listener();
+          } catch (error: unknown) {
+            emitKodaXDiagnostic({
+              source: "runtime.events",
+              level: "error",
+              message: "Runtime event close listener failed.",
+              detail: normalizeError(error),
+            });
+          }
+        }
+        closeListeners.clear();
         try {
-          listener();
+          persistence.close();
         } catch (error: unknown) {
+          const persistenceError = normalizeError(error);
+          failure ??= persistenceError;
           emitKodaXDiagnostic({
-            source: "runtime.events",
+            source: "runtime.persistence",
             level: "error",
-            message: "Runtime event close listener failed.",
-            detail: normalizeError(error),
+            message: "Failed to flush runtime events while closing",
+            detail: persistenceError,
           });
         }
+        subscribers.clear();
+        liveBySession.clear();
+        latestSeqBySession.clear();
       }
-      closeListeners.clear();
-      try {
-        persistence.close();
-      } catch (error: unknown) {
-        emitKodaXDiagnostic({
-          source: "runtime.persistence",
-          level: "error",
-          message: "Failed to flush runtime events while closing",
-          detail: error,
-        });
-      }
-      subscribers.clear();
-      liveBySession.clear();
-      latestSeqBySession.clear();
+      closeError = failure;
+      if (failure !== undefined) throw failure;
     },
   };
 }
@@ -10458,6 +11185,8 @@ function writeRuntimeJsonAtomic(file: string, value: unknown): void {
 function writeRuntimeTextAtomic(file: string, content: string): void {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   let descriptor: number | undefined;
+  let operationCompleted = false;
+  let operationError: unknown;
   try {
     descriptor = fs.openSync(temporary, "wx", 0o600);
     fs.writeFileSync(descriptor, content, "utf-8");
@@ -10465,9 +11194,38 @@ function writeRuntimeTextAtomic(file: string, content: string): void {
     fs.closeSync(descriptor);
     descriptor = undefined;
     fs.renameSync(temporary, file);
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
+    operationCompleted = true;
+  } catch (error: unknown) {
+    operationError = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  if (descriptor !== undefined) {
+    try {
+      fs.closeSync(descriptor);
+    } catch (error: unknown) {
+      cleanupErrors.push(error);
+    }
+  }
+  try {
     fs.rmSync(temporary, { force: true });
+  } catch (error: unknown) {
+    cleanupErrors.push(error);
+  }
+  if (!operationCompleted) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [operationError, ...cleanupErrors],
+        `Runtime atomic write and cleanup both failed: ${file}`,
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(
+      cleanupErrors,
+      `Runtime atomic-write cleanup failed: ${file}`,
+    );
   }
 }
 
@@ -10476,28 +11234,56 @@ function withRuntimeStatusFileLock<T>(
   operation: () => T,
 ): T {
   const lockFile = `${statusFile}.lock`;
-  const deadline = Date.now() + 2_000;
+  const deadline = performance.now() + 2_000;
   const waitCell = new Int32Array(new SharedArrayBuffer(4));
-  let descriptor: number | undefined;
-  while (descriptor === undefined) {
+  const token = randomUUID();
+  retryAbandonedRuntimeLockCleanup(lockFile);
+  reconcileRuntimeStatusLockCandidates(lockFile, deadline);
+  const reclaimFile = `${lockFile}.reclaim`;
+  let acquired = !fs.existsSync(reclaimFile)
+    && !fs.existsSync(`${reclaimFile}.cleanup`)
+    && !hasRuntimeStatusAcquisitionGateFiles(lockFile)
+    && createRuntimeStatusLockFile(lockFile, token);
+  while (!acquired) {
     try {
-      descriptor = fs.openSync(lockFile, "wx", 0o600);
-      fs.writeFileSync(
-        descriptor,
-        JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-        "utf-8",
-      );
+      acquired = withRuntimeStatusAcquisitionGate(lockFile, deadline, () => {
+        if (!clearLegacyRuntimeReclaimGates(lockFile, deadline)) return false;
+        if (fs.existsSync(lockFile)) {
+          if (
+            runtimeStatusLockOwnerState(lockFile, runtimeLockProbeBudget(deadline))
+              !== "gone"
+          ) return false;
+          const stale = readRuntimeStatusLockRecord(lockFile);
+          if (stale === undefined) return false;
+          tryRemoveRuntimeStatusLockOwnedBy(lockFile, stale.token);
+          if (fs.existsSync(lockFile)) return false;
+        }
+        return createRuntimeStatusLockFile(lockFile, token);
+      });
     } catch (error: unknown) {
-      if (runtimeErrorCode(error) !== "EEXIST") throw error;
-      if (runtimeStatusLockOwnerIsDead(lockFile)) {
-        fs.rmSync(lockFile, { force: true });
-        continue;
+      if (readRuntimeStatusLockRecord(lockFile)?.token === token) {
+        try {
+          removeRuntimeStatusLockOwnedBy(lockFile, token);
+        } catch (cleanupError: unknown) {
+          rememberAbandonedRuntimeLockFile(
+            lockFile,
+            lockFile,
+            token,
+            "blocking",
+          );
+          throw new AggregateError(
+            [error, cleanupError],
+            "Runtime status lock acquisition and cleanup both failed",
+          );
+        }
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`Runtime status lock timed out: ${lockFile}`);
-      }
-      Atomics.wait(waitCell, 0, 0, 10);
+      throw error;
     }
+    if (acquired) break;
+    if (performance.now() >= deadline) {
+      throw new RuntimeStatusLockTimeoutError(lockFile);
+    }
+    Atomics.wait(waitCell, 0, 0, 10);
   }
   let operationCompleted = false;
   let operationResult!: T;
@@ -10510,26 +11296,26 @@ function withRuntimeStatusFileLock<T>(
   }
   let cleanupError: unknown;
   try {
-    fs.closeSync(descriptor);
+    removeRuntimeStatusLockOwnedBy(lockFile, token);
   } catch (error: unknown) {
+    rememberAbandonedRuntimeLockFile(
+      lockFile,
+      lockFile,
+      token,
+      "blocking",
+    );
     cleanupError = error;
   }
-  try {
-    fs.rmSync(lockFile, { force: true });
-  } catch (error: unknown) {
-    cleanupError = cleanupError === undefined
-      ? error
-      : new AggregateError(
-          [cleanupError, error],
-          "Runtime status lock close and removal both failed",
-        );
-  }
   if (!operationCompleted) {
-    if (
-      operationError instanceof RuntimeEventCommitIndeterminateError
-      && cleanupError !== undefined
-    ) {
-      operationError.includeLockCleanupFailure(cleanupError);
+    if (cleanupError !== undefined) {
+      if (operationError instanceof RuntimeEventCommitIndeterminateError) {
+        operationError.includeLockCleanupFailure(cleanupError);
+      } else {
+        operationError = new AggregateError(
+          [operationError, cleanupError],
+          "Runtime status operation and lock cleanup both failed",
+        );
+      }
     }
     throw operationError;
   }
@@ -10539,33 +11325,649 @@ function withRuntimeStatusFileLock<T>(
   return operationResult;
 }
 
-function runtimeStatusLockOwnerIsDead(lockFile: string): boolean {
+type RuntimeStatusLockOwnerState = "alive" | "gone" | "unknown";
+
+interface RuntimeStatusLockRecord {
+  readonly pid: number;
+  readonly createdAt: number;
+  readonly token: string;
+  readonly processStartIdentity?: string;
+  readonly ticket?: number;
+}
+
+const RUNTIME_PROCESS_START_IDENTITY = readRuntimeProcessStartIdentity(process.pid);
+interface AbandonedRuntimeLockFile {
+  readonly family: string;
+  readonly token: string;
+  readonly kind: "blocking" | "candidate" | "unpublished";
+  readonly fileIdentity?: RuntimeStatusLockFileIdentity;
+}
+
+interface RuntimeStatusLockFileIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+const abandonedRuntimeLockFiles = new Map<string, AbandonedRuntimeLockFile>();
+const runtimeStatusHardLinkDisabledFamilies = new Set<string>();
+const runtimeStatusCandidateWarningFamilies = new Set<string>();
+
+function rememberAbandonedRuntimeLockFile(
+  file: string,
+  family: string,
+  token: string,
+  kind: AbandonedRuntimeLockFile["kind"],
+  fileIdentity?: RuntimeStatusLockFileIdentity,
+): void {
+  abandonedRuntimeLockFiles.set(file, {
+    family,
+    token,
+    kind,
+    ...(fileIdentity === undefined ? {} : { fileIdentity }),
+  });
+  if (kind === "candidate") runtimeStatusHardLinkDisabledFamilies.add(family);
+}
+
+function runtimeStatusLockRecord(
+  token: string,
+  ticket?: number,
+): RuntimeStatusLockRecord {
+  return {
+    pid: process.pid,
+    createdAt: Date.now(),
+    token,
+    ...(RUNTIME_PROCESS_START_IDENTITY === undefined
+      ? {}
+      : { processStartIdentity: RUNTIME_PROCESS_START_IDENTITY }),
+    ...(ticket === undefined ? {} : { ticket }),
+  };
+}
+
+function readRuntimeStatusLockRecord(
+  file: string,
+): RuntimeStatusLockRecord | undefined {
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(lockFile, "utf-8"));
+    const value: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
     if (
-      !isRecord(parsed)
-      || !Number.isSafeInteger(parsed.pid)
-      || typeof parsed.pid !== "number"
-      || parsed.pid <= 0
-    ) {
-      return fs.statSync(lockFile).mtimeMs < Date.now() - 30_000;
-    }
-    if (
-      Number.isSafeInteger(parsed.createdAt)
-      && typeof parsed.createdAt === "number"
-      && parsed.createdAt < Date.now() - 30_000
-    ) {
-      return true;
-    }
+      !isRecord(value)
+      || !Number.isSafeInteger(value.pid)
+      || typeof value.pid !== "number"
+      || value.pid <= 0
+      || !Number.isFinite(value.createdAt)
+      || typeof value.createdAt !== "number"
+      || typeof value.token !== "string"
+      || (
+        value.processStartIdentity !== undefined
+        && typeof value.processStartIdentity !== "string"
+      )
+      || (
+        value.ticket !== undefined
+        && (
+          typeof value.ticket !== "number"
+          || !Number.isSafeInteger(value.ticket)
+          || value.ticket <= 0
+        )
+      )
+    ) return undefined;
+    return {
+      pid: value.pid,
+      createdAt: value.createdAt,
+      token: value.token,
+      ...(value.processStartIdentity === undefined
+        ? {}
+        : { processStartIdentity: value.processStartIdentity }),
+      ...(value.ticket === undefined ? {} : { ticket: value.ticket }),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeStatusLockOwnerState(
+  lockFile: string,
+  processProbeTimeoutMs = 1_000,
+): RuntimeStatusLockOwnerState {
+  const parsed = readRuntimeStatusLockRecord(lockFile);
+  if (parsed === undefined) return "unknown";
+  try {
     try {
       process.kill(parsed.pid, 0);
-      return false;
     } catch (error: unknown) {
-      return runtimeErrorCode(error) === "ESRCH";
+      return runtimeErrorCode(error) === "ESRCH" ? "gone" : "unknown";
     }
+    if (typeof parsed.processStartIdentity !== "string") return "alive";
+    const currentIdentity = parsed.pid === process.pid
+      ? RUNTIME_PROCESS_START_IDENTITY
+      : readRuntimeProcessStartIdentity(parsed.pid, processProbeTimeoutMs);
+    if (currentIdentity === undefined) return "unknown";
+    return currentIdentity === parsed.processStartIdentity ? "alive" : "gone";
   } catch {
-    return false;
+    return "unknown";
   }
+}
+
+function createRuntimeStatusLockFile(
+  lockFile: string,
+  token: string,
+  ticket?: number,
+): boolean {
+  if (runtimeStatusHardLinkDisabledFamilies.has(lockFile)) {
+    return createRuntimeStatusLockFileByExclusiveWrite(lockFile, token, ticket);
+  }
+  const candidate = `${lockFile}.candidate.${process.pid}.${randomUUID()}`;
+  let descriptor: number | undefined;
+  let operationCompleted = false;
+  let operationError: unknown;
+  let acquired = false;
+  let fallbackToExclusiveWrite = false;
+  try {
+    descriptor = fs.openSync(candidate, "wx", 0o600);
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify(runtimeStatusLockRecord(token, ticket)),
+      "utf-8",
+    );
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    try {
+      fs.linkSync(candidate, lockFile);
+      acquired = true;
+      operationCompleted = true;
+    } catch (error: unknown) {
+      const code = runtimeErrorCode(error);
+      if (code === "EEXIST") {
+        operationCompleted = true;
+      } else if (runtimeStatusHardLinkUnavailable(code)) {
+        operationCompleted = true;
+        fallbackToExclusiveWrite = true;
+      } else {
+        throw error;
+      }
+    }
+  } catch (error: unknown) {
+    operationError = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  if (descriptor !== undefined) {
+    try {
+      fs.closeSync(descriptor);
+    } catch (error: unknown) {
+      cleanupErrors.push(error);
+    }
+  }
+  try {
+    fs.rmSync(candidate, { force: true });
+  } catch (error: unknown) {
+    rememberAbandonedRuntimeLockFile(
+      candidate,
+      lockFile,
+      token,
+      "candidate",
+    );
+    cleanupErrors.push(error);
+  }
+  if (!operationCompleted) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [operationError, ...cleanupErrors],
+        `Runtime status lock publication and cleanup both failed: ${lockFile}`,
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length > 0) {
+    if (!runtimeStatusCandidateWarningFamilies.has(lockFile)) {
+      runtimeStatusCandidateWarningFamilies.add(lockFile);
+      emitKodaXDiagnostic({
+        source: "runtime.status.lock",
+        level: "warn",
+        message: "Runtime status lock candidate cleanup was deferred; using exclusive creation for this lock family.",
+        detail: { lockFile, cleanupErrors },
+      });
+    }
+  }
+  if (fallbackToExclusiveWrite) {
+    return createRuntimeStatusLockFileByExclusiveWrite(lockFile, token, ticket);
+  }
+  return acquired;
+}
+
+function runtimeStatusHardLinkUnavailable(code: string | undefined): boolean {
+  return code === "EACCES"
+    || code === "EPERM"
+    || code === "ENOTSUP"
+    || code === "EOPNOTSUPP"
+    || code === "ENOSYS"
+    || code === "EXDEV";
+}
+
+function createRuntimeStatusLockFileByExclusiveWrite(
+  lockFile: string,
+  token: string,
+  ticket?: number,
+): boolean {
+  let descriptor: number | undefined;
+  let created = false;
+  let createdIdentity: RuntimeStatusLockFileIdentity | undefined;
+  let operationError: unknown;
+  try {
+    descriptor = fs.openSync(lockFile, "wx", 0o600);
+    created = true;
+    createdIdentity = runtimeStatusLockDescriptorIdentity(descriptor);
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify(runtimeStatusLockRecord(token, ticket)),
+      "utf-8",
+    );
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    return true;
+  } catch (error: unknown) {
+    if (!created && runtimeErrorCode(error) === "EEXIST") return false;
+    operationError = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  if (descriptor !== undefined) {
+    try {
+      fs.closeSync(descriptor);
+    } catch (error: unknown) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (created) {
+    try {
+      fs.rmSync(lockFile, { force: true });
+    } catch (error: unknown) {
+      rememberAbandonedRuntimeLockFile(
+        lockFile,
+        lockFile,
+        token,
+        "unpublished",
+        createdIdentity,
+      );
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [operationError, ...cleanupErrors],
+      `Runtime fallback status lock creation and cleanup both failed: ${lockFile}`,
+    );
+  }
+  throw operationError;
+}
+
+function withRuntimeStatusAcquisitionGate<T>(
+  lockFile: string,
+  deadline: number,
+  operation: () => T,
+): T {
+  const token = randomUUID();
+  const choosingFile = `${lockFile}.choosing.${token}`;
+  const claimFile = `${lockFile}.claim.${token}`;
+  let operationCompleted = false;
+  let operationResult!: T;
+  let operationError: unknown;
+  try {
+    writeRuntimeTextAtomic(
+      choosingFile,
+      JSON.stringify(runtimeStatusLockRecord(token)),
+    );
+    const existingClaims = runtimeStatusGateFiles(lockFile, "claim")
+      .map((file) => readRuntimeStatusLockRecord(file)?.ticket)
+      .filter((ticket): ticket is number => ticket !== undefined);
+    const ticket = Math.max(0, ...existingClaims) + 1;
+    if (!Number.isSafeInteger(ticket)) {
+      throw new Error(`Runtime status lock ticket overflow: ${lockFile}`);
+    }
+    writeRuntimeTextAtomic(
+      claimFile,
+      JSON.stringify(runtimeStatusLockRecord(token, ticket)),
+    );
+    removeRuntimeStatusLockOwnedBy(choosingFile, token);
+    waitForRuntimeStatusGateTurn(lockFile, claimFile, ticket, token, deadline);
+    operationResult = operation();
+    operationCompleted = true;
+  } catch (error: unknown) {
+    operationError = error;
+  }
+  const cleanupErrors: unknown[] = [];
+  for (const ownedFile of [
+    claimFile,
+    choosingFile,
+  ]) {
+    if (!fs.existsSync(ownedFile)) continue;
+    try {
+      removeRuntimeStatusLockOwnedBy(ownedFile, token);
+    } catch (error: unknown) {
+      rememberAbandonedRuntimeLockFile(
+        ownedFile,
+        lockFile,
+        token,
+        "blocking",
+      );
+      cleanupErrors.push(error);
+    }
+  }
+  if (!operationCompleted) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [operationError, ...cleanupErrors],
+        "Runtime status acquisition and gate cleanup both failed",
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length === 1) throw cleanupErrors[0];
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(
+      cleanupErrors,
+      "Runtime status acquisition gate cleanup failed",
+    );
+  }
+  return operationResult;
+}
+
+function waitForRuntimeStatusGateTurn(
+  lockFile: string,
+  claimFile: string,
+  ticket: number,
+  token: string,
+  deadline: number,
+): void {
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  while (true) {
+    let blocked = false;
+    for (const choosing of runtimeStatusGateFiles(lockFile, "choosing")) {
+      if (choosing === `${lockFile}.choosing.${token}`) continue;
+      if (!removeGoneRuntimeStatusGateFile(choosing, deadline)) blocked = true;
+    }
+    for (const claim of runtimeStatusGateFiles(lockFile, "claim")) {
+      if (claim === claimFile) continue;
+      const record = readRuntimeStatusLockRecord(claim);
+      if (record?.ticket === undefined) {
+        blocked = true;
+        continue;
+      }
+      if (
+        record.ticket > ticket
+        || (record.ticket === ticket && record.token.localeCompare(token) > 0)
+      ) continue;
+      if (!removeGoneRuntimeStatusGateFile(claim, deadline)) blocked = true;
+    }
+    if (!blocked) return;
+    if (performance.now() >= deadline) {
+      throw new RuntimeStatusLockTimeoutError(lockFile);
+    }
+    Atomics.wait(waitCell, 0, 0, 10);
+  }
+}
+
+function runtimeStatusGateFiles(
+  lockFile: string,
+  kind: "choosing" | "claim",
+): string[] {
+  const directory = path.dirname(lockFile);
+  const prefix = `${path.basename(lockFile)}.${kind}.`;
+  try {
+    return fs.readdirSync(directory)
+      .filter((name) => (
+        name.startsWith(prefix)
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(name.slice(prefix.length))
+      ))
+      .map((name) => path.join(directory, name));
+  } catch (error: unknown) {
+    if (runtimeErrorCode(error) === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function hasRuntimeStatusAcquisitionGateFiles(lockFile: string): boolean {
+  const directory = path.dirname(lockFile);
+  const basename = path.basename(lockFile);
+  const prefixes = [`${basename}.choosing.`, `${basename}.claim.`];
+  try {
+    return fs.readdirSync(directory).some((name) => prefixes.some((prefix) => (
+      name.startsWith(prefix)
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(name.slice(prefix.length))
+    )));
+  } catch (error: unknown) {
+    if (runtimeErrorCode(error) === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function removeGoneRuntimeStatusGateFile(
+  file: string,
+  deadline: number,
+): boolean {
+  if (!fs.existsSync(file)) return true;
+  if (
+    runtimeStatusLockOwnerState(file, runtimeLockProbeBudget(deadline)) !== "gone"
+  ) return false;
+  const record = readRuntimeStatusLockRecord(file);
+  if (record === undefined) return false;
+  tryRemoveRuntimeStatusLockOwnedBy(file, record.token);
+  return !fs.existsSync(file);
+}
+
+function clearLegacyRuntimeReclaimGates(
+  lockFile: string,
+  deadline: number,
+): boolean {
+  const reclaimFile = `${lockFile}.reclaim`;
+  for (const file of [`${reclaimFile}.cleanup`, reclaimFile]) {
+    if (!fs.existsSync(file)) continue;
+    if (!removeGoneRuntimeStatusGateFile(file, deadline)) return false;
+  }
+  return true;
+}
+
+function retryAbandonedRuntimeLockCleanup(lockFile: string): void {
+  for (const [file, abandoned] of [...abandonedRuntimeLockFiles]) {
+    if (abandoned.family !== lockFile) continue;
+    if (!fs.existsSync(file)) {
+      abandonedRuntimeLockFiles.delete(file);
+      continue;
+    }
+    if (abandoned.kind === "unpublished") {
+      if (abandoned.fileIdentity === undefined) {
+        throw new RuntimeStatusLockCleanupError(
+          new Error(`Runtime unpublished lock identity is unavailable: ${file}`),
+        );
+      }
+      const currentIdentity = runtimeStatusLockPathIdentity(file);
+      if (!runtimeStatusLockFileIdentityEquals(
+        currentIdentity,
+        abandoned.fileIdentity,
+      )) {
+        abandonedRuntimeLockFiles.delete(file);
+        continue;
+      }
+      try {
+        fs.rmSync(file, { force: true });
+        abandonedRuntimeLockFiles.delete(file);
+      } catch (error: unknown) {
+        throw new RuntimeStatusLockCleanupError(error);
+      }
+      continue;
+    }
+    const record = readRuntimeStatusLockRecord(file);
+    if (record?.token !== abandoned.token) {
+      abandonedRuntimeLockFiles.delete(file);
+      continue;
+    }
+    try {
+      removeRuntimeStatusLockOwnedBy(file, abandoned.token);
+      abandonedRuntimeLockFiles.delete(file);
+    } catch (error: unknown) {
+      if (abandoned.kind === "blocking") throw error;
+    }
+  }
+  const hasCandidate = [...abandonedRuntimeLockFiles.values()].some(
+    (abandoned) => (
+      abandoned.family === lockFile && abandoned.kind === "candidate"
+    ),
+  );
+  if (!hasCandidate) {
+    runtimeStatusHardLinkDisabledFamilies.delete(lockFile);
+    runtimeStatusCandidateWarningFamilies.delete(lockFile);
+  }
+}
+
+function reconcileRuntimeStatusLockCandidates(
+  lockFile: string,
+  deadline: number,
+): void {
+  const candidates = runtimeStatusLockCandidateFiles(lockFile);
+  for (const candidate of candidates) {
+    const record = readRuntimeStatusLockRecord(candidate);
+    if (
+      record === undefined
+      || runtimeStatusLockOwnerState(
+        candidate,
+        runtimeLockProbeBudget(deadline),
+      ) !== "gone"
+    ) continue;
+    try {
+      tryRemoveRuntimeStatusLockOwnedBy(candidate, record.token);
+    } catch (error: unknown) {
+      rememberAbandonedRuntimeLockFile(
+        candidate,
+        lockFile,
+        record.token,
+        "candidate",
+      );
+      if (!runtimeStatusCandidateWarningFamilies.has(lockFile)) {
+        runtimeStatusCandidateWarningFamilies.add(lockFile);
+        emitKodaXDiagnostic({
+          source: "runtime.status.lock",
+          level: "warn",
+          message: "A prior Runtime lock candidate could not be removed; using exclusive creation for this lock family.",
+          detail: { lockFile, candidate, error },
+        });
+      }
+    }
+  }
+  const candidateRemains = runtimeStatusLockCandidateFiles(lockFile).length > 0;
+  if (candidateRemains) {
+    runtimeStatusHardLinkDisabledFamilies.add(lockFile);
+  } else if (![...abandonedRuntimeLockFiles.values()].some(
+    (abandoned) => (
+      abandoned.family === lockFile && abandoned.kind === "candidate"
+    ),
+  )) {
+    runtimeStatusHardLinkDisabledFamilies.delete(lockFile);
+    runtimeStatusCandidateWarningFamilies.delete(lockFile);
+  }
+}
+
+function runtimeStatusLockCandidateFiles(lockFile: string): string[] {
+  const directory = path.dirname(lockFile);
+  const prefix = `${path.basename(lockFile)}.candidate.`;
+  try {
+    return fs.readdirSync(directory)
+      .filter((name) => (
+        name.startsWith(prefix)
+        && /^\d+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(name.slice(prefix.length))
+      ))
+      .map((name) => path.join(directory, name));
+  } catch (error: unknown) {
+    if (runtimeErrorCode(error) === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function runtimeStatusLockDescriptorIdentity(
+  descriptor: number,
+): RuntimeStatusLockFileIdentity {
+  const stat = fs.fstatSync(descriptor, { bigint: true });
+  return { device: stat.dev, inode: stat.ino };
+}
+
+function runtimeStatusLockPathIdentity(
+  file: string,
+): RuntimeStatusLockFileIdentity | undefined {
+  try {
+    const stat = fs.statSync(file, { bigint: true });
+    return { device: stat.dev, inode: stat.ino };
+  } catch (error: unknown) {
+    if (runtimeErrorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function runtimeStatusLockFileIdentityEquals(
+  left: RuntimeStatusLockFileIdentity | undefined,
+  right: RuntimeStatusLockFileIdentity,
+): boolean {
+  return left !== undefined
+    && left.device === right.device
+    && left.inode === right.inode;
+}
+
+function runtimeLockProbeBudget(deadline: number): number {
+  return Math.max(0, Math.min(1_000, Math.floor(deadline - performance.now())));
+}
+
+function tryRemoveRuntimeStatusLockOwnedBy(
+  lockFile: string,
+  token: string,
+): boolean {
+  if (!fs.existsSync(lockFile)) return false;
+  const parsed = readRuntimeStatusLockRecord(lockFile);
+  if (parsed?.token !== token) return false;
+  fs.rmSync(lockFile, { force: true });
+  return true;
+}
+
+function removeRuntimeStatusLockOwnedBy(lockFile: string, token: string): void {
+  if (!fs.existsSync(lockFile)) {
+    throw new Error(`Runtime status lock ownership disappeared: ${lockFile}`);
+  }
+  const parsed = readRuntimeStatusLockRecord(lockFile);
+  if (parsed?.token !== token) {
+    throw new Error(`Runtime status lock ownership changed: ${lockFile}`);
+  }
+  fs.rmSync(lockFile, { force: true });
+}
+
+function readRuntimeProcessStartIdentity(
+  pid: number,
+  timeoutMs = 1_000,
+): string | undefined {
+  if (timeoutMs <= 0) return undefined;
+  if (process.platform === "linux") {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+      return fields[19] === undefined ? undefined : `linux:${fields[19]}`;
+    } catch {
+      return undefined;
+    }
+  }
+  if (process.platform === "win32") {
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `([DateTimeOffset](Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`,
+    ], { encoding: "utf-8", timeout: timeoutMs, windowsHide: true });
+    const value = result.status === 0 ? result.stdout.trim() : "";
+    return /^\d+$/.test(value) ? `windows:${value}` : undefined;
+  }
+  const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  const value = result.status === 0 ? result.stdout.trim() : "";
+  return value === "" ? undefined : `${process.platform}:${value}`;
 }
 
 function runtimeErrorCode(error: unknown): string | undefined {
@@ -13295,7 +14697,7 @@ function createRuntimeSessionAdmission(
     },
     async admitsSession(sessionId) {
       if (!enforced) return true;
-      const data = await manager.storage.read(sessionId);
+      const data = await manager.storage.peek(sessionId);
       return (
         data !== null &&
         admitted(data.runtimeInfo?.surface, data.runtimeInfo?.profileId)
@@ -13307,6 +14709,19 @@ function createRuntimeSessionAdmission(
     },
     async loadRequired(sessionId, options) {
       return loadAdmitted(sessionId, options);
+    },
+    async captureRequired(sessionId, options) {
+      const capture = await manager.readSessionCapture(sessionId, options);
+      if (capture === null) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+      if (!admitted(
+        capture.data.runtimeInfo?.surface,
+        capture.data.runtimeInfo?.profileId,
+      )) {
+        reject(sessionId);
+      }
+      return capture;
     },
     async loadExecutable(sessionId) {
       const data = await loadAdmitted(sessionId, undefined, true);
@@ -13359,8 +14774,26 @@ function createRuntimeTranscriptEntriesRevision(
   entries: readonly SessionTranscriptEntry[],
   visit?: (entry: SessionTranscriptEntry, encoded: Buffer) => void,
 ): string {
+  return createRuntimeHistoryEntriesRevision(
+    entries,
+    "kodax-transcript-entries-v1\0",
+    "",
+    visit,
+  );
+}
+
+function createRuntimeHistoryEntriesRevision<TEntry>(
+  entries: readonly TEntry[],
+  domain: string,
+  context: string,
+  visit?: (entry: TEntry, encoded: Buffer) => void,
+): string {
   const hash = createHash("sha256");
-  hash.update("kodax-transcript-entries-v1\0");
+  hash.update(domain);
+  if (context.length > 0) {
+    hash.update(`${Buffer.byteLength(context, "utf8")}:`);
+    hash.update(context);
+  }
   for (const entry of entries) {
     const encoded = Buffer.from(JSON.stringify(entry), "utf8");
     hash.update(`${encoded.length}:`);
@@ -13370,20 +14803,64 @@ function createRuntimeTranscriptEntriesRevision(
   return `sha256:${hash.digest("hex")}`;
 }
 
+function runtimeConversationRevisionContext(
+  history: SessionConversationHistoryData,
+): string {
+  return JSON.stringify({
+    sourceRevision: history.sourceRevision,
+    status: history.status,
+    issues: history.issues,
+  });
+}
+
+function createRuntimeConversationHistoryRevision(
+  history: SessionConversationHistoryData,
+): string {
+  return createRuntimeHistoryEntriesRevision(
+    history.entries,
+    "kodax-conversation-history-v1\0",
+    runtimeConversationRevisionContext(history),
+  );
+}
+
 function createRuntimeTranscriptRevisionFromSerialized(
   serialized: string,
 ): string {
   return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
 }
 
+type RuntimeHistorySnapshotViewKind = "transcript" | "conversation";
+type RuntimeHistorySnapshotEntry =
+  | SessionTranscriptEntry
+  | SessionConversationHistoryEntry;
+
+interface RuntimeConversationSnapshotMetadata {
+  readonly sourceRevision: string;
+  readonly status: SessionConversationHistoryStatus;
+  readonly issues: readonly SessionConversationHistoryIssue[];
+}
+
+function runtimeHistoryEntryDescriptorIdentity(
+  entry: RuntimeHistorySnapshotEntry,
+): { readonly entryId?: string; readonly boundaryId?: string } {
+  if ("entryId" in entry && typeof entry.entryId === "string") {
+    return { entryId: entry.entryId };
+  }
+  return "boundaryId" in entry && typeof entry.boundaryId === "string"
+    ? { boundaryId: entry.boundaryId }
+    : {};
+}
+
 interface RuntimeTranscriptPageCursor {
   readonly kind: "page";
+  readonly view: RuntimeHistorySnapshotViewKind;
   readonly revision: string;
   readonly end: number;
 }
 
 interface RuntimeTranscriptChunkCursor {
   readonly kind: "entry";
+  readonly view: RuntimeHistorySnapshotViewKind;
   readonly revision: string;
   readonly entryIndex: number;
   readonly offset: number;
@@ -13394,12 +14871,16 @@ interface RuntimeTranscriptSnapshotEntryDescriptor {
   readonly byteLength: number;
   readonly chunkDigests: readonly string[];
   readonly entryId?: string;
+  readonly boundaryId?: string;
 }
 
 interface RuntimeTranscriptSnapshotView {
+  readonly view: RuntimeHistorySnapshotViewKind;
   readonly revision: string;
+  readonly sourceRevision: string;
   readonly filePath: string;
   readonly entries: readonly RuntimeTranscriptSnapshotEntryDescriptor[];
+  readonly conversation?: RuntimeConversationSnapshotMetadata;
 }
 
 function encodeRuntimeTranscriptCursor(
@@ -13422,6 +14903,14 @@ function decodeRuntimeTranscriptCursor(
   if (!isRecord(value) || typeof value.revision !== "string") {
     throw createRuntimeResyncError("Invalid transcript cursor payload");
   }
+  const view = value.view === undefined || value.view === "transcript"
+    ? "transcript"
+    : value.view === "conversation"
+      ? "conversation"
+      : undefined;
+  if (view === undefined) {
+    throw createRuntimeResyncError("Invalid transcript cursor view");
+  }
   if (
     value.kind === "page" &&
     Number.isSafeInteger(value.end) &&
@@ -13429,6 +14918,7 @@ function decodeRuntimeTranscriptCursor(
   ) {
     return {
       kind: "page",
+      view,
       revision: value.revision,
       end: Number(value.end),
     };
@@ -13442,6 +14932,7 @@ function decodeRuntimeTranscriptCursor(
   ) {
     return {
       kind: "entry",
+      view,
       revision: value.revision,
       entryIndex: Number(value.entryIndex),
       offset: Number(value.offset),
@@ -13456,15 +14947,69 @@ async function createRuntimeTranscriptSlice(
   cursor?: string,
   requestedLimit?: number,
 ): Promise<RuntimeTranscriptSlice> {
+  if (snapshot.view !== "transcript") {
+    throw createRuntimeResyncError("Transcript snapshot view does not match the request");
+  }
+  const slice = await createRuntimeHistorySlice(
+    snapshot,
+    budget,
+    cursor,
+    requestedLimit,
+  );
+  return {
+    revision: snapshot.revision,
+    entries: slice.entries.map((item): RuntimeTranscriptSliceEntry => ({
+      index: item.index,
+      ...(item.entryId !== undefined ? { entryId: item.entryId } : {}),
+      byteLength: item.byteLength,
+      oversized: item.oversized,
+      ...(item.entry !== undefined
+        ? { entry: item.entry as SessionTranscriptEntry }
+        : {}),
+    })),
+    hasMore: slice.hasMore,
+    ...(slice.nextCursor !== undefined ? { nextCursor: slice.nextCursor } : {}),
+  };
+}
+
+interface RuntimeHistorySliceItem {
+  readonly index: number;
+  readonly entryId?: string;
+  readonly boundaryId?: string;
+  readonly byteLength: number;
+  readonly oversized: boolean;
+  readonly entry?: RuntimeHistorySnapshotEntry;
+}
+
+interface RuntimeHistorySlice {
+  readonly entries: readonly RuntimeHistorySliceItem[];
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
+async function createRuntimeHistorySlice(
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
+  cursor?: string,
+  requestedLimit?: number,
+  reservedBytes = 0,
+): Promise<RuntimeHistorySlice> {
   const limit = requestedLimit ?? DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT;
   if (!Number.isSafeInteger(limit) || limit <= 0) {
     throw new Error("transcript page limit must be a positive safe integer");
   }
   const normalizedLimit = Math.min(limit, MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT);
+  if (reservedBytes > MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES) {
+    throw createRuntimeHistoryPageCapacityError();
+  }
   let end = snapshot.entries.length;
   if (cursor !== undefined) {
     const parsed = decodeRuntimeTranscriptCursor(cursor);
-    if (parsed.kind !== "page" || parsed.revision !== snapshot.revision) {
+    if (
+      parsed.kind !== "page"
+      || parsed.revision !== snapshot.revision
+      || parsed.view !== snapshot.view
+    ) {
       throw createRuntimeResyncError(
         "Transcript cursor is stale; request a fresh observation snapshot",
       );
@@ -13472,8 +15017,8 @@ async function createRuntimeTranscriptSlice(
     end = Math.min(parsed.end, snapshot.entries.length);
   }
 
-  const entries: RuntimeTranscriptSliceEntry[] = [];
-  let encodedBytes = 0;
+  const entries: RuntimeHistorySliceItem[] = [];
+  let encodedBytes = reservedBytes;
   let start = end;
   for (let index = end - 1; index >= 0; index -= 1) {
     sessionReadOptionsFromBudget(budget);
@@ -13487,20 +15032,21 @@ async function createRuntimeTranscriptSlice(
           budget,
         )
       : undefined;
-    const item: RuntimeTranscriptSliceEntry = {
+    const item: RuntimeHistorySliceItem = {
       index,
       ...(descriptor.entryId !== undefined
         ? { entryId: descriptor.entryId }
+        : {}),
+      ...(descriptor.boundaryId !== undefined
+        ? { boundaryId: descriptor.boundaryId }
         : {}),
       byteLength,
       oversized: byteLength > MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES,
       ...(entry !== undefined ? { entry } : {}),
     };
     const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
-    if (
-      entries.length > 0 &&
-      encodedBytes + itemBytes > MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES
-    ) {
+    if (encodedBytes + itemBytes > MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES) {
+      if (entries.length === 0) throw createRuntimeHistoryPageCapacityError();
       break;
     }
     entries.unshift(item);
@@ -13510,13 +15056,13 @@ async function createRuntimeTranscriptSlice(
   sessionReadOptionsFromBudget(budget);
   const hasMore = start > 0;
   return {
-    revision: snapshot.revision,
     entries,
     hasMore,
     ...(hasMore
       ? {
           nextCursor: encodeRuntimeTranscriptCursor({
             kind: "page",
+            view: snapshot.view,
             revision: snapshot.revision,
             end: start,
           }),
@@ -13525,11 +15071,91 @@ async function createRuntimeTranscriptSlice(
   };
 }
 
+async function createRuntimeConversationHistorySlice(
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
+  cursor?: string,
+  requestedLimit?: number,
+): Promise<RuntimeConversationHistorySlice> {
+  if (snapshot.view !== "conversation" || snapshot.conversation === undefined) {
+    throw createRuntimeResyncError("Conversation snapshot view does not match the request");
+  }
+  const slice = await createRuntimeHistorySlice(
+    snapshot,
+    budget,
+    cursor,
+    requestedLimit,
+    Buffer.byteLength(JSON.stringify({
+      revision: snapshot.revision,
+      sourceRevision: snapshot.conversation.sourceRevision,
+      status: snapshot.conversation.status,
+      issues: snapshot.conversation.issues,
+    }), "utf8"),
+  );
+  return {
+    revision: snapshot.revision,
+    sourceRevision: snapshot.conversation.sourceRevision,
+    status: snapshot.conversation.status,
+    issues: structuredClone(snapshot.conversation.issues),
+    entries: slice.entries.map((item): RuntimeConversationHistorySliceEntry => ({
+      index: item.index,
+      ...(item.boundaryId !== undefined ? { boundaryId: item.boundaryId } : {}),
+      byteLength: item.byteLength,
+      oversized: item.oversized,
+      ...(item.entry !== undefined
+        ? { entry: item.entry as SessionConversationHistoryEntry }
+        : {}),
+    })),
+    hasMore: slice.hasMore,
+    ...(slice.nextCursor !== undefined ? { nextCursor: slice.nextCursor } : {}),
+  };
+}
+
 async function createRuntimeTranscriptEntryChunkFromSnapshot(
   input: RuntimeTranscriptEntryChunkInput,
   snapshot: RuntimeTranscriptSnapshotView,
   budget: RuntimeReadBudget,
 ): Promise<RuntimeTranscriptEntryChunk> {
+  if (snapshot.view !== "transcript") {
+    throw createRuntimeResyncError("Transcript snapshot view does not match the request");
+  }
+  const chunk = await createRuntimeHistoryEntryChunkFromSnapshot(
+    input,
+    snapshot,
+    budget,
+  );
+  return {
+    revision: chunk.revision,
+    entryIndex: chunk.entryIndex,
+    ...(chunk.entryId !== undefined ? { entryId: chunk.entryId } : {}),
+    encoding: "base64-json",
+    data: chunk.data,
+    hasMore: chunk.hasMore,
+    ...(chunk.nextCursor !== undefined ? { nextCursor: chunk.nextCursor } : {}),
+  };
+}
+
+interface RuntimeHistoryEntryChunkInput {
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly cursor?: string;
+}
+
+interface RuntimeHistoryEntryChunk {
+  readonly revision: string;
+  readonly entryIndex: number;
+  readonly entryId?: string;
+  readonly boundaryId?: string;
+  readonly data: string;
+  readonly hasMore: boolean;
+  readonly nextCursor?: string;
+}
+
+async function createRuntimeHistoryEntryChunkFromSnapshot(
+  input: RuntimeHistoryEntryChunkInput,
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
+): Promise<RuntimeHistoryEntryChunk> {
   if (input.revision !== snapshot.revision) {
     throw createRuntimeResyncError(
       "Transcript revision changed; request a fresh observation snapshot",
@@ -13547,6 +15173,7 @@ async function createRuntimeTranscriptEntryChunkFromSnapshot(
     if (
       parsed.kind !== "entry" ||
       parsed.revision !== snapshot.revision ||
+      parsed.view !== snapshot.view ||
       parsed.entryIndex !== input.entryIndex
     ) {
       throw createRuntimeResyncError(
@@ -13583,13 +15210,16 @@ async function createRuntimeTranscriptEntryChunkFromSnapshot(
     ...(descriptor.entryId !== undefined
       ? { entryId: descriptor.entryId }
       : {}),
-    encoding: "base64-json",
+    ...(descriptor.boundaryId !== undefined
+      ? { boundaryId: descriptor.boundaryId }
+      : {}),
     data: encoded.toString("base64"),
     hasMore,
     ...(hasMore
       ? {
           nextCursor: encodeRuntimeTranscriptCursor({
             kind: "entry",
+            view: snapshot.view,
             revision: snapshot.revision,
             entryIndex: input.entryIndex,
             offset: nextOffset,
@@ -13599,11 +15229,35 @@ async function createRuntimeTranscriptEntryChunkFromSnapshot(
   };
 }
 
+async function createRuntimeConversationEntryChunkFromSnapshot(
+  input: RuntimeConversationHistoryEntryChunkInput,
+  snapshot: RuntimeTranscriptSnapshotView,
+  budget: RuntimeReadBudget,
+): Promise<RuntimeConversationHistoryEntryChunk> {
+  if (snapshot.view !== "conversation") {
+    throw createRuntimeResyncError("Conversation snapshot view does not match the request");
+  }
+  const chunk = await createRuntimeHistoryEntryChunkFromSnapshot(
+    input,
+    snapshot,
+    budget,
+  );
+  return {
+    revision: chunk.revision,
+    entryIndex: chunk.entryIndex,
+    ...(chunk.boundaryId !== undefined ? { boundaryId: chunk.boundaryId } : {}),
+    encoding: "base64-json",
+    data: chunk.data,
+    hasMore: chunk.hasMore,
+    ...(chunk.nextCursor !== undefined ? { nextCursor: chunk.nextCursor } : {}),
+  };
+}
+
 async function parseRuntimeTranscriptSnapshotEntry(
   snapshot: RuntimeTranscriptSnapshotView,
   descriptor: RuntimeTranscriptSnapshotEntryDescriptor,
   budget: RuntimeReadBudget,
-): Promise<SessionTranscriptEntry> {
+): Promise<RuntimeHistorySnapshotEntry> {
   const encoded = await readRuntimeTranscriptSnapshotBytes(
     snapshot.filePath,
     descriptor.offset,
@@ -13612,9 +15266,9 @@ async function parseRuntimeTranscriptSnapshotEntry(
   );
   assertRuntimeTranscriptSnapshotDigest(encoded, descriptor.chunkDigests[0]);
   try {
-    return JSON.parse(encoded.toString("utf8")) as SessionTranscriptEntry;
+    return JSON.parse(encoded.toString("utf8")) as RuntimeHistorySnapshotEntry;
   } catch (error: unknown) {
-    throw createRuntimeResyncError(
+    throw createRuntimeTranscriptSnapshotInvalidError(
       `Transcript snapshot entry is corrupt: ${normalizeError(error).message}`,
     );
   }
@@ -13647,7 +15301,7 @@ async function readRuntimeTranscriptSnapshotBytes(
     return buffer;
   } catch (error: unknown) {
     if (isExpectedRuntimeReadTermination(error)) throw error;
-    throw createRuntimeResyncError(
+    throw createRuntimeTranscriptSnapshotInvalidError(
       `Transcript snapshot is unavailable: ${normalizeError(error).message}`,
     );
   } finally {
@@ -13685,7 +15339,7 @@ function assertRuntimeTranscriptSnapshotDigest(
 ): void {
   const actual = createHash("sha256").update(encoded).digest("hex");
   if (expected === undefined || actual !== expected) {
-    throw createRuntimeResyncError(
+    throw createRuntimeTranscriptSnapshotInvalidError(
       "Transcript snapshot integrity check failed; request a fresh boundary",
     );
   }
@@ -15887,6 +17541,30 @@ function createRuntimeResyncError(
   });
 }
 
+function normalizeConversationBoundaryMutationError(error: unknown): Error {
+  if (error instanceof replApi.SessionReadError && error.code === "data_changed") {
+    return createRuntimeResyncError(
+      "Conversation history changed; acquire a fresh history boundary",
+    );
+  }
+  return normalizeError(error);
+}
+
+function createRuntimeTranscriptSnapshotInvalidError(
+  message: string,
+): Error & {
+  readonly code: "resync_required";
+  readonly snapshotInvalid: true;
+} {
+  return Object.assign(createRuntimeResyncError(message), {
+    snapshotInvalid: true as const,
+  });
+}
+
+function isRuntimeTranscriptSnapshotInvalidError(error: unknown): boolean {
+  return isRecord(error) && error.snapshotInvalid === true;
+}
+
 function createRuntimeSnapshotCapacityError(): Error & {
   readonly code: "overloaded";
   readonly data: { readonly limitBytes: number };
@@ -15898,6 +17576,21 @@ function createRuntimeSnapshotCapacityError(): Error & {
     {
       code: "overloaded" as const,
       data: { limitBytes: MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES },
+    },
+  );
+}
+
+function createRuntimeHistoryPageCapacityError(): Error & {
+  readonly code: "overloaded";
+  readonly data: { readonly limitBytes: number };
+} {
+  return Object.assign(
+    new Error(
+      `Runtime history page limit exceeded (${MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES} bytes)`,
+    ),
+    {
+      code: "overloaded" as const,
+      data: { limitBytes: MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES },
     },
   );
 }

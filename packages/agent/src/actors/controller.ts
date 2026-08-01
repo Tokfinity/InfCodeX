@@ -5,6 +5,7 @@ import {
   AgentOwnerUnknownError,
   AgentRevisionConflictError,
   AgentSettlementPersistenceError,
+  AgentShutdownPersistenceError,
 } from './errors.js';
 import { AgentTurnScheduler } from './scheduler.js';
 import type {
@@ -140,6 +141,11 @@ export class AgentActorController {
   private initialized = false;
   private ownershipLost = false;
   private ownershipReleased = false;
+  private closing = false;
+  private settlementGeneration = 0;
+  private settlementValidityGeneration = 0;
+  private shutdownFailure?: Error;
+  private indeterminateFailure?: Error;
   private shutdownPromise?: Promise<void>;
   private committedSnapshot: AgentActorSnapshot;
   private health: AgentControllerHealth = { state: 'healthy' };
@@ -559,11 +565,10 @@ export class AgentActorController {
    */
   disposeAfterStoreRemoval(reason = 'backing store removed'): void {
     if (this.ownershipReleased) return;
+    this.closing = true;
+    this.settlementGeneration += 1;
     this.ownershipReleased = true;
-    const aborts = [...new Set(this.abortControllers.values())];
-    this.abortControllers.clear();
-    for (const abort of aborts) abort.abort(reason);
-    for (const waiter of [...this.waiters]) waiter.resolve(undefined);
+    this.stopLocalWork(reason);
   }
 
   /** Interrupts every local execution while retaining the durable owner fence. */
@@ -585,41 +590,65 @@ export class AgentActorController {
   /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */
   async shutdown(reason = 'runtime stopped'): Promise<void> {
     if (this.ownershipReleased) return;
-    this.shutdownPromise ??= this.performShutdown(reason).finally(() => {
-      if (!this.ownershipLost && !this.ownershipReleased) {
-        this.shutdownPromise = undefined;
+    if (this.shutdownFailure) throw this.shutdownFailure;
+    if (this.shutdownPromise) return this.shutdownPromise;
+    if (!this.closing) {
+      this.closing = true;
+      this.settlementGeneration += 1;
+      this.stopLocalWork(reason);
+    }
+    if (this.ownershipLost) {
+      const error = new AgentShutdownPersistenceError(this.indeterminateFailure);
+      this.shutdownFailure = error;
+      throw error;
+    }
+    const attempt = this.performShutdown(reason);
+    this.shutdownPromise = attempt;
+    try {
+      await attempt;
+    } catch (error: unknown) {
+      if (
+        this.ownershipLost
+        || error instanceof AgentOwnerConflictError
+        || error instanceof AgentSettlementPersistenceError
+        || error instanceof AgentShutdownPersistenceError
+      ) {
+        this.shutdownFailure = normalizeControllerError(error);
       }
-    });
-    return this.shutdownPromise;
+      throw error;
+    } finally {
+      if (this.shutdownPromise === attempt) this.shutdownPromise = undefined;
+    }
   }
 
   private async performShutdown(reason: string): Promise<void> {
+    const attempt = { active: true };
     try {
       await this.flushPendingSettlements();
-      const aborts = await this.mutate(() => {
-        const pendingAborts: AbortController[] = [];
+      await raceSettlementAttempt(
+        this.mutate(() => {
         for (const turn of this.turns.values()) {
           if (isTerminal(turn.state)) continue;
-          const abort = this.abortControllers.get(turn.turnId);
-          if (abort) pendingAborts.push(abort);
           this.finishTurn(turn.turnId, 'interrupted', { error: reason });
         }
-        return pendingAborts;
-      });
-      for (const abort of aborts) abort.abort(reason);
-      if (this.options.owner) {
-        await this.mutate(() => {
+        if (this.options.owner) {
           this.durableOwner = undefined;
+        }
+      }, () => true, false, () => attempt.active, true),
+        Date.now() + SETTLEMENT_SHUTDOWN_TIMEOUT_MS,
+      );
+      this.ownershipReleased = true;
+    } catch (error: unknown) {
+      attempt.active = false;
+      if (error instanceof AgentSettlementAttemptTimeoutError) {
+        const shutdownError = new AgentShutdownPersistenceError(error);
+        this.fenceUnknownSettlement();
+        this.setHealth({
+          state: 'unknown',
+          code: 'actor_settlement_not_persisted',
+          message: shutdownError.message,
         });
-        this.ownershipReleased = true;
-      }
-      for (const waiter of [...this.waiters]) waiter.resolve(undefined);
-    } catch (error) {
-      if (
-        error instanceof AgentOwnerConflictError
-        && (this.ownershipLost || this.ownershipReleased)
-      ) {
-        return;
+        throw shutdownError;
       }
       throw error;
     }
@@ -827,6 +856,7 @@ export class AgentActorController {
   private launch(plan: StartPlan): void {
     const abort = plan.abortController;
     if (abort.signal.aborted) return;
+    const settlementGeneration = this.settlementGeneration;
     const executor = this.options.executorFor?.(plan.actor.kind) ?? this.options.executor ?? EMPTY_EXECUTOR;
     const priorTurns = plan.actor.turnIds
       .filter((turnId) => turnId !== plan.turn.turnId)
@@ -841,8 +871,14 @@ export class AgentActorController {
         reportProgress: (update) => this.recordProgress(plan.turn.turnId, update),
       }))
       .then(
-        (result) => this.trackSettlement(this.completeExecution(plan.turn.turnId, result)),
-        (error: unknown) => this.trackSettlement(this.failExecution(plan.turn.turnId, error)),
+        (result) => this.trackSettlement(
+          () => this.completeExecution(plan.turn.turnId, result),
+          settlementGeneration,
+        ),
+        (error: unknown) => this.trackSettlement(
+          () => this.failExecution(plan.turn.turnId, error),
+          settlementGeneration,
+        ),
       )
       .catch((error: unknown) => {
         if (
@@ -855,7 +891,14 @@ export class AgentActorController {
       });
   }
 
-  private trackSettlement(settlement: Promise<void>): Promise<void> {
+  private trackSettlement(
+    start: () => Promise<void>,
+    generation: number,
+  ): Promise<void> {
+    if (this.closing || generation !== this.settlementGeneration) {
+      return Promise.resolve();
+    }
+    const settlement = start();
     this.pendingSettlements.add(settlement);
     void settlement.finally(() => {
       this.pendingSettlements.delete(settlement);
@@ -868,7 +911,7 @@ export class AgentActorController {
     while (this.pendingSettlements.size > 0) {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) {
-        throw new Error('Timed out while persisting an executor settlement');
+        throw new AgentSettlementAttemptTimeoutError();
       }
       await raceSettlementFlush(
         Promise.all([...this.pendingSettlements]),
@@ -914,13 +957,18 @@ export class AgentActorController {
     }
     let retryMs = INITIAL_SETTLEMENT_RETRY_MS;
     let failureReported = false;
+    const validityGeneration = this.settlementValidityGeneration;
     const deadline = Date.now() + SETTLEMENT_RETRY_DEADLINE_MS;
     this.settlementRecoveryMessages.set(
       turnId,
       `Executor settlement for ${turnId} is awaiting durable persistence.`,
     );
     this.publishSettlementHealth();
-    while (!this.ownershipLost && !this.ownershipReleased) {
+    while (
+      !this.ownershipLost
+      && !this.ownershipReleased
+      && validityGeneration === this.settlementValidityGeneration
+    ) {
       const attempt = { active: true };
       try {
         await raceSettlementAttempt(
@@ -928,7 +976,11 @@ export class AgentActorController {
             settle,
             (changed) => changed,
             false,
-            () => attempt.active,
+            () => (
+              attempt.active
+              && validityGeneration === this.settlementValidityGeneration
+            ),
+            true,
           ),
           deadline,
         );
@@ -945,6 +997,7 @@ export class AgentActorController {
           || this.ownershipReleased
         ) {
           if (this.ownershipLost && !this.ownershipReleased) {
+            this.indeterminateFailure = normalizeControllerError(error);
             this.settlementRecoveryMessages.clear();
             this.setHealth({
               state: 'unknown',
@@ -973,6 +1026,7 @@ export class AgentActorController {
             turnId,
             error,
           );
+          this.indeterminateFailure = persistenceError;
           this.fenceUnknownSettlement();
           this.setHealth({
             state: 'unknown',
@@ -1375,8 +1429,12 @@ export class AgentActorController {
     shouldCommit: (result: T) => boolean = () => true,
     allowOwnershipClaim = false,
     commitStillValid?: () => boolean,
+    allowWhileClosing = false,
   ): Promise<T> {
     if (!allowOwnershipClaim) this.assertWritableOwner();
+    if (this.closing && !allowWhileClosing) {
+      throw new AgentControlError('actor_closed', 'Actor controller is shutting down.');
+    }
     const previousTail = this.mutationTail;
     let release: () => void = () => {};
     this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
@@ -1386,6 +1444,9 @@ export class AgentActorController {
     const priorEventSequence = this.eventsLog.at(-1)?.sequence ?? 0;
     try {
       if (!allowOwnershipClaim) this.assertWritableOwner();
+      if (this.closing && !allowWhileClosing) {
+        throw new AgentControlError('actor_closed', 'Actor controller is shutting down.');
+      }
       const result = await operation();
       if (!shouldCommit(result)) {
         this.restore(before);
@@ -1557,12 +1618,16 @@ export class AgentActorController {
 
   private fenceUnknownSettlement(): void {
     this.ownershipLost = true;
+    this.settlementValidityGeneration += 1;
     this.settlementRecoveryMessages.clear();
+    this.stopLocalWork('actor settlement persistence is unknown');
+  }
+
+  private stopLocalWork(reason: string): void {
     const localAborts = [...new Set(this.abortControllers.values())];
-    replaceMap(this.abortControllers, []);
-    for (const abort of localAborts) {
-      abort.abort('actor settlement persistence is unknown');
-    }
+    this.abortControllers.clear();
+    for (const abort of localAborts) abort.abort(reason);
+    for (const waiter of [...this.waiters]) waiter.resolve(undefined);
   }
 
   private async fenceAfterSnapshotConflict(
@@ -1818,6 +1883,10 @@ function waitForSettlementRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+function normalizeControllerError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 function raceSettlementAttempt<T>(
   settlement: Promise<T>,
   deadline: number,
@@ -1846,7 +1915,7 @@ function raceSettlementFlush(
     settlement.then(() => undefined),
     new Promise<void>((_resolve, reject) => {
       timer = setTimeout(
-        () => reject(new Error('Timed out while persisting an executor settlement')),
+        () => reject(new AgentSettlementAttemptTimeoutError()),
         timeoutMs,
       );
     }),

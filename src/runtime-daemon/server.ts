@@ -41,6 +41,8 @@ import type {
   RuntimeTranscriptEntryChunkInput,
   RuntimeTranscriptPageInput,
   RuntimeTranscriptSearchInput,
+  RuntimeConversationHistoryEntryChunkInput,
+  RuntimeConversationHistoryPageInput,
   RuntimeStartRunInput,
   RuntimeSubmitInput,
   RuntimeSubscription,
@@ -180,6 +182,9 @@ const RUNTIME_METHOD_SCOPES: ReadonlyMap<
     "session.diagnostics",
     "session.settings.get",
     "session.transcript.search",
+    "session.conversation",
+    "session.conversation.page",
+    "session.conversation.entryChunk",
     "session.settings.getVersioned",
     "session.autoMode.getStats",
     "run.get",
@@ -405,10 +410,25 @@ export function createRuntimeDaemonDispatcher(
     {
       readonly controller: AbortController;
       readonly subscriptionIds: Set<string>;
+      readonly cancellable: boolean;
       completed: boolean;
     }
   >();
-  const subscriptionRequestIds = new Map<string, string>();
+  type InFlightRequest = (typeof inFlightRequests) extends Map<string, infer T>
+    ? T
+    : never;
+  const deleteInFlightRequest = (
+    requestId: string,
+    expected: InFlightRequest,
+  ): void => {
+    if (inFlightRequests.get(requestId) === expected) {
+      inFlightRequests.delete(requestId);
+    }
+  };
+  const subscriptionRequests = new Map<string, {
+    readonly requestId: string;
+    readonly inFlight: InFlightRequest;
+  }>();
   const runResults = options.runResults ?? createRuntimeDaemonRunResultStore();
   const connectionId = `connection_${randomUUID().replace(/-/g, "")}`;
   const privateReverseBridge = createRuntimeDaemonReverseBridge(options.notify);
@@ -430,13 +450,15 @@ export function createRuntimeDaemonDispatcher(
     const subscription = subscriptions.get(subscriptionId);
     if (!subscription) return false;
     subscriptions.delete(subscriptionId);
-    const requestId = subscriptionRequestIds.get(subscriptionId);
-    subscriptionRequestIds.delete(subscriptionId);
-    if (requestId !== undefined) {
-      const request = inFlightRequests.get(requestId);
-      request?.subscriptionIds.delete(subscriptionId);
-      if (request?.completed === true && request.subscriptionIds.size === 0) {
-        inFlightRequests.delete(requestId);
+    const owner = subscriptionRequests.get(subscriptionId);
+    subscriptionRequests.delete(subscriptionId);
+    if (owner !== undefined) {
+      const request = inFlightRequests.get(owner.requestId);
+      if (request === owner.inFlight) {
+        request.subscriptionIds.delete(subscriptionId);
+      }
+      if (request === owner.inFlight && request.completed && request.subscriptionIds.size === 0) {
+        deleteInFlightRequest(owner.requestId, request);
       }
     }
     subscription.close();
@@ -472,6 +494,7 @@ export function createRuntimeDaemonDispatcher(
       | {
           readonly id: string;
           readonly subscriptionIds: Set<string>;
+          readonly inFlight: InFlightRequest;
         }
       | undefined;
     try {
@@ -549,51 +572,57 @@ export function createRuntimeDaemonDispatcher(
         requireRuntimeMethodScope(request.method, grantedScopes);
         requirePersistentGrantScope(request, grantedScopes);
       }
-      if (request.method === "request.cancel") {
-        const requestId = requireStringParam(request.params, "requestId");
-        const inFlight = inFlightRequests.get(requestId);
-        inFlight?.controller.abort(
-          Object.assign(new Error("Runtime daemon request cancelled."), {
-            code: "read_cancelled" as const,
-          }),
-        );
-        for (const subscriptionId of inFlight?.subscriptionIds ?? []) {
-          closeSubscription(subscriptionId);
-        }
-        inFlightRequests.delete(requestId);
-        return createRuntimeDaemonSuccessResponse(request.id, {
-          ok: inFlight !== undefined,
-        });
-      }
-      if (request.method === "request.ack") {
-        const requestId = requireStringParam(request.params, "requestId");
-        const inFlight = inFlightRequests.get(requestId);
-        if (inFlight !== undefined) {
-          for (const subscriptionId of inFlight.subscriptionIds) {
-            subscriptionRequestIds.delete(subscriptionId);
-          }
-          inFlightRequests.delete(requestId);
-        }
-        return createRuntimeDaemonSuccessResponse(request.id, {
-          ok: inFlight !== undefined,
-        });
-      }
       if (inFlightRequests.has(request.id)) {
         throw daemonError(
           "invalid_request",
           `Runtime daemon request id is already in flight: ${request.id}.`,
         );
       }
+      if (request.method === "request.cancel") {
+        const requestId = requireStringParam(request.params, "requestId");
+        const inFlight = inFlightRequests.get(requestId);
+        if (inFlight?.cancellable === true) {
+          inFlight.controller.abort(
+            Object.assign(new Error("Runtime daemon request cancelled."), {
+              code: "read_cancelled" as const,
+            }),
+          );
+          for (const subscriptionId of inFlight.subscriptionIds) {
+            closeSubscription(subscriptionId);
+          }
+        }
+        return createRuntimeDaemonSuccessResponse(request.id, {
+          ok: inFlight?.cancellable === true,
+        });
+      }
+      if (request.method === "request.ack") {
+        const requestId = requireStringParam(request.params, "requestId");
+        const inFlight = inFlightRequests.get(requestId);
+        if (inFlight?.completed === true) {
+          for (const subscriptionId of inFlight.subscriptionIds) {
+            const owner = subscriptionRequests.get(subscriptionId);
+            if (owner?.inFlight === inFlight) {
+              subscriptionRequests.delete(subscriptionId);
+            }
+          }
+          deleteInFlightRequest(requestId, inFlight);
+        }
+        return createRuntimeDaemonSuccessResponse(request.id, {
+          ok: inFlight?.completed === true,
+        });
+      }
       const requestController = new AbortController();
       const inFlight = {
         controller: requestController,
         subscriptionIds: new Set<string>(),
+        cancellable: !isRuntimeDaemonDrainingSensitiveMethod(request.method),
         completed: false,
       };
       inFlightRequests.set(request.id, inFlight);
       requestToCleanup = {
         id: request.id,
         subscriptionIds: inFlight.subscriptionIds,
+        inFlight,
       };
       const dispatch = () =>
         dispatchRuntimeDaemonRequest(
@@ -601,9 +630,19 @@ export function createRuntimeDaemonDispatcher(
           options,
           runResults,
           (subscriptionId, subscription) => {
+            if (
+              requestController.signal.aborted
+              || inFlightRequests.get(request.id) !== inFlight
+            ) {
+              subscription.close();
+              return;
+            }
             rememberSubscription(subscriptionId, subscription);
             inFlight.subscriptionIds.add(subscriptionId);
-            subscriptionRequestIds.set(subscriptionId, request.id);
+            subscriptionRequests.set(subscriptionId, {
+              requestId: request.id,
+              inFlight,
+            });
           },
           closeSubscription,
           notify,
@@ -616,18 +655,24 @@ export function createRuntimeDaemonDispatcher(
         );
       let dispatched: unknown;
       try {
-        dispatched = await dispatchWithOperation(
+        const operation = dispatchWithOperation(
           request,
           options,
           clientCapabilities,
           principalId,
           dispatch,
         );
+        dispatched = isRuntimeDaemonDrainingSensitiveMethod(request.method)
+          ? await operation
+          : await raceRuntimeDaemonRequestCancellation(
+              operation,
+              requestController.signal,
+            );
       } catch (error: unknown) {
         for (const subscriptionId of [...inFlight.subscriptionIds]) {
           closeSubscription(subscriptionId);
         }
-        inFlightRequests.delete(request.id);
+        deleteInFlightRequest(request.id, inFlight);
         throw error;
       }
       const result = serializeRuntimeDaemonMethodResult(
@@ -683,7 +728,7 @@ export function createRuntimeDaemonDispatcher(
       }
       inFlight.completed = true;
       if (inFlight.subscriptionIds.size === 0) {
-        inFlightRequests.delete(request.id);
+        deleteInFlightRequest(request.id, inFlight);
       }
       requestToCleanup = undefined;
       return createRuntimeDaemonSuccessResponse(request.id, result);
@@ -692,7 +737,7 @@ export function createRuntimeDaemonDispatcher(
         for (const subscriptionId of [...requestToCleanup.subscriptionIds]) {
           closeSubscription(subscriptionId);
         }
-        inFlightRequests.delete(requestToCleanup.id);
+        deleteInFlightRequest(requestToCleanup.id, requestToCleanup.inFlight);
       }
       return createRuntimeDaemonErrorResponse(
         normalizeRuntimeDaemonError(error),
@@ -724,6 +769,28 @@ export function createRuntimeDaemonDispatcher(
       }
     },
   };
+}
+
+function raceRuntimeDaemonRequestCancellation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason ?? daemonError("read_cancelled", "Runtime daemon request cancelled."),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(
+        signal.reason ?? daemonError("read_cancelled", "Runtime daemon request cancelled."),
+      );
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
 }
 
 async function dispatchWithOperation(
@@ -897,6 +964,7 @@ async function dispatchRuntimeDaemonRequest(
           options.durableHostToolInvocations === true,
           options.management !== undefined,
           options.orphanExitEnabled === true,
+          runtimeImplementsEventCoalescing(runtime),
         ),
         principalId,
         ...(options.controlJournal !== undefined
@@ -971,6 +1039,7 @@ async function dispatchRuntimeDaemonRequest(
         options.durableHostToolInvocations === true,
         options.management !== undefined,
         options.orphanExitEnabled === true,
+        runtimeImplementsEventCoalescing(runtime),
       );
     case "operation.get": {
       const params = requireRecord(request.params);
@@ -1256,6 +1325,7 @@ async function dispatchRuntimeDaemonRequest(
         requireStringField(params, "sessionId"),
         optionalIntegerField(params, "afterSequence"),
         optionalIntegerField(params, "timeoutMs"),
+        { signal: requestSignal },
       );
     }
     case "session.create":
@@ -1309,6 +1379,33 @@ async function dispatchRuntimeDaemonRequest(
         requireRecord(
           request.params,
         ) as unknown as RuntimeTranscriptSearchInput,
+        runtimeReadOptions(request.params, requestSignal),
+      );
+    case "session.conversation": {
+      const history = await runtime.sessions.conversation(
+        requireStringParam(request.params, "sessionId"),
+        runtimeReadOptions(request.params, requestSignal),
+      );
+      if (
+        history !== null
+        && Buffer.byteLength(JSON.stringify(history), "utf8")
+          > LEGACY_TRANSCRIPT_WIRE_BUDGET_BYTES
+      ) {
+        throw daemonError(
+          "invalid_request",
+          "Conversation history is too large for the direct endpoint; use session.conversation.page and session.conversation.entryChunk.",
+        );
+      }
+      return history;
+    }
+    case "session.conversation.page":
+      return runtime.sessions.conversationPage(
+        requireRecord(request.params) as unknown as RuntimeConversationHistoryPageInput,
+        runtimeReadOptions(request.params, requestSignal),
+      );
+    case "session.conversation.entryChunk":
+      return runtime.sessions.conversationEntryChunk(
+        requireRecord(request.params) as unknown as RuntimeConversationHistoryEntryChunkInput,
         runtimeReadOptions(request.params, requestSignal),
       );
     case "session.observe": {
@@ -2028,6 +2125,7 @@ function runtimeDaemonCapabilities(
   durableHostToolInvocations = false,
   daemonManagement = false,
   orphanExitEnabled = false,
+  runtimeEventCoalescing = false,
 ): Record<string, unknown> {
   const safeOverrides = { ...overrides };
   delete safeOverrides.externalAgents;
@@ -2036,6 +2134,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.actorControlPlane;
   delete safeOverrides.integrationConfigResilience;
   delete safeOverrides.daemonOrphanExit;
+  delete safeOverrides.runtimeEventCoalescing;
   delete safeOverrides.runtimeAutoModeGuardrail;
   delete safeOverrides.sandboxRuntime;
   delete safeOverrides.runLifecycleControl;
@@ -2056,6 +2155,9 @@ function runtimeDaemonCapabilities(
       methodNamespace: "agents",
     },
     sandboxRuntime: sandboxRuntimeCapability(),
+    ...(runtimeEventCoalescing
+      ? { runtimeEventCoalescing: { version: 1 } }
+      : {}),
     runtimeAutoModeGuardrail: {
       version: 4,
       owner: "session-runtime",
@@ -2195,6 +2297,12 @@ function runtimeDaemonCapabilities(
       defaultScope: "compacted",
       citedEntries: true,
     },
+    conversationHistory: {
+      version: 1,
+      immutablePaging: true,
+      revisionedBoundaries: true,
+      ambiguityReporting: true,
+    },
     learningCenter: { version: 1 },
     skillLearningLoop: {
       version: 1,
@@ -2239,6 +2347,15 @@ function runtimeDaemonCapabilities(
     },
     ...safeOverrides,
   };
+}
+
+function runtimeImplementsEventCoalescing(runtime: KodaXRuntime): boolean {
+  const capability = runtime.capabilities?.runtimeEventCoalescing;
+  return (
+    isRecord(capability)
+    && typeof capability.version === "number"
+    && capability.version >= 1
+  );
 }
 
 function publicOperationReceipt(

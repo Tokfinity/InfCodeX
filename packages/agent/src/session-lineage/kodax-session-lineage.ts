@@ -514,6 +514,23 @@ function getBranchSegment(
   return path.slice(ancestorIndex + 1);
 }
 
+function recordActiveContextProvenance(
+  lineage: KodaXSessionLineage,
+  messages: readonly KodaXMessage[],
+): void {
+  let messageIndex = 0;
+  for (const entry of getSessionLineagePath(lineage)) {
+    for (const _rendered of getContextMessagesForEntry(entry)) {
+      const message = messages[messageIndex];
+      if (message !== undefined) recordMessageProvenanceSource(message, entry);
+      messageIndex += 1;
+    }
+    if (entry.type === 'compaction' && entry.reason !== 'rewind') {
+      messageIndex += entry.postCompactAttachments?.length ?? 0;
+    }
+  }
+}
+
 /**
  * Reconcile a linear message list against an existing lineage tree.
  *
@@ -527,15 +544,36 @@ export function createSessionLineage(
   const lineage = cloneLineage(previous);
   const navigableEntries = lineage.entries.filter(isNavigableEntry);
   const children = getChildrenMap(navigableEntries);
+  const priorActiveMessages = previous === undefined
+    ? undefined
+    : getSessionMessagesFromLineage(previous);
+  const extendsPriorActivePath = previous !== undefined
+    && priorActiveMessages !== undefined
+    && priorActiveMessages.length <= messages.length
+    && priorActiveMessages.every((message, index) =>
+      messagesEqual(message, messages[index]!));
+  const messageOffset = extendsPriorActivePath ? priorActiveMessages.length : 0;
+  let parentId = extendsPriorActivePath && previous !== undefined
+    ? previous.activeEntryId
+    : null;
+  let activeEntryId = parentId;
+  if (extendsPriorActivePath && previous !== undefined) {
+    recordActiveContextProvenance(previous, messages.slice(0, messageOffset));
+  }
 
-  let parentId: string | null = null;
-  let activeEntryId: string | null = null;
-
-  for (const message of messages) {
+  for (let index = messageOffset; index < messages.length; index += 1) {
+    const message = messages[index]!;
     if (isPostCompactAttachment(message)) continue;
-    const existing: NavigableSessionEntry | undefined = [...(children.get(parentId) ?? [])]
-      .reverse()
-      .find((entry) => entryMatchesContextMessage(entry, message));
+    // An exact positional prefix is identity evidence: the remaining suffix is
+    // new input after the known active leaf. Never content-match that suffix to
+    // an abandoned sibling, because a user may intentionally repeat the same
+    // query. The fallback below remains for rewind/branch reconciliation where
+    // the incoming sequence is not an extension of the prior active context.
+    const existing: NavigableSessionEntry | undefined = extendsPriorActivePath
+      ? undefined
+      : [...(children.get(parentId) ?? [])]
+          .reverse()
+          .find((entry) => entryMatchesContextMessage(entry, message));
 
     if (existing) {
       recordMessageProvenanceSource(message, existing);
@@ -1174,6 +1212,27 @@ export function forkSessionLineage(
     entries.push(cloned);
     idMap.set(entry.id, cloned.id);
     parentId = cloned.id;
+  }
+
+  for (let index = 0; index < path.length; index += 1) {
+    const source = path[index]!;
+    const cloned = entries[index]!;
+    if (
+      source.type === 'compaction'
+      && cloned.type === 'compaction'
+      && source.firstKeptEntryId !== undefined
+    ) {
+      const firstKeptEntryId = idMap.get(source.firstKeptEntryId);
+      entries[index] = { ...cloned, firstKeptEntryId };
+    }
+    if (source.type === 'branch_summary' && cloned.type === 'branch_summary') {
+      entries[index] = {
+        ...cloned,
+        ...(source.fromId !== undefined
+          ? { fromId: idMap.get(source.fromId) ?? source.fromId }
+          : {}),
+      };
+    }
   }
 
   const labels = getResolvedLabels(lineage);

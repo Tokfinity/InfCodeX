@@ -9,6 +9,7 @@ export {
   AgentOwnerUnknownError,
   AgentRevisionConflictError,
   AgentSettlementPersistenceError,
+  AgentShutdownPersistenceError,
 } from './errors.js';
 export type { AgentControlErrorCode } from './errors.js';
 export { AgentTurnScheduler } from './scheduler.js';

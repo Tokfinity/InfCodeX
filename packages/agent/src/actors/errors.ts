@@ -96,6 +96,16 @@ export class AgentSettlementPersistenceError extends Error {
   }
 }
 
+export class AgentShutdownPersistenceError extends Error {
+  readonly code = 'actor_shutdown_not_persisted' as const;
+  readonly retryable = false as const;
+
+  constructor(readonly cause: unknown) {
+    super('Actor shutdown could not be durably confirmed before its deadline.');
+    this.name = 'AgentShutdownPersistenceError';
+  }
+}
+
 export type AgentControlErrorCode =
   | 'actor_closed'
   | 'actor_not_found'

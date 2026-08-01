@@ -66,6 +66,9 @@ import type {
   RuntimeTranscriptEntryChunk,
   RuntimeTranscriptSearchResult,
   RuntimeTranscriptSlice,
+  RuntimeConversationHistory,
+  RuntimeConversationHistoryEntryChunk,
+  RuntimeConversationHistorySlice,
   RuntimeUserInputRequest,
   RuntimeUserInputResolution,
   RuntimeWorkflowFilter,
@@ -404,6 +407,27 @@ export function createRuntimeDaemonClient(
       },
       transcriptSearch(input, readOptions) {
         return readRequest('session.transcript.search', input, readOptions) as Promise<RuntimeTranscriptSearchResult | null>;
+      },
+      conversation(sessionId, readOptions) {
+        return readRequest(
+          'session.conversation',
+          { sessionId },
+          readOptions,
+        ) as Promise<RuntimeConversationHistory | null>;
+      },
+      conversationPage(input, readOptions) {
+        return readRequest(
+          'session.conversation.page',
+          input as unknown as Readonly<Record<string, unknown>>,
+          readOptions,
+        ) as Promise<RuntimeConversationHistorySlice | null>;
+      },
+      conversationEntryChunk(input, readOptions) {
+        return readRequest(
+          'session.conversation.entryChunk',
+          input as unknown as Readonly<Record<string, unknown>>,
+          readOptions,
+        ) as Promise<RuntimeConversationHistoryEntryChunk | null>;
       },
       observe(sessionId, listener, readOptions) {
         return observeDaemonSession(options.transport, readRequest, sessionId, listener, readOptions);
@@ -935,14 +959,16 @@ export function createRuntimeDaemonClient(
           ...(afterSequence !== undefined ? { afterSequence } : {}),
         }) as ReturnType<KodaXRuntime['agents']['events']>;
       },
-      wait(sessionId, afterSequence, timeoutMs) {
+      wait(sessionId, afterSequence, timeoutMs, options) {
         const unavailable = actorControlPlaneError();
         if (unavailable) return Promise.reject(unavailable);
-        return request('agents.wait', {
+        return readRequest('agents.wait', {
           sessionId,
           ...(afterSequence !== undefined ? { afterSequence } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        }).then(nullToUndefined<Awaited<ReturnType<KodaXRuntime['agents']['wait']>>>);
+        }, options).then(
+          nullToUndefined<Awaited<ReturnType<KodaXRuntime['agents']['wait']>>>,
+        );
       },
     },
     status: {

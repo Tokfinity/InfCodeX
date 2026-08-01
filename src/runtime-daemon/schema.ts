@@ -176,6 +176,32 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     }, ['sessionId']),
     result: objectAnySchema,
   },
+  'session.conversation': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
+    result: nullOrObjectSchema,
+  },
+  'session.conversation.page': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      cursor: stringSchema,
+      limit: integerSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId']),
+    result: nullOrObjectSchema,
+  },
+  'session.conversation.entryChunk': {
+    params: objectSchema({
+      sessionId: stringSchema,
+      revision: stringSchema,
+      entryIndex: integerSchema,
+      cursor: stringSchema,
+      timeoutMs: integerSchema,
+    }, ['sessionId', 'revision', 'entryIndex']),
+    result: nullOrObjectSchema,
+  },
   'session.diagnostics': {
     params: objectSchema({
       sessionId: stringSchema,
@@ -194,7 +220,11 @@ export const RUNTIME_DAEMON_METHOD_SCHEMAS = {
     result: nullOrObjectSchema,
   },
   'session.rewind': {
-    params: objectSchema({ sessionId: stringSchema, selector: stringSchema }, ['sessionId']),
+    params: objectSchema({
+      sessionId: stringSchema,
+      selector: stringSchema,
+      historyBoundary: conversationHistoryBoundarySchema(),
+    }, ['sessionId']),
     result: nullableSchema(sessionSchema()),
   },
   'session.active_entry.set': {
@@ -1106,7 +1136,15 @@ function forkSessionParamsSchema(): RuntimeDaemonJsonSchema {
     selector: stringSchema,
     newSessionId: stringSchema,
     title: stringSchema,
+    historyBoundary: conversationHistoryBoundarySchema(),
   }, ['sessionId']);
+}
+
+function conversationHistoryBoundarySchema(): RuntimeDaemonJsonSchema {
+  return objectSchema({
+    entryId: stringSchema,
+    sourceRevision: stringSchema,
+  }, ['entryId', 'sourceRevision']);
 }
 
 function activeEntryParamsSchema(): RuntimeDaemonJsonSchema {

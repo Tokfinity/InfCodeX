@@ -1993,7 +1993,9 @@ describe('F270 actor tree and scheduler', () => {
         state: 'running',
       });
 
-      await expect(controller.shutdown()).resolves.toBeUndefined();
+      await expect(controller.shutdown()).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
       releaseLateSave?.();
       await vi.runAllTimersAsync();
       await Promise.resolve();
@@ -2072,7 +2074,9 @@ describe('F270 actor tree and scheduler', () => {
           .slice(unknownCall + 1)
           .some(([health]) => health.state !== 'unknown'),
       ).toBe(false);
-      await expect(controller.shutdown()).resolves.toBeUndefined();
+      await expect(controller.shutdown()).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -2139,7 +2143,9 @@ describe('F270 actor tree and scheduler', () => {
         turnId: turn.turnId,
       });
     });
-    await expect(controller.shutdown()).resolves.toBeUndefined();
+    await expect(controller.shutdown()).rejects.toMatchObject({
+      code: 'actor_shutdown_not_persisted',
+    });
   });
 
   it('flushes a known executor settlement before shutdown releases its owner', async () => {
@@ -2191,6 +2197,111 @@ describe('F270 actor tree and scheduler', () => {
       state: 'completed',
       output: 'durable result',
     });
+  });
+
+  it('fences a settlement that was already hung when shutdown began', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseSettlement: (() => void) | undefined;
+      const settlementGate = new Promise<void>((resolve) => {
+        releaseSettlement = resolve;
+      });
+      let markSettlementSaveStarted: (() => void) | undefined;
+      const settlementSaveStarted = new Promise<void>((resolve) => {
+        markSettlementSaveStarted = resolve;
+      });
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          if (snapshot.turns.some((turn) => turn.state === 'completed')) {
+            markSettlementSaveStarted?.();
+            await settlementGate;
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+      });
+      await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Hang before shutdown starts.',
+      });
+      executor.pending[0]?.resolve({ output: 'late result' });
+      await settlementSaveStarted;
+
+      const shutdown = controller.shutdown();
+      const rejected = expect(shutdown).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
+      await vi.advanceTimersByTimeAsync(2_001);
+      await rejected;
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+
+      releaseSettlement?.();
+      await vi.runAllTimersAsync();
+      await expect(controller.shutdown()).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
+      expect(controller.healthSnapshot().state).toBe('unknown');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts local work immediately and reports an indeterminate hung shutdown save', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseShutdownSave: (() => void) | undefined;
+      const shutdownSave = new Promise<void>((resolve) => {
+        releaseShutdownSave = resolve;
+      });
+      const store: AgentActorStore = {
+        async load() { return undefined; },
+        async save(snapshot) {
+          if (snapshot.turns.some((turn) => turn.state === 'interrupted')) {
+            await shutdownSave;
+          }
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({ executor, store });
+      const turn = await controller.spawn('/root', {
+        taskName: 'worker',
+        objective: 'Abort locally before durable shutdown blocks.',
+      });
+      const cursor = controller.eventSnapshot('/root').at(-1)?.sequence ?? 0;
+      const waiting = controller.wait('/root', cursor, 30_000);
+
+      const shutdown = controller.shutdown();
+      const rejected = expect(shutdown).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
+      expect(executor.pending[0]?.input.signal.aborted).toBe(true);
+      await expect(waiting).resolves.toBeUndefined();
+      await expect(controller.followup('/root', turn.actorPath, 'too late'))
+        .rejects.toMatchObject({ code: 'actor_closed' });
+
+      await vi.advanceTimersByTimeAsync(2_001);
+      await rejected;
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+        state: 'running',
+      });
+
+      releaseShutdownSave?.();
+      await vi.runAllTimersAsync();
+      await expect(controller.shutdown()).rejects.toMatchObject({
+        code: 'actor_shutdown_not_persisted',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never exposes a terminal turn before its durable commit succeeds', async () => {

@@ -3,8 +3,12 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 import type { RuntimeSubscription } from '../sdk-runtime.js';
-import type { RuntimeDaemonClientTransport } from '../runtime-daemon/client.js';
+import type {
+  RuntimeDaemonClientTransport,
+  RuntimeDaemonRequestControl,
+} from '../runtime-daemon/client.js';
 import {
   createRuntimeDaemonRequest,
   isRuntimeDaemonErrorResponse,
@@ -20,7 +24,10 @@ import type {
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
+  readonly cleanup: () => void;
 }
+
+const WORKER_LATE_RESULT_RETENTION_MS = 30_000;
 
 export interface RuntimeWorkerTransportHandle {
   readonly transport: RuntimeDaemonClientTransport;
@@ -41,19 +48,59 @@ export function createRuntimeWorkerTransport(
       : {}),
   });
   const pending = new Map<string, PendingRequest>();
+  const lateResults = new Map<string, {
+    readonly deliver: (value: unknown) => void;
+    readonly expiry: ReturnType<typeof setTimeout>;
+  }>();
   const listeners = new Set<(notification: RuntimeDaemonNotification) => void>();
   let requestSequence = 0;
   let closed = false;
 
   const rejectPending = (error: Error): void => {
-    for (const entry of pending.values()) entry.reject(error);
+    for (const entry of pending.values()) {
+      entry.cleanup();
+      entry.reject(error);
+    }
     pending.clear();
+  };
+  const clearLateResults = (): void => {
+    for (const retained of lateResults.values()) clearTimeout(retained.expiry);
+    lateResults.clear();
+  };
+  const removeLateResult = (id: string): ((value: unknown) => void) | undefined => {
+    const retained = lateResults.get(id);
+    if (retained === undefined) return undefined;
+    lateResults.delete(id);
+    clearTimeout(retained.expiry);
+    return retained.deliver;
   };
   const markClosed = (error: Error): void => {
     if (closed) return;
     closed = true;
     rejectPending(error);
+    clearLateResults();
     listeners.clear();
+  };
+  const sendRequestLifecycleFrame = (
+    method: 'request.cancel' | 'request.ack',
+    requestId: string,
+  ): void => {
+    if (closed) return;
+    const prefix = method === 'request.ack' ? 'ack' : 'cancel';
+    try {
+      worker.postMessage(createRuntimeDaemonRequest(
+        `worker_${prefix}_${++requestSequence}`,
+        method,
+        { requestId },
+      ));
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'runtime.worker.transport',
+        level: 'warn',
+        message: `Failed to send Worker ${method} lifecycle frame.`,
+        detail: error,
+      });
+    }
   };
 
   worker.on('message', (message: unknown) => {
@@ -64,9 +111,30 @@ export function createRuntimeWorkerTransport(
     if (!isRuntimeDaemonSuccessResponse(message) && !isRuntimeDaemonErrorResponse(message)) return;
     if (!message.id) return;
     const entry = pending.get(message.id);
-    if (!entry) return;
+    if (!entry) {
+      if (isRuntimeDaemonSuccessResponse(message)) {
+        const deliver = removeLateResult(message.id);
+        if (deliver !== undefined) {
+          try {
+            deliver(message.result);
+          } catch (error: unknown) {
+            emitKodaXDiagnostic({
+              source: 'runtime.worker.transport',
+              level: 'warn',
+              message: 'Runtime Worker late-result handler failed.',
+              detail: error,
+            });
+          }
+        }
+      } else {
+        removeLateResult(message.id);
+      }
+      return;
+    }
     pending.delete(message.id);
+    entry.cleanup();
     if (isRuntimeDaemonSuccessResponse(message)) {
+      sendRequestLifecycleFrame('request.ack', message.id);
       entry.resolve(message.result);
       return;
     }
@@ -79,18 +147,50 @@ export function createRuntimeWorkerTransport(
   worker.on('exit', (code) => markClosed(new Error(`Runtime Worker exited with code ${code}.`)));
 
   const transport: RuntimeDaemonClientTransport = {
-    request(method, params, operation) {
+    request(method, params, operation, control) {
       if (closed) return Promise.reject(new Error('Runtime Worker transport is closed.'));
       const id = `worker_${++requestSequence}`;
-      return new Promise<unknown>((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        try {
-          worker.postMessage(createRuntimeDaemonRequest(id, method, params, operation));
-        } catch (error: unknown) {
-          pending.delete(id);
-          reject(error instanceof Error ? error : new Error(String(error)));
+      let abort: (() => void) | undefined;
+      let sent = false;
+      const cleanup = (): void => {
+        if (abort !== undefined) {
+          control?.signal?.removeEventListener('abort', abort);
         }
+      };
+      const result = new Promise<unknown>((resolve, reject) => {
+        const entry = { resolve, reject, cleanup };
+        pending.set(id, entry);
+        abort = attachWorkerRequestAbort(control, () => {
+          if (pending.get(id) !== entry) return;
+          pending.delete(id);
+          cleanup();
+          if (sent) sendRequestLifecycleFrame('request.cancel', id);
+          if (control?.onLateResult !== undefined) {
+            const expiry = setTimeout(() => {
+              lateResults.delete(id);
+            }, WORKER_LATE_RESULT_RETENTION_MS);
+            expiry.unref?.();
+            lateResults.set(id, {
+              deliver: control.onLateResult,
+              expiry,
+            });
+          }
+          reject(normalizeWorkerAbortReason(control?.signal?.reason));
+        });
       });
+      if (control?.signal?.aborted) return result;
+      try {
+        worker.postMessage(createRuntimeDaemonRequest(id, method, params, operation));
+        sent = true;
+      } catch (error: unknown) {
+        const entry = pending.get(id);
+        if (entry !== undefined) {
+          pending.delete(id);
+          entry.cleanup();
+          entry.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+      return result;
     },
     subscribe(listener): RuntimeSubscription {
       if (closed) return { close() {} };
@@ -112,6 +212,23 @@ export function createRuntimeWorkerTransport(
       await worker.terminate();
     },
   };
+}
+
+function attachWorkerRequestAbort(
+  control: RuntimeDaemonRequestControl | undefined,
+  onAbort: () => void,
+): (() => void) | undefined {
+  const signal = control?.signal;
+  if (signal === undefined) return undefined;
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  return onAbort;
+}
+
+function normalizeWorkerAbortReason(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new Error('Runtime Worker request cancelled.');
 }
 
 function resolveRuntimeWorkerUrl(): URL {

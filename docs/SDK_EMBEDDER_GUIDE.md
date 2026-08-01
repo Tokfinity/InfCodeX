@@ -691,6 +691,7 @@ const {
   loadSession,
   loadFullTranscript,
   readFullTranscript,
+  readSessionCapture,
   appendClientNotice,
   compactSession,
 } = createSessionManager();
@@ -729,6 +730,12 @@ const strictScrollback = await readFullTranscript('s_my_chat', {
   timeoutMs: 15_000,
   signal: historyAbort.signal,
 });
+const capture = await readSessionCapture('s_my_chat', {
+  timeoutMs: 15_000,
+});
+const bundle = await exportSessionBundle('s_my_chat', {
+  timeoutMs: 15_000,
+});
 const compacted = await compactSession('s_my_chat', { dryRun: true });
 
 await appendClientNotice('s_my_chat', {
@@ -736,6 +743,14 @@ await appendClientNotice('s_my_chat', {
   content: '/doctor ok',
 });
 ```
+
+`readSessionCapture()` returns the active `data` and full `transcript` from one
+immutable storage boundary. `readFullTranscript()` and
+`readSessionCapture()` are strict read-only APIs: timeout/cancellation,
+corruption, version drift, or resync fail explicitly and never trigger legacy
+Session migration or recovery. `exportSessionBundle()` preserves the exact
+main/sidecar bytes with hashes and compatibility diagnostics; use it for a
+support or recovery bundle, not as proof that a Session can resume.
 
 ### Auto-resume selection in v0.7.74
 
@@ -761,6 +776,8 @@ interface SessionManager {
   loadSession(id): Promise<...>;
   loadFullTranscript(id): Promise<...>;
   readFullTranscript(id, options?): Promise<...>;
+  readConversationHistory(id, options?): Promise<...>;
+  readSessionCapture(id, options?): Promise<SessionReadCapture | null>;
   appendClientNotice(id, opts): Promise<SessionTranscriptEntry | null>;
   compactSession(id, opts?): Promise<CompactSessionResult>;
   forkSession(id, opts?): Promise<...>;
@@ -786,13 +803,14 @@ Session persistence exposes three related but different layers:
 | Need | Use | Meaning |
 |---|---|---|
 | Continue a model turn | `loadSession(id)` | Active branch only. This is the context KodaX would resume from. |
-| Render a host sidebar / scrollback | `loadFullTranscript(id)` | Append-order transcript entries, including entries no longer on the active branch when available. |
+| Render the ordinary conversation | `readConversationHistory(id)` | SDK-resolved conversation order with proven compaction copies folded and ambiguity reported. |
+| Render audit / raw scrollback | `readFullTranscript(id)` or `loadFullTranscript(id)` | Append-order physical entries, including archived islands and non-active branches. |
 | Reuse TUI display projection | `SessionData.uiHistory` | Optional bounded replay cache. Interactive REPL sessions may write it; headless SDK sessions may not. |
 
-For product UI, prefer `loadFullTranscript(id)` for conversation history and
-treat `loadSession(id)` as the model-context API. Do not assume `uiHistory`
-exists. It is intentionally a small, lossy replay cache; canonical facts remain
-in `messages` / `lineage`.
+For product UI, use `readConversationHistory(id)` for the ordinary chat and
+keep `readFullTranscript(id)` available for an audit/details view.
+`loadSession(id)` remains the model-context API. Do not assume `uiHistory`
+exists; it is intentionally a small, lossy replay cache.
 
 `loadFullTranscript(id).transcriptEntries` is the structured host-facing
 scrollback. Each entry has stable ownership and ordering fields:
@@ -816,15 +834,92 @@ interface SessionTranscriptEntry {
 
 `entryId` is the physical lineage node id. `logicalId` is stable across
 forked/cloned copies of the same transcript item, and `sourceEntryId` is present
-on cloned entries to point back to the root physical source entry. Hosts that
-want to fold cloned history should group by `logicalId`, not by
-`message.role`, content, timestamp, or `[compacted]` placeholders.
+on cloned entries to point back to the root physical source entry. These fields
+support audit inspection, but a host must not infer the complete ordinary-chat
+fold merely by grouping them: legacy omissions and conflicting metadata require
+lineage validation. Use `readConversationHistory()` instead of implementing
+host-side folding, and never guess from `message.role`, content, timestamp,
+`turnId`, or `[compacted]` placeholders.
 Legacy entries without persisted provenance use `logicalId === entryId` and omit
 `sourceEntryId`; treat that as "unknown/not cloned", not as content-based proof
 that no older clone exists.
 `loadFullTranscript()` still returns raw append-order scrollback; it does not
 hide archived islands or non-active branches, and it does not silently merge
 branches. The host owns branch visibility, folding, and main-chat presentation.
+
+`readConversationHistory()` is the supported folding boundary. Every returned
+entry has a physical `boundaryId` and `auditEntryIds` naming all copies that the
+SDK could prove represent the same interaction. Modern Sessions use
+`logicalId` / `sourceEntryId`; legacy copies are folded only when a persisted
+compaction boundary and one unique lineage suffix prove the relationship.
+An inactive compaction epoch or non-leaf ancestor is crossed only when a
+contiguous retained prefix has exact provenance and its complete parent path
+predates the compaction in append order. Content-only legacy matching never
+authorizes that fallback.
+KodaX never globally sorts or deduplicates by content, timestamp, or `turnId`.
+
+The result status is part of the contract:
+
+- `resolved`: every fold and branch predecessor used by the projection was
+  proven.
+- `partial`: persisted lineage or transcript identity needed for a complete
+  projection is unavailable. Available physical records are retained.
+- `ambiguous`: multiple legacy interpretations remain. All candidates are
+  retained and `issues[]` explains why; the host must not present the result as
+  confidently deduplicated.
+
+Issues are bounded diagnostic summaries: `occurrenceCount` is the number of
+diagnostics represented, `entryCount` is the pre-bounding evidence-reference
+count, and `entryIds` is a bounded exact sample. Conversation entries themselves
+are never removed to make diagnostic metadata fit a transport page.
+
+Runtime exposes the identical projection in embedded and daemon modes through
+`sessions.conversation()`, `sessions.conversationPage()`, and
+`sessions.conversationEntryChunk()`. The first page captures one immutable
+boundary; later page/chunk calls use only that snapshot. Direct and paged reads
+share the same `revision`, `sourceRevision`, status, issues, and logical entry
+order. Pages are fetched newest-tail-first while each page is internally in
+forward order, so prepend each fetched page to reconstruct `conversation().entries`;
+do not append pages in fetch order.
+Request `requirements: { conversationHistory: 1 }` when connecting to a daemon
+that must support this contract.
+
+Use a returned entry as a revision-fenced fork or rewind boundary instead of
+guessing from content or a historical `turnId`:
+
+```ts
+const history = await runtime.sessions.conversation(sessionId);
+const item = history?.entries.find((entry) => entry.boundaryId !== undefined);
+if (history && item?.boundaryId) {
+  await runtime.sessions.fork({
+    sessionId,
+    historyBoundary: {
+      entryId: item.boundaryId,
+      sourceRevision: history.sourceRevision,
+    },
+  });
+}
+```
+
+If the Session changes before the mutation, the Runtime returns
+`resync_required`; an unknown boundary returns `null` and never falls back to a
+different point.
+
+The standalone session API accepts the same boundary (named `boundaryId` on
+that surface) and fails closed with `null`:
+
+```ts
+const history = await manager.readConversationHistory(sessionId);
+const item = history?.entries.at(-1);
+if (history && item?.boundaryId) {
+  await manager.forkSession(sessionId, {
+    historyBoundary: {
+      boundaryId: item.boundaryId,
+      sourceRevision: history.sourceRevision,
+    },
+  });
+}
+```
 
 Since v0.7.63, rewind audit markers are represented as
 `type: 'rewind_marker'`. They are useful for host scrollback and audit UI, but
@@ -3869,6 +3964,7 @@ const runtime = await connectKodaXRuntime({
     sharedSessionSettings: 1,
     durableRecoveryQueries: 1,
     daemonManagement: 1,
+    runtimeEventCoalescing: 1,
     runtimeAutoModeGuardrail: 4,
   },
 });
@@ -3899,6 +3995,14 @@ before calling an auto-start API. This prevents an older SDK from spawning a
 persistent daemon and only then discovering that it cannot honor the requested
 lifecycle policy. The connected daemon capability remains the authoritative
 check that the current host actually enabled the policy.
+
+`KODAX_RUNTIME_SDK_CAPABILITIES.runtimeEventCoalescing` performs the same
+local-SDK preflight for bounded source-level text/reasoning coalescing. Requiring
+`runtimeEventCoalescing:1` lets auto-start replace only an idle legacy daemon;
+a busy or otherwise unsafe owner produces the normal capability-upgrade error.
+The capability changes event allocation/persistence pressure, not reconstructed
+stream content: flush boundaries remain explicit and an accumulated merge
+never exceeds 8 KiB.
 
 When a healthy profile daemon is too old, the SDK first requires
 `daemonManagement:1`, takes a revision/owner-policy fenced preflight, and
@@ -5017,6 +5121,8 @@ for await (const event of runtime.learning.subscribe({
 under one Session boundary without migration, execution recovery, takeover, or
 repair. It reports `data_corrupt`, `version_incompatible`, `read_timeout`, and
 `read_cancelled` instead of turning those cases into an empty/null history.
+`readConversationHistory()` uses that same read-only boundary, then derives the
+ordinary conversation projection without changing Session or Run state.
 
 For an old or incompatible Session that cannot safely resume, use the
 top-level `exportSessionBundle(id, options?)`. It returns the exact main,

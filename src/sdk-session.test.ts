@@ -6,6 +6,7 @@ import {
   compactSession,
   createSessionManager,
   listSessions,
+  readConversationHistory,
 } from '@kodax-ai/kodax/session';
 
 describe('@kodax-ai/kodax/session SDK subpath', () => {
@@ -13,6 +14,7 @@ describe('@kodax-ai/kodax/session SDK subpath', () => {
     expect(typeof listSessions).toBe('function');
     expect(typeof createSessionManager).toBe('function');
     expect(typeof compactSession).toBe('function');
+    expect(typeof readConversationHistory).toBe('function');
 
     const result = await compactSession('missing-session', {
       sessionsDir: path.join(os.tmpdir(), `kodax-sdk-session-${process.pid}-${Date.now()}`),

@@ -36,9 +36,11 @@ import type {
 import {
   FileSessionStorage,
   SessionReadError,
+  assertSessionReadBudget,
   readStableSessionBundleFiles,
   readSessionFirstLine,
   type SessionReadOptions,
+  type SessionReadSnapshot,
 } from '../interactive/storage.js';
 export {
   type SessionReadErrorCode,
@@ -48,6 +50,18 @@ export { SessionReadError };
 import { compactSession } from './compact-session.js';
 export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
+import {
+  buildLineageUnavailableConversationHistory,
+  buildSessionConversationHistory,
+  type SessionConversationHistoryData,
+} from './conversation-history.js';
+export type {
+  SessionConversationHistoryData,
+  SessionConversationHistoryEntry,
+  SessionConversationHistoryIssue,
+  SessionConversationHistoryIssueCode,
+  SessionConversationHistoryStatus,
+} from './conversation-history.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
@@ -62,8 +76,9 @@ import { KODAX_SESSIONS_DIR } from '../common/utils.js';
 async function collectSessionFilePaths(
   sessionsDir: string,
   includeArchived: boolean,
-): Promise<string[]> {
+): Promise<{ readonly paths: string[]; readonly complete: boolean }> {
   const out: string[] = [];
+  let complete = true;
   const isSession = (name: string): boolean =>
     name.endsWith('.jsonl')
     && !name.endsWith('.archive.jsonl')
@@ -73,7 +88,7 @@ async function collectSessionFilePaths(
   try {
     top = await fsPromises.readdir(sessionsDir, { withFileTypes: true });
   } catch {
-    return out;
+    return { paths: out, complete: false };
   }
   for (const entry of top) {
     if (entry.isFile()) {
@@ -92,7 +107,8 @@ async function collectSessionFilePaths(
           out.push(path.join(dir, f));
         }
       }
-    } catch {
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') complete = false;
       // unreadable project dir — skip
     }
     if (includeArchived) {
@@ -103,12 +119,13 @@ async function collectSessionFilePaths(
             out.push(path.join(archivedDir, f));
           }
         }
-      } catch {
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') complete = false;
         // no archived subdir — fine
       }
     }
   }
-  return out;
+  return { paths: out, complete };
 }
 
 function normalizeComparableRoot(value: string | undefined): string | undefined {
@@ -286,6 +303,13 @@ export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'>
   readonly transcriptEntries: SessionTranscriptEntry[];
 }
 
+/** One immutable storage boundary shared by Runtime admission and history. */
+export interface SessionReadCapture {
+  readonly data: SessionData;
+  readonly transcript: FullTranscriptSessionData;
+  readonly sourceRevision: string;
+}
+
 export type SessionBundleExportStatus =
   | 'ok'
   | 'partial'
@@ -459,6 +483,11 @@ export interface SessionManager {
   loadSession: typeof loadSession;
   loadFullTranscript: typeof loadFullTranscript;
   readFullTranscript: typeof readFullTranscript;
+  readConversationHistory: typeof readConversationHistory;
+  readSessionCapture(
+    id: string,
+    options?: SessionReadOptions,
+  ): Promise<SessionReadCapture | null>;
   appendClientNotice: typeof appendClientNotice;
   forkSession: typeof forkSession;
   rewindSession: typeof rewindSession;
@@ -575,7 +604,22 @@ async function listSessionsImpl(
     // Slow path: read the sessions directory ourselves for scope / before
     // filtering. FEATURE_219 — gather from the per-project layout (+ flat
     // legacy pool), dedup by id (a session mid-migration may appear twice).
-    const filePaths = await collectSessionFilePaths(sessionsDir, includeArchived);
+    const locationBoundary = storage.beginSessionLocationTraversal();
+    const locationDiscovery = await collectSessionFilePaths(sessionsDir, true);
+    const locatedFilePaths = locationDiscovery.paths;
+    storage.completeSessionLocationTraversal(
+      locationBoundary,
+      locatedFilePaths.filter(
+        (filePath) => !path.basename(filePath).startsWith('archived-'),
+      ),
+      locationDiscovery.complete,
+    );
+    const filePaths = includeArchived
+      ? locatedFilePaths
+      : locatedFilePaths.filter((filePath) => (
+          path.basename(path.dirname(filePath)) !== 'archived'
+          && !path.basename(filePath).startsWith('archived-')
+        ));
 
     const sessions: SessionListCandidate[] = [];
     const seenIds = new Set<string>();
@@ -1038,8 +1082,15 @@ async function loadSessionImpl(
   id: string,
   sessionsDirOverride: string | undefined,
 ): Promise<SessionData | null> {
+  return loadSessionWithStorage(id, getStorage(sessionsDirOverride));
+}
+
+async function loadSessionWithStorage(
+  id: string,
+  storage: FileSessionStorage,
+): Promise<SessionData | null> {
   try {
-    return await getStorage(sessionsDirOverride).load(id);
+    return await storage.load(id);
   } catch {
     return null;
   }
@@ -1067,6 +1118,42 @@ export async function readFullTranscript(
   options: SessionReadOptions = {},
 ): Promise<FullTranscriptSessionData | null> {
   return readFullTranscriptImpl(id, undefined, options);
+}
+
+/**
+ * Read the SDK-resolved ordinary conversation view at one immutable boundary.
+ * Raw append-order audit data remains available through `readFullTranscript`.
+ */
+export async function readConversationHistory(
+  id: string,
+  options: SessionReadOptions = {},
+): Promise<SessionConversationHistoryData | null> {
+  return readConversationHistoryWithStorage(id, getStorage(), options);
+}
+
+/** Build the conversation projection from an already captured read boundary. */
+export function conversationHistoryFromCapture(
+  capture: SessionReadCapture,
+  checkpoint?: () => void,
+): SessionConversationHistoryData {
+  return capture.transcript.lineage === undefined
+      ? buildLineageUnavailableConversationHistory(
+          capture.transcript.activeMessages,
+          capture.sourceRevision,
+          checkpoint,
+        )
+    : buildSessionConversationHistory(
+        capture.transcript.lineage,
+        capture.sourceRevision,
+        checkpoint,
+      );
+}
+
+export async function readSessionCapture(
+  id: string,
+  options: SessionReadOptions = {},
+): Promise<SessionReadCapture | null> {
+  return readSessionCaptureWithStorage(id, getStorage(), options);
 }
 
 /**
@@ -1275,11 +1362,48 @@ async function readFullTranscriptImpl(
   sessionsDirOverride: string | undefined,
   options: SessionReadOptions,
 ): Promise<FullTranscriptSessionData | null> {
-  const snapshot = await getStorage(sessionsDirOverride).readFullSnapshot(
+  return (await readSessionCaptureWithStorage(
     id,
+    getStorage(sessionsDirOverride),
     options,
-  );
+  ))?.transcript ?? null;
+}
+
+async function readSessionCaptureWithStorage(
+  id: string,
+  storage: FileSessionStorage,
+  options: SessionReadOptions,
+): Promise<SessionReadCapture | null> {
+  const snapshot = await storage.readFullSnapshot(id, options);
   if (snapshot === null) return null;
+  const transcript = fullTranscriptFromSnapshot(snapshot);
+  return {
+    data: snapshot.data,
+    transcript,
+    sourceRevision: snapshot.sourceRevision,
+  };
+}
+
+async function readConversationHistoryWithStorage(
+  id: string,
+  storage: FileSessionStorage,
+  options: SessionReadOptions,
+): Promise<SessionConversationHistoryData | null> {
+  const startedAt = Date.now();
+  const capture = await readSessionCaptureWithStorage(id, storage, options);
+  if (capture === null) return null;
+  const history = conversationHistoryFromCapture(
+    capture,
+    () => assertSessionReadBudget(options, startedAt),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assertSessionReadBudget(options, startedAt);
+  return history;
+}
+
+function fullTranscriptFromSnapshot(
+  snapshot: SessionReadSnapshot,
+): FullTranscriptSessionData {
   if (snapshot.lineage === null) {
     return {
       ...snapshot.data,
@@ -1377,27 +1501,55 @@ async function appendClientNoticeWithStorage(
 
 // ── forkSession ───────────────────────────────────────────────────────────────
 
+export interface SessionConversationMutationBoundary {
+  readonly boundaryId: string;
+  readonly sourceRevision: string;
+}
+
+export interface ForkSessionOptions {
+  readonly selector?: string;
+  readonly sessionId?: string;
+  readonly title?: string;
+  readonly historyBoundary?: SessionConversationMutationBoundary;
+}
+
+export interface RewindSessionOptions {
+  readonly selector?: string;
+  readonly historyBoundary?: SessionConversationMutationBoundary;
+}
+
 /**
  * Fork a session at an optional selector.
  * Returns null for a missing session. NEVER throws.
  */
 export async function forkSession(
   id: string,
-  opts?: { selector?: string; sessionId?: string; title?: string },
+  opts?: ForkSessionOptions,
 ): Promise<{ sessionId: string; data: SessionData } | null> {
   return forkSessionImpl(id, opts, undefined);
 }
 
 async function forkSessionImpl(
   id: string,
-  opts: { selector?: string; sessionId?: string; title?: string } | undefined,
+  opts: ForkSessionOptions | undefined,
   sessionsDirOverride: string | undefined,
 ): Promise<{ sessionId: string; data: SessionData } | null> {
   try {
-    return await getStorage(sessionsDirOverride).fork(id, opts?.selector, {
-      sessionId: opts?.sessionId,
-      title: opts?.title,
-    });
+    if (opts?.selector !== undefined && opts.historyBoundary !== undefined) {
+      return null;
+    }
+    const historyBoundary = opts?.historyBoundary;
+    return await getStorage(sessionsDirOverride).fork(
+      id,
+      historyBoundary?.boundaryId ?? opts?.selector,
+      {
+        sessionId: opts?.sessionId,
+        title: opts?.title,
+        ...(historyBoundary !== undefined
+          ? { historyBoundary: { sourceRevision: historyBoundary.sourceRevision } }
+          : {}),
+      },
+    );
   } catch {
     return null;
   }
@@ -1411,19 +1563,29 @@ async function forkSessionImpl(
  */
 export async function rewindSession(
   id: string,
-  opts?: { selector?: string },
+  opts?: RewindSessionOptions,
 ): Promise<SessionData | null> {
   return rewindSessionImpl(id, opts, undefined);
 }
 
 async function rewindSessionImpl(
   id: string,
-  opts: { selector?: string } | undefined,
+  opts: RewindSessionOptions | undefined,
   sessionsDirOverride: string | undefined,
   configHomeOverride?: string,
 ): Promise<SessionData | null> {
   try {
-    return await getStorage(sessionsDirOverride, configHomeOverride).rewind(id, opts?.selector);
+    if (opts?.selector !== undefined && opts.historyBoundary !== undefined) {
+      return null;
+    }
+    const historyBoundary = opts?.historyBoundary;
+    return await getStorage(sessionsDirOverride, configHomeOverride).rewind(
+      id,
+      historyBoundary?.boundaryId ?? opts?.selector,
+      historyBoundary === undefined
+        ? undefined
+        : { historyBoundary: { sourceRevision: historyBoundary.sourceRevision } },
+    );
   } catch {
     return null;
   }
@@ -1800,9 +1962,20 @@ export function createSessionManager(opts?: {
   if (sessionsDir === undefined && configHome === undefined) {
     return {
       listSessions,
-      loadSession,
-      loadFullTranscript,
-      readFullTranscript,
+      loadSession: (id) => loadSessionWithStorage(id, storage),
+      loadFullTranscript: async (id) => {
+        try {
+          return (await readSessionCaptureWithStorage(id, storage, {}))?.transcript ?? null;
+        } catch {
+          return null;
+        }
+      },
+      readFullTranscript: async (id, options) =>
+        (await readSessionCaptureWithStorage(id, storage, options ?? {}))?.transcript ?? null,
+      readConversationHistory: (id, options) =>
+        readConversationHistoryWithStorage(id, storage, options ?? {}),
+      readSessionCapture: (id, options) =>
+        readSessionCaptureWithStorage(id, storage, options ?? {}),
       appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
       forkSession,
       rewindSession,
@@ -1821,10 +1994,20 @@ export function createSessionManager(opts?: {
   }
   return {
     listSessions: (o) => listSessionsImpl(o, sessionsDir),
-    loadSession: (id) => loadSessionImpl(id, sessionsDir),
-    loadFullTranscript: (id) => loadFullTranscriptImpl(id, sessionsDir),
-    readFullTranscript: (id, options) =>
-      readFullTranscriptImpl(id, sessionsDir, options ?? {}),
+    loadSession: (id) => loadSessionWithStorage(id, storage),
+    loadFullTranscript: async (id) => {
+      try {
+        return (await readSessionCaptureWithStorage(id, storage, {}))?.transcript ?? null;
+      } catch {
+        return null;
+      }
+    },
+    readFullTranscript: async (id, options) =>
+      (await readSessionCaptureWithStorage(id, storage, options ?? {}))?.transcript ?? null,
+    readConversationHistory: (id, options) =>
+      readConversationHistoryWithStorage(id, storage, options ?? {}),
+    readSessionCapture: (id, options) =>
+      readSessionCaptureWithStorage(id, storage, options ?? {}),
     appendClientNotice: (id, options) => appendClientNoticeWithStorage(id, options, storage),
     forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
     rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir, configHome),

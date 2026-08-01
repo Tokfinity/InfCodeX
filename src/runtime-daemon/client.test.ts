@@ -956,6 +956,55 @@ describe('runtime daemon client proxy', () => {
     await client.close();
   });
 
+  it('propagates cancellation from the daemon Agent wait facade', async () => {
+    const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const base = fakeTransport(calls);
+    let waitSignal: AbortSignal | undefined;
+    const transport: RuntimeDaemonClientTransport = {
+      ...base,
+      request(method, params, operation, control) {
+        if (method !== 'agents.wait') {
+          return base.request(method, params, operation, control);
+        }
+        calls.push({ method, params });
+        waitSignal = control?.signal;
+        return new Promise((_resolve, reject) => {
+          control?.signal?.addEventListener('abort', () => {
+            reject(control.signal?.reason);
+          }, { once: true });
+        });
+      },
+    };
+    const client = createRuntimeDaemonClient({
+      identity: {
+        runtimeId: 'runtime-agent-wait-cancel',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-31T00:00:00.000Z',
+        version: '0.7.79',
+      },
+      transport,
+      capabilities: {
+        ...RUN_LIFECYCLE_CAPABILITIES,
+        actorControlPlane: { version: 1, methodNamespace: 'agents' },
+      },
+    });
+    const controller = new AbortController();
+
+    const pending = client.agents.wait('session-1', 4, 30_000, {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ code: 'read_cancelled' });
+    expect(waitSignal?.aborted).toBe(true);
+    expect(calls).toContainEqual({
+      method: 'agents.wait',
+      params: { sessionId: 'session-1', afterSequence: 4, timeoutMs: 30_000 },
+    });
+    await client.close();
+  });
+
   it('unsubscribes a Session observation whose response arrives after timeout', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
     const base = fakeTransport(calls);
@@ -1241,6 +1290,13 @@ describe('runtime daemon client proxy', () => {
     await client.sessions.status('session-1');
     await client.sessions.transcript('session-1');
     await client.sessions.transcriptSearch({ sessionId: 'session-1', query: 'old detail' });
+    await client.sessions.conversation('session-1');
+    await client.sessions.conversationPage({ sessionId: 'session-1', limit: 5 });
+    await client.sessions.conversationEntryChunk({
+      sessionId: 'session-1',
+      revision: 'sha256:conversation',
+      entryIndex: 0,
+    });
     const observation = await client.sessions.observe('session-1', () => undefined);
     observation.close();
     const diagnostic = await client.sessions.diagnostics({
@@ -1319,6 +1375,9 @@ describe('runtime daemon client proxy', () => {
       'session.status',
       'session.transcript',
       'session.transcript.search',
+      'session.conversation',
+      'session.conversation.page',
+      'session.conversation.entryChunk',
       'session.observe',
       'event.unsubscribe',
       'session.diagnostics',

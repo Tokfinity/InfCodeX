@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { NewSessionRequest, PromptRequest, SetSessionModeRequest } from '@agentclientprotocol/sdk';
+import type { KodaXResult } from '@kodax-ai/coding';
 
 type RuntimeConfigMock = {
   provider: string;
@@ -374,7 +375,20 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
     acpServerState.startKodaX.mockImplementation((options: { session?: { id?: string } }) => {
       acpServerState.capturedOptions.push(options);
       const sessionId = options.session?.id ?? 'missing-session';
-      const abort = vi.fn((_reason?: unknown) => undefined);
+      let resolveResult: ((result: KodaXResult) => void) | undefined;
+      const result = new Promise<KodaXResult>((resolve) => {
+        resolveResult = resolve;
+      });
+      const abort = vi.fn((_reason?: unknown) => {
+        resolveResult?.({
+          success: false,
+          lastText: '',
+          messages: [],
+          sessionId,
+          interrupted: true,
+        });
+        resolveResult = undefined;
+      });
       abortSpies.push(abort);
       return {
         id: sessionId,
@@ -387,7 +401,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
         setModel: vi.fn(),
         setReasoning: vi.fn(),
         abort,
-        result: new Promise<never>(() => undefined),
+        result,
       };
     });
     const server = createTestServer({ runtime, provider: 'openai', logLevel: 'off' });
@@ -415,7 +429,7 @@ describe('KodaXAcpServer reasoning effort forwarding', () => {
       expect(abortSpies[0]).toHaveBeenCalledOnce();
       const cancelledRuns = await runtime.runs.list({ sessionId });
       expect(cancelledRuns).toHaveLength(2);
-      expect(cancelledRuns.map((run) => run.phase)).toEqual(['cancelled', 'cancelled']);
+      expect(cancelledRuns.map((run) => run.phase)).toEqual(['interrupted', 'cancelled']);
     } finally {
       await server.dispose();
       await runtime.close();

@@ -140,9 +140,51 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
-  it('publishes the pre-spawn orphan-exit SDK capability', () => {
+  it('replaces an idle daemon that lacks Runtime event coalescing', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+    });
+
+    expect(runtime.identity.runtimeId).toBe('runtime_current');
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
+  it('publishes pre-spawn Runtime event coalescing and orphan-exit capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       daemonOrphanExit: 1,
+      runtimeEventCoalescing: 1,
     });
   });
 
@@ -224,6 +266,55 @@ describe('Runtime daemon capability upgrade', () => {
       capability: 'runtimeAutoModeGuardrail',
       preflight: {
         blockers: ['queued_runs'],
+        canStop: false,
+      },
+    });
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:close',
+    ]);
+    expect(upgradeMocks.acquireProcessLease).toHaveBeenCalledTimes(1);
+    expect(upgradeMocks.enableDaemonOwner).not.toHaveBeenCalled();
+  });
+
+  it('refuses to replace a busy daemon that only lacks Runtime event coalescing', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight({
+        blockers: ['active_runs'],
+        canStop: false,
+      }),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+      },
+    });
+    upgradeMocks.acquireProcessLease.mockResolvedValueOnce(
+      createLease(oldTransport),
+    );
+
+    let failure: unknown;
+    try {
+      await connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+      });
+    } catch (error: unknown) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(RuntimeDaemonCapabilityUpgradeError);
+    expect(failure).toMatchObject({
+      code: 'daemon_capability_upgrade_required',
+      recoverable: true,
+      restartRequired: true,
+      capability: 'runtimeEventCoalescing',
+      preflight: {
+        blockers: ['active_runs'],
         canStop: false,
       },
     });
@@ -372,6 +463,7 @@ function createCurrentTransport(
       }
       return initializeResult('runtime_current', {
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
         daemonOrphanExit: {
           version: 1,
           idleOnly: true,
