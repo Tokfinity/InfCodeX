@@ -20,6 +20,7 @@ import {
   createRuntimeDaemonServeEnvironment,
   daemonServeExecArgv,
   openRuntimeDaemonBootstrapLog,
+  RuntimeDaemonProcessCleanupIncompleteError,
   runtimeDaemonBootstrapLogPath,
   waitForHealthyDaemonStartup,
   waitForReadyRuntimeDaemonOwner,
@@ -539,6 +540,24 @@ describe("runtime daemon child startup", () => {
     expect(child.unref).not.toHaveBeenCalled();
   });
 
+  it("accepts a competing startup child that exits during exact cleanup", async () => {
+    const child: RuntimeDaemonStartupProcess = {
+      pid: 889,
+      exit: Promise.resolve({ code: 1, signal: null }),
+      hasExited: vi.fn(() => false),
+      unref: vi.fn(),
+      terminate: vi.fn(async () => {
+        throw new RuntimeDaemonProcessCleanupIncompleteError(889);
+      }),
+    };
+
+    await expect(
+      waitForHealthyDaemonStartup(paths, {}, child, healthy(999)),
+    ).resolves.toMatchObject({ state: { pid: 999 } });
+    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
+
   it("waits for the competing owner when its spawned child exits after losing the race", async () => {
     const configHome = mkdtempSync(
       path.join(os.tmpdir(), "kodax-daemon-startup-race-"),
@@ -566,6 +585,7 @@ describe("runtime daemon child startup", () => {
       exit: new Promise((resolve) => {
         reportExit = resolve;
       }),
+      hasExited: vi.fn(() => true),
       unref: vi.fn(),
       terminate: vi.fn(async () => undefined),
     };
@@ -590,7 +610,7 @@ describe("runtime daemon child startup", () => {
       await expect(waiting).resolves.toMatchObject({
         state: { pid: winnerPid },
       });
-      expect(child.terminate).toHaveBeenCalledOnce();
+      expect(child.terminate).not.toHaveBeenCalled();
       expect(child.unref).not.toHaveBeenCalled();
     } finally {
       rmSync(configHome, { recursive: true, force: true });
@@ -601,6 +621,7 @@ describe("runtime daemon child startup", () => {
     const child: RuntimeDaemonStartupProcess = {
       pid: 888,
       exit: Promise.resolve({ code: 0, signal: null }),
+      hasExited: vi.fn(() => true),
       unref: vi.fn(),
       terminate: vi.fn(async () => undefined),
     };
@@ -622,7 +643,7 @@ describe("runtime daemon child startup", () => {
       ),
     ).resolves.toMatchObject({ state: { pid: 999 } });
     expect(healthChecks).toBeGreaterThanOrEqual(3);
-    expect(child.terminate).toHaveBeenCalledOnce();
+    expect(child.terminate).not.toHaveBeenCalled();
     expect(child.unref).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,8 @@ import { stripHardenedEnvVars } from '../../runtime/process-hardening.js';
 import {
   killChildProcessTree,
   killChildProcessTreeSync,
+  isChildProcessExited,
+  rememberChildProcessTree,
 } from '../../runtime/process-tree.js';
 import { registerManagedChildProcess } from '../../runtime/managed-child-processes.js';
 
@@ -68,6 +70,15 @@ function createContentLengthFrame(json: string): string {
 
 export type StdioFraming = 'content-length' | 'ndjson';
 
+export class McpTransportCleanupIncompleteError extends Error {
+  readonly code = 'mcp_cleanup_incomplete' as const;
+
+  constructor() {
+    super('MCP stdio process-tree cleanup could not be verified.');
+    this.name = 'McpTransportCleanupIncompleteError';
+  }
+}
+
 export function createStdioTransport(config: {
   command: string;
   args?: string[];
@@ -76,6 +87,8 @@ export function createStdioTransport(config: {
   framing?: StdioFraming;
 }): McpTransport {
   let process: ChildProcessWithoutNullStreams | undefined;
+  let cleanupChild: ChildProcessWithoutNullStreams | undefined;
+  let cleanupPromise: Promise<void> | undefined;
   let buffer = Buffer.alloc(0);
   let events: McpTransportEvents | undefined;
   let framing: StdioFraming = config.framing ?? 'ndjson';
@@ -135,6 +148,9 @@ export function createStdioTransport(config: {
     },
 
     async open(ev) {
+      if (cleanupChild !== undefined) {
+        throw new McpTransportCleanupIncompleteError();
+      }
       events = ev;
       buffer = Buffer.alloc(0);
       const child = spawn(config.command, config.args ?? [], {
@@ -148,6 +164,11 @@ export function createStdioTransport(config: {
         detached: globalThis.process.platform !== 'win32',
       });
       process = child;
+      cleanupChild = child;
+      let spawnConfirmed = false;
+      child.once('spawn', () => {
+        spawnConfirmed = true;
+      });
       cleanupOnProcessExit = () => killChildProcessTreeSync(child);
       const childCleanupOnProcessExit = cleanupOnProcessExit;
       const removeChildCleanupOnProcessExit = (): void => {
@@ -164,15 +185,9 @@ export function createStdioTransport(config: {
         command: config.command,
         args: config.args,
         cwd: config.cwd,
+      }, {
+        manualUnregister: true,
       });
-      const childUnregisterManagedChild = unregisterManagedChild;
-      const unregisterChildRecord = (): void => {
-        childUnregisterManagedChild();
-        if (unregisterManagedChild === childUnregisterManagedChild) {
-          unregisterManagedChild = undefined;
-        }
-      };
-
       // Absorb EPIPE on stdin — the server may exit before we finish writing
       // (e.g. during framing auto-detection when Content-Length is rejected).
       child.stdin.on('error', () => {});
@@ -188,11 +203,16 @@ export function createStdioTransport(config: {
         }
       });
       child.on('error', (error) => {
+        rememberChildProcessTree(child);
         if (process === child) {
           process = undefined;
         }
-        removeChildCleanupOnProcessExit();
-        unregisterChildRecord();
+        if (!spawnConfirmed && child.pid === undefined) {
+          removeChildCleanupOnProcessExit();
+          unregisterManagedChild?.();
+          unregisterManagedChild = undefined;
+          cleanupChild = undefined;
+        }
         if (closingChildren.has(child)) {
           return;
         }
@@ -200,11 +220,10 @@ export function createStdioTransport(config: {
         ev.onClose(`Process error: ${error.message}`);
       });
       child.on('exit', (code, signal) => {
+        rememberChildProcessTree(child);
         if (process === child) {
           process = undefined;
         }
-        removeChildCleanupOnProcessExit();
-        unregisterChildRecord();
         if (closingChildren.has(child)) {
           return;
         }
@@ -233,17 +252,33 @@ export function createStdioTransport(config: {
 
     async close() {
       buffer = Buffer.alloc(0);
-      if (process) {
-        const child = process;
-        process = undefined;
-        events = undefined;
-        closingChildren.add(child);
-        child.stdout.removeAllListeners('data');
-        child.stderr.removeAllListeners('data');
+      const child = cleanupChild;
+      if (child === undefined) return;
+      if (cleanupPromise !== undefined) return cleanupPromise;
+      process = undefined;
+      events = undefined;
+      closingChildren.add(child);
+      child.stdout.removeAllListeners('data');
+      child.stderr.removeAllListeners('data');
+      const attempt = (async (): Promise<void> => {
+        const rootAlreadyExited = isChildProcessExited(child);
+        const result = await killChildProcessTree(child, { gracefulStdinEnd: true });
+        if (result.status === 'unknown') {
+          // Preserve registry and host-exit recovery evidence, but do not turn a
+          // server's prior natural exit into a close failure.
+          if (rootAlreadyExited) return;
+          throw new McpTransportCleanupIncompleteError();
+        }
         removeCleanupOnProcessExit?.();
-        await killChildProcessTree(child, { gracefulStdinEnd: true });
         unregisterManagedChild?.();
         unregisterManagedChild = undefined;
+        cleanupChild = undefined;
+      })();
+      cleanupPromise = attempt;
+      try {
+        await attempt;
+      } finally {
+        if (cleanupPromise === attempt) cleanupPromise = undefined;
       }
     },
   } as McpTransport & { detectedFraming: StdioFraming; switchFraming: (mode: StdioFraming) => void };

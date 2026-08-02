@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import type { CLIExecutorConfig, CLIEvent, CLIExecutionOptions } from './types.js';
-import { killChildProcessTree } from './process-tree.js';
+import {
+    killChildProcessTree,
+    rememberChildProcessTree,
+    type ProcessTreeKillResult,
+} from './process-tree.js';
 
 export abstract class CLIExecutor {
     protected config: CLIExecutorConfig;
@@ -58,6 +62,7 @@ export abstract class CLIExecutor {
         const abortReached = new Promise<typeof abortMarker>((resolve) => {
             resolveAbort = () => resolve(abortMarker);
         });
+        rememberChildProcessTree(child);
         const forwardExternalAbort = () => {
             if (executionController.signal.aborted) return;
             const reason = options.signal?.reason;
@@ -73,11 +78,22 @@ export abstract class CLIExecutor {
         }
 
         let exited = false;
-        let terminationPromise: Promise<void> | undefined;
-        const terminateChild = (): Promise<void> => {
+        let terminationPromise: Promise<ProcessTreeKillResult> | undefined;
+        const terminateChild = (): Promise<ProcessTreeKillResult> => {
             if (!terminationPromise) {
-                terminationPromise = killChildProcessTree(child);
-                void terminationPromise.catch(() => undefined);
+                terminationPromise = (async () => {
+                    let result: ProcessTreeKillResult = { status: 'unknown' };
+                    for (let attempt = 0; attempt < 3; attempt += 1) {
+                        rememberChildProcessTree(child);
+                        result = await killChildProcessTree(child);
+                        if (result.status !== 'unknown') return result;
+                        if (exited && !executionController.signal.aborted) return result;
+                        if (attempt < 2) {
+                            await new Promise((resolve) => setTimeout(resolve, 50));
+                        }
+                    }
+                    return result;
+                })();
             }
             return terminationPromise;
         };
@@ -95,7 +111,10 @@ export abstract class CLIExecutor {
         if (executionController.signal.aborted) {
             abortHandler();
         }
-        child.on('exit', () => { exited = true; });
+        child.on('exit', () => {
+            exited = true;
+            rememberChildProcessTree(child);
+        });
 
         let timedOut = false;
         let timeoutError: Error | undefined;
@@ -177,8 +196,19 @@ export abstract class CLIExecutor {
             }
             options.signal?.removeEventListener('abort', forwardExternalAbort);
             executionController.signal.removeEventListener('abort', abortHandler);
-            if (!exited) {
-                await terminateChild();
+            if (
+                process.platform === 'win32'
+                || terminationPromise !== undefined
+                || !exited
+            ) {
+                const cleanupWasAlreadyRequested = terminationPromise !== undefined;
+                const result = await terminateChild();
+                if (
+                    result.status === 'unknown'
+                    && (cleanupWasAlreadyRequested || !exited)
+                ) {
+                    throw new Error('Provider CLI process-tree termination could not be verified');
+                }
             }
         }
     }

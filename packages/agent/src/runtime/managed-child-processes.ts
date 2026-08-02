@@ -1,19 +1,26 @@
 import { spawnSync, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   mkdirSync,
+  renameSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+import { emitKodaXDiagnostic } from '../diagnostics.js';
 import { getAgentConfigPath } from './agent-home.js';
-import { killPidTree } from './process-tree.js';
+import {
+  killPidTree,
+  rememberChildProcessTree,
+  rememberedChildProcessTreeIdentities,
+  rememberedChildProcessTreeIsComplete,
+  type WindowsProcessTreeIdentity,
+} from './process-tree.js';
 
-const REGISTRY_VERSION = 1;
-const WINDOWS_CREATION_SKEW_MS = 60_000;
+const REGISTRY_VERSION = 4;
 const PROCESS_QUERY_TIMEOUT_MS = 5_000;
-const PID_EXIT_WAIT_MS = 2_000;
 
 export interface ManagedChildProcessMetadata {
   readonly kind: string;
@@ -31,7 +38,12 @@ interface ManagedChildProcessRecord extends ManagedChildProcessMetadata {
   readonly version: typeof REGISTRY_VERSION;
   readonly pid: number;
   readonly ownerPid: number;
+  readonly registrationId: string;
   readonly registeredAtMs: number;
+  readonly ownerProcessStartIdentity?: string;
+  readonly processStartIdentity?: string;
+  readonly processTreeIdentities?: readonly WindowsProcessTreeIdentity[];
+  readonly processTreeComplete?: boolean;
 }
 
 interface ActiveManagedChildProcess {
@@ -71,18 +83,65 @@ function registryDir(): string {
   return getAgentConfigPath('processes', 'children');
 }
 
-function registryPath(pid: number): string {
-  return path.join(registryDir(), `${pid}.json`);
+function registryPath(pid: number, registrationId: string): string {
+  return path.join(registryDir(), `${pid}.${registrationId}.json`);
 }
+
+interface ManagedChildOwnerRecord {
+  readonly pid: number;
+  readonly ownerPid: number;
+  readonly ownerProcessStartIdentity?: string;
+}
+
+function quarantineRecord(filePath: string): boolean {
+  const targetDir = path.join(registryDir(), '.unresolved');
+  const target = path.join(targetDir, path.basename(filePath));
+  try {
+    mkdirSync(targetDir, { recursive: true });
+    renameSync(filePath, target);
+    return true;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    emitKodaXDiagnostic({
+      source: 'agent.managed-child-processes',
+      level: 'warn',
+      message: 'Failed to isolate unresolved managed child recovery evidence.',
+      detail: { filePath, target, error },
+    });
+    return false;
+  }
+}
+
+type ManagedChildRecordReadResult =
+  | { readonly status: 'current'; readonly record: ManagedChildProcessRecord }
+  | { readonly status: 'unsupported'; readonly record: ManagedChildOwnerRecord }
+  | { readonly status: 'invalid' };
 
 function writeRecord(record: ManagedChildProcessRecord): void {
   mkdirSync(registryDir(), { recursive: true });
-  writeFileSync(registryPath(record.pid), JSON.stringify(record), 'utf8');
+  writeFileSync(
+    registryPath(record.pid, record.registrationId),
+    JSON.stringify(record),
+    'utf8',
+  );
 }
 
-function removeRecord(pid: number): void {
-  activeChildren.delete(pid);
-  rmSync(registryPath(pid), { force: true });
+function removeRecord(pid: number, registrationId: string): boolean {
+  const active = activeChildren.get(pid);
+  if (active?.record.registrationId === registrationId) {
+    activeChildren.delete(pid);
+  }
+  const file = registryPath(pid, registrationId);
+  const persisted = readRecord(file);
+  if (persisted.status === 'unsupported') return false;
+  if (
+    persisted.status === 'current'
+    && persisted.record.registrationId !== registrationId
+  ) {
+    return false;
+  }
+  rmSync(file, { force: true });
+  return true;
 }
 
 function isPidAlive(pid: number): boolean {
@@ -139,10 +198,49 @@ function activeChildMatchesRecord(record: ManagedChildProcessRecord): boolean {
     return false;
   }
   return active.record.registeredAtMs === record.registeredAtMs
+    && active.record.registrationId === record.registrationId
+    && active.record.processStartIdentity === record.processStartIdentity
     && active.record.kind === record.kind
     && active.record.command === record.command
     && argsMatch(active.record.args, record.args)
     && active.record.cwd === record.cwd;
+}
+
+function processStartIdentity(pid: number): string | undefined {
+  if (process.platform === 'win32') {
+    const lookup = getWindowsProcessInfo(pid);
+    if (lookup.status !== 'found') return undefined;
+    const creationMs = parseWindowsDate(lookup.info.CreationDate);
+    return creationMs === undefined
+      ? undefined
+      : `windows:${(BigInt(creationMs) + 11_644_473_600_000n).toString()}`;
+  }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      return fields[19] === undefined ? undefined : `linux:${fields[19]}`;
+    } catch {
+      return undefined;
+    }
+  }
+  const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: PROCESS_QUERY_TIMEOUT_MS,
+  });
+  const value = result.status === 0 ? result.stdout.trim() : '';
+  return value === '' ? undefined : `${process.platform}:${value}`;
+}
+
+function managedOwnerState(
+  record: ManagedChildOwnerRecord,
+  readStartIdentity: (pid: number) => string | undefined,
+): 'alive' | 'gone' | 'unknown' {
+  if (!isPidAlive(record.ownerPid)) return 'gone';
+  if (record.ownerProcessStartIdentity === undefined) return 'unknown';
+  const current = readStartIdentity(record.ownerPid);
+  if (current === undefined) return 'unknown';
+  return current === record.ownerProcessStartIdentity ? 'alive' : 'gone';
 }
 
 function parseWindowsDate(value: string | undefined): number | undefined {
@@ -281,17 +379,6 @@ function getPosixCommandLine(pid: number): PosixCommandLineLookup {
   return { status: 'found', commandLine };
 }
 
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isPidAlive(pid)) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return !isPidAlive(pid);
-}
-
 function isConfirmedRecord(record: ManagedChildProcessRecord): boolean | undefined {
   if (process.platform === 'win32') {
     const lookup = getWindowsProcessInfo(record.pid);
@@ -306,11 +393,11 @@ function isConfirmedRecord(record: ManagedChildProcessRecord): boolean | undefin
       return false;
     }
     const creationMs = parseWindowsDate(info.CreationDate);
-    if (creationMs === undefined) {
+    if (creationMs === undefined || record.processStartIdentity === undefined) {
       return undefined;
     }
-    return creationMs <= record.registeredAtMs + 5_000
-      && creationMs >= record.registeredAtMs - WINDOWS_CREATION_SKEW_MS;
+    const identity = (BigInt(creationMs) + 11_644_473_600_000n).toString();
+    return identity === record.processStartIdentity;
   }
 
   const lookup = getPosixCommandLine(record.pid);
@@ -323,23 +410,164 @@ function isConfirmedRecord(record: ManagedChildProcessRecord): boolean | undefin
   return commandMatches(record, lookup.commandLine);
 }
 
-function readRecord(filePath: string): ManagedChildProcessRecord | undefined {
+function readRecord(filePath: string): ManagedChildRecordReadResult {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<ManagedChildProcessRecord>;
-    if (
-      parsed.version !== REGISTRY_VERSION
-      || typeof parsed.pid !== 'number'
-      || typeof parsed.ownerPid !== 'number'
-      || typeof parsed.registeredAtMs !== 'number'
-      || typeof parsed.kind !== 'string'
-      || typeof parsed.command !== 'string'
-    ) {
-      return undefined;
+    const parsed: unknown = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (!isManagedChildRecordBase(parsed)) return { status: 'invalid' };
+    if (parsed.version !== REGISTRY_VERSION) {
+      return Number.isSafeInteger(parsed.version)
+        && typeof parsed.version === 'number'
+        && parsed.version > 0
+        ? {
+            status: 'unsupported',
+            record: {
+              pid: parsed.pid,
+              ownerPid: parsed.ownerPid,
+              ...(typeof parsed.ownerProcessStartIdentity === 'string'
+                ? { ownerProcessStartIdentity: parsed.ownerProcessStartIdentity }
+                : {}),
+            },
+          }
+        : { status: 'invalid' };
     }
-    return parsed as ManagedChildProcessRecord;
+    if (
+      typeof parsed.registrationId !== 'string'
+      || (
+        parsed.args !== undefined
+        && (
+          !Array.isArray(parsed.args)
+          || parsed.args.some((arg) => typeof arg !== 'string')
+        )
+      )
+      || (parsed.cwd !== undefined && typeof parsed.cwd !== 'string')
+      || (
+        parsed.processStartIdentity !== undefined
+        && typeof parsed.processStartIdentity !== 'string'
+      )
+      || (
+        parsed.ownerProcessStartIdentity !== undefined
+        && typeof parsed.ownerProcessStartIdentity !== 'string'
+      )
+      || (
+        parsed.processTreeComplete !== undefined
+        && typeof parsed.processTreeComplete !== 'boolean'
+      )
+      || (
+        parsed.processTreeIdentities !== undefined
+        && (
+          !Array.isArray(parsed.processTreeIdentities)
+          || parsed.processTreeIdentities.some((identity) => (
+            typeof identity !== 'object'
+            || identity === null
+            || typeof identity.pid !== 'number'
+            || typeof identity.creationTime !== 'string'
+          ))
+        )
+      )
+    ) {
+      return { status: 'invalid' };
+    }
+    return {
+      status: 'current',
+      record: parsed as unknown as ManagedChildProcessRecord,
+    };
+  } catch {
+    return { status: 'invalid' };
+  }
+}
+
+function parseWindowsProcessInfoRows(stdout: string): WindowsProcessInfo[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows.flatMap((row): WindowsProcessInfo[] => {
+      if (typeof row !== 'object' || row === null) return [];
+      const candidate = row as {
+        readonly ProcessId?: unknown;
+        readonly CreationDate?: unknown;
+        readonly CommandLine?: unknown;
+      };
+      if (typeof candidate.ProcessId !== 'number') return [];
+      return [{
+        ProcessId: candidate.ProcessId,
+        ...(typeof candidate.CreationDate === 'string'
+          ? { CreationDate: candidate.CreationDate }
+          : {}),
+        ...(typeof candidate.CommandLine === 'string'
+          ? { CommandLine: candidate.CommandLine }
+          : {}),
+      }];
+    });
   } catch {
     return undefined;
   }
+}
+
+function getWindowsProcessInfos(pids: readonly number[]): Map<number, WindowsProcessLookup> {
+  const uniquePids = [...new Set(pids)];
+  if (uniquePids.length === 0) return new Map();
+  const script = [
+    `$ids = @(${uniquePids.join(',')})`,
+    '$rows = @(Get-CimInstance Win32_Process | Where-Object { $ids -contains $_.ProcessId })',
+    '$rows | Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ], {
+    encoding: 'utf8',
+    timeout: PROCESS_QUERY_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  const rows = result.error || result.status !== 0 || !result.stdout.trim()
+    ? undefined
+    : parseWindowsProcessInfoRows(result.stdout);
+  if (rows === undefined) {
+    return new Map(uniquePids.map((pid) => [pid, getWindowsProcessInfoViaWmic(pid)]));
+  }
+  const byPid = new Map(rows.map((info) => [info.ProcessId!, info]));
+  return new Map(uniquePids.map((pid) => [
+    pid,
+    byPid.has(pid)
+      ? { status: 'found', info: byPid.get(pid)! }
+      : { status: 'missing' },
+  ]));
+}
+
+function processStartIdentities(pids: readonly number[]): Map<number, string | undefined> {
+  if (process.platform !== 'win32') {
+    return new Map(pids.map((pid) => [pid, processStartIdentity(pid)]));
+  }
+  return new Map([...getWindowsProcessInfos(pids)].map(([pid, lookup]) => {
+    if (lookup.status !== 'found') return [pid, undefined];
+    const creationMs = parseWindowsDate(lookup.info.CreationDate);
+    return [
+      pid,
+      creationMs === undefined
+        ? undefined
+        : `windows:${(BigInt(creationMs) + 11_644_473_600_000n).toString()}`,
+    ];
+  }));
+}
+
+function isManagedChildRecordBase(
+  value: unknown,
+): value is Record<string, unknown> & {
+  readonly pid: number;
+  readonly ownerPid: number;
+  readonly registeredAtMs: number;
+  readonly kind: string;
+  readonly command: string;
+} {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as Record<string, unknown>).pid === 'number'
+    && typeof (value as Record<string, unknown>).ownerPid === 'number'
+    && typeof (value as Record<string, unknown>).registeredAtMs === 'number'
+    && typeof (value as Record<string, unknown>).kind === 'string'
+    && typeof (value as Record<string, unknown>).command === 'string';
 }
 
 export function registerManagedChildProcess(
@@ -353,20 +581,45 @@ export function registerManagedChildProcess(
   }
 
   let registered = false;
+  const registrationId = randomUUID();
   const unregister = (): void => {
     if (!registered) {
       return;
     }
     registered = false;
-    removeRecord(pid);
+    const active = activeChildren.get(pid);
+    if (
+      process.platform === 'win32'
+      && active?.record.registrationId === registrationId
+      && (child.exitCode !== null || child.signalCode !== null)
+      && active.record.processTreeComplete !== true
+    ) {
+      activeChildren.delete(pid);
+      return;
+    }
+    removeRecord(pid, registrationId);
   };
 
   try {
+    const rootProcessStartIdentity = rememberChildProcessTree(child);
+    const ownerProcessStartIdentity = processStartIdentity(process.pid);
+    const processTreeIdentities = rememberedChildProcessTreeIdentities(child);
     const record: ManagedChildProcessRecord = {
       version: REGISTRY_VERSION,
       pid,
       ownerPid: process.pid,
+      registrationId,
       registeredAtMs: Date.now(),
+      ...(ownerProcessStartIdentity === undefined
+        ? {}
+        : { ownerProcessStartIdentity }),
+      ...(rootProcessStartIdentity === undefined
+        ? {}
+        : { processStartIdentity: rootProcessStartIdentity }),
+      ...(processTreeIdentities === undefined
+        ? {}
+        : { processTreeIdentities }),
+      processTreeComplete: rememberedChildProcessTreeIsComplete(child),
       kind: metadata.kind,
       command: metadata.command,
       args: metadata.args ? [...metadata.args] : undefined,
@@ -375,15 +628,48 @@ export function registerManagedChildProcess(
     writeRecord(record);
     activeChildren.set(pid, { record, child });
     registered = true;
-  } catch {
+  } catch (error: unknown) {
+    emitKodaXDiagnostic({
+      source: 'agent.managed-child-processes',
+      level: 'warn',
+      message: 'Failed to register a managed child process.',
+      detail: { pid, error },
+    });
     return () => {};
   }
+
+  const refreshTreeRecord = (): void => {
+    rememberChildProcessTree(child);
+    const active = activeChildren.get(pid);
+    if (!registered || active?.record.registrationId !== registrationId) return;
+    const identities = rememberedChildProcessTreeIdentities(child);
+    const refreshed: ManagedChildProcessRecord = {
+      ...active.record,
+      ...(identities === undefined ? {} : { processTreeIdentities: identities }),
+      processTreeComplete: rememberedChildProcessTreeIsComplete(child),
+    };
+    activeChildren.set(pid, { record: refreshed, child });
+    try {
+      writeRecord(refreshed);
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: 'agent.managed-child-processes',
+        level: 'warn',
+        message: 'Failed to persist refreshed managed process-tree evidence.',
+        detail: { pid, registrationId, error },
+      });
+    }
+  };
+  child.on('exit', refreshTreeRecord);
+  child.on('error', refreshTreeRecord);
 
   if (!options.manualUnregister) {
     child.once('exit', unregister);
     child.once('error', unregister);
   }
   return () => {
+    child.off('exit', refreshTreeRecord);
+    child.off('error', refreshTreeRecord);
     if (!options.manualUnregister) {
       child.off('exit', unregister);
       child.off('error', unregister);
@@ -398,6 +684,7 @@ export async function cleanupRegisteredManagedChildren(
   let killed = 0;
   let pruned = 0;
   let skipped = 0;
+  let quarantined = 0;
   let files: string[] = [];
 
   try {
@@ -406,50 +693,141 @@ export async function cleanupRegisteredManagedChildren(
     return { killed, pruned, skipped };
   }
 
-  for (const file of files) {
+  const persistedFiles = files.map((file) => {
     const filePath = path.join(registryDir(), file);
-    const record = readRecord(filePath);
-    if (!record) {
+    return { filePath, persisted: readRecord(filePath) };
+  });
+  const ownerPids = persistedFiles.flatMap(({ persisted }) => (
+    persisted.status !== 'invalid'
+    && isPidAlive(persisted.record.ownerPid)
+      ? [persisted.record.ownerPid]
+      : []
+  ));
+  // Resolve all live owners at one cleanup boundary. On Windows this is one
+  // CIM snapshot even when stale records belong to several former KodaX PIDs.
+  const ownerStartIdentities = processStartIdentities(ownerPids);
+  const readOwnerStartIdentity = (pid: number): string | undefined => (
+    ownerStartIdentities.get(pid)
+  );
+
+  for (const { filePath, persisted } of persistedFiles) {
+    if (persisted.status === 'unsupported') {
+      const ownerState = managedOwnerState(
+        persisted.record,
+        readOwnerStartIdentity,
+      );
+      if (ownerState === 'gone' && !isPidAlive(persisted.record.pid)) {
+        if (quarantineRecord(filePath)) quarantined += 1;
+      }
+      skipped += 1;
+      continue;
+    }
+    if (persisted.status === 'invalid') {
       rmSync(filePath, { force: true });
       pruned += 1;
       continue;
     }
+    const record = persisted.record;
 
     if (!options.includeCurrentOwner && record.ownerPid === process.pid) {
-      skipped += 1;
-      continue;
+      const currentOwnerIdentity = readOwnerStartIdentity(process.pid);
+      if (
+        record.ownerProcessStartIdentity === undefined
+        || currentOwnerIdentity === undefined
+        || record.ownerProcessStartIdentity === currentOwnerIdentity
+      ) {
+        skipped += 1;
+        continue;
+      }
     }
 
-    if (!options.includeCurrentOwner && isPidAlive(record.ownerPid)) {
-      skipped += 1;
-      continue;
+    if (record.ownerPid !== process.pid) {
+      const ownerState = managedOwnerState(record, readOwnerStartIdentity);
+      if (ownerState !== 'gone') {
+        skipped += 1;
+        continue;
+      }
     }
 
-    if (!isPidAlive(record.pid)) {
-      removeRecord(record.pid);
-      pruned += 1;
-      continue;
+    const rootWasAlive = isPidAlive(record.pid);
+    if (!rootWasAlive) {
+      if (process.platform !== 'win32') {
+        if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+        else skipped += 1;
+        continue;
+      }
+      const retainedRoot = record.processTreeIdentities?.find(
+        (identity) => identity.pid === record.pid,
+      );
+      if (
+        record.processStartIdentity === undefined
+        || retainedRoot?.creationTime !== record.processStartIdentity
+      ) {
+        if (quarantineRecord(filePath)) quarantined += 1;
+        skipped += 1;
+        continue;
+      }
     }
 
-    const confirmed = activeChildMatchesRecord(record) ? true : isConfirmedRecord(record);
+    const confirmed = !rootWasAlive
+      ? true
+      : activeChildMatchesRecord(record) ? true : isConfirmedRecord(record);
     if (confirmed === undefined) {
       skipped += 1;
       continue;
     }
 
     if (!confirmed) {
-      removeRecord(record.pid);
-      pruned += 1;
-      continue;
+      if (process.platform !== 'win32') {
+        if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+        else skipped += 1;
+        continue;
+      }
+      const retainedRoot = record.processTreeIdentities?.find(
+        (identity) => identity.pid === record.pid,
+      );
+      if (
+        record.processStartIdentity === undefined
+        || retainedRoot?.creationTime !== record.processStartIdentity
+      ) {
+        if (quarantineRecord(filePath)) quarantined += 1;
+        skipped += 1;
+        continue;
+      }
     }
 
-    await killPidTree(record.pid);
-    if (await waitForPidExit(record.pid, PID_EXIT_WAIT_MS)) {
-      removeRecord(record.pid);
-      killed += 1;
+    const result = await killPidTree(record.pid, {
+      ...(record.processStartIdentity === undefined
+        ? {}
+        : { expectedProcessStartIdentity: record.processStartIdentity }),
+      ...(record.processTreeIdentities === undefined
+        ? {}
+        : { expectedProcessTreeIdentities: record.processTreeIdentities }),
+      expectedProcessTreeComplete: record.processTreeComplete === true,
+    });
+    if (result.status !== 'unknown') {
+      if (removeRecord(record.pid, record.registrationId)) {
+        killed += 1;
+      } else {
+        skipped += 1;
+      }
     } else {
+      if (
+        process.platform === 'win32'
+        && (!rootWasAlive || confirmed === false)
+        && quarantineRecord(filePath)
+      ) quarantined += 1;
       skipped += 1;
     }
+  }
+
+  if (quarantined > 0) {
+    emitKodaXDiagnostic({
+      source: 'agent.managed-child-processes',
+      level: 'warn',
+      message: `Isolated ${quarantined} unresolved managed child record(s) from startup cleanup.`,
+      detail: { quarantined, directory: path.join(registryDir(), '.unresolved') },
+    });
   }
 
   return { killed, pruned, skipped };

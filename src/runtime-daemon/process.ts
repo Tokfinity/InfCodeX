@@ -18,7 +18,9 @@ import path from "node:path";
 import {
   ELECTRON_RUN_AS_NODE_ENV,
   killChildProcessTree,
+  isChildProcessExited,
   prepareInternalNodeLaunch,
+  rememberChildProcessTree,
 } from "@kodax-ai/agent";
 
 import type { RuntimeDaemonClientTransport } from "./client.js";
@@ -78,8 +80,20 @@ export interface RuntimeDaemonStartupExit {
 export interface RuntimeDaemonStartupProcess {
   readonly pid: number | undefined;
   readonly exit: Promise<RuntimeDaemonStartupExit>;
+  hasExited?(): boolean;
   unref(): void;
   terminate(): Promise<void>;
+}
+
+export class RuntimeDaemonProcessCleanupIncompleteError extends Error {
+  readonly code = "process_tree_cleanup_incomplete" as const;
+
+  constructor(readonly pid: number | undefined) {
+    super(
+      `Runtime daemon child ${pid ?? "unknown"} process-tree cleanup could not be verified.`,
+    );
+    this.name = "RuntimeDaemonProcessCleanupIncompleteError";
+  }
 }
 
 const CLEAN_EXIT_OWNER_PUBLICATION_GRACE_MS = 1_000;
@@ -362,7 +376,7 @@ export async function waitForHealthyDaemonStartup(
       const health = classifyRuntimeDaemonHealth(observation);
       if (health === "healthy" && observation.state?.status === "ready") {
         if (observation.state.pid === child.pid) child.unref();
-        else await child.terminate();
+        else await terminateCompetingStartupChild(child);
         return { ...observation, state: observation.state };
       }
       if (health === "mismatch") {
@@ -644,22 +658,45 @@ export async function spawnRuntimeDaemonServeProcess(
     child.once("spawn", resolve);
     child.once("error", reject);
   });
+  rememberChildProcessTree(child);
   return createRuntimeDaemonStartupProcess(child, exit);
 }
 
-function createRuntimeDaemonStartupProcess(
+async function terminateCompetingStartupChild(
+  child: RuntimeDaemonStartupProcess,
+): Promise<void> {
+  if (child.hasExited?.() === true) return;
+  try {
+    await child.terminate();
+  } catch (error: unknown) {
+    // A lock loser exits before host initialization. On Windows, that exit can
+    // land between the liveness check and exact process-tree capture.
+    if (
+      !(error instanceof RuntimeDaemonProcessCleanupIncompleteError)
+      || !(await didExitWithin(child.exit, 1_000))
+    ) throw error;
+  }
+}
+
+export function createRuntimeDaemonStartupProcess(
   child: ChildProcess,
   exit: Promise<RuntimeDaemonStartupExit>,
 ): RuntimeDaemonStartupProcess {
   return {
     pid: child.pid,
     exit,
+    hasExited() {
+      return isChildProcessExited(child);
+    },
     unref() {
       child.unref();
     },
     async terminate() {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      await killChildProcessTree(child);
+      const rootAlreadyExited = isChildProcessExited(child);
+      const result = await killChildProcessTree(child);
+      if (result.status === "unknown" && !rootAlreadyExited) {
+        throw new RuntimeDaemonProcessCleanupIncompleteError(child.pid);
+      }
       if (!(await didExitWithin(exit, 1_000))) {
         throw new Error(
           `Runtime daemon child ${child.pid ?? "unknown"} did not exit after termination.`,

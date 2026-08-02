@@ -1,5 +1,4 @@
 import {
-  spawn,
   spawnSync,
   type ChildProcess,
 } from 'node:child_process';
@@ -44,6 +43,8 @@ public static class KodaXNativeProcessSnapshot {
   private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool GetProcessTimes(IntPtr process, out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool TerminateProcess(IntPtr process, uint exitCode);
   [DllImport("kernel32.dll")]
   private static extern void GetSystemTimeAsFileTime(out FileTime systemTime);
   [DllImport("kernel32.dll")]
@@ -55,6 +56,19 @@ public static class KodaXNativeProcessSnapshot {
       FileTime creation, exit, kernel, user;
       if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return 0;
       return ((ulong)creation.High << 32) | creation.Low;
+    } finally {
+      CloseHandle(process);
+    }
+  }
+  public static int TerminateExact(uint processId, ulong expectedCreationTime) {
+    var process = OpenProcess(0x1001, false, processId);
+    if (process == IntPtr.Zero) return 0;
+    try {
+      FileTime creation, exit, kernel, user;
+      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return 0;
+      var actual = (((ulong)creation.High << 32) | creation.Low) / 10000;
+      if (actual != expectedCreationTime) return 2;
+      return TerminateProcess(process, 1) ? 1 : 0;
     } finally {
       CloseHandle(process);
     }
@@ -89,7 +103,27 @@ export interface ProcessTreeKillOptions {
   readonly gracefulMs?: number;
   readonly forceMs?: number;
   readonly taskkillMs?: number;
+  /** Exact Windows creation identity captured when the process was spawned. */
+  readonly expectedProcessStartIdentity?: string;
+  /** Exact Windows tree identities retained by a managed-process registry. */
+  readonly expectedProcessTreeIdentities?: readonly WindowsProcessTreeIdentity[];
+  readonly expectedProcessTreeComplete?: boolean;
 }
+
+export interface WindowsProcessTreeIdentity {
+  readonly pid: number;
+  readonly creationTime: string;
+}
+
+export type ProcessTreeKillStatus = 'terminated' | 'already-exited' | 'unknown';
+
+export interface ProcessTreeKillResult {
+  readonly status: ProcessTreeKillStatus;
+}
+
+const TERMINATED: ProcessTreeKillResult = Object.freeze({ status: 'terminated' });
+const ALREADY_EXITED: ProcessTreeKillResult = Object.freeze({ status: 'already-exited' });
+const UNKNOWN: ProcessTreeKillResult = Object.freeze({ status: 'unknown' });
 
 export function isChildProcessExited(child: Pick<ChildProcess, 'exitCode' | 'signalCode'>): boolean {
   return child.exitCode !== null || child.signalCode !== null;
@@ -120,38 +154,6 @@ export function waitForChildProcessExit(
     timer.unref?.();
     child.once('exit', onExit);
     child.once('error', onExit);
-  });
-}
-
-function runTaskkill(pid: number, timeoutMs: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (succeeded: boolean): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      resolve(succeeded);
-    };
-    timer = setTimeout(() => {
-      try {
-        killer.kill();
-      } catch {
-        // Best-effort cleanup fallback; caller may still try direct kill.
-      }
-      finish(false);
-    }, timeoutMs);
-    timer.unref?.();
-    killer.once('exit', (code) => finish(code === 0));
-    killer.once('error', () => finish(false));
   });
 }
 
@@ -198,17 +200,6 @@ async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<
   return !isPosixPidTreeAlive(pid);
 }
 
-async function waitForWindowsPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!signalTargetExists(pid)) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return !signalTargetExists(pid);
-}
-
 interface WindowsProcessIdentity {
   readonly pid: number;
   readonly parentPid: number;
@@ -230,7 +221,11 @@ function parseWindowsProcessSnapshotJson(stdout: string): WindowsProcessIdentity
         ? record.creationTime
         : String(record.creationTime ?? '0');
       if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(parentPid)) return [];
-      return [{ pid, parentPid, creationTime }];
+      return [{
+        pid,
+        parentPid,
+        creationTime: /^\d+$/.test(creationTime) ? creationTime : '0',
+      }];
     });
   } catch {
     return [];
@@ -366,6 +361,7 @@ function readWindowsProcessSnapshot(): WindowsProcessIdentity[] | undefined {
 function collectDescendantIdentities(
   snapshot: readonly WindowsProcessIdentity[],
   parentPid: number,
+  parentCreationTime?: string,
 ): WindowsProcessIdentity[] {
   const children = new Map<number, WindowsProcessIdentity[]>();
   for (const identity of snapshot) {
@@ -376,25 +372,58 @@ function collectDescendantIdentities(
   }
 
   const descendants: WindowsProcessIdentity[] = [];
-  const pending = [parentPid];
+  const pending: Array<{
+    readonly pid: number;
+    readonly creationTime?: string;
+    readonly ancestryVerified: boolean;
+  }> = [{
+    pid: parentPid,
+    ...(parentCreationTime === undefined ? {} : { creationTime: parentCreationTime }),
+    ancestryVerified: parentCreationTime !== undefined && parentCreationTime !== '0',
+  }];
   const seen = new Set<number>([parentPid]);
   while (pending.length > 0) {
     const parent = pending.shift();
     if (parent === undefined) break;
-    for (const child of children.get(parent) ?? []) {
+    for (const child of children.get(parent.pid) ?? []) {
       if (seen.has(child.pid)) continue;
+      if (!windowsCreationAtLeast(child.creationTime, parent.creationTime)) continue;
       seen.add(child.pid);
-      descendants.push(child);
-      pending.push(child.pid);
+      const ancestryVerified = parent.ancestryVerified
+        && child.creationTime !== '0';
+      descendants.push(ancestryVerified
+        ? child
+        : { ...child, creationTime: '0' });
+      pending.push({
+        pid: child.pid,
+        creationTime: child.creationTime,
+        ancestryVerified,
+      });
     }
   }
   return descendants;
 }
 
+function windowsCreationAtLeast(
+  childCreationTime: string,
+  parentCreationTime: string | undefined,
+): boolean {
+  if (
+    childCreationTime === '0'
+    || parentCreationTime === undefined
+    || parentCreationTime === '0'
+  ) return true;
+  try {
+    return BigInt(childCreationTime) >= BigInt(parentCreationTime);
+  } catch {
+    return false;
+  }
+}
+
 function currentCapturedWindowsPids(
   captured: readonly WindowsProcessIdentity[],
+  snapshot = readWindowsProcessSnapshot(),
 ): Set<number> | undefined {
-  const snapshot = readWindowsProcessSnapshot();
   if (snapshot === undefined) return undefined;
   const uncertainPids = new Set(
     snapshot
@@ -415,136 +444,298 @@ function currentCapturedWindowsPids(
   );
 }
 
+function capturedWindowsProcessesGone(
+  capture: WindowsProcessTreeCapture,
+): boolean | undefined {
+  const snapshot = readWindowsProcessSnapshot();
+  if (snapshot === undefined) return undefined;
+  const known = currentCapturedWindowsPids(
+    [capture.root, ...capture.descendants],
+    snapshot,
+  );
+  if (known === undefined) return undefined;
+  if (known.size > 0) return false;
+  if (capture.completeTree) {
+    return capture.uncertainDescendantPids.every((pid) => (
+      !snapshot.some((identity) => identity.pid === pid)
+    ))
+      ? true
+      : undefined;
+  }
+  // A userspace capture that lost its root cannot prove that an exited
+  // intermediate did not leave a detached descendant behind.
+  return undefined;
+}
+
+function capturedWindowsPidMayBeAlive(capture: WindowsProcessTreeCapture): boolean {
+  return [
+    capture.root.pid,
+    ...capture.descendants.map((identity) => identity.pid),
+    ...capture.uncertainDescendantPids,
+  ].some(signalTargetExists);
+}
+
 async function waitForCapturedWindowsProcessesExit(
-  captured: readonly WindowsProcessIdentity[],
+  capture: WindowsProcessTreeCapture,
   timeoutMs: number,
 ): Promise<boolean> {
-  if (captured.length === 0) return false;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const currentPids = currentCapturedWindowsPids(captured);
-    if (currentPids !== undefined && currentPids.size === 0) return true;
+    if (!capturedWindowsPidMayBeAlive(capture)) {
+      return capturedWindowsProcessesGone(capture) === true;
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return currentCapturedWindowsPids(captured)?.size === 0;
+  return capturedWindowsProcessesGone(capture) === true;
 }
 
-async function killWindowsPid(pid: number, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
-  try {
-    process.kill(pid, signal);
-  } catch {
-    return !signalTargetExists(pid);
-  }
-  return waitForWindowsPidExit(pid, timeoutMs);
-}
-
-async function killCapturedWindowsProcess(
-  identity: WindowsProcessIdentity,
-  signal: NodeJS.Signals,
+function terminateCapturedWindowsProcesses(
+  captured: readonly WindowsProcessIdentity[],
   timeoutMs: number,
-): Promise<boolean> {
-  if (currentCapturedWindowsPids([identity])?.has(identity.pid) !== true) return true;
-  return killWindowsPid(identity.pid, signal, timeoutMs);
+): boolean {
+  const commands = [...captured].reverse().flatMap((identity) => (
+    /^\d+$/.test(identity.creationTime)
+      ? [`[KodaXNativeProcessSnapshot]::TerminateExact(${identity.pid}, [UInt64]${identity.creationTime}) | Out-Null`]
+      : []
+  ));
+  if (commands.length === 0) return false;
+  const script = [
+    "$source = @'",
+    NATIVE_PARENT_PROCESS_SOURCE,
+    "'@",
+    'Add-Type -TypeDefinition $source',
+    ...commands,
+  ].join('\n');
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ], {
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  return !result.error && result.status === 0;
+}
+
+interface WindowsProcessTreeCapture {
+  readonly root: WindowsProcessIdentity;
+  readonly descendants: readonly WindowsProcessIdentity[];
+  readonly uncertainDescendantPids: readonly number[];
+  readonly completeTree: boolean;
+}
+
+const windowsCaptureByChild = new WeakMap<ChildProcess, WindowsProcessTreeCapture>();
+
+export function rememberChildProcessTree(child: ChildProcess): string | undefined {
+  if (
+    process.platform !== 'win32'
+    || child.pid === undefined
+  ) return undefined;
+  const tracked = windowsCaptureByChild.get(child);
+  const snapshot = readWindowsProcessSnapshot();
+  if (tracked !== undefined && isChildProcessExited(child)) {
+    if (snapshot === undefined) return tracked.root.creationTime;
+    const currentRoot = snapshot.find((identity) => identity.pid === child.pid);
+    if (
+      currentRoot !== undefined
+      && currentRoot.creationTime !== tracked.root.creationTime
+    ) return tracked.root.creationTime;
+    const descendants = collectDescendantIdentities(
+      snapshot,
+      tracked.root.pid,
+      tracked.root.creationTime,
+    );
+    windowsCaptureByChild.set(child, {
+      root: tracked.root,
+      descendants: descendants.filter((identity) => identity.creationTime !== '0'),
+      uncertainDescendantPids: descendants
+        .filter((identity) => identity.creationTime === '0')
+        .map((identity) => identity.pid),
+      // Once an incomplete capture loses its root, the remaining snapshot can
+      // enrich known descendants but cannot prove that an already-exited
+      // intermediate did not leave a detached grandchild behind.
+      completeTree: tracked.completeTree,
+    });
+    return tracked.root.creationTime;
+  }
+  const root = snapshot?.find((identity) => (
+    identity.pid === child.pid && identity.creationTime !== '0'
+  ));
+  if (root === undefined || isChildProcessExited(child)) return undefined;
+  windowsCaptureByChild.set(child, {
+    root,
+    descendants: [],
+    uncertainDescendantPids: [],
+    completeTree: false,
+  });
+  return root.creationTime;
+}
+
+export function rememberedChildProcessTreeIdentities(
+  child: ChildProcess,
+): readonly WindowsProcessTreeIdentity[] | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const capture = windowsCaptureByChild.get(child);
+  if (capture === undefined) return undefined;
+  return [
+    ...[capture.root, ...capture.descendants].map((identity) => ({
+      pid: identity.pid,
+      creationTime: identity.creationTime,
+    })),
+    ...capture.uncertainDescendantPids.map((pid) => ({
+      pid,
+      creationTime: '0',
+    })),
+  ];
+}
+
+export function rememberedChildProcessTreeIsComplete(
+  child: ChildProcess,
+): boolean {
+  return windowsCaptureByChild.get(child)?.completeTree === true;
+}
+
+function captureWindowsProcessTree(
+  pid: number,
+  expectedProcessStartIdentity: string,
+): WindowsProcessTreeCapture | null | undefined {
+  const snapshot = readWindowsProcessSnapshot();
+  if (snapshot === undefined) return undefined;
+  const root = snapshot.find((identity) => identity.pid === pid);
+  if (root === undefined) return null;
+  if (
+    root.creationTime === '0'
+    || root.creationTime !== expectedProcessStartIdentity
+  ) return null;
+  const descendants = collectDescendantIdentities(
+    snapshot,
+    pid,
+    root.creationTime,
+  );
+  return {
+    root,
+    descendants: descendants.filter((identity) => identity.creationTime !== '0'),
+    uncertainDescendantPids: descendants
+      .filter((identity) => identity.creationTime === '0')
+      .map((identity) => identity.pid),
+    completeTree: true,
+  };
+}
+
+async function killCapturedWindowsTree(
+  capture: WindowsProcessTreeCapture,
+  taskkillMs: number,
+  forceMs: number,
+): Promise<ProcessTreeKillResult> {
+  const captured = [capture.root, ...capture.descendants];
+  const terminationAttempted = terminateCapturedWindowsProcesses(
+    captured,
+    taskkillMs,
+  );
+  if (!capture.completeTree) return UNKNOWN;
+  if (await waitForCapturedWindowsProcessesExit(capture, forceMs)) {
+    return TERMINATED;
+  }
+  if (!terminationAttempted) return UNKNOWN;
+  terminateCapturedWindowsProcesses(captured, taskkillMs);
+  return await waitForCapturedWindowsProcessesExit(capture, forceMs)
+    ? TERMINATED
+    : UNKNOWN;
+}
+
+function retainedWindowsProcessTree(
+  pid: number,
+  expectedIdentity: string,
+  identities: readonly WindowsProcessTreeIdentity[] | undefined,
+  completeTree: boolean,
+): WindowsProcessTreeCapture | undefined {
+  const root = identities?.find((identity) => identity.pid === pid);
+  if (root?.creationTime !== expectedIdentity || identities === undefined) {
+    return undefined;
+  }
+  return {
+    root: { ...root, parentPid: 0 },
+    descendants: identities
+      .filter((identity) => identity.pid !== pid && identity.creationTime !== '0')
+      .map((identity) => ({ ...identity, parentPid: 0 })),
+    uncertainDescendantPids: identities
+      .filter((identity) => identity.pid !== pid && identity.creationTime === '0')
+      .map((identity) => identity.pid),
+    completeTree,
+  };
 }
 
 export async function killPidTree(
   pid: number,
   options: ProcessTreeKillOptions = {},
-): Promise<void> {
+): Promise<ProcessTreeKillResult> {
   if (process.platform === 'win32') {
     const taskkillMs = options.taskkillMs ?? DEFAULT_TASKKILL_MS;
     const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
-
-    // Snapshot parent links before taskkill can detach a missed descendant.
-    // Once the root exits, Windows no longer exposes the relationship needed
-    // to find and terminate that orphan reliably.
-    const snapshot = readWindowsProcessSnapshot();
-    const rootIdentity = snapshot?.find(
-      (identity) => identity.pid === pid && identity.creationTime !== '0',
+    // Capture parent links before exact-handle termination can detach a
+    // missed descendant. A failed snapshot is unknown, never equivalent to a
+    // process that has been verified gone.
+    const expectedIdentity = options.expectedProcessStartIdentity;
+    if (expectedIdentity === undefined) return UNKNOWN;
+    const retainedCapture = retainedWindowsProcessTree(
+      pid,
+      expectedIdentity,
+      options.expectedProcessTreeIdentities,
+      options.expectedProcessTreeComplete === true,
     );
-    const descendantIdentities = collectDescendantIdentities(snapshot ?? [], pid)
-      .filter((identity) => identity.creationTime !== '0');
-    const killOrder = [...descendantIdentities].reverse();
-    const captured = rootIdentity === undefined
-      ? descendantIdentities
-      : [rootIdentity, ...descendantIdentities];
-
-    const taskkillSucceeded = rootIdentity !== undefined
-      && currentCapturedWindowsPids([rootIdentity])?.has(pid) === true
-      && await runTaskkill(pid, taskkillMs);
-    if (taskkillSucceeded && await waitForCapturedWindowsProcessesExit(captured, forceMs)) {
-      return;
-    }
-
-    // `taskkill /t` depends on Windows management services and can fail under
-    // load. Use the pre-taskkill snapshot so missed descendants remain
-    // addressable even after the root has exited.
-
-    for (const identity of killOrder) {
-      await killCapturedWindowsProcess(identity, 'SIGTERM', forceMs);
-    }
-    if (rootIdentity !== undefined) {
-      await killCapturedWindowsProcess(rootIdentity, 'SIGTERM', forceMs);
-    }
-    if (await waitForCapturedWindowsProcessesExit(captured, forceMs)) {
-      return;
-    }
-
-    for (const identity of killOrder) {
-      await killCapturedWindowsProcess(identity, 'SIGKILL', forceMs);
-    }
-    if (rootIdentity !== undefined) {
-      await killCapturedWindowsProcess(rootIdentity, 'SIGKILL', forceMs);
-    }
-    await waitForCapturedWindowsProcessesExit(captured, forceMs);
-    return;
+    const capturedNow = captureWindowsProcessTree(pid, expectedIdentity);
+    const capture = capturedNow ?? retainedCapture;
+    if (capture === undefined) return UNKNOWN;
+    if (capture === null) return UNKNOWN;
+    return killCapturedWindowsTree(capture, taskkillMs, forceMs);
   }
 
   const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
   if (!signalPosixPidTree(pid, 'SIGTERM')) {
-    return;
+    return ALREADY_EXITED;
   }
   if (await waitForPosixPidTreeExit(pid, forceMs)) {
-    return;
+    return TERMINATED;
   }
   signalPosixPidTree(pid, 'SIGKILL');
-  await waitForPosixPidTreeExit(pid, forceMs);
+  return await waitForPosixPidTreeExit(pid, forceMs) ? TERMINATED : UNKNOWN;
 }
 
-export function killPidTreeSync(pid: number): void {
+export function killPidTreeSync(pid: number): ProcessTreeKillResult {
   if (process.platform === 'win32') {
-    const snapshot = readWindowsProcessSnapshot();
-    const rootIdentity = snapshot?.find(
-      (identity) => identity.pid === pid && identity.creationTime !== '0',
-    );
-    const descendantIdentities = collectDescendantIdentities(snapshot ?? [], pid)
-      .filter((identity) => identity.creationTime !== '0');
-    if (rootIdentity !== undefined && currentCapturedWindowsPids([rootIdentity])?.has(pid) === true) {
-      spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    }
-    for (const identity of [...descendantIdentities].reverse()) {
-      if (currentCapturedWindowsPids([identity])?.has(identity.pid) !== true) continue;
-      spawnSync('taskkill', ['/pid', String(identity.pid), '/t', '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    }
-    return;
+    // A bare PID has no durable identity and may already have been reused.
+    return UNKNOWN;
   }
 
   signalPosixPidTree(pid, 'SIGTERM');
   signalPosixPidTree(pid, 'SIGKILL');
+  return isPosixPidTreeAlive(pid) ? UNKNOWN : TERMINATED;
 }
 
 export async function killChildProcessTree(
   child: ChildProcess,
   options: ProcessTreeKillOptions = {},
-): Promise<void> {
+): Promise<ProcessTreeKillResult> {
   const gracefulMs = options.gracefulMs ?? DEFAULT_GRACE_MS;
   const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
+  const trackedWindowsCapture = process.platform === 'win32'
+    ? windowsCaptureByChild.get(child)
+    : undefined;
+  const windowsCapture = process.platform === 'win32'
+    && child.pid !== undefined
+    && trackedWindowsCapture !== undefined
+    ? captureWindowsProcessTree(
+        child.pid,
+        trackedWindowsCapture.root.creationTime,
+      )
+    : undefined;
+  if (windowsCapture !== undefined && windowsCapture !== null) {
+    windowsCaptureByChild.set(child, windowsCapture);
+  }
+  const reusableWindowsCapture = windowsCapture ?? trackedWindowsCapture;
+  let windowsTreeResult: ProcessTreeKillResult | undefined;
 
   if (options.gracefulStdinEnd && !isChildProcessExited(child) && child.stdin?.writable) {
     try {
@@ -552,41 +743,76 @@ export async function killChildProcessTree(
     } catch {
       // Fall through to forceful termination below.
     }
-    if (await waitForChildProcessExit(child, gracefulMs) && process.platform === 'win32') {
-      return;
+    if (await waitForChildProcessExit(child, gracefulMs) && process.platform !== 'win32') {
+      return TERMINATED;
     }
   }
 
   if (child.pid !== undefined && process.platform !== 'win32') {
     if (!signalPosixPidTree(child.pid, 'SIGTERM')) {
-      return;
+      return ALREADY_EXITED;
     }
     if (await waitForPosixPidTreeExit(child.pid, forceMs)) {
-      return;
+      return TERMINATED;
     }
     signalPosixPidTree(child.pid, 'SIGKILL');
-    await waitForPosixPidTreeExit(child.pid, forceMs);
-    return;
+    return await waitForPosixPidTreeExit(child.pid, forceMs) ? TERMINATED : UNKNOWN;
   }
 
   if (isChildProcessExited(child)) {
-    return;
+    if (process.platform !== 'win32' || child.pid === undefined) return ALREADY_EXITED;
+    if (reusableWindowsCapture === undefined) return UNKNOWN;
+    if (
+      !reusableWindowsCapture.completeTree
+      && reusableWindowsCapture.descendants.length === 0
+    ) return UNKNOWN;
+    return killCapturedWindowsTree(
+      reusableWindowsCapture,
+      options.taskkillMs ?? DEFAULT_TASKKILL_MS,
+      forceMs,
+    );
   }
 
   if (process.platform === 'win32' && child.pid !== undefined) {
-    await killPidTree(child.pid, options);
-    if (await waitForChildProcessExit(child, forceMs)) {
-      return;
+    if (windowsCapture === undefined && reusableWindowsCapture === undefined) {
+      return UNKNOWN;
     }
+    windowsTreeResult = windowsCapture === undefined
+      ? (reusableWindowsCapture === undefined
+          ? UNKNOWN
+          : await killCapturedWindowsTree(
+              reusableWindowsCapture,
+              options.taskkillMs ?? DEFAULT_TASKKILL_MS,
+              forceMs,
+            ))
+      : windowsCapture === null
+        ? (reusableWindowsCapture === undefined
+            ? UNKNOWN
+            : await killCapturedWindowsTree(
+                reusableWindowsCapture,
+                options.taskkillMs ?? DEFAULT_TASKKILL_MS,
+                forceMs,
+              ))
+        : await killCapturedWindowsTree(
+            windowsCapture,
+            options.taskkillMs ?? DEFAULT_TASKKILL_MS,
+            forceMs,
+          );
+    if (await waitForChildProcessExit(child, forceMs)) {
+      return windowsTreeResult.status === 'unknown' ? UNKNOWN : TERMINATED;
+    }
+    return UNKNOWN;
   }
 
   try {
     child.kill('SIGTERM');
   } catch {
-    return;
+    return isChildProcessExited(child) && windowsTreeResult?.status !== 'unknown'
+      ? TERMINATED
+      : UNKNOWN;
   }
   if (await waitForChildProcessExit(child, forceMs)) {
-    return;
+    return windowsTreeResult?.status === 'unknown' ? UNKNOWN : TERMINATED;
   }
 
   try {
@@ -594,17 +820,34 @@ export async function killChildProcessTree(
   } catch {
     // Nothing else to do once the OS refuses termination.
   }
-  await waitForChildProcessExit(child, forceMs);
+  if (!await waitForChildProcessExit(child, forceMs)) return UNKNOWN;
+  return windowsTreeResult?.status === 'unknown' ? UNKNOWN : TERMINATED;
 }
 
-export function killChildProcessTreeSync(child: ChildProcess): void {
+export function killChildProcessTreeSync(child: ChildProcess): ProcessTreeKillResult {
   if (child.pid === undefined) {
-    return;
+    return isChildProcessExited(child) ? ALREADY_EXITED : UNKNOWN;
   }
 
-  if (process.platform === 'win32' && isChildProcessExited(child)) {
-    return;
+  if (process.platform === 'win32') {
+    const tracked = windowsCaptureByChild.get(child);
+    if (tracked === undefined) return UNKNOWN;
+    const capture = captureWindowsProcessTree(
+      child.pid,
+      tracked.root.creationTime,
+    );
+    const reusable = capture ?? tracked;
+    if (reusable === undefined) return UNKNOWN;
+    if (capture !== undefined && capture !== null) {
+      windowsCaptureByChild.set(child, capture);
+    }
+    terminateCapturedWindowsProcesses(
+      [reusable.root, ...reusable.descendants],
+      DEFAULT_TASKKILL_MS,
+    );
+    if (!reusable.completeTree) return UNKNOWN;
+    return capturedWindowsProcessesGone(reusable) === true ? TERMINATED : UNKNOWN;
   }
 
-  killPidTreeSync(child.pid);
+  return killPidTreeSync(child.pid);
 }

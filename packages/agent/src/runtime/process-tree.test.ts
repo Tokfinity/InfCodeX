@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   killChildProcessTree,
   killChildProcessTreeSync,
+  killPidTree,
+  rememberChildProcessTree,
 } from './process-tree.js';
 
 const originalPlatform = process.platform;
@@ -95,9 +97,10 @@ describe('process tree cleanup', () => {
     setPlatform('linux');
     setKill(mockKill);
 
-    await killChildProcessTree(exitedChild(12345));
+    const result = await killChildProcessTree(exitedChild(12345));
 
     expect(calls).toContainEqual({ pid: -12345, signal: 'SIGTERM' });
+    expect(result.status).toBe('terminated');
   });
 
   it('sync cleanup also signals a POSIX process group after parent exit', () => {
@@ -115,7 +118,17 @@ describe('process tree cleanup', () => {
     expect(calls).toContainEqual({ pid: -12345, signal: 'SIGKILL' });
   });
 
-  it.skipIf(process.platform !== 'win32')('kills a snapshotted Windows child when taskkill times out', async () => {
+  it('reports unknown when a POSIX tree is still observable after force termination', async () => {
+    const mockKill = vi.fn(() => true) as typeof process.kill;
+    setPlatform('linux');
+    setKill(mockKill);
+
+    await expect(killPidTree(12345, { forceMs: 0 })).resolves.toEqual({
+      status: 'unknown',
+    });
+  });
+
+  it.skipIf(process.platform !== 'win32')('kills a snapshotted Windows tree through exact process handles', async () => {
     const fixtureDir = await mkdtemp(path.join(tmpdir(), 'kodax-process-tree-'));
     const stopFile = path.join(fixtureDir, 'stop');
     const nestedScript = [
@@ -132,15 +145,59 @@ describe('process tree cleanup', () => {
       windowsHide: true,
     });
     const nestedPid = await readSpawnedPid(root);
+    expect(rememberChildProcessTree(root)).toBeDefined();
 
     try {
-      await killChildProcessTree(root, { taskkillMs: 0 });
+      await expect(
+        killChildProcessTree(root),
+      ).resolves.toEqual({ status: 'terminated' });
       await waitForPidExit(nestedPid, 10_000);
     } finally {
       await writeFile(stopFile, 'stop');
       if (root.exitCode === null && root.signalCode === null) root.kill('SIGKILL');
       await waitForPidExit(nestedPid, 2_000).catch(() => undefined);
       await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it.skipIf(process.platform !== 'win32')('kills retained exact descendants without touching a reused root pid', async () => {
+    const reusedRoot = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const retainedDescendant = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (reusedRoot.pid === undefined || retainedDescendant.pid === undefined) {
+      throw new Error('test process pid missing');
+    }
+    const currentRootIdentity = rememberChildProcessTree(reusedRoot);
+    const descendantIdentity = rememberChildProcessTree(retainedDescendant);
+    if (currentRootIdentity === undefined || descendantIdentity === undefined) {
+      throw new Error('Windows process identity missing');
+    }
+    const oldRootIdentity = (BigInt(currentRootIdentity) - 1n).toString();
+
+    try {
+      await expect(killPidTree(reusedRoot.pid, {
+        expectedProcessStartIdentity: oldRootIdentity,
+        expectedProcessTreeIdentities: [
+          { pid: reusedRoot.pid, creationTime: oldRootIdentity },
+          { pid: retainedDescendant.pid, creationTime: descendantIdentity },
+        ],
+        expectedProcessTreeComplete: true,
+      })).resolves.toEqual({ status: 'terminated' });
+      expect(isPidAlive(reusedRoot.pid)).toBe(true);
+      await waitForPidExit(retainedDescendant.pid, 10_000);
+    } finally {
+      if (reusedRoot.exitCode === null && reusedRoot.signalCode === null) {
+        reusedRoot.kill('SIGKILL');
+      }
+      if (
+        retainedDescendant.exitCode === null
+        && retainedDescendant.signalCode === null
+      ) retainedDescendant.kill('SIGKILL');
     }
   }, 20_000);
 });

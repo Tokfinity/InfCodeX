@@ -4,7 +4,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { killChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
-  killChildProcessTreeMock: vi.fn(async () => undefined),
+  killChildProcessTreeMock: vi.fn(async () => ({ status: 'terminated' as const })),
   spawnMock: vi.fn(),
 }));
 
@@ -14,11 +14,13 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('./process-tree.js', () => ({
   killChildProcessTree: killChildProcessTreeMock,
+  rememberChildProcessTree: vi.fn(),
 }));
 
 const { CLIExecutor } = await import('./executor.js');
 type CLIEvent = import('./types.js').CLIEvent;
 type CLIExecutionOptions = import('./types.js').CLIExecutionOptions;
+const originalPlatform = process.platform;
 
 class BackgroundTestExecutor extends CLIExecutor {
   constructor(timeout?: number) {
@@ -51,8 +53,13 @@ class BackgroundTestExecutor extends CLIExecutor {
 
 describe('CLIExecutor background process', () => {
   afterEach(() => {
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: originalPlatform,
+    });
     vi.useRealTimers();
     vi.clearAllMocks();
+    killChildProcessTreeMock.mockResolvedValue({ status: 'terminated' });
   });
 
   it('hides the provider CLI window in GUI hosts', async () => {
@@ -93,6 +100,30 @@ describe('CLIExecutor background process', () => {
     await expect(events.next()).rejects.toThrow(/exited with code 2.*native CLI failed/i);
   });
 
+  it('does not replace a successful natural exit with an unverified cleanup error on Windows', async () => {
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: 'win32',
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: Readable;
+      stderr: PassThrough;
+    };
+    child.stdout = Readable.from([]);
+    child.stderr = new PassThrough();
+    spawnMock.mockReturnValue(child);
+    killChildProcessTreeMock.mockResolvedValue({ status: 'unknown' });
+    queueMicrotask(() => {
+      child.emit('exit', 0, null);
+      child.emit('close', 0, null);
+    });
+
+    const events = new BackgroundTestExecutor().execute({ prompt: 'hello' });
+
+    await expect(events.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(killChildProcessTreeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('times out and terminates a CLI that reports complete but never exits', async () => {
     vi.useFakeTimers();
     const child = new EventEmitter() as EventEmitter & {
@@ -102,7 +133,7 @@ describe('CLIExecutor background process', () => {
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     spawnMock.mockReturnValue(child);
-    killChildProcessTreeMock.mockResolvedValueOnce(undefined);
+    killChildProcessTreeMock.mockResolvedValueOnce({ status: 'terminated' });
 
     const events = new BackgroundTestExecutor(25).execute({ prompt: 'hello' });
     const first = events.next();
@@ -162,4 +193,27 @@ describe('CLIExecutor background process', () => {
     await rejection;
     expect(killChildProcessTreeMock).toHaveBeenCalledTimes(1);
   }, 1_000);
+
+  it('surfaces an unverified process-tree termination', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    spawnMock.mockReturnValue(child);
+    killChildProcessTreeMock.mockResolvedValue({ status: 'unknown' });
+    const controller = new AbortController();
+
+    const drained = new BackgroundTestExecutor().execute({
+      prompt: 'hello',
+      signal: controller.signal,
+    }).next();
+    controller.abort(new Error('caller cancelled'));
+
+    await expect(drained).rejects.toThrow(
+      /process-tree termination could not be verified/i,
+    );
+    expect(killChildProcessTreeMock).toHaveBeenCalledTimes(3);
+  });
 });
