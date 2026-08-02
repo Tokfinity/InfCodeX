@@ -196,6 +196,7 @@ import { createRuntimeAgentBindingService } from "./runtime-agent-binding.js";
 import {
   createRuntimeActorOwnerLiveness,
   inspectRuntimeActorOwner,
+  inspectRuntimeActorOwners,
   isRuntimeActorOwnerAlive,
   type RuntimeActorOwnerLiveness,
 } from "./runtime-actor-owner-liveness.js";
@@ -2896,6 +2897,7 @@ interface RuntimeRunServiceInternal extends RuntimeRunService {
   inspect(
     filter?: RuntimeRunFilter,
   ): Promise<readonly RuntimeRunStatus[]>;
+  inspectOne(runId: string): Promise<RuntimeRunStatus | undefined>;
   closeAll(reason: string): void;
   releaseSession(sessionId: string): void;
   getAutoModeStats(sessionId: string): AutoModeStats | undefined;
@@ -2918,6 +2920,28 @@ interface PersistedRuntimeRunStop {
   readonly accepted: boolean;
   readonly status: RuntimeRunStatus;
   readonly revision: number;
+}
+
+interface RuntimePathIdentity {
+  readonly dev: string;
+  readonly ino: string;
+  readonly size: string;
+  readonly mtimeNs: string;
+  readonly ctimeNs: string;
+}
+
+interface RuntimePendingRunStatus {
+  readonly runId: string;
+  readonly identity: RuntimePathIdentity | null;
+}
+
+interface RuntimeRunStatusIndex {
+  readonly version: 2;
+  readonly activeRunIds: readonly string[];
+  readonly recentRunIds: readonly string[];
+  readonly runsDirectory: RuntimePathIdentity | null;
+  readonly pendingRunStatuses: readonly RuntimePendingRunStatus[];
+  readonly requiresRescan: boolean;
 }
 
 interface RuntimePersistence {
@@ -2959,6 +2983,10 @@ interface RuntimeSessionAdmission {
   assertFilter(filter: RuntimeSessionFilter | undefined): void;
   admitsData(data: KodaXSessionData): boolean;
   admitsSummary(summary: SessionSummary): boolean;
+  assertCachedIdentity(
+    sessionId: string,
+    identity: { readonly surface?: string; readonly profileId?: string },
+  ): void;
   admitsSession(sessionId: string): Promise<boolean>;
   assertRunAccess(sessionId: string): Promise<void>;
   loadRequired(
@@ -3030,6 +3058,10 @@ const MAX_RUNTIME_MEMORY_EVENTS = 10_000;
 const MAX_RUNTIME_PENDING_EVENTS = 1_024;
 const MAX_RUNTIME_PENDING_EVENT_BYTES = 1024 * 1024;
 const MAX_RUNTIME_MEMORY_RUNS = 1_000;
+const MAX_RUNTIME_RECENT_PERSISTED_RUNS = 200;
+const MAX_RUNTIME_PENDING_RUN_STATUSES = 1_000;
+const MAX_RUNTIME_RUN_STATUS_INDEX_BYTES = 2 * 1024 * 1024;
+const MAX_RUNTIME_RUN_STATUS_INDEX_ID_BYTES = 512;
 const MAX_RUNTIME_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const RUNTIME_EVENT_COALESCE_INTERVAL_MS = 50;
 const MAX_RUNTIME_COALESCED_EVENT_BYTES = 8 * 1024;
@@ -3047,11 +3079,46 @@ const MAX_RUNTIME_TRANSCRIPT_SNAPSHOTS = 8;
 const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_FILES = 16;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_FILE_RESERVATION_BYTES = 4 * 1024;
+const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_WRITE_BATCH_ENTRIES = 256;
+const MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_WRITE_BATCH_BYTES = 1024 * 1024;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_CLOSE_DRAIN_MS = 250;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_TTL_MS = 5 * 60_000;
 const RUNTIME_TRANSCRIPT_SNAPSHOT_DIR_PREFIX =
   "kodax-transcript-snapshots-";
 const RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS = 5_000;
+const RUNTIME_ACTOR_FINALIZATION_MS = 30_000;
+const RUNTIME_SESSION_CAPTURE_RETRY_DELAYS_MS = [5, 15] as const;
+const RUNTIME_LEGACY_LINEAGE_FALLBACK_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
+function createDeterministicRuntimeLegacyLineage(
+  sessionId: string,
+  sourceRevision: string,
+  messages: readonly KodaXMessage[],
+): ReturnType<typeof createSessionLineage> {
+  let parentId: string | null = null;
+  const entries: ReturnType<typeof createSessionLineage>["entries"] = messages.map(
+    (message, index) => {
+      const identity = createHash("sha256")
+        .update("kodax-runtime-legacy-lineage-v1\0")
+        .update(`${sessionId}\0${sourceRevision}\0${index}:`)
+        .update(JSON.stringify(message))
+        .digest("hex")
+        .slice(0, 12);
+      const id = `entry_${identity}`;
+      const entry = {
+        type: "message" as const,
+        id,
+        parentId,
+        logicalId: id,
+        timestamp: message.timestamp ?? RUNTIME_LEGACY_LINEAGE_FALLBACK_TIMESTAMP,
+        message: structuredClone(message),
+      };
+      parentId = id;
+      return entry;
+    },
+  );
+  return { version: 2, activeEntryId: parentId, entries };
+}
 const MAX_RUNTIME_INPUT_PREVIEW_LENGTH = 1_024;
 const RUNTIME_PERMISSION_BRIDGE_TOOLS: ReadonlySet<string> = new Set([
   "tool_call",
@@ -3458,6 +3525,10 @@ export async function createKodaXRuntime(
   ].sort((left, right) =>
     compareRunStatusRecency(left.status, right.status)
   );
+  const statusesToRecover: Array<{
+    readonly persisted: PersistedRuntimeRunStatus;
+    readonly normalizedStatus: RuntimeRunStatus;
+  }> = [];
   for (const persisted of persistedStatuses) {
     const status = persisted.status;
     const sessionOrder =
@@ -3494,12 +3565,22 @@ export async function createKodaXRuntime(
         persistence.replay({ runId: status.runId }),
       );
     }
-    const ownerState =
-      !isTerminalRunPhase(status.phase)
-        ? persisted.owner === undefined
-          ? "unknown"
-          : await inspectRuntimeActorOwner(persisted.owner)
-        : "dead";
+    statusesToRecover.push({ persisted, normalizedStatus });
+  }
+  const ownersToInspect = statusesToRecover.flatMap(({ persisted }) => (
+    !isTerminalRunPhase(persisted.status.phase) && persisted.owner !== undefined
+      ? [persisted.owner]
+      : []
+  ));
+  const ownerStates = await inspectRuntimeActorOwners(ownersToInspect);
+  let ownerStateIndex = 0;
+  for (const { persisted, normalizedStatus } of statusesToRecover) {
+    const status = persisted.status;
+    const ownerState = isTerminalRunPhase(status.phase)
+      ? "dead"
+      : persisted.owner === undefined
+        ? "unknown"
+        : ownerStates[ownerStateIndex++] ?? "unknown";
     if (!isTerminalRunPhase(status.phase) && ownerState !== "dead") {
       runs.set(
         status.runId,
@@ -3572,6 +3653,7 @@ export async function createKodaXRuntime(
     settingsOwner,
     (sessionId) => runService.list({ sessionId }),
     (sessionId) => runService.inspect({ sessionId }),
+    (runId) => runService.inspectOne(runId),
     (sessionId) => permissions.service.listPending({ sessionId }),
     (sessionId) => runService.getAutoModeStats(sessionId),
     sessionOperations,
@@ -4665,6 +4747,7 @@ function createRuntimeSessionService(
   settingsOwner: RuntimeSessionSettingsOwner,
   listRuns: (sessionId: string) => Promise<readonly RuntimeRunStatus[]>,
   inspectRuns: (sessionId: string) => Promise<readonly RuntimeRunStatus[]>,
+  inspectRun: (runId: string) => Promise<RuntimeRunStatus | undefined>,
   listPendingPermissions: (
     sessionId: string,
   ) => Promise<readonly RuntimePermissionRequest[]>,
@@ -4699,6 +4782,29 @@ function createRuntimeSessionService(
       ? { profileId: data.runtimeInfo.profileId }
       : {}),
     ...(createdAt ? { createdAt } : {}),
+  });
+  type PreparedConversationPage = NonNullable<Awaited<
+    ReturnType<SessionManager["storage"]["readConversationPageCache"]>
+  >>;
+  const toRuntimeConversationPage = (
+    prepared: PreparedConversationPage,
+  ): RuntimeConversationHistorySlice => ({
+    revision: prepared.revision,
+    sourceRevision: prepared.sourceRevision,
+    status: prepared.status,
+    issues: prepared.issues,
+    entries: prepared.entries,
+    hasMore: prepared.hasMore,
+    ...(prepared.nextEnd !== undefined
+      ? {
+          nextCursor: encodeRuntimeTranscriptCursor({
+            kind: "conversation_cache_page",
+            view: "conversation",
+            revision: prepared.revision,
+            end: prepared.nextEnd,
+          }),
+        }
+      : {}),
   });
 
   const transcriptSnapshots = new Map<
@@ -5045,7 +5151,42 @@ function createRuntimeSessionService(
       throw error;
     }
   };
-  const readSessionCapture = async (
+  const assertConversationSnapshotCurrent = async (
+    sessionId: string,
+    snapshot: RuntimeTranscriptSnapshotView,
+    budget: RuntimeReadBudget,
+  ): Promise<void> => {
+    if (snapshot.conversation === undefined) {
+      throw createRuntimeResyncError('Conversation snapshot metadata is unavailable');
+    }
+    let current: Awaited<ReturnType<
+      SessionManager['storage']['readConversationPageBoundary']
+    >>;
+    try {
+      current = await manager.storage.readConversationPageBoundary(
+        sessionId,
+        sessionReadOptionsFromBudget(budget),
+      );
+    } catch (error: unknown) {
+      if (error instanceof replApi.SessionReadError && error.code === 'data_changed') {
+        throw createRuntimeResyncError(error.message);
+      }
+      throw error;
+    }
+    if (current === null) {
+      throw createRuntimeResyncError('Session moved or was removed; request a fresh boundary');
+    }
+    admission.assertCachedIdentity(sessionId, current.admission);
+    if (current.boundaryRevision !== snapshot.conversation.boundaryRevision) {
+      removeTranscriptSnapshot(transcriptSnapshotKey(
+        sessionId,
+        snapshot.revision,
+        'conversation',
+      ));
+      throw createRuntimeResyncError('Conversation history changed; request a fresh boundary');
+    }
+  };
+  const readSessionCaptureOnce = async (
     sessionId: string,
     budget: RuntimeReadBudget,
   ): Promise<SessionReadCapture> => {
@@ -5086,6 +5227,32 @@ function createRuntimeSessionService(
         flight.controller.abort();
       }
     }
+  };
+  const readSessionCapture = async (
+    sessionId: string,
+    budget: RuntimeReadBudget,
+  ): Promise<SessionReadCapture> => {
+    for (
+      let attempt = 0;
+      attempt <= RUNTIME_SESSION_CAPTURE_RETRY_DELAYS_MS.length;
+      attempt += 1
+    ) {
+      try {
+        return await readSessionCaptureOnce(sessionId, budget);
+      } catch (error: unknown) {
+        if (
+          !(error instanceof replApi.SessionReadError)
+          || error.code !== "data_changed"
+        ) throw error;
+        const delayMs = RUNTIME_SESSION_CAPTURE_RETRY_DELAYS_MS[attempt];
+        if (delayMs === undefined) throw createRuntimeResyncError(error.message);
+        await awaitRuntimeReadOperation(
+          () => new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+          budget,
+        );
+      }
+    }
+    throw new Error("unreachable session capture retry state");
   };
   const materializeTranscriptSnapshot = async (
     sessionId: string,
@@ -5167,6 +5334,18 @@ function createRuntimeSessionService(
         }
         const handle = await fs.promises.open(filePath, "wx");
         let offset = 0;
+        let pendingWrites: Buffer[] = [];
+        let pendingWriteBytes = 0;
+        const flushPendingWrites = async (): Promise<void> => {
+          if (pendingWriteBytes === 0) return;
+          const batch = pendingWrites.length === 1
+            ? pendingWrites[0]!
+            : Buffer.concat(pendingWrites, pendingWriteBytes);
+          pendingWrites = [];
+          pendingWriteBytes = 0;
+          await writeFileHandleFully(handle, batch);
+          sessionReadOptionsFromBudget(budget);
+        };
         try {
           for (
             let entryIndex = 0;
@@ -5197,8 +5376,6 @@ function createRuntimeSessionService(
                 ))
                 .digest("hex"));
             }
-            await writeFileHandleFully(handle, encoded);
-            sessionReadOptionsFromBudget(budget);
             entries.push({
               offset,
               byteLength: encoded.length,
@@ -5206,14 +5383,33 @@ function createRuntimeSessionService(
               ...runtimeHistoryEntryDescriptorIdentity(entry),
             });
             offset += encoded.length;
+            pendingWrites.push(encoded);
+            pendingWriteBytes += encoded.length;
+            if (
+              pendingWrites.length
+                >= MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_WRITE_BATCH_ENTRIES
+              || pendingWriteBytes
+                >= MAX_RUNTIME_TRANSCRIPT_SNAPSHOT_WRITE_BATCH_BYTES
+            ) {
+              await flushPendingWrites();
+            }
           }
+          await flushPendingWrites();
         } finally {
           await handle.close();
         }
         sessionReadOptionsFromBudget(budget);
+        const revision = view === "conversation" && conversation !== undefined
+          ? replApi.createSessionConversationHistoryRevision({
+              sourceRevision: conversation.sourceRevision,
+              status: conversation.status,
+              issues: conversation.issues,
+              entries: historyEntries as readonly SessionConversationHistoryEntry[],
+            })
+          : `sha256:${revisionHash.digest("hex")}`;
         return {
           entries,
-          revision: `sha256:${revisionHash.digest("hex")}`,
+          revision,
         };
       })(),
     );
@@ -5400,6 +5596,8 @@ function createRuntimeSessionService(
   ): Promise<{
     readonly capture: SessionReadCapture;
     readonly revision: string;
+    readonly lineage: ReturnType<typeof createSessionLineage>;
+    readonly transcriptEntries: readonly SessionTranscriptEntry[];
   }> => {
     sessionReadOptionsFromBudget(budget);
     const sessionSeq = bus.currentSessionSeq(sessionId);
@@ -5421,13 +5619,37 @@ function createRuntimeSessionService(
       const sharedBudget = createRuntimeReadBudget({ signal: controller.signal });
       const promise = trackTranscriptSnapshotOperation((async () => {
         const capture = await readSessionCapture(sessionId, sharedBudget);
+        const lineage = capture.transcript.lineage
+          ?? createDeterministicRuntimeLegacyLineage(
+            sessionId,
+            capture.sourceRevision,
+            capture.transcript.messages,
+          );
+        const transcriptEntries = capture.transcript.lineage === undefined
+          ? lineage.entries.flatMap((entry): SessionTranscriptEntry[] => (
+              entry.type === "message"
+                ? [{
+                    entryId: entry.id,
+                    parentId: entry.parentId,
+                    logicalId: entry.logicalId ?? entry.id,
+                    ...(entry.sourceEntryId === undefined
+                      ? {}
+                      : { sourceEntryId: entry.sourceEntryId }),
+                    timestamp: entry.timestamp,
+                    type: "message",
+                    message: entry.message,
+                    active: true,
+                  }]
+                : []
+            ))
+          : capture.transcript.transcriptEntries;
         const revision = await rememberTranscriptSnapshot(
           sessionId,
-          capture.transcript.transcriptEntries,
+          transcriptEntries,
           capture.sourceRevision,
           sharedBudget,
         );
-        return { capture, revision };
+        return { capture, revision, lineage, transcriptEntries };
       })());
       flight = {
         controller,
@@ -5619,10 +5841,12 @@ function createRuntimeSessionService(
       attempt += 1
     ) {
       const before = bus.currentSessionSeq(input.sessionId);
-      const [capture, runs] = await Promise.all([
+      const [capture, inspectedRuns] = await Promise.all([
         readSessionCapture(input.sessionId, budget),
         awaitRuntimeReadOperation(
-          () => inspectRuns(input.sessionId),
+          () => input.runId === undefined
+            ? inspectRuns(input.sessionId)
+            : inspectRun(input.runId).then((run) => run === undefined ? [] : [run]),
           budget,
         ),
       ]);
@@ -5633,7 +5857,7 @@ function createRuntimeSessionService(
         runtimeId: identity.runtimeId,
         cursor: after,
         transcriptRevision: createRuntimeTranscriptRevision(capture.transcript),
-        runs,
+        runs: inspectedRuns.filter((run) => run.sessionId === input.sessionId),
       };
     }
     throw createRuntimeResyncError(
@@ -5671,7 +5895,7 @@ function createRuntimeSessionService(
       }
       creatingSessionIds.add(sessionId);
       try {
-        if ((await manager.loadSession(sessionId)) !== null) {
+        if (input.sessionId !== undefined && (await manager.loadSession(sessionId)) !== null) {
           throw Object.assign(
             new Error(`Session already exists: ${sessionId}`),
             {
@@ -5698,7 +5922,11 @@ function createRuntimeSessionService(
           ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
           scope: "user",
         };
-        await manager.storage.save(sessionId, data);
+        if (input.sessionId === undefined) {
+          await manager.storage.createGenerated(sessionId, data);
+        } else {
+          await manager.storage.save(sessionId, data);
+        }
         const session = toRuntimeSession(
           sessionId,
           data,
@@ -5842,11 +6070,7 @@ function createRuntimeSessionService(
       const transcript = capture.transcript;
       const revision = materialized.revision;
       await yieldToRuntimeReadBudget(budget);
-      const lineage = transcript.lineage;
-      if (lineage === undefined) {
-        sessionReadOptionsFromBudget(budget);
-        return { revision, hits: [] };
-      }
+      const lineage = materialized.lineage;
       const search = await searchSessionHistoryCooperatively(
         lineage,
         {
@@ -5869,13 +6093,13 @@ function createRuntimeSessionService(
       const entryIndexById = new Map<string, number>();
       for (
         let entryIndex = 0;
-        entryIndex < transcript.transcriptEntries.length;
+        entryIndex < materialized.transcriptEntries.length;
         entryIndex += 1
       ) {
         if (entryIndex % 256 === 0) {
           await yieldToRuntimeReadBudget(budget);
         }
-        const entryId = transcript.transcriptEntries[entryIndex]?.entryId;
+        const entryId = materialized.transcriptEntries[entryIndex]?.entryId;
         if (entryId !== undefined) entryIndexById.set(entryId, entryIndex);
       }
       sessionReadOptionsFromBudget(budget);
@@ -5911,9 +6135,58 @@ function createRuntimeSessionService(
       ensureOpen();
       const budget = createRuntimeReadBudget(options);
       sessionReadOptionsFromBudget(budget);
-      const cursorRevision = input.cursor === undefined
+      const limit = input.limit ?? DEFAULT_RUNTIME_TRANSCRIPT_PAGE_LIMIT;
+      if (!Number.isSafeInteger(limit) || limit <= 0) {
+        throw new Error("transcript page limit must be a positive safe integer");
+      }
+      const normalizedLimit = Math.min(limit, MAX_RUNTIME_TRANSCRIPT_PAGE_LIMIT);
+      const parsedCursor = input.cursor === undefined
         ? undefined
-        : decodeRuntimeTranscriptCursor(input.cursor).revision;
+        : decodeRuntimeTranscriptCursor(input.cursor);
+      if (
+        parsedCursor === undefined
+        || parsedCursor.kind === "conversation_cache_page"
+      ) {
+        try {
+          const prepared = await manager.storage.readConversationPageCache(
+            input.sessionId,
+            {
+              ...(parsedCursor?.kind === "conversation_cache_page"
+                ? {
+                    expectedRevision: parsedCursor.revision,
+                    end: parsedCursor.end,
+                  }
+                : {}),
+              limit: normalizedLimit,
+              maxPageBytes: MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES,
+              maxInlineEntryBytes: MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES,
+              reservedBytes: 0,
+              authorize: (identity) => admission.assertCachedIdentity(
+                input.sessionId,
+                identity,
+              ),
+            },
+            sessionReadOptionsFromBudget(budget),
+          );
+          if (prepared !== null) {
+            return toRuntimeConversationPage(prepared);
+          }
+        } catch (error: unknown) {
+          if (error instanceof replApi.ConversationPageCacheCapacityError) {
+            throw createRuntimeHistoryPageCapacityError();
+          }
+          if (
+            error instanceof replApi.SessionReadError
+            && error.code === "data_changed"
+          ) {
+            throw createRuntimeResyncError(error.message);
+          }
+          throw error;
+        }
+      }
+      const cursorRevision = parsedCursor === undefined
+        ? undefined
+        : parsedCursor.revision;
       if (cursorRevision !== undefined) {
         const snapshot = getTranscriptSnapshot(
           input.sessionId,
@@ -5925,6 +6198,7 @@ function createRuntimeSessionService(
             "Conversation snapshot is no longer retained; request a fresh boundary",
           );
         }
+        await assertConversationSnapshotCurrent(input.sessionId, snapshot, budget);
         return readTranscriptSnapshot(
           snapshot,
           budget,
@@ -5942,10 +6216,52 @@ function createRuntimeSessionService(
         capture,
         () => sessionReadOptionsFromBudget(budget),
       );
+      if (capture.transcript.lineage !== undefined) {
+        try {
+          await manager.storage.prepareConversationPageCache(
+            input.sessionId,
+            history,
+            capture.transcript.lineage,
+            capture.data.runtimeInfo,
+            capture.boundaryRevision,
+            sessionReadOptionsFromBudget(budget),
+          );
+          const prepared = await manager.storage.readConversationPageCache(
+            input.sessionId,
+            {
+              limit: normalizedLimit,
+              maxPageBytes: MAX_RUNTIME_TRANSCRIPT_PAGE_BYTES,
+              maxInlineEntryBytes: MAX_RUNTIME_TRANSCRIPT_INLINE_ENTRY_BYTES,
+              reservedBytes: 0,
+              authorize: (identity) => admission.assertCachedIdentity(
+                input.sessionId,
+                identity,
+              ),
+            },
+            sessionReadOptionsFromBudget(budget),
+          );
+          if (prepared !== null) return toRuntimeConversationPage(prepared);
+        } catch (error: unknown) {
+          if (error instanceof replApi.ConversationPageCacheCapacityError) {
+            throw createRuntimeHistoryPageCapacityError();
+          }
+          if (
+            error instanceof replApi.SessionReadError
+            && error.code === "data_changed"
+          ) {
+            throw createRuntimeResyncError(error.message);
+          }
+          process.emitWarning(
+            `Unable to prepare bounded Conversation pages: ${normalizeError(error).message}`,
+            { code: "KODAX_CONVERSATION_PAGE_CACHE_FAILED" },
+          );
+        }
+      }
       const metadata: RuntimeConversationSnapshotMetadata = {
         sourceRevision: history.sourceRevision,
         status: history.status,
         issues: history.issues,
+        boundaryRevision: capture.boundaryRevision,
       };
       const revision = await rememberTranscriptSnapshot(
         input.sessionId,
@@ -5982,24 +6298,88 @@ function createRuntimeSessionService(
       ensureOpen();
       const budget = createRuntimeReadBudget(options);
       sessionReadOptionsFromBudget(budget);
+      if (!Number.isSafeInteger(input.entryIndex) || input.entryIndex < 0) {
+        throw new Error(`Transcript entry index is out of range: ${input.entryIndex}`);
+      }
       const snapshot = getTranscriptSnapshot(
         input.sessionId,
         input.revision,
         "conversation",
       );
-      if (snapshot === undefined) {
-        throw createRuntimeResyncError(
-          "Conversation snapshot is no longer retained; request a fresh boundary",
-        );
-      }
-      return readTranscriptSnapshot(
-        snapshot,
-        budget,
-        () => createRuntimeConversationEntryChunkFromSnapshot(
-          input,
+      if (snapshot !== undefined) {
+        await assertConversationSnapshotCurrent(input.sessionId, snapshot, budget);
+        return readTranscriptSnapshot(
           snapshot,
           budget,
-        ),
+          () => createRuntimeConversationEntryChunkFromSnapshot(
+            input,
+            snapshot,
+            budget,
+          ),
+        );
+      }
+      let offset = 0;
+      if (input.cursor !== undefined) {
+        const parsed = decodeRuntimeTranscriptCursor(input.cursor);
+        if (
+          parsed.kind !== "entry"
+          || parsed.view !== "conversation"
+          || parsed.revision !== input.revision
+          || parsed.entryIndex !== input.entryIndex
+        ) {
+          throw createRuntimeResyncError("Conversation entry cursor is stale");
+        }
+        offset = parsed.offset;
+      }
+      try {
+        const prepared = await manager.storage.readConversationPageCacheChunk(
+          input.sessionId,
+          {
+            revision: input.revision,
+            entryIndex: input.entryIndex,
+            offset,
+            authorize: (identity) => admission.assertCachedIdentity(
+              input.sessionId,
+              identity,
+            ),
+          },
+          sessionReadOptionsFromBudget(budget),
+        );
+        if (prepared !== null) {
+          const hasMore = prepared.nextOffset !== undefined;
+          return {
+            revision: prepared.revision,
+            entryIndex: prepared.entryIndex,
+            ...(prepared.boundaryId !== undefined
+              ? { boundaryId: prepared.boundaryId }
+              : {}),
+            encoding: "base64-json",
+            data: prepared.data.toString("base64"),
+            hasMore,
+            ...(prepared.nextOffset !== undefined
+              ? {
+                  nextCursor: encodeRuntimeTranscriptCursor({
+                    kind: "entry",
+                    view: "conversation",
+                    revision: prepared.revision,
+                    entryIndex: prepared.entryIndex,
+                    offset: prepared.nextOffset,
+                  }),
+                }
+              : {}),
+          };
+        }
+      } catch (error: unknown) {
+        if (
+          error instanceof replApi.SessionReadError
+          && error.code === "data_changed"
+        ) {
+          throw createRuntimeResyncError(error.message);
+        }
+        throw error;
+      }
+      throw createRuntimeResyncError(
+        "Conversation snapshot is no longer retained; request a fresh boundary",
       );
     },
 
@@ -6713,6 +7093,13 @@ function createRuntimeRunService(deps: {
   ): RuntimeRunResult => {
     if (record.settlementFinished === true) return result;
     record.settlementFinished = true;
+    if (result.phase === "unknown" && record.phase !== "unknown") {
+      record.phase = "unknown";
+      record.stage = "unknown";
+      record.stageChangedAt = new Date().toISOString();
+      record.error = result.error?.message ?? "Actor settlement persistence is unknown.";
+      publishRunUpdate(record);
+    }
     releaseAbortSignalSubscription(record);
     deps.permissions.rejectForRun(record.runId, "runtime run state is unknown");
     deps.userInputs.rejectForRun(record.runId, "runtime run state is unknown");
@@ -6735,27 +7122,35 @@ function createRuntimeRunService(deps: {
     // terminal status is allowed to persist.
     const cancellationController =
       record.actorFinalizationAbortController ??= new AbortController();
-    const cancellationTimedOut = (): AgentControllerHealth => ({
+    const finalizationTimedOut = (): AgentControllerHealth => ({
       state: "unknown",
       code: "actor_settlement_not_persisted",
       message:
-        "Actor cancellation finalization could not be confirmed within the bounded grace period.",
+        "Actor finalization could not be confirmed within the bounded grace period.",
     });
     const finalizationAbort = new AbortController();
-    let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
-    let resolveCancellationTimeout:
+    let finalizationTimer: ReturnType<typeof setTimeout> | undefined;
+    let finalizationDeadline = Number.POSITIVE_INFINITY;
+    let resolveFinalizationTimeout:
       ((health: AgentControllerHealth) => void) | undefined;
-    const cancellationTimeout = new Promise<AgentControllerHealth>((resolve) => {
-      resolveCancellationTimeout = resolve;
+    const finalizationTimeout = new Promise<AgentControllerHealth>((resolve) => {
+      resolveFinalizationTimeout = resolve;
     });
-    const startCancellationTimer = (): void => {
-      if (cancellationTimer !== undefined) return;
-      cancellationTimer = setTimeout(() => {
-        finalizationAbort.abort(new Error("Actor cancellation grace expired"));
-        resolveCancellationTimeout?.(cancellationTimedOut());
-      }, RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS);
-      cancellationTimer.unref?.();
+    const scheduleFinalizationTimer = (delayMs: number): void => {
+      const deadline = Date.now() + delayMs;
+      if (deadline >= finalizationDeadline) return;
+      if (finalizationTimer !== undefined) clearTimeout(finalizationTimer);
+      finalizationDeadline = deadline;
+      finalizationTimer = setTimeout(() => {
+        finalizationAbort.abort(new Error("Actor finalization grace expired"));
+        resolveFinalizationTimeout?.(finalizationTimedOut());
+      }, delayMs);
+      finalizationTimer.unref?.();
     };
+    const startCancellationTimer = (): void => {
+      scheduleFinalizationTimer(RUNTIME_ACTOR_CANCELLATION_FINALIZATION_MS);
+    };
+    scheduleFinalizationTimer(RUNTIME_ACTOR_FINALIZATION_MS);
     cancellationController.signal.addEventListener(
       "abort",
       startCancellationTimer,
@@ -6774,7 +7169,7 @@ function createRuntimeRunService(deps: {
 
     const finalize = async (): Promise<AgentControllerHealth> => {
       for (;;) {
-        if (finalizationAbort.signal.aborted) return cancellationTimedOut();
+        if (finalizationAbort.signal.aborted) return finalizationTimedOut();
         const actorSession = record.actorSession;
         if (actorSession === undefined) return { state: "healthy" };
         const observed = actorSession.health();
@@ -6843,13 +7238,13 @@ function createRuntimeRunService(deps: {
     };
 
     try {
-      return await Promise.race([finalize(), cancellationTimeout]);
+      return await Promise.race([finalize(), finalizationTimeout]);
     } finally {
       cancellationController.signal.removeEventListener(
         "abort",
         startCancellationTimer,
       );
-      if (cancellationTimer !== undefined) clearTimeout(cancellationTimer);
+      if (finalizationTimer !== undefined) clearTimeout(finalizationTimer);
       finalizationAbort.abort();
     }
   };
@@ -8147,7 +8542,7 @@ function createRuntimeRunService(deps: {
         runStatusMatchesFilter(status, filter)
       );
       return filterAdmittedRunStatuses(
-        boundedRuntimeRunStatuses(matching),
+        canonicalRuntimeRunStatuses(boundedRuntimeRunStatuses(matching)),
         deps.sessionAdmission,
       );
     },
@@ -8174,9 +8569,22 @@ function createRuntimeRunService(deps: {
         runStatusMatchesFilter(status, filter)
       );
       return filterAdmittedRunStatuses(
-        boundedRuntimeRunStatuses(matching),
+        canonicalRuntimeRunStatuses(boundedRuntimeRunStatuses(matching)),
         deps.sessionAdmission,
       );
+    },
+
+    async inspectOne(runId) {
+      deps.ensureOpen();
+      const run = deps.runs.get(runId);
+      const persisted = deps.persistence.loadRunStatus(runId);
+      if (persisted !== undefined) {
+        await deps.sessionAdmission.assertRunAccess(persisted.status.sessionId);
+        return inspectPersistedRun(persisted, run);
+      }
+      if (run === undefined) return undefined;
+      await deps.sessionAdmission.assertRunAccess(run.sessionId);
+      return statusFromRecord(run);
     },
 
     async abort(runId) {
@@ -10401,6 +10809,7 @@ function createRuntimePersistence(
   const sessionOrdersDir = path.join(runtimeDir, "session-orders");
   const permissionGrantsFile = path.join(runtimeDir, "permission-grants.json");
   const eventSequenceFile = path.join(runtimeDir, "event-sequence");
+  const runStatusIndexFile = path.join(runtimeDir, "run-status-index.json");
   let nextSequence: number | undefined;
   let validatedSequenceFloor: number | undefined;
 
@@ -10875,12 +11284,424 @@ function createRuntimePersistence(
     }
   };
 
+  const readIndexedRunStatus = (
+    runId: string,
+  ): PersistedRuntimeRunStatus | undefined => {
+    const file = statusFile(runId);
+    if (!fs.existsSync(file)) return undefined;
+    try {
+      const persisted = parsePersistedRuntimeRunStatus(
+        JSON.parse(fs.readFileSync(file, "utf-8")),
+      );
+      if (persisted) return persisted;
+      pushPersistenceWarning(
+        `${file}:shape`,
+        `Skipped malformed runtime status record at ${path.basename(file)}`,
+        { runId, file },
+      );
+    } catch (error: unknown) {
+      pushPersistenceWarning(
+        `${file}:parse`,
+        `Skipped malformed runtime status record at ${path.basename(file)}: ${normalizeError(error).message}`,
+        { runId, file },
+      );
+    }
+    return undefined;
+  };
+
+  const readRuntimePathIdentity = (file: string): RuntimePathIdentity | null => {
+    try {
+      const stat = fs.statSync(file, { bigint: true });
+      return {
+        dev: stat.dev.toString(),
+        ino: stat.ino.toString(),
+        size: stat.size.toString(),
+        mtimeNs: stat.mtimeNs.toString(),
+        ctimeNs: stat.ctimeNs.toString(),
+      };
+    } catch (error: unknown) {
+      if (runtimeErrorCode(error) === "ENOENT") return null;
+      throw error;
+    }
+  };
+
+  const sameRuntimePathIdentity = (
+    left: RuntimePathIdentity | null,
+    right: RuntimePathIdentity | null,
+  ): boolean => left === null || right === null
+    ? left === right
+    : left.dev === right.dev
+      && left.ino === right.ino
+      && left.size === right.size
+      && left.mtimeNs === right.mtimeNs
+      && left.ctimeNs === right.ctimeNs;
+
+  interface RuntimeRunStatusScan {
+    readonly statuses: readonly PersistedRuntimeRunStatus[];
+    readonly pendingRunStatuses: readonly RuntimePendingRunStatus[];
+    readonly pendingOverflow: boolean;
+  }
+
+  const scanAllRunStatuses = (): RuntimeRunStatusScan => {
+    if (!fs.existsSync(runsDir)) {
+      return { statuses: [], pendingRunStatuses: [], pendingOverflow: false };
+    }
+    const statuses: PersistedRuntimeRunStatus[] = [];
+    const pendingRunStatuses: RuntimePendingRunStatus[] = [];
+    let pendingOverflow = false;
+    for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      let runId: string;
+      try {
+        runId = decodeURIComponent(entry.name);
+      } catch {
+        continue;
+      }
+      const persisted = readIndexedRunStatus(runId);
+      if (persisted !== undefined) {
+        statuses.push(persisted);
+        continue;
+      }
+      if (pendingRunStatuses.length >= MAX_RUNTIME_PENDING_RUN_STATUSES) {
+        pendingOverflow = true;
+        continue;
+      }
+      pendingRunStatuses.push({
+        runId,
+        identity: readRuntimePathIdentity(statusFile(runId)),
+      });
+    }
+    return { statuses, pendingRunStatuses, pendingOverflow };
+  };
+
+  const boundedRunIds = (
+    runIds: readonly string[],
+    limit: number,
+  ): readonly string[] =>
+    [...new Set(runIds)]
+      .filter((runId) =>
+        Buffer.byteLength(runId, "utf-8") <= MAX_RUNTIME_RUN_STATUS_INDEX_ID_BYTES)
+      .slice(-limit);
+
+  const createRunStatusIndex = (
+    scan: RuntimeRunStatusScan,
+    runsDirectory: RuntimePathIdentity | null,
+    requiresRescan = scan.pendingOverflow,
+  ): RuntimeRunStatusIndex => {
+    const sorted = [...scan.statuses].sort((left, right) =>
+      compareRunStatusRecency(left.status, right.status));
+    return {
+      version: 2,
+      activeRunIds: boundedRunIds(sorted
+        .filter((persisted) => !isTerminalRunPhase(persisted.status.phase))
+        .map((persisted) => persisted.status.runId), MAX_RUNTIME_MEMORY_RUNS),
+      recentRunIds: boundedRunIds(
+        sorted.map((persisted) => persisted.status.runId),
+        MAX_RUNTIME_RECENT_PERSISTED_RUNS,
+      ),
+      runsDirectory,
+      pendingRunStatuses: scan.pendingRunStatuses,
+      requiresRescan,
+    };
+  };
+
+  const parseRunStatusIndex = (value: unknown): RuntimeRunStatusIndex | undefined => {
+    if (
+      !isRecord(value)
+      || value.version !== 2
+      || !Array.isArray(value.activeRunIds)
+      || !Array.isArray(value.recentRunIds)
+      || !Array.isArray(value.pendingRunStatuses)
+      || typeof value.requiresRescan !== "boolean"
+    ) return undefined;
+    const parseIds = (
+      candidate: readonly unknown[],
+      limit: number,
+    ): readonly string[] | undefined => {
+      if (
+        candidate.length > limit
+        || !candidate.every((runId) =>
+          typeof runId === "string"
+          && Buffer.byteLength(runId, "utf-8") <= MAX_RUNTIME_RUN_STATUS_INDEX_ID_BYTES)
+      ) return undefined;
+      const runIds = candidate as readonly string[];
+      return new Set(runIds).size === runIds.length ? runIds : undefined;
+    };
+    const activeRunIds = parseIds(value.activeRunIds, MAX_RUNTIME_MEMORY_RUNS);
+    const recentRunIds = parseIds(
+      value.recentRunIds,
+      MAX_RUNTIME_RECENT_PERSISTED_RUNS,
+    );
+    const parseIdentity = (candidate: unknown): RuntimePathIdentity | null | undefined => {
+      if (candidate === null) return null;
+      if (!isRecord(candidate)) return undefined;
+      const fields = [
+        candidate.dev,
+        candidate.ino,
+        candidate.size,
+        candidate.mtimeNs,
+        candidate.ctimeNs,
+      ];
+      if (!fields.every((field) =>
+        typeof field === "string" && /^\d{1,32}$/.test(field)
+      )) return undefined;
+      return {
+        dev: candidate.dev as string,
+        ino: candidate.ino as string,
+        size: candidate.size as string,
+        mtimeNs: candidate.mtimeNs as string,
+        ctimeNs: candidate.ctimeNs as string,
+      };
+    };
+    const runsDirectory = parseIdentity(value.runsDirectory);
+    if (runsDirectory === undefined) return undefined;
+    if (value.pendingRunStatuses.length > MAX_RUNTIME_PENDING_RUN_STATUSES) {
+      return undefined;
+    }
+    const pendingRunStatuses: RuntimePendingRunStatus[] = [];
+    for (const candidate of value.pendingRunStatuses) {
+      if (
+        !isRecord(candidate)
+        || typeof candidate.runId !== "string"
+        || Buffer.byteLength(candidate.runId, "utf-8")
+          > MAX_RUNTIME_RUN_STATUS_INDEX_ID_BYTES
+      ) return undefined;
+      const identity = parseIdentity(candidate.identity);
+      if (identity === undefined) return undefined;
+      pendingRunStatuses.push({ runId: candidate.runId, identity });
+    }
+    if (
+      new Set(pendingRunStatuses.map((pending) => pending.runId)).size
+        !== pendingRunStatuses.length
+    ) return undefined;
+    return activeRunIds === undefined || recentRunIds === undefined
+      ? undefined
+      : {
+          version: 2,
+          activeRunIds,
+          recentRunIds,
+          runsDirectory,
+          pendingRunStatuses,
+          requiresRescan: value.requiresRescan,
+        };
+  };
+
+  const readRunStatusIndex = (): RuntimeRunStatusIndex | undefined => {
+    if (!fs.existsSync(runStatusIndexFile)) return undefined;
+    let descriptor: number | undefined;
+    try {
+      descriptor = fs.openSync(runStatusIndexFile, "r");
+      const size = fs.fstatSync(descriptor).size;
+      if (size > MAX_RUNTIME_RUN_STATUS_INDEX_BYTES) return undefined;
+      const encoded = Buffer.allocUnsafe(size);
+      let offset = 0;
+      while (offset < size) {
+        const read = fs.readSync(descriptor, encoded, offset, size - offset, offset);
+        if (read === 0) return undefined;
+        offset += read;
+      }
+      return parseRunStatusIndex(JSON.parse(encoded.toString("utf-8")));
+    } catch (error: unknown) {
+      if (runtimeErrorCode(error) !== "ENOENT") {
+        emitKodaXDiagnostic({
+          source: "runtime.persistence",
+          level: "warn",
+          message: "Runtime run-status index is invalid; rebuilding it once",
+          detail: error,
+        });
+      }
+      return undefined;
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  };
+
+  const pendingRunStatusesUnchanged = (
+    pending: readonly RuntimePendingRunStatus[],
+  ): boolean => pending.every((candidate) => sameRuntimePathIdentity(
+    candidate.identity,
+    readRuntimePathIdentity(statusFile(candidate.runId)),
+  ));
+
+  const runStatusIndexIsCurrent = (index: RuntimeRunStatusIndex): boolean =>
+    !index.requiresRescan
+    && sameRuntimePathIdentity(
+      index.runsDirectory,
+      readRuntimePathIdentity(runsDir),
+    )
+    && pendingRunStatusesUnchanged(index.pendingRunStatuses);
+
+  const rebuildRunStatusIndexLocked = (): RuntimeRunStatusIndex => {
+    let latest: RuntimeRunStatusIndex | undefined;
+    let pendingOverflowObserved = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = readRuntimePathIdentity(runsDir);
+      const scan = scanAllRunStatuses();
+      pendingOverflowObserved ||= scan.pendingOverflow;
+      const after = readRuntimePathIdentity(runsDir);
+      const stable = sameRuntimePathIdentity(before, after)
+        && pendingRunStatusesUnchanged(scan.pendingRunStatuses);
+      latest = createRunStatusIndex(scan, after, !stable || scan.pendingOverflow);
+      if (stable) break;
+    }
+    if (latest === undefined) {
+      latest = createRunStatusIndex(
+        { statuses: [], pendingRunStatuses: [], pendingOverflow: true },
+        readRuntimePathIdentity(runsDir),
+        true,
+      );
+    }
+    if (pendingOverflowObserved) {
+      emitKodaXDiagnostic({
+        source: "runtime.persistence",
+        level: "warn",
+        message: "Runtime run-status recovery found more than 1000 missing or malformed status files; startup performed one fail-closed compatibility scan",
+        detail: { runsDir, trackedPendingLimit: MAX_RUNTIME_PENDING_RUN_STATUSES },
+      });
+    }
+    writeRuntimeJsonAtomic(runStatusIndexFile, latest);
+    return latest;
+  };
+
+  const ensureRunStatusIndexLocked = (): RuntimeRunStatusIndex => {
+    const existing = readRunStatusIndex();
+    return existing !== undefined && runStatusIndexIsCurrent(existing)
+      ? existing
+      : rebuildRunStatusIndexLocked();
+  };
+
+  const pendingTerminalRunStatuses = new Map<string, RuntimeRunStatus>();
+  let durableDirtyRunStatusIndexIdentity: RuntimePathIdentity | undefined;
+
+  const rememberRunStatusIndexState = (
+    index: RuntimeRunStatusIndex,
+  ): void => {
+    durableDirtyRunStatusIndexIdentity = index.requiresRescan
+      ? readRuntimePathIdentity(runStatusIndexFile) ?? undefined
+      : undefined;
+  };
+
+  const updateRunStatusIndex = (
+    status: RuntimeRunStatus,
+    terminalCommitted: boolean,
+  ): void => {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    withRuntimeStatusFileLock(runStatusIndexFile, () => {
+      // A managed Run directory changes the runs/ identity before this call.
+      // Merge it into the bounded index without rescanning 1..N status files,
+      // but keep the durable index dirty. Another Runtime or a crash restart
+      // therefore performs one authoritative reconciliation; normal close
+      // clears the dirty bit after one stable scan.
+      const current = readRunStatusIndex() ?? rebuildRunStatusIndexLocked();
+      rememberRunStatusIndexState(current);
+      const terminalStatuses = [...pendingTerminalRunStatuses.values()]
+        .filter((pending) => pending.runId !== status.runId)
+        .sort(compareRunStatusRecency);
+      const terminalRunIds = new Set(
+        terminalStatuses.map((pending) => pending.runId),
+      );
+      const recentRunIds = boundedRunIds([
+        ...current.recentRunIds.filter((runId) => (
+          runId !== status.runId && !terminalRunIds.has(runId)
+        )),
+        ...terminalStatuses.map((pending) => pending.runId),
+        status.runId,
+      ], MAX_RUNTIME_RECENT_PERSISTED_RUNS);
+      const activeRunIds = terminalCommitted
+        ? current.activeRunIds.filter((runId) => (
+            runId !== status.runId && !terminalRunIds.has(runId)
+          ))
+        : boundedRunIds([
+            ...current.activeRunIds.filter((runId) => (
+              runId !== status.runId && !terminalRunIds.has(runId)
+            )),
+            status.runId,
+          ], MAX_RUNTIME_MEMORY_RUNS);
+      const pendingRunStatuses = current.pendingRunStatuses.filter(
+        (pending) => (
+          pending.runId !== status.runId && !terminalRunIds.has(pending.runId)
+        ),
+      );
+      const runsDirectory = readRuntimePathIdentity(runsDir);
+      const requiresRescan = current.requiresRescan
+        || !sameRuntimePathIdentity(runsDirectory, current.runsDirectory);
+      const unchanged =
+        activeRunIds.length === current.activeRunIds.length
+        && recentRunIds.length === current.recentRunIds.length
+        && pendingRunStatuses.length === current.pendingRunStatuses.length
+        && sameRuntimePathIdentity(runsDirectory, current.runsDirectory)
+        && activeRunIds.every((runId, index) => runId === current.activeRunIds[index])
+        && recentRunIds.every((runId, index) => runId === current.recentRunIds[index]);
+      if (unchanged) {
+        for (const terminalStatus of terminalStatuses) {
+          pendingTerminalRunStatuses.delete(terminalStatus.runId);
+        }
+        return;
+      }
+      const next = {
+        version: 2,
+        activeRunIds,
+        recentRunIds,
+        runsDirectory,
+        pendingRunStatuses,
+        requiresRescan,
+      } satisfies RuntimeRunStatusIndex;
+      writeRuntimeJsonAtomic(runStatusIndexFile, next);
+      rememberRunStatusIndexState(next);
+      for (const terminalStatus of terminalStatuses) {
+        pendingTerminalRunStatuses.delete(terminalStatus.runId);
+      }
+    });
+  };
+
+  const finalizeRunStatusIndex = (status: RuntimeRunStatus): void => {
+    if (!isTerminalRunPhase(status.phase)) return;
+    pendingTerminalRunStatuses.delete(status.runId);
+    pendingTerminalRunStatuses.set(status.runId, status);
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    try {
+      withRuntimeStatusFileLock(runStatusIndexFile, () => {
+        if (
+          durableDirtyRunStatusIndexIdentity !== undefined
+          && sameRuntimePathIdentity(
+            durableDirtyRunStatusIndexIdentity,
+            readRuntimePathIdentity(runStatusIndexFile),
+          )
+        ) return;
+        const current = readRunStatusIndex() ?? rebuildRunStatusIndexLocked();
+        if (!current.requiresRescan) {
+          const next = {
+            ...current,
+            requiresRescan: true,
+          } satisfies RuntimeRunStatusIndex;
+          writeRuntimeJsonAtomic(runStatusIndexFile, next);
+          rememberRunStatusIndexState(next);
+        } else {
+          rememberRunStatusIndexState(current);
+        }
+      });
+    } catch (error: unknown) {
+      emitKodaXDiagnostic({
+        source: "runtime.persistence",
+        level: "warn",
+        message: "Runtime terminal status committed, but its derived run-status index could not be marked dirty",
+        detail: { runId: status.runId, error },
+      });
+    }
+  };
+
   return {
     runtimeDir,
     commitEvents(count, create) {
       return commitEventBatch(count, create);
     },
-    close() {},
+    close() {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      withRuntimeStatusFileLock(runStatusIndexFile, () => {
+        rememberRunStatusIndexState(rebuildRunStatusIndexLocked());
+      });
+      pendingTerminalRunStatuses.clear();
+    },
     nextSessionOrder(sessionId) {
       fs.mkdirSync(sessionOrdersDir, { recursive: true });
       const file = sessionOrderFile(sessionId);
@@ -10960,6 +11781,14 @@ function createRuntimePersistence(
             owner: runOwner,
           },
         });
+        // Commit the canonical status first. Publish a new active Run once;
+        // nonterminal progress keeps the same index membership, and the first
+        // terminal transition removes it with one index update.
+        if (isTerminalRunPhase(status.phase)) {
+          finalizeRunStatusIndex(status);
+        } else if (existing === undefined) {
+          updateRunStatusIndex(status, false);
+        }
         return status;
       });
     },
@@ -11042,6 +11871,7 @@ function createRuntimePersistence(
             owner: runOwner,
           },
         });
+        finalizeRunStatusIndex(next);
         return {
           accepted: true,
           status: next,
@@ -11050,56 +11880,70 @@ function createRuntimePersistence(
       });
     },
     loadRunStatus(runId) {
-      const file = statusFile(runId);
-      if (!fs.existsSync(file)) return undefined;
-      try {
-        const persisted = parsePersistedRuntimeRunStatus(
-          JSON.parse(fs.readFileSync(file, "utf-8")),
-        );
-        if (persisted) return persisted;
-        pushPersistenceWarning(
-          `${file}:shape`,
-          `Skipped malformed runtime status record at ${path.basename(file)}`,
-          { runId, file },
-        );
-        return undefined;
-      } catch (error: unknown) {
-        pushPersistenceWarning(
-          `${file}:parse`,
-          `Skipped malformed runtime status record at ${path.basename(file)}: ${normalizeError(error).message}`,
-          { runId, file },
-        );
-        return undefined;
-      }
+      return readIndexedRunStatus(runId);
     },
     loadRunStatuses() {
-      if (!fs.existsSync(runsDir)) return [];
-      const statuses: PersistedRuntimeRunStatus[] = [];
-      for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const file = path.join(runsDir, entry.name, "status.json");
-        if (!fs.existsSync(file)) continue;
-        try {
-          const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
-          const persisted = parsePersistedRuntimeRunStatus(parsed);
-          if (persisted) {
-            statuses.push(persisted);
-          } else {
-            pushPersistenceWarning(
-              `${file}:shape`,
-              `Skipped malformed runtime status record at ${path.basename(file)}`,
-              { runId: entry.name, file },
-            );
-          }
-        } catch (error: unknown) {
-          pushPersistenceWarning(
-            `${file}:parse`,
-            `Skipped malformed runtime status record at ${path.basename(file)}: ${normalizeError(error).message}`,
-            { runId: entry.name, file },
-          );
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      return withRuntimeStatusFileLock(runStatusIndexFile, () => {
+        const index = ensureRunStatusIndexLocked();
+        const runIds = [...new Set([
+          ...index.activeRunIds,
+          ...index.recentRunIds,
+        ])];
+        const statuses = runIds.flatMap((runId) => {
+          const persisted = readIndexedRunStatus(runId);
+          return persisted === undefined ? [] : [persisted];
+        });
+        const byRunId = new Map(statuses.map((persisted) => [
+          persisted.status.runId,
+          persisted,
+        ]));
+        const activeRunIds = index.activeRunIds.filter((runId) => {
+          const persisted = byRunId.get(runId);
+          return persisted !== undefined
+            && !isTerminalRunPhase(persisted.status.phase);
+        });
+        const terminalizedActive = index.activeRunIds.flatMap((runId) => {
+          const persisted = byRunId.get(runId);
+          return persisted !== undefined
+            && isTerminalRunPhase(persisted.status.phase)
+            ? [persisted]
+            : [];
+        }).sort((left, right) => compareRunStatusRecency(
+          left.status,
+          right.status,
+        ));
+        const terminalizedIds = new Set(
+          terminalizedActive.map((persisted) => persisted.status.runId),
+        );
+        const recentRunIds = boundedRunIds([
+          ...index.recentRunIds.filter((runId) => (
+            byRunId.has(runId) && !terminalizedIds.has(runId)
+          )),
+          ...terminalizedActive.map((persisted) => persisted.status.runId),
+        ], MAX_RUNTIME_RECENT_PERSISTED_RUNS);
+        if (
+          activeRunIds.length !== index.activeRunIds.length
+          || recentRunIds.length !== index.recentRunIds.length
+          || activeRunIds.some((runId, position) => (
+            runId !== index.activeRunIds[position]
+          ))
+          || recentRunIds.some((runId, position) => (
+            runId !== index.recentRunIds[position]
+          ))
+        ) {
+          const next = {
+            ...index,
+            activeRunIds,
+            recentRunIds,
+          } satisfies RuntimeRunStatusIndex;
+          writeRuntimeJsonAtomic(runStatusIndexFile, next);
+          rememberRunStatusIndexState(next);
+        } else {
+          rememberRunStatusIndexState(index);
         }
-      }
-      return statuses;
+        return statuses;
+      });
     },
     loadSessionSettingsVersioned(sessionId) {
       const file = sessionSettingsFile(sessionId);
@@ -14695,6 +15539,9 @@ function createRuntimeSessionAdmission(
         summary.runtimeInfo?.profileId,
       );
     },
+    assertCachedIdentity(sessionId, identity) {
+      if (!admitted(identity.surface, identity.profileId)) reject(sessionId);
+    },
     async admitsSession(sessionId) {
       if (!enforced) return true;
       const data = await manager.storage.peek(sessionId);
@@ -14816,11 +15663,7 @@ function runtimeConversationRevisionContext(
 function createRuntimeConversationHistoryRevision(
   history: SessionConversationHistoryData,
 ): string {
-  return createRuntimeHistoryEntriesRevision(
-    history.entries,
-    "kodax-conversation-history-v1\0",
-    runtimeConversationRevisionContext(history),
-  );
+  return replApi.createSessionConversationHistoryRevision(history);
 }
 
 function createRuntimeTranscriptRevisionFromSerialized(
@@ -14838,6 +15681,7 @@ interface RuntimeConversationSnapshotMetadata {
   readonly sourceRevision: string;
   readonly status: SessionConversationHistoryStatus;
   readonly issues: readonly SessionConversationHistoryIssue[];
+  readonly boundaryRevision: string;
 }
 
 function runtimeHistoryEntryDescriptorIdentity(
@@ -14854,6 +15698,13 @@ function runtimeHistoryEntryDescriptorIdentity(
 interface RuntimeTranscriptPageCursor {
   readonly kind: "page";
   readonly view: RuntimeHistorySnapshotViewKind;
+  readonly revision: string;
+  readonly end: number;
+}
+
+interface RuntimeConversationCachePageCursor {
+  readonly kind: "conversation_cache_page";
+  readonly view: "conversation";
   readonly revision: string;
   readonly end: number;
 }
@@ -14884,14 +15735,20 @@ interface RuntimeTranscriptSnapshotView {
 }
 
 function encodeRuntimeTranscriptCursor(
-  cursor: RuntimeTranscriptPageCursor | RuntimeTranscriptChunkCursor,
+  cursor:
+    | RuntimeTranscriptPageCursor
+    | RuntimeConversationCachePageCursor
+    | RuntimeTranscriptChunkCursor,
 ): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
 function decodeRuntimeTranscriptCursor(
   cursor: string,
-): RuntimeTranscriptPageCursor | RuntimeTranscriptChunkCursor {
+):
+  | RuntimeTranscriptPageCursor
+  | RuntimeConversationCachePageCursor
+  | RuntimeTranscriptChunkCursor {
   let value: unknown;
   try {
     value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
@@ -14910,6 +15767,19 @@ function decodeRuntimeTranscriptCursor(
       : undefined;
   if (view === undefined) {
     throw createRuntimeResyncError("Invalid transcript cursor view");
+  }
+  if (
+    value.kind === "conversation_cache_page"
+    && view === "conversation"
+    && Number.isSafeInteger(value.end)
+    && Number(value.end) >= 0
+  ) {
+    return {
+      kind: "conversation_cache_page",
+      view,
+      revision: value.revision,
+      end: Number(value.end),
+    };
   }
   if (
     value.kind === "page" &&
@@ -16371,11 +17241,22 @@ function recentRunStatuses(
   statuses: readonly PersistedRuntimeRunStatus[],
 ): readonly PersistedRuntimeRunStatus[] {
   if (statuses.length <= MAX_RUNTIME_MEMORY_RUNS) return statuses;
-  return [...statuses]
+  const active = statuses
+    .filter((persisted) => !isTerminalRunPhase(persisted.status.phase))
     .sort((left, right) =>
       compareRunStatusRecency(left.status, right.status)
     )
     .slice(-MAX_RUNTIME_MEMORY_RUNS);
+  const terminalBudget = MAX_RUNTIME_MEMORY_RUNS - active.length;
+  const terminal = terminalBudget === 0
+    ? []
+    : statuses
+        .filter((persisted) => isTerminalRunPhase(persisted.status.phase))
+        .sort((left, right) =>
+          compareRunStatusRecency(left.status, right.status)
+        )
+        .slice(-terminalBudget);
+  return [...active, ...terminal];
 }
 
 function boundedRuntimeRunStatuses(
@@ -16396,6 +17277,23 @@ function boundedRuntimeRunStatuses(
         .sort(compareRunStatusRecency)
         .slice(-terminalBudget);
   return [...nonTerminal, ...recentTerminal];
+}
+
+function canonicalRuntimeRunStatuses(
+  statuses: readonly RuntimeRunStatus[],
+): readonly RuntimeRunStatus[] {
+  return [...statuses].sort((left, right) => {
+    const byStart = (left.acceptedAt ?? left.startedAt).localeCompare(
+      right.acceptedAt ?? right.startedAt,
+    );
+    if (byStart !== 0) return byStart;
+    const bySession = left.sessionId.localeCompare(right.sessionId);
+    if (bySession !== 0) return bySession;
+    const bySessionOrder = (left.sessionOrder ?? 0) - (right.sessionOrder ?? 0);
+    return bySessionOrder !== 0
+      ? bySessionOrder
+      : left.runId.localeCompare(right.runId);
+  });
 }
 
 function pruneTerminalRuns(runs: Map<string, RuntimeRunRecord>): void {

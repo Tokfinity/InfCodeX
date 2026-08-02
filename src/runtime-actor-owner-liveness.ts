@@ -7,6 +7,7 @@ const LOOPBACK_HOST = '127.0.0.1';
 const LIVENESS_ID_PATTERN = /^[a-f0-9]{32}$/;
 const LIVENESS_PROBE_TIMEOUT_MS = 500;
 const MAX_LIVENESS_RESPONSE_BYTES = 128;
+const OWNER_PROBE_CONCURRENCY = 16;
 
 export interface RuntimeActorOwnerLiveness {
   readonly id: string;
@@ -88,6 +89,38 @@ export async function inspectRuntimeActorOwner(
   } catch (error: unknown) {
     return errorCode(error) === 'ECONNREFUSED' ? 'dead' : 'unknown';
   }
+}
+
+function actorOwnerProbeKey(owner: AgentActorOwner): string {
+  return [
+    owner.ownerId,
+    owner.runtimeId,
+    owner.pid,
+    owner.startedAt,
+    owner.livenessId ?? '',
+    owner.livenessPort ?? '',
+  ].join('\0');
+}
+
+export async function inspectRuntimeActorOwners(
+  owners: readonly AgentActorOwner[],
+): Promise<readonly RuntimeActorOwnerState[]> {
+  const unique = new Map<string, AgentActorOwner>();
+  for (const owner of owners) unique.set(actorOwnerProbeKey(owner), owner);
+  const pending = [...unique.entries()];
+  const states = new Map<string, RuntimeActorOwnerState>();
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < pending.length) {
+      const current = pending[nextIndex];
+      nextIndex += 1;
+      if (current === undefined) return;
+      states.set(current[0], await inspectRuntimeActorOwner(current[1]));
+    }
+  };
+  const workerCount = Math.min(OWNER_PROBE_CONCURRENCY, pending.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return owners.map((owner) => states.get(actorOwnerProbeKey(owner)) ?? 'unknown');
 }
 
 function isPidDefinitelyDead(pid: number): boolean {

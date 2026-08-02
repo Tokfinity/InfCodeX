@@ -7,6 +7,7 @@ import type { AgentActorOwner } from '@kodax-ai/agent';
 
 import {
   createRuntimeActorOwnerLiveness,
+  inspectRuntimeActorOwners,
   isRuntimeActorOwnerAlive,
   type RuntimeActorOwnerLiveness,
 } from './runtime-actor-owner-liveness.js';
@@ -88,6 +89,43 @@ describe('Runtime Actor owner liveness', () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
+    }
+  });
+
+  it('bounds recovery latency across several unresponsive owner endpoints', async () => {
+    const servers = await Promise.all(Array.from({ length: 3 }, async () => {
+      const server = net.createServer(() => undefined);
+      await new Promise<void>((resolve, reject) => {
+        server.once('listening', resolve);
+        server.once('error', reject);
+        server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
+      });
+      return server;
+    }));
+    try {
+      const owners = servers.map((server, index) => {
+        const address = server.address();
+        if (address === null || typeof address === 'string') {
+          throw new Error('Expected a loopback TCP test endpoint.');
+        }
+        return owner({
+          ownerId: `slow-owner-${index}`,
+          runtimeId: `slow-runtime-${index}`,
+          livenessId: String(index + 1).repeat(32),
+          livenessPort: address.port,
+        });
+      });
+      const startedAt = performance.now();
+      await expect(inspectRuntimeActorOwners(owners)).resolves.toEqual([
+        'unknown',
+        'unknown',
+        'unknown',
+      ]);
+      expect(performance.now() - startedAt).toBeLessThan(1_100);
+    } finally {
+      await Promise.all(servers.map((server) => new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      })));
     }
   });
 
