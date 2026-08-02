@@ -31,6 +31,7 @@
  */
 
 import type { TodoItem } from "@kodax-ai/coding";
+import { t } from "../../common/i18n.js";
 
 export const MAX_VISIBLE_ROWS = 6;
 /**
@@ -67,6 +68,8 @@ export interface TodoRow {
   readonly text: string;
   /** True only on the in_progress item. UI uses bold/cyan accent. */
   readonly isActive: boolean;
+  /** Locale-independent count carried by summary rows. */
+  readonly summaryCount?: number;
   /**
    * FEATURE_114 v0.7.36 Slice 4 — true when the row should render with
    * strikethrough styling. Currently only set for `cancelled` status
@@ -96,6 +99,13 @@ export interface TodoPlanViewModel {
   readonly totalCount: number;
 }
 
+export function formatTodoPlanProgressText(viewModel: TodoPlanViewModel): string {
+  return t("todo.progress", {
+    completed: viewModel.completedCount,
+    total: viewModel.totalCount,
+  });
+}
+
 export function formatTodoPlanViewModelForTranscript(
   viewModel: TodoPlanViewModel,
 ): readonly string[] {
@@ -103,9 +113,10 @@ export function formatTodoPlanViewModelForTranscript(
     return [];
   }
 
-  const lines = [
-    `Plan ${viewModel.completedCount}/${viewModel.totalCount} completed`,
-  ];
+  const lines = [t("todo.transcript.progress", {
+    completed: viewModel.completedCount,
+    total: viewModel.totalCount,
+  })];
 
   for (const row of viewModel.rows) {
     const badge = row.evaluatorBadge ? ` ${row.evaluatorBadge}` : "";
@@ -242,8 +253,9 @@ function buildDoneSummary(count: number): TodoRow {
     kind: "summary_done",
     symbol: SYMBOL_COMPLETED,
     symbolColor: "green",
-    text: `${count} done`,
+    text: t("todo.summary.done", { count }),
     isActive: false,
+    summaryCount: count,
   };
 }
 
@@ -252,8 +264,9 @@ function buildPendingSummary(count: number): TodoRow {
     kind: "summary_pending",
     symbol: SYMBOL_PENDING,
     symbolColor: "dim",
-    text: `+${count} more`,
+    text: t("todo.summary.more", { count }),
     isActive: false,
+    summaryCount: count,
   };
 }
 
@@ -427,8 +440,7 @@ export function buildTodoPlanViewModel(
           const last = rows[rows.length - 1];
           if (last && last.kind === "summary_pending") {
             // Replace last summary with incremented count.
-            const m = /\+(\d+) more/.exec(last.text);
-            const n = m ? Number.parseInt(m[1]!, 10) + 1 : 1;
+            const n = (last.summaryCount ?? 0) + 1;
             rows[rows.length - 1] = buildPendingSummary(n);
           } else {
             rows.push(buildPendingSummary(1));

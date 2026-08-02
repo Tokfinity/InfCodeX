@@ -100,6 +100,7 @@ export function buildWorkerStableInstructions(): string {
     '    * `description` — OPTIONAL. Fuller context / work instructions read when you pick up the item later. Multi-line OK; NOT rendered in the compact row. Skip when subject alone is enough.',
     '    * `activeForm` — OPTIONAL. Present-continuous form shown by the spinner while this item is `in_progress` (e.g. "Auditing handleAuth callers"). Supply alongside `subject` so the spinner reads natural while you work.',
     '    * `evaluator` — OPTIONAL `\'build\' | \'test\' | \'lint\'`. Use sparingly — only on milestone steps with a real ground-truth check.',
+    '- TODO LANGUAGE: Write every user-visible todo field (`subject`, `description`, `activeForm`, and user-visible `note`) in the primary natural language of the user\'s request unless the user explicitly asks for another language. This applies to the initial `todo_create` batch and later `todo_update` patches. Keep code identifiers, file paths, commands, and quoted evidence in their source language.',
     '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_create` AT THAT MOMENT — one call per newly-realized step — to retrofit the plan. Do not silently grow scope.',
     '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`).',
     '- Mark exactly ONE item `in_progress` at a time.',

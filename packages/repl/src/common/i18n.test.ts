@@ -58,4 +58,13 @@ describe("i18n", () => {
     expect(t("managed.completed.blocked")).toBe("任务受阻");
     expect(t("managed.completed.continuation")).toBe("任务需要继续");
   });
+
+  it("translates TodoList progress labels", () => {
+    setLocale("en");
+    expect(t("todo.progress", { completed: 1, total: 3 })).toBe("1/3 completed");
+
+    setLocale("zh");
+    expect(t("todo.progress", { completed: 1, total: 3 })).toBe("1/3 已完成");
+    expect(t("todo.summary.more", { count: 2 })).toBe("另有 2 项");
+  });
 });

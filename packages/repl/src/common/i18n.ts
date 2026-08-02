@@ -134,6 +134,12 @@ const translations = {
     "managed.completed.blocked": "Task blocked",
     "managed.completed.continuation": "Task needs continuation",
 
+    // TodoList
+    "todo.progress": "{completed}/{total} completed",
+    "todo.transcript.progress": "Plan {completed}/{total} completed",
+    "todo.summary.done": "{count} done",
+    "todo.summary.more": "+{count} more",
+
     // Cancellation
     "cancelled": "[Cancelled] Operation cancelled by user",
   },
@@ -217,6 +223,12 @@ const translations = {
     "managed.completed": "任务完成",
     "managed.completed.blocked": "任务受阻",
     "managed.completed.continuation": "任务需要继续",
+
+    // TodoList
+    "todo.progress": "{completed}/{total} 已完成",
+    "todo.transcript.progress": "计划 {completed}/{total} 已完成",
+    "todo.summary.done": "{count} 项已完成",
+    "todo.summary.more": "另有 {count} 项",
 
     "cancelled": "[已取消] 操作已被用户取消",
   },

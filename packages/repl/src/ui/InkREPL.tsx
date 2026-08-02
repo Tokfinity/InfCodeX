@@ -45,6 +45,7 @@ import {
 } from "./components/WorkflowRunSurface.js";
 import {
   buildTodoPlanViewModel,
+  formatTodoPlanProgressText,
   formatTodoPlanViewModelForTranscript,
 } from "./view-models/todo-plan.js";
 import {
@@ -9889,7 +9890,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             </Text>
           ) : (isLoading && todoPlanViewModel.shouldRender) ? (
             <Text dimColor wrap="truncate">
-              {`${todoPlanViewModel.completedCount}/${todoPlanViewModel.totalCount} completed`}
+              {formatTodoPlanProgressText(todoPlanViewModel)}
             </Text>
           ) : null}
         </Box>

@@ -3,18 +3,24 @@
  * No LLM calls. Tests anchor selection, window layout, summary folds,
  * failed-item priority, post-completion linger, and shouldRender gates.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { TodoItem, TodoStatus } from "@kodax-ai/coding";
+import { setLocale } from "../../common/i18n.js";
 
 import {
   MAX_VISIBLE_ROWS,
   MIN_ITEMS_TO_RENDER,
   POST_COMPLETION_LINGER_MS,
   buildTodoPlanViewModel,
+  formatTodoPlanProgressText,
   formatTodoPlanViewModelForTranscript,
   isPlanFullyClosed,
 } from "./todo-plan.js";
+
+afterEach(() => {
+  setLocale("en");
+});
 
 function makeItem(
   id: string,
@@ -353,6 +359,21 @@ describe("formatTodoPlanViewModelForTranscript", () => {
   it("returns no lines when the plan surface is hidden", () => {
     const vm = buildTodoPlanViewModel([], { now: NOW, lastAllCompletedAt: null });
     expect(formatTodoPlanViewModelForTranscript(vm)).toEqual([]);
+  });
+
+  it("localizes progress and summary rows to the configured Chinese locale", () => {
+    setLocale("zh");
+    const items = Array.from({ length: 12 }, (_, index) => makeItem(
+      `todo_${index + 1}`,
+      `任务 ${index + 1}`,
+      index < 5 ? "completed" : index === 5 ? "in_progress" : "pending",
+    ));
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+
+    expect(formatTodoPlanProgressText(vm)).toBe("5/12 已完成");
+    expect(formatTodoPlanViewModelForTranscript(vm)[0]).toBe("计划 5/12 已完成");
+    expect(vm.rows.map((row) => row.text)).toContain("4 项已完成");
+    expect(vm.rows.map((row) => row.text)).toContain("另有 4 项");
   });
 });
 

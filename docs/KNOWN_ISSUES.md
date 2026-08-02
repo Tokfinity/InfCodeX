@@ -14,6 +14,7 @@ _Last Updated: 2026-07-31_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 252 | High | Resolved | Cancelled shell environment probes can return before descendants terminate | configured-shell environment probing | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 251 | High | Resolved | Published Runtime Worker resolves a handler sidecar that is not shipped | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -154,6 +155,63 @@ _Last Updated: 2026-07-31_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 258: TodoList content and labels can ignore the query and UI locale
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-01
+- **Resolved**: 2026-08-01
+
+#### Original Problem
+
+For a Chinese query, the Worker could create every TodoList row in English even
+though the configured UI locale and the request were Chinese. The counter still
+rendered `0/5 completed`, and folded rows used hard-coded `done` / `more` text.
+The shared language-continuity rule covered explanations, progress notes, and
+final answers, but did not explicitly include the user-visible fields passed
+through `todo_create` and `todo_update`.
+
+#### Root Cause
+
+Todo fields were treated as tool arguments rather than as user-facing text. The
+plan contract and both tool descriptions used English-only examples without a
+field-level language requirement, so weaker providers could follow the general
+response-language rule while still emitting English `subject`, `description`,
+`activeForm`, and `note` values. Separately, the REPL counter, transcript header,
+and summary-fold text bypassed the existing i18n dictionary entirely.
+
+#### Resolution
+
+- Added a Todo-specific Worker contract requiring every user-visible todo field
+  to follow the primary natural language of the query unless the user requests
+  another language.
+- Repeated the same constraint in the `todo_create` and `todo_update` tool
+  descriptions, close to the model's field-generation decision.
+- Kept code identifiers, file paths, commands, and quoted evidence in their
+  source language.
+- Added localized progress, transcript, completed-fold, and pending-fold labels
+  and made the activity bar use the shared formatter.
+
+#### Files Changed
+
+- `packages/coding/src/agents/worker-role-prompt.ts`
+- `packages/coding/src/tools/tool-definitions.ts`
+- `packages/coding/src/language-continuity.test.ts`
+- `packages/repl/src/common/i18n.ts`
+- `packages/repl/src/common/i18n.test.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/view-models/todo-plan.ts`
+- `packages/repl/src/ui/view-models/todo-plan.test.ts`
+
+#### Tests Added
+
+- Extended `language-continuity.test.ts` to pin the Todo field-language
+  contract in the Worker prompt and both mutating Todo tool descriptions.
+- Added Chinese-locale assertions for the Todo counter, transcript heading, and
+  both summary-fold labels while preserving existing English output.
 
 ### 253: Parallel quality-strategy admissions conflict on unrelated Actor progress
 
@@ -9297,11 +9355,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 131 (25 Open, 106 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 132 (25 Open, 107 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-01: Issue 258 added and resolved (v0.7.79 development)
+- Required all user-visible TodoList fields to follow the query's primary
+  natural language in both the Worker plan contract and Todo mutation tools.
+- Localized the deterministic Todo counter, transcript heading, and summary
+  folds through the configured REPL locale.
 
 ### 2026-07-31: Issue 253 added and resolved (v0.7.79 development)
 - Split Actor admission fencing from progress/mailbox revisions and serialized

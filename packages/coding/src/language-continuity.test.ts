@@ -44,6 +44,17 @@ describe('language-continuity rule coverage (③)', () => {
     expect(out).toContain("same natural language as the user's request");
   });
 
+  it('keeps user-visible todo fields in the request language', () => {
+    const out = buildWorkerInstructions(decision, undefined, false);
+    const todoCreate = BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'todo_create');
+    const todoUpdate = BUILTIN_TOOL_DEFINITIONS.find((tool) => tool.name === 'todo_update');
+
+    expect(out).toContain('TODO LANGUAGE');
+    expect(out).toContain('`subject`, `description`, `activeForm`, and user-visible `note`');
+    expect(todoCreate?.description).toContain('primary natural language of the user\'s request');
+    expect(todoUpdate?.description).toContain('primary natural language of the user\'s request');
+  });
+
   it('the child-agent system prompt tells the child to report in the objective language', () => {
     expect(CHILD_AGENT_SYSTEM_PROMPT).toContain('same natural language as the objective');
   });

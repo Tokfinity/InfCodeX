@@ -1402,6 +1402,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     name: 'todo_update',
     description:
       'Drive the visible plan checklist so the user sees real-time progress — single-item PATCH plus status transition for ONE existing todo item. `op="update"` is the default (omit `op` for back-compat); target one item by `id` and change its status, patch its fields, or both in one call.\n\n'
+      + 'Write every user-visible text field (`subject`, `description`, `activeForm`, and `note`) in the primary natural language of the user\'s request unless the user explicitly asks for another language. Keep code identifiers, file paths, commands, and quoted evidence in their source language.\n\n'
       + '## When to Use This Tool\n\n'
       + '- BEFORE starting work on an item — flip it to `in_progress` and supply `activeForm` (present-continuous form of the subject; e.g. subject "Run failing tests" → activeForm "Running failing tests") so the spinner reflects what you are doing right now.\n'
       + '- AFTER finishing work on an item — flip it to `completed` before moving on, so the plan list stays current. If the item carries an `evaluator` hint, the runner runs the deterministic check on transition and surfaces stderr on failure.\n'
@@ -1537,6 +1538,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
     name: 'todo_create',
     description:
       'Insert ONE new pending item into the visible plan list — purely additive, existing items untouched. The store auto-generates the id (monotonic `todo_<n>`); never pass an id — any caller-supplied id is rejected at the schema layer.\n\n'
+      + 'Write the user-visible `subject`, `description`, and `activeForm` in the primary natural language of the user\'s request unless the user explicitly asks for another language. Keep code identifiers, file paths, commands, and quoted evidence in their source language.\n\n'
       + '## When to Use This Tool\n\n'
       + '- AT THE START of a non-trivial multi-step task — commit the full plan up front by batching one `todo_create` call per planned step in the same response, so the user sees the intended trajectory.\n'
       + '- WHEN you receive a user request with multiple distinct sub-tasks — capture each as its own item.\n'
