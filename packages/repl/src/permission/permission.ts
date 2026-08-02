@@ -134,6 +134,92 @@ export function findGitSubcommandIndex(argv: readonly string[]): number | undefi
   return consumeGitGlobalOptions(argv);
 }
 
+function gitFormatValues(
+  args: readonly string[],
+  optionNames: readonly string[],
+  consumeSeparate: boolean,
+): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === '--') break;
+    const option = optionNames.find((name) => longOptionCouldMatch(token, name));
+    if (!option) continue;
+    const separator = token.indexOf('=');
+    if (separator >= 0) values.push(token.slice(separator + 1));
+    else if (consumeSeparate && args[index + 1] !== undefined) {
+      values.push(args[index + 1]!);
+      index += 1;
+    }
+  }
+  return values;
+}
+
+function hasActiveGitFormatSequence(
+  format: string,
+  matches: (suffix: string) => boolean,
+): boolean {
+  for (let index = 0; index < format.length; index += 1) {
+    if (format[index] !== '%') continue;
+    let end = index + 1;
+    while (format[end] === '%') end += 1;
+    if ((end - index) % 2 === 1 && matches(format.slice(end))) return true;
+    index = end - 1;
+  }
+  return false;
+}
+
+function hasGitPrettySignaturePlaceholder(format: string): boolean {
+  return hasActiveGitFormatSequence(format, (suffix) => /^[+\- ]?G[?GSKFPT]/.test(suffix));
+}
+
+function hasGitRefSignatureAtom(format: string): boolean {
+  return hasActiveGitFormatSequence(
+    format,
+    (suffix) => /^\(\*?signature(?::[^)]*)?\)/i.test(suffix),
+  );
+}
+
+const BUILTIN_GIT_PRETTY_FORMATS = new Set([
+  'oneline', 'short', 'medium', 'full', 'fuller', 'reference', 'email', 'raw', 'mboxrd',
+]);
+
+function gitPrettyFormatMayVerifySignature(format: string): boolean {
+  if (hasGitPrettySignaturePlaceholder(format)) return true;
+  const lower = format.toLowerCase();
+  if (lower.startsWith('format:') || lower.startsWith('tformat:') || format.includes('%')) {
+    return false;
+  }
+  return !BUILTIN_GIT_PRETTY_FORMATS.has(lower);
+}
+
+/** True when a Git inspection may invoke a configured signature helper. */
+export function gitSignatureInspectionMayExecute(
+  subcommand: string | undefined,
+  args: readonly string[],
+): boolean {
+  if (subcommand === 'stash' && args[0]?.toLowerCase() === 'list') {
+    return gitSignatureInspectionMayExecute('log', args.slice(1));
+  }
+  const optionBoundary = args.indexOf('--');
+  const optionArgs = optionBoundary < 0 ? args : args.slice(0, optionBoundary);
+  if (subcommand === 'tag' && optionArgs.some((token) => (
+    token === '-v' || longOptionCouldMatch(token, '--verify')
+  ))) return true;
+  if ((subcommand === 'log' || subcommand === 'show')
+    && optionArgs.some((token) => longOptionCouldMatch(token, '--show-signature'))) {
+    return true;
+  }
+  if (subcommand === 'log' || subcommand === 'show') {
+    return gitFormatValues(args, ['--format'], true).some(hasGitPrettySignaturePlaceholder)
+      || gitFormatValues(args, ['--pretty'], false).some(gitPrettyFormatMayVerifySignature);
+  }
+  if (subcommand === 'branch' || subcommand === 'tag') {
+    return gitFormatValues(args, ['--format'], true).some(hasGitRefSignatureAtom);
+  }
+  return false;
+}
+
 function hasGitMutationArguments(
   args: readonly string[],
   mutationFlags: ReadonlySet<string>,
@@ -207,7 +293,8 @@ function isGitReadCommand(argv: readonly string[]): boolean {
   const normalizedArgs = args.map((token) => token.toLowerCase());
   const optionBoundary = normalizedArgs.indexOf('--');
   const optionArgs = optionBoundary < 0 ? normalizedArgs : normalizedArgs.slice(0, optionBoundary);
-  if (optionArgs.some((token) => GIT_READ_EXECUTION_FLAGS.has(token)
+  if (gitSignatureInspectionMayExecute(subcommand, args)
+    || optionArgs.some((token) => GIT_READ_EXECUTION_FLAGS.has(token)
     || [...GIT_READ_EXECUTION_FLAGS].some((flag) => token.startsWith(`${flag}=`)))
     || (subcommand === 'grep' && hasGitGrepPagerOption(args))) {
     return false;
@@ -238,8 +325,7 @@ function isGitReadCommand(argv: readonly string[]): boolean {
     ) && (!hasPositional || explicitlyLists);
   }
   if (subcommand === 'tag') {
-    const verifiesTags = normalizedArgs.includes('-v') || normalizedArgs.includes('--verify');
-    const listsTags = verifiesTags || args.length === 0
+    const listsTags = args.length === 0
       || normalizedArgs.every((token) => token.startsWith('-'))
       || normalizedArgs.includes('-l') || normalizedArgs.includes('--list');
     return listsTags && !hasGitMutationArguments(
@@ -533,11 +619,10 @@ export function isBashReadCommand(command: string): boolean {
     return false;
   }
 
-  // FEATURE_152: AST parse. Line continuations (`\<newline>`) are not
-  // typically present in single-line tool inputs; collapse them defensively
-  // before parse so multi-line history paste still works.
-  const collapsed = command.trim().replace(/\\\r?\n/g, ' ');
-  const tree = parseBashCommand(collapsed);
+  // FEATURE_152: AST parse. `parseBashCommand` preserves every unquoted
+  // physical line as a statement boundary so the permission model validates
+  // the same complete sequence that the configured shell will execute.
+  const tree = parseBashCommand(command.trim());
   if (tree.unparseable || tree.statements.length === 0) {
     return false;
   }

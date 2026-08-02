@@ -14,7 +14,7 @@ _Last Updated: 2026-08-02_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 263 | High | Resolved | Auto permission fast paths could bypass sensitive-read and truncated-intent review | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
+| 263 | High | Resolved | Auto permission fast paths and Coding intent propagation could bypass complete review | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 262 | High | Resolved | Session lifecycle operations can orphan recoverable conversation cache content | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 261 | Medium | Resolved | Prepared Session append rereads the complete conversation bundle | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 260 | High | Resolved | Shell read-only inspection, intent binding, and classifier protocol drift caused spurious Auto approvals | v0.7.33; amplified by v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
@@ -167,7 +167,7 @@ _Last Updated: 2026-08-02_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
-### 263: Auto permission fast paths could bypass sensitive-read and truncated-intent review
+### 263: Auto permission fast paths and Coding intent propagation could bypass complete review
 
 - **Priority**: High
 - **Status**: Resolved
@@ -202,6 +202,21 @@ LLM review:
   retained in truncated current-user content, and a narrow verb list missed
   equivalent constraints such as "Don't use the shell", "use file tools
   only", and their Chinese forms.
+- unquoted LF/CRLF/CR separators were consumed as whitespace by the permission
+  tokenizer even though the real shell executes the following physical line as
+  another statement; a safe first command could therefore hide an arbitrary
+  later command from deterministic review, including when a comment contained
+  quote characters;
+- the universal Git read helper treated signature-verifying `git tag -v`,
+  `--show-signature`, and signature format placeholders as pure reads even
+  though Git can invoke a configured signature helper. Auto[LLM]'s richer
+  analyzer already routed these cases correctly, leaving ACP, direct-shell,
+  and fallback callers with a weaker contract;
+- `Runner.run(createDefaultCodingAgent(), ..., { permissionIntent })` preserved
+  the structured intent in the generic Runner but the Coding substrate did not
+  merge it into `KodaXOptions.context`. Direct SDK calls could therefore lose
+  authenticated constraints, scope, delegation, and `readOnly` metadata before
+  tool guardrails ran.
 
 Classifier-failure fallback also checked only intent restrictions. A protected
 or unresolved read that reached the classifier could therefore be admitted as
@@ -229,6 +244,13 @@ an Accept-edits-style ordinary read after both classifier attempts failed.
 - Failure fallback did not require the complete structured permission review
   to satisfy the same deterministic-admission predicate as the original fast
   path.
+- The shell AST wrapper delegated a complete multi-line string to
+  `shell-quote`, whose grammar does not emit newline control tokens. Permission
+  and execution consequently disagreed about the number of statements.
+- Git indirect signature execution was modeled in Auto rules but duplicated
+  rather than shared with the universal read predicate.
+- The default Coding substrate merged top-level abort and guardrail fields but
+  omitted the sibling `permissionIntent` Runner field.
 
 #### Resolution
 
@@ -297,6 +319,20 @@ an Accept-edits-style ordinary read after both classifier attempts failed.
 - Permit Accept-edits classifier-failure fallback only when the complete
   permission review is itself deterministically admissible. Protected,
   unresolved, partial, risky, or intent-constrained reviews ask instead.
+- Tokenize each unquoted physical shell line separately, retain explicit
+  control-operator continuations, and validate every resulting statement and
+  pipeline stage. Bash backslash-newline is conservatively treated as a
+  boundary because PowerShell assigns it different semantics. Active `$()`
+  substitution outside single quotes is opaque even inside double-quoted or
+  multi-line arguments. Fully deterministic reads remain zero-call; any
+  unproved statement routes the complete call to Auto[LLM].
+- Share one Git signature-inspection predicate between the universal read gate
+  and Auto rules. Verification flags and active signature format placeholders
+  no longer use the unconditional read fast path, while ordinary tag listing
+  and non-verifying formats remain deterministic.
+- Merge top-level `Runner.run()` permission intent into the default Coding
+  substrate context, with the per-run value overriding a stale preset value
+  while preserving all other preset context fields.
 
 The earlier DeepSeek response body was not retained, so a historical
 `legacy_v1` response remains a hypothesis rather than a proven incident cause.
@@ -309,7 +345,9 @@ raw classifier text is intentionally not persisted.
 
 - `packages/repl/src/permission/auto-rules.ts`
 - `packages/repl/src/permission/permission.ts`
+- `packages/repl/src/permission/bash-ast.ts`
 - `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- `packages/coding/src/coding-preset.ts`
 - adjacent regression tests and SDK/release documentation
 
 #### Tests Added or Updated
@@ -342,6 +380,15 @@ raw classifier text is intentionally not persisted.
   middle-of-request compaction anchors, and classifier call-count assertions.
 - Direct versus exclusion-shaped copy/delete/move/rename authority in English
   and Chinese, plus contradictory structured and legacy classifier reasons.
+- LF/CRLF/CR command sequences, comments containing unmatched quote characters,
+  quoted multi-line arguments, active double-quoted `$()` substitution,
+  single-quoted literal controls, safe multi-line controls, and unsafe later
+  statements through both the AST and Auto rules boundaries.
+- Git verification flags, signature pretty/ref-format placeholders, ordinary
+  tag-name controls after `--`, and the existing Auto[LLM] indirect-execution
+  matrix against the shared predicate.
+- Real default-agent `Runner.run()` dispatch with conflicting top-level and
+  preset permission intents, plus the preset-only compatibility path.
 
 ### 262: Session lifecycle operations can orphan recoverable conversation cache content
 

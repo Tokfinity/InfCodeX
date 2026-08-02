@@ -132,9 +132,18 @@ const codingSubstrate: PresetDispatcher = async (
   tracingContext,
 ) => {
   const presetOptions = (opts?.presetOptions ?? {}) as KodaXOptions;
+  const permissionBoundOptions: KodaXOptions = opts?.permissionIntent === undefined
+    ? presetOptions
+    : {
+        ...presetOptions,
+        context: {
+          ...presetOptions.context,
+          permissionIntent: opts.permissionIntent,
+        },
+      };
   const baseMerged: KodaXOptions = opts?.abortSignal
-    ? { ...presetOptions, abortSignal: opts.abortSignal }
-    : presetOptions;
+    ? { ...permissionBoundOptions, abortSignal: opts.abortSignal }
+    : permissionBoundOptions;
   const mergedGuardrails = [
     ...(agent.guardrails ?? []),
     ...(opts?.guardrails ?? presetOptions.guardrails ?? []),

@@ -61,6 +61,43 @@ describe('parseBashCommand — logical operators', () => {
     expect(tree.statements[1].precedingOp).toBe(';');
     expect(tree.statements[2].precedingOp).toBe('||');
   });
+
+  it.each(['\n', '\r\n', '\r'])(
+    'treats an unquoted %j as a statement boundary',
+    (lineBreak) => {
+      const tree = parseBashCommand(`echo safe${lineBreak}node --version`);
+
+      expect(tree.unparseable).toBe(false);
+      expect(tree.statements).toHaveLength(2);
+      expect(tree.statements[0]?.stages[0]?.argv).toEqual(['echo', 'safe']);
+      expect(tree.statements[1]?.precedingOp).toBe(';');
+      expect(tree.statements[1]?.stages[0]?.argv).toEqual(['node', '--version']);
+    },
+  );
+
+  it('keeps line breaks inside quoted arguments in one statement', () => {
+    const tree = parseBashCommand('echo "safe\ntext"');
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements).toHaveLength(1);
+    expect(tree.statements[0]?.stages[0]?.argv).toEqual(['echo', 'safe\ntext']);
+  });
+
+  it('does not let a quote inside a line comment hide the next statement', () => {
+    const tree = parseBashCommand('echo safe # "comment\nnode script.js');
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements).toHaveLength(2);
+    expect(tree.statements[1]?.stages[0]?.argv).toEqual(['node', 'script.js']);
+  });
+
+  it('preserves an explicit operator across a physical line boundary', () => {
+    const tree = parseBashCommand('echo safe &&\npwd');
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements).toHaveLength(2);
+    expect(tree.statements[1]?.precedingOp).toBe('&&');
+  });
 });
 
 describe('parseBashCommand — redirections', () => {
@@ -207,6 +244,45 @@ describe('parseBashCommand — unparseable / safety', () => {
     // `unparseable = true` branch in the parser.
     const tree = parseBashCommand('echo $(rm -rf /)');
     expect(tree.unparseable).toBe(true);
+  });
+
+  it.each([
+    'echo "$(node script.js)"',
+    'echo "safe\n$(node script.js)"',
+  ])('flags active command substitution inside double quotes: %s', (command) => {
+    const tree = parseBashCommand(command);
+
+    expect(tree.unparseable).toBe(true);
+    expect(tree.statements).toEqual([]);
+  });
+
+  it('keeps command-substitution syntax literal inside single quotes', () => {
+    const tree = parseBashCommand("echo '$(node script.js)'");
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements[0]?.stages[0]?.argv).toEqual(['echo', '$(node script.js)']);
+  });
+
+  it.each([
+    'echo safe\\ #$(node script.js)',
+    'echo safe\\;#$(node script.js)',
+    'echo safe\\|#$(node script.js)',
+    'echo safe\\&#$(node script.js)',
+    'echo safe\\\n#$(node script.js)',
+    'echo safe\\\r\n#$(node script.js)',
+  ])('does not mistake an escaped Bash separator for a comment boundary: %j', (command) => {
+    const tree = parseBashCommand(command);
+
+    expect(tree.unparseable).toBe(true);
+    expect(tree.statements).toEqual([]);
+  });
+
+  it('still recognizes a real Bash comment after an even backslash pair', () => {
+    const tree = parseBashCommand('echo safe\\\\ #$(node script.js)');
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements).toHaveLength(1);
+    expect(tree.statements[0]?.stages[0]?.argv[0]).toBe('echo');
   });
 });
 

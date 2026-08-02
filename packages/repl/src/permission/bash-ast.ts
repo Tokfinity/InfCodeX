@@ -97,6 +97,131 @@ export interface BashStatement {
 
 const NULL_DEVICE_TARGETS = new Set(['/dev/null', 'nul', 'NUL']);
 
+function splitUnquotedShellLines(command: string): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let comment = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    if (character === '\n' || character === '\r') {
+      if (quote === null) {
+        lines.push(command.slice(start, index));
+        if (character === '\r' && command[index + 1] === '\n') index += 1;
+        start = index + 1;
+        comment = false;
+      }
+      continue;
+    }
+    if (comment) continue;
+    if (quote === null && character === '#') {
+      comment = true;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      const next = command[index + 1];
+      // A backslash-newline is a continuation in Bash but a statement
+      // boundary in PowerShell. This parser feeds both shells, so preserve
+      // the safer common interpretation and let the newline split commands.
+      if (next !== '\n' && next !== '\r' && next !== undefined) index += 1;
+      continue;
+    }
+    if (character !== "'" && character !== '"') continue;
+    if (quote === null) quote = character;
+    else if (quote === character) quote = null;
+  }
+  lines.push(command.slice(start));
+  return lines;
+}
+
+function endsWithShellContinuation(entries: readonly ParseEntry[]): boolean {
+  const last = entries.at(-1);
+  return last !== undefined
+    && typeof last !== 'string'
+    && 'op' in last
+    && ['&&', '||', '|', ';'].includes(last.op);
+}
+
+function parseAllShellLines(command: string): ParseEntry[] {
+  const entries: ParseEntry[] = [];
+  for (const line of splitUnquotedShellLines(command)) {
+    const lineEntries = shellQuoteParse(line, (key) => `$${key}`)
+      .filter((entry) => typeof entry === 'string' || !('comment' in entry));
+    if (lineEntries.length === 0) continue;
+    if (entries.length > 0 && !endsWithShellContinuation(entries)) {
+      entries.push({ op: ';' });
+    }
+    entries.push(...lineEntries);
+  }
+  return entries;
+}
+
+function hasActiveBashCommandSubstitution(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let comment = false;
+  let escaped = false;
+  let atWordStart = true;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    if (character === '\n' || character === '\r') {
+      const continuedLine = escaped && !comment;
+      comment = false;
+      escaped = false;
+      if (character === '\r' && command[index + 1] === '\n') index += 1;
+      if (!continuedLine && quote === null) atWordStart = true;
+      continue;
+    }
+    if (comment) continue;
+    if (character === '$' && command[index + 1] === '(' && !escaped && quote !== "'") {
+      return true;
+    }
+    if (escaped) {
+      escaped = false;
+      atWordStart = false;
+    } else if (character === '\\' && quote !== "'") {
+      escaped = true;
+    } else if (character === "'" && quote !== '"') {
+      quote = quote === "'" ? null : "'";
+      atWordStart = false;
+    } else if (character === '"' && quote !== "'") {
+      quote = quote === '"' ? null : '"';
+      atWordStart = false;
+    } else if (character === '#' && quote === null && atWordStart) {
+      comment = true;
+    } else if (quote === null && /[\s;|&()<>]/.test(character)) {
+      atWordStart = true;
+    } else {
+      atWordStart = false;
+    }
+  }
+  return false;
+}
+
+function hasActivePowerShellCommandSubstitution(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let comment = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    if (character === '\n' || character === '\r') {
+      comment = false;
+      if (character === '\r' && command[index + 1] === '\n') index += 1;
+      continue;
+    }
+    if (comment) continue;
+    if (character === '$' && command[index + 1] === '(' && quote !== "'") return true;
+    if (character === "'" && quote !== '"') quote = quote === "'" ? null : "'";
+    else if (character === '"' && quote !== "'") quote = quote === '"' ? null : '"';
+    else if (character === '#' && quote === null) comment = true;
+  }
+  return false;
+}
+
+function hasActiveCommandSubstitution(command: string): boolean {
+  return hasActiveBashCommandSubstitution(command)
+    || hasActivePowerShellCommandSubstitution(command);
+}
+
 /** Returns true when `target` resolves to a null device on POSIX or Windows. */
 export function isNullDevice(target: string): boolean {
   return NULL_DEVICE_TARGETS.has(target) || NULL_DEVICE_TARGETS.has(target.toLowerCase());
@@ -128,7 +253,7 @@ export function parseBashCommand(command: string): BashCommandTree {
   // perspective even though backticks request command substitution at
   // shell-eval time). Flag the input as unparseable so callers fail-closed
   // (refuse auto-allow) on any backtick form.
-  if (trimmed.includes('`')) {
+  if (trimmed.includes('`') || hasActiveCommandSubstitution(trimmed)) {
     return { statements: [], unparseable: true };
   }
 
@@ -138,7 +263,7 @@ export function parseBashCommand(command: string): BashCommandTree {
     // unknown variables with an empty string, which can erase a protected
     // redirection target before permission policy sees it. Execution-time
     // expansion is handled only by the target-specific policy that needs it.
-    entries = shellQuoteParse(trimmed, (key) => `$${key}`);
+    entries = parseAllShellLines(trimmed);
   } catch {
     // shell-quote shouldn't throw on standard input but guard anyway.
     return { statements: [], unparseable: true };

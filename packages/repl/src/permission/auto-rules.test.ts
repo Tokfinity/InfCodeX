@@ -1621,6 +1621,23 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(assessment.review.risks).toEqual([]);
   });
 
+  it('validates every physical shell statement before taking the read fast path', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const rulesContext = context(projectRoot);
+
+    expect(assessAutoModeCall(
+      call('bash', { command: 'echo safe\npwd' }),
+      rulesContext,
+    ).decision.action).toBe('allow');
+
+    const assessment = assessAutoModeCall(
+      call('bash', { command: 'echo safe\nnode --version' }),
+      rulesContext,
+    );
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.analysis.status).toBe('incomplete');
+  });
+
   it.each([
     'git tag -v v1.0.0',
     'git tag --verify v1.0.0',
@@ -2568,6 +2585,10 @@ describe('Auto[LLM] environment-provider routing', () => {
       'Copy the matching file into build.',
     ],
     ['copy -ToSession remote ordinary.txt C:\\outside', 'Copy ordinary.txt in the remote session.'],
+    ['echo safe\nnode --version', 'Inspect the shell and Node.js version.'],
+    ['echo "safe\n$(node script.js)"', 'Run the requested Node.js substitution.'],
+    ['echo safe\\ #$(node script.js)', 'Run the requested Node.js substitution.'],
+    ['echo safe\\\n#$(node script.js)', 'Run the requested Node.js substitution.'],
     ['git stash list --format=%G?', 'Inspect the requested stash signature state.'],
     ['git describe --dirty', 'Describe the current revision and mark a dirty worktree.'],
     ['git describe --broken=-broken', 'Describe the current revision and mark a broken worktree.'],

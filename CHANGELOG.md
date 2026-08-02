@@ -103,7 +103,12 @@ All notable changes to this project will be documented in this file.
   binding; exclusion-shaped or ambiguous authority is decided by Auto[LLM],
   whose `allow` verdict still avoids user approval. Classifier envelopes whose
   nominal allow conflicts with a hazardous or approval-seeking reason are
-  retried as contract failures instead of being accepted.
+  retried as contract failures instead of being accepted. Unquoted physical
+  line boundaries are now parsed as complete command sequences and active
+  command substitution cannot hide inside quoted read arguments. Git signature
+  verification shares one indirect-execution rule across every read fast path,
+  and the default Coding `Runner.run()` substrate preserves authenticated
+  structured permission intent through tool guardrails.
 
 - Standalone Bun binaries now let only the bootstrap own CLI startup, avoiding
   duplicate command execution and startup-time Actor ownership conflicts. The

@@ -14,6 +14,7 @@ import {
   collectDeterministicBashWriteTargets,
   extractPathsFromCommand,
   findGitSubcommandIndex,
+  gitSignatureInspectionMayExecute,
   isBashReadCommand,
   isBashWriteCommand,
   isShellReadOnlyArgv,
@@ -1908,87 +1909,6 @@ function hasAmbiguousQuotedWindowsDirectory(command: string): boolean {
   return /"[A-Za-z]:\\[^"\r\n]*\\"(?=\s*(?:&&|\|\||[;|]|$))/.test(command);
 }
 
-function gitFormatValues(
-  args: readonly string[],
-  optionNames: readonly string[],
-  consumeSeparate: boolean,
-): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const token = args[index]!;
-    if (token === '--') break;
-    const option = optionNames.find((name) => gitLongOptionMatches(token, name));
-    if (!option) continue;
-    const separator = token.indexOf('=');
-    if (separator >= 0) {
-      values.push(token.slice(separator + 1));
-    } else if (consumeSeparate && args[index + 1] !== undefined) {
-      values.push(args[index + 1]!);
-      index += 1;
-    }
-  }
-  return values;
-}
-
-function hasActiveGitFormatSequence(
-  format: string,
-  matches: (suffix: string) => boolean,
-): boolean {
-  for (let index = 0; index < format.length; index += 1) {
-    if (format[index] !== '%') continue;
-    let end = index + 1;
-    while (format[end] === '%') end += 1;
-    const percentCount = end - index;
-    if (percentCount % 2 === 1 && matches(format.slice(end))) return true;
-    index = end - 1;
-  }
-  return false;
-}
-
-function hasGitPrettySignaturePlaceholder(format: string): boolean {
-  return hasActiveGitFormatSequence(
-    format,
-    (suffix) => /^[+\- ]?G[?GSKFPT]/.test(suffix),
-  );
-}
-
-function hasGitRefSignatureAtom(format: string): boolean {
-  return hasActiveGitFormatSequence(
-    format,
-    (suffix) => /^\(\*?signature(?::[^)]*)?\)/i.test(suffix),
-  );
-}
-
-const BUILTIN_GIT_PRETTY_FORMATS = new Set([
-  'oneline', 'short', 'medium', 'full', 'fuller', 'reference', 'email', 'raw', 'mboxrd',
-]);
-
-function gitPrettyFormatMayVerifySignature(format: string): boolean {
-  if (hasGitPrettySignaturePlaceholder(format)) return true;
-  const lower = format.toLowerCase();
-  if (lower.startsWith('format:') || lower.startsWith('tformat:') || format.includes('%')) {
-    return false;
-  }
-  return !BUILTIN_GIT_PRETTY_FORMATS.has(lower);
-}
-
-function gitFormatMayVerifySignature(subcommand: string | undefined, args: readonly string[]): boolean {
-  if (subcommand === 'stash' && args[0]?.toLowerCase() === 'list') {
-    return gitFormatMayVerifySignature('log', args.slice(1));
-  }
-  if (subcommand === 'log' || subcommand === 'show') {
-    return gitFormatValues(args, ['--format'], true)
-      .some(hasGitPrettySignaturePlaceholder)
-      || gitFormatValues(args, ['--pretty'], false)
-        .some(gitPrettyFormatMayVerifySignature);
-  }
-  if (subcommand === 'branch' || subcommand === 'tag') {
-    return gitFormatValues(args, ['--format'], true)
-      .some(hasGitRefSignatureAtom);
-  }
-  return false;
-}
-
 const POWERSHELL_ALIAS_PARAMETER_NAMES = [
   'path', 'literalpath', 'destination', 'newname', 'filter', 'include', 'exclude',
   'recurse', 'force', 'passthru', 'credential', 'fromsession', 'tosession',
@@ -2068,11 +1988,7 @@ function indirectReadReason(tree: BashCommandTree): string | undefined {
           ? undefined
           : stage.argv[subcommandIndex]?.toLowerCase();
         const args = subcommandIndex === undefined ? [] : stage.argv.slice(subcommandIndex + 1);
-        const stashList = subcommand === 'stash' && args[0]?.toLowerCase() === 'list';
-        if ((subcommand === 'tag' && args.some((token) => token === '-v' || token === '--verify'))
-          || ((['log', 'show'].includes(subcommand ?? '') || stashList)
-            && args.some((token) => gitLongOptionMatches(token, '--show-signature')))
-          || gitFormatMayVerifySignature(subcommand, args)) {
+        if (gitSignatureInspectionMayExecute(subcommand, args)) {
           return 'git signature inspection may invoke a repository-configured signature-verification helper';
         }
         if (subcommand === 'status') {

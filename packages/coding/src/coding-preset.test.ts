@@ -15,7 +15,17 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('./agent-runtime/run-substrate.js', () => ({
+  runSubstrate: vi.fn(async () => ({
+    success: true,
+    lastText: 'mocked substrate output',
+    messages: [{ role: 'assistant' as const, content: 'mocked substrate output' }],
+    sessionId: 'mock-substrate-session',
+  })),
+}));
+
 import { Runner, createAgent, type PresetDispatcher } from '@kodax-ai/agent';
+import { runSubstrate } from './agent-runtime/run-substrate.js';
 import {
   DEFAULT_CODING_AGENT_NAME,
   createDefaultCodingAgent,
@@ -70,6 +80,48 @@ describe('coding-preset', () => {
       'implement thing',
       { presetOptions: { provider: 'test-provider' }, tracer: null },
     );
+  });
+
+  it('preserves top-level Runner permission intent through the default coding substrate', async () => {
+    const permissionIntent = {
+      rootUserIntent: 'Review the current changes without modifying files.',
+      delegatedObjective: 'Inspect the permission implementation.',
+      bindingConstraints: ['Do not modify files.'],
+      scopeHint: 'packages/repl/src/permission',
+      readOnly: true,
+    } as const;
+    vi.mocked(runSubstrate).mockClear();
+
+    await Runner.run(createDefaultCodingAgent(), 'Review the current changes.', {
+      permissionIntent,
+      presetOptions: {
+        context: {
+          configHome: 'C:\\kodax-config',
+          permissionIntent: { rootUserIntent: 'stale preset intent' },
+        },
+      },
+      tracer: null,
+    });
+
+    const substrateOptions = vi.mocked(runSubstrate).mock.calls[0]?.[0];
+    expect(substrateOptions?.context?.permissionIntent).toEqual(permissionIntent);
+    expect(substrateOptions?.context?.configHome).toBe('C:\\kodax-config');
+  });
+
+  it('preserves a preset permission intent when Runner does not override it', async () => {
+    const presetIntent = {
+      rootUserIntent: 'Inspect the current state.',
+      readOnly: true,
+    } as const;
+    vi.mocked(runSubstrate).mockClear();
+
+    await Runner.run(createDefaultCodingAgent(), 'Inspect the current state.', {
+      presetOptions: { context: { permissionIntent: presetIntent } },
+      tracer: null,
+    });
+
+    expect(vi.mocked(runSubstrate).mock.calls[0]?.[0].context?.permissionIntent)
+      .toEqual(presetIntent);
   });
 
   it('createDefaultCodingAgent accepts overrides for declarative fields', () => {

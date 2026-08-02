@@ -333,7 +333,7 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     'git -C C:\\repo show --stat HEAD | head -60',
     'git branch --list feature/*',
     'git branch --contains HEAD',
-    'git tag -v v0.7.78',
+    'git tag -- -v',
     'git stash show stash@{0}',
     'git grep pattern -- -O',
     'git grep pattern -- --ext-grep',
@@ -358,8 +358,27 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     'git grep -Oless transcriptSearch',
     'git grep -inOless transcriptSearch',
     'git grep --ext-grep transcriptSearch',
+    'git tag -v v0.7.78',
+    'git tag --verify v0.7.78',
+    'git show --show-signature HEAD',
+    'git log --format=%G? -1',
+    'git branch --format="%(signature:grade)" --list',
+    'git tag --format="%(*signature:grade)" --list',
   ])('does not treat effectful git options or subcommands as read-only: %s', (command) => {
     expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it('validates every newline-delimited command before allowing a compound read', () => {
+    expect(isBashReadCommand('echo safe\npwd')).toBe(true);
+    expect(isBashReadCommand('echo safe\nnode --version')).toBe(false);
+    expect(isBashReadCommand('echo safe\r\nnode script.js')).toBe(false);
+    expect(isBashReadCommand('echo safe\rrm -rf .')).toBe(false);
+    expect(isBashReadCommand('echo safe # "comment\nnode script.js')).toBe(false);
+    expect(isBashReadCommand('echo "safe\ntext"')).toBe(true);
+    expect(isBashReadCommand('echo "safe\n$(node script.js)"')).toBe(false);
+    expect(isBashReadCommand("echo 'safe\n$(node script.js)'")).toBe(true);
+    expect(isBashReadCommand('echo safe\\ #$(node script.js)')).toBe(false);
+    expect(isBashReadCommand('echo safe\\\n#$(node script.js)')).toBe(false);
   });
 
   it('requires an explicit Windows where.exe and leaves ambiguous commands to review', () => {
