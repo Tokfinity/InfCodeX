@@ -58,6 +58,8 @@ export interface AutoModeBootstrapDeps {
   readonly projectRoot: string;
   /** Directory used to resolve relative tool paths. */
   readonly executionCwd: string;
+  /** Whether process environment path aliases equal the executed shell's aliases. */
+  readonly trustProcessEnvironmentPathExpansion?: boolean;
   /** Runtime-confirmed ASRT availability for exact workspace shell calls. */
   readonly workspaceShellSandboxAvailable?: boolean;
   /** Runtime-owned one-shot admission into the workspace shell sandbox. */
@@ -78,11 +80,9 @@ export interface AutoModeBootstrapDeps {
    */
   readonly log?: (level: 'info' | 'warn', msg: string) => void;
   /**
-   * Fired whenever the guardrail's classifier engine changes — both on
-   * automatic downgrades (denial threshold / circuit breaker) and on
-   * manual `setEngine` calls. The REPL surfaces this into status-bar
-   * state so the engine indicator stays accurate without requiring a
-   * mode toggle to refresh.
+   * Fired when an explicit/manual `setEngine` call changes the selected
+   * engine. Classifier health thresholds are diagnostic and do not mutate the
+   * engine. The REPL uses this callback to keep its status bar current.
    */
   readonly onEngineChange?: (engine: 'llm' | 'rules') => void;
 
@@ -194,6 +194,8 @@ export async function bootstrapAutoMode(
       // path-aware bash collector merges with coding-side defaults.
       projectRoot: deps.projectRoot,
       executionCwd: deps.executionCwd,
+      trustProcessEnvironmentPathExpansion:
+        deps.trustProcessEnvironmentPathExpansion !== false,
       extraCollectors: deps.extraCollectors,
       extraAbsoluteDenyChecks: [replBashUserKodaxWriteDeny],
       // FEATURE_092 phase 2b.7b slice C: starting engine + timeout + classifier

@@ -210,6 +210,51 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.context?.shellExecution).toEqual(shellExecution);
   });
 
+  it('keeps root user authority separate from the generated child briefing', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const bundle = createBundle({
+      objective: 'Review the session implementation and inspect temp evidence.',
+      scopeSummary: 'packages/repl/src and the supplied temp artifact',
+      constraints: ['Do not modify files'],
+      readOnly: true,
+    });
+
+    await executeChildAgents(
+      [bundle],
+      createCtx(),
+      createOptions({
+        parentOptions: {
+          provider: 'anthropic',
+          permissionIntent: {
+            rootUserIntent: '请 review 当前版本的所有改动和提交。',
+            bindingConstraints: ['Do not publish changes'],
+          },
+        },
+      }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly context?: {
+        readonly permissionIntent?: {
+          readonly rootUserIntent?: string;
+          readonly delegatedObjective?: string;
+          readonly bindingConstraints?: readonly string[];
+          readonly scopeHint?: string;
+          readonly readOnly?: boolean;
+        };
+      };
+    };
+    expect(childOptions.context?.permissionIntent).toEqual({
+      rootUserIntent: '请 review 当前版本的所有改动和提交。',
+      delegatedObjective: bundle.objective,
+      bindingConstraints: ['Do not publish changes', 'Do not modify files'],
+      scopeHint: bundle.scopeSummary,
+      readOnly: true,
+    });
+    expect(childOptions.context?.permissionIntent?.rootUserIntent)
+      .not.toContain('# Child Agent Task');
+  });
+
   it('preserves explicit false prompt-cache and diagnostic controls from the parent runtime', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
 

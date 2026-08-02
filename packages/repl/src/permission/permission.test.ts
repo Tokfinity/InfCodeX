@@ -326,9 +326,47 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     expect(isBashReadCommand('findstr foo file.txt')).toBe(true);
   });
 
-  it('treats fc and where as safe read commands', () => {
-    expect(isBashReadCommand('fc a.txt b.txt')).toBe(true);
-    expect(isBashReadCommand('where node')).toBe(true);
+  it.each([
+    'git -C C:\\repo show --stat HEAD',
+    'git --no-pager -C C:\\repo log -5',
+    'git --git-dir=C:\\repo\\.git --work-tree=C:\\repo diff --stat',
+    'git -C C:\\repo show --stat HEAD | head -60',
+    'git branch --list feature/*',
+    'git branch --contains HEAD',
+    'git tag -v v0.7.78',
+    'git stash show stash@{0}',
+    'git grep pattern -- -O',
+    'git grep pattern -- --ext-grep',
+    'git diff -- --output',
+    'git grep -iefoo .env',
+    'git grep -eTOKEN README.md',
+    'git config get user.email',
+    'git config list --name-only',
+  ])('recognizes read-only git commands after benign global options: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(true);
+  });
+
+  it.each([
+    'git -c core.pager=evil show HEAD',
+    'git --config-env=core.pager=PAGER show HEAD',
+    'git -C C:\\repo reset --hard HEAD',
+    'git -C C:\\repo branch new-branch',
+    'git -C C:\\repo remote add origin https://example.com/repo.git',
+    'git config set get value',
+    'git config unset get',
+    'git grep -O less transcriptSearch',
+    'git grep -Oless transcriptSearch',
+    'git grep -inOless transcriptSearch',
+    'git grep --ext-grep transcriptSearch',
+  ])('does not treat effectful git options or subcommands as read-only: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it('requires an explicit Windows where.exe and leaves ambiguous commands to review', () => {
+    expect(isBashReadCommand('fc a.txt b.txt')).toBe(false);
+    expect(isBashReadCommand('fc -s')).toBe(false);
+    expect(isBashReadCommand('where node')).toBe(false);
+    expect(isBashReadCommand('where.exe node')).toBe(true);
   });
 
   it('allows pipe chains where every stage is a safe-read command', () => {
@@ -356,6 +394,72 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
 
   it('rejects redirects to real files even with a read-only base command', () => {
     expect(isBashReadCommand('grep foo file > out.txt')).toBe(false);
+  });
+});
+
+describe('isBashReadCommand — PowerShell read-only inspection', () => {
+  const environmentInspection = [
+    "echo '=== where.exe rg now ==='",
+    'where.exe rg 2>&1',
+    "echo '=== WinGet Links on PATH? ==='",
+    "$env:PATH -split ';' | Where-Object { $_ -like '*WinGet*' }",
+    "echo '=== rg version ==='",
+    'rg --version 2>&1 | Select-Object -First 2',
+  ].join('; ');
+
+  it('allows the reported multi-statement PowerShell environment inspection', () => {
+    expect(isBashReadCommand(environmentInspection)).toBe(true);
+  });
+
+  it.each([
+    'where.exe rg',
+    'rg --version 2>&1 | Select-Object -First 2',
+    "$env:PATH -split ';' | Where-Object { $_ -like '*WinGet*' }",
+  ])('recognizes the safe read-only stage: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(true);
+  });
+
+  it.each([
+    "$env:AWS_SECRET_ACCESS_KEY | Select-Object -First 1",
+    "Get-ChildItem | Where-Object { Remove-Item $_.FullName }",
+    "Get-ChildItem | Select-Object @{Name='x';Expression={Remove-Item $_.FullName}}",
+    'rg --pre malicious-helper pattern .',
+    "& 'C:\\tools\\dsh.cmd' --version",
+  ])('does not deterministically allow PowerShell with unproved effects: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it.each([
+    "& 'C:\\tmp\\rg.exe' --version",
+    "& 'C:\\tmp\\where.exe' rg",
+    '/tmp/rg --version',
+    '.\\rg.exe --version',
+  ])('does not trust a path-qualified executable by whitelist basename: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it.each([
+    `awk 'BEGIN { system("touch pwned") }' package.json`,
+    `sed -n '1e touch pwned' package.json`,
+    `awk '{ print $1 }' package.json`,
+    `sed -n '1p' package.json`,
+  ])('routes shell DSL interpreters through review: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it.each([
+    'find . -delete',
+    'find . -exec touch pwned ;',
+    'find . -fprintf report.txt %p',
+    'find . -fprint report.txt',
+  ])('does not treat effectful find actions as static reads: %s', (command) => {
+    expect(isBashReadCommand(command)).toBe(false);
+  });
+
+  it('does not allow variables in a PowerShell comparison literal', () => {
+    expect(isBashReadCommand(
+      'echo candidate | Where-Object { $_ -eq $env:AWS_SECRET_ACCESS_KEY }',
+    )).toBe(false);
   });
 });
 
@@ -413,8 +517,9 @@ describe('isBashReadCommand — FEATURE_152 AST hardening', () => {
     expect(isBashReadCommand('ls || cat foo')).toBe(false);
   });
 
-  it('rejects `;` (sequential separator) between stages', () => {
-    expect(isBashReadCommand('ls ; cat foo')).toBe(false);
+  it('allows `;` only when every sequential statement is independently read-only', () => {
+    expect(isBashReadCommand('ls ; cat foo')).toBe(true);
+    expect(isBashReadCommand('ls ; rm -rf .')).toBe(false);
   });
 
   it('rejects command substitution `$(...)`', () => {
@@ -550,6 +655,66 @@ describe('extractPathsFromCommand — FEATURE_152 AST hardening', () => {
     expect(paths.some((p) => p.startsWith('C:\\Users'))).toBe(true);
   });
 
+  it.each([
+    ['git -C %USERPROFILE%\\.ssh status', '%USERPROFILE%\\.ssh'],
+    ['git -CC:\\Users\\alice\\.ssh status', 'C:\\Users\\alice\\.ssh'],
+    ['git --git-dir=/home/alice/.ssh/repo.git show HEAD', '/home/alice/.ssh/repo.git'],
+    ['git --git-dir /home/alice/.ssh/repo.git show HEAD', '/home/alice/.ssh/repo.git'],
+    ['git --work-tree=~/.ssh diff --stat', '~/.ssh'],
+  ])('extracts Git global path options: %s', async (command, expected) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toContain(expected);
+  });
+
+  it.each([
+    ['git grep -f .env', '.env'],
+    ['git grep -if%USERPROFILE%\\.ssh\\patterns', '%USERPROFILE%\\.ssh\\patterns'],
+    ['git grep -if %USERPROFILE%\\.ssh\\patterns', '%USERPROFILE%\\.ssh\\patterns'],
+    ['git grep --file=%USERPROFILE%\\.ssh\\patterns', '%USERPROFILE%\\.ssh\\patterns'],
+    ['tree --fromfile .env', '.env'],
+    ['tree --fromfile=.env', '.env'],
+    ['tree --fromtabfile %USERPROFILE%\\.ssh\\patterns', '%USERPROFILE%\\.ssh\\patterns'],
+    [
+      'git config --file=%USERPROFILE%\\.aws\\credentials --list',
+      '%USERPROFILE%\\.aws\\credentials',
+    ],
+    ['git config -f %USERPROFILE%\\.ssh\\config --get user.name', '%USERPROFILE%\\.ssh\\config'],
+    ['git config get -f%USERPROFILE%\\.ssh\\config user.name', '%USERPROFILE%\\.ssh\\config'],
+    ['git config --file /home/alice/.ssh/config --list', '/home/alice/.ssh/config'],
+    ['git config --blob=HEAD:.env --list', 'HEAD:.env'],
+    [
+      'git diff --no-index %USERPROFILE%\\.ssh\\config README.md',
+      '%USERPROFILE%\\.ssh\\config',
+    ],
+    [
+      'git grep --no-index foo %USERPROFILE%\\.ssh\\config',
+      '%USERPROFILE%\\.ssh\\config',
+    ],
+  ])('extracts Git subcommand path-valued options: %s', async (command, expected) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toContain(expected);
+  });
+
+  it('extracts tree file-list inputs without treating intervening option values as paths', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(
+      'tree --fromfile -L 2 --charset utf-8 README.md .env',
+    );
+    expect(paths).toEqual(expect.arrayContaining(['README.md', '.env']));
+    expect(paths).not.toEqual(expect.arrayContaining(['-L', '2', '--charset', 'utf-8']));
+  });
+
+  it.each([
+    ['git diff -- .env*', '.env*'],
+    ['git diff -- .en[v]', '.en[v]'],
+    ['git diff -- .env{,.local}', '.env{,.local}'],
+    ['git grep token -- .e?v', '.e?v'],
+    ['rg token .en[v]', '.en[v]'],
+  ])('extracts dynamic path operands for sensitive-read review: %s', async (command, expected) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toContain(expected);
+  });
+
   it('extracts redirect targets too', async () => {
     const { extractPathsFromCommand } = await import('./permission.js');
     const paths = extractPathsFromCommand('echo hi > /tmp/out.log');
@@ -679,6 +844,33 @@ describe('extractPathsFromCommand — FEATURE_152 AST hardening', () => {
     expect(extractPathsFromCommand(command)).toEqual(expect.arrayContaining(expected));
   });
 
+  it.each([
+    ["Select-String -EA Ignore '.env' README.md", ['README.md'], ['.env', 'Ignore']],
+    ["Select-String -Context 1,2 '.env' README.md", ['README.md'], ['.env', '1,2']],
+    ["Select-String -Encoding UTF8 '.env' README.md", ['README.md'], ['.env', 'UTF8']],
+    ["Select-String -InputObject README.md '.env'", [], ['.env', 'README.md']],
+  ])('keeps Select-String non-path values out of extracted paths: %s', async (
+    command,
+    expected,
+    excluded,
+  ) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand(command);
+    expect(paths).toEqual(expect.arrayContaining(expected));
+    for (const value of excluded) expect(paths).not.toContain(value);
+  });
+
+  it.each([
+    'Select-String token .env',
+    'Select-String -EA Ignore token .env',
+    'Select-String -Context 1,2 token .env',
+    'sls -Encoding UTF8 token .env',
+    'Select-String -Pattern token -PSPath:.env',
+  ])('retains the actual Select-String path after parameter binding: %s', async (command) => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(command)).toContain('.env');
+  });
+
   it('resolves ordinary-prefix traversal candidates after argument classification', async () => {
     const { extractPathsFromCommand } = await import('./permission.js');
     expect(extractPathsFromCommand('cat "subdir/../../outside.txt"')).toContain(
@@ -724,6 +916,20 @@ describe('isBashReadCommand — FEATURE_152 attack-surface hardening', () => {
 
   it('rejects fd-redirect to real files', () => {
     expect(isBashReadCommand('grep foo file 2>err.log')).toBe(false);
+  });
+
+  it('retains an attached findstr file list for diagnostics', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    expect(extractPathsFromCommand(
+      'findstr /F:C:\\outside\\files.txt token',
+    )).toContain('C:\\outside\\files.txt');
+  });
+
+  it('allows descriptor duplication/close but rejects `>&` file targets', () => {
+    expect(isBashReadCommand('rg --version 2>&1')).toBe(true);
+    expect(isBashReadCommand('rg --version 3>&-')).toBe(true);
+    expect(isBashReadCommand('rg --version 2>&errors.log')).toBe(false);
+    expect(isBashReadCommand('rg --version >&output.log')).toBe(false);
   });
 
   it('treats `&>` real file redirect as not-read', () => {
@@ -866,18 +1072,16 @@ describe('isHelpCommand — universal --help fast-path (FEATURE_154)', () => {
     expect(isHelpCommand('--help')).toBe(true); // bare `--help` allowed (matches CC)
   });
 
-  it('integrates into isBashReadCommand for arbitrary command names', () => {
-    // Pre-FEATURE_154, only the 12 hard-coded language tools (node/npm/python/etc.)
-    // could pass `--help` through the safe-read whitelist. Now any command can.
-    expect(isBashReadCommand('docker --help')).toBe(true);
-    expect(isBashReadCommand('kubectl --help')).toBe(true);
-    expect(isBashReadCommand('terraform --help')).toBe(true);
-    expect(isBashReadCommand('git status --help')).toBe(true);
+  it('does not use help syntax as proof that an arbitrary executable is safe', () => {
+    expect(isBashReadCommand('docker --help')).toBe(false);
+    expect(isBashReadCommand('kubectl --help')).toBe(false);
+    expect(isBashReadCommand('terraform --help')).toBe(false);
+    expect(isBashReadCommand('git status --help')).toBe(false);
   });
 
-  it('preserves language-tools --help (no regression)', () => {
-    expect(isBashReadCommand('python --help')).toBe(true);
-    expect(isBashReadCommand('node --help')).toBe(true);
+  it('routes runtime-starting help commands through semantic review', () => {
+    expect(isBashReadCommand('python --help')).toBe(false);
+    expect(isBashReadCommand('node --help')).toBe(false);
     expect(isBashReadCommand('npm --help')).toBe(true);
   });
 
@@ -1144,17 +1348,14 @@ describe('FEATURE_158 — BASH_SAFE_READ_COMMANDS expansion', () => {
     ['git describe', true],
     ['git describe --tags HEAD', true],
     ['git config --get user.email', true],
-    ['git config --get-all user.email', false], // --get-all is NOT in whitelist (only --get)
+    ['git config --get-all user.email', true],
     ['git stash pop', false], // write
     ['git stash push', false], // write
     ['git config user.email "x@y"', false], // bare git config is write-capable
-    ['git tag -a v1.0 -m msg', true], // starts with `git tag` so it's a prefix match — known limitation
+    ['git tag -a v1.0 -m msg', false],
   ])('isBashReadCommand("%s") = %s', (cmd, expected) => {
-    // Note: BASH_SAFE_READ_COMMANDS uses prefix-startsWith matching, so
-    // `git tag -a v1.0` matches `git tag` whitelist entry. This is
-    // accepted: `git tag` writes a new tag but it's still a low-risk
-    // local operation that auto-mode would historically allow. Tier 2
-    // LLM classifier (FEATURE_092) can still review if needed.
+    // Parse Git subcommands after global options so read variants can take
+    // the fast path without misclassifying tag/branch mutations as reads.
     expect(isBashReadCommand(cmd)).toBe(expected);
   });
 
@@ -1162,5 +1363,39 @@ describe('FEATURE_158 — BASH_SAFE_READ_COMMANDS expansion', () => {
     // This is the exact command from the user-reported regression.
     // Result: fast-path bypass — no guardrail step ever runs.
     expect(isBashReadCommand('git tag --sort=-creatordate | findstr /R "v[0-9]"')).toBe(true);
+  });
+
+  it.each([
+    ['where.exe rg', true],
+    ['where rg', false],
+    ['where { $_.Name -eq README }', true],
+    ['where { Remove-Item ../outside.txt }', false],
+    ['Get-ChildItem | where { Set-Content ../outside.txt x }', false],
+    ['less README.md', false],
+    ['less -o ../outside.log README.md', false],
+    ['less -O../outside.log README.md', false],
+    ['less --log-file=../outside.log README.md', false],
+    ['less --LOG-FILE ../outside.log README.md', false],
+    ['less -Xo ../outside.log README.md', false],
+    ['less -Xo../outside.log README.md', false],
+    ['less --log-f=../outside.log README.md', false],
+    ['less -Pprompt README.md', false],
+    ['tree .', true],
+    ['tree -o ../outside.txt .', false],
+    ['tree -o../outside.txt .', false],
+    ['tree --output=../outside.txt .', false],
+    ['tree -dfo ../outside.txt .', false],
+    ['tree -dfo../outside.txt .', false],
+    ['tree --out=../outside.txt .', false],
+    ['tree -Pfoo .', true],
+    ['date', true],
+    ['date /T', true],
+    ['date +%F', true],
+    ['date -d tomorrow', true],
+    ['date -s 2026-08-03', false],
+    ['date --set=2026-08-03', false],
+    ['date 08-03-2026', false],
+  ])('validates effectful flags and shell aliases for "%s": %s', (command, expected) => {
+    expect(isBashReadCommand(command)).toBe(expected);
   });
 });

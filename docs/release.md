@@ -81,6 +81,93 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.79 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.79`. This candidate is not
+tagged or published. Its prepared scope is:
+
+- FEATURE_281 explicit configured-A2A network authorization, including the
+  Worker-hosted configured plane and independent default-deny permissions for
+  private addresses and non-loopback plaintext HTTP;
+- authoritative Runtime Session status, bounded read-only diagnostics,
+  byte-preserving bundle export, strict transcript/history observation, and
+  cold-Session capture/location/materialization reuse;
+- immutable ordinary-conversation projection through standalone
+  `readConversationHistory()` and Runtime `sessions.conversation*`, with only
+  provenance/topology-proven copies folded and ambiguity retained;
+- bounded text/reasoning event coalescing with
+  `runtimeEventCoalescing:1` capability negotiation and idle-only daemon
+  upgrade;
+- standalone/bundled child-process, Session-ID, shell-probe, sidecar-layout,
+  Windows command-path, Actor admission, and lineage-reconciliation hardening
+  recorded in the v0.7.79 changelog, including explicit `unknown` cleanup
+  outcomes instead of false success;
+- OpenAI-compatible `maxOutputTokensField`, corrected DeepSeek V4 Flash/Pro
+  reasoning profiles, text-only capability metadata, and current cost rates;
+- first-run credential guidance, MCP environment-reference expansion, and
+  protected Windows global-install ASRT runner preparation.
+
+FEATURE_280 remains `Planned` with target `v0.7.79`; none of the items above
+claim its cache-stable prompt/tool-surface outcome. Before tagging, the owner
+must either complete its preregistered acceptance gates or explicitly move it
+to a later version and update `docs/features/v0.7.79.md`, `FEATURE_LIST.md`,
+and the changelog together.
+
+Issue 256 is independently release-blocking. Identity-checked Windows process
+snapshots prevent PID-reuse mis-kills and expose observable uncertainty, but
+they cannot prove descendant closure after an intermediate parent exits. The
+release requires spawn-time Job Object containment plus an independently
+invalidatable Worker owner lease; post-spawn assignment or a bare-PID fallback
+does not satisfy this gate.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature and
+   issue trackers, this checklist, SDK/package guides, configuration examples,
+   and `kodax_manual` agree on the 0.7.79 behavior;
+2. FEATURE_280 has the explicit disposition described above, Issue 256 is fully
+   resolved, and no incomplete feature or known High release blocker is
+   presented as shipped;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. a clean-install-equivalent deterministic gate passes on the exact candidate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused human verification covers
+   [`FEATURE_281_v0.7.79_TEST_GUIDE.md`](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md)
+   and
+   [`ISSUE_243_v0.7.79_REGRESSION_GUIDE.md`](test-guides/ISSUE_243_v0.7.79_REGRESSION_GUIDE.md),
+   plus standalone `--version`, exactly-one-command execution, configured A2A
+   list/call, Session status/diagnostic/export/ordinary-conversation reads, and
+   cancelled child cleanup. After Issue 256 is fixed, Windows verification must
+   also prove descendant containment when an intermediate parent exits;
+6. the exact publish-shaped `kodax-ai-kodax-0.7.79.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,
+   provider capabilities, and built-in Skills must be present;
+7. any performance evidence from `npm run bench:session-cold-open` follows
+   `benchmark/EVAL_GUIDELINES.md` and is recorded as supporting evidence, not a
+   substitute for correctness gates or a task-quality claim;
+8. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+9. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.79`. The tag-triggered workflow
+    must finish green and the GitHub Release must contain all five archives plus
+    `SHA256SUMS`. npm publication remains the maintainer-owned
+    `node scripts/release.mjs` step after the audited bytes are approved.
+
 ## v0.7.78 release verification
 
 Release state: the root package, all four workspace packages, and every

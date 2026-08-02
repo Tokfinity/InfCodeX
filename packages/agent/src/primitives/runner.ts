@@ -57,6 +57,7 @@ import {
   runToolAfterGuardrails,
   runToolBeforeGuardrails,
 } from './guardrail.js';
+import type { GuardrailPermissionIntent } from './guardrail.js';
 import {
   detectHandoffSignal,
   detectTerminalToolSignal,
@@ -124,6 +125,8 @@ export interface RunOptions {
    * this union. See `@kodax-ai/agent/primitives/guardrail.ts` for shape.
    */
   readonly guardrails?: readonly Guardrail[];
+  /** Trusted authority context kept separate from the conversation transcript. */
+  readonly permissionIntent?: GuardrailPermissionIntent;
   /**
    * Per-run override for the tool-loop iteration cap. When omitted, the
    * loop uses `MAX_TOOL_LOOP_ITERATIONS` (20) — a safe ceiling for
@@ -736,7 +739,11 @@ async function genericRun<TData>(
   // FEATURE_084 Shard 4: the active agent may change mid-run when an emit
   // tool's result signals a handoff. `currentAgent` tracks this.
   let currentAgent: Agent = startAgent;
-  const guardrailCtx = { agent: startAgent, abortSignal: opts.abortSignal };
+  const guardrailCtx = {
+    agent: startAgent,
+    abortSignal: opts.abortSignal,
+    permissionIntent: opts.permissionIntent,
+  };
 
   // Input guardrails: runs once on the assembled transcript before the first
   // LLM turn. A rewrite replaces the transcript; block/escalate throws.

@@ -65,6 +65,8 @@ export type {
   SessionTranscriptEntryType,
   WatchSessionsCallback,
   SessionManager,
+  PreparedSessionAppendBaseline,
+  PreparedSessionTailDelta,
   RunningSessionInfo,
   DeleteSessionResult,
   CompactSessionOptions,

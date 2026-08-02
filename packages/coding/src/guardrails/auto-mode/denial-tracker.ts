@@ -2,7 +2,8 @@
  * Denial Tracker — FEATURE_092 Phase 2b.4 (v0.7.33).
  *
  * Tracks classifier blocks per session. When either threshold is crossed,
- * the auto-mode engine downgrades from `llm` to `rules` (mode stays `auto`).
+ * threshold state is exposed for diagnostics and does not mutate the selected
+ * Auto engine.
  *
  *   - 3 consecutive blocks → likely an unproductive loop (agent not adapting)
  *   - 20 cumulative blocks → broader classifier-noise pattern in this session

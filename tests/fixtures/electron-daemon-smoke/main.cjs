@@ -54,6 +54,9 @@ async function run() {
         operation: { operationId: `windows-hide-smoke-${index}` },
       });
       await handle.result;
+    } catch (error) {
+      const detail = error instanceof Error ? error.stack : String(error);
+      throw new Error(`Ordinary query ${index} failed: ${detail}`);
     } finally {
       fs.writeFileSync(consoleProbeQueryFile, 'idle', 'utf8');
     }

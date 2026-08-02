@@ -100,4 +100,89 @@ describe('buildPermissionIntentEvidence', () => {
     expect(evidence.currentUserContentTruncated).toBe(true);
     expect(evidence.status).toBe('targeted');
   });
+
+  it.each([
+    'Do not use shell commands; use file tools only.',
+    'Review all files except README.md.',
+    'Stay within src/.',
+    'README.md is out of scope.',
+    'Use file APIs and nothing else.',
+    'Keep files unchanged.',
+    '\u4e0d\u8981\u4f7f\u7528 shell \u547d\u4ee4\uff0c\u53ea\u4f7f\u7528\u6587\u4ef6\u5de5\u5177\u3002',
+  ])('retains an authority constraint from the middle of a long current request: %s', (constraint) => {
+    const messages: KodaXMessage[] = [{
+      role: 'user',
+      content: [
+        'Background material. '.repeat(800),
+        constraint,
+        'Appendix material. '.repeat(800),
+      ].join('\n'),
+    }];
+
+    const evidence = buildPermissionIntentEvidence(messages, 'git show --stat HEAD');
+
+    expect(evidence.currentUserContentTruncated).toBe(true);
+    expect(evidence.currentUserContent).toContain(constraint);
+  });
+
+  it('keeps runtime-authenticated root intent separate from a child briefing', () => {
+    const evidence = buildPermissionIntentEvidence(
+      [{ role: 'user', content: `# Child Agent Task\n${'briefing '.repeat(2_000)}` }],
+      'findstr transcriptSearch %TEMP%\\sdk-runtime-v0.7.78.ts',
+      undefined,
+      {
+        rootUserIntent: '请 review 当前版本的所有改动和提交。',
+        delegatedObjective: '只读复审会话历史实现，并核对临时对照文件。',
+        bindingConstraints: ['只读审查，禁止修改或创建文件'],
+        scopeHint: 'packages/repl/src src',
+        readOnly: true,
+      },
+    );
+
+    expect(evidence.currentUserContent).toBe('请 review 当前版本的所有改动和提交。');
+    expect(evidence.currentUserContentTruncated).toBe(false);
+    expect(evidence.delegatedObjective).toBe('只读复审会话历史实现，并核对临时对照文件。');
+    expect(evidence.bindingConstraints).toEqual(['只读审查，禁止修改或创建文件']);
+    expect(evidence.scopeHint).toBe('packages/repl/src src');
+    expect(evidence.readOnly).toBe(true);
+    expect(evidence.content).not.toContain('# Child Agent Task');
+  });
+
+  it('retains prior genuine user context for a short root follow-up', () => {
+    const evidence = buildPermissionIntentEvidence(
+      [
+        { role: 'user', content: 'Move report.json into the project output folder.' },
+        { role: 'assistant', content: 'I found the target.' },
+        { role: 'user', content: 'Do it.' },
+      ],
+      'move report.json output/report.json',
+      undefined,
+      { rootUserIntent: 'Do it.' },
+    );
+
+    expect(evidence.currentUserContent).toBe('Do it.');
+    expect(evidence.content).toContain(
+      '[prior-user-intent] Move report.json into the project output folder.',
+    );
+    expect(evidence.content).not.toContain('[prior-user-intent] Do it.');
+  });
+
+  it('treats a later genuine root message as the current authority', () => {
+    const evidence = buildPermissionIntentEvidence(
+      [
+        { role: 'user', content: 'Implement the requested changes.' },
+        { role: 'assistant', content: 'I started editing the workspace.' },
+        { role: 'user', content: 'Stop. Do not modify any more files.' },
+      ],
+      'write packages/coding/src/index.ts',
+      undefined,
+      { rootUserIntent: 'Implement the requested changes.' },
+    );
+
+    expect(evidence.currentUserContent).toBe('Stop. Do not modify any more files.');
+    expect(evidence.currentUserContentTruncated).toBe(false);
+    expect(evidence.content).toContain(
+      '[prior-user-intent] Implement the requested changes.',
+    );
+  });
 });

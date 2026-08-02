@@ -645,6 +645,47 @@ describe('FEATURE_198 — validator failure modes', () => {
     expect(result.providers.foo.verifyStrategy).toBe('models-list');
   });
 
+  it('validates provider- and model-level output-token field capabilities', () => {
+    const result = validateProviderCapabilitiesJson({
+      version: 1,
+      updatedAt: 'x',
+      providers: {
+        foo: {
+          apiKeyEnv: 'F',
+          model: 'openai-model',
+          models: [
+            { id: 'deepseek-model', maxOutputTokensField: 'max_tokens' },
+          ],
+          maxOutputTokensField: 'max_completion_tokens',
+          reasoningCapability: 'none',
+          capabilityProfile: 'native',
+          verifyStrategy: 'models-list',
+        },
+      },
+    });
+
+    expect(result.providers.foo.maxOutputTokensField).toBe('max_completion_tokens');
+    expect(result.providers.foo.models?.[0]?.maxOutputTokensField).toBe('max_tokens');
+
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            maxOutputTokensField: 'completion_limit',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
+          },
+        },
+      },
+      /maxOutputTokensField.*must be one of max_tokens, max_completion_tokens/,
+    );
+  });
+
   it('accepts deprecated reasoningCapabilityV2 as a compatibility alias', () => {
     const result = validateProviderCapabilitiesJson({
       version: 1,

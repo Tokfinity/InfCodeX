@@ -76,6 +76,7 @@ import {
 import type {
   Agent,
   AgentCapabilities,
+  GuardrailPermissionIntent,
   KodaXSessionStorage,
   WorkflowEventCorrelation,
 } from '@kodax-ai/agent';
@@ -199,7 +200,7 @@ export interface ChildExecutorOptions {
   readonly historyStorage?: KodaXSessionStorage;
   readonly parentOptions: Readonly<Partial<
     Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction' | 'disablePromptCache'>
-    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics' | 'shellExecution'>
+    & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics' | 'shellExecution' | 'permissionIntent'>
   >>;
   readonly parentRole: string;
   readonly parentHarness: string;
@@ -395,6 +396,23 @@ interface SpecialistOverride {
   modelOverride?: string;
   providerOverride?: string;
   effortOverride?: KodaXWireReasoningEffort;
+}
+
+function buildChildPermissionIntent(
+  bundle: KodaXChildContextBundle,
+  inherited: GuardrailPermissionIntent | undefined,
+): GuardrailPermissionIntent {
+  const bindingConstraints = [
+    ...(inherited?.bindingConstraints ?? []),
+    ...bundle.constraints,
+  ];
+  return {
+    ...inherited,
+    delegatedObjective: bundle.objective,
+    bindingConstraints,
+    ...(bundle.scopeSummary !== undefined ? { scopeHint: bundle.scopeSummary } : {}),
+    readOnly: inherited?.readOnly === true || bundle.readOnly,
+  };
 }
 
 /** Tools that require a Runtime Actor principal or managed-protocol host. */
@@ -1373,6 +1391,10 @@ async function runReadChildBody(
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
           shellExecution: scope.ctx.shellExecution,
+          permissionIntent: buildChildPermissionIntent(
+            bundle,
+            options.parentOptions.permissionIntent ?? scope.ctx.permissionIntent,
+          ),
           assertReadablePath: scope.ctx.assertReadablePath,
           toolVisibilityPolicy: scope.ctx.toolVisibilityPolicy,
           skillRegistry: scope.ctx.skillRegistry,
@@ -1659,6 +1681,10 @@ async function runWriteChildBody(
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,
           shellExecution: childCtx.shellExecution,
+          permissionIntent: buildChildPermissionIntent(
+            bundle,
+            options.parentOptions.permissionIntent ?? childCtx.permissionIntent,
+          ),
           assertReadablePath: childCtx.assertReadablePath,
           toolVisibilityPolicy: childCtx.toolVisibilityPolicy,
           skillRegistry: childCtx.skillRegistry,

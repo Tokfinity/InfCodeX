@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-25",
+  "updatedAt": "2026-07-31",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -154,36 +154,62 @@
       "apiKeyEnv": "DEEPSEEK_API_KEY",
       "model": "deepseek-v4-flash",
       "models": [
-        { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro" }
+        {
+          "id": "deepseek-v4-pro",
+          "displayName": "DeepSeek V4 Pro",
+          "reasoningProfile": {
+            "reasoningPreset": "deepseek-v4-pro-openai",
+            "effortStrategy": "openai-chat-effort",
+            "thinkingStrategy": "provider-toggle",
+            "defaultEffort": "high",
+            "supportedEfforts": [
+              { "value": "none", "description": "Disable thinking" },
+              { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
+              { "value": "low", "description": "Alias to high" },
+              { "value": "medium", "description": "Alias to high" },
+              { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
+              { "value": "xhigh", "description": "Alias to max" },
+              { "value": "max", "description": "DeepSeek max reasoning" }
+            ],
+            "effortAliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            },
+            "disabledEfforts": ["none", "minimal"],
+            "supportsReasoningEffort": true,
+            "supportsDisabledThinking": true
+          }
+        }
       ],
       "reasoningCapability": "native-effort",
       "reasoningProfile": {
-        "reasoningPreset": "deepseek-v4-openai",
+        "reasoningPreset": "deepseek-v4-flash-openai",
         "effortStrategy": "openai-chat-effort",
         "thinkingStrategy": "provider-toggle",
         "defaultEffort": "high",
         "supportedEfforts": [
           { "value": "none", "description": "Disable thinking" },
           { "value": "minimal", "description": "Disable thinking", "isUserVisible": false },
-          { "value": "low", "description": "Alias to high" },
+          { "value": "low", "description": "DeepSeek low reasoning" },
           { "value": "medium", "description": "Alias to high" },
           { "value": "high", "description": "DeepSeek high reasoning", "isDefault": true },
-          { "value": "xhigh", "description": "Alias to max" },
+          { "value": "xhigh", "description": "Alias to high" },
           { "value": "max", "description": "DeepSeek max reasoning" }
         ],
         "effortAliases": {
-          "low": "high",
           "medium": "high",
-          "xhigh": "max"
+          "xhigh": "high"
         },
         "disabledEfforts": ["none", "minimal"],
         "supportsReasoningEffort": true,
         "supportsDisabledThinking": true
       },
-      "capabilityProfile": "image-input-native",
+      "capabilityProfile": "native",
       "supportsThinking": true,
       "contextWindow": 1000000,
       "maxOutputTokens": 64000,
+      "maxOutputTokensField": "max_tokens",
       "verifyStrategy": "models-list"
     },
     "kimi": {
@@ -650,6 +676,7 @@
       "supportsThinking": true,
       "contextWindow": 200000,
       "maxOutputTokens": 32768,
+      "maxOutputTokensField": "max_tokens",
       "verifyStrategy": "minimal-message"
     },
     "zhipu-coding": {

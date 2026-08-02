@@ -73,6 +73,8 @@ import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import { ensureLayoutMigrated } from '../interactive/session-migration.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
+import type { SessionSourceRevisionState } from './source-revision.js';
+export type { SessionSourceRevisionState } from './source-revision.js';
 
 /**
  * FEATURE_219 — collect candidate session file paths from the per-project
@@ -318,6 +320,8 @@ export interface SessionReadCapture {
   readonly data: SessionData;
   readonly transcript: FullTranscriptSessionData;
   readonly sourceRevision: string;
+  /** Internal exact-revision witness used to extend prepared page caches. */
+  readonly sourceRevisionState: SessionSourceRevisionState;
   /** Bounded persisted-file witness corresponding to sourceRevision. */
   readonly boundaryRevision: string;
 }
@@ -1393,6 +1397,7 @@ async function readSessionCaptureWithStorage(
     data: snapshot.data,
     transcript,
     sourceRevision: snapshot.sourceRevision,
+    sourceRevisionState: snapshot.sourceRevisionState,
     boundaryRevision: snapshot.boundaryRevision,
   };
 }

@@ -31,6 +31,8 @@ export interface InteractiveContext {
   extensionRecords?: KodaXExtensionSessionRecord[];
   extensionStateDirty?: boolean;
   extensionRecordsDirty?: boolean;
+  /** Internal fence: a non-tail Session field changed since the last exact write. */
+  sessionSnapshotDirty?: boolean;
   sessionId: string;
   title: string;
   gitRoot?: string;
@@ -56,17 +58,22 @@ export async function createInteractiveContext(options: {
   existingExtensionState?: KodaXExtensionSessionState;
   existingExtensionRecords?: KodaXExtensionSessionRecord[];
 }): Promise<InteractiveContext> {
+  const artifactLedger = options.existingArtifactLedger?.map((entry) => ({
+    ...entry,
+    metadata: entry.metadata ? { ...entry.metadata } : undefined,
+  }));
   return {
     messages: options.existingMessages ?? [],
     uiHistory: options.existingUiHistory?.map((item) => ({ ...item })),
     lineage: options.existingLineage ?? undefined,
-    artifactLedger: options.existingArtifactLedger?.map((entry) => ({ ...entry, metadata: entry.metadata ? { ...entry.metadata } : undefined })),
+    artifactLedger,
     extensionState: options.existingExtensionState
       ? structuredClone(options.existingExtensionState)
       : undefined,
     extensionRecords: options.existingExtensionRecords?.map((record) => ({ ...record })),
     extensionStateDirty: false,
     extensionRecordsDirty: false,
+    sessionSnapshotDirty: false,
     sessionId: options.sessionId ?? generateSessionId(),
     title: '',
     gitRoot: options.gitRoot,

@@ -516,6 +516,12 @@ describe('shell probe argv contract', () => {
     expect(interactive).not.toContain('-NonInteractive');
   });
 
+  it('disables cmd delayed expansion before running probe commands', () => {
+    const args = buildShellProbeArgs('cmd', undefined, 'default', 'echo !SECRET!');
+
+    expect(args).toEqual(['/d', '/v:off', '/s', '/c', 'echo !SECRET!']);
+  });
+
   it('loads PowerShell profiles only when the normalized profile policy allows it', () => {
     const defaultProfile = buildShellProbeArgs(
       'powershell',

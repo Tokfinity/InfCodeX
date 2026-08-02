@@ -11,6 +11,7 @@ import { KodaXGeminiCliProvider } from './gemini-cli.js';
 import { KodaXCodexCliProvider } from './codex-cli.js';
 import {
   KodaXModelDescriptor,
+  KodaXOpenAICompatMaxOutputTokensField,
   KodaXProviderCapabilityProfile,
   KodaXProviderConfig,
   KodaXReasoningCapability,
@@ -84,6 +85,8 @@ type ProviderSnapshot = {
   readonly contextWindow?: number;
   /** Per-turn output token cap KodaX requests. Provider-level default. */
   readonly maxOutputTokens?: number;
+  /** OpenAI Chat Completions field used for the output-token cap. */
+  readonly maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   /** Upper bound on `thinking_budget` for native-budget reasoning providers. */
   readonly thinkingBudgetCap?: number;
   /** Whether the provider supports `thinking_budget` / native reasoning. */
@@ -132,6 +135,7 @@ type ProviderRuntimeExtras = Omit<
   | 'models'
   | 'contextWindow'
   | 'maxOutputTokens'
+  | 'maxOutputTokensField'
   | 'thinkingBudgetCap'
   | 'supportsThinking'
   | 'verifyStrategy'
@@ -150,6 +154,7 @@ function buildProviderConfig<K extends ProviderName>(
     models: snapshot.models,
     contextWindow: snapshot.contextWindow,
     maxOutputTokens: snapshot.maxOutputTokens,
+    maxOutputTokensField: snapshot.maxOutputTokensField,
     thinkingBudgetCap: snapshot.thinkingBudgetCap,
     supportsThinking: snapshot.supportsThinking ?? false,
     verifyStrategy: snapshot.verifyStrategy,

@@ -1,4 +1,6 @@
-import type { KodaXShellExecutionContract } from '../types.js';
+import path from 'node:path';
+
+import type { KodaXShellExecutionContract, KodaXShellKind } from '../types.js';
 import { isSensitiveShellEnvironmentName } from './contract.js';
 
 const WINDOWS_BOOTSTRAP_NAMES = new Set([
@@ -31,10 +33,67 @@ const POSIX_BOOTSTRAP_NAMES = new Set([
   'TMPDIR',
   'USER',
 ]);
-const EXECUTION_CONTROL_NAMES = new Set(['BASH_ENV', 'NODE_OPTIONS']);
-const PROBE_CONTROL_NAMES = new Set(['NODE_OPTIONS']);
+const EXECUTION_CONTROL_NAMES = new Set([
+  'BASH_ENV',
+  'NODE_OPTIONS',
+  'RIPGREP_CONFIG_PATH',
+]);
 const MAX_RESOLVED_ENV_ENTRIES = 4_096;
 const MAX_RESOLVED_ENV_BYTES = 2 * 1024 * 1024;
+
+export function hardenShellCommandEnvironment(
+  source: NodeJS.ProcessEnv,
+  shellKind: KodaXShellKind,
+  platform: NodeJS.Platform = process.platform,
+  additionalDeniedNames: readonly string[] = [],
+  executionCwd?: string,
+): NodeJS.ProcessEnv {
+  const result = { ...source };
+  for (const name of Object.keys(result)) {
+    if (isSensitiveShellEnvironmentName(name)
+      || isExecutionControlEnvironmentName(name)
+      || additionalDeniedNames.some((candidate) => candidate.toUpperCase() === name.toUpperCase())) {
+      deleteEnvironmentValue(result, name, platform);
+    }
+  }
+  sanitizeCommandPath(result, platform, executionCwd);
+  if (platform !== 'win32' || shellKind !== 'cmd') return result;
+  // cmd.exe otherwise searches the current working directory before PATH,
+  // allowing a workspace-local executable to shadow a trusted bare command.
+  setEnvironmentValue(result, 'NoDefaultCurrentDirectoryInExePath', '1', platform);
+  return result;
+}
+
+function sanitizeCommandPath(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  executionCwd: string | undefined,
+): void {
+  const pathName = Object.keys(environment).find((name) => name.toUpperCase() === 'PATH');
+  if (!pathName || environment[pathName] === undefined) return;
+  const flavor = platform === 'win32' ? path.win32 : path.posix;
+  const delimiter = platform === 'win32' ? ';' : ':';
+  const canonicalCwd = executionCwd === undefined ? undefined : flavor.resolve(executionCwd);
+  const safeEntries = environment[pathName]!.split(delimiter).filter((rawEntry) => {
+    const entry = rawEntry.replace(/^"|"$/g, '');
+    if (!flavor.isAbsolute(entry)) return false;
+    if (canonicalCwd === undefined) return true;
+    const relative = flavor.relative(canonicalCwd, flavor.resolve(entry));
+    return relative.startsWith('..') || flavor.isAbsolute(relative);
+  });
+  environment[pathName] = safeEntries.join(delimiter);
+}
+
+function deleteEnvironmentValue(
+  environment: NodeJS.ProcessEnv,
+  name: string,
+  platform: NodeJS.Platform,
+): void {
+  const matchingNames = platform === 'win32'
+    ? Object.keys(environment).filter((candidate) => candidate.toUpperCase() === name.toUpperCase())
+    : [name];
+  for (const matchingName of matchingNames) delete environment[matchingName];
+}
 
 export function buildShellProbeEnvironment(
   source: NodeJS.ProcessEnv,
@@ -42,6 +101,7 @@ export function buildShellProbeEnvironment(
   sessionScratchDir?: string,
   platform: NodeJS.Platform = process.platform,
   additionalDeniedNames: readonly string[] = [],
+  executionCwd?: string,
 ): NodeJS.ProcessEnv {
   const inherit = contract.environment?.inherit ?? 'filtered';
   const bootstrapNames = platform === 'win32'
@@ -52,7 +112,6 @@ export function buildShellProbeEnvironment(
     if (
       value === undefined
       || isDeniedEnvironmentName(name, contract, additionalDeniedNames)
-      || PROBE_CONTROL_NAMES.has(name.toUpperCase())
     ) continue;
     if (inherit === 'none' && !bootstrapNames.has(name.toUpperCase())) continue;
     setEnvironmentValue(result, name, value, platform);
@@ -82,6 +141,7 @@ export function buildShellProbeEnvironment(
   ) {
     setEnvironmentValue(result, 'KODAX_SESSION_TMP', sessionScratchDir, platform);
   }
+  sanitizeCommandPath(result, platform, executionCwd);
   validateEnvironmentSize(result);
   return result;
 }
@@ -91,15 +151,16 @@ export function sanitizeResolvedShellEnvironment(
   contract: KodaXShellExecutionContract,
   platform: NodeJS.Platform = process.platform,
   additionalDeniedNames: readonly string[] = [],
+  executionCwd?: string,
 ): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
     if (
       isDeniedEnvironmentName(name, contract, additionalDeniedNames)
-      || EXECUTION_CONTROL_NAMES.has(name.toUpperCase())
     ) continue;
     setEnvironmentValue(result, name, value, platform);
   }
+  sanitizeCommandPath(result, platform, executionCwd);
   validateEnvironmentSize(result);
   return result;
 }
@@ -110,12 +171,18 @@ export function isDeniedEnvironmentName(
   additionalDeniedNames: readonly string[] = [],
 ): boolean {
   if (isSensitiveShellEnvironmentName(name)) return true;
+  if (isExecutionControlEnvironmentName(name)) return true;
   if (additionalDeniedNames.some((candidate) => (
     candidate.toUpperCase() === name.toUpperCase()
   ))) return true;
   return (contract.environment?.denyPatterns ?? []).some((pattern) => (
     environmentNameMatchesPattern(name, pattern)
   ));
+}
+
+function isExecutionControlEnvironmentName(name: string): boolean {
+  return EXECUTION_CONTROL_NAMES.has(name.toUpperCase())
+    || /^BASH_FUNC_.+(?:%%|\(\))$/i.test(name);
 }
 
 export function environmentNameMatchesPattern(

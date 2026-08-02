@@ -66,6 +66,8 @@ function shouldLowerAutoReasoningEffort(
 ): boolean {
   switch (capability.reasoningPreset) {
     case 'zai-glm-5.2':
+    case 'deepseek-v4-flash-openai':
+    case 'deepseek-v4-pro-openai':
     case 'deepseek-v4-openai':
     case 'deepseek-v4-anthropic':
     case 'qwen-hybrid-thinking':

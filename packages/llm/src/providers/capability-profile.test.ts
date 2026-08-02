@@ -68,7 +68,7 @@ describe('provider capability profiles', () => {
     );
   });
 
-  it('marks Anthropic-compat + OpenAI-compat + Gemini-CLI providers as image-input capable (FEATURE_134 v0.7.40)', () => {
+  it('marks verified image-input providers as image-input capable (FEATURE_134 v0.7.40)', () => {
     // Anthropic-compat clones inherit anthropic.ts:770 image block forwarding.
     // OpenAI-compat clones inherit openai.ts:904 image_url forwarding.
     // Gemini-CLI gets image input through the CLI's `@<path>` syntax wired by
@@ -79,7 +79,6 @@ describe('provider capability profiles', () => {
     const visionCapableProviders = [
       'anthropic',
       'openai',
-      'deepseek',
       'kimi',
       'kimi-code',
       'qwen',
@@ -98,6 +97,12 @@ describe('provider capability profiles', () => {
         'image-input',
       );
     }
+  });
+
+  it('keeps DeepSeek V4 text-only', () => {
+    expect(getProviderConfiguredCapabilityProfile('deepseek')).toEqual(
+      EXPECTED_NATIVE_PROFILE,
+    );
   });
 
   it('keeps codex-cli text-only (no `codex exec --json` image input surface)', () => {

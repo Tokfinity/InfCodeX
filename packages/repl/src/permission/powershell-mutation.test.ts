@@ -60,6 +60,21 @@ describe('analyzePowerShellMutation', () => {
     });
   });
 
+  it.each([
+    ['Copy-Item', '-Path', '.', '-Filter', '.env', '-Recurse', '-Destination', 'build'],
+    ['Copy-Item', '-Path', '.', '-Include', '*.env', '-Recurse', '-Destination', 'build'],
+    ['Move-Item', '-Path', '.', '-Exclude', 'ordinary.txt', '-Destination', 'build'],
+    ['Remove-Item', '-Path', '.', '-Filter', '.env', '-Recurse'],
+    ['Set-Content', '-Path', '.', '-Filter', '.env', '-Value', 'x'],
+    ['Add-Content', '-Path', '.', '-Include', '.env', '-Value', 'x'],
+  ])('does not claim an exact target set when a provider selector is bound: %s', (...argv) => {
+    const result = analyzePowerShellMutation(argv);
+    expect(result).toMatchObject({
+      status: 'incomplete',
+    });
+    expect(result.operations).toHaveLength(1);
+  });
+
   it('composes New-Item -Path and -Name into the created target', () => {
     expect(analyzePowerShellMutation([
       'New-Item', '-ItemType', 'File', '-Path', 'build', '-Name', 'report.txt',

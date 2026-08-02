@@ -33,6 +33,10 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';
+import type {
+  ClassifierObservedProtocol,
+  ClassifierParseFailureCode,
+} from './parse-output.js';
 import type { AutoRules } from './rules.js';
 import type { ToolCallSignal } from './signals.js';
 import type { PermissionIntentEvidence } from './permission-intent.js';
@@ -89,6 +93,8 @@ export interface ClassifierAttemptDiagnostics {
   readonly attempt: number;
   readonly outcome: ClassifierAttemptOutcome;
   readonly diagnostics?: SideQueryDiagnostics;
+  readonly observedProtocol?: ClassifierObservedProtocol;
+  readonly parseFailureCode?: ClassifierParseFailureCode | 'tool_use';
 }
 
 interface ClassifyDecisionDetails {
@@ -109,10 +115,10 @@ export type ClassifyDecision =
 /**
  * The deadline includes connection setup, provider-side queueing, inference,
  * and any Retry-After/backoff handled by the provider adapter. Keep it bounded
- * so infrastructure failure degrades to an explicit user decision.
+ * so infrastructure failure reaches the configured Accept-edits fallback.
  */
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
-/** The classifier returns two short XML tags; a coding-turn-sized budget is wasteful. */
+/** The classifier returns three short XML tags; a coding-turn-sized budget is wasteful. */
 export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
 /** Very large shell/script projections cannot be safely truncated and auto-approved. */
 export const MAX_CLASSIFIER_ACTION_BYTES = 16 * 1024;
@@ -177,6 +183,12 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
       attempt,
       outcome: interpreted.outcome,
       diagnostics: result.diagnostics,
+      ...(interpreted.observedProtocol !== undefined
+        ? { observedProtocol: interpreted.observedProtocol }
+        : {}),
+      ...(interpreted.parseFailureCode !== undefined
+        ? { parseFailureCode: interpreted.parseFailureCode }
+        : {}),
     });
 
     if (interpreted.outcome === 'allow' || interpreted.outcome === 'confirm') {
@@ -207,6 +219,8 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
 interface InterpretedAttempt {
   readonly outcome: ClassifierAttemptOutcome;
   readonly reason: string;
+  readonly observedProtocol?: ClassifierObservedProtocol;
+  readonly parseFailureCode?: ClassifierParseFailureCode | 'tool_use';
 }
 
 function interpretAttempt(
@@ -216,16 +230,22 @@ function interpretAttempt(
   switch (result.stopReason) {
     case 'end_turn':
     case 'max_tokens': {
+      // Canonical output is structured_v2, but Runtime remains a dual-reader
+      // during rollout so providers that emit the prior valid contract do not
+      // turn a semantic allow/ask decision into an infrastructure failure.
       const decision = parseClassifierOutput(result.text);
       if (decision.kind === 'unparseable') {
         return {
           outcome: 'contract_error',
-          reason: 'classifier output was unparseable (contract violation)',
+          reason: `classifier output was unparseable (contract violation: ${decision.failureCode})`,
+          observedProtocol: decision.observedProtocol,
+          parseFailureCode: decision.failureCode,
         };
       }
       return {
         outcome: decision.kind === 'block' ? 'confirm' : 'allow',
         reason: decision.reason,
+        observedProtocol: decision.protocol,
       };
     }
 
@@ -248,6 +268,7 @@ function interpretAttempt(
         ? {
           outcome: 'contract_error',
           reason: 'classifier returned tool_use (contract violation)',
+          parseFailureCode: 'tool_use',
         }
         : {
           outcome: 'provider_error',

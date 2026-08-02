@@ -90,7 +90,7 @@ describe('classify', () => {
 
   it('returns allow when classifier outputs <block>no</block>', async () => {
     const provider = new StubProvider(async () =>
-      okStream('<block>no</block><reason>safe local read</reason>'),
+      okStream('<block>no</block>'),
     );
     const result = await classify({
       provider,
@@ -165,7 +165,54 @@ describe('classify', () => {
       expect(result.failureKind).toBe('contract_error');
       expect(result.reason).toMatch(/unparseable/i);
       expect(result.attempts).toHaveLength(2);
+      expect(result.attempts).toEqual([
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'missing_decision',
+          observedProtocol: 'unknown',
+          diagnostics: expect.objectContaining({
+            stopReason: 'end_turn',
+            responseBytes: Buffer.byteLength('looks safe to me', 'utf8'),
+            textBlockCount: 1,
+          }),
+        }),
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'missing_decision',
+        }),
+      ]);
     }
+  });
+
+  it('accepts the legacy classifier protocol during Runtime structured-context rollout', async () => {
+    const provider = new StubProvider(async () => (
+      okStream('<block>no</block><reason>read-only PowerShell inspection</reason>')
+    ));
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: '{"operations":[{"kind":"execute","options":{"readOnly":true}}]}',
+      intentEvidence: {
+        status: 'complete',
+        currentUserContent: 'Check whether rg is installed.',
+        currentUserContentTruncated: false,
+        content: '[root-user-intent] Check whether rg is installed.',
+        sourceBytes: 49,
+        includedBytes: 49,
+        omittedBytes: 0,
+        sha256: 'b'.repeat(64),
+      },
+    });
+
+    expect(result.kind).toBe('allow');
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({
+      outcome: 'allow',
+      observedProtocol: 'legacy_v1',
+    });
   });
 
   it('retries a timeout once, then returns an infrastructure failure', async () => {
@@ -300,6 +347,45 @@ describe('classify', () => {
       attempt: 2,
       outcome: 'allow',
     });
+  });
+
+  it('retries a contradictory structured decision instead of asking the user', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return providerCalls === 1
+        ? okStream(
+          '<decision>ask</decision><hazard>none</hazard>'
+          + '<reason>blocking is unnecessary</reason>',
+        )
+        : okStream(
+          '<decision>allow</decision><hazard>none</hazard>'
+          + '<reason>ordinary read</reason>',
+        );
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: '{"operations":[{"kind":"read"}]}',
+      intentEvidence: {
+        status: 'complete',
+        currentUserContent: 'Review the current changes.',
+        currentUserContentTruncated: false,
+        content: '[root-user-intent] Review the current changes.',
+        sourceBytes: 48,
+        includedBytes: 48,
+        omittedBytes: 0,
+        sha256: 'a'.repeat(64),
+      },
+    });
+
+    expect(result.kind).toBe('allow');
+    expect(providerCalls).toBe(2);
+    expect(result.attempts.map((attempt) => attempt.outcome))
+      .toEqual(['contract_error', 'allow']);
   });
 
   it('passes the action through to the classifier prompt', async () => {

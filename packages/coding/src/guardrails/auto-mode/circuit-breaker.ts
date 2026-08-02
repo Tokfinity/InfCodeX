@@ -3,8 +3,9 @@
  *
  * Sliding-window error counter for classifier failures (timeouts, 5xx, 429,
  * unparseable outputs). When ≥ 5 errors land within a 10-minute window, the
- * auto-mode engine downgrades from `llm` to `rules` (mode stays `auto`) so
- * the user is not blocked by a degraded classifier path.
+ * callers temporarily skip classifier calls and apply the Accept-edits
+ * failure boundary. The selected Auto engine remains `llm`; health state is
+ * diagnostic, not a mode change.
  *
  * Pure functional API: each operation returns a new breaker. No mutation.
  * Memory bound: stale timestamps are pruned on each recordError call so

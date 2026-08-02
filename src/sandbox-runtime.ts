@@ -39,6 +39,7 @@ import {
   getAgentConfigHome,
   killChildProcessTree,
   prepareInternalNodeLaunch,
+  rememberChildProcessTree,
   type ISkillRegistry,
   type RunnerToolCall,
   type Skill,
@@ -205,8 +206,13 @@ const moduleRequire = createRequire(import.meta.url);
 const ASRT_MODULE_URL = process.env.KODAX_BUNDLED === 'true'
   ? undefined
   : pathToFileURL(moduleRequire.resolve('@anthropic-ai/sandbox-runtime')).href;
-const SENSITIVE_PATH_PARTS = new Set(['.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents']);
-const SENSITIVE_FILES = new Set(['.env', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519']);
+const SENSITIVE_PATH_PARTS = new Set([
+  '.ssh', '.aws', '.azure', '.gnupg', '.kodax', '.agents', '.codex', '.claude', '.gemini',
+  '.direnv', '.terraform.d',
+]);
+const SENSITIVE_FILES = new Set([
+  '.env', '.envrc', '.pgpass', '.npmrc', '.pypirc', 'credentials', 'id_rsa', 'id_ed25519',
+]);
 const WORKSPACE_SHELL_SENSITIVE_HOME_PATHS = [
   '.ssh',
   '.aws',
@@ -216,9 +222,51 @@ const WORKSPACE_SHELL_SENSITIVE_HOME_PATHS = [
   '.docker',
   '.kodax',
   '.agents',
+  '.codex',
+  '.claude',
+  '.gemini',
+  '.direnv',
+  '.terraform.d',
+  path.join('.cargo', 'credentials.toml'),
   path.join('.config', 'gcloud'),
   path.join('.config', 'gh'),
+  path.join('.config', 'openai'),
+  path.join('.config', 'anthropic'),
+  '.gitconfig',
+  path.join('.config', 'git', 'config'),
+  '.terraformrc',
+  path.join('.config', 'pypoetry', 'auth.toml'),
+  '.condarc',
+  '.bashrc',
+  '.bash_profile',
+  '.zshrc',
+  '.zprofile',
+  '.profile',
+  path.join('.config', 'fish', 'config.fish'),
+  path.join('.config', 'fish', 'fish_variables'),
+  '.bash_history',
+  '.zsh_history',
+  path.join('.m2', 'settings.xml'),
+  path.join('.m2', 'settings-security.xml'),
+  path.join('.gradle', 'gradle.properties'),
+  path.join('.nuget', 'NuGet', 'NuGet.Config'),
+  path.join('.pip', 'pip.conf'),
+  path.join('.config', 'pip', 'pip.conf'),
+  path.join('.cache', 'huggingface', 'token'),
+  path.join('.huggingface', 'token'),
+  path.join('.config', 'rclone', 'rclone.conf'),
+  path.join('.local', 'share', 'keyrings'),
+  path.join('Library', 'Keychains'),
+  path.join('AppData', 'Roaming', 'Microsoft', 'Protect'),
+  path.join('AppData', 'Roaming', 'Microsoft', 'Credentials'),
+  path.join('AppData', 'Roaming', 'Microsoft', 'Vault'),
+  path.join('AppData', 'Local', 'Microsoft', 'Credentials'),
+  path.join('AppData', 'Local', 'Microsoft', 'Protect'),
+  path.join('AppData', 'Local', 'Microsoft', 'Vault'),
+  '.password-store',
   '.env',
+  '.envrc',
+  '.pgpass',
   '.env.local',
   '.env.development',
   '.env.production',
@@ -1229,6 +1277,7 @@ async function runBrokerResult(
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
+    rememberChildProcessTree(child);
     return await collectProcess(child, signal, timeoutMs, maxOutputBytes);
   } finally {
     await rm(requestFile, { force: true });
@@ -1711,6 +1760,7 @@ async function startWorkspaceSessionClient(
     stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  rememberChildProcessTree(child);
   const control = child.stdio[3];
   if (!control) throw new Error('ASRT workspace session control pipe was not created.');
   const responses = readline.createInterface({

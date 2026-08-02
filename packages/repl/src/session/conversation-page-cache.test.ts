@@ -15,6 +15,10 @@ import {
   refreshConversationPageCache,
   writeConversationPageCache,
 } from './conversation-page-cache.js';
+import {
+  createSessionSourceRevision,
+  createSessionSourceRevisionState,
+} from './source-revision.js';
 
 const roots: string[] = [];
 
@@ -34,10 +38,19 @@ async function fixture(content: string) {
       message: { role: 'user', content },
     }],
   };
+  const sourceRevisionState = createSessionSourceRevisionState([{
+    kind: 'main',
+    relativePath: 'session.jsonl',
+    bytes: Buffer.from(content),
+  }]);
   return {
     mainPath,
     lineage,
-    history: buildSessionConversationHistory(lineage, `sha256:${content}`),
+    sourceRevisionState,
+    history: buildSessionConversationHistory(
+      lineage,
+      createSessionSourceRevision(sourceRevisionState),
+    ),
   };
 }
 
@@ -53,17 +66,25 @@ describe('Conversation page cache durability', () => {
     await writeConversationPageCache(
       value.mainPath,
       'boundary:first',
+      value.sourceRevisionState,
       value.history,
       value.lineage,
       { surface: 'repl' },
       1024,
     );
     const before = await readConversationPageCacheManifest(value.mainPath);
-    const refreshedHistory = buildSessionConversationHistory(value.lineage, 'sha256:refreshed');
+    const refreshedState = createSessionSourceRevisionState([{
+      kind: 'main',
+      relativePath: 'session.jsonl',
+      bytes: Buffer.from('refreshed'),
+    }]);
+    const refreshedRevision = createSessionSourceRevision(refreshedState);
+    const refreshedHistory = buildSessionConversationHistory(value.lineage, refreshedRevision);
 
     await expect(refreshConversationPageCache(
       value.mainPath,
       'boundary:refreshed',
+      refreshedState,
       refreshedHistory,
       value.lineage,
       { surface: 'repl', profileId: 'default' },
@@ -79,7 +100,7 @@ describe('Conversation page cache durability', () => {
         surface: 'repl',
         profileId: 'default',
       }),
-    })).resolves.toMatchObject({ sourceRevision: 'sha256:refreshed' });
+    })).resolves.toMatchObject({ sourceRevision: refreshedRevision });
   });
 
   it('rejects oversized manifests without reading them into memory', async () => {
@@ -97,6 +118,7 @@ describe('Conversation page cache durability', () => {
     await writeConversationPageCache(
       value.mainPath,
       'boundary:descriptor',
+      value.sourceRevisionState,
       value.history,
       value.lineage,
       undefined,
@@ -135,14 +157,24 @@ describe('Conversation page cache durability', () => {
     await writeConversationPageCache(
       first.mainPath,
       'boundary:first',
+      first.sourceRevisionState,
       first.history,
       first.lineage,
       { surface: 'repl' },
       1024,
     );
+    const secondState = createSessionSourceRevisionState([{
+      kind: 'main',
+      relativePath: 'session.jsonl',
+      bytes: Buffer.from('second'),
+    }]);
     const second = {
       ...first,
-      history: buildSessionConversationHistory(first.lineage, 'sha256:second'),
+      sourceRevisionState: secondState,
+      history: buildSessionConversationHistory(
+        first.lineage,
+        createSessionSourceRevision(secondState),
+      ),
     };
     vi.spyOn(fs, 'readdir').mockRejectedValueOnce(
       Object.assign(new Error('cleanup denied'), { code: 'EACCES' }),
@@ -152,6 +184,7 @@ describe('Conversation page cache durability', () => {
     await expect(writeConversationPageCache(
       second.mainPath,
       'boundary:second',
+      second.sourceRevisionState,
       second.history,
       second.lineage,
       { surface: 'repl' },
@@ -168,7 +201,7 @@ describe('Conversation page cache durability', () => {
       reservedBytes: 0,
       authorize: (identity) => expect(identity).toEqual({ surface: 'repl' }),
     })).resolves.toMatchObject({
-      sourceRevision: 'sha256:second',
+      sourceRevision: createSessionSourceRevision(second.sourceRevisionState),
       entries: [{ entry: { message: { content: 'first' } } }],
     });
   });
@@ -178,6 +211,7 @@ describe('Conversation page cache durability', () => {
     await writeConversationPageCache(
       value.mainPath,
       'boundary:stable',
+      value.sourceRevisionState,
       value.history,
       value.lineage,
       undefined,
@@ -205,6 +239,7 @@ describe('Conversation page cache durability', () => {
     await expect(writeConversationPageCache(
       value.mainPath,
       'boundary:open-failure',
+      value.sourceRevisionState,
       value.history,
       value.lineage,
       undefined,
@@ -218,6 +253,7 @@ describe('Conversation page cache durability', () => {
     await writeConversationPageCache(
       value.mainPath,
       'boundary:partial',
+      value.sourceRevisionState,
       value.history,
       value.lineage,
       undefined,
@@ -251,6 +287,50 @@ describe('Conversation page cache durability', () => {
         entryCount: 1,
         entryIds: ['entry-1'],
       }],
-    }, 1, 'entry-1', appendedLineage)).toBeUndefined();
+    }, 'entry-1', appendedLineage.entries.slice(1), 'entry-2')).toBeUndefined();
+  });
+
+  it('checks append identity conflicts without traversing the persisted lineage prefix', async () => {
+    const value = await fixture('bounded-identity-filter');
+    await writeConversationPageCache(
+      value.mainPath,
+      'boundary:identity-filter',
+      value.sourceRevisionState,
+      value.history,
+      value.lineage,
+      undefined,
+      1024,
+    );
+    const manifest = await readConversationPageCacheManifest(value.mainPath);
+    if (manifest === undefined) throw new Error('Conversation cache manifest missing');
+    const appended = [
+      {
+        type: 'message' as const,
+        id: 'entry-2',
+        parentId: 'entry-1',
+        timestamp: '2026-08-01T00:00:01.000Z',
+        logicalId: 'entry-2',
+        message: { role: 'assistant' as const, content: 'bounded identity check' },
+      },
+    ];
+    expect(canAppendConversationPageCache(
+      manifest,
+      'entry-1',
+      appended,
+      'entry-2',
+    )).toMatchObject([{ boundaryId: 'entry-2' }]);
+    expect(canAppendConversationPageCache(
+      manifest,
+      'entry-1',
+      [{
+        type: 'message',
+        id: 'entry-1',
+        parentId: 'entry-1',
+        timestamp: '2026-08-01T00:00:01.000Z',
+        logicalId: 'entry-1',
+        message: { role: 'assistant', content: 'duplicate identity' },
+      }],
+      'entry-1',
+    )).toBeUndefined();
   });
 });

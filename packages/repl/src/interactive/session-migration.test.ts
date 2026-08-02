@@ -1,8 +1,9 @@
 import os from 'os';
 import path from 'path';
 import { existsSync } from 'fs';
+import fsPromises from 'fs/promises';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ensureLayoutMigrated,
@@ -35,6 +36,7 @@ describe('FEATURE_219 session-migration', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -123,10 +125,50 @@ describe('FEATURE_219 session-migration', () => {
       `${metaLine('20260601_000000')}\n`,
       'utf8',
     );
+    await writeFile(
+      path.join(archiveDir, '20260601_000000.conversation-cache.legacy.data'),
+      'recoverable archived cache body',
+      'utf8',
+    );
 
     await runMigration(sessionsDir);
 
     expect(existsSync(path.join(sessionsDir, key, '20260601_000000.jsonl'))).toBe(true);
     expect(existsSync(archiveDir)).toBe(false); // retired
+  });
+
+  it('does not move a legacy Session until its recoverable page cache is removed, and retries', async () => {
+    const id = '20260701_000000';
+    const flat = await seedFlat(id);
+    const cacheFiles = [
+      path.join(sessionsDir, `${id}.conversation-cache.json`),
+      path.join(sessionsDir, `${id}.conversation-cache.generation.data`),
+      path.join(sessionsDir, `${id}.conversation-cache.generation.index`),
+    ];
+    await Promise.all(cacheFiles.map((filePath) => writeFile(filePath, 'recoverable body')));
+    const originalRm = fsPromises.rm.bind(fsPromises);
+    let denied = false;
+    const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (candidate, options) => {
+      if (!denied && cacheFiles.includes(path.resolve(String(candidate)))) {
+        denied = true;
+        throw Object.assign(new Error('legacy cache cleanup denied'), { code: 'EACCES' });
+      }
+      return originalRm(candidate, options);
+    });
+
+    try {
+      await expect(ensureLayoutMigrated(sessionsDir)).rejects.toMatchObject({
+        name: 'ConversationPageCacheCleanupError',
+      });
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(existsSync(flat)).toBe(true);
+    expect(await isMigrated(sessionsDir)).toBe(false);
+    await expect(ensureLayoutMigrated(sessionsDir)).resolves.toBeUndefined();
+    expect(existsSync(flat)).toBe(false);
+    expect(existsSync(path.join(sessionsDir, key, `${id}.jsonl`))).toBe(true);
+    expect(cacheFiles.some(existsSync)).toBe(false);
   });
 });

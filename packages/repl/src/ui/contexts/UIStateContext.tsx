@@ -91,17 +91,21 @@ export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
     return history;
   }
   let userCount = 0;
-  let cutIndex = 0;
+  let cutIndex = history.length - MAX_HISTORY_ITEMS;
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i]?.type === "user") {
       userCount++;
       if (userCount > 50) {
-        cutIndex = i;
+        cutIndex = Math.max(cutIndex, i);
         break;
       }
     }
   }
-  return cutIndex > 0 ? history.slice(cutIndex) : history;
+  const nextUserOffset = history
+    .slice(cutIndex)
+    .findIndex((item) => item.type === "user");
+  if (nextUserOffset > 0) cutIndex += nextUserOffset;
+  return history.slice(cutIndex);
 }
 
 /**

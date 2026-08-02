@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-07-29
+> Last updated: 2026-08-01
 >
-> Current implementation baseline: `v0.7.78` integrated release candidate
-> (`@kodax-ai/kodax@0.7.78` workspace package)
+> Current implementation baseline: `v0.7.79` development candidate
+> (`@kodax-ai/kodax@0.7.79` workspace package)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -56,7 +56,7 @@ server product around it.
 | SDK root | `@kodax-ai/kodax` | `runKodaX`, `KodaXClient`, events, session storage helpers. |
 | Runtime SDK | `@kodax-ai/kodax/runtime` | Stable sessions/runs/events/permissions/workflows/config/catalog/MCP/artifact/diagnostic facade in inline, Worker, or daemon form. |
 | Daemon operations | `kodax daemon start/status/logs/stop/restart` | One local owner per `homeDir + profile`, shared by REPL, Space, IDE, and SDK clients. |
-| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/experimental-memory` | Smaller import surfaces for embedders; governed memory remains explicitly experimental. |
+| SDK subpaths | `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`, `/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, `/experimental-memory` | Twelve focused import surfaces for embedders; governed memory remains explicitly experimental. |
 | Binary release | `bun --compile` output | Runs without Node.js on the target machine. |
 
 ## 5. Current Execution Model
@@ -217,6 +217,14 @@ untrusted-code sandbox. A caller that requires deterministic V8 disposal must
 be able to request `hardDispose` and receive an error from inline or daemon
 forms rather than a silent downgrade.
 
+Windows process cleanup must never equate an incomplete observation with
+verified descendant termination. Identity-checked snapshots prevent PID-reuse
+mis-kills and may report `unknown`, but they are not kernel containment: an
+intermediate process can exit before a later snapshot and hide an already-
+running descendant. The v0.7.79 release gate therefore requires spawn-time Job
+Object containment and a host-issued Worker owner lease before KodaX claims
+complete descendant closure.
+
 ### Providers
 
 KodaX must support 16 built-in provider aliases plus user-defined compatible
@@ -234,6 +242,11 @@ alias defaults to the official `k3-256k` Model ID while retaining
 `kimi-for-coding` for K2.7 Code and exposing the `k3` route with a
 1,048,576-token local context tier. `thinking.effort` carries K3 reasoning
 intent without mixing public and subscription credentials.
+
+OpenAI-compatible custom providers may select `max_tokens` or
+`max_completion_tokens` at provider or per-model scope; model configuration
+overrides the provider default. DeepSeek V4 Flash and Pro have distinct
+reasoning profiles, share the 1M context tier, and remain text-only.
 
 A bare interactive first launch and `kodax setup` must initialize and validate
 the complete split configuration before Runtime or REPL creation: core,
@@ -276,6 +289,14 @@ context from append-order transcript history. Resumed interactive sessions
 should preserve durable terminal tool-card replay where sanitized `uiHistory`
 is available, while canonical `messages` / `lineage` remain the source of
 truth.
+
+Hosts that render ordinary chat require a third, SDK-owned view distinct from
+both active model context and raw audit scrollback. That projection folds only
+copies proven equivalent by persisted provenance or unambiguous lineage,
+retains unresolved candidates, reports `resolved` / `partial` / `ambiguous`,
+and supplies revision-fenced physical boundaries for fork or rewind. Hosts must
+not reconstruct it from role, content, timestamp, `turnId`, or `logicalId`
+grouping alone.
 
 Continue-most-recent must select the newest non-empty Session in the requested
 project rather than a newer zero-message ACP/bootstrap placeholder. The rule is
@@ -370,7 +391,11 @@ a Resource Server and does not issue production tokens.
 User A2A configuration is version 2. Legacy non-empty version 1 files require
 an explicit migration while every owning daemon is stopped. Per-Agent
 `enabled` state blocks new admission after owner reconciliation without
-cancelling in-flight work. Durable task routes, authentication realms,
+cancelling in-flight work. Private-address and non-loopback plaintext-HTTP
+permissions are independent, persisted, and default-deny; exact loopback HTTP
+needs neither, while private HTTP needs both. CLI discovery/call, Worker and
+daemon reconciliation, registration fingerprints, and execution must preserve
+the same authority. Durable task routes, authentication realms,
 registration ownership/revisions, metadata limits, and SSE resource ceilings
 must remain fail-closed across reload, daemon restart, and shutdown.
 Retained pre-realm task owners require an explicit stopped-server identity

@@ -41,16 +41,10 @@ describe('resolveResumeFromRunDir (path-traversal guard)', () => {
 });
 
 describe('F270 actor principal wiring', () => {
-  it('binds the active Provider apiKeyEnv into configured-shell filtering', () => {
+  it('binds Provider credentials into default-shell filtering', () => {
     const ctx = buildToolExecutionContext({
       options: {
         provider: 'openai',
-        context: {
-          shellExecution: {
-            version: 1,
-            shell: { kind: 'bash', profile: 'none' },
-          },
-        },
       },
       runtime: undefined,
       managedProtocolPayloadRef: { current: undefined },
@@ -59,7 +53,7 @@ describe('F270 actor principal wiring', () => {
     expect(ctx.providerCredentialEnvironmentNames).toContain('OPENAI_API_KEY');
   });
 
-  it('filters non-standard credentials owned by inactive registered Providers', () => {
+  it('filters non-standard credentials from the default shell too', () => {
     registerCustomProviders([{
       name: 'inactive-shell-review-provider',
       protocol: 'openai',
@@ -71,12 +65,6 @@ describe('F270 actor principal wiring', () => {
       const ctx = buildToolExecutionContext({
         options: {
           provider: 'openai',
-          context: {
-            shellExecution: {
-              version: 1,
-              shell: { kind: 'bash', profile: 'none' },
-            },
-          },
         },
         runtime: undefined,
         managedProtocolPayloadRef: { current: undefined },

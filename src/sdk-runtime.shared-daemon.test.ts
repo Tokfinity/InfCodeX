@@ -2,7 +2,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { FileSessionStorage } from '@kodax-ai/repl';
 
 import {
   acquireKodaXInlineOwner,
@@ -54,6 +56,11 @@ describe('F269 shared Runtime contracts', () => {
       surface: 'partner',
       profileId: 'kodax-space.partner',
     });
+    const unknownSurface = await partner.sessions.create({
+      sessionId: 'unknown-surface-existing',
+      title: 'Unknown surface',
+      surface: 'custom-product',
+    });
     await partner.close();
     const sessionFile = fs.readdirSync(sessionsDir, { recursive: true })
       .map((entry) => path.join(sessionsDir, entry.toString()))
@@ -95,6 +102,36 @@ describe('F269 shared Runtime contracts', () => {
     await expect(daemon.sessions.transcript(session.id)).rejects.toMatchObject({
       code: 'session_not_admitted',
     });
+    const peek = vi.spyOn(FileSessionStorage.prototype, 'peek');
+    const fullCapture = vi.spyOn(FileSessionStorage.prototype, 'readFullSnapshot');
+    const stalePageCursor = Buffer.from(JSON.stringify({
+      kind: 'conversation_cache_page',
+      view: 'conversation',
+      revision: 'sha256:stale',
+      end: 0,
+    }), 'utf8').toString('base64url');
+    for (const deniedSessionId of [session.id, unknownSurface.id]) {
+      peek.mockClear();
+      fullCapture.mockClear();
+      await expect(daemon.sessions.conversationPage({
+        sessionId: deniedSessionId,
+        limit: 1,
+      })).rejects.toMatchObject({ code: 'session_not_admitted' });
+      await expect(daemon.sessions.conversationPage({
+        sessionId: deniedSessionId,
+        cursor: stalePageCursor,
+        limit: 1,
+      })).rejects.toMatchObject({ code: 'session_not_admitted' });
+      await expect(daemon.sessions.conversationEntryChunk({
+        sessionId: deniedSessionId,
+        revision: 'sha256:stale',
+        entryIndex: 0,
+      })).rejects.toMatchObject({ code: 'session_not_admitted' });
+      expect(peek).not.toHaveBeenCalled();
+      expect(fullCapture).not.toHaveBeenCalled();
+    }
+    peek.mockRestore();
+    fullCapture.mockRestore();
     await expect(daemon.sessions.fork({ sessionId: session.id })).rejects.toMatchObject({
       code: 'session_not_admitted',
     });

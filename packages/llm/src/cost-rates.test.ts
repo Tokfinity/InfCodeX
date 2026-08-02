@@ -119,17 +119,16 @@ describe('cost-rates', () => {
 
     it('should have DeepSeek V4 models with cache pricing', () => {
       const deepseek = DEFAULT_COST_RATES.deepseek;
-      expect(deepseek['deepseek-v4-flash']).toBeDefined();
-      expect(deepseek['deepseek-v4-flash'].cachePer1M).toBeDefined();
-      expect(deepseek['deepseek-v4-pro']).toBeDefined();
-      expect(deepseek['deepseek-v4-pro'].cachePer1M).toBeDefined();
-      // Pro tier should cost meaningfully more than Flash on every axis.
-      expect(deepseek['deepseek-v4-pro'].inputPer1M).toBeGreaterThan(
-        deepseek['deepseek-v4-flash'].inputPer1M,
-      );
-      expect(deepseek['deepseek-v4-pro'].outputPer1M).toBeGreaterThan(
-        deepseek['deepseek-v4-flash'].outputPer1M,
-      );
+      expect(deepseek['deepseek-v4-flash']).toEqual({
+        inputPer1M: 0.14,
+        outputPer1M: 0.28,
+        cachePer1M: 0.0028,
+      });
+      expect(deepseek['deepseek-v4-pro']).toEqual({
+        inputPer1M: 0.435,
+        outputPer1M: 0.87,
+        cachePer1M: 0.003625,
+      });
     });
 
     it('should have empty entries for CLI bridge providers', () => {

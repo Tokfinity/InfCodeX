@@ -2,7 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type { KodaXSessionLineage, KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
+import type {
+  KodaXSessionEntry,
+  KodaXSessionLineage,
+  KodaXSessionRuntimeInfo,
+} from '@kodax-ai/agent';
 
 import {
   createConversationEntryChain,
@@ -13,8 +17,13 @@ import {
   type SessionConversationHistoryIssue,
   type SessionConversationHistoryStatus,
 } from './conversation-history.js';
+import {
+  createSessionSourceRevision,
+  isSessionSourceRevisionState,
+  type SessionSourceRevisionState,
+} from './source-revision.js';
 
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const INDEX_RECORD_BYTES = 24;
 const CACHE_FILE_MARKER = '.conversation-cache.';
 const CACHE_MANIFEST_SUFFIX = `${CACHE_FILE_MARKER}json`;
@@ -22,6 +31,10 @@ const WRITE_BATCH_BYTES = 1024 * 1024;
 const MAX_CACHE_MANIFEST_BYTES = 1024 * 1024;
 const MAX_CACHE_DESCRIPTOR_BYTES = 1024 * 1024;
 const MAX_CACHE_CHUNK_BYTES = 4 * 1024 * 1024;
+// Fixed-size, no-false-negative membership witness. A false positive only
+// invalidates the optimization and falls back to canonical reconstruction.
+const IDENTITY_FILTER_BYTES = 128 * 1024;
+const IDENTITY_FILTER_HASHES = 7;
 
 export interface ConversationPageCacheAdmission {
   readonly surface?: string;
@@ -29,10 +42,12 @@ export interface ConversationPageCacheAdmission {
 }
 
 interface ConversationCacheManifest {
-  readonly version: 2;
+  readonly version: 3;
   readonly sessionId: string;
   readonly generation: string;
   readonly sourceRevision: string;
+  readonly sourceRevisionState: SessionSourceRevisionState;
+  readonly identityFilter: string;
   readonly boundaryRevision: string;
   readonly revision: string;
   readonly entryChain: string;
@@ -124,6 +139,16 @@ export class ConversationPageCacheCapacityError extends Error {
   }
 }
 
+export class ConversationPageCacheCleanupError extends Error {
+  constructor(
+    readonly directory: string,
+    readonly cleanupCause: unknown,
+  ) {
+    super(`Unable to remove recoverable Conversation page caches from ${directory}`);
+    this.name = 'ConversationPageCacheCleanupError';
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -139,6 +164,19 @@ function cacheManifestPath(mainPath: string): string {
 function cacheGenerationPath(mainPath: string, generation: string, kind: 'data' | 'index'): string {
   const stem = mainPath.slice(0, -path.extname(mainPath).length);
   return `${stem}${CACHE_FILE_MARKER}${generation}.${kind}`;
+}
+
+function cacheArtifactSessionId(fileName: string): string | undefined {
+  const marker = fileName.lastIndexOf(CACHE_FILE_MARKER);
+  if (marker <= 0) return undefined;
+  const suffix = fileName.slice(marker + CACHE_FILE_MARKER.length);
+  if (
+    suffix !== 'json'
+    && !(suffix.startsWith('json.') && suffix.endsWith('.tmp'))
+    && !suffix.endsWith('.data')
+    && !suffix.endsWith('.index')
+  ) return undefined;
+  return fileName.slice(0, marker);
 }
 
 function isSafeCacheFileName(mainPath: string, fileName: string, kind: 'data' | 'index'): boolean {
@@ -179,12 +217,73 @@ function isConversationPageCacheAdmission(
     && (value.profileId === undefined || typeof value.profileId === 'string');
 }
 
+function identityPositions(identity: string): readonly number[] {
+  const digest = createHash('sha256')
+    .update('kodax-conversation-identity-filter-v1\0')
+    .update(identity, 'utf8')
+    .digest();
+  return Array.from({ length: IDENTITY_FILTER_HASHES }, (_, index) =>
+    digest.readUInt32LE(index * 4) % (IDENTITY_FILTER_BYTES * 8));
+}
+
+function identityFilterContains(filter: Buffer, identity: string): boolean {
+  return identityPositions(identity).every((position) =>
+    (filter[position >>> 3]! & (1 << (position & 7))) !== 0);
+}
+
+function addIdentityToFilter(filter: Buffer, identity: string): void {
+  for (const position of identityPositions(identity)) {
+    filter[position >>> 3] = filter[position >>> 3]! | (1 << (position & 7));
+  }
+}
+
+function lineageEntryIdentities(entry: KodaXSessionLineage['entries'][number]): readonly string[] {
+  return [entry.id, entry.logicalId, entry.sourceEntryId]
+    .filter((identity): identity is string => identity !== undefined);
+}
+
+export function createConversationPageIdentityFilter(lineage: KodaXSessionLineage): string {
+  const filter = Buffer.alloc(IDENTITY_FILTER_BYTES);
+  for (const entry of lineage.entries) {
+    for (const identity of lineageEntryIdentities(entry)) addIdentityToFilter(filter, identity);
+  }
+  return filter.toString('base64');
+}
+
+export function extendConversationPageIdentityFilter(
+  encoded: string,
+  entries: readonly KodaXSessionEntry[],
+): string {
+  const filter = Buffer.from(encoded, 'base64');
+  for (const entry of entries) {
+    for (const identity of lineageEntryIdentities(entry)) addIdentityToFilter(filter, identity);
+  }
+  return filter.toString('base64');
+}
+
+function isIdentityFilter(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const decoded = Buffer.from(value, 'base64');
+  return decoded.length === IDENTITY_FILTER_BYTES && decoded.toString('base64') === value;
+}
+
+export function conversationPageIdentityFilterContains(
+  encoded: string,
+  identity: string,
+): boolean {
+  if (!isIdentityFilter(encoded)) return true;
+  return identityFilterContains(Buffer.from(encoded, 'base64'), identity);
+}
+
 function parseManifest(value: unknown, mainPath: string): ConversationCacheManifest | undefined {
   if (!isRecord(value) || value.version !== CACHE_VERSION) return undefined;
   if (
     typeof value.sessionId !== 'string'
     || typeof value.generation !== 'string'
     || typeof value.sourceRevision !== 'string'
+    || !isSessionSourceRevisionState(value.sourceRevisionState)
+    || createSessionSourceRevision(value.sourceRevisionState) !== value.sourceRevision
+    || !isIdentityFilter(value.identityFilter)
     || typeof value.boundaryRevision !== 'string'
     || typeof value.revision !== 'string'
     || typeof value.entryChain !== 'string'
@@ -662,22 +761,29 @@ async function removeGenerationFiles(
   keepGeneration: string,
 ): Promise<void> {
   const directory = path.dirname(mainPath);
-  const prefix = `${path.basename(mainPath, path.extname(mainPath))}${CACHE_FILE_MARKER}`;
+  const sessionId = path.basename(mainPath, path.extname(mainPath));
+  const prefix = `${sessionId}${CACHE_FILE_MARKER}`;
   const keepPrefix = `${prefix}${keepGeneration}.`;
   const names = await fs.readdir(directory);
   await Promise.all(names
-    .filter((name) => name.startsWith(prefix) && !name.startsWith(keepPrefix) && name !== path.basename(cacheManifestPath(mainPath)))
+    .filter((name) => cacheArtifactSessionId(name) === sessionId
+      && !name.startsWith(keepPrefix)
+      && name !== path.basename(cacheManifestPath(mainPath)))
     .map((name) => fs.rm(path.join(directory, name), { force: true })));
 }
 
 export async function writeConversationPageCache(
   mainPath: string,
   boundaryRevision: string,
+  sourceRevisionState: SessionSourceRevisionState,
   history: SessionConversationHistoryData,
   lineage: KodaXSessionLineage,
   runtimeInfo: KodaXSessionRuntimeInfo | undefined,
   chunkBytes: number,
 ): Promise<void> {
+  if (createSessionSourceRevision(sourceRevisionState) !== history.sourceRevision) {
+    throw new ConversationPageCacheStaleError('Conversation source revision state is inconsistent');
+  }
   const generation = randomUUID();
   const dataPath = cacheGenerationPath(mainPath, generation, 'data');
   const indexPath = cacheGenerationPath(mainPath, generation, 'index');
@@ -689,6 +795,8 @@ export async function writeConversationPageCache(
       sessionId: path.basename(mainPath, path.extname(mainPath)),
       generation,
       sourceRevision: history.sourceRevision,
+      sourceRevisionState,
+      identityFilter: createConversationPageIdentityFilter(lineage),
       boundaryRevision,
       revision: createSessionConversationHistoryRevision(history, entryChain),
       entryChain,
@@ -721,10 +829,12 @@ export async function writeConversationPageCache(
 export async function refreshConversationPageCache(
   mainPath: string,
   boundaryRevision: string,
+  sourceRevisionState: SessionSourceRevisionState,
   history: SessionConversationHistoryData,
   lineage: KodaXSessionLineage,
   runtimeInfo: KodaXSessionRuntimeInfo | undefined,
 ): Promise<boolean> {
+  if (createSessionSourceRevision(sourceRevisionState) !== history.sourceRevision) return false;
   const manifest = await readConversationPageCacheManifest(mainPath);
   if (manifest === undefined || manifest.entryCount !== history.entries.length) return false;
   await assertCacheFilesStable(mainPath, manifest);
@@ -738,6 +848,8 @@ export async function refreshConversationPageCache(
   await replaceManifest(mainPath, {
     ...manifest,
     sourceRevision: history.sourceRevision,
+    sourceRevisionState,
+    identityFilter: createConversationPageIdentityFilter(lineage),
     boundaryRevision,
     revision,
     entryChain,
@@ -769,10 +881,12 @@ export async function appendConversationPageCache(
   mainPath: string,
   previous: ConversationCacheManifest,
   boundaryRevision: string,
-  sourceRevision: string,
+  sourceRevisionState: SessionSourceRevisionState,
   entries: readonly SessionConversationHistoryEntry[],
-  lineage: KodaXSessionLineage,
+  appendedLineageEntries: readonly KodaXSessionEntry[],
+  activeEntryId: string | null,
 ): Promise<void> {
+  const sourceRevision = createSessionSourceRevision(sourceRevisionState);
   const paths = cachePaths(mainPath, previous);
   await assertCacheFilesStable(mainPath, previous);
   const dataBuffers: Buffer[] = [];
@@ -802,12 +916,17 @@ export async function appendConversationPageCache(
   await replaceManifest(mainPath, {
     ...previous,
     sourceRevision,
+    sourceRevisionState,
+    identityFilter: extendConversationPageIdentityFilter(
+      previous.identityFilter,
+      appendedLineageEntries,
+    ),
     boundaryRevision,
     revision: createSessionConversationHistoryRevision(history, entryChain),
     entryChain,
     entryCount: previous.entryCount + entries.length,
-    lineageEntryCount: lineage.entries.length,
-    activeEntryId: lineage.activeEntryId,
+    lineageEntryCount: previous.lineageEntryCount + appendedLineageEntries.length,
+    activeEntryId,
     dataBytes,
     indexBytes: previous.indexBytes + entries.length * INDEX_RECORD_BYTES,
   });
@@ -815,7 +934,7 @@ export async function appendConversationPageCache(
 
 export async function removeConversationPageCache(mainPath: string): Promise<void> {
   const directory = path.dirname(mainPath);
-  const prefix = `${path.basename(mainPath, path.extname(mainPath))}${CACHE_FILE_MARKER}`;
+  const sessionId = path.basename(mainPath, path.extname(mainPath));
   let names: string[];
   try {
     names = await fs.readdir(directory);
@@ -824,32 +943,46 @@ export async function removeConversationPageCache(mainPath: string): Promise<voi
     throw error;
   }
   await Promise.all(names
-    .filter((name) => name.startsWith(prefix))
+    .filter((name) => cacheArtifactSessionId(name) === sessionId)
     .map((name) => fs.rm(path.join(directory, name), { force: true })));
+}
+
+/** Remove legacy cache artifacts that are no longer discoverable through a main path. */
+export async function removeConversationPageCachesInDirectory(directory: string): Promise<void> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw new ConversationPageCacheCleanupError(directory, error);
+  }
+  try {
+    await Promise.all(entries
+      .filter((entry) => !entry.isDirectory() && cacheArtifactSessionId(entry.name) !== undefined)
+      .map((entry) => fs.rm(path.join(directory, entry.name), { force: true })));
+  } catch (error: unknown) {
+    throw new ConversationPageCacheCleanupError(directory, error);
+  }
 }
 
 export function canAppendConversationPageCache(
   manifest: ConversationCacheManifest,
-  priorLineageCount: number,
   priorActiveEntryId: string | null | undefined,
-  lineage: KodaXSessionLineage,
+  appended: readonly KodaXSessionEntry[],
+  activeEntryId: string | null,
 ): readonly SessionConversationHistoryEntry[] | undefined {
   if (
     manifest.status !== 'resolved'
     || manifest.issues.length > 0
-    || manifest.lineageEntryCount !== priorLineageCount
     || manifest.activeEntryId !== priorActiveEntryId
   ) {
     return undefined;
   }
-  const appended = lineage.entries.slice(priorLineageCount);
   if (appended.length === 0) {
-    return lineage.activeEntryId === priorActiveEntryId ? [] : undefined;
+    return activeEntryId === priorActiveEntryId ? [] : undefined;
   }
-  const priorIdentities = new Set(lineage.entries
-    .slice(0, priorLineageCount)
-    .flatMap((entry) => [entry.id, entry.logicalId, entry.sourceEntryId])
-    .filter((identity): identity is string => identity !== undefined));
+  const priorIdentities = Buffer.from(manifest.identityFilter, 'base64');
+  const appendedIdentities = new Set<string>();
   let parentId = priorActiveEntryId;
   const projected: SessionConversationHistoryEntry[] = [];
   for (const entry of appended) {
@@ -858,7 +991,8 @@ export function canAppendConversationPageCache(
       || entry.parentId !== parentId
       || (entry.logicalId !== undefined && entry.logicalId !== entry.id)
       || entry.sourceEntryId !== undefined
-      || priorIdentities.has(entry.id)
+      || identityFilterContains(priorIdentities, entry.id)
+      || appendedIdentities.has(entry.id)
     ) {
       return undefined;
     }
@@ -867,8 +1001,8 @@ export function canAppendConversationPageCache(
       auditEntryIds: [entry.id],
       message: entry.message,
     });
-    priorIdentities.add(entry.id);
+    appendedIdentities.add(entry.id);
     parentId = entry.id;
   }
-  return lineage.activeEntryId === parentId ? projected : undefined;
+  return activeEntryId === parentId ? projected : undefined;
 }

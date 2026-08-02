@@ -1589,6 +1589,12 @@ export interface KodaXShellSandbox {
 }
 
 export interface KodaXContextOptions {
+  /**
+   * Runtime-authenticated authority for permission review. Child runtimes must
+   * preserve the root request and add delegation metadata instead of treating
+   * their generated briefing as a new user authorization.
+   */
+  permissionIntent?: import('@kodax-ai/agent').GuardrailPermissionIntent;
   /** Runtime-owner config home used by Memory, review inbox, and Learned Area routing. */
   configHome?: string;
   /** Runtime-internal shared work ledger inherited by every descendant Agent run. */
@@ -2336,6 +2342,8 @@ export interface KodaXToolExecutionContext {
   actorTurnRef?: { readonly actorPath: string; readonly turnId: string };
   /** Shared root-run work ledger; descendant runtimes retain this exact object. */
   managedWorkBudget?: KodaXManagedWorkBudget;
+  /** Trusted permission authority inherited independently of child transcripts. */
+  permissionIntent?: import('@kodax-ai/agent').GuardrailPermissionIntent;
   /** Trusted host operations that are intentionally absent from model-facing clients. */
   actorHost?: KodaXActorHost;
   /** FEATURE_260: current exactly-scoped read-only MemorySession query binding. */
@@ -2502,6 +2510,7 @@ export interface KodaXToolExecutionContext {
     readonly contextDiagnostics?: boolean;
     readonly disablePromptCache?: boolean;
     readonly shellExecution?: KodaXShellExecutionContract;
+    readonly permissionIntent?: import('@kodax-ai/agent').GuardrailPermissionIntent;
   };
   /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */
   parentEvents?: KodaXEvents;

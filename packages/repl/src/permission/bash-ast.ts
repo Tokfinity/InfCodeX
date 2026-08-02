@@ -58,6 +58,8 @@ export interface BashRedirection {
   readonly append: boolean;
   /** True when reading from (`<`, `<<`). */
   readonly input: boolean;
+  /** True for descriptor duplication/closure such as `2>&1` or `2>&-`. */
+  readonly descriptorDuplication?: true;
   /**
    * Target path (already unquoted). For null-device redirects (`/dev/null`,
    * `NUL`) callers can check `isNullDevice(target)`.
@@ -194,6 +196,13 @@ export function parseBashCommand(command: string): BashCommandTree {
       // `2>NUL` argv-fusion below.
       if (op === '&') {
         const next = entries[i + 1];
+        // PowerShell's call operator is a prefix (`& 'script.cmd' args`).
+        // It is unambiguous only at the start of a statement. A later bare
+        // `&` remains an unsupported/background operator and fails closed.
+        if (currentArgv.length === 0 && currentStages.length === 0
+          && typeof next === 'string') {
+          continue;
+        }
         if (
           next !== undefined &&
           typeof next !== 'string' &&
@@ -320,27 +329,37 @@ const REDIRECTION_OPS = new Set([
   '<<<',
   '&>',
   '&>>',
+  '>&',
 ]);
 
 const FD_REDIRECTION_PATTERN = /^([0-9]+|&)(>>?|<<?)$/;
+const FD_DUPLICATION_PATTERN = /^([0-9]+)?(>&)$/;
 
 function isRedirectionOp(op: string): boolean {
-  return REDIRECTION_OPS.has(op) || FD_REDIRECTION_PATTERN.test(op);
+  return REDIRECTION_OPS.has(op)
+    || FD_REDIRECTION_PATTERN.test(op)
+    || FD_DUPLICATION_PATTERN.test(op);
 }
 
 function parseRedirection(op: string, target: string): BashRedirection {
   let fd: string | null = null;
   let bareOp = op;
   const fdMatch = FD_REDIRECTION_PATTERN.exec(op);
-  if (fdMatch) {
+  const descriptorMatch = FD_DUPLICATION_PATTERN.exec(op);
+  if (descriptorMatch) {
+    fd = descriptorMatch[1] ?? null;
+    bareOp = descriptorMatch[2];
+  } else if (fdMatch) {
     fd = fdMatch[1];
     bareOp = fdMatch[2];
   }
+  const descriptorDuplication = bareOp === '>&' && /^(?:[0-9]+|-)$/.test(target);
   return {
     op,
     fd,
     append: bareOp === '>>' || op === '&>>',
     input: bareOp === '<' || bareOp === '<<' || op === '<<<',
     target,
+    ...(descriptorDuplication ? { descriptorDuplication: true as const } : {}),
   };
 }

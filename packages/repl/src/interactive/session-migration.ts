@@ -21,8 +21,13 @@ import fsSync from 'fs';
 import path from 'path';
 
 import { deriveProjectKeyFromData, UNKNOWN_PROJECT_KEY } from './project-key.js';
+import {
+  ConversationPageCacheCleanupError,
+  removeConversationPageCache,
+  removeConversationPageCachesInDirectory,
+} from '../session/conversation-page-cache.js';
 
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 /** A lock whose heartbeat is older than this is considered abandoned. */
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -175,11 +180,18 @@ export async function planMigration(sessionsDir: string): Promise<MovePlan[]> {
 
 export async function isMigrated(sessionsDir: string): Promise<boolean> {
   try {
-    await fs.access(layoutMarkerPath(sessionsDir));
-    return true;
+    const marker: unknown = JSON.parse(await fs.readFile(layoutMarkerPath(sessionsDir), 'utf8'));
+    return marker !== null
+      && typeof marker === 'object'
+      && (marker as { version?: unknown }).version === LAYOUT_VERSION;
   } catch {
     return false;
   }
+}
+
+async function removeLegacyConversationCaches(sessionsDir: string): Promise<void> {
+  await removeConversationPageCachesInDirectory(sessionsDir);
+  await removeConversationPageCachesInDirectory(sessionsArchiveDir(sessionsDir));
 }
 
 export async function needsMigration(sessionsDir: string): Promise<boolean> {
@@ -240,6 +252,20 @@ async function acquireLock(dir: string): Promise<boolean> {
 
 async function releaseLock(dir: string): Promise<void> {
   await fs.rm(lockDirPath(dir), { recursive: true, force: true }).catch(() => undefined);
+}
+
+async function assertNoActiveSessionWriters(sessionsDir: string): Promise<void> {
+  try {
+    const entries = await fs.readdir(path.join(sessionsDir, '.write-locks'), {
+      withFileTypes: true,
+    });
+    if (entries.some((entry) => entry.isFile() && /^[0-9a-f]{64}\.lock$/.test(entry.name))) {
+      throw new Error('Session layout migration deferred while a Session writer is active');
+    }
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
 }
 
 async function readJournalDone(dir: string): Promise<Set<string>> {
@@ -328,12 +354,25 @@ export async function runMigration(sessionsDir: string): Promise<MigrationResult
     return { moved: 0, planned: 0 };
   }
   try {
+    await assertNoActiveSessionWriters(sessionsDir);
+    // Cache files contain full message bodies and are not part of the move
+    // plan. Remove them before moving a main file, then sweep again before the
+    // durable marker to close a race with a writer that started before the
+    // migration lock was acquired.
+    await removeLegacyConversationCaches(sessionsDir);
     const plans = await planMigration(sessionsDir);
     const done = await readJournalDone(sessionsDir);
     const handle = await fs.open(journalPath(sessionsDir), 'a');
     let moved = 0;
     try {
       for (const plan of plans) {
+        if (isSessionFile(path.basename(plan.from))) {
+          try {
+            await removeConversationPageCache(plan.to);
+          } catch (error: unknown) {
+            throw new ConversationPageCacheCleanupError(path.dirname(plan.to), error);
+          }
+        }
         if (done.has(plan.from)) {
           continue;
         }
@@ -345,6 +384,7 @@ export async function runMigration(sessionsDir: string): Promise<MigrationResult
       await handle.close();
     }
     await retireSessionsArchive(sessionsDir);
+    await removeLegacyConversationCaches(sessionsDir);
     await writeMarker(sessionsDir);
     // Journal has served its purpose; the marker is the durable idempotency
     // guard. Removing it is safe (it never held session data).
@@ -356,22 +396,18 @@ export async function runMigration(sessionsDir: string): Promise<MigrationResult
 }
 
 /**
- * One-shot entry gate. Best-effort: any failure leaves the flat pool intact and
- * readable through the locator, so the next start simply tries again.
+ * One-shot entry gate. Cache cleanup failures are surfaced for an immediate
+ * retry; other migration failures leave the flat pool readable through the
+ * dual-layout locator and are retried on the next start.
  */
 export async function ensureLayoutMigrated(sessionsDir: string): Promise<void> {
   try {
     if (await isMigrated(sessionsDir)) {
       return;
     }
-    if (!(await needsMigration(sessionsDir))) {
-      // Fresh install / already per-project — stamp the marker so we don't
-      // re-scan the directory on every subsequent start.
-      await writeMarker(sessionsDir).catch(() => undefined);
-      return;
-    }
     await runMigration(sessionsDir);
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof ConversationPageCacheCleanupError) throw error;
     // best-effort — dual-layout reads keep everything working
   }
 }

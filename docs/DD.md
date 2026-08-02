@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-07-29
+> Last updated: 2026-08-01
 >
-> Current release baseline: `v0.7.78` integrated release candidate
-> (`@kodax-ai/kodax@0.7.78`)
+> Current release baseline: `v0.7.79` development candidate
+> (`@kodax-ai/kodax@0.7.79`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,12 +20,16 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.78`. The integrated
-candidate adds evidence-gated project Skill canaries, complete first-run split
+The root workspace package is `@kodax-ai/kodax@0.7.79`. The development
+candidate adds explicit configured-A2A network authorization, Worker-hosted A2A
+dispatch, strict read-only Runtime Session observation, durable lifecycle and
+history recovery, an evidence-checked ordinary-conversation projection,
+streaming-event coalescing, and Windows global-install ASRT support. It retains
+v0.7.78's evidence-gated project Skill canaries, complete first-run split
 configuration, intent-aligned Auto[LLM] permission behavior, optional
-workspace-scoped ASRT containment, and the standalone `/sandbox` SDK surface.
-It retains v0.7.77's adaptive AMA, governed memory intervention, Shell
-Execution Contract, and Kimi K3 routes.
+workspace-scoped ASRT containment, and standalone `/sandbox` SDK. Issue 256
+remains release-blocking because snapshot-based Windows process ancestry cannot
+prove descendant closure after an intermediate parent exits.
 
 `package.json` exposes:
 
@@ -326,6 +330,15 @@ effort to `high`, and preserve explicit disable semantics. Media capability
 metadata keeps `k3-256k` image-capable and video-unsupported. Public Kimi and
 Kimi For Coding credentials remain separate.
 
+OpenAI-compatible provider configuration carries
+`maxOutputTokensField: 'max_tokens' | 'max_completion_tokens'`. A model
+descriptor overrides the provider value; absent configuration uses
+`max_completion_tokens`. DeepSeek V4 Flash and Pro use separate reasoning
+presets so their effort aliases do not drift, while legacy
+`deepseek-v4-openai` configuration migrates by known model ID and preserves
+Pro-like behavior for unknown IDs. Capability metadata marks both routes
+text-only, and cost tracking keeps their base/cache rates separate.
+
 `KodaXProviderStreamOptions.promptCacheKey` is separate from the transport
 `sessionId`. Coding derives a domain-separated SHA-256 value from the stable
 logical context ID: the root uses its resumable Session identity and a child
@@ -572,13 +585,18 @@ Public session APIs should preserve id-based usage while allowing storage layout
 to evolve. New storage features must be backward-compatible with old JSONL
 records whenever practical. Host code should treat `loadSession()` as active
 model context, `loadFullTranscript()` as append-order scrollback, and
-`uiHistory` as an optional replay hint.
+`uiHistory` as an optional replay hint. Ordinary chat uses
+`readConversationHistory()` or Runtime `sessions.conversation*`; it is neither
+the active model context nor the raw audit stream.
 
 Transcript entries expose both physical and logical identity. `entryId`
 identifies the persisted lineage node; `logicalId` is stable across cloned or
 forked copies; `sourceEntryId` points at the root physical source when an entry
-is a clone. Hosts may fold display history by `logicalId`, while
-`loadFullTranscript()` continues to return raw append-order scrollback.
+is a clone. These fields support audit inspection but do not authorize a host
+to fold by `logicalId` alone. The Session-owned ordinary-conversation projection
+validates provenance and topology, reports unresolved ambiguity, and supplies
+revision-fenced physical boundaries; `loadFullTranscript()` continues to return
+raw append-order scrollback.
 
 `FileSessionStorage.loadFullLineage()` is the storage-owned merge of the main
 JSONL and island sidecar. Sidecar entries win for the same stable physical ID
@@ -669,6 +687,10 @@ A2A lives under `src/a2a` and is published through `@kodax-ai/kodax/a2a`:
   retained pre-realm tasks. Normal serving never dual-reads the legacy key.
 - `runtime-config.ts` applies disables/removals before discovery and mutates
   only source-owned registrations with revision/owner preconditions.
+- Each configured outbound Agent may persist a strict `network` block with
+  `allowPrivateAddresses` and `allowInsecureHttp`. CLI one-shot overrides and
+  persisted Runtime execution feed the same safe-fetch policy; private HTTP
+  requires both permissions, while exact loopback HTTP requires neither.
 - `server.ts` authenticates before body/task lookup, reserves global capacity
   synchronously before slow preparation, replays after subscription, drains
   admitted handlers on close, and enforces fixed per-task/per-server/per-stream

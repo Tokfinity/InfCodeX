@@ -42,7 +42,7 @@ describe('CAP-044: session id generation fallback contract', () => {
     // The sortable date+time prefix is preserved.
     const id = await generateSessionId();
     expect(typeof id).toBe('string');
-    expect(id).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id).toMatch(/^\d{8}_\d{6}_[0-9a-z]{1,2}[0-9a-f]{12}$/);
   });
 
   it('CAP-SESSION-ID-003: generates globally unique ids within the same second (FEATURE_219)', async () => {

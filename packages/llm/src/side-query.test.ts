@@ -315,6 +315,9 @@ describe('sideQuery — cost tracking', () => {
       retryCount: 1,
       retryWaitMs: 250,
       terminalPhase: 'completed',
+      stopReason: 'end_turn',
+      responseBytes: Buffer.byteLength('ok', 'utf8'),
+      textBlockCount: 1,
     });
     expect(result.diagnostics?.promptBytes).toBe(
       result.diagnostics!.systemBytes + result.diagnostics!.messageBytes,

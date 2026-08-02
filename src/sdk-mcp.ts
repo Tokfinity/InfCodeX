@@ -107,6 +107,7 @@ export {
   // transport.js
   createMcpTransport,
   McpAuthRequiredError,
+  McpTransportCleanupIncompleteError,
   McpExpiredSessionError,
   // oauth-discovery.js / oauth-login.js
   discoverOAuthEndpoints,

@@ -12,6 +12,7 @@ import { isCleanStop } from '../stop-reason.js';
 import {
   KodaXContentBlock,
   KodaXNormalizedReasoningRequest,
+  KodaXOpenAICompatMaxOutputTokensField,
   KodaXReasoningCapability,
   KodaXReasoningProfile,
   KodaXProviderConfig,
@@ -68,6 +69,15 @@ function getOpenAICompatDefaultHeaders(
   return config.userAgentMode === 'sdk'
     ? undefined
     : { 'User-Agent': KODAX_OPENAI_COMPAT_USER_AGENT };
+}
+
+function serializeOpenAICompatMaxOutputTokens(
+  field: KodaXOpenAICompatMaxOutputTokensField,
+  maxOutputTokens: number,
+): { max_tokens: number } | { max_completion_tokens: number } {
+  return field === 'max_tokens'
+    ? { max_tokens: maxOutputTokens }
+    : { max_completion_tokens: maxOutputTokens };
 }
 
 function appendOpenAIEphemeralSuffix(
@@ -331,6 +341,14 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     });
   }
 
+  private getEffectiveMaxOutputTokensField(
+    model: string,
+  ): KodaXOpenAICompatMaxOutputTokensField {
+    return this.getModelDescriptor(model)?.maxOutputTokensField
+      ?? this.config.maxOutputTokensField
+      ?? 'max_completion_tokens';
+  }
+
   protected override onStaleConnection(): void {
     // Drop the memoized client so the next call rebuilds it, discarding the
     // stale keep-alive socket pool.
@@ -358,6 +376,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     signal?: AbortSignal;
   }): Promise<KodaXVerifyCredentialResult> {
     const model = this.config.model;
+    const wireModel = this.getWireModelId(model);
     const client = this.client;
     const runners: VerifyPrimitiveRunner[] = [
       {
@@ -373,8 +392,11 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         run: async (signal) => {
           await client.chat.completions.create(
             {
-              model,
-              max_tokens: 1,
+              model: wireModel,
+              ...serializeOpenAICompatMaxOutputTokens(
+                this.getEffectiveMaxOutputTokensField(model),
+                1,
+              ),
               messages: [{ role: 'user', content: 'hi' }],
             },
             { signal },
@@ -510,6 +532,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   private applyReasoningCapability(
     createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+    model: string,
     capability: OpenAIReasoningAttempt,
     reasoning: KodaXNormalizedReasoningRequest,
   ): void {
@@ -533,7 +556,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
     // those fields on the raw request object here.
     const params = createParams as unknown as Record<string, unknown>;
-    const maxOutputTokens = this.getEffectiveMaxOutputTokens(createParams.model);
+    const maxOutputTokens = this.getEffectiveMaxOutputTokens(model);
     const requestedBudget = clampThinkingBudget(
       resolveThinkingBudget(
         this.config,
@@ -542,13 +565,13 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       ),
       maxOutputTokens,
     );
-    const reasoningProfile = this.getReasoningProfile(createParams.model);
+    const reasoningProfile = this.getReasoningProfile(model);
     if (reasoningProfile) {
       this.applyReasoningProfile(
         params,
         reasoningProfile,
         reasoning,
-        createParams.model,
+        model,
         requestedBudget,
       );
       return;
@@ -556,7 +579,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
     switch (capability) {
       case 'native-effort': {
-        this.validateExplicitReasoningEffort(reasoning, createParams.model);
+        this.validateExplicitReasoningEffort(reasoning, model);
         const reasoningEffort = selectOpenAIReasoningEffort(reasoning);
         if (reasoningEffort) {
           params.reasoning_effort = reasoningEffort;
@@ -658,6 +681,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     }
 
     if (
+      preset === 'deepseek-v4-flash-openai' ||
+      preset === 'deepseek-v4-pro-openai' ||
       preset === 'deepseek-v4-openai' ||
       preset === 'zai-glm-5.2'
     ) {
@@ -778,6 +803,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       // Resolve the active model up front so the message serializer can
       // pick per-model replayReasoningContent overrides (KodaXModelDescriptor).
       const model = streamOptions?.modelOverride ?? this.config.model;
+      const wireModel = this.getWireModelId(model);
       const fullMessages = appendOpenAIEphemeralSuffix([
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
@@ -815,12 +841,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           : isReasoningEnabled(normalizedReasoning)
             ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
             : ['none'];
+      const maxOutputTokens =
+        streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
-        model,
+        model: wireModel,
         messages: fullMessages,
         tools: openaiTools,
-        max_completion_tokens:
-          streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
+        ...serializeOpenAICompatMaxOutputTokens(
+          this.getEffectiveMaxOutputTokensField(model),
+          maxOutputTokens,
+        ),
         stream: true,
         ...(this.config.promptCacheAffinity === true
           && streamOptions?.promptCacheKey
@@ -851,7 +881,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           this.resetReasoningCapabilityParams(
             attemptParams as unknown as Record<string, unknown>,
           );
-          this.applyReasoningCapability(attemptParams, capability, normalizedReasoning);
+          this.applyReasoningCapability(attemptParams, model, capability, normalizedReasoning);
 
           try {
             stream = await this.client.chat.completions.create(
@@ -1068,6 +1098,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const { system: mergedSystem, rest: nonSystemMessages } =
         this.normalizeSystemForWire(system, cleanMessages);
       const model = streamOptions?.modelOverride ?? this.config.model;
+      const wireModel = this.getWireModelId(model);
       const fullMessages = appendOpenAIEphemeralSuffix([
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages, model),
@@ -1095,12 +1126,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         : isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningFallbackChain(initialCapability).filter(isOpenAIReasoningAttempt)
           : ['none'];
+      const maxOutputTokens =
+        streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const createParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
-        model,
+        model: wireModel,
         messages: fullMessages,
         tools: openaiTools,
-        max_completion_tokens:
-          streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
+        ...serializeOpenAICompatMaxOutputTokens(
+          this.getEffectiveMaxOutputTokensField(model),
+          maxOutputTokens,
+        ),
         ...(this.config.promptCacheAffinity === true
           && streamOptions?.promptCacheKey
           && !resolvePromptCacheDisabled()
@@ -1131,7 +1166,12 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           this.resetReasoningCapabilityParams(
             attemptParams as unknown as Record<string, unknown>,
           );
-          this.applyReasoningCapability(attemptParams as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, capability, normalizedReasoning);
+          this.applyReasoningCapability(
+            attemptParams as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+            model,
+            capability,
+            normalizedReasoning,
+          );
 
           try {
             response = await this.client.chat.completions.create(

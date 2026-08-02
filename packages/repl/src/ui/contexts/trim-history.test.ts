@@ -18,10 +18,15 @@ describe("trimHistoryToRounds (FEATURE_212)", () => {
     expect(trimHistoryToRounds(history)).toBe(history);
   });
 
-  it("does NOT trim over-cap history with <=50 user rounds (existing behavior)", () => {
-    // 200 items, a user every 4 → only 50 users → cutIndex stays 0 → untrimmed.
+  it("enforces the item cap even when there are <=50 user rounds", () => {
+    // A tool-heavy history can exceed the item cap without exceeding the
+    // round cap. Align the hard 150-item suffix to the next user boundary.
     const history = Array.from({ length: 200 }, (_, i) => item(i, i % 4 === 0 ? "user" : "assistant"));
-    expect(trimHistoryToRounds(history)).toBe(history);
+    const trimmed = trimHistoryToRounds(history);
+    expect(trimmed).toHaveLength(148);
+    expect(trimmed[0]!.type).toBe("user");
+    expect(trimmed[0]!.id).toBe("52");
+    expect(trimmed.at(-1)!.id).toBe("199");
   });
 
   it("cuts at a user boundary keeping the most recent ~50 rounds when over cap", () => {

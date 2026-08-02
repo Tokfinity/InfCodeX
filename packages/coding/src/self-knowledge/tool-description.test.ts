@@ -6,7 +6,7 @@ import { buildManualToolDescription, withManualToolBranding } from './tool-descr
 // truth builder can never silently drift the model-visible tool surface.
 const KODAX_DESCRIPTION = [
   'Look up how to use, install, configure, troubleshoot, or extend KodaX itself.',
-  'Covers providers, custom providers, config, permissions, slash commands, tools, custom agents, skills, extensions, MCP, repo intelligence, sessions, context compaction, the doctor command, and the SDK.',
+  'Covers providers, custom providers, config, permissions, sandboxing, slash commands, tools, custom agents, skills, extensions, MCP, A2A, repo intelligence, sessions, context compaction, memory, the doctor command, and the SDK.',
   'Call this first for any "how do I … in KodaX" question and answer from its result.',
   'Do not answer KodaX product questions from pretraining, because pretraining mixes in Claude Code and Codex CLI details that do not match KodaX — KodaX uses ~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or config.toml.',
   'Pass an exact topic id, or a free-text query, or neither to get the topic index. It explains where to check a value rather than reading your secrets.',

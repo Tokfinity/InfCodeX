@@ -143,6 +143,11 @@ describe('toolBash', () => {
       toolCallId: 'bash-sandbox-1',
       command: 'echo unsandboxed',
     }));
+    if (process.platform === 'win32') {
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+        env: expect.objectContaining({ NoDefaultCurrentDirectoryInExePath: '1' }),
+      }));
+    }
     expect(cleanup).toHaveBeenCalledOnce();
     expect(reportToolSandboxObservation).toHaveBeenCalledWith({
       version: 1,
@@ -173,6 +178,49 @@ describe('toolBash', () => {
       reason: 'prepare_failed',
       execution: 'normal_permission_policy',
     });
+  });
+
+  it('keeps Provider credentials out of legacy sandbox input and fallback execution', async () => {
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    const originalCustom = process.env.KODAX_TEST_CUSTOM_PROVIDER_AUTH;
+    const originalSafe = process.env.KODAX_TEST_SAFE_VALUE;
+    process.env.OPENAI_API_KEY = 'built-in-secret';
+    process.env.KODAX_TEST_CUSTOM_PROVIDER_AUTH = 'custom-secret';
+    process.env.KODAX_TEST_SAFE_VALUE = 'safe';
+    let preparedEnvironment: NodeJS.ProcessEnv | undefined;
+    const prepare = vi.fn(async (input: Parameters<KodaXShellSandbox['prepare']>[0]) => {
+      preparedEnvironment = input.env;
+      throw new Error('exercise normal-permission fallback');
+    });
+    const script = [
+      'process.env.OPENAI_API_KEY',
+      'process.env.KODAX_TEST_CUSTOM_PROVIDER_AUTH',
+      'process.env.KODAX_TEST_SAFE_VALUE',
+    ].join(" ?? 'missing',") + " ?? 'missing'";
+    const encoded = Buffer.from(`process.stdout.write([${script}].join('|'))`, 'utf8')
+      .toString('base64');
+    try {
+      const result = await toolBash({
+        command: `node -e "eval(Buffer.from('${encoded}','base64').toString())"`,
+      }, {
+        backups: new Map(),
+        toolCallId: 'bash-filter-provider-credentials',
+        shellSandbox: { prepare },
+        providerCredentialEnvironmentNames: ['KODAX_TEST_CUSTOM_PROVIDER_AUTH'],
+      });
+
+      expect(preparedEnvironment).not.toHaveProperty('OPENAI_API_KEY');
+      expect(preparedEnvironment).not.toHaveProperty('KODAX_TEST_CUSTOM_PROVIDER_AUTH');
+      expect(preparedEnvironment).toHaveProperty('KODAX_TEST_SAFE_VALUE', 'safe');
+      expect(completedCommandBody(result)).toContain('missing|missing|safe');
+    } finally {
+      if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAI;
+      if (originalCustom === undefined) delete process.env.KODAX_TEST_CUSTOM_PROVIDER_AUTH;
+      else process.env.KODAX_TEST_CUSTOM_PROVIDER_AUTH = originalCustom;
+      if (originalSafe === undefined) delete process.env.KODAX_TEST_SAFE_VALUE;
+      else process.env.KODAX_TEST_SAFE_VALUE = originalSafe;
+    }
   });
 
   it('does not fall back or spawn after cancellation during sandbox preparation', async () => {
@@ -235,6 +283,23 @@ describe('toolBash', () => {
       tempDir = '';
     }
   });
+
+  it.runIf(process.platform === 'win32')(
+    'does not execute a cwd-shadowed bare command through legacy cmd',
+    async () => {
+      const marker = 'KODAX_CWD_SHADOW_EXECUTED';
+      const comspec = process.env.ComSpec ?? process.env.COMSPEC;
+      expect(comspec).toBeTruthy();
+      await fs.copyFile(comspec!, path.join(tempDir, 'where.exe'));
+
+      const result = await toolBash({ command: `where /c echo ${marker}` }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+
+      expect(completedCommandBody(result)).not.toContain(marker);
+    },
+  );
 
   it('returns complete large command output without an inner line or byte preview', async () => {
     // NOTE: keep this shell-portable — backticks / ${...} inside the double-

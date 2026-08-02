@@ -27,6 +27,7 @@ export type {
   KodaXToolDefinition,
   KodaXModelDescriptor,
   KodaXProtocolFamily,
+  KodaXOpenAICompatMaxOutputTokensField,
   KodaXCustomProviderConfig,
   KodaXProviderConfig,
   KodaXProviderTransport,

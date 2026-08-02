@@ -22,7 +22,7 @@
  */
 
 import { spawn } from 'child_process';
-import { killChildProcessTree } from '@kodax-ai/agent';
+import { killChildProcessTree, rememberChildProcessTree } from '@kodax-ai/agent';
 import {
   appendBashOutputChunk,
   createBashOutputCollector,
@@ -184,6 +184,7 @@ export async function runDeterministicEvaluator(
               : {}),
           },
         );
+    rememberChildProcessTree(proc);
 
     const stdoutCollector = createBashOutputCollector();
     const stderrCollector = createBashOutputCollector();

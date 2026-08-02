@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { KodaXOpenAICompatProvider } from './openai.js';
+import { createCustomProvider } from './custom-provider.js';
+import { KODAX_PROVIDERS } from './registry.js';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -37,15 +39,22 @@ afterEach(async () => {
 });
 
 class TestOpenAIProvider extends KodaXOpenAICompatProvider {
-  readonly name = 'test-openai';
-  protected readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'TEST_API_KEY',
-    model: 'test-model',
-    supportsThinking: false,
-  };
+  readonly name: string;
+  protected readonly config: KodaXProviderConfig;
 
-  constructor(client: unknown) {
+  constructor(
+    client: unknown,
+    name = 'test-openai',
+    configOverrides: Partial<KodaXProviderConfig> = {},
+  ) {
     super();
+    this.name = name;
+    this.config = {
+      apiKeyEnv: 'TEST_API_KEY',
+      model: 'test-model',
+      supportsThinking: false,
+      ...configOverrides,
+    };
     this.client = client as any;
   }
 
@@ -109,6 +118,251 @@ describe('openai message serialization', () => {
       function: { name: 'emit_verdict' },
     });
     expect(kwargs.max_completion_tokens).toBe(1024);
+  });
+
+  it('uses an explicit OpenAI-compat max_tokens capability on streaming calls', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = new TestOpenAIProvider(
+      { chat: { completions: { create } } },
+      'my-deepseek-v4',
+      { maxOutputTokensField: 'max_tokens' },
+    );
+
+    await provider.stream(
+      [{ role: 'user', content: 'keep this short' }],
+      TOOLS,
+      'system',
+      false,
+      { maxOutputTokensOverride: 1024 },
+    );
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.max_tokens).toBe(1024);
+    expect(kwargs).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('uses an explicit OpenAI-compat max_tokens capability on non-streaming calls', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const provider = new TestOpenAIProvider(
+      { chat: { completions: { create } } },
+      'my-deepseek-v4',
+      { maxOutputTokensField: 'max_tokens' },
+    );
+
+    await provider.complete(
+      [{ role: 'user', content: 'keep this short' }],
+      TOOLS,
+      'system',
+      false,
+      { maxOutputTokensOverride: 1024 },
+    );
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.max_tokens).toBe(1024);
+    expect(kwargs).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('uses the configured output-token field for minimal credential verification', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok' } }],
+    });
+    const provider = new TestOpenAIProvider(
+      { chat: { completions: { create } } },
+      'strict-openai-compatible',
+      {
+        maxOutputTokensField: 'max_completion_tokens',
+        verifyStrategy: 'minimal-message',
+      },
+    );
+
+    const result = await provider.verifyCredential();
+
+    expect(result.ok).toBe(true);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      max_completion_tokens: 1,
+    });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('max_tokens');
+  });
+
+  it('keeps the built-in Zhipu minimal-message request on max_tokens', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok' } }],
+    });
+    const provider = KODAX_PROVIDERS.zhipu();
+    Reflect.set(provider, '_client', { chat: { completions: { create } } });
+
+    const result = await provider.verifyCredential();
+
+    expect(result.ok).toBe(true);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ max_tokens: 1 });
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('honours a per-model max_tokens override for mixed custom gateways', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = createCustomProvider({
+      name: 'mixed-gateway',
+      protocol: 'openai',
+      baseUrl: 'https://example.test/v1',
+      apiKeyEnv: 'MIXED_GATEWAY_API_KEY',
+      model: 'gpt-5',
+      maxOutputTokensField: 'max_completion_tokens',
+      models: [
+        { id: 'deepseek-v4-flash', maxOutputTokensField: 'max_tokens' },
+      ],
+    });
+    Reflect.set(provider, '_client', { chat: { completions: { create } } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'keep this short' }],
+      TOOLS,
+      'system',
+      false,
+      { modelOverride: 'deepseek-v4-flash', maxOutputTokensOverride: 1024 },
+    );
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.max_tokens).toBe(1024);
+    expect(kwargs).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('serializes a custom DeepSeek Flash preset through the real factory path', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = createCustomProvider({
+      name: 'my-deepseek-v4',
+      protocol: 'openai',
+      baseUrl: 'https://example.test/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_API_KEY',
+      model: 'deepseek-v4-flash',
+      maxOutputTokensField: 'max_tokens',
+      reasoningPreset: 'deepseek-v4-flash-openai',
+      supportsThinking: true,
+    });
+    Reflect.set(provider, '_client', { chat: { completions: { create } } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'think carefully' }],
+      TOOLS,
+      'system',
+      { enabled: true, effort: 'xhigh' },
+      { maxOutputTokensOverride: 1024 },
+    );
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      max_tokens: 1024,
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'high',
+    });
+  });
+
+  it('migrates a legacy custom DeepSeek Pro preset on the real wire path', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = createCustomProvider({
+      name: 'my-legacy-deepseek-pro',
+      protocol: 'openai',
+      baseUrl: 'https://example.test/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_API_KEY',
+      model: 'deepseek-v4-pro',
+      maxOutputTokensField: 'max_tokens',
+      reasoningPreset: 'deepseek-v4-openai',
+      supportsThinking: true,
+    });
+    Reflect.set(provider, '_client', { chat: { completions: { create } } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'think carefully' }],
+      TOOLS,
+      'system',
+      { enabled: true, effort: 'xhigh' },
+      { maxOutputTokensOverride: 1024 },
+    );
+
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      max_tokens: 1024,
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'max',
+    });
+  });
+
+  it('serializes a custom OpenAI wireModel alias on every Chat Completions path', async () => {
+    async function* streamChunks() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const create = vi.fn().mockImplementation((params: { stream?: boolean }) => (
+      params.stream
+        ? Promise.resolve(streamChunks())
+        : Promise.resolve({
+            choices: [
+              {
+                message: { role: 'assistant', content: 'ok', tool_calls: [] },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })
+    ));
+    const provider = createCustomProvider({
+      name: 'deepseek-alias-gateway',
+      protocol: 'openai',
+      baseUrl: 'https://example.test/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_API_KEY',
+      model: 'pro-alias',
+      models: [
+        {
+          id: 'pro-alias',
+          wireModel: 'deepseek-v4-pro',
+          maxOutputTokensField: 'max_tokens',
+          reasoningPreset: 'deepseek-v4-openai',
+        },
+      ],
+      verifyStrategy: 'minimal-message',
+      supportsThinking: true,
+    });
+    Reflect.set(provider, '_client', { chat: { completions: { create } } });
+    expect(provider.getReasoningProfile('pro-alias')?.effortAliases).toEqual({
+      low: 'high',
+      medium: 'high',
+      xhigh: 'max',
+    });
+
+    await provider.stream(
+      [{ role: 'user', content: 'think carefully' }],
+      TOOLS,
+      'system',
+      { enabled: true, effort: 'xhigh' },
+      { maxOutputTokensOverride: 1024 },
+    );
+    await provider.complete(
+      [{ role: 'user', content: 'think carefully' }],
+      TOOLS,
+      'system',
+      { enabled: true, effort: 'xhigh' },
+      { maxOutputTokensOverride: 1024 },
+    );
+    const verifyResult = await provider.verifyCredential();
+
+    expect(verifyResult.ok).toBe(true);
+    expect(create.mock.calls).toHaveLength(3);
+    for (const [params] of create.mock.calls) {
+      expect(params.model).toBe('deepseek-v4-pro');
+    }
+    expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('max');
+    expect(create.mock.calls[1]?.[0].reasoning_effort).toBe('max');
   });
 
   it('retries judge streams without forced tool choice when an upstream rejects tool_choice', async () => {

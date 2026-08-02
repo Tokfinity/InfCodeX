@@ -55,6 +55,14 @@ the coding-runtime middleware requests a broad newest-first list and selects the
 first record with `msgCount > 0`; empty ACP/bootstrap placeholders cannot shadow
 the latest real conversation. A caller-provided ID always wins.
 
+The v0.7.79 candidate scopes parallel quality-strategy admission to the same
+parent Actor state, so unrelated child/progress updates do not create a false
+conflict. Its built-in `kodax_manual` also documents current DeepSeek/custom
+provider fields, configured-A2A network authorization, strict Session reads and
+export, the evidence-checked ordinary-conversation projection, Runtime
+status/diagnostic/coalescing capabilities, and the open Windows descendant-
+containment boundary tracked as Issue 256.
+
 ## 安装 / 导入
 
 ```bash

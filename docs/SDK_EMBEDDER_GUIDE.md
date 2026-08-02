@@ -875,14 +875,63 @@ are never removed to make diagnostic metadata fit a transport page.
 
 Runtime exposes the identical projection in embedded and daemon modes through
 `sessions.conversation()`, `sessions.conversationPage()`, and
-`sessions.conversationEntryChunk()`. The first page captures one immutable
-boundary; later page/chunk calls use only that snapshot. Direct and paged reads
-share the same `revision`, `sourceRevision`, status, issues, and logical entry
-order. Pages are fetched newest-tail-first while each page is internally in
+`sessions.conversationEntryChunk()`. Modern Session writes prepare a bounded
+on-disk page index, so the first finite page reads only its metadata, fixed-size
+index records, and requested inline bodies instead of materializing all history.
+A source-boundary-fenced copy of the Session's minimal admission identity lets
+the shared daemon authorize that bounded read before checking cursors, capacity,
+or entry metadata; it does not perform a full Session `peek()` on a cache hit.
+A cache-less older Session is upgraded by one canonical fallback read. Direct
+and paged reads share the same `revision`, `sourceRevision`, status, issues, and
+logical entry order. Page and chunk cursors are revision-fenced: if the Session
+changes, the Runtime returns `resync_required` and the host must request a fresh
+first page. Derived manifest, descriptor, and chunk reads have fixed allocation
+ceilings; a corrupt or concurrently replaced generation is rejected rather
+than trusted. Pages are fetched newest-tail-first while each page is internally in
 forward order, so prepend each fetched page to reconstruct `conversation().entries`;
 do not append pages in fetch order.
 Request `requirements: { conversationHistory: 1 }` when connecting to a daemon
 that must support this contract.
+
+For write-side hosts that already own a newly produced append tail,
+`await FileSessionStorage.prepareSessionAppend(id)` returns an authenticated
+one-shot boundary or `null` when no canonical cache witness is available.
+`appendPreparedSessionTail(id, delta)` appends only the supplied new linear
+lineage, artifact, and extension records. The delta deliberately has no
+historical-array field: its read and compute cost is bounded by the new tail,
+and a stale boundary, prefix/sidecar change, duplicate identity, non-linear
+lineage tail, or concurrent durable write fails with
+`SessionReadError.code === 'data_changed'`. Reload, obtain a fresh boundary,
+and rebuild the tail before retrying.
+
+A non-null fulfilled append result is the reusable successor boundary. A
+fulfilled `null` means the tail did commit exactly once, but the successor
+could not be witnessed; reload before another append and do not retry that
+tail. Use `appendSessionDelta(id, data)` for a full mutable snapshot, a `null`
+prepared boundary, or any historical rewrite; that API performs the exact
+canonical merge and persists index, nested-object, and post-helper mutations.
+Data returned by `storage.load()` remains an ordinary mutable,
+`structuredClone()`-compatible `KodaXSessionData` object. The derived page
+cache is only a recoverable acceleration structure: its fixed-size identity
+filter is accepted for appends only when its exact bundle revision and hash
+match canonical metadata in the Session main file.
+
+```ts
+const baseline = await storage.prepareSessionAppend(sessionId);
+if (baseline === null) {
+  await storage.appendSessionDelta(sessionId, completeMutableSnapshot);
+} else {
+  const successor = await storage.appendPreparedSessionTail(sessionId, {
+    baseline,
+    title,
+    activeEntryId: newEntry.id,
+    lineageEntries: [newEntry],
+  });
+  if (successor === null) {
+    await storage.load(sessionId); // committed; resync before the next tail
+  }
+}
+```
 
 Use a returned entry as a revision-fenced fork or rewind boundary instead of
 guessing from content or a historical `turnId`:
@@ -1434,7 +1483,8 @@ interface KodaXModelCapabilities {
     supportedEfforts?: Array<{ value: string; isDefault?: boolean; isUserVisible?: boolean }>;
   };
   contextWindow?: number;           // input tokens (provider default + per-model override cascade)
-  maxOutputTokens?: number;         // per-turn max_tokens KodaX requests — see note below
+  maxOutputTokens?: number;         // per-turn output limit KodaX requests — see note below
+  maxOutputTokensField?: 'max_tokens' | 'max_completion_tokens';
   thinkingBudgetCap?: number;       // tokens (native-budget providers only)
   isDefault: boolean;               // true for the provider's default model
 }
@@ -1541,9 +1591,10 @@ for (const providerName of Object.keys(KODAX_PROVIDER_SNAPSHOTS)) {
 
 ### A note on `maxOutputTokens`
 
-`KodaXModelCapabilities.maxOutputTokens` is the **per-turn `max_tokens`
-KodaX requests**, NOT the upstream "theoretical maximum". The two
-diverge because:
+`KodaXModelCapabilities.maxOutputTokens` is the **per-turn output-token limit
+KodaX requests**, NOT the upstream "theoretical maximum". For OpenAI-compatible
+routes, `maxOutputTokensField` reports whether that limit is serialized as
+`max_tokens` or `max_completion_tokens`. The two size concepts diverge because:
 
 - **What upstream advertises is often unreliable.** A 2026-05 probe
   against `zhipu-coding` / `kimi-code` / `minimax-coding` / `ark-coding`
@@ -2057,9 +2108,18 @@ registerCustomProviders([{
   baseUrl: 'https://api.example.com/v1',
   apiKeyEnv: 'MY_GATEWAY_KEY',
   model: 'gpt-4-mini',
+  maxOutputTokensField: 'max_completion_tokens',
   verifyStrategy: 'minimal-message',  // optional override
 }]);
 ```
+
+For an OpenAI-compatible endpoint that follows DeepSeek Chat Completions, set
+`maxOutputTokensField: 'max_tokens'`. The default is
+`max_completion_tokens`; an object entry in `models[]` may override the
+provider-level value for a mixed gateway. DeepSeek V4 custom configurations
+should likewise use the model-specific `deepseek-v4-flash-openai` or
+`deepseek-v4-pro-openai` reasoning preset. Both built-in DeepSeek V4 routes are
+text-only.
 
 The validator rejects illegal combinations:
 - `protocol: 'openai'` + `verifyStrategy: 'count-tokens'` → throws (OpenAI protocol has no count_tokens endpoint).
@@ -2579,6 +2639,14 @@ SDK auto-start allows `daemonStartupTimeoutMs` (default 60 seconds) and
 concurrent test/desktop startup without weakening PID, endpoint, token, or
 runtime-identity validation.
 
+On Windows, current child cleanup verifies observed process identities and
+reports indeterminate outcomes instead of falling back to bare-PID success.
+That is not Job Object-grade containment: if an intermediate process exits
+between snapshots, an already-running descendant can become unobservable.
+Until Issue 256 is resolved with spawn-time Job Object assignment and a
+host-issued Worker owner lease, embedders must not treat Runtime/Worker close or
+executor cleanup as proof that every descendant has terminated.
+
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;
 lower-level `KODAX_HOME` points at the **data directory itself** and need not be
@@ -2949,7 +3017,11 @@ import {
 The schema is additive within this patch line. Removing or changing required
 fields requires a protocol version bump.
 
-### Current verification status
+### v0.7.69 Runtime verification record
+
+This subsection is the historical verification record for the original shared
+Runtime delivery. Current 0.7.79 candidate gates and evidence live in
+[`docs/release.md`](release.md#v0779-release-preparation).
 
 The v0.7.69 release validation covers the runtime migration, the Worker
 isolation follow-ups delivered ahead of their original v0.7.71/v0.7.72
@@ -4315,6 +4387,16 @@ query `runtime.operations.get({ operationId, journalEpoch })`; applied receipts
 include the canonical result. Permission grants remain daemon-owned and
 revisioned.
 
+Runtime startup restores all indexed active Runs and at most 200 recent
+terminal Runs from a bounded durable status index. `runs.get(runId)` remains an
+exact persisted lookup even when an older terminal Run is outside that recent
+window. The first start after upgrading an unindexed home may perform one full
+compatibility scan. A start after a crash, or a concurrent Runtime starting
+while a live writer has intentionally left the index dirty, may likewise do
+one authoritative reconciliation. Normal writers publish canonical
+`status.json` first and keep the derived index recovery-fenced across those
+crashes and concurrent Runtime instances.
+
 ### AskUser and permission from any client
 
 AskUser is no longer an in-process callback for daemon Coder runs. Any client
@@ -4664,6 +4746,20 @@ concerns use the existing shared
 it. Hosts should subscribe to permission events to display such a request, but
 must not treat a missing request as an error for a safe tool call.
 
+On PowerShell, deterministic read admission includes independently validated
+sequential/pipeline stages such as `where.exe`, ordinary `rg` inspection,
+non-sensitive `$env:NAME` reads, and constrained `Where-Object` /
+`Select-Object` expressions. This is a structural allowlist, not a blanket
+"review task" exemption. The executable token must be an admitted bare command
+name; path-qualified executables, arbitrary `& script.cmd`, effectful `find` /
+`awk` / `sed` forms, script blocks, sensitive credential environment names,
+external ripgrep preprocessors, and file redirection continue through the LLM
+classifier. They reach user approval only when the classifier identifies a
+concrete hazard (or when its bounded retry and fallback policy requires it).
+Authenticated child constraints are checked before deterministic admission:
+for example, `Do not execute shell commands` keeps even a read-only shell call
+under review, while `Do not modify files` does not make an ordinary read ask.
+
 The classifier deadline remains 20 seconds by default and includes connection
 setup, provider Retry-After/backoff, inference, and stream completion. KodaX
 retries one timeout/provider/response-contract failure once; a second failure
@@ -4677,15 +4773,59 @@ provider call; it is never truncated into an automatic allow. These limits are
 owned by `classify()` itself, so custom callers cannot accidentally bypass the
 session-history boundary.
 
+Deterministic read admission treats wildcard-bearing path operands as
+unresolved when they could expand to protected data. Explicit PowerShell
+`-LiteralPath` remains literal. Positive broad search selectors (including
+structured `grep`/`glob`, ripgrep/GNU-grep filters, and custom ripgrep types),
+PowerShell path arrays/enumeration pipelines, indirect file lists, and dynamic
+Git pathspecs or expanded `git grep --no-index`/`--untracked` scopes remain
+LLM-reviewed because a lexical root cannot prove which files will be read. The
+same applies to implicit/directory content searches, including a structured
+`grep` call whose omitted path defaults to the workspace and GNU-grep
+`-d recurse`/`--directories=recurse`, and to unscoped Git patch output. Git
+line-log `-L` paths, patch-enabling short-option clusters, and merge-diff modes
+are resolved before deciding whether output is scoped. Exact-file reads and
+metadata-only output such as `git show --stat` remain deterministic. Exclusion
+selectors do not become input targets. On Windows, protected-name checks also
+cover trailing-dot/space aliases, alternate data streams, and canonicalized
+existing 8.3 names. Git-config
+regexp/URL reads account for accepted option abbreviations and effective
+boolean-option ordering; only complete anchored selectors over known
+non-secret metadata can take the deterministic fast path. Likewise, incomplete
+current-user content may still admit a proven read, but a complete current
+request that explicitly prohibits reading or shell execution routes the
+matching read-only operation through the classifier. Ordinary review and
+read-only requests remain deterministic. `currentUserContentTruncated:true` prevents a
+write, delete, move, copy, or unmodeled execution from relying on the compacted
+fragment alone. On classifier failure, Accept-edits fallback is available only
+when the full structured review would pass the same deterministic predicate;
+protected/unresolved targets and partial/risky reviews remain approval-bound.
+
 `ClassifyDecision.diagnostics` and the lower-level
 `SideQueryResult.diagnostics` expose provider, model, effective timeout,
-elapsed time, retry count/wait, and a coarse terminal phase without including
-the prompt, action, messages, or response text. `pre_output` means no non-empty
-text delta was observed; `streaming` means output began before termination.
-`firstOutputMs` and `streamMs` are present only when the provider adapter emits
-a text delta. The current provider API cannot honestly separate DNS/connect,
-TLS, provider queueing, and inference, so embedders must not infer those stages
-from `pre_output`.
+elapsed time, retry count/wait, provider stop reason, response byte/text-block
+counts, and a coarse terminal phase without including the prompt, action,
+messages, or response text. `pre_output` means no non-empty text delta was
+observed; `streaming` means output began before termination. `firstOutputMs`
+and `streamMs` are present only when the provider adapter emits a text delta.
+Each classifier attempt may additionally expose `observedProtocol`
+(`structured_v2`, `legacy_v1`, or `unknown`) and a bounded
+`parseFailureCode`. Runtime permission requests copy these fields into
+`autoModeDiagnostics`, allowing a host to distinguish an LLM hazard decision
+(`source: classifier_confirm`) from provider/contract failure
+(`source: classifier_failure`) without retaining model output. The current
+dual reader accepts only one exact standalone envelope for either protocol and
+never downgrades output containing structured-protocol markers. Surrounding
+prose, nested contract tags, mixed protocols, and duplicate decisions are
+contract failures and receive the same single bounded retry. The current
+provider API cannot honestly separate DNS/connect, TLS, provider queueing, and
+inference, so embedders must not infer those stages from `pre_output`.
+Because raw classifier text is deliberately not retained, these diagnostics
+cannot retroactively prove the shape of an older response. A future
+`observedProtocol:legacy_v1` value is evidence for that attempt; compatibility
+with `legacy_v1` alone is not proof that a prior provider returned it. Code
+fences, surrounding prose, mixed envelopes, and missing required fields remain
+contract failures rather than being heuristically stripped.
 
 The permission event's `inputPreview` is a display-safe diagnostic projection:
 it is bounded, credential-redacted, valid JSON, and includes the effective

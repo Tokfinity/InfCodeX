@@ -125,9 +125,15 @@ export function analyzePowerShellMutation(
   if (hasUnmodelledBracketWildcard(bound)) {
     return incomplete('PowerShell path contains bracket wildcard syntax');
   }
-
   const operation = buildOperation(command, bound);
   if (!operation) return incomplete('PowerShell mutation target is missing or ambiguous');
+  if (['filter', 'include', 'exclude'].some((name) => bound.values.has(name))) {
+    return {
+      status: 'incomplete',
+      operations: [operation],
+      reason: 'PowerShell provider selectors make the concrete target set unresolved',
+    };
+  }
   if (operationPaths(operation).some(isAmbiguousPathExpression)) {
     return {
       status: 'incomplete', operations: [operation],
@@ -275,6 +281,7 @@ function operationPaths(operation: PowerShellMutationOperation): readonly string
 }
 
 function isAmbiguousPathExpression(value: string): boolean {
+  if (/^\$env:(?:temp|tmp)(?=$|[\\/])/i.test(value)) return false;
   return /[,*?`$]|@\(|[{}]/.test(value) || isPowerShellProviderPath(value);
 }
 

@@ -6,7 +6,11 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { killChildProcessTree, killPidTree } from '@kodax-ai/agent';
+import {
+  killChildProcessTree,
+  killPidTree,
+  rememberChildProcessTree,
+} from '@kodax-ai/agent';
 
 import {
   acquireKodaXInlineOwner,
@@ -1103,6 +1107,7 @@ function runNodeProcess(
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
+    rememberChildProcessTree(child);
     let stdout = '';
     let stderr = '';
     let settled = false;

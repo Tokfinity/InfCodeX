@@ -555,10 +555,12 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     await waitForLspProcessExitOrGiveUp({
       proc,
       isClosed: () => processClosed,
-      killProcess: () => killChildProcessTree(proc, {
-        forceMs: SHUTDOWN_KILL_REAP_GRACE_MS,
-        taskkillMs: 2_000,
-      }),
+      killProcess: async () => {
+        await killChildProcessTree(proc, {
+          forceMs: SHUTDOWN_KILL_REAP_GRACE_MS,
+          taskkillMs: 2_000,
+        });
+      },
       unregisterManagedChild: unregisterManagedChildOnce,
     });
   }

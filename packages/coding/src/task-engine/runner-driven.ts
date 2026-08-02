@@ -851,6 +851,15 @@ export async function runManagedTaskViaRunner(
   // and the per-iteration L1-L4 resolver inside the Runner loop. When no
   // signal fires, the helper returns the input options reference unchanged.
   let { options: effectiveOptions } = applyFollowupEscalationToOptions(options, prompt);
+  if (effectiveOptions.context?.permissionIntent === undefined) {
+    effectiveOptions = {
+      ...effectiveOptions,
+      context: {
+        ...effectiveOptions.context,
+        permissionIntent: { rootUserIntent: prompt },
+      },
+    };
+  }
   const providerName = effectiveOptions.provider ?? 'anthropic';
   effectiveOptions = installProductionLearningReviewer(
     effectiveOptions,
@@ -2339,6 +2348,7 @@ async function runManagedTaskViaRunnerInner(
       llm,
       abortSignal: options.abortSignal,
       guardrails: options.guardrails,
+      permissionIntent: options.context?.permissionIntent,
       compactionHook,
       toolResultBatchTransform,
       toolObserver: runnerToolObserver,

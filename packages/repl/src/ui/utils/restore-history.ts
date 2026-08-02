@@ -212,27 +212,28 @@ function alignCanonicalTextItems(
   return anchors;
 }
 
-function previousAnchor(
+function nearestAnchors(
   anchors: ReadonlyMap<number, number>,
-  derivedIndex: number,
-): number | undefined {
-  for (let index = derivedIndex - 1; index >= 0; index -= 1) {
-    const anchor = anchors.get(index);
-    if (anchor !== undefined) return anchor;
-  }
-  return undefined;
-}
-
-function nextAnchor(
-  anchors: ReadonlyMap<number, number>,
-  derivedIndex: number,
   derivedLength: number,
-): number | undefined {
-  for (let index = derivedIndex + 1; index < derivedLength; index += 1) {
+): {
+  readonly previous: readonly (number | undefined)[];
+  readonly next: readonly (number | undefined)[];
+} {
+  const previous: Array<number | undefined> = new Array(derivedLength);
+  const next: Array<number | undefined> = new Array(derivedLength);
+  let nearest: number | undefined;
+  for (let index = 0; index < derivedLength; index += 1) {
+    previous[index] = nearest;
     const anchor = anchors.get(index);
-    if (anchor !== undefined) return anchor;
+    if (anchor !== undefined) nearest = anchor;
   }
-  return undefined;
+  nearest = undefined;
+  for (let index = derivedLength - 1; index >= 0; index -= 1) {
+    next[index] = nearest;
+    const anchor = anchors.get(index);
+    if (anchor !== undefined) nearest = anchor;
+  }
+  return { previous, next };
 }
 
 function enrichPersistedUiHistory(
@@ -240,6 +241,7 @@ function enrichPersistedUiHistory(
   derivedItems: readonly CreatableHistoryItem[],
 ): CreatableHistoryItem[] {
   const anchors = alignCanonicalTextItems(persistedItems, derivedItems);
+  const nearest = nearestAnchors(anchors, derivedItems.length);
   const insertions = new Map<number, Extract<CreatableHistoryItem, { type: "tool_group" }>[]>();
   const persistedTools = new Map<string, {
     tool: Extract<CreatableHistoryItem, { type: "tool_group" }>["tools"][number];
@@ -265,12 +267,12 @@ function enrichPersistedUiHistory(
       positionedToolIds.add(tool.id);
       return true;
     }).map((tool) => persistedTools.get(tool.id)?.tool ?? tool);
-    const before = previousAnchor(anchors, index);
+    const before = nearest.previous[index];
     if (before === undefined || tools.length === 0) {
       for (const tool of tools) positionedToolIds.delete(tool.id);
       continue;
     }
-    const after = nextAnchor(anchors, index, derivedItems.length);
+    const after = nearest.next[index];
     const boundary = after !== undefined && after > before ? after : before + 1;
     const legacySearchEnd = after ?? persistedItems.findIndex((candidate, candidateIndex) => (
       candidateIndex > before && candidate.type === "user"

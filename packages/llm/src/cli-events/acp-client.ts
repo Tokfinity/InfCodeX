@@ -10,7 +10,7 @@ import {
     type RequestPermissionRequest,
     type RequestPermissionResponse
 } from '@agentclientprotocol/sdk';
-import { killChildProcessTree } from './process-tree.js';
+import { killChildProcessTree, rememberChildProcessTree } from './process-tree.js';
 
 export interface AcpClientOptions {
     /** Command used to launch a native ACP server process. */
@@ -67,6 +67,7 @@ export class AcpClient {
                 detached: process.platform !== 'win32',
                 windowsHide: true,
             });
+            rememberChildProcessTree(this.agentProcess);
 
             if (!this.agentProcess.stdin || !this.agentProcess.stdout) {
                 throw new Error('Failed to create ACP stdio pipes');

@@ -797,6 +797,37 @@ describe('Runner', () => {
       expect(events[1]!.content).toMatch(/blocked by policy/i);
     });
 
+    it('forwards runtime-authenticated permission intent to tool guardrails', async () => {
+      const echoTool = makeLocalEchoTool();
+      let observedRootIntent: string | undefined;
+      const guardrail: ToolGuardrail = {
+        kind: 'tool',
+        name: 'observe-intent',
+        beforeTool: async (_call, context) => {
+          observedRootIntent = context.permissionIntent?.rootUserIntent;
+          return { action: 'allow' };
+        },
+      };
+      const agent = createAgent({
+        name: 'intent-agent',
+        instructions: 'sys',
+        tools: [echoTool],
+        guardrails: [guardrail as Guardrail],
+      });
+      let turn = 0;
+      await Runner.run(agent, 'generated child briefing', {
+        llm: async (): Promise<RunnerLlmResult> => {
+          turn += 1;
+          return turn === 1
+            ? { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] }
+            : { text: 'done', toolCalls: [] };
+        },
+        permissionIntent: { rootUserIntent: 'Review the current changes.' },
+      });
+
+      expect(observedRootIntent).toBe('Review the current changes.');
+    });
+
     it('skips tool execution when observer.beforeTool returns false (default-blocked message)', async () => {
       const echoTool = makeLocalEchoTool();
       let executeCalled = 0;

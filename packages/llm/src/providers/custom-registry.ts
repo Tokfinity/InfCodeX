@@ -217,19 +217,23 @@ function customDescriptorToFull(
   entry: string | KodaXModelDescriptor,
   protocol: KodaXCustomProviderConfig['protocol'],
   supportsThinking?: boolean,
+  inheritedReasoningPreset?: KodaXModelDescriptor['reasoningPreset'],
 ): KodaXModelDescriptor {
-  if (typeof entry === 'string') {
-    return { id: entry };
-  }
-  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
+  const descriptor = typeof entry === 'string' ? { id: entry } : entry;
+  const reasoningProfile = resolveCustomModelReasoningProfile(
+    descriptor,
+    protocol,
+    supportsThinking,
+    inheritedReasoningPreset,
+  );
   // Single-track invariant: supportsThinking:false forces every surface to 'none'
   // (mirrors customModelDescriptorToFull + getCustomModelCapabilities). Without
   // this the deprecated per-model reasoningCapability leaks through the spread and
   // getReasoningCapability(id) reports a stale label the runtime never acts on.
   const normalized =
-    supportsThinking === false && entry.reasoningCapability !== undefined
-      ? { ...entry, reasoningCapability: 'none' as const }
-      : entry;
+    supportsThinking === false && descriptor.reasoningCapability !== undefined
+      ? { ...descriptor, reasoningCapability: 'none' as const }
+      : descriptor;
   return reasoningProfile
     ? { ...normalized, reasoningProfile }
     : normalized;
@@ -253,7 +257,12 @@ export function getCustomProviderModelDescriptors(
   // reports the override. Mirrors the built-in getProviderModelDescriptors fix and the
   // getCustomModelCapabilities descriptor-first precedence.
   const full = (config.models ?? []).map((entry) =>
-    customDescriptorToFull(entry, config.protocol, config.supportsThinking),
+    customDescriptorToFull(
+      entry,
+      config.protocol,
+      config.supportsThinking,
+      config.reasoningPreset,
+    ),
   );
   const defaultEntry: KodaXModelDescriptor = full.find((m) => m.id === config.model) ?? { id: config.model };
   const alternatives = full.filter((m) => m.id !== config.model);
@@ -279,7 +288,12 @@ export function getCustomModelCapabilities(
   // maxOutputTokens / reasoningProfile override, which the bare `{id}` default
   // descriptor silently dropped. Mirrors base.ts + the built-in registry fix.
   const fromList = (config.models ?? [])
-    .map((entry) => customDescriptorToFull(entry, config.protocol, config.supportsThinking))
+    .map((entry) => customDescriptorToFull(
+      entry,
+      config.protocol,
+      config.supportsThinking,
+      config.reasoningPreset,
+    ))
     .find((m) => m.id === modelId);
   const descriptor = fromList ?? (isDefault ? ({ id: config.model } as KodaXModelDescriptor) : undefined);
   if (!descriptor) return undefined;

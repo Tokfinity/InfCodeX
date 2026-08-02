@@ -234,6 +234,11 @@ function buildSnapshot(
     (snapshot as { maxOutputTokens: number }).maxOutputTokens =
       entry.maxOutputTokens;
   }
+  if (entry.maxOutputTokensField !== undefined) {
+    (
+      snapshot as { maxOutputTokensField: typeof entry.maxOutputTokensField }
+    ).maxOutputTokensField = entry.maxOutputTokensField;
+  }
   if (entry.thinkingBudgetCap !== undefined) {
     (snapshot as { thinkingBudgetCap: number }).thinkingBudgetCap =
       entry.thinkingBudgetCap;

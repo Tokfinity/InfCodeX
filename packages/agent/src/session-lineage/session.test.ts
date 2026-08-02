@@ -60,7 +60,7 @@ describe('session ID generation', () => {
     const ids = Array.from({ length: 1_000 }, () => generateSessionIdSync());
 
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.every((id) => /^\d{8}_\d{6}_[a-z0-9]+$/.test(id))).toBe(true);
+    expect(ids.every((id) => /^\d{8}_\d{6}_lx[0-9a-f]{12}$/.test(id))).toBe(true);
   });
 
   it('preserves the public async wrapper over the shared generator', async () => {
@@ -72,6 +72,6 @@ describe('session ID generation', () => {
     );
 
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.every((id) => /^\d{8}_\d{6}_[a-z0-9]+$/.test(id))).toBe(true);
+    expect(ids.every((id) => /^\d{8}_\d{6}_lx[0-9a-f]{12}$/.test(id))).toBe(true);
   });
 });

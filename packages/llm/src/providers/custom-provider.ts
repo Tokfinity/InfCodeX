@@ -8,6 +8,7 @@
 import {
   type KodaXCustomProviderConfig,
   type KodaXModelDescriptor,
+  type KodaXOpenAICompatMaxOutputTokensField,
   type KodaXProtocolFamily,
   type KodaXProviderConfig,
   type KodaXReasoningCapability,
@@ -22,6 +23,10 @@ import { KodaXOpenAICompatProvider } from './openai.js';
 import { createReasoningProfileFromPreset } from '../reasoning.js';
 
 const VALID_CUSTOM_PROVIDER_USER_AGENT_MODES = new Set(['compat', 'sdk']);
+const VALID_OPENAI_MAX_OUTPUT_TOKEN_FIELDS = new Set<KodaXOpenAICompatMaxOutputTokensField>([
+  'max_tokens',
+  'max_completion_tokens',
+]);
 const VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES = new Set<KodaXVerifyStrategy>([
   'count-tokens',
   'models-list',
@@ -51,6 +56,29 @@ function defaultVerifyStrategyForProtocol(
   protocol: 'anthropic' | 'openai',
 ): KodaXVerifyStrategy {
   return protocol === 'anthropic' ? 'count-tokens' : 'models-list';
+}
+
+function validateMaxOutputTokensField(
+  custom: KodaXCustomProviderConfig,
+  value: unknown,
+  path: string,
+): void {
+  if (value === undefined) return;
+  if (
+    typeof value !== 'string'
+    || !VALID_OPENAI_MAX_OUTPUT_TOKEN_FIELDS.has(
+      value as KodaXOpenAICompatMaxOutputTokensField,
+    )
+  ) {
+    throw new Error(
+      `Custom provider "${custom.name}": ${path} must be "max_tokens" or "max_completion_tokens".`,
+    );
+  }
+  if (custom.protocol !== 'openai') {
+    throw new Error(
+      `Custom provider "${custom.name}": ${path} is only valid for protocol="openai".`,
+    );
+  }
 }
 
 export function legacyCapabilityFromReasoningProfile(
@@ -206,12 +234,28 @@ function resolveCustomReasoningProfile(
     : undefined;
 }
 
+function migrateLegacyDeepSeekPreset(
+  preset: KodaXModelDescriptor['reasoningPreset'],
+  modelId: string,
+  wireModel?: string,
+): KodaXModelDescriptor['reasoningPreset'] {
+  if (preset !== 'deepseek-v4-openai') return preset;
+  const upstreamModel = wireModel ?? modelId;
+  if (upstreamModel === 'deepseek-v4-flash') {
+    return 'deepseek-v4-flash-openai';
+  }
+  if (upstreamModel === 'deepseek-v4-pro') {
+    return 'deepseek-v4-pro-openai';
+  }
+  return preset;
+}
+
 export function resolveCustomProviderReasoningProfile(
   config: KodaXCustomProviderConfig,
 ): KodaXReasoningProfile | undefined {
   return resolveCustomReasoningProfile(
     getConfiguredReasoningProfile(config),
-    config.reasoningPreset,
+    migrateLegacyDeepSeekPreset(config.reasoningPreset, config.model),
     config.reasoning,
     {
       protocol: config.protocol,
@@ -229,10 +273,21 @@ export function resolveCustomModelReasoningProfile(
   // descriptor resolves to the 'none' profile at the SOURCE — keeping the runtime
   // (getReasoningProfile(modelId)) consistent with the capability query surfaces.
   supportsThinking?: boolean,
+  inheritedReasoningPreset?: KodaXModelDescriptor['reasoningPreset'],
 ): KodaXReasoningProfile | undefined {
+  const inheritsLegacyPreset =
+    inheritedReasoningPreset === 'deepseek-v4-openai'
+    && getConfiguredReasoningProfile(descriptor) === undefined
+    && descriptor.reasoningPreset === undefined
+    && descriptor.reasoning === undefined
+    && descriptor.reasoningCapability === undefined;
   return resolveCustomReasoningProfile(
     getConfiguredReasoningProfile(descriptor),
-    descriptor.reasoningPreset,
+    migrateLegacyDeepSeekPreset(
+      descriptor.reasoningPreset ?? (inheritsLegacyPreset ? inheritedReasoningPreset : undefined),
+      descriptor.id,
+      descriptor.wireModel,
+    ),
     descriptor.reasoning,
     {
       protocol,
@@ -246,11 +301,15 @@ function customModelDescriptorToFull(
   entry: string | KodaXModelDescriptor,
   protocol: KodaXProtocolFamily,
   supportsThinking?: boolean,
+  inheritedReasoningPreset?: KodaXModelDescriptor['reasoningPreset'],
 ): KodaXModelDescriptor {
-  if (typeof entry === 'string') {
-    return { id: entry };
-  }
-  const reasoningProfile = resolveCustomModelReasoningProfile(entry, protocol, supportsThinking);
+  const descriptor = typeof entry === 'string' ? { id: entry } : entry;
+  const reasoningProfile = resolveCustomModelReasoningProfile(
+    descriptor,
+    protocol,
+    supportsThinking,
+    inheritedReasoningPreset,
+  );
   // Single-track invariant: a provider-level supportsThinking:false must make
   // EVERY surface agree on 'none' — same override buildProviderConfig and
   // getCustomModelCapabilities already apply. Otherwise the deprecated per-model
@@ -258,9 +317,9 @@ function customModelDescriptorToFull(
   // reports a stale label (e.g. 'native-effort') the runtime never acts on,
   // masking the 'reasoning-control-limited' user warning (provider-policy).
   const normalized =
-    supportsThinking === false && entry.reasoningCapability !== undefined
-      ? { ...entry, reasoningCapability: 'none' as const }
-      : entry;
+    supportsThinking === false && descriptor.reasoningCapability !== undefined
+      ? { ...descriptor, reasoningCapability: 'none' as const }
+      : descriptor;
   return reasoningProfile
     ? { ...normalized, reasoningProfile }
     : normalized;
@@ -302,6 +361,21 @@ export function validateCustomProviderConfig(
     );
   }
 
+  validateMaxOutputTokensField(
+    custom,
+    custom.maxOutputTokensField,
+    'maxOutputTokensField',
+  );
+  custom.models?.forEach((model, index) => {
+    if (typeof model !== 'string') {
+      validateMaxOutputTokensField(
+        custom,
+        model.maxOutputTokensField,
+        `models[${index}].maxOutputTokensField`,
+      );
+    }
+  });
+
   if (custom.verifyStrategy !== undefined) {
     if (!VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES.has(custom.verifyStrategy)) {
       throw new Error(
@@ -323,7 +397,12 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
   // can express real differences instead of a single provider-wide
   // value.
   const models = custom.models?.length
-    ? custom.models.map((entry) => customModelDescriptorToFull(entry, custom.protocol, custom.supportsThinking))
+    ? custom.models.map((entry) => customModelDescriptorToFull(
+        entry,
+        custom.protocol,
+        custom.supportsThinking,
+        custom.reasoningPreset,
+      ))
     : undefined;
   const reasoningProfile = resolveCustomProviderReasoningProfile(custom);
   // supportsThinking:false forces the no-thinking preset at runtime
@@ -359,6 +438,7 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     capabilityProfile: custom.capabilityProfile,
     contextWindow: custom.contextWindow,
     maxOutputTokens: custom.maxOutputTokens,
+    maxOutputTokensField: custom.maxOutputTokensField,
     thinkingBudgetCap: custom.thinkingBudgetCap,
     promptCacheAffinity: custom.promptCacheAffinity ?? false,
     // Provider-level defaults for the three two-layer cascade fields.

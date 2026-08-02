@@ -31,6 +31,7 @@ import {
   createShellCommandInvocation,
   resolveShellExecution,
 } from '../shell-execution/resolver.js';
+import { hardenShellCommandEnvironment } from '../shell-execution/environment.js';
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
 const FOREGROUND_CLOSE_DRAIN_MS = process.platform === 'win32' ? 2_000 : 1_000;
@@ -252,12 +253,33 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   const usesWindowsCmd =
     process.platform === 'win32'
     && (ctx.shellExecution === undefined || ctx.shellExecution.shell.kind === 'cmd');
-  const legacyEnv = ctx.sessionScratchDir
+  const legacyEnvSource = ctx.sessionScratchDir
     ? {
       ...process.env,
       KODAX_SESSION_TMP: ctx.sessionScratchDir,
     }
     : process.env;
+  const legacyEnv = hardenShellCommandEnvironment(
+    legacyEnvSource,
+    usesWindowsCmd ? 'cmd' : 'bash',
+    process.platform,
+    ctx.providerCredentialEnvironmentNames,
+    cwd,
+  );
+  const legacyCommandInvocation = usesWindowsCmd
+    ? {
+      executable: legacyEnv.ComSpec ?? legacyEnv.COMSPEC ?? 'cmd.exe',
+      args: [
+        '/d',
+        '/v:off',
+        '/s',
+        '/c',
+        command.trimStart().startsWith('"') ? `"${command.trimStart()}"` : command,
+      ],
+      env: legacyEnv,
+      windowsVerbatimArguments: true as const,
+    }
+    : undefined;
   let commandInvocation:
     | ReturnType<typeof createShellCommandInvocation>
     | undefined;
@@ -289,11 +311,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         toolCallId: ctx.toolCallId,
         toolInput: input,
         command,
-        executable: commandInvocation?.executable,
-        args: commandInvocation?.args,
+        executable: commandInvocation?.executable ?? legacyCommandInvocation?.executable,
+        args: commandInvocation?.args ?? legacyCommandInvocation?.args,
         cwd,
         env: commandInvocation?.env ?? legacyEnv,
-        windowsVerbatimArguments: commandInvocation?.windowsVerbatimArguments,
+        windowsVerbatimArguments: commandInvocation?.windowsVerbatimArguments
+          ?? legacyCommandInvocation?.windowsVerbatimArguments,
         signal: ctx.abortSignal,
         deadlineAt,
         reportObservation: ctx.reportToolSandboxObservation,
@@ -350,7 +373,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
           ? { windowsVerbatimArguments: true }
           : {}),
       })
-    : commandInvocation === undefined
+    : commandInvocation === undefined && legacyCommandInvocation === undefined
     ? spawn(command, [], {
         shell: true,
         windowsHide: true,
@@ -358,16 +381,19 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         env: legacyEnv,
         detached: process.platform !== 'win32',
       })
-    : spawn(commandInvocation.executable, [...commandInvocation.args], {
+    : spawn(
+      (commandInvocation ?? legacyCommandInvocation)!.executable,
+      [...(commandInvocation ?? legacyCommandInvocation)!.args], {
         shell: false,
         windowsHide: true,
         cwd,
-        env: commandInvocation.env,
+        env: (commandInvocation ?? legacyCommandInvocation)!.env,
         detached: process.platform !== 'win32',
-        ...(commandInvocation.windowsVerbatimArguments === true
+        ...((commandInvocation ?? legacyCommandInvocation)!.windowsVerbatimArguments === true
           ? { windowsVerbatimArguments: true }
           : {}),
-      });
+      },
+    );
 
   if (runInBackground) {
     const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -391,7 +417,9 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       command,
       cwd,
     });
-    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(proc);
+    const cleanupOnProcessExit = (): void => {
+      killChildProcessTreeSync(proc);
+    };
     process.once('exit', cleanupOnProcessExit);
     const abortSignal = ctx.abortSignal;
     let cleaned = false;
@@ -455,7 +483,9 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       command,
       cwd,
     });
-    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(proc);
+    const cleanupOnProcessExit = (): void => {
+      killChildProcessTreeSync(proc);
+    };
     process.once('exit', cleanupOnProcessExit);
     let foregroundCommandRegistered = true;
     const unregisterForegroundCommand = (): void => {

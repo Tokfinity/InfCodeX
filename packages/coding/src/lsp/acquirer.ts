@@ -10,7 +10,7 @@
  * server falls straight through to step ③ (actionable install guidance).
  */
 
-import { killChildProcessTree } from '@kodax-ai/agent';
+import { killChildProcessTree, rememberChildProcessTree } from '@kodax-ai/agent';
 import { spawnLspProcess } from './spawn.js';
 
 /** True only when the user has explicitly opted into server auto-install. */
@@ -61,6 +61,7 @@ export function runInstallCommand(command: InstallCommand, options: RunInstallOp
       env: process.env,
       detached: process.platform !== 'win32',
     });
+    rememberChildProcessTree(child);
     onAbort = (): void => {
       void killChildProcessTree(child);
       done(false);

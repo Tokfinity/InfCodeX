@@ -64,6 +64,41 @@ describe('parseBashCommand — logical operators', () => {
 });
 
 describe('parseBashCommand — redirections', () => {
+  it('models descriptor duplication without treating it as a file write', () => {
+    const tree = parseBashCommand('rg --version 2>&1');
+
+    expect(tree.unparseable).toBe(false);
+    expect(tree.statements[0]?.stages[0]?.redirections).toEqual([{
+      op: '2>&',
+      fd: '2',
+      append: false,
+      input: false,
+      target: '1',
+      descriptorDuplication: true,
+    }]);
+  });
+
+  it('distinguishes descriptor close/duplication from a file named after `>&`', () => {
+    const closed = parseBashCommand('rg --version 3>&-');
+    expect(closed.statements[0]?.stages[0]?.redirections).toEqual([{
+      op: '3>&',
+      fd: '3',
+      append: false,
+      input: false,
+      target: '-',
+      descriptorDuplication: true,
+    }]);
+
+    const fileTarget = parseBashCommand('rg --version 2>&errors.log');
+    expect(fileTarget.statements[0]?.stages[0]?.redirections).toEqual([{
+      op: '2>&',
+      fd: '2',
+      append: false,
+      input: false,
+      target: 'errors.log',
+    }]);
+  });
+
   it('preserves environment references in redirection targets', () => {
     const tree = parseBashCommand('echo secret > "$HOME/.kodax/credentials.json"');
     expect(tree.unparseable).toBe(false);
@@ -134,6 +169,17 @@ describe('parseBashCommand — null-device redirects', () => {
 });
 
 describe('parseBashCommand — unparseable / safety', () => {
+  it('recognizes a leading PowerShell call operator without accepting background operators', () => {
+    const invocation = parseBashCommand("& 'C:\\tools\\dsh.cmd' --version");
+    expect(invocation.unparseable).toBe(false);
+    expect(invocation.statements[0]?.stages[0]?.argv).toEqual([
+      'C:\\tools\\dsh.cmd',
+      '--version',
+    ]);
+
+    expect(parseBashCommand('echo ready & remove-item secret.txt').unparseable).toBe(true);
+  });
+
   it('flags unknown operators as unparseable', () => {
     // Heredoc-style inputs aren't fully modeled.
     const tree = parseBashCommand('cat <<EOF\nhello\nEOF');

@@ -210,6 +210,67 @@ describe('custom providers', () => {
     });
   });
 
+  it('migrates the legacy DeepSeek preset according to the configured model', () => {
+    const flash = createCustomProvider({
+      name: 'custom-deepseek-flash',
+      protocol: 'openai',
+      baseUrl: 'https://deepseek.example/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_FLASH_API_KEY',
+      model: 'deepseek-v4-flash',
+      reasoningPreset: 'deepseek-v4-openai',
+    });
+    const pro = createCustomProvider({
+      name: 'custom-deepseek-pro',
+      protocol: 'openai',
+      baseUrl: 'https://deepseek.example/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_PRO_API_KEY',
+      model: 'deepseek-v4-pro',
+      reasoningPreset: 'deepseek-v4-openai',
+    });
+    const mixed = createCustomProvider({
+      name: 'custom-deepseek-mixed',
+      protocol: 'openai',
+      baseUrl: 'https://deepseek.example/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_MIXED_API_KEY',
+      model: 'deepseek-v4-flash',
+      models: ['deepseek-v4-pro'],
+      reasoningPreset: 'deepseek-v4-openai',
+    });
+
+    expect(flash.getReasoningProfile()?.effortAliases).toEqual({
+      medium: 'high',
+      xhigh: 'high',
+    });
+    expect(pro.getReasoningProfile()?.effortAliases).toEqual({
+      low: 'high',
+      medium: 'high',
+      xhigh: 'max',
+    });
+    expect(mixed.getReasoningProfile('deepseek-v4-pro')?.effortAliases).toEqual({
+      low: 'high',
+      medium: 'high',
+      xhigh: 'max',
+    });
+
+    registerCustomProviders([{
+      name: 'custom-deepseek-mixed',
+      protocol: 'openai',
+      baseUrl: 'https://deepseek.example/v1',
+      apiKeyEnv: 'CUSTOM_DEEPSEEK_MIXED_API_KEY',
+      model: 'deepseek-v4-flash',
+      models: ['deepseek-v4-pro'],
+      reasoningPreset: 'deepseek-v4-openai',
+    }]);
+    expect(
+      getCustomModelCapabilities('custom-deepseek-mixed', 'deepseek-v4-pro')
+        ?.reasoningProfile?.effortAliases,
+    ).toEqual({
+      low: 'high',
+      medium: 'high',
+      xhigh: 'max',
+    });
+  });
+
   it('loads deprecated reasoningCapabilityV2 custom-provider fields as reasoningProfile', () => {
     vi.stubEnv('CUSTOM_LEGACY_PROFILE_API_KEY', 'test-key');
     const legacyConfig: KodaXCustomProviderConfig & {
@@ -368,6 +429,20 @@ describe('custom providers', () => {
         promptCacheAffinity: 'yes' as unknown as boolean,
       }),
     ).toThrowError(/promptcacheaffinity must be a boolean/i);
+
+    expect(() =>
+      createCustomProvider({
+        ...cloneConfig(OPENAI_CUSTOM),
+        maxOutputTokensField: 'completion_limit' as unknown as KodaXCustomProviderConfig['maxOutputTokensField'],
+      }),
+    ).toThrowError(/maxoutputtokensfield must be "max_tokens" or "max_completion_tokens"/i);
+
+    expect(() =>
+      createCustomProvider({
+        ...cloneConfig(ANTHROPIC_CUSTOM),
+        maxOutputTokensField: 'max_tokens',
+      }),
+    ).toThrowError(/maxoutputtokensfield is only valid for protocol="openai"/i);
   });
 
   it('tracks registered custom providers without instantiating them', () => {

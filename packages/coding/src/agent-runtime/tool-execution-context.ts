@@ -133,6 +133,7 @@ export function buildToolExecutionContext(
     contextIdentitySessionId: options.context?.contextIdentitySessionId ?? sessionId,
     actorHost: options.context?.actorHost,
     managedWorkBudget: options.context?.managedWorkBudget,
+    permissionIntent: options.context?.permissionIntent,
     gitRoot: options.context?.gitRoot ?? undefined,
     // FEATURE_247 (R7) — session/profile attribution for host-registered tools
     // (Space artifact/source/KB) so concurrent Partner/Coder sessions don't
@@ -161,10 +162,7 @@ export function buildToolExecutionContext(
     executionCwd,
     shellExecution: options.context?.shellExecution,
     shellSandbox: options.context?.shellSandbox,
-    providerCredentialEnvironmentNames:
-      options.context?.shellExecution === undefined
-        ? undefined
-        : getProviderCredentialEnvironmentNames(),
+    providerCredentialEnvironmentNames: getProviderCredentialEnvironmentNames(),
     sessionScratchDir,
     extensionRuntime: runtime,
     askUser: events.askUser, // Issue 069
@@ -207,6 +205,9 @@ export function buildToolExecutionContext(
         : {}),
       ...(options.context?.shellExecution !== undefined
         ? { shellExecution: options.context.shellExecution }
+        : {}),
+      ...(options.context?.permissionIntent !== undefined
+        ? { permissionIntent: options.context.permissionIntent }
         : {}),
     },
     parentEvents: events,

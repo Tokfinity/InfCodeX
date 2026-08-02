@@ -282,19 +282,28 @@ Some OpenAI-compatible reasoning models require KodaX to replay the previous ass
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
       "model": "deepseek-v4-flash",
-      "reasoningPreset": "deepseek-v4-openai",
+      "maxOutputTokensField": "max_tokens",
+      "reasoningPreset": "deepseek-v4-flash-openai",
       "replayReasoningContent": true
     }
   ]
 }
 ```
 
-Keep `replayReasoningContent` unset or `false` for OpenAI proper and gateways that reject unknown assistant-message fields. If one gateway routes mixed models, prefer per-model overrides:
+DeepSeek Chat Completions uses `max_tokens`; OpenAI proper defaults to
+`max_completion_tokens`. Keep `replayReasoningContent` unset or `false` for
+OpenAI proper and gateways that reject unknown assistant-message fields. If one
+gateway routes mixed models, prefer per-model overrides for both fields:
 
 ```json
 {
   "models": [
-    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    {
+      "id": "deepseek-v4-flash",
+      "maxOutputTokensField": "max_tokens",
+      "reasoningPreset": "deepseek-v4-flash-openai",
+      "replayReasoningContent": true
+    },
     { "id": "gpt-5", "replayReasoningContent": false }
   ]
 }
@@ -311,7 +320,7 @@ Sidecar verifier judge calls use provider-level forced tool choice when supporte
 
 #### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
 
-If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. Built-in vision-capable aliases (Anthropic, OpenAI, Anthropic-/OpenAI-compatible aliases such as DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; Codex-CLI and custom providers need to opt in when their underlying model supports image input.
+If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. Built-in vision-capable aliases (Anthropic, OpenAI, compatible aliases such as Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default. DeepSeek V4 and Codex-CLI are text-only; custom providers need to opt in when their underlying model supports image input.
 
 ```json
 {
@@ -528,6 +537,28 @@ advertises `fallbackPersistsEngine:false` across embedded, Worker, and daemon
 hosts. Actor ownership additionally uses Runtime identity rather than PID alone,
 so PID reuse cannot pin a crashed owner. The resume Session picker also renders
 timestamps in the host's local timezone.
+
+**v0.7.79 release-preparation candidate:** Configured outbound A2A Agents can persist two
+independent, default-deny network permissions: private-address access and
+non-loopback plaintext HTTP. The embedded Worker and shared daemon reconcile
+and execute the same authorized configuration. Runtime embedders also gain one
+authoritative Session status, bounded read-only diagnostics, byte-preserving
+Session export, strict transcript observation, a provenance-checked ordinary
+conversation projection, and bounded streaming-event coalescing with
+capability-gated idle daemon upgrade. Standalone child-process, Session lineage,
+shell cleanup, packaged sidecar, and parallel admission paths receive the
+corresponding release hardening.
+
+OpenAI-compatible custom providers can now choose `max_tokens` or
+`max_completion_tokens` per provider or model. DeepSeek V4 Flash and Pro use
+separate reasoning profiles and are advertised as text-only. See the
+[v0.7.79 design](docs/features/v0.7.79.md) and
+[release preparation checklist](docs/release.md#v0779-release-preparation).
+FEATURE_280 remains planned and is not represented as shipped by this
+candidate; it must be completed or explicitly rescheduled before tagging.
+Issue 256 is also a release blocker: Windows snapshot-based process ancestry
+does not yet provide spawn-time Job Object-grade descendant containment or an
+independently invalidatable Worker owner lease.
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows

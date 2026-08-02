@@ -2351,6 +2351,7 @@ export async function runSubstrate(
                       ? { abortSignal: options.abortSignal }
                       : {}),
                     messages: messages.slice(0, -1),
+                    permissionIntent: options.context?.permissionIntent,
                   },
                   getAfterGuardrailContext: () => ({
                     agent: guardrailAgent,
@@ -2358,6 +2359,7 @@ export async function runSubstrate(
                       ? { abortSignal: options.abortSignal }
                       : {}),
                     messages: [...messages],
+                    permissionIntent: options.context?.permissionIntent,
                   }),
                   onToolCallsPrepared: (preparedBlocks: readonly KodaXToolUseBlock[]) => {
                     if (!preparedBlocks.some((block, index) => {

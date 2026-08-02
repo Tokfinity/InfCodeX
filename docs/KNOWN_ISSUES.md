@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-07-31_
+_Last Updated: 2026-08-02_
 
 ---
 
@@ -14,14 +14,25 @@ _Last Updated: 2026-07-31_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 263 | High | Resolved | Auto permission fast paths could bypass sensitive-read and truncated-intent review | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
+| 262 | High | Resolved | Session lifecycle operations can orphan recoverable conversation cache content | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
+| 261 | Medium | Resolved | Prepared Session append rereads the complete conversation bundle | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
+| 260 | High | Resolved | Shell read-only inspection, intent binding, and classifier protocol drift caused spurious Auto approvals | v0.7.33; amplified by v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
+| 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
+| 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | - | 2026-08-01 | - |
+| 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
+| 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 252 | High | Resolved | Cancelled shell environment probes can return before descendants terminate | configured-shell environment probing | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 251 | High | Resolved | Published Runtime Worker resolves a handler sidecar that is not shipped | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 250 | Medium | Resolved | Windows programmable commands use non-portable module paths and hide load failures | programmable command support | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 249 | High | Resolved | Standalone executable re-enters KodaX when launching JavaScript children | Bun standalone child integrations | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 248 | High | Resolved | REPL Session IDs collide for contexts created in the same second | legacy REPL Session ID generator | v0.7.79 development | 2026-07-31 | 2026-07-31 |
-| 245 | High | Resolved | Windows sandbox runner cannot launch from a user-level global npm install | v0.7.78 Windows ASRT integration | v0.7.78 development | 2026-07-31 | 2026-07-31 |
+| 247 | High | Resolved | Runtime cold Session snapshots repeat storage reads, locator scans, and materialization | v0.7.79 development | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 246 | High | Resolved | Runtime coalescing release closure could reuse legacy daemons, exceed 8KiB, and mis-test cancellation | v0.7.79 development | v0.7.79 development | 2026-07-31 | 2026-07-31 |
+| 245 | High | Resolved | Windows sandbox runner cannot launch from a user-level global npm install | v0.7.78 Windows ASRT integration | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 244 | High | Resolved | Runtime streaming deltas create an event, sequence-allocation, and persistence storm | v0.7.64 Runtime event contract | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 243 | High | Resolved | Runtime Worker omits configured A2A Agents from dispatchable catalog and execution | v0.7.66 Worker-hosted Runtime | v0.7.79 development | 2026-07-30 | 2026-07-30 |
 | 242 | Medium | Resolved | First launch opens metadata setup when no provider credential exists | v0.7.73 first-run provider setup | v0.7.79 development | 2026-07-30 | 2026-07-30 |
@@ -156,6 +167,472 @@ _Last Updated: 2026-07-31_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 263: Auto permission fast paths could bypass sensitive-read and truncated-intent review
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-02
+- **Resolved**: 2026-08-02
+
+#### Original Problem
+
+Three deterministic Auto permission checks admitted calls that still required
+LLM review:
+
+- shell and PowerShell read operands such as `.env*`, `.e?v`, and `.en[v]`
+  could expand to protected files after the lexical sensitive-path check;
+- positive `grep`/`glob`/ripgrep/GNU-grep selectors, PowerShell comma-separated
+  path arrays and `Get-ChildItem | Get-Content/Select-String` pipelines, and
+  `findstr /F:` file lists could select protected files indirectly while the
+  fast path inspected only a lexical root or direct operand;
+- `git config --get-regexp` treated a `user.` prefix as sufficient, so an
+  alternation such as `^user\.|.*` could read unrelated credential-bearing
+  configuration. New `git config get` regexp/URL modes, Git's accepted long
+  option abbreviations, boolean option ordering, dynamic attr pathspecs, and
+  executable `git grep` options were not modeled consistently;
+- a mutation could rely on a compacted current user request even when
+  `currentUserContentTruncated` proved that the request was incomplete;
+- PowerShell environment-provider reads such as `Get-ChildItem Env:*`,
+  `gci Env:OPENAI_*`, and `Get-ChildItem Env: -Force` were modeled as complete
+  ordinary reads, despite returning environment values that can contain API
+  keys and tokens;
+- deterministic read/read-only-execute paths ignored explicit constraints
+  retained in truncated current-user content, and a narrow verb list missed
+  equivalent constraints such as "Don't use the shell", "use file tools
+  only", and their Chinese forms.
+
+Classifier-failure fallback also checked only intent restrictions. A protected
+or unresolved read that reached the classifier could therefore be admitted as
+an Accept-edits-style ordinary read after both classifier attempts failed.
+
+#### Root Cause
+
+- Sensitive-path discovery recognized exact components but did not preserve
+  shell expansion, selector, array, pipeline, or indirect-file-list
+  uncertainty as an unresolved read target.
+- The safe Git selector regular expression validated only the beginning of the
+  supplied expression instead of its complete grammar.
+- Deterministic mutation admission stopped consulting the truncation flag
+  during the v0.7.79 intent-binding refactor.
+- PowerShell `Env:` and `Variable:` were treated like lexical file operands
+  rather than process-data provider selectors. Aliases, wildcards,
+  attached/detached `-Path`, parameter combinations, and `Get-Variable` could
+  therefore bypass the sensitive-process-data check. Pipeline-bound provider
+  paths, scoped variables, Bash indirect expansion, and arbitrary exact secret
+  names were adjacent ways to reach the same data without a known denylist hit.
+- Read-only fast paths treated failure to match a small denial regex as proof
+  of compatible intent. The compactor also anchored slices only around command
+  terms, so a constraint in the middle of a long current request could be
+  omitted before the guardrail evaluated it.
+- Failure fallback did not require the complete structured permission review
+  to satisfy the same deterministic-admission predicate as the original fast
+  path.
+
+#### Resolution
+
+- Treat glob, bracket, brace, positive search-selector, path-array, broad
+  enumeration-pipeline, and indirect file-list syntax as unresolved and route
+  it to Auto[LLM] unless a concrete protected target is already known.
+  Preserve explicit PowerShell `-LiteralPath` semantics, including unambiguous
+  parameter abbreviations; exclusion selectors remain exclusions. On Windows,
+  normalize trailing-dot/space and alternate-data-stream aliases and resolve
+  existing 8.3 names before deciding that a target is non-sensitive.
+- Restrict statically safe Git-config regexp reads to complete anchored
+  expressions over the known non-secret `user.name`/`user.email` keys.
+  Validate new `get --regexp` and `get --url` forms using Git's accepted long
+  option abbreviations and effective last-boolean-option semantics. Dynamic
+  attr pathspecs and Git-grep options that can execute a pager/external grep
+  remain LLM-reviewed. `git grep --no-index`/`--untracked` also stay under LLM
+  review because they expand the scan beyond tracked pathspec resolution.
+- Treat directory/implicit `rg`, all modeled recursive GNU-grep forms (including
+  `-d recurse`/`--directories=recurse`), recursive findstr, explicit or default
+  structured-grep directory roots, pathless Git-grep, and unscoped Git
+  patch/content output as unresolved while no universal per-file fence is
+  present. Git line-log `-L` targets are parsed as paths, and patch-enabling
+  short-option clusters, `--patch-with-raw`, `--remerge-diff`, and
+  `--diff-merges` modes cannot hide content output behind metadata flags.
+  Scoped file reads and metadata-only Git output such as `git show --stat`
+  retain the fast path.
+- Parse PowerShell environment/variable-provider operands for `Get-ChildItem`,
+  `Get-Item`, `Get-Content`, and `Select-String`, including their built-in
+  aliases, unambiguous parameter abbreviations, comma arrays, provider-qualified
+  paths, and wildcard forms. Broad or sensitive selectors route through
+  Auto[LLM]. A small conventional diagnostic-name allowlist keeps exact reads
+  such as `Env:PATH` on the fast path; arbitrary exact names and literal
+  wildcard names are not assumed non-secret. `Get-Variable`/`gv`, scoped
+  PowerShell variables, pipeline-bound provider paths, and Bash `${!...}`
+  expansion follow the same process-data boundary. Canonical `Get-Item`/
+  `Get-Variable` safe-name selectors are modeled as read-only only inside the
+  Auto[LLM] analyzer, so `PATH`/`HOME` stay deterministic without widening the
+  direct-shell bypass. Non-filesystem providers (`Function:`, `Alias:`,
+  `Cert:`, registry drives, and provider-qualified equivalents) remain
+  LLM-reviewed. Literal single-quoted variable text and bare `Env:` search or
+  output text are not misclassified as process-data access. `Select-String`
+  binds its first unbound positional operand as `Pattern`, later operands as
+  `Path`, and treats `-InputObject` as data rather than a provider path.
+- Keep truncation by itself irrelevant to deterministic reads, but require LLM
+  review before writes, deletes, moves, copies, or unmodeled execution can rely
+  on incomplete current-user authority. Any explicit read/shell constraint
+  that is present in compacted current-user content is checked even when the
+  content is marked truncated. High-recall English/Chinese constraint
+  candidates only route to the LLM; they never decide allow/deny themselves.
+  Constraint markers are also compaction anchors, so middle-of-request
+  authority survives bounded intent projection. Ordinary review/read-only and
+  mutation-only restrictions still retain deterministic read fast paths.
+  Semantic routing is clause- and target-aware: operation paths are removed
+  before interpreting constraint words, exclusions apply only when related to
+  the requested target, and broad compaction anchors are not themselves used
+  as proof that a restriction exists.
+- For copy, delete, move, and rename, deterministic admission now requires the
+  requested action to bind directly to the concrete source target. Indirect,
+  exclusion-shaped, or otherwise ambiguous authority routes to Auto[LLM]; an
+  LLM `allow` still executes without asking the user. Explicit English and
+  Chinese action-to-target forms retain their zero-classifier fast path.
+- Treat an `allow`/`hazard=none` envelope whose reason itself describes a
+  destructive, disclosure, or confirmation requirement as a contract
+  contradiction. The bounded retry/fallback path handles it as classifier
+  failure instead of silently accepting a semantically inconsistent response.
+- Permit Accept-edits classifier-failure fallback only when the complete
+  permission review is itself deterministically admissible. Protected,
+  unresolved, partial, risky, or intent-constrained reviews ask instead.
+
+The earlier DeepSeek response body was not retained, so a historical
+`legacy_v1` response remains a hypothesis rather than a proven incident cause.
+The strict dual reader is a compatibility mitigation: fenced output,
+surrounding prose, mixed envelopes, and missing required fields remain contract
+failures. Future incidents use bounded content-free protocol/parse diagnostics;
+raw classifier text is intentionally not persisted.
+
+#### Files Changed
+
+- `packages/repl/src/permission/auto-rules.ts`
+- `packages/repl/src/permission/permission.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- adjacent regression tests and SDK/release documentation
+
+#### Tests Added or Updated
+
+- Reported POSIX/cmd/PowerShell wildcard reads, Git and regex pathspecs, and
+  PowerShell `-LiteralPath`, comma-array, enumeration-pipeline, search-filter,
+  and indirect-file-list counterexamples.
+- Safe and adversarial full-expression Git config selectors, abbreviation,
+  URL-section, and ordered `--name-only` cases; executable Git-grep options.
+- Broad versus scoped content-search and Git patch-output cases, including
+  GNU-grep directory modes, default structured-grep scope, Git `-L` paths,
+  patch/merge-diff option combinations, and the user-reported metadata-only
+  `git show --stat` counterexample.
+- Windows trailing-dot/space, alternate-data-stream, and existing 8.3 aliases
+  for protected filenames.
+- Truncated-intent mutation review, truncated-intent read fast path, and
+  classifier-failure denial for unresolved reads or explicit root-user read
+  restrictions.
+- PowerShell `Environment`/`Variable` provider cmdlets and aliases (including
+  `Get-Variable`/`gv`), wildcard and parameter combinations,
+  provider-qualified/pipeline-bound paths, scoped and indirect variable forms,
+  non-filesystem providers, literal-reference controls, safe-name controls,
+  `Select-String` Pattern/Path/InputObject binding, and end-to-end assertions
+  that risky commands call the classifier exactly once while proven-safe
+  selectors make zero calls.
+- English/Chinese shell/read constraint paraphrases, positive and mutation-only
+  controls, multi-clause/target-scoped restrictions, `read-only` versus
+  `read only <target>`, retained constraints in truncated requests,
+  scope/exclusion/passive/subprocess variants, constraint-shaped filenames,
+  middle-of-request compaction anchors, and classifier call-count assertions.
+- Direct versus exclusion-shaped copy/delete/move/rename authority in English
+  and Chinese, plus contradictory structured and legacy classifier reasons.
+
+### 262: Session lifecycle operations can orphan recoverable conversation cache content
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-02
+- **Resolved**: 2026-08-02
+
+#### Original Problem
+
+Conversation page caches contain complete message bodies. Archive, unarchive,
+delete, and retention cleanup can currently report the primary Session
+operation as successful when cache removal fails. Legacy Session migration can
+also leave the cache at the superseded source location. A detached cache is
+therefore still recoverable after the Session lifecycle operation that should
+have moved or destroyed its content.
+
+#### Context
+
+Affected paths are Session archive/unarchive, explicit deletion, retention
+cleanup, and legacy layout migration. Completion requires cache lifecycle
+failures to be observable and retryable, with no orphaned recoverable body
+content after a successful operation.
+
+#### Resolution
+
+Archive, unarchive, delete, and retention now remove the source, counterpart,
+and legacy cache locations before moving or deleting the canonical Session.
+Cleanup failure leaves the Session attached, is surfaced to the caller, and is
+safe to retry. Retention aggregates failures after continuing its sweep. Layout
+migration v3 removes legacy caches before and after moves, does not write its
+marker on cache-cleanup failure, and allows the same storage instance to retry.
+
+#### Files Changed
+
+- `packages/repl/src/session/conversation-page-cache.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/interactive/session-migration.ts`
+- `src/kodax_cli.ts`
+
+#### Tests Added
+
+- Lifecycle cleanup failures for archive, unarchive, delete, and retention.
+- Same-instance migration retry and legacy flat / `sessions-archive` cache cleanup.
+
+### 261: Prepared Session append rereads the complete conversation bundle
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-02
+- **Resolved**: 2026-08-02
+
+#### Original Problem
+
+After a Session conversation page cache has been prepared, an ordinary append
+re-reads the complete main and sidecar bundle to maintain the cache. Measured
+append latency therefore grows with the complete Session history even though
+only a new tail was persisted.
+
+The first bounded-prefix implementation also made existing indices of arrays
+returned by public `storage.load()` calls non-writable/non-configurable and
+exported its trusted inheritance primitive from the public Agent SDK. That
+changed the declared mutable-array contract and let a caller incorrectly bless
+an already rewritten prefix so the hot path could overlook the rewrite.
+
+#### Context
+
+The append hot path must have bounded read and compute cost relative to the new
+tail while preserving exact revision/sourceRevision, canonical ordering, and
+the existing `data_changed` / `resync_required` contract. No timestamp,
+sequence, content-deduplication, or UI-visibility semantics are added.
+
+#### Resolution
+
+The cache manifest now carries a validated, fixed-chunk source revision state.
+A normal prepared append extends that state from at most one bounded tail plus
+the newly written JSONL bytes, and validates the exact main/sidecar boundary
+transition using metadata only. A fixed-size, no-false-negative identity filter
+preserves conflict detection without traversing the persisted prefix. The
+filter remains a recoverable cache artifact: it is admitted only when its hash
+matches canonical main-file metadata and its bundle revision is exact, so a
+tampered or publicly rebuilt partial cache cannot become a trust authority. Full
+snapshot calculation uses the same revision algorithm, so direct reads and
+prepared pages remain exact. Any
+unexpected topology or lineage transition invalidates the cache without doing
+a synchronous full-history rebuild.
+
+Public full-snapshot `appendSessionDelta()` calls now always use the exact
+canonical merge path, so replacement, nested mutation, and mutation after a
+lineage helper returns are persisted instead of being silently treated as an
+unchanged prefix. The separate `appendPreparedSessionTail()` capability accepts
+only new lineage/artifact/extension tail records and a one-shot boundary from
+asynchronous `prepareSessionAppend()`; historical arrays are absent from its
+type and runtime input. The boundary is fenced by a process-local revision,
+counts, active leaf, tag, exact main/sidecar bundle revision, and durable
+main-file identity. Lineage tails must be a new message-only parent chain;
+artifact identities/dedup keys and the bounded ledger cap are checked without
+prefix traversal. The mutable public delta is deep-snapshotted before the first
+await. Stale or non-linear tails fail observably with `data_changed` and require
+reload/rebuild. No periodic full-history maintenance runs inside this path, so
+the complete prepared append computation remains proportional to the supplied
+tail while keeping caller-owned full snapshots exact.
+
+A non-null fulfilled prepared append returns its reusable successor boundary.
+A fulfilled `null` means the append committed exactly once but the successor
+could not be safely witnessed; the caller reloads and must not retry the same
+tail. This separates observable pre-commit rejection from post-commit resync
+without weakening revision or canonical-order semantics.
+
+`storage.load()` again returns ordinary mutable, configurable,
+structured-cloneable arrays and objects. All Proxy/freeze prefix tracking and
+the importable `@kodax-ai/agent/internal/session-append-prefix` package export
+were removed; there is no public primitive that can bless an unverified
+historical prefix.
+
+#### Files Changed
+
+- `packages/repl/src/session/source-revision.ts`
+- `packages/repl/src/session/conversation-page-cache.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/session/public-api.ts`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/index.ts`
+- `src/sdk-conversation-history.test.ts`
+- `src/sdk-runtime.ts`
+
+#### Tests Added
+
+- Incremental/full source revision equivalence across LF, CRLF, empty-line, and chunk boundaries.
+- Prepared append performs no main/sidecar payload or prefix read, preserves direct source revision equality, and rejects a stale revision.
+- A 640-entry prepared append fails on any lineage/artifact history index read while verifying exact incremental `activeMessageCount` and the cache tail.
+- Stale prepared boundaries and cross-process changes fail with `data_changed` and expose a fresh retry boundary after reload.
+- Public SDK storage regression verifies loaded lineage/artifact arrays are structured-cloneable, retain writable/configurable indices, and persist index, nested, and post-helper prefix edits.
+- Public Agent packaging regression verifies no prefix capture, inheritance, trust-check primitive, or internal proof subpath is exported.
+
+### 260: Shell read-only inspection, intent binding, and classifier protocol drift caused spurious Auto approvals
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.33; amplified by v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-02
+- **Resolved**: 2026-08-02
+
+#### Original Problem
+
+Auto[LLM] repeatedly requested permission for ordinary PowerShell environment
+inspection such as `where.exe rg`, `$env:PATH ... | Where-Object`, and
+`rg --version 2>&1 | Select-Object -First 2`. Permission diagnostics reported
+`classifier_failure/contract_error`, even though both classifier attempts
+completed normally. A related explicit `& ...dsh.cmd --version` call was
+represented as an opaque unknown action, so the classifier received weaker
+facts than were available from the command. Child review commands could also
+inherit a long generated briefing as if it were fresh user authority, while
+some authenticated constraints were checked only after read fast-paths.
+
+#### Root Cause
+
+- The shared shell tokenizer treated `2>&1` as a file redirect and a leading
+  PowerShell call operator as an unsupported background operator.
+- Static read admission did not model safe PowerShell environment expressions,
+  constrained `Where-Object`/`Select-Object` stages, or ripgrep's read-only
+  invocation boundary. Sequential `;` statements were rejected before each
+  statement could be validated independently.
+- The basename-oriented command allowlist did not distinguish a bare admitted
+  executable from a path-qualified lookalike. It also classified interpreters
+  with effectful DSLs (`awk`, `sed`, POSIX `fc`) and effectful `find` actions
+  too broadly as reads.
+- The classifier prompt had moved to a structured decision/hazard contract
+  while valid responses in the previous `<block>` protocol could still arrive.
+  Those semantic decisions were converted into infrastructure failures.
+- Deterministic admission checked `read` and `readOnly` operations before
+  relevant authenticated child constraints, and review questions containing a
+  possible mutation verb could be mistaken for mutation authority.
+- Existing diagnostics exposed timing and prompt size but not response shape,
+  provider stop reason, observed protocol, or the exact parse failure class.
+
+#### Resolution
+
+- Model descriptor duplication/closure separately from file redirection and
+  recognize a leading PowerShell call operator without accepting background
+  execution. File targets after `>&` remain writes.
+- Deterministically admit only structurally proven read-only PowerShell stages,
+  including the reported compound inspection. Sensitive environment names,
+  path-qualified executables, effectful command DSL/actions, script blocks with
+  effects, external ripgrep preprocessors, arbitrary scripts, and any
+  unmodeled stage continue to require LLM review.
+- Preserve structured operation facts for parsed-but-unmodeled shell calls
+  instead of collapsing them to an opaque unknown action.
+- Carry Runtime-authenticated root intent, delegated objective, and binding
+  constraints separately from generated child briefings. Check relevant
+  constraints before read fast-paths, while retaining zero-LLM admission when
+  a constraint only prohibits mutations. Treat review questions as review
+  authority, not implied permission to perform the mutation being discussed.
+- Keep the structured classifier protocol canonical while dual-reading the
+  previous valid standalone protocol during rollout. Both readers require one
+  complete, exclusive envelope: mixed protocols, surrounding prose, duplicate
+  decisions, and nested contract tags cannot select an early allow or
+  downgrade a malformed structured response. Malformed output still retries
+  once and then uses the Accept-edits failure boundary.
+- Add bounded, content-free diagnostics for provider stop reason, response byte
+  count, text-block count, observed protocol, and parse failure code; Runtime
+  permission requests carry the same fields to SDK hosts and Space.
+
+#### Files Changed
+
+- `packages/repl/src/permission/bash-ast.ts`
+- `packages/repl/src/permission/permission.ts`
+- `packages/repl/src/permission/types.ts`
+- `packages/repl/src/permission/auto-rules.ts`
+- `packages/coding/src/guardrails/auto-mode/permission-intent.ts`
+- `packages/coding/src/guardrails/auto-mode/guardrail.ts`
+- `packages/coding/src/guardrails/auto-mode/parse-output.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.ts`
+- `packages/coding/src/guardrails/auto-mode/circuit-breaker.ts`
+- `packages/llm/src/side-query.ts`
+- `packages/repl/src/interactive/commands.ts`
+- `packages/coding/src/index.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+
+#### Tests Added or Updated
+
+- Added parser and permission regressions for descriptor duplication, the exact
+  reported PowerShell inspection, sensitive/effectful counterexamples, and the
+  Accept-edits failure path.
+- Added classifier protocol/parse-diagnostic and side-query response-shape
+  coverage, plus Runtime SDK propagation and degraded-health status coverage.
+
+### 259: REPL startup persists zero-message sessions before the first prompt
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.72 Runtime REPL bridge
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-02
+- **Resolved**: 2026-08-02
+
+#### Original Problem
+
+Starting the classic or Ink REPL and exiting before submitting a prompt created
+a durable user-scope `REPL Session`. Startup and first-ready performance probes
+therefore left batches of zero-message records in the shared Session store.
+`kodax -r` hid those records because they were not resumable, while KodaX Space
+showed them as empty tasks because it intentionally preserves REPL history.
+
+#### Context
+
+- Affected components: Runtime-backed REPL startup, CLI startup benchmarks, and
+  KodaX Space's shared Session list.
+- Reproduction: launch `kodax`, wait for the first input prompt, enter `/exit`,
+  and inspect the current project's user Session bucket.
+- Expected: a REPL that never receives a prompt leaves no durable Session.
+
+#### Root Cause
+
+Both REPL surfaces synchronize Runtime Auto settings while mounting. The
+`syncSettings()` bridge called `ensureCliRuntimeSession()`, which created the
+Session before any user prompt reached the interactive Runtime runner. The
+runner already has the correct first-prompt creation boundary, but startup
+settings synchronization bypassed it.
+
+#### Resolution
+
+- Startup settings synchronization now updates only an existing Runtime
+  Session. A normal missing-Session result is provisional and performs no
+  create or settings write; other load failures still propagate.
+- The interactive Runtime runner continues to create the Session on the first
+  real prompt and then synchronizes the current permission and Auto settings.
+- Archived the 15 strictly verified zero-message REPL records created by the
+  2026-08-01 startup performance investigation and two same-signature records
+  created by a concurrent process before the fix was built. Two older strict
+  zero-message REPL records were also archived. All 19 records and their cache
+  bundles remain recoverable through the Session storage archive operation.
+
+#### Files Changed
+
+- `src/kodax_cli.ts`
+- `src/kodax_cli.runtime-runner.test.ts`
+
+#### Tests Added
+
+- Added a Runtime bridge regression proving startup synchronization returns no
+  stats and performs no create, settings read, or settings write when the
+  provisional REPL Session does not exist.
+- Passed the 11-test Runtime bridge suite, the 65-test CLI contract suite, and
+  the complete production build.
+
 ### 258: TodoList content and labels can ignore the query and UI locale
 
 - **Priority**: Medium
@@ -212,6 +689,235 @@ and summary-fold text bypassed the existing i18n dictionary entirely.
   contract in the Worker prompt and both mutating Todo tool descriptions.
 - Added Chinese-locale assertions for the Todo counter, transcript heading, and
   both summary-fold labels while preserving existing English output.
+
+### 257: Legacy compaction copies cannot be safely folded by hosts
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: legacy compaction/resume persistence
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-01
+- **Resolved**: 2026-08-01
+
+#### Problem
+
+Some legacy Sessions contain different physical lineage IDs for copies of one
+retained user/assistant/tool interaction. Raw transcript provenance is
+insufficient for a host to distinguish those copies from a genuine repeated
+interaction. Content, timestamp, and `turnId` heuristics can therefore either
+show duplicates or silently delete real user input.
+
+#### Resolution
+
+- Raw `loadFullTranscript()` / `readFullTranscript()` behavior remains an
+  append-order physical audit with archived and inactive records intact.
+- `readConversationHistory()` and Runtime `sessions.conversation*` provide a
+  separate ordinary-chat projection. Persisted logical/source provenance is
+  authoritative; legacy folding additionally requires a valid compaction
+  boundary and one unique topology suffix.
+- Missing, conflicting, or non-unique evidence returns `partial` or
+  `ambiguous`, includes structured issues, and retains all physical candidates.
+  The implementation never globally sorts or deduplicates by content,
+  timestamp, or `turnId`.
+- Direct, page, and oversized-entry chunk reads share one immutable revision.
+  Fork and rewind accept a returned physical boundary plus its exact source
+  revision, and fail closed on stale or unknown boundaries.
+- Post-compaction forks carry a compact provenance seed so their ordinary
+  history preserves the selected source prefix without expanding active model
+  context; cloned compaction boundaries are remapped to cloned entry IDs.
+- Legacy suffix matching is linear in the path length. Cross-epoch fallback is
+  allowed only for a contiguous, explicitly proven retained prefix whose full
+  parent path predates the compaction in append order. Diagnostic evidence is
+  bounded and counted in snapshot/page budgets, while all conversation records
+  remain available.
+- Regression coverage includes modern and legacy provenance, multiple
+  compactions, inactive and indistinguishable branches, non-leaf ancestors,
+  forward/corrupt topology, genuine repeated interactions, incomplete lineage,
+  archived boundaries, stale mutations, oversized chunks, and embedded/daemon
+  contract parity.
+
+### 256: Windows child containment cannot prove descendant closure after an intermediate parent exits
+
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
+- **Fixed**: -
+- **Created**: 2026-08-01
+- **Resolved**: -
+
+#### Problem
+
+The identity-checked Windows process-tree implementation prevents PID-reuse
+mis-kills and reports `unknown` instead of false success, but Toolhelp/CIM
+snapshots are observations rather than kernel containment. If an intermediate
+child exits before a later snapshot, an already-running grandchild can become
+unreachable from the root ancestry. Because this historical gap is no longer
+observable, cleanup can still report `terminated`; natural root exit can also
+leave LLM, MCP, or daemon-startup teardown incomplete. Worker-owned registry
+records share the host process identity, so another thread cannot prove that
+the owning Worker is gone while the host remains alive.
+
+#### Current Mitigation and Required Resolution
+
+Known, observable uncertainty now fails closed. Every retained exact
+`(pid, creationTime)` identity is offered for termination even when a fresh
+snapshot is unavailable or the captured ancestry is incomplete; cleanup never
+falls back to a bare PID. An incomplete capture remains `unknown`, and managed
+paths retain or quarantine the available recovery evidence. An explicit cleanup
+of a live root surfaces a typed incomplete result. If the root had already
+exited naturally, LLM, MCP, and daemon-startup callers preserve the completed
+business result while retaining any managed evidence instead of converting a
+successful operation into a teardown failure. This does not detect the
+lost-ancestor case described above, and LLM execution has no durable
+managed-registry evidence. Once both owner and root are confirmed gone,
+permanently non-actionable incomplete or older-version registry records are
+atomically moved with their original bytes to `children/.unresolved`; subsequent
+starts scan only the active registry root. Live or identity-unknown old owners
+remain in place for mixed-version unregister. A complete retained tree is still
+cleaned by exact `(pid, creationTime)` evidence when the root PID has been reused,
+without touching the replacement process. These startup bounds do not close the
+containment gap. A complete fix requires spawn-time Windows Job Object
+containment (assignment before user code can create descendants), plus a
+host-issued Worker owner lease that can be invalidated independently of the
+process PID. A post-spawn Job Object assignment or another bare-PID fallback is
+not sufficient because it retains a child-spawn race or reintroduces PID-reuse
+risk.
+
+The 2026-08-02 review follow-up also replaced repeated full PowerShell process
+snapshots during each 50 ms wait interval with lightweight captured-PID liveness
+checks. A full identity snapshot is still required before reporting a complete
+tree gone, and is taken when the captured PIDs appear gone or at the deadline.
+This lowers steady cleanup CPU cost without weakening the identity fence.
+
+### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: Runtime SDK lifecycle and daemon protocol
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-01
+- **Resolved**: 2026-08-01
+
+#### Original Problem
+
+Several independent lifecycle paths collapsed an unverified outcome into
+success. Windows process cleanup treated an unavailable process snapshot like
+an empty tree. Actor shutdown could wait on durable settlement before aborting
+local work, then clear nonterminal turns and ownership in separate writes.
+An indeterminate event commit retained coalescing buffers, while a failed first
+close could make a repeated Runtime close appear successful. Runtime status
+locks were reclaimed by age before owner liveness and had neither acquisition
+tokens nor process-start identity. Finally, daemon cancellation did not wake
+`run.await` or `agents.wait`, and a late request completion could remove a newer
+request that reused the same ID.
+
+#### Resolution
+
+Process-tree termination now has explicit `terminated`, `already-exited`, and
+`unknown` outcomes. Windows cleanup retains the root creation identity from
+spawn time, treats unreadable or late descendants as unverified, and terminates
+only through a process handle whose creation identity is checked atomically.
+Managed records compare exact registration and owner-process identities and
+retain the strongest captured tree evidence after natural root exit without
+promoting an incomplete capture. Recognizable records from older registry
+versions are retained with a diagnostic instead of being discarded as corrupt.
+MCP close retains its host-exit hook and manual cleanup record and
+throws a typed retryable incomplete-cleanup error on `unknown`. Actor shutdown
+closes local admission and aborts work synchronously, then persists interrupted
+turns plus owner release atomically; both a pre-existing settlement hang and the
+final shutdown write are fenced and surfaced through a typed error. Healthy
+Actor children may run without a generic deadline, while every explicit Stop or
+Runtime close gets a bounded finalization grace and remains `unknown` if
+durability is not confirmed.
+
+Event-bus poison now drops pending/coalesced state, rejects later emission, and
+performs teardown before rethrowing the same close failure on every attempt.
+Determinate persistence failures retain one bounded batch behind a backpressure
+latch and require an explicit flush retry, preventing memory growth and 50 ms
+retry storms; an oversized emission bypasses the retry queue and is persisted
+synchronously, so failure is surfaced without retaining the payload, while a
+failed direct durable write does not create an unretryable empty-queue latch.
+Status locks atomically publish a complete owner record, fail closed on malformed
+or unknown ownership, compare OS-derived process-start identity, use monotonic
+deadlines and exact-token release, and serialize crash recovery with unique
+bakery claims so stale reclaim/cleanup gates have no recursive recovery layer.
+Hard-link publication falls back to exclusive creation where unsupported, and
+a persistent candidate-cleanup failure disables further candidates for that
+exact lock family until cleanup succeeds. Daemon request
+records and subscription ownership are identity-checked; cancellation reaches
+the underlying Actor waiter from inline, Worker, and daemon facades without
+translating to durable Run abort, and
+cancel/ack control frames cannot bypass the request-ID fence.
+
+The 2026-08-02 review follow-up bounded normal Actor finalization as well as
+explicit cancellation. A root Run that completes while an external child never
+settles now becomes durably `unknown` after 30 seconds (explicit cancellation
+keeps its shorter five-second grace), publishes that state, retains the Session
+fence, and emits no false terminal completion.
+
+#### Verification
+
+- Process-tree, managed-child, and MCP tests cover spawn-time PID identity,
+  exact-handle termination, late/unreadable descendants, registration ABA,
+  natural root exit, spawn failure, retryable unknown cleanup, and confirmed cleanup;
+  LLM executor tests verify unknown termination is surfaced.
+- Actor controller tests cover immediate local abort, admission closure,
+  pre-existing settlement hangs, atomic owner release, late-write fencing, and
+  stable typed shutdown failure.
+- Runtime tests cover live/malformed-owner lock refusal, dead-owner/PID-reuse and
+  stale reclaim/cleanup-gate recovery, orphaned owned-lock cleanup, determinate
+  backpressure, direct durable-write recovery, oversized direct persistence,
+  bounded persistent candidate cleanup,
+  poisoned event-bus bounds, stable repeated
+  close failure, same-flight transcript cloning, post-delete materialization,
+  8 KiB coalescing, and finalization bounds for AbortSignal and `runs.abort()`.
+- Daemon protocol/client tests cover cancellable `run.await`/`agents.wait`, underlying
+  waiter release, absence of accidental Run abort, control-frame ID fencing,
+  pre-completion ack refusal, and reused request-ID/subscription ABA protection.
+
+### 254: First v0.7.78 Session reconciliation replays historical messages as new lineage entries
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.78 lineage reconciliation
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+On the first full reconciliation of an upgraded v0.7.78 Session, a later
+same-content replay sibling with a physical compaction-context child could win
+the content-based branch search instead of the persisted active path. The
+remaining active suffix was then recreated with new IDs and no reliable source
+provenance. The reproduced Session added 61 historical copies with no new
+input, or 62 records when only one new query was supplied. The copies covered
+user, assistant, thinking, tool call, and tool result content, so a consumer
+could not safely distinguish corruption from an intentional repeated message.
+
+#### Resolution
+
+The implementation treats a complete, positionally equal persisted active
+context as identity evidence, preserves its exact entry IDs and provenance, and
+appends only the suffix after the known active leaf. The suffix deliberately
+does not content-match abandoned siblings, so a user can repeat identical
+content without being collapsed. Independent review found no P0-P2 issue.
+
+#### Verification
+
+- A sanitized v0.7.78 replay/compaction fixture reproduces the old failure and
+  covers thinking, text, tool use, tool result, and ordinary turns.
+- No-input reconciliation preserves every ID; adding one same-content query
+  adds exactly one new ID; a JSON round-trip followed by repeated
+  reconciliation adds nothing.
+- The real reported Session was inspected read-only: the fixed algorithm adds
+  `0` entries without input and `1` entry for one new query, versus `61` and
+  `62` before the fix.
+- Runtime persistence coverage writes the no-change handoff, reloads it, then
+  adds one query and proves direct and paged transcript IDs have identical
+  entry sets and order.
+- The 71-test lineage suite and 236-test Runtime suite pass, including immediate
+  compaction provenance and repeated reconciliation coverage.
 
 ### 253: Parallel quality-strategy admissions conflict on unrelated Actor progress
 
@@ -428,7 +1134,7 @@ IDs differed.
 #### Resolution
 
 The Agent package now owns a shared synchronous generator using the readable
-local timestamp plus milliseconds and a UUID. The established asynchronous
+local timestamp plus base36 milliseconds and 48 cryptographically random bits. The established asynchronous
 `generateSessionId()` API delegates to it, and both classic and Ink REPL paths
 reuse the same primitive.
 
@@ -440,12 +1146,276 @@ reuse the same primitive.
   identity was distinct.
 - Existing title extraction and Session API compatibility tests remain intact.
 
+### 247: Runtime cold Session snapshots repeat storage reads, locator scans, and materialization
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+The first Runtime observation loaded admission metadata and then independently
+read the full transcript. Strict storage capture read the main Session and each
+sidecar twice, while every id-only read repeatedly scanned every project
+directory. Concurrent first observations, pages, and searches also serialized,
+hashed, and materialized the same transcript independently. Finally,
+`sessions.load()` emitted a durable `session.loaded` event, so a read-only call
+could synchronously allocate and persist an event sequence.
+
+#### Resolution
+
+- Added one immutable storage capture that returns admission metadata, the full
+  transcript input, and a byte-derived source revision from one read of the main
+  payload and each present sidecar. File-handle and final-path identity checks,
+  writer/migration/journal fences, version validation, and corruption handling
+  preserve the existing fail-closed boundary without a second payload read.
+- Added a process-wide, sessions-root-scoped Session locator index. Exact paths
+  are learned by create/list/read, moved by archive/unarchive, and removed by
+  delete/retention cleanup. A disappeared cached target falls back to strict
+  discovery, while missing results are not negatively cached across processes.
+- Added per-Session capture single-flight and per-source-revision transcript
+  materialization single-flight with independent waiter cancellation. The
+  materializer encodes each entry once, computes the transcript revision and
+  chunk digests once, and commits no snapshot after cancellation or close.
+- Runtime observe, fresh page, search, diagnostic, and direct transcript reads
+  reuse the unified capture. Revision-bound cursor and oversized-entry reads
+  continue from immutable snapshot storage without touching source JSONL.
+- Made `sessions.load()` a pure read by removing its durable
+  `session.loaded` emission. Provider-bind compatibility events keep their
+  existing contract.
+
+#### Verification
+
+- Added deterministic read-count tests proving one main/sidecar payload read
+  per strict capture and zero sessions-root scans after a path is indexed.
+- Added concurrent observe/page/search and cancellation regressions proving one
+  source capture, one full materialization/hash, independent waiter budgets,
+  mutation invalidation, and no late snapshot commit.
+- Added a read-only Runtime regression that byte-compares replay and event
+  sequence state before and after load/list/status/transcript/page/search/chunk,
+  observation, diagnostics, and settings reads.
+- Passed 88 storage tests, 45 Session public-API tests, 236 Runtime tests, 45
+  daemon protocol tests, and the complete release build.
+
+#### 2026-08-01 bounded paging and startup follow-up
+
+Space additionally requires the first finite `conversationPage({ sessionId })`
+to stay independent of total canonical history size after a Session has been
+prepared, while preserving canonical order and revision consistency. Direct CLI
+startup also exposed repeated Windows owner queries, eager tool-output reference
+scans, serial Runtime owner probes, synchronous cold-locator candidate stats,
+and serial Git metadata probes.
+
+- Added a revision-fenced derived conversation data/index generation beside the
+  Session bundle. Normal saves build it, simple lineage appends extend it, and a
+  cache-less legacy Session performs one canonical full-read upgrade. Prepared
+  pages and oversized-entry chunks read only the requested fixed index window
+  and content; any source-boundary change requires a fresh first page.
+- Bound the shared-daemon admission check to the same canonical source boundary
+  by storing only `surface`/`profileId` in the page manifest. Admission now runs
+  before cursor, capacity, or entry checks without reparsing the Session. Cache
+  generation races become an explicit fresh-read/resync result, and a failed
+  old-generation cleanup cannot invalidate the newly committed generation.
+- Kept direct full-history reads exact. No timestamp, sequence, content
+  deduplication, or UI visibility semantics were added.
+- Prevented long linear lineages from scheduling pointless full maintenance
+  rewrites after every append; disconnected histories still use the existing
+  archival path.
+- Batched Windows managed-owner identity lookup into one cleanup-boundary
+  snapshot, deferred reference-aware tool-output housekeeping until 30 seconds
+  after startup, bounded Runtime owner probes to 16 concurrent unique owners,
+  made cold candidate stats asynchronous in batches of 48, and queried Git
+  common-dir and branch concurrently after resolving the repository root.
+- Added revision-fenced durable per-ID Session location hints. A stable hint
+  verifies one exact path (or the complete legacy ambiguity set) with constant
+  metadata/stat work; topology epoch, per-Session writer, archive, delete, and
+  managed cross-process changes plus raw payload-identity changes invalidate it
+  and fall back to authoritative discovery. SDK-created random IDs use an
+  atomic exact-target create path, so
+  opening a new Session no longer performs an all-project negative lookup;
+  explicit caller IDs retain the global conflict check.
+- Added a durable Runtime run-status index. The first post-upgrade start scans
+  legacy statuses once; later starts restore every indexed active Run plus at
+  most 200 recent persisted Runs instead of synchronously parsing the entire
+  historical `runs/` tree. Older terminal Runs remain addressable by exact ID.
+  The canonical `status.json` commits before its derived index, and directory
+  plus pending-file identities force recovery after an interrupted index write
+  or a mixed-version writer publishes into a pre-existing directory. A live
+  Runtime publishes new active membership incrementally and keeps the index
+  explicitly dirty until a stable close/start reconciliation; terminal
+  transitions are batched, but the first transition against a clean index
+  durably marks it dirty. That fast path is fenced by the index file identity,
+  so another Runtime cannot clean the index behind an older writer's in-memory
+  state. Startup also repairs bounded stale active/recent membership from the
+  indexed status files it already reads. More than 1,000 simultaneously
+  missing or malformed status files is an explicitly
+  pathological compatibility boundary: startup performs one authoritative
+  fail-closed scan and emits one aggregate diagnostic instead of repeating the
+  scan three times. Such files are not moved because one may be an older writer
+  between directory creation and status publication.
+- Removed the second main-JSONL payload read from the append hot path, reused
+  immutable Conversation data/index files when a full save leaves the
+  canonical projection unchanged, and bounded manifest/descriptor/chunk cache
+  allocations even for corrupt derived files.
+- Added `bench:session-cold-open`. On the Windows verification host, a tiny
+  indexed Session opened in 15.7 ms mean with 10 project directories and 15.8
+  ms with 300; after an unrelated write the corresponding means were 14.4 and
+  14.5 ms. The uncached authoritative path measured 19.2 and 27.9 ms. Every
+  sample materialized the transcript and left no snapshot file after close.
+- Added `bench:conversation-page-cold-open`. On the Windows verification host,
+  the shared-daemon path returned a prepared 20-entry tail in 2.8, 4.6, 4.4,
+  and 4.4 ms mean across 2, 200, 2,000, and 5,000 canonical entries (all p95
+  values at or below 5.0 ms). The intentional one-time legacy upgrade averaged
+  30.2, 35.6, 56.4, and 87.0 ms respectively.
+- Added `bench:cli-first-ready`, which launches the production bootstrap in a
+  fresh process with an isolated existing config home and waits until the first
+  classic-REPL input prompt before sending `/exit`. This covers ESM evaluation,
+  Runtime recovery, managed-child cleanup, workspace Git probes, and REPL
+  preparation rather than timing after Runtime construction. Five Windows
+  smoke samples averaged 2,043.3 ms (p95 2,137.5 ms). Redirected stdio forces
+  the classic surface, so this is shared bare-CLI startup evidence, not an Ink
+  paint-latency claim.
+- The final release build and full repository test suite passed. The Windows
+  daemon smoke also now records exact process identity for timed test children
+  and tolerates the narrow lock-loser exit race only after a healthy competing
+  owner is confirmed; timeout, cancellation, and general failure cleanup remain
+  fail-closed.
+
+#### 2026-08-02 independent review follow-up
+
+- Strict direct and paged conversation captures retry only a transient
+  `data_changed` boundary twice (after 5 ms and 15 ms). A third mismatch is
+  consistently returned as `resync_required`; other failures are not retried.
+- Legacy flat-message Sessions now get a deterministic read-only lineage
+  projection for transcript search. Unchanged source bytes retain the same
+  revision, citation, and entry/chunk address across Runtime restarts; no new
+  persisted timestamp, sequence, content-deduplication, or visibility semantics
+  were introduced.
+- Incremental Conversation cache extension remains limited to a fully resolved,
+  issue-free canonical prefix. Independent review proved that appending onto a
+  partial projection can change both the canonical entries and status, so those
+  Sessions deliberately take the full rebuild path.
+- Append watermarks use weak, copy-on-write prefix identity plus the stable
+  main-file identity; they no longer serialize or SHA-256 the complete history
+  during `load()` or every append, and they do not keep discarded lineage
+  graphs alive. A file identity is accepted only when it remains unchanged
+  across the read, so an atomic replacement cannot bind old bytes to a new
+  append watermark; strict reads instead return `data_changed` and require a
+  fresh capture. An unavailable or changed prefix witness, including an
+  explicit extension-record payload, takes the full-write path only after the
+  durable file is proven to match its cached baseline. If another process
+  changed that file first, durable same-ID state remains authoritative while
+  both writers' genuinely new tails are retained during merge.
+
+#### Reopened Findings
+
+Independent verification found two locator-authority gaps after the initial
+closure. A sessions-root traversal failure could still promote one observed
+candidate to globally verified, and a cached positive result did not notice a
+later same-ID candidate created by another process inside an already-existing
+project directory. Both cases could return the wrong Session instead of
+failing with `data_changed`. macOS also lacked a repeatable tiny-Session cold
+observation wall-clock benchmark for the remaining unconditional temporary
+materialization.
+
+The follow-up implementation refuses authority after any incomplete traversal
+and binds positive and negative cache entries to the sessions-root identity, a
+durable location-topology epoch, and a writer witness. Managed create, archive,
+unarchive, and delete operations advance the epoch under a cross-process
+topology lock before exposing a location change. A v0.7.78 writer does not know
+that epoch, so strict direct locators additionally watch the existing
+per-Session lock queue. A stable all-project list first uses the global lock
+directory as a traversal fence, captures one per-Session legacy-writer witness
+for every discovered ID, then rechecks the global fence before committing the
+index. A write to Session B therefore does not invalidate Session A, while a
+same-ID legacy write does. Each witness includes both the persistent queue
+directory and an active lock-file identity, closing the case where an old
+writer already held the lock before listing and released it only after the
+index commit. Candidate discovery uses explicit `stat` states:
+only `ENOENT`/`ENOTDIR` mean absent; permission or I/O failures make the
+traversal non-authoritative and strict reads fail with `data_changed`. Strict
+reads validate the applicable witness, lock, and epoch before and after capture.
+External creation of a new project remains detectable through the root identity.
+Read-only APIs never create or advance the epoch or writer witness. Raw
+filesystem mutations that bypass both the SDK lock protocol and the topology
+epoch remain outside the managed storage contract.
+
+The new `bench:session-cold-open` command writes a pre-existing two-message
+JSONL fixture before constructing a fresh Runtime, so setup cannot prewarm the
+locator, admission, or transcript caches. It separately measures direct cold
+lookup, list-indexed observation, and list-indexed observation after an
+unrelated v0.7.78-style locked write. It supports a 10-versus-10,000 project
+matrix, records indexing and observation wall-clock samples plus machine
+metadata, and reports temporary snapshot materialization and post-close cleanup.
+macOS is the primary platform; other platforms are explicitly smoke-only.
+Independent review found no P0-P2 issue across the final locator authority,
+materialization, read-only API, benchmark, and cancellation implementation.
+
+### 246: Runtime coalescing release closure could reuse legacy daemons, exceed 8KiB, and mis-test cancellation
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-07-31
+- **Resolved**: 2026-07-31
+
+#### Original Problem
+
+The source-level Runtime event coalescer from Issue 244 was implemented, but
+three release-closure gaps remained:
+
+- auto-start clients required Runtime Auto v4 but had no independent capability
+  requirement for event coalescing, so an already-running v0.7.78 daemon could
+  be reused after the npm package was upgraded;
+- the 8KiB threshold was checked after two compatible fragments were merged,
+  allowing two 7KiB fragments to become one roughly 14KiB public event; and
+- the ACP queued-cancellation test used a no-op executor `abort()` with a result
+  that never settled, while expecting Runtime to manufacture cancellation. That
+  contradicted the confirmed-Stop contract and made the test fail reliably.
+
+#### Resolution
+
+- Added the independent versioned `runtimeEventCoalescing: 1` capability to the
+  SDK fact set, Runtime requirements/assertion path, embedded and Worker
+  metadata, and daemon host response. Daemon capability overrides cannot forge
+  it.
+- Auto-start now requires the capability and uses the existing governed daemon
+  upgrade fence. An idle legacy daemon is rolled back and replaced; active or
+  queued governed work produces a recoverable upgrade-required error without
+  force-stopping the daemon.
+- Compatible append fragments now check the accumulated byte size before
+  merging. The previous ordered batch flushes first when the next fragment
+  would exceed 8KiB. A single provider fragment larger than 8KiB remains intact
+  because splitting provider-owned semantic units was not part of the contract.
+- The ACP fixture now resolves the executor result as interrupted from
+  `abort()`. ACP still returns `stopReason: cancelled` for both prompts, while
+  Runtime truthfully records the active run as `interrupted` and the never-
+  started queued run as `cancelled`.
+
+#### Verification
+
+- Added explicit attach-only capability rejection and daemon-host
+  non-forgeability assertions.
+- Added idle v0.7.78-compatible daemon replacement and governed-work refusal
+  regressions where Runtime Auto v4 is already present and only coalescing is
+  missing.
+- Added a 7KiB + 7KiB text regression that requires two ordered events, exact
+  concatenated text, and no merged event above 8KiB.
+- Kept the ACP settlement deadline unchanged and verified real abort
+  acknowledgement plus the distinct Runtime terminal phases.
+- `npm run build`, all 230 `sdk-runtime` tests, and all 66 daemon upgrade,
+  dispatcher, and ACP tests pass.
+
 ### 245: Windows sandbox runner cannot launch from a user-level global npm install
 
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.78 Windows ASRT integration
-- **Fixed**: v0.7.78 development
+- **Fixed**: v0.7.79 development
 - **Created**: 2026-07-31
 - **Resolved**: 2026-07-31
 
@@ -9355,17 +10325,31 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 132 (25 Open, 107 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 143 (26 Open, 117 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-02: Issue 259 added and resolved (v0.7.79 development)
+- Deferred durable REPL Session creation until the first real prompt while
+  preserving settings synchronization for existing and newly active Sessions.
+- Reversibly archived 19 zero-message REPL records: 15 left by the 2026-08-01
+  startup performance investigation, two created concurrently before the fix
+  was built, and two older strict empty records.
 
 ### 2026-08-01: Issue 258 added and resolved (v0.7.79 development)
 - Required all user-visible TodoList fields to follow the query's primary
   natural language in both the Worker plan contract and Todo mutation tools.
 - Localized the deterministic Todo counter, transcript heading, and summary
   folds through the configured REPL locale.
+
+### 2026-07-31: Issues 247 and 254 resolved after independent review
+- Prevented the first v0.7.78 Session handoff from replaying a polluted
+  historical branch, while preserving intentional repeated content.
+- Strengthened locator authority with traversal-completeness checks and a
+  cross-process topology epoch, and added the macOS-primary tiny-Session cold
+  observation benchmark.
 
 ### 2026-07-31: Issue 253 added and resolved (v0.7.79 development)
 - Split Actor admission fencing from progress/mailbox revisions and serialized
@@ -9384,13 +10368,25 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   verify the root and every pre-snapshotted Windows descendant by creation
   identity, and fail closed when identity snapshots are unavailable.
 
+### 2026-07-31: Issue 247 added and resolved
+- Unified immutable Session capture, process-wide canonical path indexing,
+  first-materialization single-flight, and pure read-only Runtime Session APIs
+  remove repeated cold-read I/O without weakening fail-closed snapshot,
+  cancellation, or revision-bound cursor semantics.
+
 ### 2026-07-31: Issue 241 resolved (v0.7.79 development)
 - Assigned standalone process startup exclusively to the bootstrap while
   preserving direct Node CLI and daemon execution.
 - Added a real compiled-artifact smoke gate that rejects duplicate A2A JSON
   documents.
 
-### 2026-07-31: Issue 245 added and resolved (v0.7.78 development)
+### 2026-07-31: Issue 246 added and resolved (v0.7.79 development)
+- Added a non-forgeable `runtimeEventCoalescing: 1` capability requirement and
+  governed auto-start upgrade path for legacy daemon replacement.
+- Enforced the 8KiB accumulated merge bound before concatenation and corrected
+  the ACP cancellation fixture to settle through real executor interruption.
+
+### 2026-07-31: Issue 245 added and resolved (v0.7.79 development)
 - Prepared a protected content-addressed Windows runner outside private global
   npm paths, propagated it to every ASRT session, and used its directory for
   readiness and initialization child processes.

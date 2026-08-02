@@ -348,6 +348,8 @@ async function executeCodingActorTurn(
           ?? options.disablePromptCache,
         shellExecution: parentConfig?.shellExecution
           ?? options.context?.shellExecution,
+        permissionIntent: parentConfig?.permissionIntent
+          ?? options.context?.permissionIntent,
         extensionRuntime: parentCtx.extensionRuntime,
         events: parentCtx.parentEvents,
       },

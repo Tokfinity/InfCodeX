@@ -57,7 +57,12 @@ export type {
 export { buildInitializeCapabilities } from './reverse-capabilities.js';
 
 export type { McpTransport, McpTransportEvents } from './transport.js';
-export { createMcpTransport, McpAuthRequiredError, McpExpiredSessionError } from './transport.js';
+export {
+  createMcpTransport,
+  McpAuthRequiredError,
+  McpExpiredSessionError,
+  McpTransportCleanupIncompleteError,
+} from './transport.js';
 
 // FEATURE_222 — MCP OAuth (discovery + interactive login). The runtime drives
 // these on a 401/403; they are exported so a host can also log in proactively.

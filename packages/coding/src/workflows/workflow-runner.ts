@@ -498,6 +498,7 @@ export async function runWorkflowFromOptions(
       repoIntelligenceTrace: workflowOptions.context?.repoIntelligenceTrace,
       compaction: workflowOptions.compaction,
       contextDiagnostics: workflowOptions.context?.contextDiagnostics,
+      permissionIntent: workflowOptions.context?.permissionIntent,
       disablePromptCache: workflowOptions.disablePromptCache,
       extensionRuntime: workflowOptions.extensionRuntime,
       events: workflowOptions.events,

@@ -4,7 +4,7 @@
  * 会话管理 - Session ID 生成和消息处理
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
 const DEFAULT_SESSION_TITLE = 'Untitled Session';
@@ -46,7 +46,7 @@ function formatSessionTitle(text: string): string {
 
 /**
  * 生成会话 ID
- * 格式: YYYYMMDD_HHMMSS_<suffix>  (suffix = ms 低位 + 随机, base36)
+ * 格式: YYYYMMDD_HHMMSS_<suffix>  (suffix = ms base36 + 48-bit random hex)
  *
  * FEATURE_219 (v0.7.46): the date-prefix is preserved (sortable +
  * human-readable), but a per-call suffix makes the id GLOBALLY unique.
@@ -59,7 +59,7 @@ export function generateSessionIdSync(): string {
   const now = new Date();
   const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
   const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-  const suffix = `${now.getMilliseconds().toString(36)}${randomUUID().replaceAll('-', '')}`;
+  const suffix = `${now.getMilliseconds().toString(36)}${randomBytes(6).toString('hex')}`;
   return `${datePart}_${timePart}_${suffix}`;
 }
 

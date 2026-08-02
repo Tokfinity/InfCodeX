@@ -31,6 +31,15 @@ interactive surfaces restore persisted workspace/runtime identity before the
 next turn. Shift-Tab cycles Plan -> Edits -> Auto while Shift+Enter inserts a
 newline; Auto displays its configured/persisted LLM or rules engine immediately.
 
+For strict host observation, `readSessionCapture()` returns active context and
+full transcript from one immutable storage boundary. `readFullTranscript()` and
+`readSessionCapture()` are timeout/cancellation-aware and never migrate or
+recover legacy data as a read side effect. `exportSessionBundle()` preserves
+the exact main/sidecar bytes plus hashes and compatibility diagnostics.
+For an ordinary chat view, use `readConversationHistory()`: it folds only
+provenance/topology-proven compaction copies, reports ambiguity, and leaves raw
+append-order audit entries unchanged.
+
 ## 安装 / 导入
 
 ```bash
@@ -111,6 +120,9 @@ import {
   computeConfirmTools,
   isPermissionMode,
   listSessions,
+  readConversationHistory,
+  readSessionCapture,
+  exportSessionBundle,
   forkSession,
   watchSessions,
 } from '@kodax-ai/kodax/repl';
@@ -137,6 +149,16 @@ const nextPage = firstPage.at(-1)?.cursor
     })
   : [];
 
+const capture = first
+  ? await readSessionCapture(first.id, { timeoutMs: 10_000 })
+  : null;
+const conversation = first
+  ? await readConversationHistory(first.id, { timeoutMs: 10_000 })
+  : null;
+const bundle = first
+  ? await exportSessionBundle(first.id, { timeoutMs: 10_000 })
+  : null;
+
 if (first) {
   await forkSession(first.id, { title: `${first.title} copy` });
 }
@@ -155,7 +177,7 @@ Session-only consumers can import the same session APIs from `@kodax-ai/kodax/se
 - Entrypoints: `runInkInteractiveMode`, `runInteractiveMode`, `processSpecialSyntax`
 - Commands: `InteractiveContext`, `parseCommand`, `executeCommand`, `BUILTIN_COMMANDS`
 - Config: `loadConfig`, `prepareRuntimeConfig`, `saveConfig`, custom-provider CRUD, MCP-server CRUD
-- Sessions: `FileSessionStorage`, `findMostRecentResumableSession`, `listSessions`, `loadSession`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
+- Sessions: `FileSessionStorage`, `findMostRecentResumableSession`, `listSessions`, `loadSession`, `readConversationHistory`, `readFullTranscript`, `readSessionCapture`, `exportSessionBundle`, `forkSession`, `rewindSession`, `archiveSession`, `watchSessions`
 - Permissions: `computeConfirmTools`, `isPermissionMode`, `isToolCallAllowed`, `getPlanModeBlockReason`
 - Headless events: JSON/CLI event output includes `sidecar.message` for Sidecar Verifier `revise` / `blocked` messages
 - UI exports: `App`, `SimpleApp`, hooks, contexts, components, terminal-host utilities

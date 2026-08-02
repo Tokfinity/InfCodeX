@@ -80,6 +80,12 @@ export interface SideQueryDiagnostics {
   readonly promptBytes: number;
   readonly retryCount: number;
   readonly retryWaitMs: number;
+  /** Provider completion mapped to the stable side-query stop taxonomy. */
+  readonly stopReason?: SideQueryStopReason;
+  /** UTF-8 size of returned text only; response content is never persisted. */
+  readonly responseBytes?: number;
+  /** Number of provider text blocks concatenated into the returned text. */
+  readonly textBlockCount?: number;
   /** Time until the first lifecycle/data event exposed by the provider adapter. */
   readonly firstUpstreamEventMs?: number;
   /** Time until the first non-empty thinking delta. */
@@ -141,6 +147,11 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
 
   const diagnostics = (
     terminalPhase: SideQueryTerminalPhase,
+    completion?: {
+      readonly stopReason: SideQueryStopReason;
+      readonly responseBytes?: number;
+      readonly textBlockCount?: number;
+    },
   ): SideQueryDiagnostics => {
     const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
     return {
@@ -153,6 +164,7 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       promptBytes: systemBytes + messageBytes,
       retryCount,
       retryWaitMs,
+      ...(completion !== undefined ? completion : {}),
       ...(firstUpstreamEventMs !== undefined ? { firstUpstreamEventMs } : {}),
       ...(firstThinkingDeltaMs !== undefined ? { firstThinkingDeltaMs } : {}),
       ...(firstOutputMs !== undefined
@@ -256,6 +268,10 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
     const textBlocks = result.textBlocks ?? [];
     const toolBlocks = result.toolBlocks ?? [];
     const text = textBlocks.map((b) => b.text).join('');
+    const responseShape = {
+      responseBytes: Buffer.byteLength(text, 'utf8'),
+      textBlockCount: textBlocks.length,
+    };
 
     if (toolBlocks.length > 0) {
       return {
@@ -263,7 +279,10 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
         usage,
         costTracker,
         stopReason: 'error',
-        diagnostics: diagnostics('contract_error'),
+        diagnostics: diagnostics('contract_error', {
+          stopReason: 'error',
+          ...responseShape,
+        }),
         error: new Error(
           `sideQuery: provider returned ${toolBlocks.length} tool_use block(s); sideQuery expects text-only output`,
         ),
@@ -282,12 +301,13 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
       });
     }
 
+    const stopReason = mapStopReason(result.stopReason);
     return {
       text,
       usage,
       costTracker,
-      stopReason: mapStopReason(result.stopReason),
-      diagnostics: diagnostics('completed'),
+      stopReason,
+      diagnostics: diagnostics('completed', { stopReason, ...responseShape }),
     };
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
@@ -309,7 +329,8 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
             ? 'thinking'
             : firstUpstreamEventMs !== undefined
               ? 'awaiting_text'
-              : 'pre_output',
+            : 'pre_output',
+        { stopReason },
       ),
       error,
     };

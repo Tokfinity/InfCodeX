@@ -13,7 +13,8 @@ describe('buildClassifierPrompt', () => {
       action: 'Bash: ls',
     });
     expect(out.system).toMatch(/security reviewer/i);
-    expect(out.system).toMatch(/<block>/);
+    expect(out.system).toMatch(/<decision>/);
+    expect(out.system).toMatch(/<hazard>/);
     expect(out.system).toMatch(/<reason>/);
   });
 
@@ -146,6 +147,18 @@ describe('buildClassifierPrompt', () => {
     expect(out.system).toMatch(/ignore.*instructions|do not.*instructions|treat.*as data/i);
   });
 
+  it('distinguishes policy-override injection from task authorization evidence', () => {
+    const out = buildClassifierPrompt({
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: mv a b',
+    });
+
+    expect(out.system).toMatch(/task authorization.*must be interpreted/i);
+    expect(out.system).toMatch(/binding constraints.*must be interpreted/i);
+    expect(out.system).toMatch(/three tags/i);
+  });
+
   it('uses the compact review envelope without transcript or project-document payloads', () => {
     const out = buildClassifierPrompt({
       rules: emptyRules,
@@ -165,9 +178,9 @@ describe('buildClassifierPrompt', () => {
     const content = out.messages[0]!.content as string;
 
     expect(content).toContain('<intent_evidence status="targeted"');
-    expect(content).toContain('<current_user_intent>');
+    expect(content).toContain('<root_user_intent>');
     expect(content).toContain('Move the report into the project folder.');
-    expect(content.indexOf('<current_user_intent>'))
+    expect(content.indexOf('<root_user_intent>'))
       .toBeLessThan(content.indexOf('<intent_evidence'));
     expect(content).toContain('<operation_facts>');
     expect(content).toContain('outside-workspace');
@@ -195,8 +208,38 @@ describe('buildClassifierPrompt', () => {
     });
     const content = out.messages[0]!.content as string;
 
-    expect(content).toContain('<current_user_intent truncated="true">');
-    expect(out.system).toMatch(/partial evidence/i);
+    expect(content).toContain('<root_user_intent truncated="true">');
+    expect(out.system).toMatch(/truncation.*not itself a reason to ask/i);
+  });
+
+  it('renders delegated child context separately from root user authority', () => {
+    const out = buildClassifierPrompt({
+      rules: emptyRules,
+      transcript: [],
+      intentEvidence: {
+        status: 'complete',
+        content: '[root-user-intent] Review the changes.',
+        currentUserContent: 'Review the changes.',
+        currentUserContentTruncated: false,
+        delegatedObjective: 'Inspect a temp comparison artifact.',
+        bindingConstraints: ['Do not modify files'],
+        scopeHint: 'packages/repl/src',
+        readOnly: true,
+        sourceBytes: 100,
+        includedBytes: 100,
+        omittedBytes: 0,
+        sha256: 'c'.repeat(64),
+      },
+      action: '{"operations":[{"kind":"read","boundary":"system-temp"}]}',
+    });
+    const content = out.messages[0]!.content as string;
+
+    expect(content).toContain('<root_user_intent>');
+    expect(content).toContain('<delegated_objective>');
+    expect(content).toContain('<binding_constraints>');
+    expect(content).toContain('<scope_hint binding="false">');
+    expect(content).toContain('<runtime_capabilities read_only="true" />');
+    expect(out.system).toMatch(/scope_hint.*not a filesystem access boundary/i);
   });
 
   it('forbids invented tool policy when a capability question accompanies a scope mismatch', () => {

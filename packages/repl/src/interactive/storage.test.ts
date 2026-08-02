@@ -13,6 +13,7 @@ import {
   createSessionLineage,
   drainPendingEpisodeReviews,
   evictOldIslandMessageContent,
+  getSessionMessagesFromLineage,
   getSessionLineagePath,
   hashMemoryIdentityComponent,
   listPendingEpisodeReviews,
@@ -23,6 +24,8 @@ import {
 import type {
   AgentActorSnapshot,
   KodaXMemoryOutcomeDigest,
+  KodaXSessionArtifactLedgerEntry,
+  KodaXSessionEntry,
   KodaXSessionLineage,
 } from '@kodax-ai/agent';
 
@@ -761,12 +764,27 @@ describe('FileSessionStorage', () => {
       gitRoot,
     });
 
-    await storage.setLabel?.('session-tree', rootId!, 'checkpoint-a');
+    const labeled = await storage.setLabel?.('session-tree', rootId!, 'checkpoint-a');
+    if (labeled?.lineage === undefined) throw new Error('expected labeled lineage');
+
+    // Ink adopts the returned canonical lineage before its next ordinary
+    // turn. Reproduce that transition so a later full snapshot cannot erase
+    // the just-persisted checkpoint label.
+    const continuedMessages = [
+      ...labeled.messages,
+      { role: 'user' as const, content: 'continue after checkpoint' },
+      { role: 'assistant' as const, content: 'checkpoint preserved' },
+    ];
+    await storage.appendSessionDelta('session-tree', {
+      ...labeled,
+      messages: continuedMessages,
+      lineage: createSessionLineage(continuedMessages, labeled.lineage),
+    });
 
     const branched = await storage.getLineage?.('session-tree');
     expect(branched?.entries.filter((entry: { type: string }) => entry.type === 'label')).toHaveLength(1);
     expect(branched?.entries.filter((entry: { type: string }) => entry.type === 'branch_summary')).toHaveLength(1);
-    expect(branched?.entries.filter((entry: { type: string }) => entry.type === 'message')).toHaveLength(4);
+    expect(branched?.entries.filter((entry: { type: string }) => entry.type === 'message')).toHaveLength(6);
 
     const forked = await storage.fork?.('session-tree', 'checkpoint-a', { sessionId: 'forked-tree' });
     expect(forked?.sessionId).toBe('forked-tree');
@@ -783,6 +801,8 @@ describe('FileSessionStorage', () => {
         }),
         { role: 'user', content: 'root task follow-up' },
         { role: 'assistant', content: 'second pass' },
+        { role: 'user', content: 'continue after checkpoint' },
+        { role: 'assistant', content: 'checkpoint preserved' },
       ],
     });
   });
@@ -4111,7 +4131,7 @@ describe('FileSessionStorage', () => {
     }
   });
 
-  it('does not re-serialize the persisted prefix on the append hot path', async () => {
+  it('does not re-serialize the persisted prefix on the prepared tail path', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
     const baseMessages = Array.from({ length: 40 }, (_, index) => ({
@@ -4134,13 +4154,16 @@ describe('FileSessionStorage', () => {
       { role: 'user' as const, content: 'new append tail' },
     ];
     const lineage = createSessionLineage(messages, loaded.lineage);
+    const baseline = await storage.prepareSessionAppend('session-append-watermark-cost');
+    if (baseline === null) throw new Error('expected prepared append boundary');
     const stringify = vi.spyOn(JSON, 'stringify');
 
     try {
-      await storage.appendSessionDelta('session-append-watermark-cost', {
-        ...loaded,
-        messages,
-        lineage,
+      await storage.appendPreparedSessionTail('session-append-watermark-cost', {
+        baseline,
+        title: loaded.title,
+        activeEntryId: lineage.activeEntryId,
+        lineageEntries: lineage.entries.slice(baseline.lineageCount),
       });
       expect(stringify.mock.calls.some(([value]) => value === persistedPrefixEntry)).toBe(false);
     } finally {
@@ -4173,11 +4196,17 @@ describe('FileSessionStorage', () => {
     );
     const reader = new FileSessionStorage({ sessionsDir });
     await reader.isArchived(sessionId);
-    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementationOnce(async () => {
-      const replacementPath = `${mainPath}.replacement`;
-      await writeFile(replacementPath, replacementContent, 'utf8');
-      await fsPromises.rename(replacementPath, mainPath);
-      return oldContent;
+    const originalReadFile = fsPromises.readFile.bind(fsPromises);
+    let replaced = false;
+    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementation(async (candidate, options) => {
+      if (!replaced && path.resolve(String(candidate)) === path.resolve(mainPath)) {
+        replaced = true;
+        const replacementPath = `${mainPath}.replacement`;
+        await writeFile(replacementPath, replacementContent, 'utf8');
+        await fsPromises.rename(replacementPath, mainPath);
+        return oldContent;
+      }
+      return originalReadFile(candidate, options);
     });
     const loaded = await reader.load(sessionId);
     raceRead.mockRestore();
@@ -4224,11 +4253,17 @@ describe('FileSessionStorage', () => {
     );
     const reader = new FileSessionStorage({ sessionsDir });
     await reader.isArchived(sessionId);
-    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementationOnce(async () => {
-      const replacementPath = `${mainPath}.replacement`;
-      await writeFile(replacementPath, replacementContent, 'utf8');
-      await fsPromises.rename(replacementPath, mainPath);
-      return oldContent;
+    const originalReadFile = fsPromises.readFile.bind(fsPromises);
+    let replaced = false;
+    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementation(async (candidate, options) => {
+      if (!replaced && path.resolve(String(candidate)) === path.resolve(mainPath)) {
+        replaced = true;
+        const replacementPath = `${mainPath}.replacement`;
+        await writeFile(replacementPath, replacementContent, 'utf8');
+        await fsPromises.rename(replacementPath, mainPath);
+        return oldContent;
+      }
+      return originalReadFile(candidate, options);
     });
 
     try {
@@ -4238,7 +4273,7 @@ describe('FileSessionStorage', () => {
     }
   });
 
-  it('does not reload and parse the main Session payload on the append hot path', async () => {
+  it('does not reload and parse the main Session payload on the prepared tail path', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
     const sessionsDir = testSessionsDir();
@@ -4262,20 +4297,856 @@ describe('FileSessionStorage', () => {
       'session-single-append-read.jsonl',
     );
     const readFile = vi.spyOn(fsPromises, 'readFile');
+    const baseline = await storage.prepareSessionAppend('session-single-append-read');
+    if (baseline === null) throw new Error('expected prepared append boundary');
 
-    await storage.appendSessionDelta('session-single-append-read', {
-      messages: [
-        { role: 'user', content: 'first' },
-        { role: 'assistant', content: 'second' },
-      ],
+    await storage.appendPreparedSessionTail('session-single-append-read', {
+      baseline,
       title: 'Single append read',
-      gitRoot,
-      lineage: next,
+      activeEntryId: next.activeEntryId,
+      lineageEntries: next.entries.slice(baseline.lineageCount),
     });
 
     expect(readFile.mock.calls.filter(
       ([candidate]) => path.resolve(String(candidate)) === path.resolve(mainPath),
     )).toHaveLength(0);
+  });
+
+  it('rejects prepared tail ids that are not new without consuming the boundary', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-prepared-tail-id-collision';
+    const initialMessages = [{ role: 'user' as const, content: 'collision base' }];
+    const initialLineage = createSessionLineage(initialMessages);
+    await storage.save(sessionId, {
+      messages: initialMessages,
+      title: 'Prepared tail id collision',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: initialLineage,
+      artifactLedger: [{
+        id: 'artifact-existing',
+        kind: 'file_read',
+        target: 'existing.ts',
+        timestamp: '2026-08-02T00:00:00.000Z',
+      }],
+      extensionRecords: [{
+        id: 'extension-existing',
+        extensionId: 'ext:prepared-tail',
+        type: 'turn',
+        ts: 1,
+      }],
+    });
+    await storage.load(sessionId);
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared append boundary');
+
+    const duplicateLineageEntry: KodaXSessionEntry = {
+      type: 'message',
+      id: initialLineage.entries[0]!.id,
+      parentId: baseline.activeEntryId,
+      logicalId: 'duplicate-lineage-tail',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'assistant', content: 'must not duplicate history' },
+    };
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: duplicateLineageEntry.id,
+      lineageEntries: [duplicateLineageEntry],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: baseline.activeEntryId,
+      lineageEntries: [],
+      artifactEntries: [{
+        id: 'artifact-existing',
+        kind: 'file_modified',
+        target: 'replacement.ts',
+        timestamp: '2026-08-02T00:00:02.000Z',
+      }],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: baseline.activeEntryId,
+      lineageEntries: [],
+      extensionRecords: [{
+        id: 'extension-existing',
+        extensionId: 'ext:prepared-tail',
+        type: 'turn',
+        ts: 2,
+      }],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const orphanEntry: KodaXSessionEntry = {
+      type: 'message',
+      id: 'orphan-prepared-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'orphan-prepared-tail',
+      timestamp: '2026-08-02T00:00:02.500Z',
+      message: { role: 'assistant', content: 'must not remain outside the active path' },
+    };
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: baseline.activeEntryId,
+      lineageEntries: [orphanEntry],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const repeatedEntry: KodaXSessionEntry = {
+      ...orphanEntry,
+      id: 'repeated-prepared-tail',
+      logicalId: 'repeated-prepared-tail',
+    };
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: repeatedEntry.id,
+      lineageEntries: [repeatedEntry, { ...repeatedEntry }],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const validEntry: KodaXSessionEntry = {
+      type: 'message',
+      id: 'unique-prepared-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'unique-prepared-tail',
+      timestamp: '2026-08-02T00:00:03.000Z',
+      message: { role: 'assistant', content: 'unique tail persists' },
+    };
+    await storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail id collision',
+      activeEntryId: validEntry.id,
+      lineageEntries: [validEntry],
+    });
+    expect((await storage.load(sessionId))?.messages.at(-1)?.content).toBe('unique tail persists');
+  });
+
+  it('rejects prepared artifact dedup replacements and ledger-cap rollover', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const baseMessages = [{ role: 'user' as const, content: 'artifact base' }];
+    await storage.save('session-prepared-artifact-dedup', {
+      messages: baseMessages,
+      title: 'Prepared artifact dedup',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+      artifactLedger: [{
+        id: 'artifact-original',
+        kind: 'file_read',
+        sourceTool: 'read',
+        action: 'read',
+        target: 'same.ts',
+        timestamp: '2026-08-02T00:00:00.000Z',
+      }],
+    });
+    await storage.load('session-prepared-artifact-dedup');
+    const dedupBaseline = await storage.prepareSessionAppend('session-prepared-artifact-dedup');
+    if (dedupBaseline === null) throw new Error('expected prepared artifact boundary');
+    await expect(storage.appendPreparedSessionTail('session-prepared-artifact-dedup', {
+      baseline: dedupBaseline,
+      title: 'Prepared artifact dedup',
+      activeEntryId: dedupBaseline.activeEntryId,
+      lineageEntries: [],
+      artifactEntries: [{
+        id: 'artifact-replacement',
+        kind: 'file_read',
+        sourceTool: 'read',
+        action: 'read',
+        target: 'same.ts',
+        timestamp: '2026-08-02T00:00:01.000Z',
+      }],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const cappedArtifacts: KodaXSessionArtifactLedgerEntry[] = Array.from(
+      { length: 256 },
+      (_, index) => ({
+        id: `capped-artifact-${index}`,
+        kind: 'file_read',
+        target: `capped-${index}.ts`,
+        timestamp: '2026-08-02T00:00:00.000Z',
+      }),
+    );
+    await storage.save('session-prepared-artifact-cap', {
+      messages: baseMessages,
+      title: 'Prepared artifact cap',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+      artifactLedger: cappedArtifacts,
+    });
+    await storage.load('session-prepared-artifact-cap');
+    const capBaseline = await storage.prepareSessionAppend('session-prepared-artifact-cap');
+    if (capBaseline === null) throw new Error('expected capped artifact boundary');
+    await expect(storage.appendPreparedSessionTail('session-prepared-artifact-cap', {
+      baseline: capBaseline,
+      title: 'Prepared artifact cap',
+      activeEntryId: capBaseline.activeEntryId,
+      lineageEntries: [],
+      artifactEntries: [{
+        id: 'artifact-over-cap',
+        kind: 'file_read',
+        target: 'over-cap.ts',
+        timestamp: '2026-08-02T00:00:01.000Z',
+      }],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+  });
+
+  it('uses a canonical-hash-bound identity filter for archived ids and keeps the page cache hot', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { buildSessionConversationHistory } = await import('../session/conversation-history.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-archived-identity';
+    const messages = [
+      { role: 'user' as const, content: 'archived identity root' },
+      { role: 'assistant' as const, content: 'active identity leaf' },
+    ];
+    const lineage = createSessionLineage(messages);
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared archived identity',
+      gitRoot,
+      lineage,
+    });
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const archivedEntry = lineage.entries[0]!;
+    const mainLines = (await readFile(mainPath, 'utf8')).trimEnd().split('\n')
+      .filter((line) => {
+        const parsed = JSON.parse(line) as { _type?: string; entry?: { id?: string } };
+        return parsed._type !== 'lineage_entry' || parsed.entry?.id !== archivedEntry.id;
+      });
+    await writeFile(mainPath, `${mainLines.join('\n')}\n`, 'utf8');
+    await writeFile(
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      `${JSON.stringify({
+        _type: 'archived_entry',
+        archiveBatchId: 'archived-identity-batch',
+        entry: archivedEntry,
+      })}\n`,
+      'utf8',
+    );
+    const capture = await storage.readFullSnapshot(sessionId);
+    if (capture === null || capture.lineage === null) throw new Error('expected full archived capture');
+    await storage.prepareConversationPageCache(
+      sessionId,
+      buildSessionConversationHistory(capture.lineage, capture.sourceRevision),
+      capture.lineage,
+      capture.data.runtimeInfo,
+      capture.boundaryRevision,
+      capture.sourceRevisionState,
+    );
+
+    const cold = new FileSessionStorage({ sessionsDir });
+    await cold.load(sessionId);
+    const baseline = await cold.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected cold archived prepared boundary');
+    const duplicateArchived: KodaXSessionEntry = {
+      type: 'message',
+      id: archivedEntry.id,
+      parentId: baseline.activeEntryId,
+      logicalId: archivedEntry.id,
+      timestamp: '2026-08-02T00:00:02.000Z',
+      message: { role: 'user', content: 'must not replace archived history' },
+    };
+    await expect(cold.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared archived identity',
+      activeEntryId: duplicateArchived.id,
+      lineageEntries: [duplicateArchived],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const validEntry: KodaXSessionEntry = {
+      ...duplicateArchived,
+      id: 'archived-identity-valid-tail',
+      logicalId: 'archived-identity-valid-tail',
+      message: { role: 'user', content: 'valid archived tail' },
+    };
+    await cold.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared archived identity',
+      activeEntryId: validEntry.id,
+      lineageEntries: [validEntry],
+    });
+    const page = await cold.readConversationPageCache(sessionId, {
+      limit: 2,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    });
+    const direct = await cold.readFullSnapshot(sessionId);
+    expect(page?.sourceRevision).toBe(direct?.sourceRevision);
+    expect(page?.entries.at(-1)?.entry?.message.content).toBe('valid archived tail');
+  });
+
+  it('rejects a prepared tail after a sidecar-only bundle change', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-sidecar-boundary';
+    const messages = [{ role: 'user' as const, content: 'sidecar boundary base' }];
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared sidecar boundary',
+      gitRoot,
+      lineage: createSessionLineage(messages),
+    });
+    await storage.load(sessionId);
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared sidecar boundary');
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const sidecarEntry: KodaXSessionEntry = {
+      type: 'message',
+      id: 'sidecar-only-change',
+      parentId: null,
+      logicalId: 'sidecar-only-change',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'user', content: 'sidecar changed independently' },
+    };
+    await writeFile(
+      path.join(projectDir, `${sessionId}.islands.jsonl`),
+      `${JSON.stringify({
+        _type: 'archived_entry',
+        archiveBatchId: 'sidecar-only-batch',
+        entry: sidecarEntry,
+      })}\n`,
+      'utf8',
+    );
+    const tail: KodaXSessionEntry = {
+      type: 'message',
+      id: 'tail-after-sidecar-change',
+      parentId: baseline.activeEntryId,
+      logicalId: 'tail-after-sidecar-change',
+      timestamp: '2026-08-02T00:00:02.000Z',
+      message: { role: 'assistant', content: 'must not commit' },
+    };
+    await expect(storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared sidecar boundary',
+      activeEntryId: tail.id,
+      lineageEntries: [tail],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+    expect(await readFile(path.join(projectDir, `${sessionId}.jsonl`), 'utf8'))
+      .not.toContain('must not commit');
+  });
+
+  it('does not authorize a prepared append from a tampered recoverable identity filter', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-tampered-filter';
+    const messages = [{ role: 'user' as const, content: 'tampered filter base' }];
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared tampered filter',
+      gitRoot,
+      lineage: createSessionLineage(messages),
+    });
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const manifestPath = path.join(projectDir, `${sessionId}.conversation-cache.json`);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    manifest.identityFilter = Buffer.alloc(128 * 1024).toString('base64');
+    await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+
+    const cold = new FileSessionStorage({ sessionsDir });
+    await cold.load(sessionId);
+    await expect(cold.prepareSessionAppend(sessionId)).resolves.toBeNull();
+  });
+
+  it('does not trust a forged cache prepared through the public SDK API', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { buildSessionConversationHistory } = await import('../session/conversation-history.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'session-prepared-forged-public-cache';
+    const messages = [
+      { role: 'user' as const, content: 'canonical root' },
+      { role: 'assistant' as const, content: 'canonical leaf' },
+    ];
+    const canonicalLineage = createSessionLineage(messages);
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared forged public cache',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: canonicalLineage,
+    });
+    const capture = await storage.readFullSnapshot(sessionId);
+    if (capture === null) throw new Error('expected canonical capture');
+    const canonicalLeaf = canonicalLineage.entries.at(-1)!;
+    const forgedLineage: KodaXSessionLineage = {
+      entries: [{ ...canonicalLeaf, parentId: null }],
+      activeEntryId: canonicalLeaf.id,
+    };
+    await storage.prepareConversationPageCache(
+      sessionId,
+      buildSessionConversationHistory(forgedLineage, capture.sourceRevision),
+      forgedLineage,
+      capture.data.runtimeInfo,
+      capture.boundaryRevision,
+      capture.sourceRevisionState,
+    );
+
+    const cold = new FileSessionStorage({ sessionsDir });
+    await cold.load(sessionId);
+    await expect(cold.prepareSessionAppend(sessionId)).resolves.toBeNull();
+  });
+
+  it('derives prepared activeMessageCount from canonical lineage, not stale meta hints', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { buildSessionConversationHistory } = await import('../session/conversation-history.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-active-count';
+    const messages = [{ role: 'user' as const, content: 'active count base' }];
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared active count',
+      gitRoot,
+      lineage: createSessionLineage(messages),
+    });
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    await fsPromises.appendFile(
+      mainPath,
+      `${JSON.stringify({ _type: 'meta_update', activeMessageCount: -99 })}\n`,
+      'utf8',
+    );
+    const capture = await storage.readFullSnapshot(sessionId);
+    if (capture === null || capture.lineage === null) throw new Error('expected active-count capture');
+    await storage.prepareConversationPageCache(
+      sessionId,
+      buildSessionConversationHistory(capture.lineage, capture.sourceRevision),
+      capture.lineage,
+      capture.data.runtimeInfo,
+      capture.boundaryRevision,
+      capture.sourceRevisionState,
+    );
+
+    const cold = new FileSessionStorage({ sessionsDir });
+    await cold.load(sessionId);
+    const baseline = await cold.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected active-count prepared boundary');
+    const tail: KodaXSessionEntry = {
+      type: 'message',
+      id: 'active-count-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'active-count-tail',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'assistant', content: 'active count tail' },
+    };
+    await cold.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared active count',
+      activeEntryId: tail.id,
+      lineageEntries: [tail],
+    });
+    const metaUpdates = (await readFile(mainPath, 'utf8')).trimEnd().split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line._type === 'meta_update');
+    expect(metaUpdates.at(-1)?.activeMessageCount).toBe(2);
+  });
+
+  it('snapshots a mutable public tail before awaiting validation', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'session-prepared-tail-snapshot';
+    const messages = [{ role: 'user' as const, content: 'snapshot base' }];
+    const lineage = createSessionLineage(messages);
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared tail snapshot',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage,
+    });
+    await storage.load(sessionId);
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared snapshot boundary');
+    const entry: KodaXSessionEntry = {
+      type: 'message',
+      id: 'snapshot-safe-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'snapshot-safe-tail',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'assistant', content: 'validated snapshot value' },
+    };
+    const pending = storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared tail snapshot',
+      activeEntryId: entry.id,
+      lineageEntries: [entry],
+    });
+    entry.id = lineage.entries[0]!.id;
+    entry.parentId = null;
+    entry.message.content = 'mutated after call';
+    await pending;
+    const loaded = await storage.load(sessionId);
+    expect(loaded?.lineage?.entries.at(-1)?.id).toBe('snapshot-safe-tail');
+    expect(loaded?.messages.at(-1)?.content).toBe('validated snapshot value');
+  });
+
+  it('keeps the 50th prepared append bounded and returns a usable successor', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'session-prepared-maintenance-successor';
+    const messages = [{ role: 'user' as const, content: 'maintenance base' }];
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared maintenance successor',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    });
+    await storage.load(sessionId);
+    let baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared maintenance boundary');
+    const mainPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(KODAX_REPO_ROOT).key,
+      `${sessionId}.jsonl`,
+    );
+    const readFileSpy = vi.spyOn(fsPromises, 'readFile');
+    for (let index = 0; index < 50; index += 1) {
+      baseline = await storage.appendPreparedSessionTail(sessionId, {
+        baseline,
+        title: `Prepared maintenance successor ${index}`,
+        activeEntryId: baseline.activeEntryId,
+        lineageEntries: [],
+      });
+      if (baseline === null) throw new Error(`missing successor after append ${index}`);
+    }
+    const chained = await storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: 'Prepared maintenance successor chained',
+      activeEntryId: baseline.activeEntryId,
+      lineageEntries: [],
+    });
+    expect(chained).not.toBeNull();
+    expect(readFileSpy.mock.calls.filter(
+      ([candidate]) => path.resolve(String(candidate)) === path.resolve(mainPath),
+    )).toHaveLength(0);
+    readFileSpy.mockRestore();
+  });
+
+  it('resolves a committed append with null when post-commit witness refresh fails', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'session-prepared-committed-resync';
+    const messages = [{ role: 'user' as const, content: 'committed resync base' }];
+    const storage = new FileSessionStorage({ sessionsDir });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared committed resync',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    });
+    await storage.load(sessionId);
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected committed-resync boundary');
+    const tail: KodaXSessionEntry = {
+      type: 'message',
+      id: 'committed-resync-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'committed-resync-tail',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'assistant', content: 'committed exactly once' },
+    };
+    const originalAppendFile = fsPromises.appendFile.bind(fsPromises);
+    const originalStat = fsPromises.stat.bind(fsPromises);
+    let appended = false;
+    const appendFile = vi.spyOn(fsPromises, 'appendFile').mockImplementation(async (...args) => {
+      await originalAppendFile(...args);
+      appended = true;
+    });
+    const stat = vi.spyOn(fsPromises, 'stat').mockImplementation(async (...args) => {
+      if (appended && String(args[0]).endsWith(`${sessionId}.jsonl`)) {
+        throw Object.assign(new Error('post-commit witness unavailable'), { code: 'EIO' });
+      }
+      return originalStat(...args);
+    });
+    try {
+      await expect(storage.appendPreparedSessionTail(sessionId, {
+        baseline,
+        title: 'Prepared committed resync',
+        activeEntryId: tail.id,
+        lineageEntries: [tail],
+      })).resolves.toBeNull();
+    } finally {
+      stat.mockRestore();
+      appendFile.mockRestore();
+    }
+    const loaded = await new FileSessionStorage({ sessionsDir }).load(sessionId);
+    expect(loaded?.messages.filter((message) => message.content === 'committed exactly once'))
+      .toHaveLength(1);
+  });
+
+  it('extends a prepared Conversation cache without reading the persisted history bundle', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const { buildSessionConversationHistory } = await import('../session/conversation-history.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-bounded-append';
+    const messages = Array.from({ length: 128 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `prepared history ${index}`,
+    }));
+    const lineage = createSessionLineage(messages);
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared bounded append',
+      gitRoot,
+      lineage,
+    });
+    const loaded = await storage.load(sessionId);
+    if (loaded?.lineage === undefined) throw new Error('expected loaded Session lineage');
+    const capture = await storage.readFullSnapshot(sessionId);
+    if (capture?.lineage === null || capture === null) throw new Error('expected Session capture');
+    await storage.prepareConversationPageCache(
+      sessionId,
+      buildSessionConversationHistory(capture.lineage, capture.sourceRevision),
+      capture.lineage,
+      capture.data.runtimeInfo,
+      capture.boundaryRevision,
+      capture.sourceRevisionState,
+    );
+    const previousPage = await storage.readConversationPageCache(sessionId, {
+      limit: 4,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    });
+    if (previousPage === null) throw new Error('expected prepared Conversation page');
+    const nextMessages = [
+      ...messages,
+      { role: 'user' as const, content: 'bounded append tail' },
+    ];
+    const nextLineage = createSessionLineage(nextMessages, loaded.lineage);
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    const bundleNames = new Set([
+      `${sessionId}.jsonl`,
+      `${sessionId}.islands.jsonl`,
+      `${sessionId}.archive.jsonl`,
+    ]);
+    const open = vi.spyOn(fsPromises, 'open');
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared append boundary');
+
+    await storage.appendPreparedSessionTail(sessionId, {
+      baseline,
+      title: loaded.title,
+      activeEntryId: nextLineage.activeEntryId,
+      lineageEntries: nextLineage.entries.slice(baseline.lineageCount),
+    });
+
+    const historyReads = open.mock.calls.filter(([candidate, flags]) =>
+      flags === 'r'
+      && path.dirname(path.resolve(String(candidate))) === path.resolve(projectDir)
+      && bundleNames.has(path.basename(String(candidate))));
+    open.mockRestore();
+    expect(historyReads).toHaveLength(0);
+
+    const nextPage = await storage.readConversationPageCache(sessionId, {
+      limit: 4,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    });
+    const direct = await storage.readFullSnapshot(sessionId);
+    expect(nextPage?.sourceRevision).toBe(direct?.sourceRevision);
+    expect(nextPage?.entries.at(-1)?.entry?.message.content).toBe('bounded append tail');
+    await expect(storage.readConversationPageCache(sessionId, {
+      expectedRevision: previousPage.revision,
+      limit: 4,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    })).rejects.toMatchObject({ code: 'data_changed' });
+  });
+
+  it('keeps the complete prepared append path off the lineage and artifact history prefixes', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { buildSessionConversationHistory } = await import('../session/conversation-history.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const sessionId = 'session-prepared-bounded-compute';
+    const messages = Array.from({ length: 640 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `bounded compute history ${index}`,
+    }));
+    const initialLineage = createSessionLineage(messages);
+    const artifacts: KodaXSessionArtifactLedgerEntry[] = Array.from(
+      { length: 64 },
+      (_, index) => ({
+        id: `artifact-${index}`,
+        kind: 'file_read',
+        target: `history-${index}.ts`,
+        timestamp: `2026-08-02T00:00:${String(index).padStart(2, '0')}.000Z`,
+      }),
+    );
+    let rejectHistoryReads = false;
+    const guardedPrefix = <T>(values: T[], prefixLength: number, label: string): T[] =>
+      new Proxy(values, {
+        get(target, property, receiver) {
+          if (
+            rejectHistoryReads
+            && typeof property === 'string'
+            && /^(?:0|[1-9]\d*)$/.test(property)
+            && Number(property) < prefixLength
+          ) {
+            throw new Error(`${label} history prefix was traversed at ${property}`);
+          }
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      });
+    await storage.save(sessionId, {
+      messages,
+      title: 'Prepared bounded compute',
+      gitRoot,
+      lineage: initialLineage,
+      artifactLedger: artifacts,
+    });
+    const capture = await storage.readFullSnapshot(sessionId);
+    if (capture === null || capture.lineage === null) throw new Error('expected Session capture');
+    await storage.prepareConversationPageCache(
+      sessionId,
+      buildSessionConversationHistory(capture.lineage, capture.sourceRevision),
+      capture.lineage,
+      capture.data.runtimeInfo,
+      capture.boundaryRevision,
+      capture.sourceRevisionState,
+    );
+    const loaded = await storage.load(sessionId);
+    if (loaded?.lineage === undefined || loaded.artifactLedger === undefined) {
+      throw new Error('expected loaded append prefixes');
+    }
+    loaded.lineage.entries = guardedPrefix(
+      loaded.lineage.entries,
+      loaded.lineage.entries.length,
+      'lineage',
+    );
+    loaded.artifactLedger = guardedPrefix(
+      loaded.artifactLedger,
+      loaded.artifactLedger.length,
+      'artifact',
+    );
+    const baseline = await storage.prepareSessionAppend(sessionId);
+    if (baseline === null) throw new Error('expected prepared append boundary');
+
+    const tailEntry = {
+      type: 'message' as const,
+      id: 'bounded-compute-tail',
+      parentId: baseline.activeEntryId,
+      logicalId: 'bounded-compute-tail',
+      timestamp: '2026-08-02T00:02:08.000Z',
+      message: { role: 'user' as const, content: 'bounded compute tail' },
+    };
+    const tailArtifact: KodaXSessionArtifactLedgerEntry = {
+      id: 'artifact-tail',
+      kind: 'file_modified',
+      target: 'tail.ts',
+      timestamp: '2026-08-02T00:02:09.000Z',
+    };
+    rejectHistoryReads = true;
+    try {
+      await storage.appendPreparedSessionTail(sessionId, {
+        baseline,
+        title: 'Prepared bounded compute',
+        activeEntryId: tailEntry.id,
+        lineageEntries: [tailEntry],
+        artifactEntries: [tailArtifact],
+      });
+    } finally {
+      rejectHistoryReads = false;
+    }
+
+    const mainPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(gitRoot).key,
+      `${sessionId}.jsonl`,
+    );
+    const metaUpdates = (await readFile(mainPath, 'utf8'))
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line._type === 'meta_update');
+    expect(metaUpdates.at(-1)?.activeMessageCount).toBe(messages.length + 1);
+    const page = await storage.readConversationPageCache(sessionId, {
+      limit: 2,
+      maxPageBytes: 64 * 1024,
+      maxInlineEntryBytes: 64 * 1024,
+      reservedBytes: 0,
+    });
+    expect(page?.entries.at(-1)?.entry?.message.content).toBe('bounded compute tail');
+  });
+
+  it('rejects a stale prepared tail boundary and makes reload-and-retry explicit', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'session-prepared-stale-boundary';
+    const first = new FileSessionStorage({ sessionsDir });
+    const baseMessages = [{ role: 'user' as const, content: 'prepared base' }];
+    await first.save(sessionId, {
+      messages: baseMessages,
+      title: 'Prepared stale boundary',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const loaded = await first.load(sessionId);
+    const staleBaseline = await first.prepareSessionAppend(sessionId);
+    if (loaded?.lineage === undefined || staleBaseline === null) {
+      throw new Error('expected prepared Session state');
+    }
+
+    const second = new FileSessionStorage({ sessionsDir });
+    const concurrent = await second.load(sessionId);
+    if (concurrent?.lineage === undefined) throw new Error('expected concurrent Session state');
+    const concurrentLineage = createSessionLineage([
+      ...concurrent.messages,
+      { role: 'assistant' as const, content: 'concurrent tail' },
+    ], concurrent.lineage);
+    await second.appendSessionDelta(sessionId, {
+      ...concurrent,
+      messages: getSessionMessagesFromLineage(concurrentLineage),
+      lineage: concurrentLineage,
+    });
+
+    const staleTail: KodaXSessionEntry = {
+      type: 'message',
+      id: 'prepared-stale-tail',
+      parentId: staleBaseline.activeEntryId,
+      logicalId: 'prepared-stale-tail',
+      timestamp: '2026-08-02T00:03:00.000Z',
+      message: { role: 'assistant', content: 'must be rebuilt' },
+    };
+    await expect(first.appendPreparedSessionTail(sessionId, {
+      baseline: staleBaseline,
+      title: loaded.title,
+      activeEntryId: staleTail.id,
+      lineageEntries: [staleTail],
+    })).rejects.toMatchObject({ code: 'data_changed' });
+
+    const refreshed = await first.load(sessionId);
+    expect(refreshed?.messages.at(-1)).toMatchObject({ content: 'concurrent tail' });
+    expect((await first.prepareSessionAppend(sessionId))?.revision).not.toBe(staleBaseline.revision);
   });
 
   it('appendSessionDelta makes a newly provided tag visible to list by rewriting the initial meta line', async () => {
@@ -4534,6 +5405,58 @@ describe('FileSessionStorage', () => {
     expect(listed.map((s) => s.id).sort()).toEqual(['20260701_000000', '20260701_000001']);
   });
 
+  it('retries legacy cache cleanup after a failed migration on the same storage instance', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'legacy-cache-migration-retry';
+    await mkdir(sessionsDir, { recursive: true });
+    const flatPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const cachePath = path.join(sessionsDir, `${sessionId}.conversation-cache.generation.data`);
+    await writeFile(flatPath, [
+      JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Legacy cache migration retry',
+        gitRoot,
+        activeMessageCount: 1,
+      }),
+      JSON.stringify({ role: 'user', content: 'legacy body' }),
+    ].join('\n'), 'utf8');
+    await writeFile(cachePath, 'recoverable cached body', 'utf8');
+    const storage = new FileSessionStorage({ sessionsDir });
+    const originalRm = fsPromises.rm.bind(fsPromises);
+    let denied = false;
+    const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (candidate, options) => {
+      if (!denied && path.resolve(String(candidate)) === path.resolve(cachePath)) {
+        denied = true;
+        throw Object.assign(new Error('migration cache cleanup denied'), { code: 'EACCES' });
+      }
+      return originalRm(candidate, options);
+    });
+
+    try {
+      await expect(storage.list(gitRoot)).rejects.toMatchObject({
+        name: 'ConversationPageCacheCleanupError',
+      });
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(existsSync(flatPath)).toBe(true);
+    await expect(storage.list(gitRoot)).resolves.toEqual([
+      expect.objectContaining({ id: sessionId }),
+    ]);
+    expect(existsSync(flatPath)).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+    expect(existsSync(path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(gitRoot).key,
+      `${sessionId}.jsonl`,
+    ))).toBe(true);
+  });
+
   it('FEATURE_219: archive() hides a session from the default list; includeArchived + unarchive restore it', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
@@ -4586,12 +5509,163 @@ describe('FileSessionStorage', () => {
     });
     expect(existsSync(path.join(projectDir, 'archived', '20260801_000000.jsonl'))).toBe(true);
     expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(false);
+    const detachedActiveCache = path.join(
+      projectDir,
+      '20260801_000000.conversation-cache.legacy.data',
+    );
+    await writeFile(detachedActiveCache, 'detached active cache body', 'utf8');
+    await expect(storage.archive('20260801_000000')).resolves.toBe(true);
+    expect(existsSync(detachedActiveCache)).toBe(false);
     expect((await storage.load('20260801_000000'))?.title).toBe('Archive Me In Place');
 
     // Unarchive restores it to the default list.
     expect(await storage.unarchive('20260801_000000')).toBe(true);
     expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(true);
     expect((await storage.list(gitRoot)).map((s) => s.id)).toContain('20260801_000000');
+    const detachedArchivedCache = path.join(
+      projectDir,
+      'archived',
+      '20260801_000000.conversation-cache.legacy.data',
+    );
+    await writeFile(detachedArchivedCache, 'detached archived cache body', 'utf8');
+    await expect(storage.unarchive('20260801_000000')).resolves.toBe(true);
+    expect(existsSync(detachedArchivedCache)).toBe(false);
+  });
+
+  it.each(['archive', 'unarchive'] as const)(
+    '%s fails before moving a Session when its recoverable Conversation cache cannot be removed',
+    async (operation) => {
+      const { FileSessionStorage } = await import('./storage.js');
+      const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+      const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+      const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+      const sessionId = `${operation}-cache-cleanup-retry`;
+      await storage.save(sessionId, {
+        messages: [{ role: 'user', content: 'private cached body' }],
+        title: 'Cache cleanup retry',
+        gitRoot,
+        lineage: createSessionLineage([{ role: 'user', content: 'private cached body' }]),
+      });
+      const projectDir = path.join(
+        testSessionsDir(),
+        deriveProjectKeyFromRoot(gitRoot).key,
+      );
+      const archivedDir = path.join(projectDir, 'archived');
+      if (operation === 'unarchive') await storage.archive(sessionId);
+      const sourceDir = operation === 'archive' ? projectDir : archivedDir;
+      const destinationDir = operation === 'archive' ? archivedDir : projectDir;
+      const sourceMain = path.join(sourceDir, `${sessionId}.jsonl`);
+      const destinationMain = path.join(destinationDir, `${sessionId}.jsonl`);
+      const cachePrefix = `${sessionId}.conversation-cache.`;
+      expect((await fsPromises.readdir(sourceDir)).some((name) => name.startsWith(cachePrefix)))
+        .toBe(true);
+      const originalRm = fsPromises.rm.bind(fsPromises);
+      let denied = false;
+      const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (candidate, options) => {
+        if (!denied && path.basename(String(candidate)).startsWith(cachePrefix)) {
+          denied = true;
+          throw Object.assign(new Error('cache cleanup denied'), { code: 'EACCES' });
+        }
+        return originalRm(candidate, options);
+      });
+
+      try {
+        await expect(storage[operation](sessionId)).rejects.toMatchObject({ code: 'EACCES' });
+      } finally {
+        remove.mockRestore();
+      }
+
+      expect(existsSync(sourceMain)).toBe(true);
+      expect(existsSync(destinationMain)).toBe(false);
+      await expect(storage[operation](sessionId)).resolves.toBe(true);
+      expect(existsSync(sourceMain)).toBe(false);
+      expect(existsSync(destinationMain)).toBe(true);
+      expect((await fsPromises.readdir(sourceDir)).some((name) => name.startsWith(cachePrefix)))
+        .toBe(false);
+    },
+  );
+
+  it('delete keeps the Session recoverable when cache cleanup fails and succeeds on retry', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'delete-cache-cleanup-retry';
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'delete cached body' }],
+      title: 'Delete cache cleanup retry',
+      gitRoot,
+      lineage: createSessionLineage([{ role: 'user', content: 'delete cached body' }]),
+    });
+    const projectDir = path.join(testSessionsDir(), deriveProjectKeyFromRoot(gitRoot).key);
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const cachePrefix = `${sessionId}.conversation-cache.`;
+    const detachedDir = path.join(projectDir, 'archived');
+    const detachedCache = path.join(detachedDir, `${cachePrefix}legacy.data`);
+    await mkdir(detachedDir, { recursive: true });
+    await writeFile(detachedCache, 'detached recoverable cached body', 'utf8');
+    const originalRm = fsPromises.rm.bind(fsPromises);
+    let denied = false;
+    const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (candidate, options) => {
+      if (!denied && path.basename(String(candidate)).startsWith(cachePrefix)) {
+        denied = true;
+        throw Object.assign(new Error('cache cleanup denied'), { code: 'EACCES' });
+      }
+      return originalRm(candidate, options);
+    });
+
+    try {
+      await expect(storage.delete(sessionId)).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(existsSync(mainPath)).toBe(true);
+    await expect(storage.delete(sessionId)).resolves.toBeUndefined();
+    expect(existsSync(mainPath)).toBe(false);
+    expect(existsSync(detachedCache)).toBe(false);
+    expect((await fsPromises.readdir(projectDir)).some((name) => name.startsWith(cachePrefix)))
+      .toBe(false);
+  });
+
+  it('retention reports cache cleanup failure without detaching cached content and retries', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const sessionId = 'retention-cache-cleanup-retry';
+    await storage.save(sessionId, {
+      messages: [{ role: 'user', content: 'retention cached body' }],
+      title: 'Retention cache cleanup retry',
+      gitRoot,
+      lineage: createSessionLineage([{ role: 'user', content: 'retention cached body' }]),
+    });
+    const projectDir = path.join(testSessionsDir(), deriveProjectKeyFromRoot(gitRoot).key);
+    const mainPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const old = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    await utimes(mainPath, old, old);
+    const cachePrefix = `${sessionId}.conversation-cache.`;
+    const originalRm = fsPromises.rm.bind(fsPromises);
+    let denied = false;
+    const remove = vi.spyOn(fsPromises, 'rm').mockImplementation(async (candidate, options) => {
+      if (!denied && path.basename(String(candidate)).startsWith(cachePrefix)) {
+        denied = true;
+        throw Object.assign(new Error('cache cleanup denied'), { code: 'EACCES' });
+      }
+      return originalRm(candidate, options);
+    });
+
+    try {
+      await expect(storage.cleanupOldSessions(30)).rejects.toBeInstanceOf(AggregateError);
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(existsSync(mainPath)).toBe(true);
+    await expect(storage.cleanupOldSessions(30)).resolves.toBe(1);
+    expect(existsSync(mainPath)).toBe(false);
+    expect((await fsPromises.readdir(projectDir)).some((name) => name.startsWith(cachePrefix)))
+      .toBe(false);
   });
 
   it('keeps raw lineage mutators on the exact archived Session path', async () => {

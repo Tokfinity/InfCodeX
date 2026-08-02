@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-07-29
+> Last updated: 2026-08-01
 >
-> Current implementation baseline: `v0.7.78` integrated release candidate
-> (`@kodax-ai/kodax@0.7.78` workspace package)
+> Current implementation baseline: `v0.7.79` development candidate
+> (`@kodax-ai/kodax@0.7.79` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -109,6 +109,13 @@ processes request hidden consoles. Explicit editor, terminal, and PTY paths stay
 interactive. The bundle build audits this boundary from the Runtime Worker
 metafile.
 
+Windows descendant cleanup is identity-checked and exposes observable
+uncertainty instead of bare-PID success. Its current Toolhelp/CIM snapshot model
+is still observation rather than containment: a descendant can become
+unreachable after an intermediate parent exits. Issue 256 therefore blocks the
+v0.7.79 release until spawn-time Job Object assignment and an independently
+invalidatable Worker owner lease provide the missing closure guarantee.
+
 The same published worker preserves Sidecar terminal meaning end to end:
 optional post-completion offers remain successful, required clarification can
 produce a structured blocked terminal, and only an eligible revision can
@@ -176,6 +183,18 @@ extends the v3 opaque exact-grant and concrete-matcher contract; version
 negotiation treats requirements as minimums. Side-query diagnostics report
 only coarse, observed timing/retry facts, while guardrail spans start before
 and end after the awaited callback.
+
+Runtime text and reasoning deltas are coalesced before sequence allocation,
+durable event persistence, and subscriber delivery. The source owner preserves
+flush boundaries and an 8 KiB accumulated-merge limit. Clients that depend on
+this behavior require `runtimeEventCoalescing:1`; daemon auto-start may replace
+only an idle older owner and fails closed when preflight is unsafe.
+
+Session read APIs expose three intentionally separate planes: active model
+context, raw append-order transcript audit, and ordinary conversation. The
+ordinary projection is owned by the Session implementation, folds only
+provenance/topology-proven copies, preserves ambiguity, and carries immutable
+revision-fenced boundaries through standalone and Runtime paging APIs.
 
 First-run setup is a pre-Runtime CLI branch. One root-owned coordinator
 validates and creates the core, MCP, Extensions, and A2A active files plus
@@ -470,7 +489,10 @@ A2A remains a root integration edge rather than an agent-layer wire concern.
 Runtime publication, configuration reconciliation, and the protocol-neutral
 external-Agent plane. Version 2 configuration adds per-Agent desired-state
 activation, outbound OAuth 2.0 Client Credentials, and inbound RFC 9068 JWT
-Resource Server validation while retaining fixed Bearer compatibility.
+Resource Server validation while retaining fixed Bearer compatibility. Its
+per-Agent network block carries independent `allowPrivateAddresses` and
+`allowInsecureHttp` booleans; both default false and participate in the
+registration fingerprint so grants and revocations force reconciliation.
 
 Trust is split by authority: Card, Agent RPC, and Authorization Server origins
 are independently constrained; a stable authentication realm scopes durable

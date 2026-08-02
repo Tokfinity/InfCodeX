@@ -4,6 +4,7 @@ import type { KodaXShellExecutionContract } from '../types.js';
 import {
   buildShellProbeEnvironment,
   environmentNameMatchesPattern,
+  hardenShellCommandEnvironment,
   mergeWindowsRegistryEnvironment,
   mergeWindowsRegistryPath,
   parseWindowsRegistryEnvironment,
@@ -22,6 +23,78 @@ const contract: KodaXShellExecutionContract = {
 };
 
 describe('shell execution environment', () => {
+  it('prevents cmd from searching the execution cwd before PATH', () => {
+    expect(hardenShellCommandEnvironment({
+      PATH: 'C:\\Windows\\System32',
+      nodefaultcurrentdirectoryinexepath: 'user-controlled',
+      Node_Options: '--require=C:\\hook.js',
+      BASH_ENV: 'C:\\hook.sh',
+    }, 'cmd', 'win32')).toEqual({
+      PATH: 'C:\\Windows\\System32',
+      NoDefaultCurrentDirectoryInExePath: '1',
+    });
+    expect(hardenShellCommandEnvironment({
+      PATH: '/usr/bin',
+      NODE_OPTIONS: '--require=/tmp/hook.js',
+      BASH_ENV: '/tmp/hook.sh',
+    }, 'bash', 'linux'))
+      .toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('removes inherited controls that can replace or preprocess analyzed commands', () => {
+    const source = {
+      PATH: '/usr/bin',
+      RIPGREP_CONFIG_PATH: '/tmp/untrusted-rg.conf',
+      'BASH_FUNC_cat%%': '() { node /tmp/hook.js; }',
+      'BASH_FUNC_git()': '() { node /tmp/hook.js; }',
+      SAFE_VALUE: 'safe',
+    };
+
+    expect(hardenShellCommandEnvironment(source, 'bash', 'linux')).toEqual({
+      PATH: '/usr/bin',
+      SAFE_VALUE: 'safe',
+    });
+    expect(buildShellProbeEnvironment(source, {
+      version: 1,
+      shell: { kind: 'bash' },
+      environment: { inherit: 'filtered' },
+    }, undefined, 'linux')).not.toHaveProperty('RIPGREP_CONFIG_PATH');
+    expect(sanitizeResolvedShellEnvironment(source as Record<string, string>, {
+      version: 1,
+      shell: { kind: 'bash' },
+    }, 'linux')).toEqual({
+      PATH: '/usr/bin',
+      SAFE_VALUE: 'safe',
+    });
+  });
+
+  it('removes relative and workspace PATH entries that can shadow analyzed commands', () => {
+    expect(hardenShellCommandEnvironment({
+      PATH: '/workspace/node_modules/.bin:relative-bin:/usr/local/bin:/usr/bin',
+    }, 'bash', 'linux', [], '/workspace')).toEqual({
+      PATH: '/usr/local/bin:/usr/bin',
+    });
+    expect(hardenShellCommandEnvironment({
+      Path: 'C:\\workspace\\bin;.;C:\\Windows\\System32',
+    }, 'cmd', 'win32', [], 'C:\\workspace')).toMatchObject({
+      Path: 'C:\\Windows\\System32',
+      NoDefaultCurrentDirectoryInExePath: '1',
+    });
+  });
+
+  it('filters built-in and active Provider credentials from a legacy child environment', () => {
+    expect(hardenShellCommandEnvironment({
+      PATH: '/usr/bin',
+      OPENAI_API_KEY: 'built-in-secret',
+      ANTHROPIC_AUTH_TOKEN: 'built-in-token',
+      CUSTOM_PROVIDER_AUTH: 'custom-secret',
+      SAFE_VALUE: 'safe',
+    }, 'bash', 'linux', ['CUSTOM_PROVIDER_AUTH'])).toEqual({
+      PATH: '/usr/bin',
+      SAFE_VALUE: 'safe',
+    });
+  });
+
   it('filters credentials before profile startup and after profile resolution', () => {
     const source = {
       PATH: 'C:\\system',

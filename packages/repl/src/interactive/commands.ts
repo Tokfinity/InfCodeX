@@ -1224,6 +1224,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       }
       if (args.length === 0) {
         console.log(chalk.dim(`\nClassifier engine: ${chalk.cyan(stats.engine)}`));
+        console.log(chalk.dim(`  classifier health:    ${stats.classifierHealth}`));
         if (stats.classifierModel) {
           console.log(chalk.dim(`  classifier model:     ${stats.classifierModel}`));
         }
@@ -1243,7 +1244,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       if (newEngine === 'rules') {
         console.log(chalk.dim('  deterministic workspace/temp rules are now active'));
       } else {
-        console.log(chalk.dim('  classifier consultation resumed; threshold downgrades still apply'));
+        console.log(chalk.dim('  classifier selected; degraded health temporarily uses Accept-edits fallback'));
       }
     },
     detailedHelp: () => {
@@ -1255,16 +1256,16 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
       console.log(chalk.bold('Notes:'));
       console.log(chalk.dim('  - Only meaningful in auto mode (/mode auto).'));
-      console.log(chalk.dim('  - The classifier may auto-downgrade to rules after 3 consecutive blocks,'));
-      console.log(chalk.dim('    20 cumulative blocks, or 5 errors in a 10-minute window. /auto-engine llm'));
-      console.log(chalk.dim('    manually flips back to llm.'));
+      console.log(chalk.dim('  - Denial counters are diagnostic only; they do not change the selected engine.'));
+      console.log(chalk.dim('  - Five classifier failures in 10 minutes temporarily skip classifier calls'));
+      console.log(chalk.dim('    and apply Accept-edits fallback; the selected engine remains llm.'));
       console.log(chalk.dim('  - Override via env: KODAX_AUTO_MODE_ENGINE=rules.'));
       console.log();
     },
   },
   {
     // FEATURE_092 phase 2b.8: dump tracker + breaker stats. Useful for the
-    // pilot to verify "5 fallback paths" manually + for debugging downgrades.
+    // pilot to verify fallback paths manually + for debugging classifier health.
     name: 'auto-denials',
     description: 'Show auto-mode classifier denial tracker + circuit breaker stats',
     usage: '/auto-denials',
@@ -1276,6 +1277,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       }
       console.log(chalk.cyan('\n[auto-mode classifier stats]'));
       console.log(chalk.dim(`  engine:               ${chalk.cyan(stats.engine)}`));
+      console.log(chalk.dim(`  classifier health:    ${stats.classifierHealth}`));
       console.log(chalk.dim('  Denial tracker:'));
       console.log(chalk.dim(`    consecutive blocks: ${stats.denials.consecutive} / 3`));
       console.log(chalk.dim(`    cumulative blocks:  ${stats.denials.cumulative} / 20`));
@@ -1284,6 +1286,10 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
       if (stats.engine === 'rules') {
         console.log(chalk.yellow('  ↪ rules engine is active. /auto-engine llm to enable the classifier.'));
+      } else if (stats.classifierHealth === 'degraded') {
+        console.log(chalk.yellow(
+          '  ↪ classifier calls are temporarily skipped; Accept-edits fallback is active and engine remains llm.',
+        ));
       }
       console.log();
     },
@@ -1292,10 +1298,10 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /auto-denials                ') + 'Print engine + tracker + breaker counters');
       console.log();
-      console.log(chalk.bold('Thresholds (FEATURE_092):'));
-      console.log(chalk.dim('  - 3 consecutive blocks  → engine downgrade to rules'));
-      console.log(chalk.dim('  - 20 cumulative blocks  → engine downgrade to rules'));
-      console.log(chalk.dim('  - 5 errors in 10-min    → circuit breaker trips → engine downgrade'));
+      console.log(chalk.bold('Diagnostics and fallback (FEATURE_092):'));
+      console.log(chalk.dim('  - Block counters are diagnostic only; they never select rules.'));
+      console.log(chalk.dim('  - 5 errors in 10 min → skip classifier temporarily and use Accept-edits fallback.'));
+      console.log(chalk.dim('  - The selected engine remains llm unless the user/host explicitly selects rules.'));
       console.log();
     },
   },

@@ -106,7 +106,9 @@ export async function defaultSkillToolRunner(
       command: launch.command,
       args: launch.args,
     });
-    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(child);
+    const cleanupOnProcessExit = (): void => {
+      killChildProcessTreeSync(child);
+    };
     process.once('exit', cleanupOnProcessExit);
     const cleanup = (): void => {
       process.off('exit', cleanupOnProcessExit);

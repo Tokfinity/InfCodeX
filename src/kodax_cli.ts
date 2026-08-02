@@ -595,7 +595,17 @@ export function createReplRuntimeAutoModeControl(
     },
     async syncSettings(sessionId, permissionMode, settings) {
       return enqueueSettingsUpdate(sessionId, async () => {
-        await ensureCliRuntimeSession(runtime, sessionId, 'repl', '');
+        try {
+          await runtime.sessions.load(sessionId);
+        } catch (error: unknown) {
+          if (
+            error instanceof Error &&
+            error.message.startsWith('Session not found:')
+          ) {
+            return undefined;
+          }
+          throw error;
+        }
         const initializeEngine =
           !initializedSessions.has(sessionId) &&
           (await runtime.sessions.getSettings(sessionId)).autoModeEngine ===
@@ -3343,8 +3353,9 @@ async function main() {
   // explicitly enabled (e.g. KODAX_SESSION_RETENTION_DAYS=30). The `list()`
   // head-read path already keeps `kodax -c` + the picker fast regardless of
   // file count, so retention is a housekeeping convenience, not a perf
-  // requirement. Fire-and-forget — never blocks startup; errors are swallowed
-  // inside cleanupOldSessions, and a non-positive value is a no-op.
+  // requirement. Fire-and-forget never blocks startup, but cleanup failures
+  // are reported because cached message bodies must remain attached to a
+  // retryable Session lifecycle operation.
   // Read from env (shell override) then config.json (persistent). This runs at
   // startup before prepareRuntimeConfig's bridge, so it reads config directly.
   if (!isDaemonManagementCommand) {
@@ -3353,7 +3364,14 @@ async function main() {
         loadConfig().sessionRetentionDays ??
         0,
     );
-    void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
+    void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays).catch((error: unknown) => {
+      emitKodaXDiagnostic({
+        source: 'cli:session-retention',
+        level: 'warn',
+        message: 'Session retention cleanup was incomplete and will be retried later.',
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   const program = configureKodaXRootCommand(

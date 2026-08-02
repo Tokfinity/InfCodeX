@@ -501,6 +501,10 @@ import {
   type TranscriptSelectionSpan,
 } from "./utils/transcript-selection-gestures.js";
 import { buildHostSessionPayload } from "./utils/session-payload.js";
+import type {
+  PreparedSessionAppendBaseline,
+  PreparedSessionTailDelta,
+} from "../interactive/storage.js";
 
 const DOUBLE_INTERRUPT_ESCAPE_INTERVAL_MS = 500;
 
@@ -565,6 +569,14 @@ type AppendSessionDeltaStorage = SessionStorage & {
   appendSessionDelta(id: string, data: SessionData): Promise<void>;
 };
 
+type PreparedAppendStorage = AppendSessionDeltaStorage & {
+  prepareSessionAppend(id: string): Promise<PreparedSessionAppendBaseline | null>;
+  appendPreparedSessionTail(
+    id: string,
+    delta: PreparedSessionTailDelta,
+  ): Promise<PreparedSessionAppendBaseline | null>;
+};
+
 function hasAppendSessionDelta(storage: SessionStorage): storage is AppendSessionDeltaStorage {
   const candidate: Partial<AppendSessionDeltaStorage> = storage;
   return typeof candidate.appendSessionDelta === "function";
@@ -606,6 +618,50 @@ export type InkRuntimeStatusProvider = () => Promise<RuntimeSurfaceStatus | unde
 export interface InkTransientNotice {
   readonly text: string;
   readonly tone: "success" | "warning";
+}
+
+function hasPreparedSessionAppend(storage: SessionStorage): storage is PreparedAppendStorage {
+  const candidate: Partial<PreparedAppendStorage> = storage;
+  return typeof candidate.prepareSessionAppend === "function"
+    && typeof candidate.appendPreparedSessionTail === "function"
+    && typeof candidate.appendSessionDelta === "function";
+}
+
+export function createPreparedSessionTail(
+  data: SessionData,
+  baseline: PreparedSessionAppendBaseline,
+  sessionSnapshotDirty: boolean,
+): PreparedSessionTailDelta | undefined {
+  if (
+    sessionSnapshotDirty
+    || data.lineage === undefined
+    || data.lineage.entries.length < baseline.lineageCount
+    || (data.artifactLedger !== undefined
+      && data.artifactLedger.length < baseline.artifactCount)
+    || (data.artifactLedger === undefined && baseline.artifactCount > 0)
+    || (data.extensionRecords !== undefined && baseline.extensionCount > 0)
+    || data.tag !== baseline.tag
+    || data.extensionState !== undefined
+    || data.actorSnapshot !== undefined
+    || Object.prototype.hasOwnProperty.call(data, "errorMetadata")
+  ) return undefined;
+  const lineageEntries = data.lineage.entries.slice(baseline.lineageCount);
+  let parentId = baseline.activeEntryId;
+  for (const entry of lineageEntries) {
+    if (entry.type !== "message" || entry.parentId !== parentId) return undefined;
+    parentId = entry.id;
+  }
+  if (data.lineage.activeEntryId !== parentId) return undefined;
+  return {
+    baseline,
+    title: data.title,
+    activeEntryId: data.lineage.activeEntryId,
+    lineageEntries,
+    artifactEntries: data.artifactLedger?.slice(baseline.artifactCount),
+    extensionRecords: data.extensionRecords?.slice(baseline.extensionCount),
+    ...(data.uiHistory !== undefined ? { uiHistory: data.uiHistory } : {}),
+    ...(data.scope !== undefined ? { scope: data.scope } : {}),
+  };
 }
 
 export interface InkREPLOptions extends KodaXOptions {
@@ -680,10 +736,8 @@ interface InkREPLProps {
   ) => void;
   /**
    * Setter the component invokes on mount to subscribe to guardrail
-   * engine-change events (automatic downgrades from circuit breaker /
-   * denial threshold, plus manual `setEngine` calls). Without this the
-   * status-bar engine indicator would go stale after the guardrail
-   * auto-downgrades to `'rules'` mid-session.
+   * engine-change events from explicit/manual `setEngine` calls. Classifier
+   * health thresholds no longer mutate the selected engine.
    */
   setAutoModeEngineChange: (
     handler: ((engine: 'llm' | 'rules') => void) | null,
@@ -7155,11 +7209,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // fed into the classifier prompt + speculative race). This is the
       // structural decision in ADR-025.
       //
-      // When the engine downgrades to 'rules' (denial 3/20 or breaker
-      // 5/10m), this short-circuit yields and the original Step 2.5/3
-      // rules re-engage automatically — defense-in-depth tier 3 fallback.
-      // The classifier engine ref is updated by `setAutoModeEngineChange`
-      // (subscribed on mount); reads are synchronous and reflect live state.
+      // An explicit engine switch to rules yields to the original Step 2.5/3
+      // checks. Classifier health failures keep the LLM engine selected and
+      // use the runner-level Accept-edits fallback instead.
       if (isAutoMode(mode) && autoModeEngine === 'llm') {
         return true; // Defer all further checks to AutoModeToolGuardrail.beforeTool
       }
@@ -7447,6 +7499,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           context.artifactLedger ?? [],
           update.artifactLedger,
         );
+        context.sessionSnapshotDirty = true;
       }
       // FEATURE_072: route post-compact attachments natively onto the
       // CompactionEntry instead of letting them be re-serialized as regular
@@ -7652,10 +7705,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       );
       return result.confirmed ? 'allow' : 'block';
     });
-    // FEATURE_092 phase 2b.8: subscribe to guardrail engine-change events so
-    // auto-downgrades (denial threshold / circuit breaker) refresh the status
-    // bar `auto[LLM]/auto[RULES]` indicator immediately. Without this the
-    // bar stays stale until the user toggles permission mode.
+    // Subscribe to explicit engine changes so the status bar reflects a live
+    // `/auto-engine` switch without waiting for a permission-mode toggle.
     setAutoModeEngineChange((engine) => {
       setAutoModeEngineState(engine);
     });
@@ -7861,15 +7912,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       artifactLedger: context.artifactLedger,
       ...extensionSessionPayload,
     });
-    // Prefer append-only hot path when available (FileSessionStorage).
-    // Falls back to full save() for other storage implementations.
-    if (hasAppendSessionDelta(storage)) {
+    const baseline = hasPreparedSessionAppend(storage)
+      ? await storage.prepareSessionAppend(context.sessionId)
+      : null;
+    const preparedTail = baseline === null
+      ? undefined
+      : createPreparedSessionTail(
+          sessionPayload,
+          baseline,
+          context.sessionSnapshotDirty === true,
+        );
+    if (hasPreparedSessionAppend(storage) && preparedTail !== undefined) {
+      await storage.appendPreparedSessionTail(context.sessionId, preparedTail);
+    } else if (hasAppendSessionDelta(storage)) {
       await storage.appendSessionDelta(context.sessionId, sessionPayload);
     } else {
       await storage.save(context.sessionId, sessionPayload);
     }
     context.extensionStateDirty = false;
     context.extensionRecordsDirty = false;
+    context.sessionSnapshotDirty = false;
     if (memDiagEnabled()) {
       memDiagSnapshot('persist', buildMemDiagBreakdown(
         context.messages, lineage,
@@ -8292,6 +8354,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     context.extensionRecords = undefined;
     context.extensionStateDirty = false;
     context.extensionRecordsDirty = false;
+    context.sessionSnapshotDirty = false;
     context.createdAt = now;
     context.lastAccessed = now;
     persistedUiHistoryRef.current = [];
@@ -8938,6 +9001,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               }));
               context.extensionStateDirty = false;
               context.extensionRecordsDirty = false;
+              context.sessionSnapshotDirty = false;
             }
           },
           startNewSession: () => {
@@ -8953,6 +9017,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecords = undefined;
             context.extensionStateDirty = false;
             context.extensionRecordsDirty = false;
+            context.sessionSnapshotDirty = false;
             persistedUiHistoryRef.current = [];
             context.createdAt = now;
             context.lastAccessed = now;
@@ -9006,6 +9071,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.sessionId = id;
               context.contextTokenSnapshot = undefined;
               applyInteractiveRuntimeInfo(appliedRuntime);
+              context.sessionSnapshotDirty = JSON.stringify(appliedRuntime)
+                !== JSON.stringify(savedRuntime);
               // FEATURE_226: back-propagate the loaded session's tag into the
               // live options so subsequent saves / forks reflect it (the save
               // side reads currentOptionsRef.current.session?.tag).
@@ -9192,6 +9259,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             context.messages = loaded.messages;
             context.uiHistory = normalizePersistedUiHistory(loaded.uiHistory);
+            context.lineage = loaded.lineage;
+            context.artifactLedger = loaded.artifactLedger;
             context.extensionState = loaded.extensionState
               ? structuredClone(loaded.extensionState)
               : undefined;
@@ -9200,7 +9269,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = loaded.title;
             context.contextTokenSnapshot = undefined;
-            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(loaded) ?? context.runtimeInfo ?? startupRuntimeInfo);
+            const savedRuntime = resolveSessionRuntimeInfo(loaded);
+            const appliedRuntime = savedRuntime ?? context.runtimeInfo ?? startupRuntimeInfo;
+            applyInteractiveRuntimeInfo(appliedRuntime);
+            context.sessionSnapshotDirty = JSON.stringify(appliedRuntime)
+              !== JSON.stringify(savedRuntime);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();
@@ -9215,6 +9288,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             if (!updated) {
               return false;
             }
+
+            // setLabel persists and returns a rotated canonical lineage. Keep
+            // the interactive snapshot on that exact prefix so the next turn
+            // cannot overwrite the checkpoint with its pre-label lineage.
+            context.lineage = updated.lineage;
 
             const action = label && label.trim()
               ? `checkpoint label set: ${label.trim()}`
@@ -9240,6 +9318,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.sessionId = forked.sessionId;
             context.messages = forked.data.messages;
             context.uiHistory = normalizePersistedUiHistory(forked.data.uiHistory);
+            context.lineage = forked.data.lineage;
+            context.artifactLedger = forked.data.artifactLedger;
             context.extensionState = forked.data.extensionState
               ? structuredClone(forked.data.extensionState)
               : undefined;
@@ -9248,7 +9328,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = forked.data.title;
             context.contextTokenSnapshot = undefined;
-            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(forked.data) ?? context.runtimeInfo ?? startupRuntimeInfo);
+            const savedRuntime = resolveSessionRuntimeInfo(forked.data);
+            const appliedRuntime = savedRuntime ?? context.runtimeInfo ?? startupRuntimeInfo;
+            applyInteractiveRuntimeInfo(appliedRuntime);
+            context.sessionSnapshotDirty = JSON.stringify(appliedRuntime)
+              !== JSON.stringify(savedRuntime);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             const now = new Date().toISOString();
             context.createdAt = now;
@@ -9256,6 +9340,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             currentOptionsRef.current.session = {
               ...currentOptionsRef.current.session,
               id: forked.sessionId,
+              tag: forked.data.tag,
             };
             setLiveTokenCount(null);
             clearUIHistory();
@@ -9286,6 +9371,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             context.messages = rewound.messages;
             context.uiHistory = normalizePersistedUiHistory(rewound.uiHistory);
+            context.lineage = rewound.lineage;
+            context.artifactLedger = rewound.artifactLedger;
             context.extensionState = rewound.extensionState
               ? structuredClone(rewound.extensionState)
               : undefined;
@@ -9294,7 +9381,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             context.extensionRecordsDirty = false;
             context.title = rewound.title;
             context.contextTokenSnapshot = undefined;
-            applyInteractiveRuntimeInfo(resolveSessionRuntimeInfo(rewound) ?? context.runtimeInfo ?? startupRuntimeInfo);
+            const savedRuntime = resolveSessionRuntimeInfo(rewound);
+            const appliedRuntime = savedRuntime ?? context.runtimeInfo ?? startupRuntimeInfo;
+            applyInteractiveRuntimeInfo(appliedRuntime);
+            context.sessionSnapshotDirty = JSON.stringify(appliedRuntime)
+              !== JSON.stringify(savedRuntime);
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();

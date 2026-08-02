@@ -54,6 +54,15 @@ export async function runKodaX(
           context: { ...baseOptions.context, systemPromptOverride: profileInstructions },
         }
       : baseOptions;
+  const runtimeOptions: KodaXOptions = effectiveOptions.context?.permissionIntent !== undefined
+    ? effectiveOptions
+    : {
+        ...effectiveOptions,
+        context: {
+          ...effectiveOptions.context,
+          permissionIntent: { rootUserIntent: prompt },
+        },
+      };
   // Establish the run-scoped config (AsyncLocalStorage) around the whole run.
   // `runKodaX` is a public SDK entry (and the target `startKodaX` wraps), so
   // without this the per-run overrides (modelTiers / maxOutputTokens /
@@ -61,14 +70,15 @@ export async function runKodaX(
   // consumer calls it directly rather than via `runManagedTask`. When reached
   // through `runManagedTask` (SA dispatch) this simply re-establishes the same
   // scope — nesting replaces with an identical config, so it is idempotent.
-  return runWithScopedConfig(deriveRunScopedConfig(effectiveOptions), async () => {
+  return runWithScopedConfig(deriveRunScopedConfig(runtimeOptions), async () => {
     const result = await Runner.run<KodaXResult>(createDefaultCodingAgent(), prompt, {
-      presetOptions: effectiveOptions,
-      abortSignal: effectiveOptions.abortSignal,
+      presetOptions: runtimeOptions,
+      abortSignal: runtimeOptions.abortSignal,
       // FEATURE_092 (v0.7.33): forward caller-supplied run-scoped guardrails
       // (e.g. AutoModeToolGuardrail injected by the REPL bootstrap when
       // permissionMode === 'auto'). Runner merges with `agent.guardrails`.
-      guardrails: effectiveOptions.guardrails,
+      guardrails: runtimeOptions.guardrails,
+      permissionIntent: runtimeOptions.context?.permissionIntent,
     });
     // Substrate executor always lifts full `KodaXResult` onto `data` —
     // missing means the Agent declaration is mis-wired (fail loud, never

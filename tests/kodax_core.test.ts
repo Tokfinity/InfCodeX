@@ -672,8 +672,8 @@ describe('Tool Execution Context', () => {
 describe('Session ID Generation', () => {
   it('should generate valid session ID', async () => {
     const sessionId = await generateSessionId();
-    // FEATURE_219: YYYYMMDD_HHMMSS_<suffix>
-    expect(sessionId).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    // FEATURE_219: YYYYMMDD_HHMMSS_<ms base36 + 48-bit random hex>
+    expect(sessionId).toMatch(/^\d{8}_\d{6}_[0-9a-z]{1,2}[0-9a-f]{12}$/);
   });
 
   it('should generate unique session IDs', async () => {
@@ -817,16 +817,16 @@ describe('Session Initial Messages', () => {
 describe('generateSessionId', () => {
   it('should generate session ID in correct format', async () => {
     const id = await generateSessionId();
-    // FEATURE_219: Format YYYYMMDD_HHMMSS_<suffix> (date prefix + unique suffix)
-    expect(id).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    // FEATURE_219: Format YYYYMMDD_HHMMSS_<ms base36 + 48-bit random hex>
+    expect(id).toMatch(/^\d{8}_\d{6}_[0-9a-z]{1,2}[0-9a-f]{12}$/);
   });
 
   it('should generate unique IDs even within the same second', async () => {
     // FEATURE_219: ids are now globally unique by construction (suffix).
     const id1 = await generateSessionId();
     const id2 = await generateSessionId();
-    expect(id1).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
-    expect(id2).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id1).toMatch(/^\d{8}_\d{6}_[0-9a-z]{1,2}[0-9a-f]{12}$/);
+    expect(id2).toMatch(/^\d{8}_\d{6}_[0-9a-z]{1,2}[0-9a-f]{12}$/);
     expect(id1).not.toBe(id2);
   });
 });

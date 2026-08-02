@@ -99,6 +99,17 @@ describe('bootstrapAutoMode', () => {
     expect(config?.sharedState).toBe(sharedState);
   });
 
+  it('forwards shell environment path-expansion trust to the analyzer context', async () => {
+    const result = await bootstrapAutoMode({
+      ...baseDeps(),
+      trustProcessEnvironmentPathExpansion: false,
+    });
+    result.getGuardrail();
+
+    const config = vi.mocked(createAutoModeToolGuardrail).mock.calls.at(-1)?.[0];
+    expect(config?.trustProcessEnvironmentPathExpansion).toBe(false);
+  });
+
   it('guardrail has stable kind=tool name=auto-mode (Runner registration contract)', async () => {
     const result = await bootstrapAutoMode(baseDeps());
     const g = result.getGuardrail();

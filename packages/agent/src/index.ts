@@ -256,6 +256,7 @@ export {
 // Guardrail tri-layer
 export type {
   GuardrailContext,
+  GuardrailPermissionIntent,
   GuardrailVerdict,
   InputGuardrail,
   OutputGuardrail,
@@ -415,6 +416,9 @@ export {
   killChildProcessTreeSync,
   killPidTree,
   killPidTreeSync,
+  rememberChildProcessTree,
+  type ProcessTreeKillResult,
+  type ProcessTreeKillStatus,
   type ProcessTreeKillOptions,
 } from './runtime/process-tree.js';
 

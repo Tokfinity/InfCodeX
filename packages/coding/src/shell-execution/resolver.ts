@@ -24,6 +24,7 @@ import {
 } from './contract.js';
 import {
   buildShellProbeEnvironment,
+  hardenShellCommandEnvironment,
   mergeWindowsRegistryEnvironment,
   parseWindowsRegistryEnvironment,
   sanitizeResolvedShellEnvironment,
@@ -222,7 +223,12 @@ export function createShellCommandInvocation(
         ? `"${command.trimStart()}"`
         : command,
     ],
-    env: resolved.env,
+    env: hardenShellCommandEnvironment(
+      resolved.env,
+      resolved.contract.shell.kind,
+      process.platform,
+      [],
+    ),
     ...(resolved.contract.shell.kind === 'cmd'
       ? { windowsVerbatimArguments: true }
       : {}),
@@ -251,6 +257,7 @@ async function resolveFreshShellExecution(
     sessionScratchDir,
     process.platform,
     additionalDeniedNames,
+    cwd,
   );
   if (
     contract.shell.kind === 'bash'
@@ -274,6 +281,7 @@ async function resolveFreshShellExecution(
       sessionScratchDir,
       process.platform,
       additionalDeniedNames,
+      cwd,
     );
   }
   const executable = resolveShellExecutable(contract, bootstrapEnv);
@@ -432,7 +440,7 @@ export function buildShellProbeArgs(
   command: string,
 ): readonly string[] {
   const prefix = [...(prefixArgs ?? [])];
-  if (kind === 'cmd') return [...prefix, '/d', '/s', '/c', command];
+  if (kind === 'cmd') return [...prefix, '/d', '/v:off', '/s', '/c', command];
   if (kind === 'pwsh' || kind === 'powershell') {
     const interactive =
       profile === 'interactive' || profile === 'login-interactive';
@@ -456,7 +464,7 @@ function buildCommandArgs(
   prefixArgs: readonly string[] | undefined,
 ): readonly string[] {
   const prefix = [...(prefixArgs ?? [])];
-  if (kind === 'cmd') return [...prefix, '/d', '/s', '/c'];
+  if (kind === 'cmd') return [...prefix, '/d', '/v:off', '/s', '/c'];
   if (kind === 'pwsh' || kind === 'powershell') {
     return [
       ...prefix,
@@ -734,8 +742,10 @@ function captureProcess(
     };
     const finishAfterTermination = (error: Error): void => {
       terminationError ??= error;
-      termination ??= killChildProcessTree(child);
-      void termination.then(
+      const pendingTermination = termination
+        ?? killChildProcessTree(child).then(() => undefined);
+      termination = pendingTermination;
+      void pendingTermination.then(
         () => finish(terminationError),
         () => finish(terminationError),
       );

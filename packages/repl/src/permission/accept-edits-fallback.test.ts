@@ -63,4 +63,31 @@ describe('allowsAcceptEditsClassifierFallback', () => {
       projectRoot,
     )).toBe(false);
   });
+
+  it('keeps the reported PowerShell inspection usable after classifier failure', () => {
+    const projectRoot = createRoot('kodax-accept-edits-project-');
+    const command = [
+      "echo '=== where.exe rg now ==='",
+      'where.exe rg 2>&1',
+      "echo '=== WinGet Links on PATH? ==='",
+      "$env:PATH -split ';' | Where-Object { $_ -like '*WinGet*' }",
+      "echo '=== rg version ==='",
+      'rg --version 2>&1 | Select-Object -First 2',
+    ].join('; ');
+
+    expect(allowsAcceptEditsClassifierFallback(
+      { id: 'bash-powershell-read', name: 'bash', input: { command } },
+      projectRoot,
+      projectRoot,
+    )).toBe(true);
+    expect(allowsAcceptEditsClassifierFallback(
+      {
+        id: 'bash-powershell-script',
+        name: 'bash',
+        input: { command: "& 'C:\\tools\\dsh.cmd' --version" },
+      },
+      projectRoot,
+      projectRoot,
+    )).toBe(false);
+  });
 });

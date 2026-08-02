@@ -101,6 +101,7 @@ describe('status workspace output', () => {
     await command!.handler([], context, {
       getAutoModeStats: async () => ({
         engine: 'llm',
+        classifierHealth: 'healthy',
         classifierModel: 'qwen-token-plan:qwen3.7-plus',
         denials: { consecutive: 0, cumulative: 0 },
         breaker: { timestamps: [] },
@@ -110,6 +111,28 @@ describe('status workspace output', () => {
     expect(logSpy.mock.calls.flat().join('\n')).toContain(
       'qwen-token-plan:qwen3.7-plus',
     );
+  });
+
+  it('shows circuit-breaker fallback without claiming the engine changed to rules', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const command = BUILTIN_COMMANDS.find((candidate) => candidate.name === 'auto-denials');
+    const now = Date.now();
+
+    await command!.handler([], context, {
+      getAutoModeStats: async () => ({
+        engine: 'llm',
+        classifierHealth: 'degraded',
+        classifierModel: 'deepseek:deepseek-v4-flash',
+        denials: { consecutive: 0, cumulative: 0 },
+        breaker: { timestamps: [now, now, now, now, now] },
+      }),
+    } as unknown as CommandCallbacks, currentConfig);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('degraded');
+    expect(output).toContain('Accept-edits fallback');
+    expect(output).toContain('engine remains llm');
+    expect(output).not.toContain('engine downgrade to rules');
   });
 
   it('does not publish a mode change before Runtime settings synchronize', async () => {

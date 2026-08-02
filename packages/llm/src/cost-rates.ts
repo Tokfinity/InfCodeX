@@ -59,13 +59,11 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'gpt-5.3-codex-spark': { inputPer1M: 10.0, outputPer1M: 40.0 },
   },
   deepseek: {
-    // V4 series. DeepSeek publishes pricing in CNY/M tokens; values below are
-    // converted at ¥1 ≈ $0.14 (official USD rates not yet posted as of 2026-04).
-    // Update once api-docs.deepseek.com lists USD rates directly.
-    //   v4-flash: ¥1 / ¥0.2 cached / ¥2 out
-    //   v4-pro:   ¥12 / ¥1 cached / ¥24 out
-    'deepseek-v4-flash': { inputPer1M: 0.14, outputPer1M: 0.28, cachePer1M: 0.028 },
-    'deepseek-v4-pro': { inputPer1M: 1.68, outputPer1M: 3.36, cachePer1M: 0.14 },
+    // Official USD rates per 1M tokens, published 2026-07-31. Peak-hour
+    // pricing has been announced but has no effective date yet, so these are
+    // the current base rates rather than a speculative time-of-day schedule.
+    'deepseek-v4-flash': { inputPer1M: 0.14, outputPer1M: 0.28, cachePer1M: 0.0028 },
+    'deepseek-v4-pro': { inputPer1M: 0.435, outputPer1M: 0.87, cachePer1M: 0.003625 },
   },
   kimi: {
     // Official prices are published in CNY; converted at ¥1 ≈ $0.14,

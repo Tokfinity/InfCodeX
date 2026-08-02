@@ -1,12 +1,18 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXSessionEntry, KodaXSessionLineage } from '@kodax-ai/agent';
-import { createSessionManager } from '@kodax-ai/repl';
+import type {
+  KodaXSessionArtifactLedgerEntry,
+  KodaXSessionEntry,
+  KodaXSessionLineage,
+} from '@kodax-ai/agent';
+import { createSessionManager, FileSessionStorage } from '@kodax-ai/repl';
 
+import * as sdkAgent from './sdk-agent.js';
 import { createKodaXRuntime, type RuntimeConversationHistorySlice } from './sdk-runtime.js';
 
 const timestamp = '2026-08-01T00:00:00.000Z';
@@ -31,10 +37,22 @@ function messageEntry(
   };
 }
 
+async function removeConversationPageCaches(sessionsDir: string): Promise<void> {
+  for (const directory of await readdir(sessionsDir, { withFileTypes: true })) {
+    if (!directory.isDirectory()) continue;
+    const projectDir = path.join(sessionsDir, directory.name);
+    for (const file of await readdir(projectDir)) {
+      if (!file.includes('.conversation-cache.')) continue;
+      await rm(path.join(projectDir, file), { force: true });
+    }
+  }
+}
+
 describe('Runtime conversation history', () => {
   const tempRoots: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(tempRoots.splice(0).map((root) =>
       rm(root, { recursive: true, force: true })));
   });
@@ -123,6 +141,163 @@ describe('Runtime conversation history', () => {
     return { manager, root, runtime, sessionId };
   }
 
+  it('keeps storage.load results mutable through the public SDK and persists prefix edits', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-mutable-session-'));
+    tempRoots.push(root);
+    const sessionsDir = path.join(root, 'sessions');
+    const sessionId = 'public-mutable-session';
+    const entries = [
+      messageEntry('mutable-u1', null, 'user', 'original request'),
+      messageEntry('mutable-a1', 'mutable-u1', 'assistant', 'original answer'),
+    ];
+    const artifactLedger: KodaXSessionArtifactLedgerEntry[] = [{
+      id: 'mutable-artifact',
+      kind: 'file_read',
+      target: 'original.ts',
+      timestamp,
+    }];
+    const manager = createSessionManager({ sessionsDir });
+    await manager.storage.save(sessionId, {
+      title: 'Public mutable Session',
+      gitRoot: root,
+      scope: 'user',
+      lineage: { version: 2, activeEntryId: 'mutable-a1', entries },
+      artifactLedger,
+      messages: entries.map((entry) => entry.type === 'message'
+        ? entry.message
+        : { role: 'user' as const, content: '' }),
+    });
+
+    const loaded = await manager.storage.load(sessionId);
+    if (loaded?.lineage === undefined || loaded.artifactLedger === undefined) {
+      throw new Error('expected public storage Session data');
+    }
+    expect(() => structuredClone(loaded)).not.toThrow();
+    expect(Object.getOwnPropertyDescriptor(loaded.lineage.entries, '0')).toMatchObject({
+      configurable: true,
+      writable: true,
+    });
+    expect(Object.getOwnPropertyDescriptor(loaded.artifactLedger, '0')).toMatchObject({
+      configurable: true,
+      writable: true,
+    });
+
+    const rewrittenRoot = messageEntry('mutable-u1', null, 'user', 'rewritten request');
+    loaded.lineage.entries[0] = rewrittenRoot;
+    loaded.artifactLedger[0] = {
+      ...loaded.artifactLedger[0]!,
+      target: 'rewritten.ts',
+    };
+    const nextMessages = [
+      rewrittenRoot.message,
+      entries[1]!.type === 'message'
+        ? entries[1]!.message
+        : { role: 'assistant' as const, content: '' },
+      { role: 'user' as const, content: 'new tail' },
+    ];
+    const nextLineage = sdkAgent.createSessionLineage(nextMessages, loaded.lineage);
+
+    await manager.storage.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages: nextMessages,
+      lineage: nextLineage,
+    });
+
+    const reloaded = await new FileSessionStorage({ sessionsDir }).load(sessionId);
+    expect(reloaded?.lineage?.entries[0]).toMatchObject({
+      id: rewrittenRoot.id,
+      message: { content: 'rewritten request' },
+    });
+    expect(reloaded?.artifactLedger?.[0]).toMatchObject({
+      id: 'mutable-artifact',
+      target: 'rewritten.ts',
+    });
+    expect(reloaded?.messages.at(-1)).toMatchObject({ content: 'new tail' });
+  });
+
+  it('persists in-place loaded entry and artifact edits through the public SDK', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-nested-session-'));
+    tempRoots.push(root);
+    const sessionsDir = path.join(root, 'sessions');
+    const sessionId = 'public-nested-session';
+    const baseMessages = [{ role: 'user' as const, content: 'nested before' }];
+    const manager = createSessionManager({ sessionsDir });
+    await manager.storage.save(sessionId, {
+      title: 'Public nested Session',
+      gitRoot: root,
+      scope: 'user',
+      lineage: sdkAgent.createSessionLineage(baseMessages),
+      artifactLedger: [{
+        id: 'nested-artifact',
+        kind: 'file_read',
+        target: 'nested-before.ts',
+        timestamp,
+      }],
+      messages: baseMessages,
+    });
+
+    const loaded = await manager.storage.load(sessionId);
+    const loadedEntry = loaded?.lineage?.entries[0];
+    const loadedArtifact = loaded?.artifactLedger?.[0];
+    if (
+      loaded?.lineage === undefined
+      || loadedEntry?.type !== 'message'
+      || loadedArtifact === undefined
+    ) {
+      throw new Error('expected mutable public Session prefix');
+    }
+    loadedEntry.message.content = 'nested after';
+    loadedArtifact.target = 'nested-after.ts';
+    const nextMessages = [
+      loadedEntry.message,
+      { role: 'assistant' as const, content: 'nested tail' },
+    ];
+
+    const nextLineage = sdkAgent.createSessionLineage(nextMessages, loaded.lineage);
+    const nextEntry = nextLineage.entries[0];
+    if (nextEntry?.type !== 'message') throw new Error('expected helper lineage entry');
+    nextEntry.message.content = 'nested after helper';
+    loadedArtifact.target = 'nested-after-helper.ts';
+
+    await manager.storage.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages: nextMessages,
+      lineage: nextLineage,
+    });
+
+    const reloaded = await new FileSessionStorage({ sessionsDir }).load(sessionId);
+    expect(reloaded?.lineage?.entries[0]).toMatchObject({
+      message: { content: 'nested after helper' },
+    });
+    expect(reloaded?.artifactLedger?.[0]).toMatchObject({
+      target: 'nested-after-helper.ts',
+    });
+    expect(reloaded?.messages.at(-1)).toMatchObject({ content: 'nested tail' });
+  });
+
+  it('does not expose append-prefix trust declarations from the public agent SDK', () => {
+    expect('inheritSessionAppendPrefix' in sdkAgent).toBe(false);
+    expect('captureSessionAppendPrefix' in sdkAgent).toBe(false);
+    expect('hasSessionAppendPrefix' in sdkAgent).toBe(false);
+  });
+
+  it('does not publish an importable append-prefix trust subpath', async () => {
+    const packageJson = JSON.parse(await readFile(
+      path.join(process.cwd(), 'packages', 'agent', 'package.json'),
+      'utf8',
+    )) as { exports?: Record<string, unknown> };
+    expect(packageJson.exports).not.toHaveProperty('./internal/session-append-prefix');
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      "import('@kodax-ai/agent/internal/session-append-prefix').then(() => process.exit(2)).catch((error) => process.exit(error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' ? 0 : 3))",
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    expect(probe.status, probe.stderr).toBe(0);
+  });
+
   it('returns the same resolved order from direct and immutable paged reads', async () => {
     const { runtime, sessionId } = await fixture();
     try {
@@ -153,6 +328,215 @@ describe('Runtime conversation history', () => {
         'third request',
         'third answer',
       ]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('serves a prepared long-session tail without a full capture and resyncs after mutation', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-runtime-conversation-page-'));
+    tempRoots.push(root);
+    const sessionsDir = path.join(root, 'sessions');
+    const sessionId = 'bounded-conversation-page';
+    const entries = Array.from({ length: 2_000 }, (_, index) => messageEntry(
+      `entry-${index}`,
+      index === 0 ? null : `entry-${index - 1}`,
+      index % 2 === 0 ? 'user' : 'assistant',
+      `message-${index}`,
+    ));
+    const manager = createSessionManager({ sessionsDir });
+    await manager.storage.save(sessionId, {
+      title: 'Bounded Conversation Page',
+      gitRoot: root,
+      scope: 'user',
+      runtimeInfo: { surface: 'repl' },
+      lineage: {
+        version: 2,
+        activeEntryId: entries.at(-1)!.id,
+        entries,
+      },
+      messages: entries.map((entry) => entry.type === 'message'
+        ? entry.message
+        : { role: 'user' as const, content: '' }),
+    });
+    const fullCapture = vi.spyOn(FileSessionStorage.prototype, 'readFullSnapshot');
+    const peek = vi.spyOn(FileSessionStorage.prototype, 'peek');
+    const runtime = await createKodaXRuntime({
+      homeDir: root,
+      sessionsDir,
+      sharedDaemonHost: true,
+    });
+    peek.mockClear();
+    try {
+      const first = await runtime.sessions.conversationPage({ sessionId, limit: 5 });
+      expect(first?.entries.map((item) => item.entry?.message.content)).toEqual([
+        'message-1995',
+        'message-1996',
+        'message-1997',
+        'message-1998',
+        'message-1999',
+      ]);
+      expect(first?.nextCursor).toEqual(expect.any(String));
+      expect(fullCapture).not.toHaveBeenCalled();
+      expect(peek).not.toHaveBeenCalled();
+      const second = await runtime.sessions.conversationPage({
+        sessionId,
+        cursor: first!.nextCursor,
+        limit: 5,
+      });
+      expect(second?.entries.map((item) => item.entry?.message.content)).toEqual([
+        'message-1990',
+        'message-1991',
+        'message-1992',
+        'message-1993',
+        'message-1994',
+      ]);
+      expect(fullCapture).not.toHaveBeenCalled();
+      expect(peek).not.toHaveBeenCalled();
+
+      const updatedEntries = [
+        ...entries,
+        messageEntry('entry-2000', 'entry-1999', 'user', 'message-2000'),
+      ];
+      const baseline = await manager.storage.prepareSessionAppend(sessionId);
+      if (baseline === null) throw new Error('prepared append boundary missing');
+      await manager.storage.appendPreparedSessionTail(sessionId, {
+        baseline,
+        title: 'Bounded Conversation Page',
+        scope: 'user',
+        activeEntryId: 'entry-2000',
+        lineageEntries: updatedEntries.slice(baseline.lineageCount),
+      });
+      await expect(runtime.sessions.conversationPage({
+        sessionId,
+        cursor: first!.nextCursor,
+        limit: 5,
+      })).rejects.toMatchObject({ code: 'resync_required' });
+      const refreshed = await runtime.sessions.conversationPage({ sessionId, limit: 2 });
+      expect(refreshed?.entries.map((item) => item.entry?.message.content)).toEqual([
+        'message-1999',
+        'message-2000',
+      ]);
+      expect(fullCapture).not.toHaveBeenCalled();
+    } finally {
+      peek.mockRestore();
+      fullCapture.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it('upgrades a cache-less existing session once and reuses its bounded pages', async () => {
+    const { root, runtime, sessionId } = await fixture();
+    const sessionsDir = path.join(root, 'sessions');
+    await removeConversationPageCaches(sessionsDir);
+    const fullCapture = vi.spyOn(FileSessionStorage.prototype, 'readFullSnapshot');
+    try {
+      await expect(runtime.sessions.conversationPage({ sessionId, limit: 2 }))
+        .resolves.toMatchObject({ entries: expect.any(Array) });
+      expect(fullCapture).toHaveBeenCalledTimes(1);
+      fullCapture.mockClear();
+
+      await expect(runtime.sessions.conversationPage({ sessionId, limit: 2 }))
+        .resolves.toMatchObject({ entries: expect.any(Array) });
+      expect(fullCapture).not.toHaveBeenCalled();
+    } finally {
+      fullCapture.mockRestore();
+      await runtime.close();
+    }
+  });
+
+  it('invalidates a fallback conversation page cursor after the Session changes', async () => {
+    const { manager, root, runtime, sessionId } = await fixture();
+    await removeConversationPageCaches(path.join(root, 'sessions'));
+    const prepare = vi.spyOn(
+      FileSessionStorage.prototype,
+      'prepareConversationPageCache',
+    ).mockRejectedValue(new Error('forced cache preparation failure'));
+    const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const first = await runtime.sessions.conversationPage({ sessionId, limit: 2 });
+      if (first?.nextCursor === undefined) throw new Error('fallback page cursor missing');
+      const current = await manager.storage.load(sessionId);
+      if (current?.lineage === undefined) throw new Error('Session lineage missing');
+      const appended = messageEntry('a4', current.lineage.activeEntryId, 'assistant', 'changed');
+      await manager.storage.appendSessionDelta(sessionId, {
+        ...current,
+        lineage: {
+          ...current.lineage,
+          activeEntryId: appended.id,
+          entries: [...current.lineage.entries, appended],
+        },
+        messages: [...current.messages, appended.message],
+      });
+
+      await expect(runtime.sessions.conversationPage({
+        sessionId,
+        cursor: first.nextCursor,
+        limit: 2,
+      })).rejects.toMatchObject({ code: 'resync_required' });
+      expect(prepare).toHaveBeenCalled();
+      expect(warning).toHaveBeenCalled();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('invalidates a fallback oversized-entry chunk after the Session changes', async () => {
+    const { manager, root, runtime, sessionId } = await fixture('large answer '.repeat(40_000));
+    await removeConversationPageCaches(path.join(root, 'sessions'));
+    vi.spyOn(FileSessionStorage.prototype, 'prepareConversationPageCache')
+      .mockRejectedValue(new Error('forced cache preparation failure'));
+    vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      const page = await runtime.sessions.conversationPage({ sessionId, limit: 20 });
+      const oversized = page?.entries.find((entry) => entry.oversized);
+      if (page === null || oversized === undefined) throw new Error('oversized fallback entry missing');
+      const current = await manager.storage.load(sessionId);
+      if (current?.lineage === undefined) throw new Error('Session lineage missing');
+      const appended = messageEntry('u4', current.lineage.activeEntryId, 'user', 'changed');
+      await manager.storage.appendSessionDelta(sessionId, {
+        ...current,
+        lineage: {
+          ...current.lineage,
+          activeEntryId: appended.id,
+          entries: [...current.lineage.entries, appended],
+        },
+        messages: [...current.messages, appended.message],
+      });
+
+      await expect(runtime.sessions.conversationEntryChunk({
+        sessionId,
+        revision: page.revision,
+        entryIndex: oversized.index,
+      })).rejects.toMatchObject({ code: 'resync_required' });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('keeps raw transcript pages on their immutable snapshot after an append', async () => {
+    const { manager, runtime, sessionId } = await fixture();
+    try {
+      const first = await runtime.sessions.transcriptPage({ sessionId, limit: 2 });
+      if (first?.nextCursor === undefined) throw new Error('transcript page cursor missing');
+      const current = await manager.storage.load(sessionId);
+      if (current?.lineage === undefined) throw new Error('Session lineage missing');
+      const appended = messageEntry('a4', current.lineage.activeEntryId, 'assistant', 'changed');
+      await manager.storage.appendSessionDelta(sessionId, {
+        ...current,
+        lineage: {
+          ...current.lineage,
+          activeEntryId: appended.id,
+          entries: [...current.lineage.entries, appended],
+        },
+        messages: [...current.messages, appended.message],
+      });
+
+      await expect(runtime.sessions.transcriptPage({
+        sessionId,
+        cursor: first.nextCursor,
+        limit: 2,
+      })).resolves.toMatchObject({ revision: first.revision });
     } finally {
       await runtime.close();
     }

@@ -84,6 +84,37 @@ describe('interactive daemon runtime bridge', () => {
     });
   });
 
+  it('does not persist a new REPL session while synchronizing startup settings', async () => {
+    const create = vi.fn(async () => ({ id: 'new-session' }));
+    const getSettings = vi.fn(async () => ({ permissionMode: 'auto' }));
+    const updateSettings = vi.fn(async () => ({ permissionMode: 'auto' }));
+    const runtime = {
+      sessions: {
+        load: vi.fn(async () => {
+          throw new Error('Session not found: new-session');
+        }),
+        create,
+        getSettings,
+        updateSettings,
+        getAutoModeStats: vi.fn(async () => ({
+          engine: 'llm' as const,
+          denials: {},
+          breaker: {},
+        })),
+      },
+    } as unknown as KodaXRuntime;
+
+    const control = createReplRuntimeAutoModeControl(runtime);
+    const stats = await control.syncSettings?.('new-session', 'auto', {
+      engine: 'llm',
+    });
+
+    expect(stats).toBeUndefined();
+    expect(create).not.toHaveBeenCalled();
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it('serializes rapid permission-mode changes so the last shortcut wins', async () => {
     let persistedMode = 'accept-edits';
     let releaseFirstUpdate: (() => void) | undefined;

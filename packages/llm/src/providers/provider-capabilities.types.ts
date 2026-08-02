@@ -12,6 +12,7 @@
 
 import type {
   KodaXModelDescriptor,
+  KodaXOpenAICompatMaxOutputTokensField,
   KodaXProviderCapabilityProfile,
   KodaXReasoningCapability,
   KodaXReasoningProfile,
@@ -55,6 +56,7 @@ export interface ProviderCapabilityJsonEntry {
   readonly capabilityProfile: CapabilityProfileName;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
+  readonly maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   readonly thinkingBudgetCap?: number;
   readonly supportsThinking?: boolean;
   /** When true, loader injects `model` + `models` from cli-bridge-models.ts. */
@@ -91,6 +93,7 @@ export interface ProviderSnapshot {
   readonly capabilityProfile: KodaXProviderCapabilityProfile;
   readonly contextWindow?: number;
   readonly maxOutputTokens?: number;
+  readonly maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   readonly thinkingBudgetCap?: number;
   readonly supportsThinking?: boolean;
   /** FEATURE_216 v0.7.45 — verify primitive for this provider. */
@@ -133,6 +136,8 @@ const VALID_THINKING_STRATEGIES: readonly KodaXThinkingWireStrategy[] = [
 const VALID_REASONING_PRESETS: readonly KodaXReasoningPresetName[] = [
   'zai-glm-5.2',
   'zai-glm-toggle',
+  'deepseek-v4-flash-openai',
+  'deepseek-v4-pro-openai',
   'deepseek-v4-openai',
   'deepseek-v4-anthropic',
   'deepseek-toggle',
@@ -151,6 +156,11 @@ const VALID_REASONING_PRESETS: readonly KodaXReasoningPresetName[] = [
   'anthropic-budget',
   'generic-thinking-toggle',
   'none',
+];
+
+const VALID_OPENAI_MAX_OUTPUT_TOKEN_FIELDS: readonly KodaXOpenAICompatMaxOutputTokensField[] = [
+  'max_tokens',
+  'max_completion_tokens',
 ];
 
 const VALID_PROFILE_NAMES: readonly CapabilityProfileName[] = [
@@ -187,6 +197,24 @@ function requireString(value: unknown, path: string): string {
 function optionalString(value: unknown, path: string): string | undefined {
   if (value === undefined) return undefined;
   return requireString(value, path);
+}
+
+function optionalMaxOutputTokensField(
+  value: unknown,
+  path: string,
+): KodaXOpenAICompatMaxOutputTokensField | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string'
+    || !VALID_OPENAI_MAX_OUTPUT_TOKEN_FIELDS.includes(
+      value as KodaXOpenAICompatMaxOutputTokensField,
+    )
+  ) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must be one of ${VALID_OPENAI_MAX_OUTPUT_TOKEN_FIELDS.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as KodaXOpenAICompatMaxOutputTokensField;
 }
 
 function optionalNumber(value: unknown, path: string): number | undefined {
@@ -490,6 +518,10 @@ function validateModelDescriptor(
     raw.maxOutputTokens,
     `${path}.maxOutputTokens`,
   );
+  const maxOutputTokensField = optionalMaxOutputTokensField(
+    raw.maxOutputTokensField,
+    `${path}.maxOutputTokensField`,
+  );
   const thinkingBudgetCap = optionalNumber(
     raw.thinkingBudgetCap,
     `${path}.thinkingBudgetCap`,
@@ -519,6 +551,9 @@ function validateModelDescriptor(
   if (displayName !== undefined) descriptor.displayName = displayName;
   if (contextWindow !== undefined) descriptor.contextWindow = contextWindow;
   if (maxOutputTokens !== undefined) descriptor.maxOutputTokens = maxOutputTokens;
+  if (maxOutputTokensField !== undefined) {
+    descriptor.maxOutputTokensField = maxOutputTokensField;
+  }
   if (thinkingBudgetCap !== undefined) {
     descriptor.thinkingBudgetCap = thinkingBudgetCap;
   }
@@ -594,6 +629,10 @@ function validateProviderEntry(
     raw.maxOutputTokens,
     `providers.${name}.maxOutputTokens`,
   );
+  const maxOutputTokensField = optionalMaxOutputTokensField(
+    raw.maxOutputTokensField,
+    `providers.${name}.maxOutputTokensField`,
+  );
   const thinkingBudgetCap = optionalNumber(
     raw.thinkingBudgetCap,
     `providers.${name}.thinkingBudgetCap`,
@@ -663,6 +702,11 @@ function validateProviderEntry(
   }
   if (maxOutputTokens !== undefined) {
     (entry as { maxOutputTokens: number }).maxOutputTokens = maxOutputTokens;
+  }
+  if (maxOutputTokensField !== undefined) {
+    (
+      entry as { maxOutputTokensField: KodaXOpenAICompatMaxOutputTokensField }
+    ).maxOutputTokensField = maxOutputTokensField;
   }
   if (thinkingBudgetCap !== undefined) {
     (entry as { thinkingBudgetCap: number }).thinkingBudgetCap = thinkingBudgetCap;

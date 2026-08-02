@@ -201,4 +201,6 @@ export {
   KODAX_SESSIONS_DIR,
   KODAX_CONFIG_FILE,
   FileSessionStorage,
+  type PreparedSessionAppendBaseline,
+  type PreparedSessionTailDelta,
 } from '@kodax-ai/repl';

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isBareResumeRequest,
+  isVersionRequest,
   runKodaXBootstrap,
   type BootstrapResumeRoute,
 } from './kodax_bootstrap.js';
@@ -122,6 +123,35 @@ describe('KodaX CLI bootstrap', () => {
     expect(isBareResumeRequest(['--resume'])).toBe(true);
     expect(isBareResumeRequest(['-r', 'id'])).toBe(false);
     expect(isBareResumeRequest(['--provider', 'openai', '-r'])).toBe(false);
+  });
+
+  it.each([['-V'], ['--version']])(
+    'prints version without loading the full CLI: %s',
+    async (flag) => {
+      const previousVersion = process.env.KODAX_VERSION;
+      process.env.KODAX_VERSION = '9.8.7-test';
+      const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const loadCli = vi.fn();
+      try {
+        await runKodaXBootstrap({
+          argv: ['node', 'kodax', flag],
+          loadCli,
+        });
+        expect(loadCli).not.toHaveBeenCalled();
+        expect(write).toHaveBeenCalledWith('9.8.7-test\n');
+      } finally {
+        write.mockRestore();
+        if (previousVersion === undefined) delete process.env.KODAX_VERSION;
+        else process.env.KODAX_VERSION = previousVersion;
+      }
+    },
+  );
+
+  it('recognizes only exact version requests', () => {
+    expect(isVersionRequest(['-V'])).toBe(true);
+    expect(isVersionRequest(['--version'])).toBe(true);
+    expect(isVersionRequest(['--version', 'extra'])).toBe(false);
+    expect(isVersionRequest(['completion', '--version'])).toBe(false);
   });
 });
 

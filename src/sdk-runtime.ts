@@ -6224,6 +6224,7 @@ function createRuntimeSessionService(
             capture.transcript.lineage,
             capture.data.runtimeInfo,
             capture.boundaryRevision,
+            capture.sourceRevisionState,
             sessionReadOptionsFromBudget(budget),
           );
           const prepared = await manager.storage.readConversationPageCache(
@@ -18036,6 +18037,20 @@ function createRuntimeSessionAutoModeGuardrail(input: {
   };
 }
 
+function runtimeShellUsesProcessEnvironmentPathAliases(
+  contract: KodaXShellExecutionContract | undefined,
+): boolean {
+  if (contract === undefined) return true;
+  if ((contract.shell.profile ?? 'default') !== 'none') return false;
+  const environment = contract.environment;
+  if (environment?.setup !== undefined || (environment?.denyPatterns?.length ?? 0) > 0) {
+    return false;
+  }
+  return !Object.keys(environment?.set ?? {}).some((name) => (
+    ['TEMP', 'TMP', 'TMPDIR'].includes(name.toUpperCase())
+  ));
+}
+
 async function createRuntimeAutoModeGuardrail(input: {
   readonly sessionId: string;
   readonly provider: string;
@@ -18083,6 +18098,10 @@ async function createRuntimeAutoModeGuardrail(input: {
   const projectRoot = path.resolve(
     input.options.context?.gitRoot ?? executionCwd,
   );
+  const trustProcessEnvironmentPathExpansion =
+    runtimeShellUsesProcessEnvironmentPathAliases(
+      input.options.context?.shellExecution,
+    );
   const cacheKey = JSON.stringify([
     process.platform === "win32" ? projectRoot.toLowerCase() : projectRoot,
     process.platform === "win32" ? executionCwd.toLowerCase() : executionCwd,
@@ -18090,6 +18109,7 @@ async function createRuntimeAutoModeGuardrail(input: {
     input.settings.autoModeClassifierModel ?? null,
     input.settings.autoModeTimeoutMs ?? null,
     input.settings.autoModeSpeculativeWindowMs ?? null,
+    trustProcessEnvironmentPathExpansion,
   ]);
   const sessionCache = input.cache.get(input.sessionId) ?? new Map();
   input.cache.set(input.sessionId, sessionCache);
@@ -18148,6 +18168,7 @@ async function createRuntimeAutoModeGuardrail(input: {
     },
     projectRoot,
     executionCwd,
+    trustProcessEnvironmentPathExpansion,
     admitWorkspaceSandboxCall: (call, review) => {
       if (reviewTouchesProtectedWindowsSystemTemp(review)) return;
       const key = runtimeAutoModeDecisionKey(call);

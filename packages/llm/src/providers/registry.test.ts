@@ -43,6 +43,23 @@ describe('provider registry', () => {
     expect(getProviderConfiguredReasoningCapability('unknown-provider')).toBe('unknown');
   });
 
+  it('tracks the current per-model DeepSeek V4 reasoning effort mapping', () => {
+    const flash = getModelCapabilities('deepseek', 'deepseek-v4-flash')?.reasoningProfile;
+    const pro = getModelCapabilities('deepseek', 'deepseek-v4-pro')?.reasoningProfile;
+
+    expect(flash?.reasoningPreset).toBe('deepseek-v4-flash-openai');
+    expect(flash?.effortAliases).toEqual({
+      medium: 'high',
+      xhigh: 'high',
+    });
+    expect(pro?.reasoningPreset).toBe('deepseek-v4-pro-openai');
+    expect(pro?.effortAliases).toEqual({
+      low: 'high',
+      medium: 'high',
+      xhigh: 'max',
+    });
+  });
+
   it.each([
     ['zhipu-coding', 'glm-5.2'],
     ['deepseek', 'deepseek-v4-flash'],

@@ -181,6 +181,22 @@ deadline 时才超时；embedded、Worker 与 daemon 的 Runtime Auto v4 均声�
 `fallbackPersistsEngine:false`。Actor owner 还会验证 Runtime identity，而不是只看
 PID，因此 PID 复用不会卡住已崩溃 owner。恢复 Session 选择器也改为显示宿主本地时区。
 
+**v0.7.79 发布准备候选版**：configured outbound A2A Agent 现在可持久化两项彼此独立、
+默认拒绝的网络权限：private-address 访问与非 loopback 明文 HTTP。embedded Worker
+与共享 daemon 会协调并执行同一份授权配置。Runtime 宿主同时获得唯一权威的
+Session 状态、有界只读诊断、字节保持的 Session 导出、严格 transcript 观测，
+证据约束的普通对话投影，以及通过 capability 协商并仅在 daemon 空闲时升级的
+有界流式事件合并。standalone 子进程、Session lineage、shell 清理、发布 sidecar
+和并行 admission 路径也完成了相应的发布加固。
+
+OpenAI-compatible 自定义 provider 现在可在 provider 或 model 级选择 `max_tokens`
+或 `max_completion_tokens`。DeepSeek V4 Flash/Pro 使用各自的 reasoning profile，
+并正确标记为纯文本。详见 [v0.7.79 设计](docs/features/v0.7.79.md)与
+[发布准备清单](docs/release.md#v0779-release-preparation)。FEATURE_280 仍是计划项，
+本候选版没有把它表述为已交付；打 tag 前必须完成或显式改期。Issue 256 同样是
+release blocker：Windows 的快照式进程祖先关系尚不能提供 spawn-time Job Object
+级后代 containment，也没有可独立失效的 Worker owner lease。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一
@@ -489,19 +505,27 @@ import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-
       "baseUrl": "https://example.com/v1",
       "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
       "model": "deepseek-v4-flash",
-      "reasoningPreset": "deepseek-v4-openai",
+      "maxOutputTokensField": "max_tokens",
+      "reasoningPreset": "deepseek-v4-flash-openai",
       "replayReasoningContent": true
     }
   ]
 }
 ```
 
-如果网关同时代理 DeepSeek 和 OpenAI proper，建议用 per-model override，避免把 `reasoning_content` 发给不接受该字段的模型：
+DeepSeek Chat Completions 使用 `max_tokens`，OpenAI proper 默认使用
+`max_completion_tokens`。如果网关同时代理两者，建议对这两个字段都使用
+per-model override，避免把 `reasoning_content` 或不兼容的 token 字段发给错误模型：
 
 ```json
 {
   "models": [
-    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    {
+      "id": "deepseek-v4-flash",
+      "maxOutputTokensField": "max_tokens",
+      "reasoningPreset": "deepseek-v4-flash-openai",
+      "replayReasoningContent": true
+    },
     { "id": "gpt-5", "replayReasoningContent": false }
   ]
 }
@@ -531,7 +555,7 @@ Verifier 的 `revise` / `blocked` 可执行消息；JSONL 输出使用同形
 
 #### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
 
-如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置 vision-capable alias（Anthropic、OpenAI、DeepSeek、Kimi、Qwen、Zhipu、MiniMax、MiMo、Ark，以及通过 CLI `@<path>` file-include 语法传图的 Gemini-CLI）已经默认开了这个 flag。Codex-CLI 和自定义 provider 在底层模型支持图片输入时需要手动 opt-in。
+如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置 vision-capable alias（Anthropic、OpenAI、Kimi、Qwen、Zhipu、MiniMax、MiMo、Ark，以及通过 CLI `@<path>` file-include 语法传图的 Gemini-CLI）已经默认开了这个 flag。DeepSeek V4 和 Codex-CLI 是纯文本模型；自定义 provider 在底层模型支持图片输入时需要手动 opt-in。
 
 ```json
 {

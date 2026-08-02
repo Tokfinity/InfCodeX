@@ -10,6 +10,7 @@ describe('session tool-output retention', () => {
   let root: string | undefined;
 
   afterEach(async () => {
+    vi.useRealTimers();
     delete process.env.KODAX_TOOL_OUTPUT_DIR;
     if (root) await fs.rm(root, { recursive: true, force: true });
   });
@@ -37,7 +38,12 @@ describe('session tool-output retention', () => {
     );
     process.env.KODAX_TOOL_OUTPUT_DIR = outputDir;
 
+    vi.useFakeTimers();
+    const timersBefore = vi.getTimerCount();
     createSessionManager({ sessionsDir });
+    expect(vi.getTimerCount()).toBe(timersBefore + 1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.useRealTimers();
 
     await vi.waitFor(async () => {
       await expect(fs.stat(referenced)).resolves.toBeDefined();

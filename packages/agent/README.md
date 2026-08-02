@@ -90,6 +90,18 @@ token reserve all participate in its evidence fingerprint. Qualified
 credential sentences are rejected before they can become model-visible memory
 evidence.
 
+The v0.7.79 candidate hardens Session-lineage reconciliation for upgraded
+v0.7.78 data: the first full reconciliation reuses the exact persisted active
+context, no-input reconciliation is idempotent, and an intentional same-content
+new query remains a distinct lineage entry. Durable-island recovery preserves
+parent-before-child order and compaction clone provenance.
+
+Windows process-tree cleanup now identity-checks observed roots and descendants
+and returns an indeterminate outcome when evidence is incomplete. Snapshot
+ancestry is not kernel containment, however; Issue 256 remains release-blocking
+until spawn-time Job Object assignment and Worker owner leasing can prove
+descendant closure after an intermediate parent exits.
+
 `DefaultSummaryCompaction` 是给自定义 Agent loop 使用的独立 primitive；它不替代、也不能关闭 KodaX coding runtime 在 FEATURE_272 中定义的始终开启大型压缩策略。
 
 ## Subpath 说明

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export type BootstrapResumeRoute =
@@ -30,6 +31,29 @@ export function isBareResumeRequest(args: readonly string[]): boolean {
   return args.length === 1 && (args[0] === '-r' || args[0] === '--resume');
 }
 
+export function isVersionRequest(args: readonly string[]): boolean {
+  return args.length === 1 && (args[0] === '-V' || args[0] === '--version');
+}
+
+function readBootstrapVersion(): string {
+  if (process.env.KODAX_VERSION) return process.env.KODAX_VERSION;
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    );
+    if (
+      typeof parsed === 'object'
+      && parsed !== null
+      && typeof (parsed as { readonly version?: unknown }).version === 'string'
+    ) {
+      return (parsed as { readonly version: string }).version;
+    }
+  } catch {
+    // Standalone builds inject KODAX_VERSION and may not ship package.json.
+  }
+  return '0.0.0';
+}
+
 export async function runKodaXBootstrap(options: KodaXBootstrapOptions = {}): Promise<void> {
   const argv = options.argv ?? process.argv;
   const stdin = options.stdin ?? process.stdin;
@@ -40,7 +64,12 @@ export async function runKodaXBootstrap(options: KodaXBootstrapOptions = {}): Pr
     cliModulePromise ??= loadCli();
     return cliModulePromise;
   };
-  if (isBareResumeRequest(argv.slice(2))) {
+  const args = argv.slice(2);
+  if (isVersionRequest(args)) {
+    process.stdout.write(`${readBootstrapVersion()}\n`);
+    return;
+  }
+  if (isBareResumeRequest(args)) {
     const route = await (await loadResume()).resolveBareResume({
       beforeSelect: async () => {
         await loadCliOnce();

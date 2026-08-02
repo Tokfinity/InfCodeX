@@ -257,6 +257,8 @@ export type KodaXWireReasoningEffort = string;
 export type KodaXReasoningPresetName =
   | 'zai-glm-5.2'
   | 'zai-glm-toggle'
+  | 'deepseek-v4-flash-openai'
+  | 'deepseek-v4-pro-openai'
   | 'deepseek-v4-openai'
   | 'deepseek-v4-anthropic'
   | 'deepseek-toggle'
@@ -550,6 +552,11 @@ export interface KodaXModelDescriptor {
   displayName?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
+  /**
+   * Per-model OpenAI Chat Completions field for the output-token limit.
+   * Defaults to the provider-level value, then `max_completion_tokens`.
+   */
+  maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   thinkingBudgetCap?: number;
   /** @deprecated Auto-migrated on load. Prefer `reasoning: { efforts, default }`. */
   reasoningCapability?: KodaXReasoningCapability;
@@ -584,6 +591,9 @@ export interface KodaXModelDescriptor {
 
 export type KodaXProtocolFamily = 'anthropic' | 'openai';
 export type KodaXProviderUserAgentMode = 'compat' | 'sdk';
+export type KodaXOpenAICompatMaxOutputTokensField =
+  | 'max_tokens'
+  | 'max_completion_tokens';
 
 /**
  * FEATURE_216 v0.7.45 — Strategy KodaX uses to verify a provider's API
@@ -698,6 +708,12 @@ export interface KodaXCustomProviderConfig {
   capabilityProfile?: KodaXProviderCapabilityProfile;
   contextWindow?: number;
   maxOutputTokens?: number;
+  /**
+   * OpenAI Chat Completions field used for the output-token limit. Set to
+   * `max_tokens` for DeepSeek-compatible endpoints. Defaults to
+   * `max_completion_tokens`; model descriptors may override it.
+   */
+  maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   thinkingBudgetCap?: number;
   /**
    * Opt in only when this exact endpoint is known to accept the protocol's
@@ -756,6 +772,8 @@ export interface KodaXProviderConfig {
   contextWindow?: number;
   /** Provider 允许的最大输出 token */
   maxOutputTokens?: number;
+  /** OpenAI Chat Completions output-token field; model descriptors override it. */
+  maxOutputTokensField?: KodaXOpenAICompatMaxOutputTokensField;
   /** Provider thinking budget 上限 */
   thinkingBudgetCap?: number;
   /** Whether this verified endpoint accepts the protocol cache-affinity field. */

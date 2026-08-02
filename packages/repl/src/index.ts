@@ -213,7 +213,11 @@ export type {
 } from "./common/integration-config.js";
 
 // === 会话存储 ===
-export { FileSessionStorage } from "./interactive/storage.js";
+export {
+  FileSessionStorage,
+  type PreparedSessionAppendBaseline,
+  type PreparedSessionTailDelta,
+} from "./interactive/storage.js";
 export { findMostRecentResumableSession } from "./session/resumable-session.js";
 export {
   dedupeSessions,

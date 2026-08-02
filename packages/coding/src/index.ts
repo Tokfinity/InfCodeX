@@ -1225,7 +1225,13 @@ export type {
 export { stripAssistantText } from './guardrails/auto-mode/transcript-strip.js';
 export type { StripOptions } from './guardrails/auto-mode/transcript-strip.js';
 export { parseClassifierOutput } from './guardrails/auto-mode/parse-output.js';
-export type { ClassifierDecision } from './guardrails/auto-mode/parse-output.js';
+export type {
+  ClassifierDecision,
+  ClassifierHazard,
+  ClassifierObservedProtocol,
+  ClassifierParseFailureCode,
+  ClassifierProtocol,
+} from './guardrails/auto-mode/parse-output.js';
 // Auto-mode denial counter (cumulative + consecutive block tally) — distinct
 // from the FEATURE_044/045 input-signature `DenialTracker` exported above.
 export {

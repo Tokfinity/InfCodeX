@@ -614,7 +614,7 @@ export function mergeArtifactLedger(
 ): KodaXSessionArtifactLedgerEntry[] {
   const merged = new Map<string, KodaXSessionArtifactLedgerEntry>();
 
-  for (const entry of [...existing, ...next]) {
+  const mergeEntry = (entry: KodaXSessionArtifactLedgerEntry): void => {
     const key = ledgerDedupKey(entry);
     const prior = merged.get(key);
     merged.set(key, {
@@ -628,6 +628,13 @@ export function mergeArtifactLedger(
       // and the enrichment would be lost — defeating the whole point.
       metadata: mergeLedgerMetadata(prior?.metadata, entry.metadata),
     });
+  };
+
+  for (const entry of existing) {
+    mergeEntry(entry);
+  }
+  for (const entry of next) {
+    mergeEntry(entry);
   }
 
   return Array.from(merged.values()).slice(-LEDGER_MAX_ENTRIES);

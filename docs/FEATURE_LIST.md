@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.77` (Git tag / GitHub Release / npm) |
-| Current package version | `@kodax-ai/kodax@0.7.78` development candidate (unpublished) |
+| Current released version | `v0.7.78` (Git tag / GitHub Release / npm) |
+| Current package version | `@kodax-ai/kodax@0.7.79` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `67` |
 | InProgress | `1` |
@@ -26,7 +26,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 47 | `281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `281` is engineering-complete for v0.7.79 development; `263`, `276`, and `277` are engineering-complete for the unpublished v0.7.78 candidate. v0.7.77 remains the current Git/GitHub/npm release. |
+| Completed | 47 | `281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `281` is engineering-complete for the unpublished v0.7.79 candidate; `263`, `276`, and `277` shipped in v0.7.78. v0.7.78 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 7 | `280, 278, 279, 282, 283, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -472,6 +472,16 @@
 > redesign is withdrawn as an architectural regression. Post-parity research
 > into Self-MoA, roles, structured evidence, blind aggregation, and learned
 > routing remains unplanned; no superiority claim is part of F105.
+>
+> **2026-08-01 F105 architecture contract approved**: the MoA implementation
+> belongs in `@kodax-ai/agent`, while `@kodax-ai/llm` adds only neutral
+> effective-target, prepare/rebase, and physical-call contracts. Existing Root
+> and managed loops prepare once before context compaction and rebase the same
+> guidance afterward; this is a Provider lifecycle hook, not a restored planner
+> stage. Cadence/result-cache state and an idempotent physical-call ledger are
+> keyed by stable logical context inside the session rather than Provider
+> instance lifetime. Local reference-result reuse and physical Provider
+> KV/prompt-cache usage are specified and measured as separate cache layers.
 
 ---
 
@@ -483,7 +493,34 @@
 
 ---
 
-## v0.7.78 Engineering-Complete Candidate Record
+## v0.7.79 Release Preparation Record
+
+The unpublished `@kodax-ai/kodax@0.7.79` candidate includes completed
+`FEATURE_281` plus the Runtime Session observation/export/diagnostic,
+event-coalescing, standalone child-process, lineage, shell cleanup, packaged
+sidecar, provider-compatibility, setup, and Windows ASRT fixes recorded in
+`CHANGELOG.md` and `KNOWN_ISSUES.md`.
+
+`FEATURE_280` remains `Planned` with target `v0.7.79`. It is not included in
+the completed candidate claims. Before tag/release, the owner must either
+complete its preregistered acceptance gates or explicitly reschedule it and
+update the v0.7.79 feature design, this tracker, changelog, and release
+checklist together.
+
+The same candidate contains a non-Feature release-hardening addendum. Issue 257
+delivers the evidence-checked ordinary-conversation projection without changing
+raw transcript audit semantics. Issue 256 remains an independent High release
+blocker: snapshot-based Windows ancestry cannot prove descendant closure after
+an intermediate parent exits, so spawn-time Job Object containment and a
+host-issued Worker owner lease are still required before tag readiness.
+
+The release checklist is [docs/release.md](release.md#v0779-release-preparation).
+The completed F281 human verification is
+[FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.78 Release Record
 
 `FEATURE_263` now implements the full evidence-gated background Skill Learning
 Loop: non-blocking durable review, immutable unified decisions, fenced
@@ -517,8 +554,8 @@ cleanup—share one lock plus revision recheck. Installed templates show the
 actual `KODAX_HOME`.
 Built-process tests cover help, real initialization, authoritative invalid
 configuration failure, mid-wizard EOF, and `--custom`; the suite is part of the
-normal system/CI gate. The full verification record remains with the feature
-until release. The human guide is
+normal system/CI gate. The full verification record remains with the feature.
+The human guide is
 [FEATURE_276_v0.7.78_TEST_GUIDE](test-guides/FEATURE_276_v0.7.78_TEST_GUIDE.md).
 
 `FEATURE_277` implements the v0.7.78 permission correction defined in its
@@ -531,17 +568,13 @@ guide are maintained in
 [FEATURE_277_v0.7.78_TEST_GUIDE](test-guides/FEATURE_277_v0.7.78_TEST_GUIDE.md);
 normal REPL history stays quiet and `/sandbox` is the explicit diagnostics entry.
 
-All three features are `Completed`: their implementation and feature-level
-acceptance evidence are complete. Publication is tracked independently at the
-version level. The previously missing current-policy release runners are now
-closed as Issue 235: F263 revision `f263-v0.7.78.2` and F277 revision
+All three features are `Completed` and shipped in v0.7.78 on 2026-07-29. The
+previously missing current-policy release runners were closed as Issue 235:
+F263 revision `f263-v0.7.78.2` and F277 revision
 `f277-v0.7.78.2` froze the initial exact production bytes, cases, routes, scorer,
-budgets, resumable raw output and blind-review packets. Their paid calls still
-require explicit owner authorization, and the final integrated regression
-matrix remains a release-candidate gate rather than a Feature lifecycle state.
-Automated evidence recorded in the feature documents predates the final
-concurrent-fix integration and must be rerun against the exact candidate SHA
-before release.
+budgets, resumable raw output and blind-review packets. Their paid calls
+required explicit owner authorization, and the final integrated regression
+matrix remained a version-level gate rather than a Feature lifecycle state.
 
 The authorized `f263-v0.7.78.2` pilot then exposed Issue 236 and stopped after
 four calls without panel expansion. The minimal production prompt/schema fix is
@@ -552,9 +585,9 @@ nine positive raw decisions selected `project_canary`. It also exposed Issue
 production prompt/tool schema omitted the validator's lowercase hyphenated-slug
 constraint. The strict validator and learning policy remain unchanged; the
 minimal protocol clarification is tracked by replacement revisions
-`f263-v0.7.78.4` and `f277-v0.7.78.4`. Both bind the corrected bytes to the same
-new exact release-candidate SHA before publication. These release-gate results
-do not roll completed Feature lifecycle records back into implementation
+`f263-v0.7.78.4` and `f277-v0.7.78.4`. Both bound the corrected bytes to the
+same exact release-candidate SHA before publication. These release-gate results
+did not roll completed Feature lifecycle records back into implementation
 status.
 
 ---
@@ -944,10 +977,10 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
-| `281` | Explicit A2A Network Authorization | `v0.7.79` development | [v0.7.79](features/v0.7.79.md#feature_281-explicit-a2a-network-authorization) | Adds independent persisted private-address and non-loopback plaintext-HTTP permissions across config, CLI discovery/call, Runtime reconciliation, registration fingerprints, and execution. Exact loopback HTTP remains implicit; all broader authority remains default deny. |
-| `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) | Engineering and feature-level acceptance are complete. Publication remains governed by the independent semantic-eval, integrated CI, binary, tag, and release-asset gates. |
-| `276` | Complete First-Run Setup and Split-Configuration Onboarding | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) | Engineering and feature-level acceptance are complete, including create-only split configuration, shared writer fencing, built-process setup coverage, and sandbox preparation guidance. |
-| `263` | Evidence-Gated Background Skill Learning Loop | `v0.7.78` candidate | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) | Engineering and feature-level acceptance are complete. The explicitly authorized paid semantic evaluation remains a release-candidate decision rather than a Feature lifecycle state. |
+| `281` | Explicit A2A Network Authorization | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_281-explicit-a2a-network-authorization) | Adds independent persisted private-address and non-loopback plaintext-HTTP permissions across config, CLI discovery/call, Runtime reconciliation, registration fingerprints, and execution. Exact loopback HTTP remains implicit; all broader authority remains default deny. |
+| `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) | Shipped after the independent semantic-eval, integrated CI, binary, tag, and release-asset gates completed. |
+| `276` | Complete First-Run Setup and Split-Configuration Onboarding | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_276-complete-first-run-setup-and-split-configuration-onboarding) | Shipped with create-only split configuration, shared writer fencing, built-process setup coverage, and sandbox preparation guidance. |
+| `263` | Evidence-Gated Background Skill Learning Loop | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_263-evidence-gated-background-skill-learning-loop) | Shipped with the explicitly authorized paid semantic evaluation recorded as version-level release evidence. |
 | `275` | Governed Event-Triggered Memory Intervention | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_275-governed-event-triggered-memory-intervention) | Sparse foreground intervention after tool failure, verification failure, or committed compaction; F228 remains the durable authority and semantic selection remains an explicit in-process host option. Frozen paid evaluation and blind review produced the joint `SHIP` decision. |
 | `274` | Pattern-Aware Adaptive AMA and Sidecar Quality Alignment | `v0.7.77` | [v0.7.77](features/v0.7.77.md#feature_274-pattern-aware-adaptive-ama-and-sidecar-quality-alignment) | One shared six-pattern catalog, optional validated `quality_strategy`, bounded fact-only `PatternTrace`, and the existing Sidecar as sole terminal-answer adjudicator. Frozen Layer 2/3 evaluation and blind review produced the joint `SHIP` decision. |
 | `273` | Mailbox-Driven Agent Wait + Telemetry/Control Separation | `v0.7.74` | [v0.7.74](features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation) | Model coordination waits only on scoped mailbox/user/interruption/timeout activity; progress remains SDK/UI telemetry. Safe-boundary synthetic delivery, post-transcript completion acknowledgement, explicit pending-delivery recovery, and child-turn queue deduplication provide one-shot completion evidence across restart. |

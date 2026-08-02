@@ -33,45 +33,401 @@ let cachedSystemTempDirectories: string[] | null = null;
 
 // ============== Pattern Parsing and Matching ==============
 
-/**
- * Check if a single bash command (no &&) is a safe read-only operation.
- * Used internally by isBashReadCommand for compound command validation.
- *
- * 检查单个 bash 命令（不含 &&）是否是安全的只读操作。
- * 供 isBashReadCommand 内部用于复合命令验证。
- *
- * @param command - single bash command string (no &&)
- * @returns true if the command is a safe read operation
- */
-function isSingleBashReadCommand(command: string): boolean {
-  if (!command || !command.trim()) {
+const SIMPLE_GIT_READ_SUBCOMMANDS = new Set([
+  'status', 'log', 'diff', 'show', 'ls-files', 'rev-parse', 'grep', 'describe',
+]);
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
+  '-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
+]);
+const GIT_GLOBAL_PATH_OPTIONS = new Set(['--git-dir', '--work-tree']);
+const GIT_GLOBAL_FLAGS = new Set([
+  '--bare', '--no-pager', '--no-replace-objects', '--literal-pathspecs',
+  '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+  '--no-optional-locks',
+]);
+const GIT_BRANCH_MUTATION_FLAGS = new Set([
+  '-d', '-D', '-m', '-M', '-c', '-C', '-f', '--delete', '--move', '--copy',
+  '--force', '--edit-description', '--set-upstream-to', '--unset-upstream',
+  '--create-reflog', '--track', '--no-track', '--recurse-submodules',
+]);
+const GIT_TAG_MUTATION_FLAGS = new Set([
+  '-a', '-s', '-u', '-d', '-f', '-m', '-F', '--annotate', '--sign',
+  '--local-user', '--delete', '--force', '--message', '--file', '--create-reflog',
+]);
+const GIT_READ_EXECUTION_FLAGS = new Set([
+  '--ext-diff', '--textconv', '--open-files-in-pager', '--output', '--ext-grep', '--help',
+]);
+const GIT_CONFIG_MUTATION_FLAGS = new Set([
+  '--add', '--replace-all', '--unset', '--unset-all', '--rename-section',
+  '--remove-section', '--edit', '-e',
+]);
+const GIT_CONFIG_READ_FLAGS = new Set([
+  '--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l',
+]);
+const GIT_CONFIG_WRITE_ACTIONS = new Set([
+  'set', 'unset', 'rename-section', 'remove-section', 'edit',
+]);
+
+function consumeGitGlobalOptions(
+  argv: readonly string[],
+  pathIndexes?: Set<number>,
+  pathValues?: Set<string>,
+): number | undefined {
+  let index = 1;
+  while (index < argv.length && argv[index]!.startsWith('-')) {
+    const token = argv[index]!;
+    const normalizedToken = token.toLowerCase();
+    // `-c` changes repository configuration and may activate external helpers.
+    // Keep the comparison case-sensitive because Git's benign `-C` option is
+    // a distinct global option.
+    if (token === '-c' || (token.startsWith('-c') && token.length > 2)
+      || normalizedToken === '--config-env'
+      || normalizedToken.startsWith('--config-env=')) return undefined;
+    const separatePathOption = token === '-C'
+      || GIT_GLOBAL_PATH_OPTIONS.has(normalizedToken);
+    if (separatePathOption) {
+      const value = argv[index + 1];
+      if (!value) return undefined;
+      pathIndexes?.add(index + 1);
+      pathValues?.add(value);
+      index += 2;
+      continue;
+    }
+    const longPathOption = [...GIT_GLOBAL_PATH_OPTIONS]
+      .find((option) => normalizedToken.startsWith(`${option}=`));
+    const attachedPathValue = longPathOption
+      ? token.slice(longPathOption.length + 1)
+      : token.startsWith('-C') && token.length > 2
+        ? token.slice(2)
+        : undefined;
+    if (attachedPathValue !== undefined) {
+      if (!attachedPathValue) return undefined;
+      pathIndexes?.add(index);
+      pathValues?.add(attachedPathValue);
+      index += 1;
+      continue;
+    }
+    if (GIT_GLOBAL_FLAGS.has(normalizedToken)) {
+      index += 1;
+      continue;
+    }
+    if (GIT_GLOBAL_OPTIONS_WITH_VALUE.has(token)
+      || GIT_GLOBAL_OPTIONS_WITH_VALUE.has(normalizedToken)) {
+      if (argv[index + 1] === undefined) return undefined;
+      index += 2;
+      continue;
+    }
+    if ([...GIT_GLOBAL_OPTIONS_WITH_VALUE].some((option) => (
+      token.startsWith(`${option}=`) || normalizedToken.startsWith(`${option}=`)
+    ))
+      || (token.startsWith('-C') && token.length > 2)) {
+      index += 1;
+      continue;
+    }
+    return undefined;
+  }
+  return index;
+}
+
+/** Return the subcommand position after validated Git global options. */
+export function findGitSubcommandIndex(argv: readonly string[]): number | undefined {
+  return consumeGitGlobalOptions(argv);
+}
+
+function hasGitMutationArguments(
+  args: readonly string[],
+  mutationFlags: ReadonlySet<string>,
+): boolean {
+  return args.some((token) => mutationFlags.has(token)
+    || [...mutationFlags].some((flag) => (
+      (flag.startsWith('--') && token.startsWith(`${flag}=`))
+      || (flag.startsWith('-') && !flag.startsWith('--') && token.startsWith(flag)
+        && token.length > flag.length)
+    )))
+    || args.some((token) => !token.startsWith('-'));
+}
+
+export interface GitGrepShortOption {
+  readonly pager: boolean;
+  readonly valueKind?: 'pattern' | 'pattern-file' | 'other';
+  readonly attachedValue?: string;
+  readonly consumesNext: boolean;
+}
+
+/** Parse Git grep's clusterable short options until an option consumes the remainder. */
+export function parseGitGrepShortOption(token: string): GitGrepShortOption {
+  if (!token.startsWith('-') || token.startsWith('--') || token.length < 2) {
+    return { pager: false, consumesNext: false };
+  }
+  for (let index = 1; index < token.length; index += 1) {
+    const option = token[index]!;
+    if (option === 'O') return { pager: true, consumesNext: false };
+    const valueKind = option === 'e'
+      ? 'pattern'
+      : option === 'f'
+        ? 'pattern-file'
+        : 'mABC'.includes(option)
+          ? 'other'
+          : undefined;
+    if (valueKind) {
+      const attachedValue = token.slice(index + 1) || undefined;
+      return {
+        pager: false,
+        valueKind,
+        attachedValue,
+        consumesNext: attachedValue === undefined,
+      };
+    }
+  }
+  return { pager: false, consumesNext: false };
+}
+
+function hasGitGrepPagerOption(args: readonly string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (token === '--') return false;
+    if (token === '--regexp' || token === '--file') {
+      index += 1;
+      continue;
+    }
+    const parsed = parseGitGrepShortOption(token);
+    if (parsed.pager) return true;
+    if (parsed.consumesNext) index += 1;
+  }
+  return false;
+}
+
+function isGitReadCommand(argv: readonly string[]): boolean {
+  const subcommandIndex = findGitSubcommandIndex(argv);
+  if (subcommandIndex === undefined) return false;
+  const rawSubcommand = argv[subcommandIndex];
+  if (!rawSubcommand) return false;
+  const subcommand = rawSubcommand.toLowerCase();
+  const args = argv.slice(subcommandIndex + 1);
+  const normalizedArgs = args.map((token) => token.toLowerCase());
+  const optionBoundary = normalizedArgs.indexOf('--');
+  const optionArgs = optionBoundary < 0 ? normalizedArgs : normalizedArgs.slice(0, optionBoundary);
+  if (optionArgs.some((token) => GIT_READ_EXECUTION_FLAGS.has(token)
+    || [...GIT_READ_EXECUTION_FLAGS].some((flag) => token.startsWith(`${flag}=`)))
+    || (subcommand === 'grep' && hasGitGrepPagerOption(args))) {
     return false;
   }
-  
-  // Normalize spaces for simpler matching (e.g., "git  status" -> "git status")
-  const normalizedCommand = command.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (SIMPLE_GIT_READ_SUBCOMMANDS.has(subcommand)) return true;
+  if (subcommand === 'stash') {
+    return normalizedArgs[0] === 'list' || normalizedArgs[0] === 'show';
+  }
+  if (subcommand === 'config') {
+    const action = normalizedArgs[0];
+    if (GIT_CONFIG_WRITE_ACTIONS.has(action ?? '')) return false;
+    const readMode = action === 'get' || action === 'list'
+      || normalizedArgs.some((token) => GIT_CONFIG_READ_FLAGS.has(token));
+    return readMode && !normalizedArgs.some((token) => GIT_CONFIG_MUTATION_FLAGS.has(token));
+  }
+  if (subcommand === 'branch') {
+    const explicitlyLists = normalizedArgs.some((token) => [
+      '--list', '-l', '--contains', '--no-contains', '--merged', '--no-merged',
+      '--points-at', '--show-current', '--all', '-a', '--remotes', '-r',
+    ].includes(token) || [
+      '--list=', '--contains=', '--no-contains=', '--merged=', '--no-merged=',
+      '--points-at=',
+    ].some((prefix) => token.startsWith(prefix)));
+    const hasPositional = args.some((token) => !token.startsWith('-'));
+    return !hasGitMutationArguments(
+      args.filter((token) => token.startsWith('-')),
+      GIT_BRANCH_MUTATION_FLAGS,
+    ) && (!hasPositional || explicitlyLists);
+  }
+  if (subcommand === 'tag') {
+    const verifiesTags = normalizedArgs.includes('-v') || normalizedArgs.includes('--verify');
+    const listsTags = verifiesTags || args.length === 0
+      || normalizedArgs.every((token) => token.startsWith('-'))
+      || normalizedArgs.includes('-l') || normalizedArgs.includes('--list');
+    return listsTags && !hasGitMutationArguments(
+      args.filter((token) => token.startsWith('-')),
+      GIT_TAG_MUTATION_FLAGS,
+    );
+  }
+  if (subcommand === 'remote') {
+    const action = normalizedArgs.find((token) => !token.startsWith('-'));
+    if (action === undefined || action === 'get-url') return true;
+    if (action !== 'show') return false;
+    return normalizedArgs.includes('-n') || normalizedArgs.includes('--no-query');
+  }
+  return false;
+}
+
+const SENSITIVE_ENVIRONMENT_NAME = /(?:^|_)(?:api_?key|access_?key|secret|token|password|passwd|credential|private_?key|auth|cookie)(?:_|$)/i;
+const POWERSHELL_COMPARISON_OPERATORS = new Set([
+  '-eq', '-ne', '-gt', '-ge', '-lt', '-le', '-like', '-notlike',
+  '-match', '-notmatch', '-contains', '-notcontains', '-in', '-notin',
+]);
+
+function isSafePowerShellLiteral(value: string): boolean {
+  return value.length > 0
+    && !/[${};&|<>`]/.test(value)
+    && !value.includes('$(');
+}
+
+function isSafePowerShellEnvironmentRead(argv: readonly string[]): boolean {
+  const match = /^\$env:([a-z_][a-z0-9_]*)$/i.exec(argv[0] ?? '');
+  if (!match || SENSITIVE_ENVIRONMENT_NAME.test(match[1]!)) return false;
+  if (argv.length === 1) return true;
+  return argv.length === 3
+    && ['-split', '-like', '-notlike', '-match', '-notmatch'].includes(
+      argv[1]?.toLowerCase() ?? '',
+    )
+    && (argv[2]?.length ?? 0) > 0
+    && !/[{}&|<>`]/.test(argv[2] ?? '')
+    && !(argv[2] ?? '').includes('$(');
+}
+
+function isSafeWhereObjectRead(argv: readonly string[]): boolean {
+  const args = argv.slice(1);
+  const expression = args[0] === '{' && args.at(-1) === '}'
+    ? args.slice(1, -1)
+    : args;
+  if (expression.length !== 3) return false;
+  const [left, operator, right] = expression;
+  // shell-quote normalizes PowerShell's `$_.Name` token to `$_Name`. Accept
+  // that parser spelling as well as the literal PowerShell spelling.
+  return /^\$_(?:(?:\.)?[a-z_][a-z0-9_]*)?$/i.test(left ?? '')
+    && POWERSHELL_COMPARISON_OPERATORS.has(operator?.toLowerCase() ?? '')
+    && isSafePowerShellLiteral(right ?? '');
+}
+
+function isSafeSelectObjectRead(argv: readonly string[]): boolean {
+  const switches = new Set(['-unique', '-wait']);
+  const numericOptions = new Set(['-first', '-last', '-skip', '-index']);
+  const propertyOptions = new Set(['-property', '-expandproperty']);
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    const normalized = token.toLowerCase();
+    if (switches.has(normalized)) continue;
+    if (numericOptions.has(normalized)) {
+      if (!/^\d+(?:,\d+)*$/.test(argv[++index] ?? '')) return false;
+      continue;
+    }
+    if (propertyOptions.has(normalized)) {
+      if (!/^(?:\*|[a-z_][a-z0-9_]*)(?:,(?:\*|[a-z_][a-z0-9_]*))*$/i.test(
+        argv[++index] ?? '',
+      )) return false;
+      continue;
+    }
+    if (!/^(?:\*|[a-z_][a-z0-9_]*)(?:,(?:\*|[a-z_][a-z0-9_]*))*$/i.test(token)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isSafeRipgrepRead(argv: readonly string[]): boolean {
+  return !argv.slice(1).some((token) => (
+    /^--pre(?:=|$)/i.test(token) || /^--hostname-bin(?:=|$)/i.test(token)
+  ));
+}
+
+const EFFECTFUL_FIND_ACTION = /^(?:-delete|-exec|-execdir|-ok|-okdir|-fprint|-fprint0|-fprintf|-fls)$/i;
+
+function isSafeFindRead(argv: readonly string[]): boolean {
+  return !argv.slice(1).some((token) => EFFECTFUL_FIND_ACTION.test(token));
+}
+
+const LESS_SHORT_VALUE_OPTIONS = new Set(['b', 'h', 'j', 'k', 'p', 'P', 't', 'T', 'x', 'y', 'z']);
+const TREE_SHORT_VALUE_OPTIONS = new Set(['H', 'I', 'L', 'P', 'T']);
+const LESS_OUTPUT_OPTIONS = new Set(['o', 'O']);
+const TREE_OUTPUT_OPTIONS = new Set(['o']);
+const TREE_LONG_VALUE_OPTIONS = new Set([
+  '--charset', '--filelimit', '--output', '--sort', '--timefmt',
+]);
+
+function longOptionCouldMatch(token: string, fullName: string): boolean {
+  const separator = token.indexOf('=');
+  const option = (separator >= 0 ? token.slice(0, separator) : token).toLowerCase();
+  return option.startsWith('--') && option.length >= 3 && fullName.startsWith(option);
+}
+
+function shortOptionClusterContains(
+  token: string,
+  targets: ReadonlySet<string>,
+  valueOptions: ReadonlySet<string>,
+): boolean {
+  if (!/^-[^-]/.test(token)) return false;
+  for (const option of token.slice(1)) {
+    if (targets.has(option)) return true;
+    if (valueOptions.has(option)) return false;
+  }
+  return false;
+}
+
+function isSafeLessRead(argv: readonly string[]): boolean {
+  return !argv.slice(1).some((token) => (
+    shortOptionClusterContains(token, LESS_OUTPUT_OPTIONS, LESS_SHORT_VALUE_OPTIONS)
+    || longOptionCouldMatch(token, '--log-file')
+  ));
+}
+
+function isSafeTreeRead(argv: readonly string[]): boolean {
+  return !argv.slice(1).some((token) => (
+    shortOptionClusterContains(token, TREE_OUTPUT_OPTIONS, TREE_SHORT_VALUE_OPTIONS)
+    || longOptionCouldMatch(token, '--output')
+  ));
+}
+
+function isSafeDateRead(argv: readonly string[]): boolean {
+  const args = argv.slice(1);
+  if (args.length === 0) return true;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index] ?? '';
+    const lower = token.toLowerCase();
+    if (lower === '/t' || lower === '--help' || lower === '--version'
+      || token.startsWith('+')) continue;
+    if (lower === '-s' || lower === '--set' || lower.startsWith('--set=')) return false;
+    if (['-d', '--date', '-r', '--reference'].includes(lower)) {
+      if (args[++index] === undefined) return false;
+      continue;
+    }
+    if (/^--(?:date|reference)=/i.test(token)) continue;
+    if (/^(?:-u|--utc|--universal|-R|--rfc-email|--resolution|--debug)$/i.test(token)
+      || /^--(?:iso-8601|rfc-3339)(?:=|$)/i.test(token)) continue;
+    return false;
+  }
+  return true;
+}
+
+function isBareShellExecutable(value: string): boolean {
+  return value.length > 0 && !/[\\/]/.test(value);
+}
+
+/** Validate one already-tokenized shell pipeline stage as read-only. */
+export function isShellReadOnlyArgv(argv: readonly string[]): boolean {
+  if (argv.length === 0) {
+    return false;
+  }
+  if (!isBareShellExecutable(argv[0] ?? '')) return false;
+  if (isSafePowerShellEnvironmentRead(argv)) return true;
+  const rawExecutable = (argv[0] ?? '').toLowerCase();
+  const executable = commandBasename(argv[0] ?? '');
+  if (rawExecutable === 'where.exe') return true;
+  if (executable === 'where-object' || rawExecutable === 'where' || rawExecutable === '?') {
+    return isSafeWhereObjectRead(['where-object', ...argv.slice(1)]);
+  }
+  if (executable === 'select-object') return isSafeSelectObjectRead(argv);
+  if (executable === 'rg' || executable === 'ripgrep') return isSafeRipgrepRead(argv);
+  if (executable === 'find') return isSafeFindRead(argv);
+  // less may execute LESSOPEN/LESSCLOSE preprocessors inherited from the
+  // environment, so syntax alone cannot prove that it is a pure file read.
+  if (executable === 'less') return false;
+  if (executable === 'tree') return isSafeTreeRead(argv);
+  if (executable === 'date') return isSafeDateRead(argv);
+
+  const normalizedArgv = [executable, ...argv.slice(1).map((token) => token.toLowerCase())];
+  const normalizedCommand = normalizedArgv.join(' ');
+  if (executable === 'git') return isGitReadCommand([executable, ...argv.slice(1)]);
 
   // 1. Base command validation: Must start with a whitelisted command
   // e.g. "git status -s" starts with "git status"
   for (const safeCmd of BASH_SAFE_READ_COMMANDS) {
     if (normalizedCommand === safeCmd || normalizedCommand.startsWith(safeCmd + ' ')) {
-      // Additional safety checks for specific tools
-      if (safeCmd === 'sed') {
-        const parts = normalizedCommand.split(/\s+/);
-        // Catch -i, -i.bak, -i'', etc.
-        if (parts.some(p => p.startsWith('-i') || p === '--in-place')) {
-          return false; // Modifies file in-place
-        }
-      }
-
-      if (safeCmd === 'awk') {
-        const parts = normalizedCommand.split(/\s+/);
-        // Block script execution from file which might have side effects
-        if (parts.includes('-f') || parts.includes('--file')) {
-          return false;
-        }
-      }
-
       // Block arbitrary code execution for language tools (version/info only)
       const languageTools = ['node', 'npm', 'yarn', 'pnpm', 'tsc', 'python', 'pip', 'go', 'cargo', 'rustc', 'ruby', 'perl'];
       if (languageTools.includes(safeCmd)) {
@@ -166,8 +522,8 @@ export function isHelpCommand(command: string): boolean {
  *     substitution `$(...)`, backticks, bare `&`, etc.) — fail-closed to
  *     `false` so unmodeled syntax always falls through to confirmation.
  *
- * Per-stage syntactic checks (`isSingleBashReadCommand`) are unchanged —
- * the AST migration only replaces the splitting + null-device-strip layer.
+ * Per-stage syntactic checks use `isShellReadOnlyArgv` so quoted tokens do not
+ * need to be joined and parsed a second time.
  *
  * @param command - bash command string
  * @returns true if the command is a safe read operation
@@ -175,14 +531,6 @@ export function isHelpCommand(command: string): boolean {
 export function isBashReadCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
-  }
-
-  // FEATURE_154: universal `--help` fast-path. `* --help` is unconditionally
-  // safe — programs print help and exit. Skipping the rest of the parser
-  // (and, in auto mode, the LLM classifier) saves a Haiku/main-model call
-  // per help invocation. See isHelpCommand for the strict admission rules.
-  if (isHelpCommand(command)) {
-    return true;
   }
 
   // FEATURE_152: AST parse. Line continuations (`\<newline>`) are not
@@ -198,9 +546,12 @@ export function isBashReadCommand(command: string): boolean {
     || (tree.statements[0]?.stages.length ?? 0) > 1;
 
   for (const stmt of tree.statements) {
-    // Only allow null (first stmt) or `&&` between statements. `||` and `;`
-    // were rejected by the pre-AST `baseIllegalSyntax` regex; preserved here.
-    if (stmt.precedingOp !== null && stmt.precedingOp !== '&&') {
+    // Sequential PowerShell inspection commonly uses `;`. It is safe only
+    // because every resulting statement and pipeline stage is independently
+    // validated below. Keep `||` rejected because its shell semantics vary.
+    if (stmt.precedingOp !== null
+      && stmt.precedingOp !== '&&'
+      && stmt.precedingOp !== ';') {
       return false;
     }
 
@@ -212,13 +563,13 @@ export function isBashReadCommand(command: string): boolean {
       //     target is a null device. fd-redirect to null discards output;
       //     this is the Issue 129 carve-out, now expressed structurally.
       for (const redir of stage.redirections) {
+        if (redir.descriptorDuplication) continue;
         if (redir.input) return false;
         if (!isNullDevice(redir.target)) return false;
       }
 
-      // Stage commands run through `isSingleBashReadCommand` exactly as
-      // before — argv joined back into a string preserves the existing
-      // tokenizer's expectations (e.g. `git status -s` → starts-with-match).
+      // Stage commands run through the token-preserving validator below; the
+      // string is retained only for the empty-stage guard.
       const stageStr = stage.argv.join(' ');
       if (!stageStr) continue;
 
@@ -228,7 +579,7 @@ export function isBashReadCommand(command: string): boolean {
         continue;
       }
 
-      if (!isSingleBashReadCommand(stageStr)) {
+      if (!isShellReadOnlyArgv(stage.argv)) {
         return false;
       }
     }
@@ -371,6 +722,7 @@ function isBashWriteCommandAtDepth(command: string, depth: number): boolean {
 
       // Rule 3: non-input redirect to a real (non-null-device) target
       for (const redir of stage.redirections) {
+        if (redir.descriptorDuplication) continue;
         if (redir.input) continue;
         if (!isNullDevice(redir.target)) return true;
       }
@@ -640,6 +992,10 @@ function looksLikePath(token: string): boolean {
   if (token.startsWith('~/') || token.startsWith('~\\')) return true;
   // Windows drive-letter absolute (`C:\foo`)
   if (/^[a-zA-Z]:[/\\]/.test(token)) return true;
+  // UNC, extended UNC, and Windows device namespaces. These are path-like
+  // even though they do not have a drive letter; the permission analyzer
+  // decides separately whether they are safe to access.
+  if (/^\\\\/.test(token)) return true;
   // POSIX absolute (`/foo/bar`) — but on Windows, exclude single-letter
   // cmd.exe flag tokens like `findstr /R "v[0-9]"`, `dir /B`, `xcopy /Y`,
   // `where /R`, `fc /B`, `robocopy /MIR`. On Windows these `/X` tokens
@@ -694,6 +1050,7 @@ const REGEX_SOURCE_COMMANDS: ReadonlySet<string> = new Set([
   'fgrep',
   'findstr',
   'select-string',
+  'sls',
   'sed',
   'awk',
 ]);
@@ -733,6 +1090,43 @@ const REGEX_PATH_VALUE_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
   fgrep: new Set(['--exclude-from']),
   'select-string': new Set(['-path', '-literalpath']),
 };
+const POWERSHELL_SELECT_STRING_PARAMETERS = [
+  'path', 'literalpath', 'include', 'exclude', 'pattern', 'simplematch',
+  'casesensitive', 'quiet', 'list', 'allmatches', 'notmatch', 'encoding',
+  'context', 'raw', 'culture', 'inputobject', 'noemphasis',
+  'verbose', 'debug', 'erroraction', 'warningaction', 'informationaction',
+  'errorvariable', 'warningvariable', 'informationvariable', 'outvariable',
+  'outbuffer', 'pipelinevariable', 'progressaction',
+] as const;
+const POWERSHELL_SELECT_STRING_SWITCHES = new Set([
+  'simplematch', 'casesensitive', 'quiet', 'list', 'allmatches', 'notmatch',
+  'raw', 'noemphasis', 'verbose', 'debug',
+]);
+const POWERSHELL_SELECT_STRING_PARAMETER_ALIASES: Readonly<Record<string, string>> = {
+  pspath: 'literalpath',
+  vb: 'verbose',
+  db: 'debug',
+  ea: 'erroraction',
+  wa: 'warningaction',
+  infa: 'informationaction',
+  ev: 'errorvariable',
+  wv: 'warningvariable',
+  iv: 'informationvariable',
+  ov: 'outvariable',
+  ob: 'outbuffer',
+  pv: 'pipelinevariable',
+};
+const GIT_CONFIG_PATH_VALUE_FLAGS = new Set(['-f', '--file', '--blob']);
+const GIT_READ_NON_PATH_VALUE_OPTIONS = new Set([
+  '-g', '-s', '--format', '--pretty', '--date', '--encoding', '--diff-algorithm',
+  '--word-diff-regex', '--diff-filter', '--find-object', '--line-prefix',
+  '--src-prefix', '--dst-prefix', '--grep', '--author', '--committer', '--since',
+  '--after', '--until', '--before', '--max-count', '-n', '--skip',
+  '--min-parents', '--max-parents', '--inter-hunk-context', '--anchored',
+]);
+const GIT_GREP_NON_PATH_VALUE_OPTIONS = new Set([
+  '--max-count', '--after-context', '--before-context', '--context', '--threads',
+]);
 
 function commandBasename(value: string): string {
   const normalized = value.replace(/\\/g, '/');
@@ -763,6 +1157,21 @@ function addIndexedValue(
   if (value === undefined) return;
   indexes.add(index);
   values?.add(value);
+}
+
+function addGitPathCandidate(
+  argv: readonly string[],
+  index: number,
+  roles: CommandArgumentRoles,
+): void {
+  const value = argv[index];
+  if (!value) return;
+  const environmentPath = /^%[A-Za-z_][A-Za-z0-9_]*%[/\\]/.test(value)
+    || /^\$(?:env:)?(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)[/\\]/i.test(value);
+  const shellPathExpansion = /[*?[\]]/.test(value) || /\{[^{}]*,[^{}]*\}/.test(value);
+  if (looksLikePath(value) || environmentPath || shellPathExpansion) {
+    addIndexedValue(argv, index, roles.pathIndexes, roles.pathValues);
+  }
 }
 
 function attachedOptionValue(token: string, flag: string): string | undefined {
@@ -824,8 +1233,167 @@ function collectFlagValueRoles(
   }
 }
 
+function collectGitGrepArgumentRoles(
+  argv: readonly string[],
+  subcommandIndex: number,
+  roles: CommandArgumentRoles,
+): void {
+  let patternSeen = false;
+  let optionsEnded = false;
+  for (let index = subcommandIndex + 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    const lower = token.toLowerCase();
+    if (!optionsEnded && lower === '--file') {
+      addIndexedValue(argv, index + 1, roles.pathIndexes, roles.pathValues);
+      patternSeen = true;
+      index += 1;
+      continue;
+    }
+    if (!optionsEnded && lower.startsWith('--file=')) {
+      roles.pathIndexes.add(index);
+      roles.pathValues.add(token.slice(token.indexOf('=') + 1));
+      patternSeen = true;
+      continue;
+    }
+    if (!optionsEnded && (lower === '--regexp' || lower === '-e')) {
+      addIndexedValue(argv, index + 1, roles.sourceIndexes);
+      patternSeen = true;
+      index += 1;
+      continue;
+    }
+    if (!optionsEnded && lower.startsWith('--regexp=')) {
+      roles.sourceIndexes.add(index);
+      patternSeen = true;
+      continue;
+    }
+    if (!optionsEnded && GIT_GREP_NON_PATH_VALUE_OPTIONS.has(lower)) {
+      addIndexedValue(argv, index + 1, roles.sourceIndexes);
+      index += 1;
+      continue;
+    }
+    if (!optionsEnded) {
+      const shortOption = parseGitGrepShortOption(token);
+      if (shortOption.valueKind === 'pattern-file') {
+        if (shortOption.attachedValue !== undefined) {
+          roles.pathIndexes.add(index);
+          roles.pathValues.add(shortOption.attachedValue);
+        } else {
+          addIndexedValue(argv, index + 1, roles.pathIndexes, roles.pathValues);
+          index += 1;
+        }
+        patternSeen = true;
+        continue;
+      }
+      if (shortOption.valueKind === 'pattern') {
+        if (shortOption.attachedValue !== undefined) roles.sourceIndexes.add(index);
+        else {
+          addIndexedValue(argv, index + 1, roles.sourceIndexes);
+          index += 1;
+        }
+        patternSeen = true;
+        continue;
+      }
+      if (shortOption.valueKind === 'other') {
+        if (shortOption.consumesNext) {
+          addIndexedValue(argv, index + 1, roles.sourceIndexes);
+          index += 1;
+        }
+        continue;
+      }
+      if (token.startsWith('-')) continue;
+    }
+    if (!patternSeen) {
+      roles.sourceIndexes.add(index);
+      patternSeen = true;
+      continue;
+    }
+    addGitPathCandidate(argv, index, roles);
+  }
+}
+
+function collectGitReadPathRoles(
+  argv: readonly string[],
+  subcommandIndex: number,
+  roles: CommandArgumentRoles,
+): void {
+  let pathsOnly = false;
+  for (let index = subcommandIndex + 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (token === '--') {
+      pathsOnly = true;
+      continue;
+    }
+    if (!pathsOnly && GIT_READ_NON_PATH_VALUE_OPTIONS.has(token.toLowerCase())) {
+      addIndexedValue(argv, index + 1, roles.sourceIndexes);
+      index += 1;
+      continue;
+    }
+    if (!pathsOnly && token.startsWith('-')) continue;
+    addGitPathCandidate(argv, index, roles);
+  }
+}
+
+function resolvePowerShellSelectStringParameter(token: string): {
+  readonly name: string;
+  readonly attachedValue?: string;
+} | undefined {
+  const match = /^-([^:]+)(?::(.*))?$/s.exec(token);
+  if (!match) return undefined;
+  const prefix = match[1]?.toLowerCase() ?? '';
+  const alias = POWERSHELL_SELECT_STRING_PARAMETER_ALIASES[prefix];
+  const candidates = alias
+    ? [alias]
+    : POWERSHELL_SELECT_STRING_PARAMETERS.filter((name) => name.startsWith(prefix));
+  if (candidates.length !== 1) return undefined;
+  return {
+    name: candidates[0]!,
+    ...(match[2] !== undefined ? { attachedValue: match[2] } : {}),
+  };
+}
+
+function collectPowerShellSelectStringArgumentRoles(
+  argv: readonly string[],
+  roles: CommandArgumentRoles,
+): void {
+  let patternBound = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    const parameter = resolvePowerShellSelectStringParameter(token);
+    if (parameter) {
+      if (POWERSHELL_SELECT_STRING_SWITCHES.has(parameter.name)) continue;
+      const valueIndex = parameter.attachedValue === undefined ? index + 1 : index;
+      const value = parameter.attachedValue ?? argv[valueIndex];
+      if (value === undefined) continue;
+      if (parameter.name === 'path' || parameter.name === 'literalpath') {
+        roles.pathIndexes.add(valueIndex);
+        roles.pathValues.add(value);
+      } else {
+        roles.sourceIndexes.add(valueIndex);
+      }
+      if (parameter.name === 'pattern') patternBound = true;
+      if (parameter.attachedValue === undefined) index += 1;
+      continue;
+    }
+    if (token.startsWith('-')) continue;
+    if (!patternBound) {
+      roles.sourceIndexes.add(index);
+      patternBound = true;
+      continue;
+    }
+    addIndexedValue(argv, index, roles.pathIndexes, roles.pathValues);
+  }
+}
+
 function collectRegexArgumentRoles(argv: readonly string[], roles: CommandArgumentRoles): void {
   const command = commandBasename(argv[0] ?? '');
+  if (command === 'select-string' || command === 'sls') {
+    collectPowerShellSelectStringArgumentRoles(argv, roles);
+    return;
+  }
   collectFlagValueRoles(
     argv,
     REGEX_SOURCE_VALUE_FLAGS[command],
@@ -842,6 +1410,11 @@ function collectRegexArgumentRoles(argv: readonly string[], roles: CommandArgume
     const token = argv[index] ?? '';
     if (token === '--') break;
     const lower = token.toLowerCase();
+    if (command === 'findstr' && lower.startsWith('/f:')) {
+      roles.pathIndexes.add(index);
+      roles.pathValues.add(token.slice(3));
+      continue;
+    }
     if (command === 'findstr' && lower.startsWith('/c:')) {
       roles.sourceIndexes.add(index);
       hasExplicitPattern = true;
@@ -912,14 +1485,95 @@ function collectRegexArgumentRoles(argv: readonly string[], roles: CommandArgume
   }
 }
 
+function collectTreeFileListRoles(
+  argv: readonly string[],
+  roles: CommandArgumentRoles,
+): void {
+  const fromFileMode = argv.slice(1).some((token) => /^--from(?:tab)?file(?:=|$)/i.test(token));
+  if (!fromFileMode) return;
+  let optionsEnded = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    const attachedInput = /^--from(?:tab)?file=(.*)$/i.exec(token)?.[1];
+    if (attachedInput !== undefined) {
+      roles.pathIndexes.add(index);
+      if (attachedInput) roles.pathValues.add(attachedInput);
+      continue;
+    }
+    if (/^--from(?:tab)?file$/i.test(token) || token === '--') {
+      roles.sourceIndexes.add(index);
+      if (token === '--') optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && /^-[^-]/.test(token)) {
+      const body = token.slice(1);
+      const valueIndex = [...body].findIndex((option) => (
+        TREE_SHORT_VALUE_OPTIONS.has(option) || TREE_OUTPUT_OPTIONS.has(option)
+      ));
+      roles.sourceIndexes.add(index);
+      if (valueIndex >= 0 && body.slice(valueIndex + 1).length === 0) {
+        const output = TREE_OUTPUT_OPTIONS.has(body[valueIndex] ?? '');
+        addIndexedValue(
+          argv,
+          index + 1,
+          output ? roles.pathIndexes : roles.sourceIndexes,
+          output ? roles.pathValues : undefined,
+        );
+        index += 1;
+      }
+      continue;
+    }
+    if (!optionsEnded && token.startsWith('--')) {
+      const option = token.split('=', 1)[0]?.toLowerCase() ?? '';
+      roles.sourceIndexes.add(index);
+      if (TREE_LONG_VALUE_OPTIONS.has(option) && !token.includes('=')) {
+        const output = option === '--output';
+        addIndexedValue(
+          argv,
+          index + 1,
+          output ? roles.pathIndexes : roles.sourceIndexes,
+          output ? roles.pathValues : undefined,
+        );
+        index += 1;
+      }
+      continue;
+    }
+    addIndexedValue(argv, index, roles.pathIndexes, roles.pathValues);
+  }
+}
+
 function collectCommandArgumentRoles(argv: readonly string[]): CommandArgumentRoles {
   const roles = createCommandArgumentRoles();
   const command = commandBasename(argv[0] ?? '');
+  if (command === 'git') {
+    const subcommandIndex = consumeGitGlobalOptions(
+      argv,
+      roles.pathIndexes,
+      roles.pathValues,
+    );
+    const subcommand = subcommandIndex === undefined
+      ? undefined
+      : argv[subcommandIndex]?.toLowerCase();
+    if (subcommandIndex !== undefined && subcommand === 'grep') {
+      collectGitGrepArgumentRoles(argv, subcommandIndex, roles);
+    } else if (subcommandIndex !== undefined
+      && (subcommand === 'diff' || subcommand === 'log' || subcommand === 'show')) {
+      collectGitReadPathRoles(argv, subcommandIndex, roles);
+    } else if (subcommand === 'config') {
+      collectFlagValueRoles(
+        argv,
+        GIT_CONFIG_PATH_VALUE_FLAGS,
+        roles.pathIndexes,
+        roles.pathValues,
+      );
+    }
+  }
   const scriptFlags = /^python(?:\d+(?:\.\d+)*)?$/.test(command)
     ? INLINE_SCRIPT_FLAGS.python
     : INLINE_SCRIPT_FLAGS[command];
   if (scriptFlags) collectScriptSourceRoles(argv, scriptFlags, roles);
   if (REGEX_SOURCE_COMMANDS.has(command)) collectRegexArgumentRoles(argv, roles);
+  if (command === 'tree') collectTreeFileListRoles(argv, roles);
   return roles;
 }
 
@@ -936,13 +1590,13 @@ function collectCommandArgumentRoles(argv: readonly string[]): CommandArgumentRo
  * layered ON TOP of the AST argv pass. Tokens recognised by both are
  * de-duped at the `Set` level by the caller.
  */
-interface RawCommandWord {
+export interface RawCommandWord {
   readonly value: string;
   readonly start: number;
   readonly end: number;
 }
 
-function tokenizeRawCommandStages(command: string): readonly RawCommandWord[][] {
+export function tokenizeRawCommandStages(command: string): readonly RawCommandWord[][] {
   const stages: RawCommandWord[][] = [];
   let words: RawCommandWord[] = [];
   let value = '';
@@ -1054,22 +1708,40 @@ function legacyRegexPathScan(command: string): string[] {
  */
 export function extractPathsFromCommand(command: string): string[] {
   const paths = new Set<string>();
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) return [];
+
+  // The Runtime shell on Windows is cmd/PowerShell-flavoured, while the AST
+  // tokenizer deliberately follows POSIX quoting. Read path roles from the raw
+  // words first so `%TEMP%\x` and `C:\x` retain their backslashes.
+  if (process.platform === 'win32') {
+    for (const words of tokenizeRawCommandStages(command)) {
+      const values = words.map((word) => word.value);
+      const roles = collectCommandArgumentRoles(values);
+      for (const value of roles.pathValues) paths.add(value);
+      for (let index = 0; index < values.length; index += 1) {
+        if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
+        const value = values[index]!;
+        if (looksLikePath(value)) paths.add(value);
+      }
+    }
+  }
 
   // Pass 1: AST-based argv + redirection targets (handles quoted-with-spaces)
-  const tree = parseBashCommand(command);
-  if (!tree.unparseable) {
-    for (const stmt of tree.statements) {
-      for (const stage of stmt.stages) {
-        const roles = collectCommandArgumentRoles(stage.argv);
+  for (const stmt of tree.statements) {
+    for (const stage of stmt.stages) {
+      const roles = collectCommandArgumentRoles(stage.argv);
+      if (process.platform !== 'win32') {
         for (const value of roles.pathValues) paths.add(value);
-        for (let index = 0; index < stage.argv.length; index += 1) {
-          const token = stage.argv[index]!;
-          if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
-          if (looksLikePath(token)) paths.add(token);
-        }
-        for (const redir of stage.redirections) {
-          if (looksLikePath(redir.target)) paths.add(redir.target);
-        }
+      }
+      for (let index = 0; index < stage.argv.length; index += 1) {
+        const token = stage.argv[index]!;
+        if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
+        if (looksLikePath(token)) paths.add(token);
+      }
+      for (const redir of stage.redirections) {
+        if (redir.descriptorDuplication) continue;
+        if (looksLikePath(redir.target)) paths.add(redir.target);
       }
     }
   }
@@ -1352,6 +2024,13 @@ function collectPositionalArgs(
   let optionsEnded = false;
   for (let index = startIndex; index < argv.length; index += 1) {
     const token = argv[index]!;
+    if (!optionsEnded && ['touch', 'chmod', 'chown'].includes(command)) {
+      if ((command === 'touch' && token === '-r') || token === '--reference') {
+        index += 1;
+        continue;
+      }
+      if (/^--reference=/.test(token) || (command === 'touch' && /^-r.+/.test(token))) continue;
+    }
     if (token === '--') {
       optionsEnded = true;
     } else if (optionsEnded || (!token.startsWith('-') && !isCmdMutationSwitch(command, token))) {
@@ -1376,7 +2055,12 @@ function collectDirectCommandWriteTargets(stage: { readonly argv: readonly strin
     const attachedTarget = stage.argv.find((token) => token.startsWith('--target-directory='));
     return attachedTarget ? [attachedTarget.slice('--target-directory='.length)] : positional.slice(-1);
   }
-  if (command === 'chmod' || command === 'chown') return positional.slice(1);
+  if (command === 'chmod' || command === 'chown') {
+    const copiesReference = stage.argv.some((token) => (
+      token === '--reference' || token.startsWith('--reference=')
+    ));
+    return copiesReference ? positional : positional.slice(1);
+  }
   if (command === 'dd') {
     const output = stage.argv.find((token) => token.startsWith('of='));
     return output ? [output.slice(3)] : [];
@@ -1476,6 +2160,7 @@ function collectBashWriteTargetsAtDepth(
       //    don't write. Null-device redirects ARE included so plan-mode
       //    won't mistake `echo hi 2>NUL > /tmp/out` for "no targets".
       for (const redir of stage.redirections) {
+        if (redir.descriptorDuplication) continue;
         if (redir.input) continue;
         pushTarget(redir.target);
       }

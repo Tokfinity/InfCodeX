@@ -58,6 +58,16 @@ const HIGH_MAX_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
   { value: 'max', description: 'Maximum reasoning' },
 ];
 
+const DEEPSEEK_V4_FLASH_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
+  { value: 'none', description: 'Disable thinking' },
+  { value: 'minimal', description: 'Disable thinking', isUserVisible: false },
+  { value: 'low', description: 'Low reasoning' },
+  { value: 'medium', description: 'Alias to high' },
+  { value: 'high', description: 'High reasoning', isDefault: true },
+  { value: 'xhigh', description: 'Alias to high' },
+  { value: 'max', description: 'Maximum reasoning' },
+];
+
 const ALWAYS_ON_EFFORTS: readonly KodaXReasoningEffortPreset[] = [
   { value: 'low', description: 'Thinking is always on' },
   { value: 'medium', description: 'Thinking is always on' },
@@ -94,7 +104,23 @@ function createBaseReasoningProfileFromPreset(
         supportsReasoningEffort: true,
         supportsDisabledThinking: true,
       };
+    case 'deepseek-v4-flash-openai':
+      return {
+        reasoningPreset: preset,
+        effortStrategy: 'openai-chat-effort',
+        thinkingStrategy: 'provider-toggle',
+        defaultEffort: 'high',
+        supportedEfforts: DEEPSEEK_V4_FLASH_EFFORTS,
+        effortAliases: { medium: 'high', xhigh: 'high' },
+        disabledEfforts: ['none', 'minimal'],
+        supportsReasoningEffort: true,
+        supportsDisabledThinking: true,
+      };
+    // Unknown-model legacy configs preserve their historical Pro-like
+    // mapping. Custom providers with a known Flash/Pro model id migrate to the
+    // corresponding explicit preset before reaching this factory.
     case 'deepseek-v4-openai':
+    case 'deepseek-v4-pro-openai':
       return {
         reasoningPreset: preset,
         effortStrategy: 'openai-chat-effort',

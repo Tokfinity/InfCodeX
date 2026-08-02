@@ -69,6 +69,41 @@ describe('FEATURE_218 manual registry', () => {
     expect(content).toContain('defaults to high');
   });
 
+  it('documents the v0.7.79 provider, A2A, Session, and Runtime contracts', () => {
+    const providers = resolveKodaXManual({ topic: 'providers' }).content;
+    const customProviders = resolveKodaXManual({ topic: 'custom-providers' }).content;
+    const a2a = resolveKodaXManual({ topic: 'a2a' }).content;
+    const sessions = resolveKodaXManual({ topic: 'sessions' }).content;
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(providers).toContain('deepseek-v4-flash');
+    expect(providers).toContain('deepseek-v4-pro');
+    expect(providers).toContain('text-only');
+    expect(customProviders).toContain('maxOutputTokensField');
+    expect(customProviders).toContain('max_completion_tokens');
+    expect(customProviders).toContain('per-model');
+
+    expect(a2a).toContain('--allow-private');
+    expect(a2a).toContain('--allow-insecure-http');
+    expect(a2a).toContain('default deny');
+    expect(a2a).toContain('exact loopback HTTP');
+
+    expect(sessions).toContain('readSessionCapture()');
+    expect(sessions).toContain('readFullTranscript()');
+    expect(sessions).toContain('readConversationHistory()');
+    expect(sessions).toContain('exportSessionBundle()');
+    expect(sessions).toContain('read-only');
+
+    expect(sdk).toContain('runtimeEventCoalescing:1');
+    expect(sdk).toContain('sessions.status()');
+    expect(sdk).toContain('sessions.conversation()');
+    expect(sdk).toContain('conversationHistory:1');
+    expect(sdk).toContain('captureRuntimeSessionDiagnostics()');
+    expect(sdk).toContain('sessions.diagnostics()');
+    expect(sdk).toContain('Job Object');
+    expect(sdk).toContain('Issue 256');
+  });
+
   it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {
     const agents = resolveKodaXManual({ topic: 'agents' }).content;
     const memory = resolveKodaXManual({ topic: 'memory' }).content;
