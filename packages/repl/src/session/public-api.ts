@@ -47,6 +47,7 @@ export {
   type SessionReadOptions,
 } from '../interactive/storage.js';
 export { SessionReadError };
+export { ConversationPageCacheCapacityError } from '../interactive/storage.js';
 import { compactSession } from './compact-session.js';
 export { compactSession } from './compact-session.js';
 export type { CompactSessionOptions, CompactSessionResult } from './compact-session.js';
@@ -54,6 +55,12 @@ import {
   buildLineageUnavailableConversationHistory,
   buildSessionConversationHistory,
   type SessionConversationHistoryData,
+} from './conversation-history.js';
+export {
+  createConversationEntryChain,
+  createSessionConversationHistoryRevision,
+  emptyConversationEntryChain,
+  extendConversationEntryChain,
 } from './conversation-history.js';
 export type {
   SessionConversationHistoryData,
@@ -285,10 +292,13 @@ async function collectToolOutputReferences(
 
 function scheduleToolOutputRetention(sessionsDir: string): void {
   const outputDir = resolveToolOutputDir();
-  void maybeRunReferenceAwareToolOutputGc(
-    outputDir,
-    () => collectToolOutputReferences(sessionsDir, outputDir),
-  );
+  const timer = setTimeout(() => {
+    void maybeRunReferenceAwareToolOutputGc(
+      outputDir,
+      () => collectToolOutputReferences(sessionsDir, outputDir),
+    );
+  }, 30_000);
+  timer.unref();
 }
 
 export interface FullTranscriptSessionData extends Omit<SessionData, 'messages'> {
@@ -308,6 +318,8 @@ export interface SessionReadCapture {
   readonly data: SessionData;
   readonly transcript: FullTranscriptSessionData;
   readonly sourceRevision: string;
+  /** Bounded persisted-file witness corresponding to sourceRevision. */
+  readonly boundaryRevision: string;
 }
 
 export type SessionBundleExportStatus =
@@ -1381,6 +1393,7 @@ async function readSessionCaptureWithStorage(
     data: snapshot.data,
     transcript,
     sourceRevision: snapshot.sourceRevision,
+    boundaryRevision: snapshot.boundaryRevision,
   };
 }
 

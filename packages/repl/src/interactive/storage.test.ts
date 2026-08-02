@@ -1228,6 +1228,101 @@ describe('FileSessionStorage', () => {
     )).toHaveLength(1);
   });
 
+  it('preserves a durable same-ID rewrite when a stale instance rewrites that ID', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const first = new FileSessionStorage({ sessionsDir });
+    const second = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-concurrent-same-id-rewrite';
+    const baseMessages = [{ role: 'user' as const, content: 'shared original' }];
+    await first.save(sessionId, {
+      messages: baseMessages,
+      title: 'Concurrent same-ID rewrite',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const [firstBase, secondBase] = await Promise.all([
+      first.load(sessionId),
+      second.load(sessionId),
+    ]);
+    const firstEntry = firstBase?.lineage?.entries[0];
+    const secondEntry = secondBase?.lineage?.entries[0];
+    if (
+      !firstBase?.lineage
+      || !secondBase?.lineage
+      || firstEntry?.type !== 'message'
+      || secondEntry?.type !== 'message'
+    ) {
+      throw new Error('expected both instances to load the base message lineage');
+    }
+    const firstRewrite = {
+      ...firstEntry,
+      message: { ...firstEntry.message, content: 'first durable rewrite' },
+    };
+    const firstTail = {
+      type: 'message' as const,
+      id: 'entry_first_rewrite_tail',
+      parentId: firstRewrite.id,
+      logicalId: 'entry_first_rewrite_tail',
+      timestamp: '2026-08-02T00:00:02.000Z',
+      message: { role: 'assistant' as const, content: 'first durable tail' },
+    };
+    await first.appendSessionDelta(sessionId, {
+      ...firstBase,
+      messages: [firstRewrite.message, firstTail.message],
+      lineage: {
+        ...firstBase.lineage,
+        activeEntryId: firstTail.id,
+        entries: [firstRewrite, firstTail],
+      },
+    });
+
+    const secondRewrite = {
+      ...secondEntry,
+      message: { ...secondEntry.message, content: 'second stale rewrite' },
+    };
+    const secondTail = {
+      type: 'message' as const,
+      id: 'entry_second_rewrite_tail',
+      parentId: secondRewrite.id,
+      logicalId: 'entry_second_rewrite_tail',
+      timestamp: '2026-08-02T00:00:03.000Z',
+      message: { role: 'assistant' as const, content: 'second stale tail' },
+    };
+    await second.appendSessionDelta(sessionId, {
+      ...secondBase,
+      messages: [secondRewrite.message, secondTail.message],
+      lineage: {
+        ...secondBase.lineage,
+        activeEntryId: secondTail.id,
+        entries: [secondRewrite, secondTail],
+      },
+    });
+
+    const reader = new FileSessionStorage({ sessionsDir });
+    const full = await reader.loadFullLineage(sessionId);
+    expect(full?.entries).toContainEqual(expect.objectContaining({
+      id: firstEntry.id,
+      type: 'message',
+      message: expect.objectContaining({ content: 'first durable rewrite' }),
+    }));
+    expect(full?.entries).not.toContainEqual(expect.objectContaining({
+      id: firstEntry.id,
+      type: 'message',
+      message: expect.objectContaining({ content: 'second stale rewrite' }),
+    }));
+    expect(full?.entries.map((entry) => entry.id)).toEqual(expect.arrayContaining([
+      firstTail.id,
+      secondTail.id,
+    ]));
+    await expect(reader.load(sessionId)).resolves.toMatchObject({
+      messages: [
+        { content: 'first durable rewrite' },
+        { content: 'second stale tail' },
+      ],
+    });
+  });
+
   it('appends to the exact archived path after another storage instance moves the Session', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
@@ -1314,6 +1409,111 @@ describe('FileSessionStorage', () => {
       type: 'message',
       message: expect.objectContaining({ content: 'stale writer delta' }),
     }));
+  });
+
+  it('persists a caller-owned same-ID prefix rewrite before appending its tail', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const sessionId = 'session-local-prefix-rewrite';
+    const originalMessages = [{ role: 'user' as const, content: 'before rewrite' }];
+    await storage.save(sessionId, {
+      messages: originalMessages,
+      title: 'Local prefix rewrite',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(originalMessages),
+    });
+    const loaded = await storage.load(sessionId);
+    const original = loaded?.lineage?.entries[0];
+    if (!loaded?.lineage || original?.type !== 'message') {
+      throw new Error('expected persisted message lineage');
+    }
+    const rewritten = {
+      ...original,
+      message: { ...original.message, content: 'after rewrite' },
+    };
+    const tail = {
+      type: 'message' as const,
+      id: 'entry_local_tail',
+      parentId: rewritten.id,
+      logicalId: 'entry_local_tail',
+      timestamp: '2026-08-02T00:00:00.000Z',
+      message: { role: 'assistant' as const, content: 'new tail' },
+    };
+
+    await storage.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages: [rewritten.message, tail.message],
+      lineage: {
+        ...loaded.lineage,
+        activeEntryId: tail.id,
+        entries: [rewritten, tail],
+      },
+    });
+
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      messages: [
+        { content: 'after rewrite' },
+        { content: 'new tail' },
+      ],
+    });
+  });
+
+  it('persists caller-owned same-ID parent and provenance rewrites', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const sessionId = 'session-local-topology-rewrite';
+    const messages = [
+      { role: 'user' as const, content: 'retired parent' },
+      { role: 'assistant' as const, content: 'rewritten root' },
+    ];
+    await storage.save(sessionId, {
+      messages,
+      title: 'Local topology rewrite',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    });
+    const loaded = await storage.load(sessionId);
+    const rewrittenTarget = loaded?.lineage?.entries[1];
+    if (!loaded?.lineage || rewrittenTarget?.type !== 'message') {
+      throw new Error('expected two persisted message entries');
+    }
+    const rewritten = {
+      ...rewrittenTarget,
+      parentId: null,
+      logicalId: 'logical_rewritten_root',
+      sourceEntryId: 'source_rewritten_root',
+    };
+    const tail = {
+      type: 'message' as const,
+      id: 'entry_topology_tail',
+      parentId: rewritten.id,
+      logicalId: 'entry_topology_tail',
+      timestamp: '2026-08-02T00:00:01.000Z',
+      message: { role: 'user' as const, content: 'topology tail' },
+    };
+
+    await storage.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages: [rewritten.message, tail.message],
+      lineage: {
+        ...loaded.lineage,
+        activeEntryId: tail.id,
+        entries: [loaded.lineage.entries[0]!, rewritten, tail],
+      },
+    });
+
+    const full = await storage.loadFullLineage(sessionId);
+    expect(full?.entries.find((entry) => entry.id === rewritten.id)).toMatchObject({
+      parentId: null,
+      logicalId: 'logical_rewritten_root',
+      sourceEntryId: 'source_rewritten_root',
+    });
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      messages: [
+        { content: 'rewritten root' },
+        { content: 'topology tail' },
+      ],
+    });
   });
 
   it('appendSessionDelta meta_update overwrites title but preserves extensionState from disk', async () => {
@@ -2491,12 +2691,22 @@ describe('FileSessionStorage', () => {
           return originalStat(candidate, options as never);
         },
       );
+      const originalAsyncStat = fsPromises.stat.bind(fsPromises);
+      const asyncStat = vi.spyOn(fsPromises, 'stat').mockImplementation(
+        async (candidate, options) => {
+          if (path.resolve(String(candidate)) === path.resolve(inaccessiblePath)) {
+            throw Object.assign(new Error('candidate inaccessible'), { code: 'EACCES' });
+          }
+          return originalAsyncStat(candidate, options as never);
+        },
+      );
       try {
         await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
           .rejects.toMatchObject({ code: 'data_changed' });
         await expect(readStableSessionBundleFiles(sessionsDir, sessionId))
           .rejects.toMatchObject({ code: 'data_changed' });
       } finally {
+        asyncStat.mockRestore();
         stat.mockRestore();
       }
     },
@@ -2603,6 +2813,45 @@ describe('FileSessionStorage', () => {
     });
   });
 
+  it('does not rebind a stale durable locator after a legacy writer adds a duplicate', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'durable-locator-legacy-writer-race';
+    const firstDir = path.join(sessionsDir, 'durable-race-a');
+    const secondDir = path.join(sessionsDir, 'durable-race-b');
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Durable locator legacy writer race',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    await mkdir(`${lockPath}.queue`, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const storage = new FileSessionStorage({ sessionsDir });
+    await expect(storage.readFullSnapshot(sessionId)).resolves.not.toBeNull();
+    const internal = storage as unknown as {
+      persistSessionLocationHint(id: string): Promise<void>;
+    };
+    await internal.persistSessionLocationHint(sessionId);
+
+    await withKodaXFileLock(lockPath, async () => {
+      await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+    });
+    await internal.persistSessionLocationHint(sessionId);
+
+    await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+      .rejects.toMatchObject({ code: 'data_changed' });
+  });
+
   it('fails a cached strict capture when the verified root topology changes mid-read', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const sessionsDir = testSessionsDir();
@@ -2690,6 +2939,36 @@ describe('FileSessionStorage', () => {
     await assertIndexedRead(false, false);
   });
 
+  it('uses a durable id locator without scanning every project directory', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'durable-location-index';
+    await Promise.all(Array.from({ length: 300 }, (_, index) =>
+      mkdir(path.join(sessionsDir, `unrelated-project-${index}`), { recursive: true })));
+    const writer = new FileSessionStorage({ sessionsDir });
+    await writer.save(sessionId, {
+      messages: [{ role: 'user', content: 'indexed durably' }],
+      title: 'Durable location index',
+      gitRoot: path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/'),
+      lineage: createSessionLineage([{ role: 'user', content: 'indexed durably' }]),
+    });
+    const internal = writer as unknown as {
+      readonly sessionLocations: Map<string, unknown>;
+    };
+    internal.sessionLocations.clear();
+
+    const readdir = vi.spyOn(fsPromises, 'readdir');
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+        .resolves.not.toBeNull();
+      expect(readdir.mock.calls.filter(
+        ([candidate]) => path.resolve(String(candidate)) === path.resolve(sessionsDir),
+      )).toHaveLength(0);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
   it('indexes Session paths discovered by list for later id-only reads', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const sessionsDir = testSessionsDir();
@@ -2730,6 +3009,26 @@ describe('FileSessionStorage', () => {
     )).toHaveLength(0);
   });
 
+  it('does not inspect the current Git workspace for an unscoped global list', async () => {
+    const inspectWorkspaceRuntime = vi.fn(async () => ({
+      executionCwd: process.cwd(),
+      workspaceKind: 'rootless' as const,
+    }));
+    vi.doMock('./workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('./workspace-runtime.js')>(
+        './workspace-runtime.js',
+      );
+      return { ...actual, inspectWorkspaceRuntime };
+    });
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    await mkdir(path.join(sessionsDir, 'project-with-session'), { recursive: true });
+
+    await new FileSessionStorage({ sessionsDir }).list(undefined, { limit: 10 });
+
+    expect(inspectWorkspaceRuntime).not.toHaveBeenCalled();
+  });
+
   it('invalidates a list-derived locator after a legacy Session writer completes', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const sessionsDir = testSessionsDir();
@@ -2760,6 +3059,68 @@ describe('FileSessionStorage', () => {
     await withKodaXFileLock(lockPath, async () => {
       await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
     });
+    await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
+      .rejects.toMatchObject({ code: 'data_changed' });
+  });
+
+  it('does not authorize a list locator when a legacy writer finishes mid-traversal', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'list-mid-traversal-legacy-writer';
+    const firstDir = path.join(sessionsDir, 'list-mid-traversal-a');
+    const secondDir = path.join(sessionsDir, 'list-mid-traversal-b');
+    const gateDir = path.join(sessionsDir, 'list-mid-traversal-gate');
+    const lockKey = createHash('sha256').update(sessionId, 'utf8').digest('hex');
+    const lockPath = path.join(sessionsDir, '.write-locks', `${lockKey}.lock`);
+    const payload = `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'List mid-traversal legacy writer',
+      createdAt: '2026-07-31T00:00:00.000Z',
+      scope: 'user',
+      lineageVersion: 2,
+      activeEntryId: null,
+      activeMessageCount: 0,
+    })}\n`;
+    await mkdir(firstDir, { recursive: true });
+    await mkdir(secondDir, { recursive: true });
+    await mkdir(gateDir, { recursive: true });
+    await mkdir(`${lockPath}.queue`, { recursive: true });
+    await writeFile(path.join(firstDir, `${sessionId}.jsonl`), payload, 'utf8');
+
+    const originalReaddir = fsPromises.readdir.bind(fsPromises);
+    let markSecondScanned: (() => void) | undefined;
+    let markGateStarted: (() => void) | undefined;
+    let releaseGate: (() => void) | undefined;
+    const secondScanned = new Promise<void>((resolve) => { markSecondScanned = resolve; });
+    const gateStarted = new Promise<void>((resolve) => { markGateStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const readdir = vi.spyOn(fsPromises, 'readdir').mockImplementation(
+      async (directory, options) => {
+        const resolved = path.resolve(String(directory));
+        if (resolved === path.resolve(gateDir)) {
+          markGateStarted?.();
+          await gate;
+        }
+        const result = await originalReaddir(directory, options);
+        if (resolved === path.resolve(secondDir)) markSecondScanned?.();
+        return result;
+      },
+    );
+    try {
+      const storage = new FileSessionStorage({ sessionsDir });
+      const listing = storage.list(undefined, { limit: 10 });
+      await Promise.all([secondScanned, gateStarted]);
+      await withKodaXFileLock(lockPath, async () => {
+        await writeFile(path.join(secondDir, `${sessionId}.jsonl`), payload, 'utf8');
+      });
+      releaseGate?.();
+      await listing;
+    } finally {
+      releaseGate?.();
+      readdir.mockRestore();
+    }
+
     await expect(new FileSessionStorage({ sessionsDir }).readFullSnapshot(sessionId))
       .rejects.toMatchObject({ code: 'data_changed' });
   });
@@ -3430,6 +3791,63 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.extensionRecords).toEqual([]);
   });
 
+  it('full-merges an in-place extension record replacement followed by an append', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const sessionId = 'session-extension-record-replace-append';
+    const initialMessages = [{ role: 'user' as const, content: 'extension base' }];
+    await storage.save(sessionId, {
+      messages: initialMessages,
+      title: 'Extension replace and append',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(initialMessages),
+      extensionRecords: [{
+        id: 'record-original',
+        extensionId: 'ext:sample',
+        type: 'turn',
+        ts: 1,
+        dedupeKey: 'same-turn',
+        data: { revision: 1 },
+      }],
+    });
+    const loaded = await storage.load(sessionId);
+    if (!loaded?.lineage || !loaded.extensionRecords) {
+      throw new Error('expected extension record state');
+    }
+    loaded.extensionRecords.splice(0, 1, {
+      id: 'record-replacement',
+      extensionId: 'ext:sample',
+      type: 'turn',
+      ts: 2,
+      dedupeKey: 'same-turn',
+      data: { revision: 2 },
+    });
+    loaded.extensionRecords.push({
+      id: 'record-tail',
+      extensionId: 'ext:sample',
+      type: 'turn',
+      ts: 3,
+      dedupeKey: 'new-turn',
+    });
+    const messages = [
+      ...initialMessages,
+      { role: 'assistant' as const, content: 'extension tail' },
+    ];
+
+    await storage.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages,
+      lineage: createSessionLineage(messages, loaded.lineage),
+    });
+
+    await expect(storage.load(sessionId)).resolves.toMatchObject({
+      extensionRecords: [
+        { id: 'record-replacement', data: { revision: 2 } },
+        { id: 'record-tail' },
+      ],
+    });
+  });
+
   it('appendSessionDelta fallback preserves runtimeInfo and errorMetadata', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
@@ -3662,6 +4080,204 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.tag).toBe('partner');
   });
 
+  it('does not re-serialize persisted lineage entries while initializing a load watermark', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const writer = new FileSessionStorage({ sessionsDir });
+    const messages = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `load watermark message ${index}`,
+    }));
+    await writer.save('session-load-watermark-cost', {
+      messages,
+      title: 'Load watermark cost',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(messages),
+    });
+    const stringify = vi.spyOn(JSON, 'stringify');
+
+    try {
+      await new FileSessionStorage({ sessionsDir }).load('session-load-watermark-cost');
+      const serializedPersistedEntry = stringify.mock.calls.some(([value]) => {
+        if (value === null || typeof value !== 'object') return false;
+        const candidate = value as { type?: unknown; message?: { content?: unknown } };
+        return candidate.type === 'message'
+          && typeof candidate.message?.content === 'string'
+          && candidate.message.content.startsWith('load watermark message ');
+      });
+      expect(serializedPersistedEntry).toBe(false);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('does not re-serialize the persisted prefix on the append hot path', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage({ sessionsDir: testSessionsDir() });
+    const baseMessages = Array.from({ length: 40 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      content: `append watermark message ${index}`,
+    }));
+    await storage.save('session-append-watermark-cost', {
+      messages: baseMessages,
+      title: 'Append watermark cost',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const loaded = await storage.load('session-append-watermark-cost');
+    const persistedPrefixEntry = loaded?.lineage?.entries[0];
+    if (!loaded?.lineage || persistedPrefixEntry === undefined) {
+      throw new Error('expected persisted lineage');
+    }
+    const messages = [
+      ...baseMessages,
+      { role: 'user' as const, content: 'new append tail' },
+    ];
+    const lineage = createSessionLineage(messages, loaded.lineage);
+    const stringify = vi.spyOn(JSON, 'stringify');
+
+    try {
+      await storage.appendSessionDelta('session-append-watermark-cost', {
+        ...loaded,
+        messages,
+        lineage,
+      });
+      expect(stringify.mock.calls.some(([value]) => value === persistedPrefixEntry)).toBe(false);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('does not bind an append watermark to a file replaced during load', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const writer = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-load-replace-race';
+    const baseMessages = [{ role: 'user' as const, content: 'identity race base' }];
+    await writer.save(sessionId, {
+      messages: baseMessages,
+      title: 'Load replace race',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const mainPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(KODAX_REPO_ROOT).key,
+      `${sessionId}.jsonl`,
+    );
+    const oldContent = await readFile(mainPath, 'utf8');
+    const replacementContent = oldContent.replace(
+      'identity race base',
+      'identity race durable replacement',
+    );
+    const reader = new FileSessionStorage({ sessionsDir });
+    await reader.isArchived(sessionId);
+    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementationOnce(async () => {
+      const replacementPath = `${mainPath}.replacement`;
+      await writeFile(replacementPath, replacementContent, 'utf8');
+      await fsPromises.rename(replacementPath, mainPath);
+      return oldContent;
+    });
+    const loaded = await reader.load(sessionId);
+    raceRead.mockRestore();
+    if (!loaded?.lineage) throw new Error('expected raced load lineage');
+    const messages = [
+      ...baseMessages,
+      { role: 'assistant' as const, content: 'identity race tail' },
+    ];
+    const appendRead = vi.spyOn(fsPromises, 'readFile');
+
+    await reader.appendSessionDelta(sessionId, {
+      ...loaded,
+      messages,
+      lineage: createSessionLineage(messages, loaded.lineage),
+    });
+
+    expect(appendRead.mock.calls.filter(
+      ([candidate]) => path.resolve(String(candidate)) === path.resolve(mainPath),
+    ).length).toBeGreaterThan(0);
+  });
+
+  it('fails a strict read when the main Session file is replaced during the read', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const writer = new FileSessionStorage({ sessionsDir });
+    const sessionId = 'session-strict-read-replace-race';
+    const baseMessages = [{ role: 'user' as const, content: 'strict identity race base' }];
+    await writer.save(sessionId, {
+      messages: baseMessages,
+      title: 'Strict read replace race',
+      gitRoot: KODAX_REPO_ROOT,
+      lineage: createSessionLineage(baseMessages),
+    });
+    const mainPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(KODAX_REPO_ROOT).key,
+      `${sessionId}.jsonl`,
+    );
+    const oldContent = await readFile(mainPath, 'utf8');
+    const replacementContent = oldContent.replace(
+      'strict identity race base',
+      'strict identity race durable replacement',
+    );
+    const reader = new FileSessionStorage({ sessionsDir });
+    await reader.isArchived(sessionId);
+    const raceRead = vi.spyOn(fsPromises, 'readFile').mockImplementationOnce(async () => {
+      const replacementPath = `${mainPath}.replacement`;
+      await writeFile(replacementPath, replacementContent, 'utf8');
+      await fsPromises.rename(replacementPath, mainPath);
+      return oldContent;
+    });
+
+    try {
+      await expect(reader.read(sessionId)).rejects.toMatchObject({ code: 'data_changed' });
+    } finally {
+      raceRead.mockRestore();
+    }
+  });
+
+  it('does not reload and parse the main Session payload on the append hot path', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = testSessionsDir();
+    const storage = new FileSessionStorage({ sessionsDir });
+    const gitRoot = tempHome.replace(/\\/g, '/');
+    const first = createSessionLineage([{ role: 'user', content: 'first' }]);
+    await storage.save('session-single-append-read', {
+      messages: [{ role: 'user', content: 'first' }],
+      title: 'Single append read',
+      gitRoot,
+      lineage: first,
+    });
+    const loaded = await storage.load('session-single-append-read');
+    const next = createSessionLineage([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+    ], loaded!.lineage);
+    const mainPath = path.join(
+      sessionsDir,
+      deriveProjectKeyFromRoot(gitRoot).key,
+      'session-single-append-read.jsonl',
+    );
+    const readFile = vi.spyOn(fsPromises, 'readFile');
+
+    await storage.appendSessionDelta('session-single-append-read', {
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'second' },
+      ],
+      title: 'Single append read',
+      gitRoot,
+      lineage: next,
+    });
+
+    expect(readFile.mock.calls.filter(
+      ([candidate]) => path.resolve(String(candidate)) === path.resolve(mainPath),
+    )).toHaveLength(0);
+  });
+
   it('appendSessionDelta makes a newly provided tag visible to list by rewriting the initial meta line', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');
@@ -3814,6 +4430,40 @@ describe('FileSessionStorage', () => {
     const loaded = await cold.load('20260601_130000');
     expect(loaded?.title).toBe('Cold Load');
     expect(loaded?.messages[0]).toEqual({ role: 'user', content: 'persisted' });
+  });
+
+  it('does not synchronously stat every project candidate during a cold id lookup', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = testSessionsDir();
+    const sessionId = 'cold-candidate-lookup';
+    const gitRoot = path.resolve(KODAX_REPO_ROOT).replace(/\\/g, '/');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, `${sessionId}.jsonl`), [
+      JSON.stringify({
+        _type: 'meta',
+        id: sessionId,
+        title: 'Cold candidate lookup',
+        gitRoot,
+        scope: 'user',
+        activeMessageCount: 1,
+      }),
+      JSON.stringify({ role: 'user', content: 'persisted' }),
+    ].join('\n'), 'utf8');
+    await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      mkdir(path.join(sessionsDir, `unrelated-${index}`), { recursive: true })));
+    const stat = vi.spyOn(fsSync, 'statSync');
+    try {
+      await expect(new FileSessionStorage({ sessionsDir }).load(sessionId))
+        .resolves.toMatchObject({ title: 'Cold candidate lookup' });
+      const synchronousCandidateStats = stat.mock.calls.filter(([candidate]) => (
+        path.basename(String(candidate)) === `${sessionId}.jsonl`
+      ));
+      expect(synchronousCandidateStats).toEqual([]);
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it('FEATURE_219: load(id) still reads a legacy flat-pool session (compat)', async () => {

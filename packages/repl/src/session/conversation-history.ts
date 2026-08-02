@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   forkSessionLineage,
   getSessionLineagePath,
@@ -81,6 +83,52 @@ type PendingConversationHistoryIssue = Omit<
 const MAX_CONVERSATION_ISSUE_ENTRY_IDS = 16;
 const MAX_CONVERSATION_ISSUE_EVIDENCE_BYTES = 4 * 1024;
 const MAX_CONVERSATION_ISSUE_MESSAGE_LENGTH = 512;
+const CONVERSATION_ENTRY_CHAIN_DOMAIN = 'kodax-conversation-entry-chain-v1\0';
+const CONVERSATION_HISTORY_REVISION_DOMAIN = 'kodax-conversation-history-v2\0';
+
+export function emptyConversationEntryChain(): string {
+  return `sha256:${createHash('sha256')
+    .update(CONVERSATION_ENTRY_CHAIN_DOMAIN)
+    .digest('hex')}`;
+}
+
+export function extendConversationEntryChain(
+  previous: string,
+  entries: readonly SessionConversationHistoryEntry[],
+): string {
+  let chain = previous;
+  for (const entry of entries) {
+    const encoded = JSON.stringify(entry);
+    chain = `sha256:${createHash('sha256')
+      .update(CONVERSATION_ENTRY_CHAIN_DOMAIN)
+      .update(chain)
+      .update(`${Buffer.byteLength(encoded, 'utf8')}:`)
+      .update(encoded)
+      .digest('hex')}`;
+  }
+  return chain;
+}
+
+export function createConversationEntryChain(
+  entries: readonly SessionConversationHistoryEntry[],
+): string {
+  return extendConversationEntryChain(emptyConversationEntryChain(), entries);
+}
+
+export function createSessionConversationHistoryRevision(
+  history: SessionConversationHistoryData,
+  entryChain = createConversationEntryChain(history.entries),
+): string {
+  return `sha256:${createHash('sha256')
+    .update(CONVERSATION_HISTORY_REVISION_DOMAIN)
+    .update(entryChain)
+    .update(JSON.stringify({
+      sourceRevision: history.sourceRevision,
+      status: history.status,
+      issues: history.issues,
+    }))
+    .digest('hex')}`;
+}
 
 function isThreadEntry(entry: KodaXSessionEntry): boolean {
   return entry.type === 'message'

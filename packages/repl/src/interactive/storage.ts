@@ -56,7 +56,35 @@ import { getGitRoot, KODAX_DIR, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
 import { deriveProjectKeyFromData, type ProjectIdentity } from './project-key.js';
 import { ensureLayoutMigrated } from './session-migration.js';
-import { forkSessionConversationLineage } from '../session/conversation-history.js';
+import {
+  buildSessionConversationHistory,
+  forkSessionConversationLineage,
+  type SessionConversationHistoryData,
+} from '../session/conversation-history.js';
+import {
+  appendConversationPageCache,
+  canAppendConversationPageCache,
+  ConversationPageCacheStaleError,
+  readConversationPageCache as readPreparedConversationPage,
+  readConversationPageCacheChunk as readPreparedConversationChunk,
+  readConversationPageCacheManifest,
+  refreshConversationPageCache,
+  removeConversationPageCache,
+  writeConversationPageCache,
+  type ConversationPageCacheChunk,
+  type ConversationPageCacheChunkInput,
+  type ConversationPageCacheAdmission,
+  type ConversationPageCacheInput,
+  type ConversationPageCachePage,
+} from '../session/conversation-page-cache.js';
+export type {
+  ConversationPageCacheChunk,
+  ConversationPageCacheChunkInput,
+  ConversationPageCacheAdmission,
+  ConversationPageCacheInput,
+  ConversationPageCachePage,
+} from '../session/conversation-page-cache.js';
+export { ConversationPageCacheCapacityError } from '../session/conversation-page-cache.js';
 import {
   isKodaXExtensionSessionRecord,
   isKodaXExtensionSessionState,
@@ -111,6 +139,9 @@ const SESSION_WRITE_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_SESSION_READ_TIMEOUT_MS = 15_000;
 const SESSION_LOCATION_TOPOLOGY_EPOCH = '.location-topology';
 const SESSION_LOCATION_TOPOLOGY_LOCK = '.location-topology.lock';
+const SESSION_LOCATION_INDEX_DIR = '.location-index';
+const MAX_SESSION_LOCATION_HINT_BYTES = 64 * 1024;
+const SESSION_CONVERSATION_CACHE_CHUNK_BYTES = 256 * 1024;
 let sessionTempSequence = 0;
 
 function normalizeSessionReadTimeout(timeoutMs: number | undefined): number {
@@ -228,12 +259,15 @@ interface PersistedSessionSnapshot {
   artifactLedger: KodaXSessionArtifactLedgerEntry[];
   extensionRecords: KodaXExtensionSessionRecord[];
   malformedCount: number;
+  rawContent: string;
+  mainIdentity?: StableFileIdentity;
 }
 
 interface ResolvedSessionSnapshot {
   data: SessionData;
   createdAt?: string;
   filePath: string;
+  mainIdentity?: StableFileIdentity;
 }
 
 export type SessionReadErrorCode =
@@ -268,6 +302,8 @@ export interface SessionReadSnapshot {
   readonly lineage: KodaXSessionLineage | null;
   /** Exact identity of the immutable persisted bundle used for this capture. */
   readonly sourceRevision: string;
+  /** Stat-derived witness for prepared-page validation at this exact capture. */
+  readonly boundaryRevision: string;
 }
 
 function completeLineageBoundaryPath(
@@ -298,6 +334,8 @@ export interface StableSessionBundleSnapshot {
   readonly candidates: readonly string[];
   readonly files: readonly StableSessionBundleFile[];
   readonly sourceRevision: string;
+  /** Bounded stat-derived witness used to validate prepared conversation pages. */
+  readonly boundaryRevision: string;
 }
 
 type StableFileIdentity = {
@@ -316,8 +354,28 @@ type SessionTopologyIdentity = {
   readonly activeWriterIdentity: StableFileIdentity | null;
 };
 
+interface PersistedStableFileIdentity {
+  readonly dev: string;
+  readonly ino: string;
+  readonly size: string;
+  readonly mtimeNs: string;
+  readonly ctimeNs: string;
+}
+
+interface PersistedSessionLocationHint {
+  readonly version: 1;
+  readonly id: string;
+  readonly filePaths: readonly string[];
+  readonly topology: {
+    readonly root: PersistedStableFileIdentity;
+    readonly epoch: string | null;
+    readonly writerIdentity: PersistedStableFileIdentity | null;
+  };
+}
+
 type SessionLocationTraversalBoundary = {
   readonly topologyBefore?: SessionTopologyIdentity;
+  readonly writerTopologyDigestBefore?: string;
   readonly topologyMutationBefore: boolean;
 };
 
@@ -335,12 +393,51 @@ function sessionLocationTopologyLockPath(sessionsDir: string): string {
   return path.join(sessionsDir, SESSION_LOCATION_TOPOLOGY_LOCK);
 }
 
+function sessionLocationHintPath(sessionsDir: string, id: string): string {
+  const key = createHash('sha256').update(id, 'utf8').digest('hex');
+  return path.join(sessionsDir, SESSION_LOCATION_INDEX_DIR, `${key}.json`);
+}
+
 function sessionWriteQueuePath(sessionsDir: string, id: string): string {
   return `${sessionWriteLockPath(sessionsDir, id)}.queue`;
 }
 
 function sessionGlobalWriteBoundaryPath(sessionsDir: string): string {
   return path.join(sessionsDir, '.write-locks');
+}
+
+function sessionWriterTopologyDigestSync(sessionsDir: string): string | undefined {
+  const root = sessionGlobalWriteBoundaryPath(sessionsDir);
+  try {
+    const digest = createHash('sha256');
+    const entries = fsSync.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith('.lock.queue'))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const identity = stableFileIdentity(fsSync.statSync(
+        path.join(root, entry.name),
+        { bigint: true },
+      ));
+      digest.update(entry.name);
+      digest.update('\0');
+      digest.update(identity.dev.toString());
+      digest.update('\0');
+      digest.update(identity.ino.toString());
+      digest.update('\0');
+      digest.update(identity.size.toString());
+      digest.update('\0');
+      digest.update(identity.mtimeNs.toString());
+      digest.update('\0');
+      digest.update(identity.ctimeNs.toString());
+      digest.update('\n');
+    }
+    return digest.digest('hex');
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return createHash('sha256').digest('hex');
+    }
+    return undefined;
+  }
 }
 
 function assertStableSessionReadBoundary(sessionsDir: string, id: string): void {
@@ -363,6 +460,16 @@ type SessionCandidatePresence = 'present' | 'missing' | 'unverifiable';
 function inspectSessionCandidate(filePath: string): SessionCandidatePresence {
   try {
     return fsSync.statSync(filePath).isFile() ? 'present' : 'missing';
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'missing';
+    return 'unverifiable';
+  }
+}
+
+async function inspectSessionCandidateAsync(filePath: string): Promise<SessionCandidatePresence> {
+  try {
+    return (await fs.stat(filePath)).isFile() ? 'present' : 'missing';
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return 'missing';
@@ -471,6 +578,31 @@ function stableFileIdentity(
   };
 }
 
+function persistStableFileIdentity(identity: StableFileIdentity): PersistedStableFileIdentity {
+  return {
+    dev: identity.dev.toString(),
+    ino: identity.ino.toString(),
+    size: identity.size.toString(),
+    mtimeNs: identity.mtimeNs.toString(),
+    ctimeNs: identity.ctimeNs.toString(),
+  };
+}
+
+function parsePersistedStableFileIdentity(value: unknown): StableFileIdentity | undefined {
+  if (!isRecord(value)) return undefined;
+  const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'] as const;
+  if (!fields.every((field) => typeof value[field] === 'string' && /^\d+$/.test(value[field]))) {
+    return undefined;
+  }
+  return {
+    dev: BigInt(value.dev as string),
+    ino: BigInt(value.ino as string),
+    size: BigInt(value.size as string),
+    mtimeNs: BigInt(value.mtimeNs as string),
+    ctimeNs: BigInt(value.ctimeNs as string),
+  };
+}
+
 function sameStableFileIdentity(
   left: StableFileIdentity,
   right: StableFileIdentity,
@@ -520,6 +652,98 @@ function sameOptionalSessionTopologyIdentity(
 ): boolean {
   if (left === null || right === null) return left === right;
   return sameSessionTopologyIdentity(left, right);
+}
+
+function resolvePersistedSessionLocationPath(
+  sessionsDir: string,
+  id: string,
+  relativePath: string,
+): string | undefined {
+  if (path.isAbsolute(relativePath)) return undefined;
+  const normalized = relativePath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  const fileName = `${id}.jsonl`;
+  const validShape = (
+    segments.length === 1 && segments[0] === fileName
+  ) || (
+    segments.length === 2
+    && !segments[0]!.startsWith('.')
+    && segments[1] === fileName
+  ) || (
+    segments.length === 3
+    && !segments[0]!.startsWith('.')
+    && segments[1] === 'archived'
+    && segments[2] === fileName
+  );
+  if (!validShape || segments.some((segment) => segment === '..' || segment === '')) {
+    return undefined;
+  }
+  const root = path.resolve(sessionsDir);
+  const resolved = path.resolve(sessionsDir, ...segments);
+  return resolved.startsWith(`${root}${path.sep}`) ? resolved : undefined;
+}
+
+async function readSessionLocationHint(
+  sessionsDir: string,
+  id: string,
+): Promise<{
+  readonly filePaths: readonly string[];
+  readonly topology: SessionTopologyIdentity;
+} | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    handle = await fs.open(sessionLocationHintPath(sessionsDir, id), 'r');
+    const size = (await handle.stat()).size;
+    if (size > MAX_SESSION_LOCATION_HINT_BYTES) return undefined;
+    const encoded = Buffer.allocUnsafe(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await handle.read(encoded, offset, size - offset, offset);
+      if (bytesRead === 0) return undefined;
+      offset += bytesRead;
+    }
+    const value: unknown = JSON.parse(encoded.toString('utf8'));
+    if (
+      !isRecord(value)
+      || value.version !== 1
+      || value.id !== id
+      || !Array.isArray(value.filePaths)
+      || value.filePaths.length === 0
+      || value.filePaths.length > 16
+      || !isRecord(value.topology)
+      || (value.topology.epoch !== null && typeof value.topology.epoch !== 'string')
+    ) return undefined;
+    const root = parsePersistedStableFileIdentity(value.topology.root);
+    const writerIdentity = value.topology.writerIdentity === null
+      ? null
+      : parsePersistedStableFileIdentity(value.topology.writerIdentity);
+    if (root === undefined || writerIdentity === undefined) return undefined;
+    const filePaths = value.filePaths.flatMap((candidate) => {
+      if (typeof candidate !== 'string') return [];
+      const resolved = resolvePersistedSessionLocationPath(sessionsDir, id, candidate);
+      return resolved === undefined ? [] : [resolved];
+    });
+    if (filePaths.length !== value.filePaths.length || new Set(filePaths).size !== filePaths.length) {
+      return undefined;
+    }
+    return {
+      filePaths,
+      topology: {
+        root,
+        epoch: value.topology.epoch,
+        writerScope: 'session',
+        writerIdentity,
+        activeWriterIdentity: null,
+      },
+    };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 async function statSessionTopologyIdentity(
@@ -580,12 +804,35 @@ function createStableBundleRevision(
   return `sha256:${hash.digest('hex')}`;
 }
 
+function createStableBundleBoundaryRevision(
+  sessionsDir: string,
+  reads: readonly (StableBundleRead | null)[],
+): string {
+  const hash = createHash('sha256');
+  hash.update('kodax-session-bundle-boundary-v1\0');
+  for (const read of reads) {
+    if (read === null) continue;
+    const relativePath = path.relative(sessionsDir, read.file.path).replace(/\\/g, '/');
+    const identity = read.identity;
+    hash.update(`${read.file.kind}:${relativePath}:`);
+    hash.update([
+      identity.dev,
+      identity.ino,
+      identity.size,
+      identity.mtimeNs,
+      identity.ctimeNs,
+    ].map((value) => value.toString()).join(':'));
+  }
+  return `sha256:${hash.digest('hex')}`;
+}
+
 async function readStableSessionBundleAtPath(
   sessionsDir: string,
   id: string,
   mainPath: string,
   signal?: AbortSignal,
   allowActiveWriter = false,
+  mainBytesOverride?: Buffer,
 ): Promise<StableSessionBundleSnapshot> {
   throwIfSessionReadAborted(signal);
   if (!allowActiveWriter) assertStableSessionReadBoundary(sessionsDir, id);
@@ -598,7 +845,23 @@ async function readStableSessionBundleAtPath(
   const reads: Array<StableBundleRead | null> = [];
   for (const descriptor of descriptors) {
     throwIfSessionReadAborted(signal);
-    reads.push(await readStableBundleFile(descriptor.kind, descriptor.filePath));
+    if (descriptor.kind === 'main' && mainBytesOverride !== undefined) {
+      const identity = await statStableFileIdentity(descriptor.filePath);
+      if (identity === null || identity.size !== BigInt(mainBytesOverride.length)) {
+        throw new SessionReadError('data_changed', 'Session main file changed after append');
+      }
+      reads.push({
+        identity,
+        file: {
+          kind: 'main',
+          path: descriptor.filePath,
+          bytes: mainBytesOverride,
+          modifiedAt: new Date(Number(identity.mtimeNs / 1_000_000n)).toISOString(),
+        },
+      });
+    } else {
+      reads.push(await readStableBundleFile(descriptor.kind, descriptor.filePath));
+    }
   }
   if (reads[0] === null) {
     throw new SessionReadError(
@@ -630,7 +893,57 @@ async function readStableSessionBundleAtPath(
     candidates: [mainPath],
     files,
     sourceRevision: createStableBundleRevision(sessionsDir, files),
+    boundaryRevision: createStableBundleBoundaryRevision(sessionsDir, reads),
   };
+}
+
+async function readStableSessionBundleBoundaryAtPath(
+  sessionsDir: string,
+  id: string,
+  mainPath: string,
+  allowActiveWriter = false,
+): Promise<string> {
+  if (!allowActiveWriter) assertStableSessionReadBoundary(sessionsDir, id);
+  const directory = path.dirname(mainPath);
+  const descriptors = [
+    { kind: 'main' as const, filePath: mainPath },
+    { kind: 'islands' as const, filePath: path.join(directory, `${id}.islands.jsonl`) },
+    { kind: 'legacy_archive' as const, filePath: path.join(directory, `${id}.archive.jsonl`) },
+  ];
+  const reads: Array<StableBundleRead | null> = [];
+  for (const descriptor of descriptors) {
+    const identity = await statStableFileIdentity(descriptor.filePath);
+    reads.push(identity === null ? null : {
+      identity,
+      file: {
+        kind: descriptor.kind,
+        path: descriptor.filePath,
+        bytes: Buffer.alloc(0),
+        modifiedAt: '',
+      },
+    });
+  }
+  if (reads[0] === null) {
+    throw new SessionReadError('data_changed', 'Session main file moved during the read boundary');
+  }
+  if (!allowActiveWriter) assertStableSessionReadBoundary(sessionsDir, id);
+  for (let index = 0; index < descriptors.length; index += 1) {
+    const finalIdentity = await statStableFileIdentity(descriptors[index]!.filePath);
+    const captured = reads[index];
+    if (
+      (captured === null && finalIdentity !== null)
+      || (captured !== null && (
+        finalIdentity === null || !sameStableFileIdentity(captured.identity, finalIdentity)
+      ))
+    ) {
+      throw new SessionReadError(
+        'data_changed',
+        `Session file changed during the read boundary: ${path.basename(descriptors[index]!.filePath)}`,
+      );
+    }
+  }
+  if (!allowActiveWriter) assertStableSessionReadBoundary(sessionsDir, id);
+  return createStableBundleBoundaryRevision(sessionsDir, reads);
 }
 
 /**
@@ -651,6 +964,7 @@ export async function readStableSessionBundleFiles(
       candidates,
       files: [],
       sourceRevision: createStableBundleRevision(sessionsDir, []),
+      boundaryRevision: createStableBundleBoundaryRevision(sessionsDir, []),
     };
   }
   const snapshot = await readStableSessionBundleAtPath(
@@ -718,6 +1032,24 @@ function toArtifactLedgerLine(entry: KodaXSessionArtifactLedgerEntry): Persisted
     _type: 'artifact_ledger_entry',
     entry,
   };
+}
+
+function hasSameObjectPrefix<T extends object>(
+  cached: WeakRef<readonly T[]> | undefined,
+  current: readonly T[],
+  count: number,
+): boolean {
+  if (count === 0) return true;
+  const prior = cached?.deref();
+  if (prior === undefined || prior.length < count || current.length < count) return false;
+  // Session lineage and ledgers use copy-on-write updates. Shared object
+  // identity therefore proves that the old prefix was preserved without
+  // serializing it; replaced objects and collected witnesses take the cold
+  // merge path.
+  for (let index = 0; index < count; index += 1) {
+    if (prior[index] !== current[index]) return false;
+  }
+  return true;
 }
 
 function isPersistedExtensionRecordLine(
@@ -1280,6 +1612,44 @@ function getLastNavigableEntryId(entries: KodaXSessionEntry[]): string | null {
   return null;
 }
 
+const LEGACY_LINEAGE_FALLBACK_TIMESTAMP = '1970-01-01T00:00:00.000Z';
+
+function buildDeterministicLegacyLineage(
+  snapshot: PersistedSessionSnapshot,
+): KodaXSessionLineage {
+  const namespace = snapshot.meta?.id
+    ?? createHash('sha256').update(snapshot.rawContent).digest('hex');
+  const fallbackTimestamp = snapshot.meta?.createdAt
+    ?? LEGACY_LINEAGE_FALLBACK_TIMESTAMP;
+  let parentId: string | null = null;
+  const entries: KodaXSessionEntry[] = snapshot.legacyMessages.map(
+    (message, index): KodaXSessionEntry => {
+      const identity = createHash('sha256')
+        .update('kodax-legacy-lineage-v1\0')
+        .update(`${namespace}\0${index}:`)
+        .update(JSON.stringify(message))
+        .digest('hex')
+        .slice(0, 12);
+      const id = `entry_${identity}`;
+      const entry: KodaXSessionEntry = {
+        type: 'message',
+        id,
+        parentId,
+        logicalId: id,
+        timestamp: message.timestamp ?? fallbackTimestamp,
+        message: structuredClone(message),
+      };
+      parentId = id;
+      return entry;
+    },
+  );
+  return {
+    version: 2,
+    activeEntryId: parentId,
+    entries,
+  };
+}
+
 function buildLineage(
   snapshot: PersistedSessionSnapshot,
 ): KodaXSessionLineage | undefined {
@@ -1295,7 +1665,7 @@ function buildLineage(
     return undefined;
   }
 
-  return createSessionLineage(snapshot.legacyMessages);
+  return buildDeterministicLegacyLineage(snapshot);
 }
 
 function serializeMessageContentForCompare(content: KodaXMessage['content']): string {
@@ -1369,6 +1739,7 @@ function buildSessionData(
   return {
     createdAt: snapshot.meta?.createdAt,
     filePath,
+    ...(snapshot.mainIdentity !== undefined ? { mainIdentity: snapshot.mainIdentity } : {}),
       data: {
         messages: lineage
           ? getSessionMessagesFromLineage(lineage)
@@ -1439,9 +1810,27 @@ async function readPersistedSessionFile(
   // check and the read would surface as an uncaught ENOENT crash instead of a
   // graceful null. `load()` already treats null as "session not found".
   let rawContent = contentOverride;
+  let mainIdentity: StableFileIdentity | undefined;
   if (rawContent === undefined) {
     try {
+      const beforeReadIdentity = await statStableFileIdentity(filePath);
       rawContent = await fs.readFile(filePath, 'utf-8');
+      const afterReadIdentity = await statStableFileIdentity(filePath);
+      // A non-strict load may return the bytes it successfully read while a
+      // concurrent writer atomically replaces the path. Only grant append
+      // authority when both path identities prove those bytes came from the
+      // same durable file; otherwise the next append must cold-merge.
+      mainIdentity = beforeReadIdentity !== null
+        && afterReadIdentity !== null
+        && sameStableFileIdentity(beforeReadIdentity, afterReadIdentity)
+        ? afterReadIdentity
+        : undefined;
+      if (strict && mainIdentity === undefined) {
+        throw new SessionReadError(
+          'data_changed',
+          `Session data changed while reading ${path.basename(filePath)}; re-read the Session.`,
+        );
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
         return null;
@@ -1460,6 +1849,8 @@ async function readPersistedSessionFile(
     artifactLedger: [],
     extensionRecords: [],
     malformedCount: 0,
+    rawContent,
+    ...(mainIdentity !== undefined ? { mainIdentity } : {}),
   };
 
   const lines = trimmedContent.split('\n');
@@ -1558,6 +1949,46 @@ async function readPersistedSessionFile(
 // longer than the buffer, or a legacy non-`meta` session whose msgCount is the
 // total line count).
 const SESSION_HEAD_READ_BYTES = 65536;
+
+async function readConversationPageAdmission(
+  filePath: string,
+): Promise<ConversationPageCacheAdmission> {
+  const handle = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(SESSION_HEAD_READ_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead === 0) {
+      throw new SessionReadError('data_corrupt', 'Session metadata is empty');
+    }
+    const head = buffer.toString('utf8', 0, bytesRead);
+    const newline = head.indexOf('\n');
+    if (newline < 0 && bytesRead === buffer.length) {
+      throw new SessionReadError(
+        'data_corrupt',
+        'Session metadata exceeds the bounded page-admission record',
+      );
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse((newline < 0 ? head : head.slice(0, newline)).trim());
+    } catch (error: unknown) {
+      throw new SessionReadError(
+        'data_corrupt',
+        `Session metadata is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (!isRecord(value) || value._type !== 'meta') return {};
+    const runtimeInfo = isKodaXSessionRuntimeInfo(value.runtimeInfo)
+      ? value.runtimeInfo
+      : undefined;
+    return {
+      ...(runtimeInfo?.surface !== undefined ? { surface: runtimeInfo.surface } : {}),
+      ...(runtimeInfo?.profileId !== undefined ? { profileId: runtimeInfo.profileId } : {}),
+    };
+  } finally {
+    await handle.close();
+  }
+}
 
 export async function readSessionFirstLine(filePath: string): Promise<string | null> {
   let fh: fs.FileHandle | undefined;
@@ -1734,9 +2165,27 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   /** @internal Start an authoritative all-project locator traversal. */
   beginSessionLocationTraversal(): SessionLocationTraversalBoundary {
+    let locationIndexReady = true;
+    try {
+      fsSync.mkdirSync(path.join(this.sessionsDir, SESSION_LOCATION_INDEX_DIR), {
+        recursive: true,
+      });
+    } catch (error: unknown) {
+      locationIndexReady = false;
+      reportStorageDiagnostic(
+        'warn',
+        'Unable to prepare the durable Session location index.',
+        error,
+      );
+    }
     return {
-      topologyBefore: this.readSessionTopologyIdentitySync('', 'global'),
-      topologyMutationBefore: fsSync.existsSync(
+      topologyBefore: locationIndexReady
+        ? this.readSessionTopologyIdentitySync('', 'global')
+        : undefined,
+      writerTopologyDigestBefore: locationIndexReady
+        ? sessionWriterTopologyDigestSync(this.sessionsDir)
+        : undefined,
+      topologyMutationBefore: !locationIndexReady || fsSync.existsSync(
         sessionLocationTopologyLockPath(this.sessionsDir),
       ),
     };
@@ -1749,12 +2198,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
     traversalComplete: boolean,
   ): void {
     const topologyAfterTraversal = this.readSessionTopologyIdentitySync('', 'global');
+    const writerTopologyDigestAfter = sessionWriterTopologyDigestSync(this.sessionsDir);
     const stableTraversal = traversalComplete
       && !boundary.topologyMutationBefore
       && !fsSync.existsSync(sessionLocationTopologyLockPath(this.sessionsDir))
       && boundary.topologyBefore !== undefined
+      && boundary.writerTopologyDigestBefore !== undefined
       && topologyAfterTraversal !== undefined
-      && sameSessionTopologyIdentity(boundary.topologyBefore, topologyAfterTraversal);
+      && writerTopologyDigestAfter !== undefined
+      && sameSessionTopologyIdentity(boundary.topologyBefore, topologyAfterTraversal)
+      && boundary.writerTopologyDigestBefore === writerTopologyDigestAfter;
     if (!stableTraversal) {
       this.indexSessionLocations(filePaths, false);
       return;
@@ -1805,6 +2258,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         SESSION_WRITE_LOCK_TIMEOUT_MS,
       );
       this.refreshSelfVerifiedLocationTopology(id);
+      await this.persistSessionLocationHint(id);
     };
     const next = prev.then(locked, locked);
     this.writeQueues.set(id, next);
@@ -1843,6 +2297,118 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return sessionWriteLockPath(this.sessionsDir, id);
   }
 
+  private async persistSessionLocationHint(id: string): Promise<void> {
+    const target = sessionLocationHintPath(this.sessionsDir, id);
+    try {
+      const location = this.sessionLocations.get(id);
+      if (location === undefined) {
+        await fs.rm(target, { force: true });
+        return;
+      }
+      if (location.kind !== 'located' || !location.globallyVerified) {
+        await fs.rm(target, { force: true });
+        return;
+      }
+      const filePaths = [location.filePath];
+      const presences = await Promise.all(filePaths.map(inspectSessionCandidateAsync));
+      if (presences.some((presence) => presence !== 'present')) return;
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      const topology = await statSessionTopologyIdentity(this.sessionsDir, id);
+      if (
+        topology === null
+        || topology.activeWriterIdentity !== null
+        || fsSync.existsSync(sessionLocationTopologyLockPath(this.sessionsDir))
+        || location.topologyIdentity === undefined
+        || !sameSessionTopologyIdentity(location.topologyIdentity, topology)
+      ) return;
+      const relativePaths = filePaths.map((filePath) =>
+        path.relative(this.sessionsDir, filePath).replace(/\\/g, '/'));
+      const persisted: PersistedSessionLocationHint = {
+        version: 1,
+        id,
+        filePaths: relativePaths,
+        topology: {
+          root: persistStableFileIdentity(topology.root),
+          epoch: topology.epoch,
+          writerIdentity: topology.writerIdentity === null
+            ? null
+            : persistStableFileIdentity(topology.writerIdentity),
+        },
+      };
+      const temp = `${target}.${process.pid}.${randomUUID()}.tmp`;
+      let handle: fs.FileHandle | undefined;
+      try {
+        handle = await fs.open(temp, 'wx');
+        await handle.writeFile(JSON.stringify(persisted), 'utf8');
+        await handle.sync();
+        await handle.close();
+        handle = undefined;
+        await replaceSessionFile(temp, target);
+      } finally {
+        await handle?.close().catch(() => undefined);
+        await fs.rm(temp, { force: true });
+      }
+      this.sessionLocations.set(id, {
+        kind: 'located',
+        filePath: filePaths[0]!,
+        globallyVerified: true,
+        topologyIdentity: topology,
+      });
+    } catch (error: unknown) {
+      reportStorageDiagnostic(
+        'warn',
+        `Unable to update the Session location hint for ${id}.`,
+        error,
+      );
+    }
+  }
+
+  private async resolveSessionLocationHint(
+    id: string,
+    strict: boolean,
+  ): Promise<string | undefined> {
+    let hint: Awaited<ReturnType<typeof readSessionLocationHint>>;
+    try {
+      hint = await readSessionLocationHint(this.sessionsDir, id);
+    } catch (error: unknown) {
+      reportStorageDiagnostic('warn', `Unable to read the Session location hint for ${id}.`, error);
+      return undefined;
+    }
+    if (hint === undefined || fsSync.existsSync(sessionLocationTopologyLockPath(this.sessionsDir))) {
+      return undefined;
+    }
+    const current = await statSessionTopologyIdentity(this.sessionsDir, id);
+    if (
+      current === null
+      || current.activeWriterIdentity !== null
+      || !sameSessionTopologyIdentity(hint.topology, current)
+    ) return undefined;
+    const presences = await Promise.all(hint.filePaths.map(inspectSessionCandidateAsync));
+    const inaccessible = presences.findIndex((presence) => presence === 'unverifiable');
+    if (inaccessible >= 0 && strict) {
+      throw inaccessibleSessionCandidate(id, hint.filePaths[inaccessible]!);
+    }
+    if (presences.some((presence) => presence !== 'present')) return undefined;
+    if (hint.filePaths.length === 1) {
+      this.sessionLocations.set(id, {
+        kind: 'located',
+        filePath: hint.filePaths[0]!,
+        globallyVerified: true,
+        topologyIdentity: current,
+      });
+      return hint.filePaths[0]!;
+    }
+    const filePaths = [...hint.filePaths].sort();
+    this.sessionLocations.set(id, { kind: 'ambiguous', filePaths });
+    if (strict) {
+      throw new SessionReadError(
+        'data_changed',
+        `Ambiguous Session id ${id} has multiple persisted main files`,
+      );
+    }
+    return this.resolveAmbiguousSessionLocation(id, filePaths);
+  }
+
   // ── Append watermarks ──
   // Tracks how many entries have been written to disk per session.
   // When the count matches the in-memory lineage, only new entries are appended.
@@ -1850,11 +2416,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // load() initializes the watermark so subsequent appends don't need fallback.
   private appendState = new Map<string, {
     lineageCount: number;
+    lineagePrefix?: WeakRef<readonly KodaXSessionEntry[]>;
     artifactCount: number;
+    artifactPrefix?: WeakRef<readonly KodaXSessionArtifactLedgerEntry[]>;
     extensionCount: number;
     metaUpdateCount: number;
     activeEntryId?: string;
     tag?: string;
+    filePath?: string;
+    mainIdentity?: StableFileIdentity;
+    runtimeInfo?: KodaXSessionRuntimeInfo;
   }>();
 
   private projectJsonWritten = new Set<string>();
@@ -1870,16 +2441,47 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return this.migrationPromise;
   }
 
-  /** Update watermarks. Only overwrites fields the caller actually provided. */
-  private syncAppendState(id: string, data: SessionData, metaUpdateCount?: number): void {
+  /** Update watermarks without retaining or serializing the full Session graph. */
+  private syncAppendState(
+    id: string,
+    data: SessionData,
+    metaUpdateCount?: number,
+    fileWitness?: {
+      readonly filePath: string;
+      readonly mainIdentity: StableFileIdentity | undefined;
+    },
+  ): void {
     const prev = this.appendState.get(id);
     this.appendState.set(id, {
       lineageCount: data.lineage?.entries.length ?? prev?.lineageCount ?? 0,
+      lineagePrefix: data.lineage === undefined
+        ? prev?.lineagePrefix
+        : new WeakRef(data.lineage.entries),
       artifactCount: data.artifactLedger?.length ?? prev?.artifactCount ?? 0,
+      artifactPrefix: data.artifactLedger === undefined
+        ? prev?.artifactPrefix
+        : new WeakRef(data.artifactLedger),
       extensionCount: data.extensionRecords?.length ?? prev?.extensionCount ?? 0,
       metaUpdateCount: metaUpdateCount ?? prev?.metaUpdateCount ?? 0,
       activeEntryId: data.lineage?.activeEntryId ?? prev?.activeEntryId,
       tag: data.tag !== undefined ? data.tag : prev?.tag,
+      filePath: fileWitness?.filePath ?? prev?.filePath,
+      // A write without a fresh post-write witness must not inherit an older
+      // identity. The next append safely takes the cold merge path instead.
+      mainIdentity: fileWitness?.mainIdentity,
+      runtimeInfo: data.runtimeInfo ?? prev?.runtimeInfo,
+    });
+  }
+
+  private async syncAppendStateFromFile(
+    id: string,
+    data: SessionData,
+    filePath: string,
+    metaUpdateCount?: number,
+  ): Promise<void> {
+    this.syncAppendState(id, data, metaUpdateCount, {
+      filePath,
+      mainIdentity: await statStableFileIdentity(filePath) ?? undefined,
     });
   }
 
@@ -2098,13 +2700,23 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return this.resolveAmbiguousSessionLocation(id, stillPresent);
       }
     }
+    const hinted = await this.resolveSessionLocationHint(id, strict);
+    if (hinted !== undefined) return hinted;
 
-    const matches: string[] = [];
-    const flat = this.legacyFlatPath(id);
     let traversalComplete = true;
-    const flatPresence = inspectSessionCandidate(flat);
-    if (flatPresence === 'present') matches.push(flat);
-    if (flatPresence === 'unverifiable') traversalComplete = false;
+    try {
+      await fs.mkdir(path.join(this.sessionsDir, SESSION_LOCATION_INDEX_DIR), {
+        recursive: true,
+      });
+    } catch (error: unknown) {
+      traversalComplete = false;
+      reportStorageDiagnostic(
+        'warn',
+        `Unable to prepare the durable Session location index for ${id}.`,
+        error,
+      );
+    }
+    const flat = this.legacyFlatPath(id);
     let topologyBefore: SessionTopologyIdentity | null | undefined;
     try {
       topologyBefore = await statSessionTopologyIdentity(this.sessionsDir, id);
@@ -2120,13 +2732,21 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
       entries = [];
     }
+    const candidates = [flat];
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-      for (const candidate of [
+      candidates.push(
         path.join(this.sessionsDir, entry.name, `${id}.jsonl`),
         path.join(this.sessionsDir, entry.name, 'archived', `${id}.jsonl`),
-      ]) {
-        const presence = inspectSessionCandidate(candidate);
+      );
+    }
+    const matches: string[] = [];
+    const LOCATOR_STAT_CONCURRENCY = 48;
+    for (let offset = 0; offset < candidates.length; offset += LOCATOR_STAT_CONCURRENCY) {
+      const batch = candidates.slice(offset, offset + LOCATOR_STAT_CONCURRENCY);
+      const presences = await Promise.all(batch.map(inspectSessionCandidateAsync));
+      for (const [index, presence] of presences.entries()) {
+        const candidate = batch[index]!;
         if (presence === 'present') matches.push(candidate);
         if (presence === 'unverifiable') traversalComplete = false;
       }
@@ -2156,6 +2776,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       } else {
         this.verifiedLocationMisses.delete(id);
       }
+      await this.persistSessionLocationHint(id);
       return null;
     }
     this.verifiedLocationMisses.delete(id);
@@ -2168,9 +2789,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
           ? { topologyIdentity: topologyAfter }
           : {}),
       });
+      await this.persistSessionLocationHint(id);
       return matches[0]!;
     }
     this.sessionLocations.set(id, { kind: 'ambiguous', filePaths: matches });
+    await this.persistSessionLocationHint(id);
     if (strict) {
       throw new SessionReadError(
         'data_changed',
@@ -2394,13 +3017,118 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // ── Phase 2: Streaming write (no join) ──
   // Writes one JSONL line at a time via file handle, eliminating the giant
   // concatenated string that the old join('\n') approach produced.
+  private async rebuildConversationCache(
+    id: string,
+    mainPath: string,
+    lineage: KodaXSessionLineage,
+    runtimeInfo: KodaXSessionRuntimeInfo | undefined,
+  ): Promise<void> {
+    try {
+      const archivedEntries = await this.readArchivedEntries(id, mainPath, true);
+      const completeLineage = archivedEntries.length === 0
+        ? lineage
+        : {
+            ...lineage,
+            entries: mergeFullLineageEntries(archivedEntries, lineage.entries),
+          };
+      const bundle = await readStableSessionBundleAtPath(
+        this.sessionsDir,
+        id,
+        mainPath,
+        undefined,
+        true,
+      );
+      const history = buildSessionConversationHistory(completeLineage, bundle.sourceRevision);
+      if (await refreshConversationPageCache(
+        mainPath,
+        bundle.boundaryRevision,
+        history,
+        completeLineage,
+        runtimeInfo,
+      )) return;
+      await writeConversationPageCache(
+        mainPath,
+        bundle.boundaryRevision,
+        history,
+        completeLineage,
+        runtimeInfo,
+        SESSION_CONVERSATION_CACHE_CHUNK_BYTES,
+      );
+    } catch (error: unknown) {
+      try {
+        await removeConversationPageCache(mainPath);
+      } catch (cleanupError: unknown) {
+        reportStorageDiagnostic(
+          'warn',
+          `Unable to invalidate Conversation page cache for ${id}.`,
+          new AggregateError([error, cleanupError]),
+        );
+        return;
+      }
+      reportStorageDiagnostic(
+        'warn',
+        `Unable to prepare Conversation pages for ${id}; reads will use the canonical fallback.`,
+        error,
+      );
+    }
+  }
+
+  private async updateConversationCacheAfterAppend(
+    id: string,
+    mainPath: string,
+    priorBoundaryRevision: string,
+    priorLineageCount: number,
+    priorActiveEntryId: string | null | undefined,
+    lineage: KodaXSessionLineage,
+    runtimeInfo: KodaXSessionRuntimeInfo | undefined,
+  ): Promise<void> {
+    try {
+      const manifest = await readConversationPageCacheManifest(mainPath);
+      const projected = manifest?.boundaryRevision === priorBoundaryRevision
+        ? canAppendConversationPageCache(
+            manifest,
+            priorLineageCount,
+            priorActiveEntryId,
+            lineage,
+          )
+        : undefined;
+      if (manifest === undefined || projected === undefined) {
+        await this.rebuildConversationCache(id, mainPath, lineage, runtimeInfo);
+        return;
+      }
+      const bundle = await readStableSessionBundleAtPath(
+        this.sessionsDir,
+        id,
+        mainPath,
+        undefined,
+        true,
+      );
+      await appendConversationPageCache(
+        mainPath,
+        manifest,
+        bundle.boundaryRevision,
+        bundle.sourceRevision,
+        projected,
+        lineage,
+      );
+    } catch (error: unknown) {
+      reportStorageDiagnostic(
+        'warn',
+        `Unable to extend Conversation page cache for ${id}; rebuilding it.`,
+        error,
+      );
+      await this.rebuildConversationCache(id, mainPath, lineage, runtimeInfo);
+    }
+  }
+
   private async writeSessionInternal(
     id: string,
     data: SessionData,
     createdAt?: string,
     exactTargetPath?: string,
     verifiedTopology = this.verifiedLocationTopology(id),
-  ): Promise<void> {
+    conversationLineage?: KodaXSessionLineage,
+  ): Promise<string> {
     const dir = exactTargetPath
       ? path.dirname(exactTargetPath)
       : this.resolveWriteDir(id, data);
@@ -2458,6 +3186,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     } else {
       await write();
     }
+    await this.rebuildConversationCache(
+      id,
+      targetPath,
+      conversationLineage ?? lineage,
+      data.runtimeInfo,
+    );
     const knownMainPaths = [targetPath];
     if (legacy !== targetPath && fsSync.existsSync(legacy)) {
       knownMainPaths.push(legacy);
@@ -2476,6 +3210,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
             : {}),
         }
       : { kind: 'ambiguous', filePaths: knownMainPaths.sort() });
+    return targetPath;
   }
 
   // ── Merge helper ──
@@ -2528,21 +3263,27 @@ export class FileSessionStorage implements KodaXSessionStorage {
       existing?.filePath,
     );
     const persisted: SessionData = { ...merged, lineage: archiveResult.slimmedLineage };
-    await this.writeSessionInternal(
+    const targetPath = await this.writeSessionInternal(
       id,
       persisted,
       existing?.createdAt,
       existing?.filePath,
       verifiedTopology,
+      reconciledLineage,
     );
     // The caller continues with the unslimmed lineage. Keep its count as the
     // append watermark even though storage moved old entries to the sidecar.
-    this.syncAppendState(id, { ...merged, lineage: reconciledLineage });
+    await this.syncAppendStateFromFile(
+      id,
+      { ...merged, lineage: reconciledLineage },
+      targetPath,
+    );
   }
 
   // ── Phase 1: Append-only hot path ──
-  // Only appends new entries + a meta_update line.  O(1) cost regardless of
-  // total session size.  Falls back to full mergeAndWriteInternal when:
+  // Only writes new entries + a meta_update line. Existing prefixes are
+  // checked by object identity, without re-serializing their content. Falls
+  // back to full mergeAndWriteInternal when:
   //   - No cached watermark (process restart before load())
   //   - No file on disk (new session)
   //   - No lineage provided by caller
@@ -2560,14 +3301,26 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
 
-      // Caller-owned rewrites are authoritative cold-path transactions, not
-      // evidence of a concurrent writer. Handle them before comparing the
-      // process-local watermark with disk so explicit clears are not merged
-      // back from the persisted snapshot.
-      if (
+      // A caller-owned rewrite is authoritative only while the durable file
+      // still matches the process-local baseline. Compute the cold-path need
+      // now, but verify that baseline before allowing a full replacement.
+      const callerRequiresFullMerge = (
         !data.lineage
         || data.lineage.entries.length < cached.lineageCount
         || (data.artifactLedger?.length ?? 0) < cached.artifactCount
+        || !hasSameObjectPrefix(
+          cached.lineagePrefix,
+          data.lineage.entries,
+          cached.lineageCount,
+        )
+        || (
+          data.artifactLedger !== undefined
+          && !hasSameObjectPrefix(
+            cached.artifactPrefix,
+            data.artifactLedger,
+            cached.artifactCount,
+          )
+        )
         || (data.tag !== undefined && data.tag !== cached.tag)
         || data.extensionState !== undefined
         || data.actorSnapshot !== undefined
@@ -2577,44 +3330,47 @@ export class FileSessionStorage implements KodaXSessionStorage {
         || (
           data.extensionRecords !== undefined
           && cached.extensionCount > 0
-          && data.extensionRecords.length <= cached.extensionCount
         )
         || data.lineage.entries
           .slice(cached.lineageCount)
           .some((entry) => entry.type === 'compaction')
-      ) {
-        await this.mergeAndWriteInternal(id, data);
-        return;
-      }
+      );
 
       // The watermark is process-local. Another Runtime may have appended
       // while this instance was idle, even though both writers share the
       // cross-process file lock. Re-read under that lock and use the merge path
-      // unless the durable counts still match our observed baseline.
-      const latest = await this.readSession(id);
+      // unless the durable content still matches our observed baseline. This
+      // check must precede caller-authoritative rewrites: if another instance
+      // already rewrote the same ID, the persisted entry remains authoritative
+      // while the stale writer's genuinely new tail is merged alongside it.
+      const latestMainIdentity = cached.filePath === undefined
+        ? null
+        : await statStableFileIdentity(cached.filePath);
       if (
-        !latest
-        || !data.lineage
-        || (latest.data.lineage?.entries.length ?? 0) !== cached.lineageCount
-        || (latest.data.artifactLedger?.length ?? 0) !== cached.artifactCount
-        || (latest.data.extensionRecords?.length ?? 0) !== cached.extensionCount
-        || latest.data.lineage?.activeEntryId !== cached.activeEntryId
-        || !latest.data.lineage?.entries.every(
-          (entry, index) => data.lineage?.entries[index]?.id === entry.id,
-        )
-        || !(latest.data.artifactLedger ?? []).every(
-          (entry, index) => data.artifactLedger?.[index]?.id === entry.id,
-        )
-        || !(latest.data.extensionRecords ?? []).every(
-          (record, index) => data.extensionRecords?.[index]?.id === record.id,
-        )
+        cached.filePath === undefined
+        || cached.mainIdentity === undefined
+        || latestMainIdentity === null
+        || !sameStableFileIdentity(cached.mainIdentity, latestMainIdentity)
       ) {
+        const latest = await this.readSession(id);
         await this.mergeAndWriteInternal(
           id,
           latest ? mergeConcurrentAppendData(data, latest.data) : data,
         );
         return;
       }
+
+      if (callerRequiresFullMerge) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
+      const priorBoundaryRevision = await readStableSessionBundleBoundaryAtPath(
+        this.sessionsDir,
+        id,
+        cached.filePath,
+        true,
+      );
 
       // Compute delta
       const newLineage = data.lineage!.entries.slice(cached.lineageCount);
@@ -2643,20 +3399,39 @@ export class FileSessionStorage implements KodaXSessionStorage {
       };
       parts.push(JSON.stringify(metaUpdate));
 
-      if (parts.length > 0) {
+      const appendedContent = parts.length > 0 ? `\n${parts.join('\n')}` : '';
+      if (appendedContent.length > 0) {
         // The exact path is resolved under the same cross-process lock as the
         // append. An archive/unarchive cannot move the file between path
         // selection and write, so this never recreates an active duplicate.
-        await fs.appendFile(latest.filePath, '\n' + parts.join('\n'), 'utf-8');
+        await fs.appendFile(cached.filePath, appendedContent, 'utf-8');
       }
 
+      await this.updateConversationCacheAfterAppend(
+        id,
+        cached.filePath,
+        priorBoundaryRevision,
+        cached.lineageCount,
+        cached.activeEntryId,
+        data.lineage!,
+        data.runtimeInfo ?? cached.runtimeInfo,
+      );
+
       // Update watermark inside the queue
-      this.syncAppendState(id, data, cached.metaUpdateCount + 1);
+      this.syncAppendState(
+        id,
+        data,
+        cached.metaUpdateCount + 1,
+        {
+          filePath: cached.filePath,
+          mainIdentity: await statStableFileIdentity(cached.filePath) ?? undefined,
+        },
+      );
     });
 
     // Async maintenance (also goes through serializedWrite, won't race with append)
     const state = this.appendState.get(id);
-    if (state && this.shouldRunMaintenance(state)) {
+    if (state && data.lineage && this.shouldRunMaintenance(state, data.lineage)) {
       this.runMaintenance(id).catch((err) => {
         reportStorageDiagnostic('error', 'Archive maintenance failed.', err);
       });
@@ -2664,10 +3439,17 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   // ── Phase 3: Maintenance ──
-  private shouldRunMaintenance(state: { metaUpdateCount: number; lineageCount: number }): boolean {
+  private shouldRunMaintenance(
+    state: { metaUpdateCount: number; lineageCount: number },
+    lineage: KodaXSessionLineage,
+  ): boolean {
     if (state.metaUpdateCount >= 50) return true;
-    if (state.lineageCount > 500) return true;
-    return false;
+    if (state.lineageCount <= 500) return false;
+    // A long linear history has nothing to archive. Rewriting it after every
+    // append only turns the nominal O(1) hot path back into an O(n) write and
+    // leaves background lock work behind. Large disconnected histories still
+    // trigger the existing archival maintenance.
+    return archiveOldIslands(lineage).archivedEntries.length > 0;
   }
 
   private async runMaintenance(id: string): Promise<void> {
@@ -2679,13 +3461,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
       const { slimmedLineage, archivedEntries, archiveBatchId } = archiveOldIslands(resolved.data.lineage);
       if (archivedEntries.length === 0) {
         // Nothing to archive, but still rewrite to merge meta_updates
-        await this.writeSessionInternal(
+        const targetPath = await this.writeSessionInternal(
           id,
           resolved.data,
           resolved.createdAt,
           resolved.filePath,
         );
-        this.syncAppendState(id, resolved.data, 0);
+        await this.syncAppendStateFromFile(id, resolved.data, targetPath, 0);
         return;
       }
 
@@ -2703,7 +3485,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
       // Full streamed rewrite of main session with slimmed lineage
       const cleanedData: SessionData = { ...resolved.data, lineage: slimmedLineage };
-      await this.writeSessionInternal(
+      const targetPath = await this.writeSessionInternal(
         id,
         cleanedData,
         resolved.createdAt,
@@ -2711,7 +3493,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       );
       // Preserve the live caller's unslimmed count. Reset only maintenance
       // cadence so the next append does not repeat already persisted entries.
-      this.syncAppendState(id, resolved.data, 0);
+      await this.syncAppendStateFromFile(id, resolved.data, targetPath, 0);
     });
   }
 
@@ -2720,6 +3502,37 @@ export class FileSessionStorage implements KodaXSessionStorage {
   async save(id: string, data: SessionData): Promise<void> {
     await this.serializedWrite(id, async () => {
       await this.mergeAndWriteInternal(id, data);
+    });
+  }
+
+  /**
+   * Fast creation path for IDs produced by KodaX's timestamp + random-bit
+   * generator. The per-ID cross-process lock and exact target check preserve
+   * atomic creation without an all-project negative lookup. Caller-supplied
+   * IDs must continue through the ordinary global conflict check.
+  */
+  async createGenerated(id: string, data: SessionData): Promise<void> {
+    await this.serializedWrite(id, async () => {
+      await fs.mkdir(path.join(this.sessionsDir, SESSION_LOCATION_INDEX_DIR), {
+        recursive: true,
+      });
+      const targetPath = this.writeFilePath(id, data);
+      if (fsSync.existsSync(targetPath) || fsSync.existsSync(this.legacyFlatPath(id))) {
+        throw Object.assign(new Error(`Session already exists: ${id}`), {
+          code: 'conflict' as const,
+        });
+      }
+      await this.writeSessionInternal(id, data, undefined, targetPath, undefined);
+      const topology = this.readSessionTopologyIdentitySync(id);
+      if (topology !== undefined) {
+        this.sessionLocations.set(id, {
+          kind: 'located',
+          filePath: targetPath,
+          globallyVerified: true,
+          topologyIdentity: topology,
+        });
+      }
+      await this.syncAppendStateFromFile(id, data, targetPath);
     });
   }
 
@@ -2760,13 +3573,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
         ...resolved.data,
         actorSnapshot: structuredClone(snapshot),
       };
-      await this.writeSessionInternal(
+      const targetPath = await this.writeSessionInternal(
         id,
         updated,
         resolved.createdAt,
         resolved.filePath,
       );
-      this.syncAppendState(id, updated);
+      await this.syncAppendStateFromFile(id, updated, targetPath);
     });
   }
 
@@ -2787,6 +3600,160 @@ export class FileSessionStorage implements KodaXSessionStorage {
       options,
     );
     return resolved ? structuredClone(resolved.data) : null;
+  }
+
+  async readConversationPageCache(
+    id: string,
+    input: ConversationPageCacheInput,
+    options: SessionReadOptions = {},
+  ): Promise<ConversationPageCachePage | null> {
+    throwIfSessionReadAborted(options.signal);
+    const operation = (async (): Promise<ConversationPageCachePage | null> => {
+      const mainPath = await this.resolveSessionLocation(id, true);
+      if (mainPath === null) return null;
+      const topologyIdentity = this.verifiedLocationTopology(id);
+      try {
+        const before = await readStableSessionBundleBoundaryAtPath(
+          this.sessionsDir,
+          id,
+          mainPath,
+        );
+        const page = await readPreparedConversationPage(mainPath, before, {
+          ...input,
+          signal: options.signal,
+        });
+        const after = await readStableSessionBundleBoundaryAtPath(
+          this.sessionsDir,
+          id,
+          mainPath,
+        );
+        this.assertLocationTopologyUnchanged(id, topologyIdentity);
+        if (before !== after) {
+          throw new ConversationPageCacheStaleError('Conversation history changed during paging');
+        }
+        if (page === null && input.expectedRevision !== undefined) {
+          throw new ConversationPageCacheStaleError('Conversation history changed; request a fresh page');
+        }
+        return page;
+      } catch (error: unknown) {
+        if (error instanceof ConversationPageCacheStaleError) {
+          if (input.expectedRevision === undefined) return null;
+          throw new SessionReadError('data_changed', error.message);
+        }
+        throw error;
+      }
+    })();
+    return raceSessionRead(operation, options);
+  }
+
+  async readConversationPageBoundary(
+    id: string,
+    options: SessionReadOptions = {},
+  ): Promise<{
+    readonly boundaryRevision: string;
+    readonly admission: ConversationPageCacheAdmission;
+  } | null> {
+    throwIfSessionReadAborted(options.signal);
+    const operation = (async () => {
+      const mainPath = await this.resolveSessionLocation(id, true);
+      if (mainPath === null) return null;
+      const topologyIdentity = this.verifiedLocationTopology(id);
+      const before = await readStableSessionBundleBoundaryAtPath(
+        this.sessionsDir,
+        id,
+        mainPath,
+      );
+      const admission = await readConversationPageAdmission(mainPath);
+      const after = await readStableSessionBundleBoundaryAtPath(
+        this.sessionsDir,
+        id,
+        mainPath,
+      );
+      this.assertLocationTopologyUnchanged(id, topologyIdentity);
+      if (before !== after) {
+        throw new SessionReadError(
+          'data_changed',
+          'Session changed while validating a Conversation page boundary',
+        );
+      }
+      return { boundaryRevision: after, admission };
+    })();
+    return raceSessionRead(operation, options);
+  }
+
+  async prepareConversationPageCache(
+    id: string,
+    history: SessionConversationHistoryData,
+    lineage: KodaXSessionLineage,
+    runtimeInfo: KodaXSessionRuntimeInfo | undefined,
+    boundaryRevision: string,
+    options: SessionReadOptions = {},
+  ): Promise<void> {
+    throwIfSessionReadAborted(options.signal);
+    const mainPath = await this.resolveSessionLocation(id, true);
+    if (mainPath === null) {
+      throw new SessionReadError('data_changed', 'Session moved before page preparation');
+    }
+    await raceSessionRead(this.serializedWrite(id, async () => {
+      throwIfSessionReadAborted(options.signal);
+      const currentBoundary = await readStableSessionBundleBoundaryAtPath(
+        this.sessionsDir,
+        id,
+        mainPath,
+        true,
+      );
+      if (currentBoundary !== boundaryRevision) {
+        throw new SessionReadError('data_changed', 'Session changed before page preparation');
+      }
+      await writeConversationPageCache(
+        mainPath,
+        boundaryRevision,
+        history,
+        lineage,
+        runtimeInfo,
+        SESSION_CONVERSATION_CACHE_CHUNK_BYTES,
+      );
+    }), options);
+  }
+
+  async readConversationPageCacheChunk(
+    id: string,
+    input: ConversationPageCacheChunkInput,
+    options: SessionReadOptions = {},
+  ): Promise<ConversationPageCacheChunk | null> {
+    throwIfSessionReadAborted(options.signal);
+    const operation = (async (): Promise<ConversationPageCacheChunk | null> => {
+      const mainPath = await this.resolveSessionLocation(id, true);
+      if (mainPath === null) return null;
+      const topologyIdentity = this.verifiedLocationTopology(id);
+      try {
+        const before = await readStableSessionBundleBoundaryAtPath(
+          this.sessionsDir,
+          id,
+          mainPath,
+        );
+        const chunk = await readPreparedConversationChunk(mainPath, before, {
+          ...input,
+          signal: options.signal,
+        });
+        const after = await readStableSessionBundleBoundaryAtPath(
+          this.sessionsDir,
+          id,
+          mainPath,
+        );
+        this.assertLocationTopologyUnchanged(id, topologyIdentity);
+        if (before !== after || chunk === null) {
+          throw new ConversationPageCacheStaleError('Conversation history changed; request a fresh page');
+        }
+        return chunk;
+      } catch (error: unknown) {
+        if (error instanceof ConversationPageCacheStaleError) {
+          throw new SessionReadError('data_changed', error.message);
+        }
+        throw error;
+      }
+    })();
+    return raceSessionRead(operation, options);
   }
 
   /** Stable read-only main + sidecar snapshot with no lock or migration writes. */
@@ -2861,6 +3828,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       data: structuredClone(resolved.data),
       lineage,
       sourceRevision: bundle.sourceRevision,
+      boundaryRevision: bundle.boundaryRevision,
     };
   }
 
@@ -2872,7 +3840,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
     // Initialize append watermark so subsequent appendSessionDelta calls
     // don't need to fallback to full rewrite.
-    this.syncAppendState(id, resolved.data);
+    this.syncAppendState(
+      id,
+      resolved.data,
+      undefined,
+      {
+        filePath: resolved.filePath,
+        mainIdentity: resolved.mainIdentity,
+      },
+    );
 
     const { data } = resolved;
     // Label only — used by the no-op `warnMalformedSessionData(filePath, 0)`
@@ -2939,19 +3915,28 @@ export class FileSessionStorage implements KodaXSessionStorage {
             (turn) => turn.state === 'accepted' || turn.state === 'running',
           )
         ) {
-          this.syncAppendState(id, latest.data);
+          this.syncAppendState(id, latest.data, undefined, {
+            filePath: latest.filePath,
+            mainIdentity: latest.mainIdentity,
+          });
           return;
         }
         if (
           !latest.data.errorMetadata?.consecutiveErrors
           || latest.data.errorMetadata.consecutiveErrors <= 0
         ) {
-          this.syncAppendState(id, latest.data);
+          this.syncAppendState(id, latest.data, undefined, {
+            filePath: latest.filePath,
+            mainIdentity: latest.mainIdentity,
+          });
           return;
         }
         const cleaned = cleanupIncompleteToolCalls(latest.data.messages);
         if (cleaned === latest.data.messages) {
-          this.syncAppendState(id, latest.data);
+          this.syncAppendState(id, latest.data, undefined, {
+            filePath: latest.filePath,
+            mainIdentity: latest.mainIdentity,
+          });
           return;
         }
         const next: SessionData = {
@@ -2963,13 +3948,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
           },
           lineage: createSessionLineage(cleaned, latest.data.lineage),
         };
-        await this.writeSessionInternal(
+        const targetPath = await this.writeSessionInternal(
           id,
           next,
           latest.createdAt,
           latest.filePath,
         );
-        this.syncAppendState(id, next);
+        await this.syncAppendStateFromFile(id, next, targetPath);
         current = next;
         recovered = true;
       });
@@ -3039,13 +4024,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
           messages: getSessionMessagesFromLineage(lineage),
           lineage,
         };
-        await this.writeSessionInternal(
+        const targetPath = await this.writeSessionInternal(
           id,
           nextData,
           resolved.createdAt,
           resolved.filePath,
         );
-        this.syncAppendState(id, nextData);
+        await this.syncAppendStateFromFile(id, nextData, targetPath);
         result = nextData;
       }),
     );
@@ -3135,13 +4120,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
           [...fullEntriesBeforeRewind, correctedRewindMarker],
           resolved.filePath,
         );
-        await this.writeSessionInternal(
+        const targetPath = await this.writeSessionInternal(
           id,
           nextData,
           resolved.createdAt,
           resolved.filePath,
         );
-        this.syncAppendState(id, nextData);
+        await this.syncAppendStateFromFile(id, nextData, targetPath);
         result = nextData;
       }),
     );
@@ -3161,13 +4146,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
         ...resolved.data,
         lineage,
       };
-      await this.writeSessionInternal(
+      const targetPath = await this.writeSessionInternal(
         id,
         nextData,
         resolved.createdAt,
         resolved.filePath,
       );
-      this.syncAppendState(id, nextData);
+      await this.syncAppendStateFromFile(id, nextData, targetPath);
       result = nextData;
     });
     return result;
@@ -3299,9 +4284,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const hasProjectIntent = requestedGitRoot !== undefined || this.hostCwd !== undefined;
     const currentGitRoot =
       requestedGitRoot ?? (this.hostCwd ? await getGitRoot(this.hostCwd) : null);
-    const currentRuntime = await inspectWorkspaceRuntime({
-      cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
-    });
+    const currentRuntime = hasProjectIntent
+      ? await inspectWorkspaceRuntime({
+          cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
+        })
+      : undefined;
     // FEATURE_219 — candidate files come from the CURRENT project's directory
     // (O(sessions-in-project), the whole point of the per-project layout) plus
     // the legacy flat pool (compat until auto-migration empties it). When there
@@ -3316,52 +4303,58 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // stored-runtimeInfo quirk). Flat-pool files are untrusted and still filter.
     const candidatePaths: Array<{ path: string; trusted: boolean; archived: boolean }> = [];
     const locatedPaths: string[] = [];
-    const currentProjectKey = deriveProjectKeyFromData({
-      gitRoot: currentGitRoot ?? undefined,
-      runtimeInfo: currentRuntime,
-    }).key;
+    const currentProjectKey = currentRuntime === undefined
+      ? undefined
+      : deriveProjectKeyFromData({
+          gitRoot: currentGitRoot ?? undefined,
+          runtimeInfo: currentRuntime,
+        }).key;
     const isSidecar = (f: string): boolean => f.endsWith('.archive.jsonl') || f.endsWith('.islands.jsonl');
-    const projectDirNames = hasProjectIntent
+    const projectDirNames = currentProjectKey !== undefined
       ? [currentProjectKey]
       : topEntries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
     let locationTraversalComplete = !hasProjectIntent;
-    for (const key of projectDirNames) {
-      let dirFiles: string[] = [];
+    const readDirectory = async (directory: string): Promise<{
+      readonly files: readonly string[];
+      readonly complete: boolean;
+    }> => {
       try {
-        dirFiles = await fs.readdir(this.projectDir(key));
+        return { files: await fs.readdir(directory), complete: true };
       } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return {
+          files: [],
+          complete: (error as NodeJS.ErrnoException).code === 'ENOENT',
+        };
+      }
+    };
+    const LIST_DIRECTORY_CONCURRENCY = 48;
+    for (let offset = 0; offset < projectDirNames.length; offset += LIST_DIRECTORY_CONCURRENCY) {
+      const projectFiles = await Promise.all(
+        projectDirNames.slice(offset, offset + LIST_DIRECTORY_CONCURRENCY).map(async (key) => {
+          const projectDir = this.projectDir(key);
+          const [active, archived] = await Promise.all([
+            readDirectory(projectDir),
+            readDirectory(path.join(projectDir, 'archived')),
+          ]);
+          return { projectDir, active, archived };
+        }),
+      );
+      for (const project of projectFiles) {
+        if (!project.active.complete || !project.archived.complete) {
           locationTraversalComplete = false;
         }
-        continue;
-      }
-      for (const f of dirFiles) {
-        if (f.endsWith('.jsonl') && !isSidecar(f)) {
-          const filePath = path.join(this.projectDir(key), f);
+        for (const file of project.active.files) {
+          if (!file.endsWith('.jsonl') || isSidecar(file)) continue;
+          const filePath = path.join(project.projectDir, file);
           locatedPaths.push(filePath);
           candidatePaths.push({ path: filePath, trusted: hasProjectIntent, archived: false });
         }
-      }
-      // FEATURE_219 Phase 4 — whole-session archive lives in <key>/archived/.
-      let archivedFiles: string[] = [];
-      try {
-        archivedFiles = await fs.readdir(path.join(this.projectDir(key), 'archived'));
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          locationTraversalComplete = false;
-        }
-        archivedFiles = [];
-      }
-      for (const f of archivedFiles) {
-        if (f.endsWith('.jsonl') && !isSidecar(f)) {
-          const filePath = path.join(this.projectDir(key), 'archived', f);
+        for (const file of project.archived.files) {
+          if (!file.endsWith('.jsonl') || isSidecar(file)) continue;
+          const filePath = path.join(project.projectDir, 'archived', file);
           locatedPaths.push(filePath);
           if (opts?.includeArchived) {
-            candidatePaths.push({
-              path: filePath,
-              trusted: hasProjectIntent,
-              archived: true,
-            });
+            candidatePaths.push({ path: filePath, trusted: hasProjectIntent, archived: true });
           }
         }
       }
@@ -3413,7 +4406,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
           const scope: KodaXSessionScope = first.scope === 'managed-task-worker'
             ? 'managed-task-worker'
             : 'user';
-          if (hasProjectIntent && !trusted) {
+          if (currentRuntime !== undefined && currentProjectKey !== undefined && !trusted) {
             const sameCanonicalRepo = isSameCanonicalRepo(currentRuntime, sessionRuntime);
             // FEATURE_157: Windows-aware comparison (case-insensitive on
             // win32/darwin) — see `pathsEqual` JSDoc for the resume-loss
@@ -3573,6 +4566,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
       const verifiedTopology = this.verifiedLocationTopology(id);
+      await removeConversationPageCache(resolved.filePath).catch((error: unknown) => {
+        reportStorageDiagnostic('warn', `Unable to remove Conversation page cache for ${id}.`, error);
+      });
       await this.withSessionLocationTopologyChange(
         () => this.movePair(id, dir, path.join(dir, 'archived')),
       );
@@ -3587,6 +4583,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
           ? { topologyIdentity: currentTopology }
           : {}),
       });
+      await this.rebuildConversationCache(
+        id,
+        path.join(dir, 'archived', `${id}.jsonl`),
+        resolved.data.lineage ?? createSessionLineage(resolved.data.messages),
+        resolved.data.runtimeInfo,
+      );
       result = true;
     });
     return result;
@@ -3617,6 +4619,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
       const verifiedTopology = this.verifiedLocationTopology(id);
+      await removeConversationPageCache(resolved.filePath).catch((error: unknown) => {
+        reportStorageDiagnostic('warn', `Unable to remove Conversation page cache for ${id}.`, error);
+      });
       await this.withSessionLocationTopologyChange(
         () => this.movePair(id, dir, path.dirname(dir)),
       );
@@ -3631,6 +4636,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
           ? { topologyIdentity: currentTopology }
           : {}),
       });
+      await this.rebuildConversationCache(
+        id,
+        path.join(path.dirname(dir), `${id}.jsonl`),
+        resolved.data.lineage ?? createSessionLineage(resolved.data.messages),
+        resolved.data.runtimeInfo,
+      );
       result = true;
     });
     return result;
@@ -3804,6 +4815,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
       await this.withSessionLocationTopologyChange(
         () => this.removeFileSetAtomically(id, targets),
       );
+      await removeConversationPageCache(located).catch((error: unknown) => {
+        reportStorageDiagnostic('warn', `Unable to remove Conversation page cache for ${id}.`, error);
+      });
       this.sessionLocations.delete(id);
     });
   }
@@ -3884,6 +4898,9 @@ export class FileSessionStorage implements KodaXSessionStorage {
               filePath,
             ]),
           );
+          await removeConversationPageCache(filePath).catch((error: unknown) => {
+            reportStorageDiagnostic('warn', `Unable to remove Conversation page cache for ${id}.`, error);
+          });
           this.sessionLocations.delete(id);
         });
       } catch {
