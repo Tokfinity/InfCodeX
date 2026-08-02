@@ -47,15 +47,13 @@ export async function inspectWorkspaceRuntime(options: {
   const workspaceRoot = normalizePath(
     await gitStdout(executionCwd, ['rev-parse', '--show-toplevel']),
   );
-  const commonDir = await gitStdout(
-    workspaceRoot ?? executionCwd,
-    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
-  ) ?? await gitStdout(
-    workspaceRoot ?? executionCwd,
-    ['rev-parse', '--git-common-dir'],
-  );
-  const branch = await gitStdout(workspaceRoot ?? executionCwd, ['branch', '--show-current'])
-    ?? await gitStdout(workspaceRoot ?? executionCwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const repositoryCwd = workspaceRoot ?? executionCwd;
+  const [commonDir, branch] = await Promise.all([
+    gitStdout(repositoryCwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+      .then((value) => value ?? gitStdout(repositoryCwd, ['rev-parse', '--git-common-dir'])),
+    gitStdout(repositoryCwd, ['branch', '--show-current'])
+      .then((value) => value ?? gitStdout(repositoryCwd, ['rev-parse', '--abbrev-ref', 'HEAD'])),
+  ]);
 
   return {
     canonicalRepoRoot: deriveCanonicalRepoRoot(commonDir) ?? workspaceRoot,
