@@ -548,6 +548,8 @@ export function readRuntimeDaemonState(paths: RuntimeDaemonPaths): RuntimeDaemon
   }
 }
 
+const MAX_RETAINED_SHUTDOWN_OUTCOMES = 32;
+
 function runtimeDaemonShutdownOutcomePath(
   paths: RuntimeDaemonPaths,
   identity: RuntimeDaemonShutdownIdentity,
@@ -561,7 +563,7 @@ function runtimeDaemonShutdownOutcomePath(
 export function writeRuntimeDaemonShutdownOutcome(
   paths: RuntimeDaemonPaths,
   outcome: RuntimeDaemonShutdownOutcome,
-): void {
+): readonly Error[] {
   ensureRuntimeDaemonDirectories(paths);
   const target = runtimeDaemonShutdownOutcomePath(paths, outcome);
   const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
@@ -577,6 +579,39 @@ export function writeRuntimeDaemonShutdownOutcome(
   } finally {
     fs.rmSync(temporary, { force: true });
   }
+  return pruneRuntimeDaemonShutdownOutcomes(paths, target);
+}
+
+function pruneRuntimeDaemonShutdownOutcomes(
+  paths: RuntimeDaemonPaths,
+  preservedPath: string,
+): readonly Error[] {
+  const failures: Error[] = [];
+  let candidates: Array<{ readonly path: string; readonly mtimeMs: number }> = [];
+  try {
+    candidates = fs.readdirSync(paths.rootDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile()
+        && entry.name.startsWith('shutdown-outcome.')
+        && entry.name.endsWith('.json'))
+      .map((entry) => {
+        const candidatePath = path.join(paths.rootDir, entry.name);
+        return { path: candidatePath, mtimeMs: fs.statSync(candidatePath).mtimeMs };
+      })
+      .sort((left, right) => right.mtimeMs - left.mtimeMs
+        || right.path.localeCompare(left.path));
+  } catch (error: unknown) {
+    return [error instanceof Error ? error : new Error(String(error))];
+  }
+  const removable = candidates.filter((candidate) => candidate.path !== preservedPath)
+    .slice(MAX_RETAINED_SHUTDOWN_OUTCOMES - 1);
+  for (const candidate of removable) {
+    try {
+      fs.rmSync(candidate.path, { force: true });
+    } catch (error: unknown) {
+      failures.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return failures;
 }
 
 export function readRuntimeDaemonShutdownOutcome(

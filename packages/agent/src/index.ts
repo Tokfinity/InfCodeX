@@ -416,6 +416,7 @@ export {
   killChildProcessTreeSync,
   killPidTree,
   killPidTreeSync,
+  readProcessStartIdentity,
   rememberChildProcessTree,
   type ProcessTreeKillResult,
   type ProcessTreeKillStatus,

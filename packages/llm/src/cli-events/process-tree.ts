@@ -1,7 +1,8 @@
 import { spawnSync, type ChildProcess } from 'node:child_process';
 
-// Keep this file in sync with packages/agent/src/runtime/process-tree.ts.
-// @kodax-ai/llm intentionally does not depend on @kodax-ai/agent.
+// Keep Windows snapshot, identity-fence, and termination semantics in sync with
+// packages/agent/src/runtime/process-tree.ts. Public exports and timeout
+// plumbing intentionally differ because @kodax-ai/llm stays dependency-light.
 
 const TASKKILL_TIMEOUT_MS = 2_000;
 const FORCE_WAIT_MS = 2_000;
@@ -529,9 +530,14 @@ export function rememberChildProcessTree(child: ChildProcess): string | undefine
     });
     return tracked.root.creationTime;
   }
-  const root = snapshot?.find((identity) => (
+  let root = snapshot?.find((identity) => (
     identity.pid === child.pid && identity.creationTime !== '0'
   ));
+  if (root === undefined && snapshot !== undefined && !isExited(child)) {
+    root = readWindowsProcessSnapshot()?.find((identity) => (
+      identity.pid === child.pid && identity.creationTime !== '0'
+    ));
+  }
   if (root === undefined || isExited(child)) return undefined;
   windowsCaptureByChild.set(child, {
     root,

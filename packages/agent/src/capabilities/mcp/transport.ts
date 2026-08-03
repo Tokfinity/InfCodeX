@@ -7,7 +7,6 @@ import { stripHardenedEnvVars } from '../../runtime/process-hardening.js';
 import {
   killChildProcessTree,
   killChildProcessTreeSync,
-  isChildProcessExited,
   rememberChildProcessTree,
 } from '../../runtime/process-tree.js';
 import { registerManagedChildProcess } from '../../runtime/managed-child-processes.js';
@@ -261,12 +260,11 @@ export function createStdioTransport(config: {
       child.stdout.removeAllListeners('data');
       child.stderr.removeAllListeners('data');
       const attempt = (async (): Promise<void> => {
-        const rootAlreadyExited = isChildProcessExited(child);
         const result = await killChildProcessTree(child, { gracefulStdinEnd: true });
         if (result.status === 'unknown') {
-          // Preserve registry and host-exit recovery evidence, but do not turn a
-          // server's prior natural exit into a close failure.
-          if (rootAlreadyExited) return;
+          // Preserve registry and host-exit recovery evidence. A natural root
+          // exit does not prove that descendants are gone, so close must report
+          // the same retryable failure that already blocks reopen.
           throw new McpTransportCleanupIncompleteError();
         }
         removeCleanupOnProcessExit?.();

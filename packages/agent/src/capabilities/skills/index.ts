@@ -83,3 +83,8 @@ export {
   formatSkillActivationMessage,
 } from './skill-expander.js';
 export type { SkillExpansionResult } from './skill-expander.js';
+
+export {
+  dispatchSkillCreatorTool,
+  isSkillCreatorDispatchAction,
+} from './skill-creator-dispatcher.js';

@@ -969,6 +969,11 @@ describe('daemon CLI smoke', () => {
     const lockFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.lock');
     expect(fs.existsSync(stateFile)).toBe(false);
     expect(fs.existsSync(lockFile)).toBe(false);
+    const shutdownOutcomes = fs.readdirSync(path.dirname(stateFile)).filter(
+      (name) => name.startsWith('shutdown-outcome.'),
+    );
+    expect(shutdownOutcomes).toHaveLength(2);
+    expect(new Set(shutdownOutcomes.map((name) => name.split('.')[1])).size).toBe(2);
   }, 180_000);
 
   it('shuts down a test-owned daemon when its explicitly watched parent exits', async () => {
@@ -1122,6 +1127,7 @@ describe('daemon CLI smoke', () => {
       'start', '--home', homeDir, '--profile', profile,
       '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
     ], {
+      NODE_ENV: 'test',
       KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG: '1',
     });
     const daemonPid = readDaemonPid(homeDir, profile);

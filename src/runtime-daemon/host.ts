@@ -200,7 +200,12 @@ export async function startRuntimeDaemonHost(
       }
       if (!runtimeClosed) {
         try {
-          if (process.env.KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG === '1') {
+          // Test-only fault injection; NODE_ENV prevents an accidentally
+          // inherited internal variable from hanging a production host close.
+          if (
+            process.env.NODE_ENV === 'test'
+            && process.env.KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG === '1'
+          ) {
             await new Promise<void>(() => undefined);
           }
           await options.runtime.close();

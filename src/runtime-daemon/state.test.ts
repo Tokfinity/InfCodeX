@@ -137,6 +137,28 @@ describe('runtime daemon state paths', () => {
     expect(readRuntimeDaemonShutdownOutcome(paths, second)).toBeUndefined();
   });
 
+  it('retains a bounded multi-reader window of shutdown outcomes', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'space');
+    for (let index = 0; index < 40; index += 1) {
+      writeRuntimeDaemonShutdownOutcome(paths, {
+        version: 1,
+        runtimeId: `runtime-${String(index).padStart(2, '0')}`,
+        pid: 4_000 + index,
+        status: 'succeeded',
+        completedAt: new Date(Date.UTC(2026, 7, 3, 0, 0, index)).toISOString(),
+      });
+    }
+
+    const outcomes = fs.readdirSync(paths.rootDir).filter(
+      (name) => name.startsWith('shutdown-outcome.'),
+    );
+    expect(outcomes).toHaveLength(32);
+    expect(readRuntimeDaemonShutdownOutcome(paths, {
+      runtimeId: 'runtime-39',
+      pid: 4_039,
+    })).toMatchObject({ status: 'succeeded' });
+  });
+
   it('preserves the legacy endpoint scope for canonical config and isolates arbitrary config homes', () => {
     const homeDir = tempHome();
 

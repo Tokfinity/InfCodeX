@@ -150,7 +150,7 @@ import {
 import {
   searchSessionHistoryCooperatively,
   validateSessionHistorySearchQuery,
-} from "../packages/agent/src/session-lineage/history-retrieval.js";
+} from "@kodax-ai/agent/session-lineage";
 import type {
   AgentArtifactPolicy,
   AgentActorClient,

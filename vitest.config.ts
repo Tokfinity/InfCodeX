@@ -46,14 +46,14 @@ export function createVitestConfig(options: TestSuiteOptions = {}) {
         // type-only subpaths below, which are erased at runtime).
         '@kodax-ai/agent/workflow': resolveFromRoot('packages', 'agent', 'src', 'workflow', 'index.ts'),
         '@kodax-ai/agent/experimental-memory': resolveFromRoot('packages', 'agent', 'src', 'experimental-memory', 'index.ts'),
+        '@kodax-ai/agent/session-lineage': resolveFromRoot('packages', 'agent', 'src', 'session-lineage', 'index.ts'),
+        '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
+        '@kodax-ai/agent/tracing': resolveFromRoot('packages', 'agent', 'src', 'tracing', 'index.ts'),
         '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
         '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
         '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
         '@kodax-ai/repl/cli-resume': resolveFromRoot('packages', 'repl', 'src', 'cli-resume.ts'),
         '@kodax-ai/repl': resolveFromRoot('packages', 'repl', 'src', 'index.ts'),
-        '@kodax-ai/agent/session-lineage': resolveFromRoot('packages', 'agent', 'src', 'session-lineage', 'index.ts'),
-        '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
-        '@kodax-ai/agent/tracing': resolveFromRoot('packages', 'agent', 'src', 'tracing', 'index.ts'),
       },
     },
     test: {

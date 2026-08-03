@@ -78,6 +78,16 @@ describe('LLM Windows process-tree identity fences', () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
+  it('retries one complete snapshot when a newly spawned root is initially absent', () => {
+    setWindows();
+    spawnSyncMock
+      .mockReturnValueOnce(snapshot('1,0,100\n'))
+      .mockReturnValueOnce(snapshot('4242,1,111\n'));
+
+    expect(rememberChildProcessTree(fakeChild(4_242) as never)).toBe('111');
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+  });
+
   it('attempts the retained exact root identity when a fresh snapshot fails', async () => {
     setWindows();
     const child = fakeChild(4_242);

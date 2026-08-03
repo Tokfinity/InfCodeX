@@ -4,8 +4,9 @@ import {
 } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-// Keep this file in sync with packages/llm/src/cli-events/process-tree.ts.
-// @kodax-ai/llm stays dependency-light, so it carries a small local copy.
+// Keep Windows snapshot, identity-fence, and termination semantics in sync with
+// packages/llm/src/cli-events/process-tree.ts. Public exports and timeout
+// plumbing intentionally differ because @kodax-ai/llm stays dependency-light.
 
 const DEFAULT_GRACE_MS = 300;
 const DEFAULT_FORCE_MS = 2_000;
@@ -587,9 +588,14 @@ export function rememberChildProcessTree(child: ChildProcess): string | undefine
     });
     return tracked.root.creationTime;
   }
-  const root = snapshot?.find((identity) => (
+  let root = snapshot?.find((identity) => (
     identity.pid === child.pid && identity.creationTime !== '0'
   ));
+  if (root === undefined && snapshot !== undefined && !isChildProcessExited(child)) {
+    root = readWindowsProcessSnapshot()?.find((identity) => (
+      identity.pid === child.pid && identity.creationTime !== '0'
+    ));
+  }
   if (root === undefined || isChildProcessExited(child)) return undefined;
   windowsCaptureByChild.set(child, {
     root,

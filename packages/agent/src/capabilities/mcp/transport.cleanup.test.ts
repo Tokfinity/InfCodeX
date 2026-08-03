@@ -93,7 +93,7 @@ describe('MCP stdio cleanup evidence', () => {
     expect(unregisterMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the host-exit fallback after the MCP root exits naturally', async () => {
+  it('reports incomplete cleanup and blocks reopen after the MCP root exits naturally', async () => {
     const baselineExitListeners = process.listenerCount('exit');
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
@@ -110,7 +110,14 @@ describe('MCP stdio cleanup evidence', () => {
 
     expect(rememberChildProcessTreeMock).toHaveBeenCalledWith(child);
     expect(process.listenerCount('exit')).toBe(baselineExitListeners + 1);
-    await expect(transport.close()).resolves.toBeUndefined();
+    await expect(transport.close()).rejects.toBeInstanceOf(
+      McpTransportCleanupIncompleteError,
+    );
+    await expect(transport.open({
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onClose: vi.fn(),
+    })).rejects.toBeInstanceOf(McpTransportCleanupIncompleteError);
     expect(unregisterMock).not.toHaveBeenCalled();
     expect(process.listenerCount('exit')).toBe(baselineExitListeners + 1);
   });

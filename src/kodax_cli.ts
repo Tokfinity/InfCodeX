@@ -120,7 +120,7 @@ import {
 import {
   dispatchSkillCreatorTool,
   isSkillCreatorDispatchAction,
-} from '../packages/agent/src/capabilities/skills/skill-creator-dispatcher.js';
+} from '@kodax-ai/agent/capabilities/skills';
 import {
   archiveAcpPollutionCandidates,
   findAcpPollutionCandidates,
@@ -165,10 +165,10 @@ import {
   cleanupRegisteredManagedChildren,
   emitKodaXDiagnostic,
   killPidTree,
+  readProcessStartIdentity,
   shutdownTracing,
   applyProcessHardening,
 } from '@kodax-ai/agent';
-import { readProcessStartIdentity } from '../packages/agent/src/runtime/process-tree.js';
 import {
   getGitRoot,
   loadConfig,
@@ -1715,7 +1715,7 @@ async function serveDaemonCommand(input: {
   if (ownedRuntimeId !== undefined) {
     const succeeded = completedNormally && finalError === undefined;
     try {
-      writeRuntimeDaemonShutdownOutcome(daemonPaths, {
+      const pruneErrors = writeRuntimeDaemonShutdownOutcome(daemonPaths, {
         version: 1,
         runtimeId: ownedRuntimeId,
         pid: process.pid,
@@ -1725,6 +1725,14 @@ async function serveDaemonCommand(input: {
           error: 'Runtime daemon shutdown did not complete successfully. See daemon.log.',
         }),
       });
+      for (const error of pruneErrors) {
+        emitKodaXDiagnostic({
+          source: 'runtime.daemon',
+          level: 'warn',
+          message: 'Failed to prune an older daemon shutdown outcome.',
+          detail: error.message,
+        });
+      }
     } catch (error: unknown) {
       finalError = combineDaemonShutdownErrors(
         finalError,
@@ -2102,7 +2110,7 @@ async function getDaemonStopResult(input: {
         : process.platform === 'win32'
           ? `Runtime daemon did not exit after exact process-tree cleanup (${watchdogStatus ?? 'not-attempted'}).`
           : 'Runtime daemon did not exit; unsafe POSIX cached-PID escalation was refused.';
-  return {
+  const result: DaemonStopResult = {
     stopped: requestedDaemonStopped && !replacementRunning,
     ...(replacementRunning ? { replacementRunning: true } : {}),
     ...(cleanupReason === undefined && !replacementRunning ? {} : {
@@ -2116,6 +2124,7 @@ async function getDaemonStopResult(input: {
     health: afterHealth,
     state: after.state ?? null,
   };
+  return result;
 }
 
 async function delayDaemonStopAfterObservationForTest(): Promise<void> {

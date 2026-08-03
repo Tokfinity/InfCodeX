@@ -62,6 +62,8 @@ export {
 export {
   readSessionHistoryEntry,
   searchSessionHistory,
+  searchSessionHistoryCooperatively,
+  validateSessionHistorySearchQuery,
 } from './history-retrieval.js';
 export { persistCompactedSessionHistory } from './compaction-persistence.js';
 export type { PersistCompactedSessionHistoryInput } from './compaction-persistence.js';
