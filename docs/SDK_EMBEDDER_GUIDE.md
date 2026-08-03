@@ -861,9 +861,13 @@ KodaX never globally sorts or deduplicates by content, timestamp, or `turnId`.
 The result status is part of the contract:
 
 - `resolved`: every fold and branch predecessor used by the projection was
-  proven.
+  proven. A persisted Session with no conversation records is also resolved
+  with empty `entries` and `issues`, including the normal interval after a Run
+  is accepted but before its body enters canonical history.
 - `partial`: persisted lineage or transcript identity needed for a complete
-  projection is unavailable. Available physical records are retained.
+  projection of one or more existing conversation records is unavailable.
+  Available physical records are retained; Actor/Run state by itself does not
+  make an otherwise empty persisted conversation partial.
 - `ambiguous`: multiple legacy interpretations remain. All candidates are
   retained and `issues[]` explains why; the host must not present the result as
   confidently deduplicated.
@@ -4810,22 +4814,43 @@ observed; `streaming` means output began before termination. `firstOutputMs`
 and `streamMs` are present only when the provider adapter emits a text delta.
 Each classifier attempt may additionally expose `observedProtocol`
 (`structured_v2`, `legacy_v1`, or `unknown`) and a bounded
-`parseFailureCode`. Runtime permission requests copy these fields into
-`autoModeDiagnostics`, allowing a host to distinguish an LLM hazard decision
-(`source: classifier_confirm`) from provider/contract failure
-(`source: classifier_failure`) without retaining model output. The current
-dual reader accepts only one exact standalone envelope for either protocol and
-never downgrades output containing structured-protocol markers. Surrounding
-prose, nested contract tags, mixed protocols, and duplicate decisions are
-contract failures and receive the same single bounded retry. The current
+`parseFailureCode` when no valid unambiguous decision exists. When exactly one
+valid `decision=allow|ask` (or legacy `block=no|yes`) is present, that decision
+is authoritative. Missing, malformed, or contradictory `hazard` / `reason`
+fields and surrounding-format defects are reported as bounded
+`outputWarnings`; they do not change the decision, consume the retry, increment
+the circuit breaker, or create an approval request after `allow`. Runtime
+permission requests copy these fields into `autoModeDiagnostics`, allowing a
+host to distinguish an LLM confirmation decision (`source:
+classifier_confirm`) from provider/decision-contract failure (`source:
+classifier_failure`) without retaining model output. Missing or invalid
+decision values and ambiguous duplicate/mixed decisions remain contract
+failures and receive the same single bounded retry. The current
 provider API cannot honestly separate DNS/connect, TLS, provider queueing, and
 inference, so embedders must not infer those stages from `pre_output`.
 Because raw classifier text is deliberately not retained, these diagnostics
 cannot retroactively prove the shape of an older response. A future
 `observedProtocol:legacy_v1` value is evidence for that attempt; compatibility
-with `legacy_v1` alone is not proof that a prior provider returned it. Code
-fences, surrounding prose, mixed envelopes, and missing required fields remain
-contract failures rather than being heuristically stripped.
+with `legacy_v1` alone is not proof that a prior provider returned it.
+`outputWarnings` explain the accepted attempt; they are not a second verdict.
+Under the LLM engine, a broken/non-string tool projection and an unavailable or
+faulty direct-read analyzer are recoverable metadata faults: KodaX records a
+warning, builds a bounded credential-redacted fallback projection, and still
+asks the classifier. They do not directly create a user approval request.
+Extension/provider exception bodies are omitted entirely from Auto-mode logs
+and approval reasons; only the stable failure stage and exception category are
+retained. All Auto-mode host warning messages are additionally
+credential-redacted, normalized to one line, and capped at 768 characters.
+Logging is best-effort observation: an embedder logger that throws cannot alter
+the permission decision or interrupt the documented fallback.
+For source compatibility, the public `ClassifierDecision` allow branch keeps
+`hazard?: 'none'`. If a model returns `decision=allow` with another hazard, the
+allow remains authoritative, `decision_hazard_conflict` appears in
+`outputWarnings`, and the contradictory hazard value is not placed in that
+legacy field.
+Direct approval remains limited to a deterministic catastrophic boundary, a
+valid classifier `ask`, or classifier/configuration failure after the bounded
+retry and Accept-edits fallback have both been exhausted.
 
 The permission event's `inputPreview` is a display-safe diagnostic projection:
 it is bounded, credential-redacted, valid JSON, and includes the effective

@@ -1508,7 +1508,7 @@ await runInkInteractiveMode({ provider: 'zhipu-coding', effort: 'auto' });
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code (262,144-token context; `kimi-k3` 1M / `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5` via `/model`) |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | k3-256k (Moderato+, 256K, direct upstream ID; `k3` 1M / `kimi-for-coding` K2.7 Code / `kimi-for-coding-highspeed` via `/model`) |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
-| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview (Anthropic-compat; `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on Qwen 3.8 / 3.7 Plus / 3.6 Flash) |
+| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max (Anthropic-compat; legacy `qwen3.8-max-preview` plus `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro` via `/model`; all 1M context; image input on both Qwen 3.8 IDs / 3.7 Plus / 3.6 Flash) |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 (`glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo` via `/model`) |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2 (1M ctx; legacy `glm-5.1` and `glm-5-turbo` remain selectable via `/model`) |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2 (Zhipu Coding Plan overseas mirror via `api.z.ai`, Anthropic-compat — same model lineup as `zhipu-coding`, served from outside CN) |

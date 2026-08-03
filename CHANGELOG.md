@@ -10,6 +10,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Qwen Token Plan now defaults to the production `qwen3.8-max` Model ID while
+  retaining `qwen3.8-max-preview` as an explicit compatibility choice. Both
+  routes keep the 1M context, always-on reasoning, and image-input contract;
+  Qwen 3.8 metadata now reflects the documented 131,072-token output limit.
 - Configured outbound A2A Agents now support independent, persisted,
   default-deny authorization for private addresses and non-loopback plaintext
   HTTP through `--allow-private` and `--allow-insecure-http`.
@@ -61,7 +65,18 @@ All notable changes to this project will be documented in this file.
   authority. The classifier strictly dual-reads the previous standalone
   response protocol during rollout and exposes bounded stop/response/protocol/
   parse diagnostics through Runtime permission requests instead of presenting
-  a response-contract failure as an LLM hazard decision.
+  a response-contract failure as an LLM hazard decision. A valid, unambiguous
+  classifier `decision` is now the sole verdict: malformed, missing, or
+  contradictory `hazard` / `reason` fields are retained as `outputWarnings`
+  without retrying, opening the circuit breaker, or overriding `allow|ask`.
+  Recoverable tool-projection and direct-read-analyzer faults now use bounded,
+  redacted fallback facts and continue through the LLM instead of immediately
+  requesting user approval. Extension/provider exception bodies are omitted
+  from Auto-mode logs and approval reasons in favor of a stable failure stage
+  and exception category; all Auto-mode warnings are single-line, bounded, and
+  unable to alter permission decisions if a host logger fails. The public
+  `ClassifierDecision` allow branch retains its previous `hazard?: 'none'`
+  source type while contradictory hazard values remain non-blocking warnings.
 - Auto permission fast paths now preserve shell wildcard uncertainty for
   sensitive reads, route broad search selectors, indirect file lists,
   PowerShell path arrays/enumeration pipelines, and dynamic Git pathspecs to

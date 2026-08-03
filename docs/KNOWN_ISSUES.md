@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-02_
+_Last Updated: 2026-08-03_
 
 ---
 
@@ -14,6 +14,9 @@ _Last Updated: 2026-08-02_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 266 | High | Resolved | Auto-mode fault logs exposed exception secrets and allow hazard typing widened | v0.7.79 classifier decision fix | v0.7.79 development | 2026-08-03 | 2026-08-03 |
+| 265 | High | Resolved | Classifier auxiliary fields could override a valid Auto[LLM] decision | v0.7.79 classifier output hardening | v0.7.79 development | 2026-08-03 | 2026-08-03 |
+| 264 | Medium | Resolved | Empty persisted conversations were reported as missing lineage | v0.7.79 conversation projection | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 263 | High | Resolved | Auto permission fast paths and Coding intent propagation could bypass complete review | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 262 | High | Resolved | Session lifecycle operations can orphan recoverable conversation cache content | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 261 | Medium | Resolved | Prepared Session append rereads the complete conversation bundle | v0.7.79 development | v0.7.79 development | 2026-08-02 | 2026-08-02 |
@@ -166,6 +169,151 @@ _Last Updated: 2026-08-02_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 266: Auto-mode fault logs exposed exception secrets and allow hazard typing widened
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 classifier decision fix
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+Recoverable projector, analyzer, Accept-edits fallback, and rules-evaluator
+exceptions were interpolated directly into host warning logs. An extension
+could therefore expose credentials embedded in an exception message and emit
+an unbounded, multi-line log entry. Separately, accepting `allow` despite a
+contradictory hazard widened the public allow branch from `hazard?: 'none'` to
+`hazard?: ClassifierHazard`, which could break TypeScript SDK hosts that relied
+on the earlier discriminated type.
+
+#### Root Cause
+
+The fallback behavior added diagnostic exception text without applying the
+existing classifier-projection redaction boundary. The parser also reused one
+hazard property shape for both allow and ask results even though a contradictory
+allow hazard is diagnostic-only.
+
+#### Resolution
+
+- Omit extension/provider exception bodies from Auto-mode logs and approval
+  reasons, retaining only a stable failure stage and exception category.
+- Route all Auto-mode host warnings through one boundary that redacts remaining
+  dynamic facts, normalizes to one line, caps the complete log entry at 768
+  characters, and isolates host-logger failures from permission decisions.
+- Include model/provider resolution and classifier-context callbacks in the
+  existing classifier-failure fallback boundary instead of allowing synchronous
+  callback exceptions to escape to the host.
+- Restore the public allow branch to `hazard?: 'none'`. A contradictory
+  non-`none` value still produces `decision_hazard_conflict`, but is omitted
+  from the legacy hazard field and never overrides the LLM `allow`.
+
+#### Verification
+
+- Projector, analyzer, fallback, rules, and provider-resolution regressions
+  inject long natural-language secrets and prove exception bodies do not reach
+  logs or approval reasons, while the documented allow/fallback paths remain
+  unchanged. A throwing host logger is also proven unable to alter the verdict.
+- Parser/type regression coverage proves a contradictory hazard yields an
+  allow plus warning while the allow branch retains the previous public type.
+
+### 265: Classifier auxiliary fields could override a valid Auto[LLM] decision
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 classifier output hardening
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+The structured classifier parser first accepted `decision=allow|ask`, then
+treated missing, invalid, or contradictory `hazard` / `reason` fields as a
+contract failure. A valid `allow` could therefore be retried and converted to
+an artificial user-approval request; repeated auxiliary defects could also
+open the classifier circuit breaker. This created a second, parser-owned
+decision mechanism after the LLM had already returned its verdict.
+
+#### Root Cause
+
+The parser used explanatory fields both to validate observability quality and
+to re-decide the permission outcome. Attempt diagnostics had only failure
+codes, so callers could not retain auxiliary defects without rejecting the
+decision.
+
+#### Resolution
+
+- Treat exactly one valid current or legacy decision as authoritative.
+- Preserve auxiliary and surrounding-format defects as bounded
+  `outputWarnings`; they do not retry, count as classifier failure, or override
+  the verdict.
+- Route recoverable tool-projection and direct-read-analyzer faults through the
+  classifier with bounded, redacted fallback facts instead of immediately
+  requesting user approval.
+- Keep missing, invalid, duplicate, and mixed decisions as retryable contract
+  failures. An unusable `ask` explanation receives a neutral display reason
+  without weakening the confirmation decision.
+- Publish the warning type through the Coding/Runtime diagnostics contract and
+  clarify the classifier prompt and SDK embedder guidance.
+
+#### Verification
+
+- Parser regressions cover missing/invalid/contradictory auxiliaries, legacy
+  compatibility, surrounding prose, and ambiguous decision envelopes.
+- Classifier tests prove accepted warnings use one provider call while missing
+  or ambiguous decisions still receive one bounded retry.
+- Guardrail tests prove `allow` never asks the user and repeated warnings never
+  increment or open the circuit breaker; `ask` still requests confirmation and
+  exposes its warnings diagnostically.
+- A real REPL analyzer matrix covers ordinary execution, scripts, network,
+  Git, protected reads, and recursive deletion; a decision-only `allow` uses
+  exactly one provider call and zero user-approval calls in every case.
+
+### 264: Empty persisted conversations were reported as missing lineage
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 conversation projection
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+Strict Session reads reconstructed an empty v2 lineage as `undefined` because
+there were no lineage-entry records. The ordinary-conversation projection then
+unconditionally emitted `partial` / `lineage_unavailable`, even though no
+conversation record existed to recover. This affected both genuinely empty v2
+Sessions and the normal lifecycle interval after a Run was accepted but before
+its body entered canonical history. A prepared empty page cache was built from
+the original empty lineage as `resolved`, so direct and paged reads could also
+disagree at the same persisted source revision. Conversely, a legacy main file
+with only an island-sidecar message dropped that recoverable body when no main
+lineage existed.
+
+#### Resolution
+
+- Preserve the explicit empty v2 lineage from its persisted metadata.
+- Treat a missing lineage with zero persisted conversation messages as a
+  resolved empty projection; Actor/Run state does not change that diagnosis.
+- When sidecars contain lineage entries but the main lineage is absent, retain
+  those physical records under an incomplete lineage so the existing exact
+  `partial` diagnostics apply instead of hiding the bodies.
+- Keep standalone, Runtime direct, and prepared/fallback paged results on the
+  same source-revision, ordering, status, and issue contract.
+
+#### Verification
+
+- Added public SDK regressions for an empty v2 Session and an accepted Run with
+  no canonical history; standalone, direct, and paged reads all return the same
+  resolved empty result.
+- Added a persisted sidecar-only regression proving an orphan body remains
+  visible and partial when its active lineage cannot be recovered.
+- Added a projection unit regression for the legacy zero-record/no-lineage
+  boundary.
 
 ### 263: Auto permission fast paths and Coding intent propagation could bypass complete review
 
@@ -10372,7 +10520,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 143 (26 Open, 117 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 146 (26 Open, 120 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

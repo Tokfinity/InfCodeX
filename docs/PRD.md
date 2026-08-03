@@ -296,7 +296,10 @@ copies proven equivalent by persisted provenance or unambiguous lineage,
 retains unresolved candidates, reports `resolved` / `partial` / `ambiguous`,
 and supplies revision-fenced physical boundaries for fork or rewind. Hosts must
 not reconstruct it from role, content, timestamp, `turnId`, or `logicalId`
-grouping alone.
+grouping alone. A persisted boundary with no conversation records is a resolved
+empty projection even when a Run has already been accepted; `partial` is
+reserved for existing records whose identity or lineage cannot be fully
+recovered.
 
 Continue-most-recent must select the newest non-empty Session in the requested
 project rather than a newer zero-message ACP/bootstrap placeholder. The rule is

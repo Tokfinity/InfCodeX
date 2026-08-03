@@ -697,7 +697,7 @@ dist/binary/linux-x64/
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.7-code（262,144 token；可 `/model` 切换 `kimi-k3`〔1M〕/ `kimi-k2.7-code-highspeed` / `kimi-k2.6` / `kimi-k2.5`） |
 | kimi-code | `KIMI_CODE_API_KEY` | Native | k3-256k（Moderato+，256K，直接请求同名上游模型；可 `/model` 切换 `k3`〔Allegretto+，1M〕/ `kimi-for-coding`〔K2.7 Code〕/ `kimi-for-coding-highspeed`） |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
-| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max-preview（Anthropic 协议；可 `/model` 切换 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；均为 1M ctx；Qwen 3.8 / 3.7 Plus / 3.6 Flash 支持图片理解） |
+| qwen-token-plan | `QWEN_TOKEN_API_KEY` | Native | qwen3.8-max（Anthropic 协议；可 `/model` 切换兼容项 `qwen3.8-max-preview` 及 `qwen3.7-max` / `qwen3.7-plus` / `qwen3.6-flash` / `glm-5.2` / `deepseek-v4-pro`；均为 1M ctx；两个 Qwen 3.8 ID / 3.7 Plus / 3.6 Flash 支持图片理解） |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5（可 `/model` 切换 `glm-5.2` 1M ctx / `glm-5.1` / `glm-5-turbo`） |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5.2（1M ctx；仍可通过 `/model` 显式选择兼容模型 `glm-5.1` / `glm-5-turbo`） |
 | zai-coding | `ZAI_CODING_API_KEY` | Native | glm-5.2（GLM Coding Plan 海外站，通过 `api.z.ai` 接入，Anthropic 协议 — 模型清单和 `zhipu-coding` 完全一致） |
