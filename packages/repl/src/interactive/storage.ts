@@ -1880,7 +1880,13 @@ function buildLineage(
   }
 
   if (snapshot.legacyMessages.length === 0) {
-    return undefined;
+    return snapshot.meta?.lineageVersion === 2
+      ? {
+          version: 2,
+          activeEntryId: snapshot.meta.activeEntryId ?? null,
+          entries: [],
+        }
+      : undefined;
   }
 
   return buildDeterministicLegacyLineage(snapshot);
@@ -4220,15 +4226,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
         true,
         sidecars,
       );
-      const lineage = resolved.data.lineage === undefined
-        ? null
-        : {
-            ...resolved.data.lineage,
-            entries: mergeFullLineageEntries(
-              archivedEntries,
-              resolved.data.lineage.entries,
-            ),
-          };
+      const completeEntries = mergeFullLineageEntries(
+        archivedEntries,
+        resolved.data.lineage?.entries ?? [],
+      );
+      const lineage: KodaXSessionLineage | null = resolved.data.lineage === undefined
+        ? completeEntries.length === 0
+          ? null
+          : { version: 2, activeEntryId: null, entries: completeEntries }
+        : { ...resolved.data.lineage, entries: completeEntries };
       if (!allowActiveWriter) {
         this.assertLocationTopologyUnchanged(id, topologyIdentity);
       }

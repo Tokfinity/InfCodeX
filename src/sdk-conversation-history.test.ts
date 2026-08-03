@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  AgentActorSnapshot,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionEntry,
   KodaXSessionLineage,
@@ -16,6 +17,46 @@ import * as sdkAgent from './sdk-agent.js';
 import { createKodaXRuntime, type RuntimeConversationHistorySlice } from './sdk-runtime.js';
 
 const timestamp = '2026-08-01T00:00:00.000Z';
+
+function acceptedActorSnapshot(): AgentActorSnapshot {
+  return {
+    schemaVersion: 1,
+    revision: 1,
+    maxConcurrentThreads: 4,
+    actors: [{
+      path: '/root',
+      taskName: 'root',
+      kind: 'native',
+      state: 'running',
+      capabilities: {
+        tools: ['*'],
+        filesystem: 'write',
+        network: true,
+        providers: ['*'],
+        canAskUser: true,
+      },
+      turnIds: ['accepted-turn'],
+      currentTurnId: 'accepted-turn',
+      mailboxCursor: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      revision: 1,
+    }],
+    turns: [{
+      turnId: 'accepted-turn',
+      actorPath: '/root',
+      sequence: 1,
+      state: 'accepted',
+      objective: 'Wait for canonical conversation persistence.',
+      forkTurns: 'none',
+      createdAt: timestamp,
+      progress: [],
+      revision: 1,
+    }],
+    mailboxes: { '/root': [] },
+    events: [],
+  };
+}
 
 function messageEntry(
   id: string,
@@ -140,6 +181,124 @@ describe('Runtime conversation history', () => {
     });
     return { manager, root, runtime, sessionId };
   }
+
+  it.each([
+    {
+      name: 'an empty v2 Session',
+      sessionId: 'empty-v2-conversation',
+      actorSnapshot: undefined,
+    },
+    {
+      name: 'an accepted Run before canonical history exists',
+      sessionId: 'accepted-empty-conversation',
+      actorSnapshot: acceptedActorSnapshot(),
+    },
+  ])('keeps $name resolved and identical across direct and paged reads', async ({
+    sessionId,
+    actorSnapshot,
+  }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-empty-conversation-'));
+    tempRoots.push(root);
+    const sessionsDir = path.join(root, 'sessions');
+    const manager = createSessionManager({ sessionsDir });
+    await manager.storage.save(sessionId, {
+      title: 'Empty persisted conversation',
+      gitRoot: root,
+      scope: 'user',
+      messages: [],
+      lineage: { version: 2, activeEntryId: null, entries: [] },
+      ...(actorSnapshot === undefined ? {} : { actorSnapshot }),
+    });
+    const standalone = await manager.readConversationHistory(sessionId);
+    const runtime = await createKodaXRuntime({ homeDir: root, sessionsDir });
+    try {
+      const direct = await runtime.sessions.conversation(sessionId);
+      const page = await runtime.sessions.conversationPage({ sessionId, limit: 20 });
+
+      expect(standalone).toMatchObject({
+        status: 'resolved',
+        entries: [],
+        issues: [],
+      });
+      expect(direct).toMatchObject({
+        sourceRevision: standalone?.sourceRevision,
+        status: 'resolved',
+        entries: [],
+        issues: [],
+      });
+      expect(page).toMatchObject({
+        revision: direct?.revision,
+        sourceRevision: direct?.sourceRevision,
+        status: direct?.status,
+        entries: [],
+        issues: direct?.issues,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('retains persisted orphan records as partial when their lineage cannot be recovered', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-orphan-conversation-'));
+    tempRoots.push(root);
+    const sessionsDir = path.join(root, 'sessions');
+    const sessionId = 'orphaned-conversation-record';
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(path.join(sessionsDir, `${sessionId}.jsonl`), `${JSON.stringify({
+      _type: 'meta',
+      id: sessionId,
+      title: 'Orphaned persisted conversation',
+      gitRoot: root,
+      createdAt: timestamp,
+      scope: 'user',
+      activeMessageCount: 0,
+    })}\n`, 'utf8');
+    await writeFile(
+      path.join(sessionsDir, `${sessionId}.islands.jsonl`),
+      `${JSON.stringify({
+        _type: 'archived_entry',
+        archiveBatchId: 'orphaned-record-batch',
+        entry: messageEntry(
+          'orphaned-message',
+          'missing-parent',
+          'assistant',
+          'recoverable body without a recoverable lineage',
+        ),
+      })}\n`,
+      'utf8',
+    );
+    const manager = createSessionManager({ sessionsDir });
+    const standalone = await manager.readConversationHistory(sessionId);
+    const runtime = await createKodaXRuntime({ homeDir: root, sessionsDir });
+    try {
+      const direct = await runtime.sessions.conversation(sessionId);
+      const page = await runtime.sessions.conversationPage({ sessionId, limit: 20 });
+
+      expect(standalone).toMatchObject({
+        status: 'partial',
+        entries: [{
+          boundaryId: 'orphaned-message',
+          message: { content: 'recoverable body without a recoverable lineage' },
+        }],
+        issues: [expect.objectContaining({ code: 'active_entry_missing' })],
+      });
+      expect(direct).toMatchObject({
+        sourceRevision: standalone?.sourceRevision,
+        status: standalone?.status,
+        entries: standalone?.entries,
+        issues: standalone?.issues,
+      });
+      expect(page).toMatchObject({
+        revision: direct?.revision,
+        sourceRevision: direct?.sourceRevision,
+        status: direct?.status,
+        issues: direct?.issues,
+      });
+      expect(page?.entries.map((entry) => entry.entry)).toEqual(direct?.entries);
+    } finally {
+      await runtime.close();
+    }
+  });
 
   it('keeps storage.load results mutable through the public SDK and persists prefix edits', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'kodax-sdk-mutable-session-'));

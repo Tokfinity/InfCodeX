@@ -5,7 +5,10 @@ import type {
   KodaXSessionLineage,
 } from '@kodax-ai/agent';
 
-import { buildSessionConversationHistory } from './conversation-history.js';
+import {
+  buildLineageUnavailableConversationHistory,
+  buildSessionConversationHistory,
+} from './conversation-history.js';
 
 const timestamp = '2026-08-01T00:00:00.000Z';
 
@@ -57,6 +60,15 @@ function project(entries: KodaXSessionEntry[], activeEntryId: string) {
 }
 
 describe('buildSessionConversationHistory', () => {
+  it('treats an absent lineage as complete when no conversation record exists', () => {
+    expect(buildLineageUnavailableConversationHistory([], 'sha256:empty')).toEqual({
+      sourceRevision: 'sha256:empty',
+      status: 'resolved',
+      entries: [],
+      issues: [],
+    });
+  });
+
   it('folds modern compaction copies by persisted provenance', () => {
     const entries = [
       messageEntry('u1', null, 'user', 'first request'),

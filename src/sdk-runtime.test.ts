@@ -13487,17 +13487,16 @@ describe("createKodaXRuntime", () => {
           apiKey: "private-value",
         },
       },
-      "The classifier could not establish whether this command is safe.",
+      "Auto[LLM] classifier requested user confirmation.",
       [{ kind: "outside_project", path: "C:\\outside\\input.pdf" }],
       {
-        source: "classifier_failure",
-        classifierFailureKind: "contract_error",
+        source: "classifier_confirm",
         classifierAttempts: [
           {
             attempt: 1,
-            outcome: "contract_error",
+            outcome: "confirm",
             observedProtocol: "structured_v2",
-            parseFailureCode: "missing_hazard",
+            outputWarnings: ["missing_hazard", "missing_reason"],
             diagnostics: {
               provider: "mock-provider",
               model: "classifier-model",
@@ -13524,18 +13523,17 @@ describe("createKodaXRuntime", () => {
     expect(pending).toMatchObject({
       toolName: "bash",
       reason:
-        "The classifier could not establish whether this command is safe.",
+        "Auto[LLM] classifier requested user confirmation.",
       risk: "medium",
       executionCwd,
       autoModeDiagnostics: {
-        source: "classifier_failure",
-        classifierFailureKind: "contract_error",
+        source: "classifier_confirm",
         classifierAttempts: [
           expect.objectContaining({
             attempt: 1,
-            outcome: "contract_error",
+            outcome: "confirm",
             observedProtocol: "structured_v2",
-            parseFailureCode: "missing_hazard",
+            outputWarnings: ["missing_hazard", "missing_reason"],
             diagnostics: expect.objectContaining({
               promptBytes: 192,
               stopReason: "end_turn",
@@ -13547,6 +13545,7 @@ describe("createKodaXRuntime", () => {
         ],
       },
     });
+    expect(pending?.autoModeDiagnostics?.classifierFailureKind).toBeUndefined();
     expect(Date.parse(pending?.expiresAt ?? "")).toBe(
       Date.parse(pending?.createdAt ?? "") + 1_000,
     );

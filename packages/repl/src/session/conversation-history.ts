@@ -1038,6 +1038,15 @@ export function buildLineageUnavailableConversationHistory(
   sourceRevision: string,
   checkpoint?: () => void,
 ): SessionConversationHistoryData {
+  checkpoint?.();
+  if (messages.length === 0) {
+    return {
+      sourceRevision,
+      status: 'resolved',
+      entries: [],
+      issues: [],
+    };
+  }
   const issue: PendingConversationHistoryIssue = {
     code: 'lineage_unavailable',
     message: 'This legacy Session has messages but no lineage identity metadata.',
@@ -1045,7 +1054,7 @@ export function buildLineageUnavailableConversationHistory(
   };
   const entries: SessionConversationHistoryEntry[] = [];
   for (let index = 0; index < messages.length; index += 1) {
-    if (index % 256 === 0) checkpoint?.();
+    if (index > 0 && index % 256 === 0) checkpoint?.();
     entries.push({ auditEntryIds: [], message: messages[index]! });
   }
   return {
