@@ -14,6 +14,17 @@ import {
 
 const handles: RuntimeActorOwnerLiveness[] = [];
 const unexpectedErrors: Error[] = [];
+const CHILD_PROXY_ENV_KEYS = [
+  'NODE_USE_ENV_PROXY',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+] as const;
 
 afterEach(async () => {
   await Promise.all(handles.splice(0).map((handle) => handle.close()));
@@ -148,21 +159,65 @@ describe('Runtime Actor owner liveness', () => {
         livenessId: handle.id,
         livenessPort: handle.port,
       });
-      process.stdout.write(JSON.stringify({ alive, errors }));
+      process.stdout.write(JSON.stringify({
+        alive,
+        errors,
+        proxyEnvironment: {
+          nodeUseEnvProxy: process.env.NODE_USE_ENV_PROXY ?? null,
+          httpProxy: process.env.HTTP_PROXY ?? null,
+          httpsProxy: process.env.HTTPS_PROXY ?? null,
+        },
+      }));
       await handle.close();
     `;
-    const result = await runNodeModule(script);
+    const result = await runNodeModuleFromProxyConfiguredParent(script);
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({ alive: true, errors: [] });
+    expect(JSON.parse(result.stdout)).toEqual({
+      alive: true,
+      errors: [],
+      proxyEnvironment: {
+        nodeUseEnvProxy: null,
+        httpProxy: null,
+        httpsProxy: null,
+      },
+    });
   });
 });
+
+function restoreEnvironmentValue(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
+async function runNodeModuleFromProxyConfiguredParent(
+  source: string,
+): Promise<Awaited<ReturnType<typeof runNodeModule>>> {
+  const inherited = new Map<string, string | undefined>([
+    ['NODE_USE_ENV_PROXY', process.env.NODE_USE_ENV_PROXY],
+    ['HTTP_PROXY', process.env.HTTP_PROXY],
+    ['HTTPS_PROXY', process.env.HTTPS_PROXY],
+  ]);
+  try {
+    process.env.NODE_USE_ENV_PROXY = '1';
+    process.env.HTTP_PROXY = 'http://127.0.0.1:9';
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:9';
+    return await runNodeModule(source);
+  } finally {
+    for (const [name, value] of inherited) restoreEnvironmentValue(name, value);
+  }
+}
 
 function runNodeModule(
   source: string,
 ): Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }> {
   return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    for (const key of CHILD_PROXY_ENV_KEYS) delete env[key];
     const child = spawn(process.execPath, [
       '--import',
       'tsx',
@@ -171,6 +226,7 @@ function runNodeModule(
       source,
     ], {
       cwd: process.cwd(),
+      env,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

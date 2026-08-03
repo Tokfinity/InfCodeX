@@ -14,6 +14,7 @@ _Last Updated: 2026-08-03_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 273 | Medium | Resolved | Runtime actor subprocess test inherited Node environment-proxy warnings | v0.7.79 Runtime actor owner liveness test | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 272 | Medium | Resolved | Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 271 | Medium | Resolved | GLM review found an unbounded boundary projection and small lifecycle/parser hardening gaps | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 270 | High | Resolved | Always-on classifier low effort could produce an impossible output/thinking budget | v0.7.73 side-query effort fallback; exposed by v0.7.79 Qwen 3.8 default | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -175,6 +176,58 @@ _Last Updated: 2026-08-03_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 273: Runtime actor subprocess test inherited Node environment-proxy warnings
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 Runtime actor owner liveness test
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+The short-lived Runtime actor owner-liveness subprocess test asserted an empty
+stderr but spawned Node with the complete parent environment. On Node versions
+that support environment proxies, a machine with `NODE_USE_ENV_PROXY=1` and
+`HTTP_PROXY` or `HTTPS_PROXY` caused Undici to print its experimental
+`EnvHttpProxyAgent` warning. The liveness probe itself succeeded, but the
+unrelated warning deterministically failed the fast suite.
+
+This was a test portability problem rather than a Runtime liveness defect.
+Proxy variables without the Node environment-proxy switch did not reproduce the
+failure.
+
+#### Root Cause
+
+The test helper's child needs only local module loading and a loopback TCP
+probe, but `spawn()` inherited proxy activation and routing variables that were
+irrelevant to that contract. Filtering the warning after capture would have
+weakened the strict stderr assertion and risked hiding future child failures.
+
+#### Resolution
+
+- Build the child environment from the parent environment, then remove the
+  Node environment-proxy switch and uppercase/lowercase HTTP, HTTPS, ALL, and
+  NO proxy variables before spawning the local test process.
+- Contaminate the parent test environment deliberately and assert that the
+  child sees none of the proxy settings, while preserving `stderr === ''` for
+  every other warning or error.
+- Restore the parent environment in `finally` so the regression test cannot
+  affect later Vitest cases.
+
+#### Files Modified
+
+- `src/runtime-actor-owner-liveness.test.ts`
+- `docs/KNOWN_ISSUES.md`
+
+#### Verification
+
+- `npx vitest run src/runtime-actor-owner-liveness.test.ts` (6 passed)
+- Explicit `NODE_USE_ENV_PROXY=1` plus HTTP/HTTPS proxy run (6 passed)
+- `npm run test:fast` (1465 passed)
+- `npx vitest run -c vitest.fast.config.ts tests/tracker-consistency.test.ts`
 
 ### 272: Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation
 
@@ -10968,11 +11021,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 152 (27 Open, 125 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 153 (27 Open, 126 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-03: Issue 273 added and resolved (v0.7.79 development)
+- Isolated the Runtime actor liveness test child from inherited Node proxy
+  activation and routing variables while keeping strict stderr validation.
+- Added a deterministic contaminated-parent regression and verified all 1465
+  fast-suite tests.
 
 ### 2026-08-03: Issue 272 added and resolved (v0.7.79 development)
 - Made MCP close surface every unverified descendant cleanup immediately and
