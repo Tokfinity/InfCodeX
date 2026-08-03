@@ -107,6 +107,7 @@ const EMPTY_USAGE: KodaXTokenUsage = {
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const SIDE_QUERY_LOW_THINKING_TOKENS = 1024;
 
 function resolveDefaultSideQueryReasoning(
   profile: KodaXReasoningProfile | undefined,
@@ -130,6 +131,31 @@ function resolveDefaultSideQueryReasoning(
   return lowestEnabledEffort === undefined
     ? undefined
     : { effort: lowestEnabledEffort };
+}
+
+function resolveSideQueryMaxOutputTokens(
+  requestedTokens: number | undefined,
+  profile: KodaXReasoningProfile | undefined,
+  reasoning: KodaXReasoningRequest | undefined,
+  usesDefaultReasoning: boolean,
+): number | undefined {
+  if (!usesDefaultReasoning || !isPositiveInteger(requestedTokens) || !profile) {
+    return requestedTokens;
+  }
+
+  const effort = reasoning?.effort;
+  const thinkingDisabled = effort === 'none'
+    || (effort !== undefined && profile.disabledEfforts?.includes(effort) === true);
+  const cannotDisableThinking = profile.supportsDisabledThinking === false
+    || profile.localRejectEfforts?.includes('none') === true;
+  if (thinkingDisabled || !cannotDisableThinking) return requestedTokens;
+
+  // Always-thinking APIs can consume the whole output window before emitting
+  // the classifier contract. Keep the caller's small structured-response cap
+  // as the final-text reserve, then add one bounded low-effort thinking window.
+  // For provider-budget APIs this also prevents max_tokens=256 paired with the
+  // adapters' minimum budget_tokens=1024.
+  return requestedTokens + SIDE_QUERY_LOW_THINKING_TOKENS;
 }
 
 export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult> {
@@ -222,17 +248,23 @@ export async function sideQuery(req: SideQueryRequest): Promise<SideQueryResult>
   });
 
   try {
+    const reasoningProfile = req.provider.getReasoningProfile(req.model);
+    const reasoning = req.reasoning ?? resolveDefaultSideQueryReasoning(reasoningProfile);
+    const maxOutputTokens = resolveSideQueryMaxOutputTokens(
+      req.maxOutputTokens,
+      reasoningProfile,
+      reasoning,
+      req.reasoning === undefined,
+    );
     const providerResult = req.provider.stream(
       [...req.messages],
       [],
       req.system,
-      req.reasoning ?? resolveDefaultSideQueryReasoning(
-        req.provider.getReasoningProfile(req.model),
-      ),
+      reasoning,
       {
         modelOverride: req.model,
-        ...(isPositiveInteger(req.maxOutputTokens)
-          ? { maxOutputTokensOverride: req.maxOutputTokens }
+        ...(isPositiveInteger(maxOutputTokens)
+          ? { maxOutputTokensOverride: maxOutputTokens }
           : {}),
         onTextDelta: (text) => {
           recordUpstreamEvent();

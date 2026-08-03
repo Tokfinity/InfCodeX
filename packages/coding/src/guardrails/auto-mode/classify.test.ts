@@ -67,8 +67,8 @@ const okStream = (out: string): KodaXStreamResult => ({
 });
 
 describe('classify', () => {
-  it('uses a 20 second default classifier timeout', () => {
-    expect(DEFAULT_CLASSIFIER_TIMEOUT_MS).toBe(20_000);
+  it('uses a 30 second default classifier timeout', () => {
+    expect(DEFAULT_CLASSIFIER_TIMEOUT_MS).toBe(30_000);
   });
 
   it('returns confirm when classifier outputs <block>yes</block>', async () => {

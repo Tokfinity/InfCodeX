@@ -1,7 +1,7 @@
 /**
  * Transcript Fixture Matrix — FEATURE_092 phase 2b.10 (pilot eval).
  *
- * The 14 `cases.ts` entries each carry a SHORT case-specific transcript
+ * The 18 `cases.ts` entries each carry a SHORT case-specific transcript
  * (typically 1 user message). That makes the classifier prompt very lean —
  * great for verdict-correctness probing, but it under-represents the
  * "transcript size" axis that drives most of the classifier's token cost
@@ -9,7 +9,7 @@
  *
  * For the synthetic pilot eval we cross every `case` with EVERY transcript
  * fixture below. This decouples two axes:
- *   - axis A (action): the 14 case action strings drive verdict diversity
+ *   - axis A (action): the 18 case action strings drive verdict diversity
  *   - axis B (context): these 5 fixtures drive token-cost diversity
  *
  * The fixtures are deterministic, version-tracked, hand-crafted prose —

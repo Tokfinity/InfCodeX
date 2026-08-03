@@ -184,7 +184,9 @@ function buildReasoningProfileFromSimple(
     thinkingStrategy: 'provider-toggle',
     ...(defaultWire !== undefined ? { defaultEffort: defaultWire } : {}),
     supportedEfforts,
-    ...(canDisable ? { disabledEfforts: ['none'], supportsDisabledThinking: true } : {}),
+    ...(canDisable
+      ? { disabledEfforts: ['none'], supportsDisabledThinking: true }
+      : { localRejectEfforts: ['none'], supportsDisabledThinking: false }),
     supportsReasoningEffort: true,
   };
 }

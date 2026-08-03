@@ -226,7 +226,8 @@ describe('Tier 0 — public contract', () => {
     expect(result.denied).toBe(true);
     if (result.denied) {
       expect(result.patternId).toBe('rm_rf_root');
-      expect(result.reason).toMatch(/permanently denied/i);
+      expect(result.reason).toMatch(/root.*operating-system|operating-system.*root/i);
+      expect(result.reason).not.toMatch(/permanently denied/i);
     }
   });
 });

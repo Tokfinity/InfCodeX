@@ -62,6 +62,12 @@ class StubProvider extends KodaXBaseProvider {
   }
 }
 
+class ThrowingProfileProvider extends StubProvider {
+  override getReasoningProfile(): KodaXReasoningProfile | undefined {
+    throw new Error('reasoning profile unavailable');
+  }
+}
+
 const text = (s: string): KodaXTextBlock => ({ type: 'text', text: s });
 const toolUse = (name: string): KodaXToolUseBlock => ({
   type: 'tool_use',
@@ -158,6 +164,92 @@ describe('sideQuery — happy path', () => {
     });
 
     expect(provider.capturedCalls[0]!.reasoning).toEqual({ effort: 'low' });
+  });
+
+  it('reserves a valid final-answer window for an always-on budget model', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'provider-budget',
+      thinkingStrategy: 'provider-budget',
+      defaultEffort: 'medium',
+      supportedEfforts: [
+        { value: 'low' },
+        { value: 'medium', isDefault: true },
+        { value: 'high' },
+      ],
+      budgetByEffort: { low: 6000 },
+      localRejectEfforts: ['none', 'minimal'],
+      supportsManualThinkingBudget: true,
+      supportsDisabledThinking: false,
+    });
+
+    await sideQuery({
+      provider,
+      model: 'always-on-budget-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      maxOutputTokens: 256,
+    });
+
+    const call = provider.capturedCalls[0]!;
+    expect(call.reasoning).toEqual({ effort: 'low' });
+    expect(call.streamOptions?.maxOutputTokensOverride).toBe(1280);
+  });
+
+  it('reserves the same bounded window for an always-on effort model', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'prompt-only',
+      defaultEffort: 'high',
+      supportedEfforts: [
+        { value: 'low' },
+        { value: 'high', isDefault: true },
+      ],
+      localRejectEfforts: ['none', 'minimal'],
+    });
+
+    await sideQuery({
+      provider,
+      model: 'always-on-effort-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      maxOutputTokens: 256,
+    });
+
+    const call = provider.capturedCalls[0]!;
+    expect(call.reasoning).toEqual({ effort: 'low' });
+    expect(call.streamOptions?.maxOutputTokensOverride).toBe(1280);
+  });
+
+  it('preserves an explicit reasoning request and output cap', async () => {
+    const provider = new StubProvider(async () => okResult(), {
+      effortStrategy: 'provider-budget',
+      thinkingStrategy: 'provider-budget',
+      defaultEffort: 'medium',
+      supportedEfforts: [
+        { value: 'low' },
+        { value: 'medium', isDefault: true },
+        { value: 'high' },
+      ],
+      budgetByEffort: { low: 6000, medium: 10000, high: 20000 },
+      localRejectEfforts: ['none', 'minimal'],
+      supportsManualThinkingBudget: true,
+      supportsDisabledThinking: false,
+    });
+
+    await sideQuery({
+      provider,
+      model: 'always-on-explicit-model',
+      system: 'sys',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      reasoning: { effort: 'high' },
+      maxOutputTokens: 256,
+    });
+
+    const call = provider.capturedCalls[0]!;
+    expect(call.reasoning).toEqual({ effort: 'high' });
+    expect(call.streamOptions?.maxOutputTokensOverride).toBe(256);
   });
 
   it('uses none when the profile declares a disabled effort', async () => {
@@ -541,6 +633,23 @@ describe('sideQuery — failure modes', () => {
     expect(result.stopReason).toBe('error');
     expect(result.error?.message).toMatch(/synthetic/);
     expect(result.text).toBe('');
+  });
+
+  it('contains reasoning-profile resolution failures inside the result contract', async () => {
+    const provider = new ThrowingProfileProvider(async () => okResult());
+
+    const result = await sideQuery({
+      provider,
+      model: 'm',
+      system: 's',
+      messages: baseMessages,
+      querySource: 'auto_mode',
+      maxOutputTokens: 256,
+    });
+
+    expect(result.stopReason).toBe('error');
+    expect(result.error?.message).toBe('reasoning profile unavailable');
+    expect(result.diagnostics?.terminalPhase).toBe('pre_output');
   });
 
   it('never throws — all failure paths produce a result', async () => {

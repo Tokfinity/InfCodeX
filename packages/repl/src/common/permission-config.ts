@@ -85,7 +85,7 @@ export interface AutoModeSettings {
    * inherits from the main session). Feeds layer 4 of `resolveClassifierModel`.
    */
   classifierModel?: string;
-  /** sideQuery timeout in ms. Default 20_000. */
+  /** sideQuery timeout in ms. Default 30_000. */
   timeoutMs?: number;
   /**
    * Issue 143 (WS3): speculative-classify quiet window in ms. Default 500.

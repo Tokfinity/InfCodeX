@@ -1193,6 +1193,7 @@ export type {
 // surface to measure classifier quality.
 export {
   classify,
+  CLASSIFIER_MAX_OUTPUT_TOKENS,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
 } from './guardrails/auto-mode/classify.js';
 export type {

@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
+import { sideQuery } from '../side-query.js';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -407,6 +408,44 @@ describe('anthropic reasoning capability', () => {
     expect(create.mock.calls[0]?.[0].thinking).toMatchObject({
       type: 'enabled',
       budget_tokens: 8000,
+    });
+  });
+
+  it('keeps an always-on budgeted side query request internally consistent', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    }, {
+      reasoningProfile: {
+        reasoningPreset: 'qwen-hybrid-thinking',
+        effortStrategy: 'provider-budget',
+        thinkingStrategy: 'provider-budget',
+        defaultEffort: 'medium',
+        supportedEfforts: [
+          { value: 'low' },
+          { value: 'medium', isDefault: true },
+        ],
+        budgetByEffort: { low: 6000, medium: 10000 },
+        localRejectEfforts: ['none', 'minimal'],
+        supportsManualThinkingBudget: true,
+        supportsDisabledThinking: false,
+      },
+    });
+
+    await sideQuery({
+      provider,
+      model: 'test-model',
+      system: 'Return only OK.',
+      messages: MESSAGES,
+      querySource: 'auto_mode',
+      maxOutputTokens: 256,
+    });
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.max_tokens).toBe(1280);
+    expect(kwargs.thinking).toEqual({
+      type: 'enabled',
+      budget_tokens: 1024,
     });
   });
 

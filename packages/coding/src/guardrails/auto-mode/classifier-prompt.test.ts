@@ -29,13 +29,29 @@ describe('buildClassifierPrompt', () => {
     expect(out.system).toMatch(/default decision.*allow/i);
     expect(out.system).toMatch(/only two.*ask/i);
     expect(out.system).toMatch(/credential.*read|read.*credential/i);
-    expect(out.system).toMatch(/outside.*write.*system|write.*outside.*system/i);
+    expect(out.system).toMatch(/writes, edits, or deletes.*KodaX.*(?:permission|trust|authorization)/i);
+    expect(out.system).toMatch(/target plus the mutation is sufficient/i);
+    expect(out.system).toMatch(/system.*(?:destroy|format|exhaust)|(?:destroy|format|exhaust).*system/i);
     expect(out.system).toMatch(/project.*edit.*delete.*move/i);
     expect(out.system).toMatch(/git stash/i);
     expect(out.system).toMatch(/global.*install.*uninstall.*reinstall/i);
     expect(out.system).toMatch(/syntax.*incomplete.*uncertainty.*not.*ask/i);
-    expect(out.system).toContain('none|credential_exposure|outside_write');
+    expect(out.system).toContain('none|credential_exposure|privilege_change|outside_write|destructive_loss');
     expect(out.system).not.toContain('none|protected_read|outside_write|destructive_loss');
+  });
+
+  it('keeps control-plane and system-disruption asks concrete and narrow', () => {
+    const out = buildClassifierPrompt({
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: printf x > ~/.kodax/config.json',
+    });
+
+    expect(out.system).toMatch(/KodaX.*(?:permission|trust|credential).*(?:configuration|control)/i);
+    expect(out.system).toMatch(/fork bomb|resource exhaustion/i);
+    expect(out.system).toMatch(/protected_path.*not.*by itself/i);
+    expect(out.system).toMatch(/dangerous_pattern.*not.*by itself/i);
+    expect(out.system).toMatch(/allow.*normal.*global.*dependenc|normal.*global.*dependenc.*allow/i);
   });
 
   it('includes the user-supplied rules in their own sections', () => {
@@ -384,7 +400,8 @@ describe('buildClassifierPrompt — signals (FEATURE_158)', () => {
     expect(out.system).toMatch(/NOT verdicts|not verdicts/i);
     expect(out.system).toMatch(/severity.*not.*approval/i);
     expect(out.system).toMatch(/network.*not dangerous by itself/i);
-    expect(out.system).toMatch(/protected_path.*ask.*credential.*read/i);
+    expect(out.system).toMatch(/protected_path.*not.*by itself/i);
+    expect(out.system).toMatch(/protected_path.*credential.*read|credential.*read.*protected_path/i);
   });
 
   it('handles a single signal correctly', () => {

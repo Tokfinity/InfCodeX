@@ -13,7 +13,7 @@
  *   - maxOutputTokensPerCall: 256
  *   - maxTotalTokens: 20,000
  *   - maxExternalSpendUsd: 0.50
- *   - timeoutMs: 20_000 (the production default under investigation)
+ *   - timeoutMs: 20_000 (the historical v0.7.73 default under investigation)
  *   - stop condition: finish all four cells; do not retry a timeout here.
  *
  * The raw, non-secret model response and timing records are incrementally
@@ -113,7 +113,7 @@ describe('Eval: Auto LLM classifier 20 second timeout (v0.7.73)', () => {
     && process.env.ZAI_CODING_API_KEY.trim().length > 0;
 
   it.skipIf(!enabled || !hasCredential)(
-    'measures four bounded zai-coding/glm-5.2 classifier calls at the production timeout',
+    'measures four bounded zai-coding/glm-5.2 classifier calls at the historical v0.7.73 timeout',
     { timeout: 100_000 },
     async () => {
       const provider = getProvider('zai-coding');

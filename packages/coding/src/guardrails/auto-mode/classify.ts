@@ -119,7 +119,7 @@ export type ClassifyDecision =
  * and any Retry-After/backoff handled by the provider adapter. Keep it bounded
  * so infrastructure failure reaches the configured Accept-edits fallback.
  */
-export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 20_000;
+export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 30_000;
 /** The classifier returns three short XML tags; a coding-turn-sized budget is wasteful. */
 export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
 /** Very large shell/script projections cannot be safely truncated and auto-approved. */

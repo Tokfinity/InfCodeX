@@ -101,9 +101,10 @@ export interface AutoModeSharedState {
 /**
  * User answer for an escalated tool-call. The guardrail translates this into
  * the actual `GuardrailVerdict` returned to the Runner. `'block'` preserves
- * the original escalation reason as the verdict reason so downstream consumers
- * see why the tool was blocked. `'timeout'` reports that the action was not
- * executed and gives the main model a bounded recovery instruction.
+ * a clear call-local user-declined result while retaining the review reason.
+ * It does not create a persistent denial: a safer follow-up is reviewed as a
+ * new call. `'timeout'` reports that the action was not executed and gives the
+ * main model a bounded recovery instruction.
  */
 export type AutoModeAskUserVerdict = 'allow' | 'block' | 'timeout';
 
@@ -345,7 +346,7 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * FEATURE_092 phase 2b.7b slice C: classifier sideQuery timeout in ms.
-   * Defaults to 20_000. Resolved by the REPL from `~/.kodax/config.json`
+   * Defaults to 30_000. Resolved by the REPL from `~/.kodax/config.json`
    * `autoMode.timeoutMs`.
    */
   readonly timeoutMs?: number;
@@ -472,6 +473,10 @@ const APPROVAL_TIMEOUT_REASON =
   '[approval_timeout] The requested operation was not executed because user approval timed out. '
   + 'Try a safer, narrower, or reversible way to continue. If no safer alternative exists, '
   + 'stop the task and wait for explicit user approval before retrying.';
+const USER_DECLINED_REASON =
+  '[user_declined] The requested operation was not executed because the user declined this attempt. '
+  + 'Try a safer, narrower, or alternative way to continue; any new proposal will be reviewed independently. '
+  + 'Review reason: ';
 const AUTO_MODE_FAILURE_LOG_MAX_LENGTH = 768;
 const AUTO_MODE_FAILURE_LOG_SCAN_MAX_LENGTH = 4_096;
 
@@ -1401,7 +1406,7 @@ export function createAutoModeToolGuardrail(
       if (verdict === 'timeout') {
         return { action: 'block', reason: APPROVAL_TIMEOUT_REASON };
       }
-      return { action: 'block', reason };
+      return { action: 'block', reason: `${USER_DECLINED_REASON}${reason}` };
     };
 
     const allowOrAskOnClassifierFailure = async (

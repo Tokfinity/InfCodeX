@@ -362,10 +362,14 @@ describe('custom providers', () => {
       reasoning: { efforts: ['low', 'high'], default: 'high' },
     });
     // Non-Claude anthropic-compat endpoints (zhipu/deepseek) take {type:'enabled'} +
-    // reasoning_effort, not Claude's adaptive shape. Disable still works via the
-    // provider-toggle thinkingStrategy.
-    expect(provider.getReasoningProfile()?.effortStrategy).toBe('anthropic-reasoning-effort');
-    expect(provider.getReasoningProfile()?.thinkingStrategy).toBe('provider-toggle');
+    // reasoning_effort, not Claude's adaptive shape. Omitting `off` means the
+    // friendly declaration explicitly says thinking cannot be disabled.
+    expect(provider.getReasoningProfile()).toMatchObject({
+      effortStrategy: 'anthropic-reasoning-effort',
+      thinkingStrategy: 'provider-toggle',
+      supportsDisabledThinking: false,
+      localRejectEfforts: ['none'],
+    });
   });
 
   it('maps reasoning: "none" to a disabled profile', () => {

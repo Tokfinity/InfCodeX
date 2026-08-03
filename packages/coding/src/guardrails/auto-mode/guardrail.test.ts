@@ -2967,7 +2967,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
   it('timeoutMs override forces a fast classifier timeout when sideQuery hangs', async () => {
     // Provider that hangs but observes the abort signal. sideQuery's
     // internal timeout (classify forwards opts.timeoutMs to sideQuery)
-    // must fire — the guardrail's default is 20_000ms, so without the
+    // must fire — the guardrail's default is 30_000ms, so without the
     // override this would hang. Setting timeoutMs: 25 forces fast escalate.
     class HangingProvider extends KodaXBaseProvider {
       readonly name = 'hanging';
@@ -3011,7 +3011,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
     if (verdict.action === 'escalate') {
       expect(verdict.reason).toMatch(/timeout/i);
     }
-    // The default 20_000ms must NOT have been used — assert we returned in
+    // The default 30_000ms must NOT have been used — assert we returned in
     // well under 1s. The 500ms cap leaves slack for slow CI without
     // accidentally validating the default.
     expect(elapsed).toBeLessThan(500);
@@ -3037,7 +3037,7 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
     expect(reasonArg).toMatch(/classifier error/i);
   });
 
-  it('classifier-escalate path: askUser supplied + answers block → verdict block (reason preserved)', async () => {
+  it('classifier-escalate path: user rejection cancels only this attempt with safer-retry feedback', async () => {
     const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const provider = new StubProvider(async () => { throw new Error('500 transient'); });
     const g = createAutoModeToolGuardrail({
@@ -3048,8 +3048,37 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(verdict.action).toBe('block');
     if (verdict.action === 'block') {
+      expect(verdict.reason).toMatch(/user.*(?:declined|denied|rejected)/i);
+      expect(verdict.reason).toMatch(/not executed/i);
+      expect(verdict.reason).toMatch(/safer|narrower|alternative/i);
       expect(verdict.reason).toMatch(/classifier error/i);
     }
+  });
+
+  it('reviews and allows a safer follow-up after the user rejects the first attempt', async () => {
+    const responses = [
+      '<decision>ask</decision><hazard>destructive_loss</hazard><reason>root deletion would disable the system</reason>',
+      '<decision>allow</decision><hazard>none</hazard><reason>the replacement only removes project build output</reason>',
+    ];
+    const provider = new StubProvider(async () => okResult(responses.shift()!));
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      askUser,
+    });
+
+    const rejected = await g.beforeTool!(callBash('rm -rf /'), ctx());
+    const safer = await g.beforeTool!(callBash('rm -rf ./dist'), ctx());
+
+    expect(rejected.action).toBe('block');
+    if (rejected.action === 'block') {
+      expect(rejected.reason).toContain('[user_declined]');
+      expect(rejected.reason).toMatch(/safer|narrower|alternative/i);
+    }
+    expect(safer.action).toBe('allow');
+    expect(askUser).toHaveBeenCalledOnce();
+    expect(responses).toHaveLength(0);
   });
 
   it('distinguishes approval timeout and tells the main model how to recover safely', async () => {
@@ -3103,7 +3132,11 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
 
     const verdict = await g.beforeTool!(callBash('echo no > ../outside.txt'), ctx());
 
-    expect(verdict).toEqual({ action: 'block', reason: 'outside workspace boundary' });
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
+      expect(verdict.reason).toContain('[user_declined]');
+      expect(verdict.reason).toContain('outside workspace boundary');
+    }
     expect(askUser).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'bash' }),
       'outside workspace boundary',

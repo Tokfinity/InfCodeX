@@ -36,7 +36,7 @@
   // "autoMode": {
   //   "engine": "llm",
   //   "classifierModel": "provider:model",
-  //   "timeoutMs": 20000,
+  //   "timeoutMs": 30000,
   //   "speculativeWindowMs": 500
   // },
 
