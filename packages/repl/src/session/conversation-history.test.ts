@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   KodaXSessionEntry,
@@ -8,6 +8,7 @@ import type {
 import {
   buildLineageUnavailableConversationHistory,
   buildSessionConversationHistory,
+  forkSessionConversationLineage,
 } from './conversation-history.js';
 
 const timestamp = '2026-08-01T00:00:00.000Z';
@@ -683,4 +684,122 @@ describe('buildSessionConversationHistory', () => {
     expect(history.status).toBe('resolved');
     expect(history.entries).toHaveLength(2_001);
   }, 1_500);
+
+  it('propagates projection checkpoints through conversation-boundary forks', () => {
+    const entries = [
+      messageEntry('u1', null, 'user', 'first request'),
+      messageEntry('a1', 'u1', 'assistant', 'first answer'),
+      compactionEntry('compact', 'u1-copy'),
+      messageEntry('u1-copy', 'compact', 'user', 'first request', {
+        logicalId: 'u1',
+        sourceEntryId: 'u1',
+      }),
+      messageEntry('a1-copy', 'u1-copy', 'assistant', 'first answer', {
+        logicalId: 'a1',
+        sourceEntryId: 'a1',
+      }),
+      messageEntry('u2', 'a1-copy', 'user', 'second request'),
+    ];
+    const checkpoint = vi.fn();
+
+    const forked = forkSessionConversationLineage({
+      version: 2,
+      activeEntryId: 'u2',
+      entries,
+    }, 'u2', 'sha256:test-source', checkpoint);
+
+    expect(forked).not.toBeNull();
+    expect(checkpoint).toHaveBeenCalled();
+  });
+
+  it('checks the budget while scanning a large inactive lineage', () => {
+    const entries: KodaXSessionEntry[] = [
+      messageEntry('active', null, 'user', 'active request'),
+    ];
+    for (let index = 0; index < 1_000; index += 1) {
+      entries.push(messageEntry(`inactive-${index}`, null, 'user', `inactive ${index}`));
+    }
+    let checks = 0;
+
+    expect(() => forkSessionConversationLineage({
+      version: 2,
+      activeEntryId: 'active',
+      entries,
+    }, 'active', 'sha256:test-source', () => {
+      checks += 1;
+      if (checks === 2) throw new Error('projection budget exhausted');
+    })).toThrow('projection budget exhausted');
+  });
+
+  it('checkpoints during conversation epoch preprocessing', () => {
+    let checks = 0;
+    const entries: KodaXSessionEntry[] = [
+      messageEntry('active', null, 'user', 'active request'),
+    ];
+    for (let index = 0; index < 1_000; index += 1) {
+      const entry = messageEntry(`inactive-${index}`, null, 'user', `inactive ${index}`);
+      if (index === 300) {
+        Object.defineProperty(entry, 'type', {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            if (checks < 2) throw new Error('epoch scan passed its checkpoint budget');
+            return 'message';
+          },
+        });
+      }
+      entries.push(entry);
+    }
+
+    expect(() => buildSessionConversationHistory({
+      version: 2,
+      activeEntryId: 'active',
+      entries,
+    }, 'sha256:test-source', () => { checks += 1; })).not.toThrow();
+  });
+
+  it('checkpoints inside a large explicit provenance overlap', () => {
+    const entries: KodaXSessionEntry[] = [];
+    let priorParentId: string | null = null;
+    for (let index = 0; index < 600; index += 1) {
+      const id = `prior-${index}`;
+      entries.push(messageEntry(id, priorParentId, 'user', `message ${index}`));
+      priorParentId = id;
+    }
+    entries.push(compactionEntry('compact', 'copy-0'));
+    let copyParentId = 'compact';
+    let comparisonStarted = false;
+    let comparisonCheckpoints = 0;
+    for (let index = 0; index < 600; index += 1) {
+      const entry = messageEntry(`copy-${index}`, copyParentId, 'user', `message ${index}`, {
+        logicalId: `prior-${index}`,
+        sourceEntryId: `prior-${index}`,
+      });
+      if (index === 0 || index === 300) {
+        let reads = 0;
+        Object.defineProperty(entry, 'logicalId', {
+          configurable: true,
+          enumerable: true,
+          get: () => {
+            reads += 1;
+            if (index === 0 && reads === 4) comparisonStarted = true;
+            if (index === 300 && reads === 2 && comparisonCheckpoints === 0) {
+              throw new Error('overlap comparison passed its checkpoint budget');
+            }
+            return `prior-${index}`;
+          },
+        });
+      }
+      entries.push(entry);
+      copyParentId = `copy-${index}`;
+    }
+
+    expect(() => buildSessionConversationHistory({
+      version: 2,
+      activeEntryId: 'copy-599',
+      entries,
+    }, 'sha256:test-source', () => {
+      if (comparisonStarted) comparisonCheckpoints += 1;
+    })).not.toThrow();
+  });
 });

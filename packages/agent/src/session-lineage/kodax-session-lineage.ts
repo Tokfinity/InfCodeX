@@ -331,9 +331,14 @@ function getChildrenMap(entries: NavigableSessionEntry[]): Map<string | null, Na
   return children;
 }
 
-function getNavigableEntryMap(lineage: KodaXSessionLineage): Map<string, NavigableSessionEntry> {
+function getNavigableEntryMap(
+  lineage: KodaXSessionLineage,
+  checkpoint?: () => void,
+): Map<string, NavigableSessionEntry> {
   const byId = new Map<string, NavigableSessionEntry>();
-  for (const entry of lineage.entries) {
+  for (let index = 0; index < lineage.entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = lineage.entries[index]!;
     if (isNavigableEntry(entry)) {
       byId.set(entry.id, entry);
     }
@@ -341,9 +346,14 @@ function getNavigableEntryMap(lineage: KodaXSessionLineage): Map<string, Navigab
   return byId;
 }
 
-function getResolvedLabels(lineage: KodaXSessionLineage): Map<string, string> {
+function getResolvedLabels(
+  lineage: KodaXSessionLineage,
+  checkpoint?: () => void,
+): Map<string, string> {
   const labels = new Map<string, string>();
-  for (const entry of lineage.entries) {
+  for (let index = 0; index < lineage.entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = lineage.entries[index]!;
     if (!isLabelEntry(entry)) {
       continue;
     }
@@ -616,23 +626,28 @@ export function createSessionLineage(
 export function getSessionLineagePath(
   lineage: KodaXSessionLineage,
   targetId: string | null = lineage.activeEntryId,
+  checkpoint?: () => void,
 ): NavigableSessionEntry[] {
   if (!targetId) {
     return [];
   }
 
-  const byId = getNavigableEntryMap(lineage);
+  const byId = getNavigableEntryMap(lineage, checkpoint);
   const path: NavigableSessionEntry[] = [];
   const visited = new Set<string>();
   let current = byId.get(targetId);
+  let traversed = 0;
   while (current) {
+    if (traversed > 0 && traversed % 256 === 0) checkpoint?.();
     if (visited.has(current.id)) {
       break;
     }
     visited.add(current.id);
     path.push(current);
     current = current.parentId ? byId.get(current.parentId) : undefined;
+    traversed += 1;
   }
+  checkpoint?.();
   return path.reverse();
 }
 
@@ -678,19 +693,20 @@ export function getSessionMessagesFromLineage(
 export function resolveSessionLineageTarget(
   lineage: KodaXSessionLineage,
   selector: string,
+  checkpoint?: () => void,
 ): NavigableSessionEntry | undefined {
   const normalizedSelector = selector.trim();
   if (!normalizedSelector) {
     return undefined;
   }
 
-  const byId = getNavigableEntryMap(lineage);
+  const byId = getNavigableEntryMap(lineage, checkpoint);
   const direct = byId.get(normalizedSelector);
   if (direct && direct.type !== 'archive_marker') {
     return direct;
   }
 
-  const labels = getResolvedLabels(lineage);
+  const labels = getResolvedLabels(lineage, checkpoint);
   const labeledTargetId = [...labels.entries()]
     .find(([, label]) => label === normalizedSelector)?.[0];
   if (!labeledTargetId) return undefined;
@@ -1192,22 +1208,25 @@ export function rewindSessionLineage(
 export function forkSessionLineage(
   lineage: KodaXSessionLineage,
   selector?: string,
+  checkpoint?: () => void,
 ): KodaXSessionLineage | null {
   const target = selector
-    ? resolveSessionLineageTarget(lineage, selector)
+    ? resolveSessionLineageTarget(lineage, selector, checkpoint)
     : lineage.activeEntryId
-      ? resolveSessionLineageTarget(lineage, lineage.activeEntryId)
+      ? resolveSessionLineageTarget(lineage, lineage.activeEntryId, checkpoint)
       : undefined;
   if (!target) {
     return null;
   }
 
-  const path = getSessionLineagePath(lineage, target.id);
+  const path = getSessionLineagePath(lineage, target.id, checkpoint);
   const idMap = new Map<string, string>();
   const entries: KodaXSessionEntry[] = [];
 
   let parentId: string | null = null;
-  for (const entry of path) {
+  for (let index = 0; index < path.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = path[index]!;
     const cloned = cloneForkableEntry(entry, parentId);
     entries.push(cloned);
     idMap.set(entry.id, cloned.id);
@@ -1215,6 +1234,7 @@ export function forkSessionLineage(
   }
 
   for (let index = 0; index < path.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
     const source = path[index]!;
     const cloned = entries[index]!;
     if (
@@ -1235,8 +1255,10 @@ export function forkSessionLineage(
     }
   }
 
-  const labels = getResolvedLabels(lineage);
-  for (const entry of path) {
+  const labels = getResolvedLabels(lineage, checkpoint);
+  for (let index = 0; index < path.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = path[index]!;
     const label = labels.get(entry.id);
     const targetId = idMap.get(entry.id);
     if (!label || !targetId) {
@@ -1264,7 +1286,7 @@ export function forkSessionLineage(
   // entry attached to the fork's tip with the same goal state — the
   // goal `id` survives so consumers can correlate progress across the
   // fork.
-  const sourceLatestGoal = findLatestGoalOnPath(lineage, path);
+  const sourceLatestGoal = findLatestGoalOnPath(lineage, path, checkpoint);
   if (sourceLatestGoal && sourceLatestGoal.goal) {
     const goalEntryId = generateEntryId('goal');
     const carriedGoalEntry: KodaXSessionGoalEntry = {
@@ -1293,9 +1315,14 @@ export function forkSessionLineage(
 function findLatestGoalOnPath(
   lineage: KodaXSessionLineage,
   path: NavigableSessionEntry[],
+  checkpoint?: () => void,
 ): KodaXSessionGoalEntry | null {
   if (path.length === 0) return null;
-  const pathIds = new Set(path.map((e) => e.id));
+  const pathIds = new Set<string>();
+  for (let index = 0; index < path.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    pathIds.add(path[index]!.id);
+  }
   // Reverse iteration so insertion order breaks ties on same-ms
   // timestamps — `/goal new` after a `complete` goal emits
   // `(complete → cleared → created)` in the same Date.now() ms, and
@@ -1303,6 +1330,8 @@ function findLatestGoalOnPath(
   // behind the earliest match. Mirrors `goal-helpers.readLatestGoalFromBranch`.
   let latest: KodaXSessionGoalEntry | null = null;
   for (let i = lineage.entries.length - 1; i >= 0; i--) {
+    const scanned = lineage.entries.length - 1 - i;
+    if (scanned > 0 && scanned % 256 === 0) checkpoint?.();
     const entry = lineage.entries[i];
     if (entry.type !== 'goal') continue;
     if (entry.parentId === null || !pathIds.has(entry.parentId)) continue;

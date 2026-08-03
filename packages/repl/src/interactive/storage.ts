@@ -4640,6 +4640,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       ) {
         return;
       }
+      const projectionStartedAt = Date.now();
       const lineage = captured === undefined
         ? forkSessionLineage(sourceLineage, selector)
         : captured === null
@@ -4648,6 +4649,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
               sourceLineage,
               selector!,
               captured.sourceRevision,
+              () => assertSessionReadBudget({}, projectionStartedAt),
             );
       if (!lineage) return;
 

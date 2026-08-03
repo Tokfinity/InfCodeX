@@ -46,7 +46,7 @@ const GIT_GLOBAL_FLAGS = new Set([
   '--no-optional-locks',
 ]);
 const GIT_BRANCH_MUTATION_FLAGS = new Set([
-  '-d', '-D', '-m', '-M', '-c', '-C', '-f', '--delete', '--move', '--copy',
+  '-d', '-D', '-m', '-M', '-c', '-C', '-f', '-t', '-u', '--delete', '--move', '--copy',
   '--force', '--edit-description', '--set-upstream-to', '--unset-upstream',
   '--create-reflog', '--track', '--no-track', '--recurse-submodules',
 ]);
@@ -224,12 +224,14 @@ function hasGitMutationArguments(
   args: readonly string[],
   mutationFlags: ReadonlySet<string>,
 ): boolean {
+  const shortMutationFlags = new Set([...mutationFlags]
+    .filter((flag) => /^-[^-]$/.test(flag))
+    .map((flag) => flag.slice(1)));
   return args.some((token) => mutationFlags.has(token)
     || [...mutationFlags].some((flag) => (
       (flag.startsWith('--') && token.startsWith(`${flag}=`))
-      || (flag.startsWith('-') && !flag.startsWith('--') && token.startsWith(flag)
-        && token.length > flag.length)
-    )))
+    ))
+    || shortOptionClusterContains(token, shortMutationFlags, new Set()))
     || args.some((token) => !token.startsWith('-'));
 }
 
@@ -515,7 +517,7 @@ export function isShellReadOnlyArgv(argv: readonly string[]): boolean {
   for (const safeCmd of BASH_SAFE_READ_COMMANDS) {
     if (normalizedCommand === safeCmd || normalizedCommand.startsWith(safeCmd + ' ')) {
       // Block arbitrary code execution for language tools (version/info only)
-      const languageTools = ['node', 'npm', 'yarn', 'pnpm', 'tsc', 'python', 'pip', 'go', 'cargo', 'rustc', 'ruby', 'perl'];
+      const languageTools = ['npm', 'tsc', 'go', 'cargo', 'rustc'];
       if (languageTools.includes(safeCmd)) {
         const parts = normalizedCommand.split(/\s+/).slice(1); // skip the command itself
         // Only allow info flags like -v, --version, -h, --help
@@ -552,7 +554,7 @@ const HELP_COMMAND_TOKEN_PATTERN = /^[a-zA-Z0-9]+$/;
  * Why: KodaX's auto-mode classifier costs an LLM call per tool invocation.
  * Paying token cost on every `kubectl --help` / `docker --help` etc. is
  * waste. Pre-FEATURE_154, KodaX only fast-pathed `--help` for ~12 language
- * tools (`node` / `npm` / `python` / etc.) via the `languageTools` carve-out
+ * toolchains (`npm` / `tsc` / `go` / etc.) via the `languageTools` carve-out
  * in `isSingleBashReadCommand`; this generalises to any command name.
  *
  * Strict by design (matches CC):

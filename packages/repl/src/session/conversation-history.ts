@@ -191,32 +191,56 @@ function retainedSuffixMatches(
   current: readonly KodaXSessionMessageEntry[],
   checkpoint?: () => void,
 ): boolean {
-  const firstExplicitIndex = current.findIndex(hasExplicitProvenance);
+  let firstExplicitIndex = -1;
+  for (let index = 0; index < current.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    if (hasExplicitProvenance(current[index]!)) {
+      firstExplicitIndex = index;
+      break;
+    }
+  }
   if (firstExplicitIndex < 0) {
+    const priorFingerprints: string[] = [];
+    const priorStart = Math.max(0, prior.length - current.length);
+    for (let index = priorStart; index < prior.length; index += 1) {
+      if (index > priorStart && index % 256 === 0) checkpoint?.();
+      priorFingerprints.push(messageFingerprint(prior[index]!.message));
+    }
+    const currentFingerprints: string[] = [];
+    for (let index = 0; index < current.length; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      currentFingerprints.push(messageFingerprint(current[index]!.message));
+    }
     return prefixSuffixOverlapLengths(
-      prior.slice(-current.length)
-        .map((entry) => messageFingerprint(entry.message)),
-      current.map((entry) => messageFingerprint(entry.message)),
+      priorFingerprints,
+      currentFingerprints,
       checkpoint,
     ).length > 0;
   }
   const minStart = Math.max(0, prior.length - current.length);
-  return prior.some((entry, priorIndex) => {
+  for (let priorIndex = 0; priorIndex < prior.length; priorIndex += 1) {
     if (priorIndex % 256 === 0) checkpoint?.();
+    const entry = prior[priorIndex]!;
     const start = priorIndex - firstExplicitIndex;
     if (
       start < minStart
       || !provenanceMatches(entry, current[firstExplicitIndex]!)
     ) {
-      return false;
+      continue;
     }
-    return prior.slice(start).every((candidate, index) => {
+    const comparedLength = prior.length - start;
+    let matches = comparedLength <= current.length;
+    for (let index = 0; matches && index < comparedLength; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      const candidate = prior[start + index]!;
       const copy = current[index]!;
-      return hasExplicitProvenance(copy)
+      matches = hasExplicitProvenance(copy)
         ? provenanceMatches(candidate, copy)
         : messagesEqual(candidate.message, copy.message);
-    });
-  });
+    }
+    if (matches) return true;
+  }
+  return false;
 }
 
 function compactionPredecessorCandidates(
@@ -226,17 +250,36 @@ function compactionPredecessorCandidates(
   issues: PendingConversationHistoryIssue[],
   checkpoint?: () => void,
 ): CompactionPredecessorCandidate[] {
-  const priorThreadEntries = priorEntries.filter(isThreadEntry);
-  const entriesById = new Map(priorThreadEntries.map((entry) => [entry.id, entry]));
-  const appendIndex = new Map(
-    priorThreadEntries.map((entry, index) => [entry.id, index]),
-  );
-  const parents = new Set(priorThreadEntries.flatMap((entry) =>
-    entry.parentId === null ? [] : [entry.parentId]));
-  const candidates = priorThreadEntries
-    .filter((entry) => !parents.has(entry.id))
-    .map((leaf) => ({ leaf, path: threadPath(leaf.id, entriesById, checkpoint) }));
-  const incomplete = candidates.filter((candidate) => !candidate.path.complete);
+  const priorThreadEntries: KodaXSessionEntry[] = [];
+  const entriesById = new Map<string, KodaXSessionEntry>();
+  const appendIndex = new Map<string, number>();
+  for (let index = 0; index < priorEntries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = priorEntries[index]!;
+    if (!isThreadEntry(entry)) continue;
+    appendIndex.set(entry.id, priorThreadEntries.length);
+    priorThreadEntries.push(entry);
+    entriesById.set(entry.id, entry);
+  }
+  const parents = new Set<string>();
+  for (let index = 0; index < priorThreadEntries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const parentId = priorThreadEntries[index]!.parentId;
+    if (parentId !== null) parents.add(parentId);
+  }
+  const candidates: CompactionPredecessorCandidate[] = [];
+  for (let index = 0; index < priorThreadEntries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const leaf = priorThreadEntries[index]!;
+    if (!parents.has(leaf.id)) {
+      candidates.push({ leaf, path: threadPath(leaf.id, entriesById, checkpoint) });
+    }
+  }
+  const incomplete: CompactionPredecessorCandidate[] = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    if (!candidates[index]!.path.complete) incomplete.push(candidates[index]!);
+  }
   if (incomplete.length > 0) {
     issues.push({
       code: 'lineage_path_incomplete',
@@ -245,8 +288,17 @@ function compactionPredecessorCandidates(
     });
     return [];
   }
-  const outOfOrder = candidates.filter((candidate) =>
-    !isAppendOrderedPriorPath(candidate.path, priorThreadEntries.length, appendIndex));
+  const outOfOrder: CompactionPredecessorCandidate[] = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const candidate = candidates[index]!;
+    if (!isAppendOrderedPriorPath(
+      candidate.path,
+      priorThreadEntries.length,
+      appendIndex,
+      checkpoint,
+    )) outOfOrder.push(candidate);
+  }
   if (outOfOrder.length > 0) {
     issues.push({
       code: 'lineage_path_incomplete',
@@ -265,12 +317,20 @@ function compactionPredecessorCandidates(
     return [];
   }
 
-  const matches = candidates.filter((candidate) => {
-    const messages = candidate.path.entries.filter(
-      (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
-    );
-    return retainedSuffixMatches(messages, currentMessages, checkpoint);
-  });
+  const matches: CompactionPredecessorCandidate[] = [];
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+    if (candidateIndex > 0 && candidateIndex % 256 === 0) checkpoint?.();
+    const candidate = candidates[candidateIndex]!;
+    const messages: KodaXSessionMessageEntry[] = [];
+    for (let index = 0; index < candidate.path.entries.length; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      const entry = candidate.path.entries[index]!;
+      if (entry.type === 'message') messages.push(entry);
+    }
+    if (retainedSuffixMatches(messages, currentMessages, checkpoint)) {
+      matches.push(candidate);
+    }
+  }
   if (matches.length === 0 && candidates.length > 0) {
     issues.push({
       code: 'compaction_boundary_invalid',
@@ -315,30 +375,43 @@ function resolveCompactionPredecessor(
 function leadingExplicitRetainedCopies(
   root: KodaXSessionCompactionEntry,
   currentMessages: readonly KodaXSessionMessageEntry[],
+  checkpoint?: () => void,
 ): readonly KodaXSessionMessageEntry[] {
   if (currentMessages[0]?.id !== root.firstKeptEntryId) return [];
-  const firstNonExplicit = currentMessages.findIndex(
-    (entry) => !hasExplicitProvenance(entry),
-  );
+  let firstNonExplicit = -1;
+  for (let index = 0; index < currentMessages.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    if (!hasExplicitProvenance(currentMessages[index]!)) {
+      firstNonExplicit = index;
+      break;
+    }
+  }
   const prefixLength = firstNonExplicit < 0
     ? currentMessages.length
     : firstNonExplicit;
-  if (
-    prefixLength === 0
-    || currentMessages.slice(prefixLength).some(hasExplicitProvenance)
-  ) {
-    return [];
+  if (prefixLength === 0) return [];
+  for (let index = prefixLength; index < currentMessages.length; index += 1) {
+    if (index > prefixLength && index % 256 === 0) checkpoint?.();
+    if (hasExplicitProvenance(currentMessages[index]!)) return [];
   }
-  return currentMessages.slice(0, prefixLength);
+  const retained: KodaXSessionMessageEntry[] = [];
+  for (let index = 0; index < prefixLength; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    retained.push(currentMessages[index]!);
+  }
+  return retained;
 }
 
 function isAppendOrderedPriorPath(
   path: ThreadPath,
   rootIndex: number,
   appendIndex: ReadonlyMap<string, number>,
+  checkpoint?: () => void,
 ): boolean {
   let previousIndex = -1;
-  for (const entry of path.entries) {
+  for (let pathIndex = 0; pathIndex < path.entries.length; pathIndex += 1) {
+    if (pathIndex > 0 && pathIndex % 256 === 0) checkpoint?.();
+    const entry = path.entries[pathIndex]!;
     const index = appendIndex.get(entry.id);
     if (
       index === undefined
@@ -361,44 +434,68 @@ function explicitCompactionPredecessorCandidates(
   messagesByIdentity: ReadonlyMap<string, readonly KodaXSessionMessageEntry[]>,
   checkpoint?: () => void,
 ): KodaXSessionMessageEntry[] {
-  const retainedCopies = leadingExplicitRetainedCopies(root, currentMessages);
+  const retainedCopies = leadingExplicitRetainedCopies(root, currentMessages, checkpoint);
   const lastCopy = retainedCopies.at(-1);
   const lookupKey = lastCopy === undefined
     ? undefined
     : explicitProvenanceKeys(lastCopy)[0];
   if (lastCopy === undefined || lookupKey === undefined) return [];
   const matches: KodaXSessionMessageEntry[] = [];
-  for (const candidate of messagesByIdentity.get(lookupKey) ?? []) {
+  const identityMatches = messagesByIdentity.get(lookupKey) ?? [];
+  for (let candidateIndex = 0; candidateIndex < identityMatches.length; candidateIndex += 1) {
     checkpoint?.();
+    const candidate = identityMatches[candidateIndex]!;
     if ((appendIndex.get(candidate.id) ?? Number.MAX_SAFE_INTEGER) >= rootIndex) {
       continue;
     }
     const path = threadPath(candidate.id, entriesById, checkpoint);
-    const priorMessages = path.entries.filter(
-      (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
-    );
-    const suffix = priorMessages.slice(-retainedCopies.length);
+    const priorMessages: KodaXSessionMessageEntry[] = [];
+    for (let index = 0; index < path.entries.length; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      const entry = path.entries[index]!;
+      if (entry.type === 'message') priorMessages.push(entry);
+    }
     if (
-      path.complete
-      && isAppendOrderedPriorPath(path, rootIndex, appendIndex)
-      && suffix.length === retainedCopies.length
-      && suffix.every((entry, index) => {
-        const copy = retainedCopies[index]!;
-        return provenanceMatches(entry, copy)
-          && messagesEqual(entry.message, copy.message);
-      })
+      !path.complete
+      || !isAppendOrderedPriorPath(path, rootIndex, appendIndex, checkpoint)
     ) {
+      continue;
+    }
+    const suffixStart = Math.max(0, priorMessages.length - retainedCopies.length);
+    const suffix: KodaXSessionMessageEntry[] = [];
+    for (let index = suffixStart; index < priorMessages.length; index += 1) {
+      if (index > suffixStart && index % 256 === 0) checkpoint?.();
+      suffix.push(priorMessages[index]!);
+    }
+    let suffixMatches = suffix.length === retainedCopies.length;
+    for (let index = 0; suffixMatches && index < suffix.length; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      const entry = suffix[index]!;
+      const copy = retainedCopies[index]!;
+      suffixMatches = provenanceMatches(entry, copy)
+        && messagesEqual(entry.message, copy.message);
+    }
+    if (suffixMatches) {
       matches.push(candidate);
     }
   }
-  return [...new Map(matches.map((entry) => [entry.id, entry])).values()];
+  const unique = new Map<string, KodaXSessionMessageEntry>();
+  for (let index = 0; index < matches.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = matches[index]!;
+    unique.set(entry.id, entry);
+  }
+  return [...unique.values()];
 }
 
 function indexMessagesByIdentity(
   entries: readonly KodaXSessionEntry[],
+  checkpoint?: () => void,
 ): ReadonlyMap<string, readonly KodaXSessionMessageEntry[]> {
   const result = new Map<string, KodaXSessionMessageEntry[]>();
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = entries[index]!;
     if (entry.type !== 'message') continue;
     for (const key of new Set([entry.id, entry.logicalId, entry.sourceEntryId])) {
       if (key === undefined) continue;
@@ -415,26 +512,32 @@ function conversationEpochs(
   issues: PendingConversationHistoryIssue[],
   checkpoint?: () => void,
 ): ConversationEpoch[] {
-  const threadEntries = lineage.entries.filter(isThreadEntry);
-  if (
-    lineage.activeEntryId === null
-    && threadEntries.some((entry) => entry.type === 'message')
-  ) {
+  const threadEntries: KodaXSessionEntry[] = [];
+  const entriesById = new Map<string, KodaXSessionEntry>();
+  const appendIndex = new Map<string, number>();
+  const messageEntryIds: string[] = [];
+  for (let index = 0; index < lineage.entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = lineage.entries[index]!;
+    appendIndex.set(entry.id, index);
+    if (!isThreadEntry(entry)) continue;
+    threadEntries.push(entry);
+    entriesById.set(entry.id, entry);
+    if (entry.type === 'message') messageEntryIds.push(entry.id);
+  }
+  if (lineage.activeEntryId === null && messageEntryIds.length > 0) {
     issues.push({
       code: 'active_entry_missing',
       message: 'Conversation lineage contains messages but has no active entry.',
-      entryIds: threadEntries
-        .filter((entry) => entry.type === 'message')
-        .map((entry) => entry.id),
+      entryIds: messageEntryIds,
     });
     return [];
   }
-  const entriesById = new Map(threadEntries.map((entry) => [entry.id, entry]));
-  const appendIndex = new Map(lineage.entries.map((entry, index) => [entry.id, index]));
-  const messagesByIdentity = indexMessagesByIdentity(threadEntries);
+  const messagesByIdentity = indexMessagesByIdentity(threadEntries, checkpoint);
   const priorEpochStartByCompactionId = new Map<string, number>();
   let epochStart = 0;
   for (let index = 0; index < lineage.entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
     const entry = lineage.entries[index]!;
     if (entry.type === 'compaction' && entry.parentId === null) {
       priorEpochStartByCompactionId.set(entry.id, epochStart);
@@ -454,9 +557,12 @@ function conversationEpochs(
       break;
     }
     visitedRoots.add(root.id);
-    const currentMessages = path.entries.filter(
-      (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
-    );
+    const currentMessages: KodaXSessionMessageEntry[] = [];
+    for (let index = 0; index < path.entries.length; index += 1) {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
+      const entry = path.entries[index]!;
+      if (entry.type === 'message') currentMessages.push(entry);
+    }
     epochs.push({
       root,
       messages: currentMessages,
@@ -465,8 +571,13 @@ function conversationEpochs(
     const rootIndex = appendIndex.get(root.id) ?? 0;
     const priorEpochStart = priorEpochStartByCompactionId.get(root.id) ?? 0;
     const predecessorIssues: PendingConversationHistoryIssue[] = [];
+    const priorEntries: KodaXSessionEntry[] = [];
+    for (let index = priorEpochStart; index < rootIndex; index += 1) {
+      if (index > priorEpochStart && index % 256 === 0) checkpoint?.();
+      priorEntries.push(lineage.entries[index]!);
+    }
     let predecessor = resolveCompactionPredecessor(
-      lineage.entries.slice(priorEpochStart, rootIndex),
+      priorEntries,
       root,
       currentMessages,
       predecessorIssues,
@@ -941,24 +1052,31 @@ export function forkSessionConversationLineage(
   lineage: KodaXSessionLineage,
   targetId: string,
   sourceRevision: string,
+  checkpoint?: () => void,
 ): KodaXSessionLineage | null {
+  checkpoint?.();
   const targetLineage: KodaXSessionLineage = {
     ...lineage,
     activeEntryId: targetId,
   };
-  const activePath = getSessionLineagePath(targetLineage, targetId);
+  const activePath = getSessionLineagePath(targetLineage, targetId, checkpoint);
   if (activePath.at(-1)?.id !== targetId) return null;
-  const initialFork = forkSessionLineage(targetLineage, targetId);
+  const initialFork = forkSessionLineage(targetLineage, targetId, checkpoint);
   if (initialFork === null) return null;
-  const forkPath = getSessionLineagePath(initialFork);
+  const forkPath = getSessionLineagePath(
+    initialFork,
+    initialFork.activeEntryId,
+    checkpoint,
+  );
   if (forkPath.length !== activePath.length) return null;
-  const forkIdBySourceId = new Map(activePath.map((entry, index) => [
-    entry.id,
-    forkPath[index]!.id,
-  ]));
+  const forkIdBySourceId = new Map(activePath.map((entry, index) => {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    return [entry.id, forkPath[index]!.id];
+  }));
   const forked: KodaXSessionLineage = {
     ...initialFork,
     entries: initialFork.entries.map((entry, index) => {
+      if (index > 0 && index % 256 === 0) checkpoint?.();
       const source = activePath[index];
       return entry.type === 'compaction'
         && source?.type === 'compaction'
@@ -973,30 +1091,51 @@ export function forkSessionConversationLineage(
   const root = activePath[0];
   if (root?.type !== 'compaction' || root.reason === 'rewind') return forked;
 
-  const history = buildSessionConversationHistory(targetLineage, sourceRevision);
+  const history = buildSessionConversationHistory(
+    targetLineage,
+    sourceRevision,
+    checkpoint,
+  );
   if (history.status !== 'resolved' || root.firstKeptEntryId === undefined) {
     return null;
   }
-  const activeMessages = activePath.filter(
-    (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
-  );
-  const firstKeptIndex = activeMessages.findIndex(
-    (entry) => entry.id === root.firstKeptEntryId,
-  );
+  const activeMessages: KodaXSessionMessageEntry[] = [];
+  const activeMessageIds = new Set<string>();
+  let firstKeptIndex = -1;
+  for (let index = 0; index < activePath.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = activePath[index]!;
+    if (entry.type !== 'message') continue;
+    if (entry.id === root.firstKeptEntryId) firstKeptIndex = activeMessages.length;
+    activeMessages.push(entry);
+    activeMessageIds.add(entry.id);
+  }
   if (firstKeptIndex < 0) return null;
-  const activeMessageIds = new Set(activeMessages.map((entry) => entry.id));
   const historyIndexByAuditId = new Map<string, number>();
   for (let index = 0; index < history.entries.length; index += 1) {
-    for (const auditEntryId of history.entries[index]!.auditEntryIds) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const auditEntryIds = history.entries[index]!.auditEntryIds;
+    for (let auditIndex = 0; auditIndex < auditEntryIds.length; auditIndex += 1) {
+      if (auditIndex > 0 && auditIndex % 256 === 0) checkpoint?.();
+      const auditEntryId = auditEntryIds[auditIndex]!;
       historyIndexByAuditId.set(auditEntryId, index);
     }
   }
   let retainedHistoryEnd = -1;
-  for (const message of activeMessages.slice(firstKeptIndex)) {
+  for (let index = firstKeptIndex; index < activeMessages.length; index += 1) {
+    if (index > firstKeptIndex && index % 256 === 0) checkpoint?.();
+    const message = activeMessages[index]!;
     const historyIndex = historyIndexByAuditId.get(message.id);
     if (historyIndex === undefined) return null;
-    const hasEarlierPhysicalCopy = history.entries[historyIndex]!.auditEntryIds
-      .some((entryId) => !activeMessageIds.has(entryId));
+    let hasEarlierPhysicalCopy = false;
+    const auditEntryIds = history.entries[historyIndex]!.auditEntryIds;
+    for (let auditIndex = 0; auditIndex < auditEntryIds.length; auditIndex += 1) {
+      if (auditIndex > 0 && auditIndex % 256 === 0) checkpoint?.();
+      if (!activeMessageIds.has(auditEntryIds[auditIndex]!)) {
+        hasEarlierPhysicalCopy = true;
+        break;
+      }
+    }
     if (!hasEarlierPhysicalCopy) break;
     if (retainedHistoryEnd >= 0 && historyIndex !== retainedHistoryEnd + 1) {
       return null;
@@ -1005,12 +1144,26 @@ export function forkSessionConversationLineage(
   }
   if (retainedHistoryEnd < 0) return null;
 
-  const entriesById = new Map(lineage.entries.map((entry) => [entry.id, entry]));
+  const entriesById = new Map<string, KodaXSessionEntry>();
+  for (let index = 0; index < lineage.entries.length; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const entry = lineage.entries[index]!;
+    entriesById.set(entry.id, entry);
+  }
   let parentId: string | null = null;
   const seedEntries: KodaXSessionMessageEntry[] = [];
-  for (const item of history.entries.slice(0, retainedHistoryEnd + 1)) {
-    const activeCopyId = item.auditEntryIds.find((entryId) =>
-      activeMessageIds.has(entryId));
+  for (let index = 0; index <= retainedHistoryEnd; index += 1) {
+    if (index > 0 && index % 256 === 0) checkpoint?.();
+    const item = history.entries[index]!;
+    let activeCopyId: string | undefined;
+    for (let auditIndex = 0; auditIndex < item.auditEntryIds.length; auditIndex += 1) {
+      if (auditIndex > 0 && auditIndex % 256 === 0) checkpoint?.();
+      const entryId = item.auditEntryIds[auditIndex]!;
+      if (activeMessageIds.has(entryId)) {
+        activeCopyId = entryId;
+        break;
+      }
+    }
     const sourceId = activeCopyId ?? item.boundaryId;
     const source = sourceId === undefined ? undefined : entriesById.get(sourceId);
     if (source?.type !== 'message') return null;
@@ -1024,7 +1177,7 @@ export function forkSessionConversationLineage(
     version: 2,
     activeEntryId: seedTip.id,
     entries: seedEntries,
-  });
+  }, undefined, checkpoint);
   if (seed === null) return null;
   return {
     version: 2,

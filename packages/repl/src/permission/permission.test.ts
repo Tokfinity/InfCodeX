@@ -364,6 +364,10 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     'git log --format=%G? -1',
     'git branch --format="%(signature:grade)" --list',
     'git tag --format="%(*signature:grade)" --list',
+    'git branch -uxyz',
+    'git branch -t',
+    'git branch -ld',
+    'git tag -ld',
   ])('does not treat effectful git options or subcommands as read-only: %s', (command) => {
     expect(isBashReadCommand(command)).toBe(false);
   });
@@ -1105,8 +1109,8 @@ describe('isHelpCommand — universal --help fast-path (FEATURE_154)', () => {
   });
 
   it('preserves language-tools script-execution blocking (no regression)', () => {
-    // The languageTools branch in isSingleBashReadCommand still blocks scripts
-    // for these tools. FEATURE_154 only bypasses the parser for *--help* form.
+    // Whitelisted toolchains accept only version/help flags; non-whitelisted
+    // runtimes continue to fail closed before this branch.
     expect(isBashReadCommand('node script.js')).toBe(false);
     expect(isBashReadCommand('npm install foo')).toBe(false);
     expect(isBashReadCommand('python -c "print(1)"')).toBe(false);
