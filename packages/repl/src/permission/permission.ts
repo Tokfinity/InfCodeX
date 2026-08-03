@@ -1800,12 +1800,18 @@ export function extractPathsFromCommand(command: string): string[] {
 
   // The Runtime shell on Windows is cmd/PowerShell-flavoured, while the AST
   // tokenizer deliberately follows POSIX quoting. Read path roles from the raw
-  // words first so `%TEMP%\x` and `C:\x` retain their backslashes.
-  if (process.platform === 'win32') {
-    for (const words of tokenizeRawCommandStages(command)) {
-      const values = words.map((word) => word.value);
-      const roles = collectCommandArgumentRoles(values);
-      for (const value of roles.pathValues) paths.add(value);
+  // words on every platform so Windows-style paths (`%TEMP%\x`, `C:\x`,
+  // `%USERPROFILE%\.ssh`) retain their backslashes: shell-quote's POSIX
+  // tokenisation eats the `\.` escape, which would otherwise hide the
+  // protected `.ssh` segment (git path-option it.each, ubuntu node 20).
+  for (const words of tokenizeRawCommandStages(command)) {
+    const values = words.map((word) => word.value);
+    const roles = collectCommandArgumentRoles(values);
+    for (const value of roles.pathValues) paths.add(value);
+    // The looksLikePath fallback stays win32-only: on POSIX the AST pass
+    // below already applies the same heuristic to correctly tokenised argv,
+    // and raw words would add backslash-escaped noise (e.g. `a\ b`).
+    if (process.platform === 'win32') {
       for (let index = 0; index < values.length; index += 1) {
         if (roles.sourceIndexes.has(index) || roles.pathIndexes.has(index)) continue;
         const value = values[index]!;
