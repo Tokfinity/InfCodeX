@@ -317,8 +317,9 @@ async function importMainWithMocks(options: {
     }),
     shutdownDefaultLspService,
     generateSessionId: vi.fn(async () => 'cli-session-1'),
+    parseSandboxEnvironmentPass: (value?: string): readonly string[] =>
+      value ? value.split(',').filter(Boolean) : [],
   }));
-
   vi.doMock('@kodax-ai/repl', () => {
     class MockIntegrationConfigController {
       private readonly domain: 'mcp' | 'extensions';
