@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-03_
+_Last Updated: 2026-08-04_
 
 ---
 
@@ -32,7 +32,7 @@ _Last Updated: 2026-08-03_
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | - | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.84 (scheduled) | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -1490,7 +1490,7 @@ show duplicates or silently delete real user input.
 - **Priority**: High
 - **Status**: Open
 - **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
-- **Fixed**: -
+- **Fixed**: v0.7.84 (scheduled)
 - **Created**: 2026-08-01
 - **Resolved**: -
 
@@ -1539,6 +1539,11 @@ snapshots during each 50 ms wait interval with lightweight captured-PID liveness
 checks. A full identity snapshot is still required before reporting a complete
 tree gone, and is taken when the captured PIDs appear gone or at the deadline.
 This lowers steady cleanup CPU cost without weakening the identity fence.
+
+The 2026-08-04 decision explicitly reschedules this issue to `v0.7.84`. The
+identity-checked snapshot mitigation above remains the v0.7.79 behavior; the
+remaining spawn-time Job Object / Worker owner-lease closure work no longer
+blocks the v0.7.79 release.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 
@@ -11081,6 +11086,14 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-04: Issue 256 rescheduled to v0.7.84 (no longer blocks v0.7.79)
+- Issue 256 was explicitly rescheduled from a v0.7.79 release blocker to a
+  v0.7.84 resolution target. The identity-checked Windows snapshot mitigation
+  remains the v0.7.79 behavior; spawn-time Job Object containment and a
+  host-issued Worker owner lease are the v0.7.84 closure work.
+- The v0.7.79 release gates in `docs/release.md` no longer require Issue 256 to
+  be resolved before tagging.
 
 ### 2026-08-03: Issue 273 added and resolved (v0.7.79 development)
 - Isolated the Runtime actor liveness test child from inherited Node proxy

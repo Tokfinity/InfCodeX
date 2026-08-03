@@ -12,7 +12,7 @@
 > Worker-hosted Runtime dispatch uses the same policy. Windows process cleanup
 > now fails closed on observable uncertainty, but snapshot ancestry is not
 > descendant containment; Issue 256 requires spawn-time Job Objects plus a
-> Worker owner lease and remains a v0.7.79 release blocker.
+> Worker owner lease and is scheduled for v0.7.84.
 >
 > **v0.7.78 intent-aligned permission and learning addendum:** FEATURE_277
 > supersedes ADR-056's automatic LLM-to-rules fallback. Precisely modeled safe

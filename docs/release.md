@@ -113,21 +113,23 @@ items above claim its cache-stable prompt/tool-surface outcome.
 `docs/features/v0.7.79.md`, `FEATURE_LIST.md`, the README/README_CN release
 notes, and this checklist were updated together with that decision.
 
-Issue 256 is independently release-blocking. Identity-checked Windows process
-snapshots prevent PID-reuse mis-kills and expose observable uncertainty, but
-they cannot prove descendant closure after an intermediate parent exits. The
-release requires spawn-time Job Object containment plus an independently
-invalidatable Worker owner lease; post-spawn assignment or a bare-PID fallback
-does not satisfy this gate.
+Issue 256 was explicitly rescheduled to `v0.7.84` on 2026-08-04 and is not a
+v0.7.79 release blocker. Identity-checked Windows process snapshots prevent
+PID-reuse mis-kills and expose observable uncertainty, but they cannot prove
+descendant closure after an intermediate parent exits. The v0.7.84 resolution
+requires spawn-time Job Object containment plus an independently invalidatable
+Worker owner lease; post-spawn assignment or a bare-PID fallback does not
+satisfy that gate. `docs/features/v0.7.79.md`, `KNOWN_ISSUES.md`, this
+checklist, and the README/README_CN release notes were updated together with
+that decision.
 
 Before tagging, all of the following must be true:
 
 1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature and
    issue trackers, this checklist, SDK/package guides, configuration examples,
    and `kodax_manual` agree on the 0.7.79 behavior;
-2. FEATURE_280 has the explicit disposition described above, Issue 256 is fully
-   resolved, and no incomplete feature or known High release blocker is
-   presented as shipped;
+2. FEATURE_280 and Issue 256 have the explicit dispositions described above, and
+   no incomplete feature or known High release blocker is presented as shipped;
 3. both the root repository and `docs/features` submodule are clean, and the
    parent points to a submodule commit reachable from its remote;
 4. a clean-install-equivalent deterministic gate passes on the exact candidate:
@@ -149,8 +151,9 @@ Before tagging, all of the following must be true:
    [`ISSUE_243_v0.7.79_REGRESSION_GUIDE.md`](test-guides/ISSUE_243_v0.7.79_REGRESSION_GUIDE.md),
    plus standalone `--version`, exactly-one-command execution, configured A2A
    list/call, Session status/diagnostic/export/ordinary-conversation reads, and
-   cancelled child cleanup. After Issue 256 is fixed, Windows verification must
-   also prove descendant containment when an intermediate parent exits;
+   cancelled child cleanup. The v0.7.84 release gate separately requires
+   Windows verification of descendant containment when an intermediate parent
+   exits (Issue 256);
 6. the exact publish-shaped `kodax-ai-kodax-0.7.79.tgz` is hashed, inspected,
    and installed into an empty consumer that imports the root plus all 12 SDK
    subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,

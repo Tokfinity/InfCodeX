@@ -577,9 +577,8 @@ separate reasoning profiles and are advertised as text-only. See the
 [release preparation checklist](docs/release.md#v0779-release-preparation).
 FEATURE_280 was explicitly rescheduled to v0.7.81 and is not represented as
 shipped by this candidate.
-Issue 256 is also a release blocker: Windows snapshot-based process ancestry
-does not yet provide spawn-time Job Object-grade descendant containment or an
-independently invalidatable Worker owner lease.
+Issue 256 was explicitly rescheduled to v0.7.84 and is likewise not represented
+as shipped by this candidate.
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows

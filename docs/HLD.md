@@ -112,8 +112,8 @@ metafile.
 Windows descendant cleanup is identity-checked and exposes observable
 uncertainty instead of bare-PID success. Its current Toolhelp/CIM snapshot model
 is still observation rather than containment: a descendant can become
-unreachable after an intermediate parent exits. Issue 256 therefore blocks the
-v0.7.79 release until spawn-time Job Object assignment and an independently
+unreachable after an intermediate parent exits. Issue 256 is scheduled for
+v0.7.84, when spawn-time Job Object assignment and an independently
 invalidatable Worker owner lease provide the missing closure guarantee.
 
 The same published worker preserves Sidecar terminal meaning end to end:

@@ -510,10 +510,11 @@ together with that decision.
 
 The same candidate contains a non-Feature release-hardening addendum. Issue 257
 delivers the evidence-checked ordinary-conversation projection without changing
-raw transcript audit semantics. Issue 256 remains an independent High release
-blocker: snapshot-based Windows ancestry cannot prove descendant closure after
-an intermediate parent exits, so spawn-time Job Object containment and a
-host-issued Worker owner lease are still required before tag readiness.
+raw transcript audit semantics. Issue 256 was explicitly rescheduled to
+`v0.7.84` on 2026-08-04 and is not part of this candidate: snapshot-based
+Windows ancestry cannot prove descendant closure after an intermediate parent
+exits, so spawn-time Job Object containment and a host-issued Worker owner
+lease are required in v0.7.84, not at v0.7.79 tag readiness.
 
 The release checklist is [docs/release.md](release.md#v0779-release-preparation).
 The completed F281 human verification is

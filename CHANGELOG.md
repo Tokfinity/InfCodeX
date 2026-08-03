@@ -68,7 +68,7 @@ All notable changes to this project will be documented in this file.
   observable uncertainty and avoids bare-PID kills. Snapshot ancestry is not
   kernel containment, however: if an intermediate process exits before a later
   snapshot, an already-running descendant can become unobservable. Issue 256
-  remains open and blocks the v0.7.79 release until spawn-time Job Object
+  remains open and is scheduled for v0.7.84, when spawn-time Job Object
   containment and Worker owner leasing close that gap.
 
 ### Fixed

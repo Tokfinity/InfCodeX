@@ -2655,9 +2655,10 @@ On Windows, current child cleanup verifies observed process identities and
 reports indeterminate outcomes instead of falling back to bare-PID success.
 That is not Job Object-grade containment: if an intermediate process exits
 between snapshots, an already-running descendant can become unobservable.
-Until Issue 256 is resolved with spawn-time Job Object assignment and a
-host-issued Worker owner lease, embedders must not treat Runtime/Worker close or
-executor cleanup as proof that every descendant has terminated.
+Until Issue 256 is resolved (scheduled for v0.7.84) with spawn-time Job Object
+assignment and a host-issued Worker owner lease, embedders must not treat
+Runtime/Worker close or executor cleanup as proof that every descendant has
+terminated.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;

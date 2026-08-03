@@ -27,8 +27,8 @@ history recovery, an evidence-checked ordinary-conversation projection,
 streaming-event coalescing, and Windows global-install ASRT support. It retains
 v0.7.78's evidence-gated project Skill canaries, complete first-run split
 configuration, intent-aligned Auto[LLM] permission behavior, optional
-workspace-scoped ASRT containment, and standalone `/sandbox` SDK. Issue 256
-remains release-blocking because snapshot-based Windows process ancestry cannot
+workspace-scoped ASRT containment, and standalone `/sandbox` SDK. Issue 256 is
+scheduled for v0.7.84 because snapshot-based Windows process ancestry cannot
 prove descendant closure after an intermediate parent exits.
 
 `package.json` exposes:

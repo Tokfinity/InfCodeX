@@ -193,9 +193,8 @@ OpenAI-compatible 自定义 provider 现在可在 provider 或 model 级选择 `
 或 `max_completion_tokens`。DeepSeek V4 Flash/Pro 使用各自的 reasoning profile，
 并正确标记为纯文本。详见 [v0.7.79 设计](docs/features/v0.7.79.md)与
 [发布准备清单](docs/release.md#v0779-release-preparation)。FEATURE_280 已显式改期到
-v0.7.81，本候选版没有把它表述为已交付。Issue 256 同样是
-release blocker：Windows 的快照式进程祖先关系尚不能提供 spawn-time Job Object
-级后代 containment，也没有可独立失效的 Worker owner lease。
+v0.7.81，本候选版没有把它表述为已交付。Issue 256 同样已显式改期到 v0.7.84，
+本候选版没有把它表述为已交付。
 
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
