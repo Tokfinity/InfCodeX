@@ -1,18 +1,13 @@
 /**
- * Tier 0 — Absolute Denylist — FEATURE_158 Step 4 (v0.7.39).
+ * Historical Tier 0 high-impact pattern detector — FEATURE_158 Step 4.
  *
- * The narrowest possible set of catastrophic patterns that must NEVER reach
- * the LLM classifier (which is fallible / can be prompt-injected). Per
- * ADR-025: every entry here must satisfy BOTH gates:
+ * The exported names remain source-compatible with FEATURE_158. Auto[LLM]
+ * now treats matches as deterministic facts for the classifier, whose
+ * decision is final. Explicit Auto[Rules] mode retains the legacy approval
+ * gate. The narrow list still identifies high-impact operations worth
+ * describing precisely:
  *
- *   (a) "is there any legitimate context in which this should be allowed?"
- *       — answer must be **no**.
- *   (b) "could the LLM be convinced to allow it under prompt injection?"
- *       — answer must be **yes** (otherwise classifier is sufficient).
- *
- * The 5-item list is **frozen** by ADR-025; adding entries requires a new
- * ADR addendum answering (a)+(b) again. Removing entries requires evidence
- * of high-volume false-positive friction.
+ * The detector must not expand into a second Auto[LLM] approval policy.
  *
  * Patterns:
  *
@@ -20,7 +15,7 @@
  *                        / -fr variants). Excludes `rm -rf /tmp/foo` (which
  *                        is a `dangerous_pattern` signal but reaches LLM).
  *   2. mkfs_or_format  — `mkfs.* /dev/sd*`, `fdisk /dev/sd*`, `format C:`.
- *                        Block formatting any disk device.
+ *                        Identifies formatting of a disk device.
  *   3. dd_disk_write   — `dd of=/dev/sd*` (raw-disk write). Excludes
  *                        `dd of=test.bin` (file write — reaches LLM as
  *                        dangerous_pattern signal).
@@ -28,13 +23,12 @@
  *   5. user_kodax_write — write/edit to any path under `~/.kodax/`
  *                        (credentials zone — internal kodax config writes
  *                        use the TypeScript API, not bash/tools, so the
- *                        only path here is LLM-emitted shell which is
- *                        always wrong).
+ *                        only path here is normally an LLM-emitted shell).
  *
  * Layer note: bash-level `~/.kodax/` writes (e.g. `echo x > ~/.kodax/y`)
  * require AST path-extraction which lives in `@kodax/repl`. The REPL-side
- * collector wired through `extraCollectors` (Step 7) escalates those to
- * Tier 0 by emitting a synthetic `user_kodax_write` denial via the same
+ * collector wired through `extraCollectors` (Step 7) identifies those as
+ * Tier 0 by emitting a synthetic `user_kodax_write` match via the same
  * `AbsoluteDenyResult` shape. This module handles the file-tool path
  * directly (the most common attack vector) and the four command-string
  * patterns that don't need path extraction.
@@ -132,7 +126,7 @@ function checkRmRfRoot(command: string): AbsoluteDenyResult {
       return {
         denied: true,
         patternId: 'rm_rf_root',
-        reason: `Recursive deletion of root path (\`${unq}\`) is permanently denied. If you intended a subdirectory, use a full path like \`rm -rf /tmp/scratch\`.`,
+        reason: `Recursive forced deletion targets the root path (\`${unq}\`) and can remove operating-system or user files.`,
       };
     }
   }
@@ -149,14 +143,14 @@ function checkMkfsOrFormat(command: string): AbsoluteDenyResult {
     return {
       denied: true,
       patternId: 'mkfs_or_format',
-      reason: 'Disk format / filesystem creation on a block device is permanently denied (data destruction risk).',
+      reason: 'The command creates a filesystem on a block device and destroys the device\'s existing filesystem data.',
     };
   }
   if (FORMAT_DRIVE_RE.test(command)) {
     return {
       denied: true,
       patternId: 'mkfs_or_format',
-      reason: 'Windows `format X:` command is permanently denied (data destruction risk).',
+      reason: 'The Windows command formats a drive and destroys its existing filesystem data.',
     };
   }
   return MISS;
@@ -171,7 +165,7 @@ function checkDdDiskWrite(command: string): AbsoluteDenyResult {
     return {
       denied: true,
       patternId: 'dd_disk_write',
-      reason: 'Raw disk write via `dd of=/dev/sd*` is permanently denied. Use a file target (`of=path.bin`) if you intended a file write.',
+      reason: 'The command writes raw bytes to a block device rather than to an ordinary file.',
     };
   }
   return MISS;
@@ -188,7 +182,7 @@ function checkForkBomb(command: string): AbsoluteDenyResult {
     return {
       denied: true,
       patternId: 'fork_bomb',
-      reason: 'Fork bomb pattern detected; permanently denied (denial-of-service risk).',
+      reason: 'The command is a fork-bomb pattern that can exhaust process and CPU resources.',
     };
   }
   return MISS;
@@ -214,7 +208,7 @@ function checkUserKodaxWrite(
     return {
       denied: true,
       patternId: 'user_kodax_write',
-      reason: `Write to credential-zone path \`${targetPath}\` (under ~/.kodax/) is permanently denied. KodaX config edits must go through the \`kodax config\` CLI or the SDK config API, never through the file-write tool.`,
+      reason: `The write targets KodaX configuration path \`${targetPath}\` under ~/.kodax/ and can make KodaX configuration unusable; managed config APIs are available.`,
     };
   }
   return MISS;
@@ -223,13 +217,15 @@ function checkUserKodaxWrite(
 // ============== Public entrypoint ==============
 
 /**
- * Check a tool call against the Tier 0 absolute denylist. Returns the
- * first matching pattern, or `{ denied: false }` if no pattern fires.
+ * Check a tool call against the historical Tier 0 pattern list. Returns the
+ * first matching pattern, or `{ denied: false }` if no pattern fires. A match
+ * is classifier evidence in Auto[LLM] and a legacy approval gate only in
+ * explicit Auto[Rules].
  *
  * Order is deterministic — patterns checked in the order defined above.
  * Multiple matches would be possible (e.g. `rm -rf / ; :(){...};:`) but
- * we return the first hit since the guardrail acts on `denied: true`
- * regardless and the reason string is one-shot.
+ * we return the first hit because one precise fact is sufficient for the
+ * classifier and the reason string is one-shot.
  *
  * **Pure**: deterministic given (call, projectRoot, stable env).
  * **Fast**: ~5 regex tests + 1-2 string ops; safe to run on every

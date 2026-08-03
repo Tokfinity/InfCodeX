@@ -12,11 +12,30 @@ describe('buildClassifierPrompt', () => {
       transcript: [],
       action: 'Bash: ls',
     });
-    expect(out.system).toMatch(/security reviewer/i);
+    expect(out.system).toMatch(/Auto\[LLM\] reviewer/i);
     expect(out.system).toMatch(/<decision>/);
     expect(out.system).toMatch(/<hazard>/);
     expect(out.system).toMatch(/<reason>/);
     expect(out.system).toMatch(/decision is the sole verdict/i);
+  });
+
+  it('defines Auto LLM as allow-by-default with exactly two evidence-based ask classes', () => {
+    const out = buildClassifierPrompt({
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: npm uninstall -g old-tool && npm install -g new-tool',
+    });
+
+    expect(out.system).toMatch(/default decision.*allow/i);
+    expect(out.system).toMatch(/only two.*ask/i);
+    expect(out.system).toMatch(/credential.*read|read.*credential/i);
+    expect(out.system).toMatch(/outside.*write.*system|write.*outside.*system/i);
+    expect(out.system).toMatch(/project.*edit.*delete.*move/i);
+    expect(out.system).toMatch(/git stash/i);
+    expect(out.system).toMatch(/global.*install.*uninstall.*reinstall/i);
+    expect(out.system).toMatch(/syntax.*incomplete.*uncertainty.*not.*ask/i);
+    expect(out.system).toContain('none|credential_exposure|outside_write');
+    expect(out.system).not.toContain('none|protected_read|outside_write|destructive_loss');
   });
 
   it('includes the user-supplied rules in their own sections', () => {
@@ -155,8 +174,8 @@ describe('buildClassifierPrompt', () => {
       action: 'Bash: mv a b',
     });
 
-    expect(out.system).toMatch(/task authorization.*must be interpreted/i);
-    expect(out.system).toMatch(/binding constraints.*must be interpreted/i);
+    expect(out.system).toMatch(/task authority.*context/i);
+    expect(out.system).toMatch(/intent mismatch.*not.*ask/i);
     expect(out.system).toMatch(/three tags/i);
   });
 
@@ -263,7 +282,7 @@ describe('buildClassifierPrompt', () => {
 
     expect(out.system).toMatch(/not infer.*tool prohibition.*asks whether.*tool.*available/i);
     expect(out.system).toMatch(/questions.*explicitly.*constraints.*authority/i);
-    expect(out.system).toMatch(/scope mismatch.*actual unrequested operation/i);
+    expect(out.system).toMatch(/scope mismatch.*not.*ask/i);
     expect(out.system).toMatch(/PowerShell.*not.*circumvention/i);
   });
 });
@@ -363,9 +382,9 @@ describe('buildClassifierPrompt — signals (FEATURE_158)', () => {
     // The system prompt should explain signals are not verdicts
     expect(out.system).toMatch(/<signals>/i);
     expect(out.system).toMatch(/NOT verdicts|not verdicts/i);
-    expect(out.system).toMatch(/severity/i);
+    expect(out.system).toMatch(/severity.*not.*approval/i);
     expect(out.system).toMatch(/network.*not dangerous by itself/i);
-    expect(out.system).toMatch(/protected_path.*not an absolute policy block/i);
+    expect(out.system).toMatch(/protected_path.*ask.*credential.*read/i);
   });
 
   it('handles a single signal correctly', () => {

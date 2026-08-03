@@ -930,6 +930,12 @@ v0.7.39 ADR-024 落地时把 `name`、`exports`、`bin` normalize、`publishConf
 
 **Status**: Accepted (2026-05-12)
 
+> **Current Auto[LLM] semantics (2026-08-03)**: ADR-060's decision-semantics
+> addendum supersedes this ADR's Tier 0 non-overridable gate for Auto[LLM].
+> Historical Tier 0 matches are now classifier facts and the LLM decision is
+> final; explicit Auto[Rules] retains the legacy deterministic gate. The
+> material below records the original FEATURE_158 design.
+
 **TL;DR**：把 `auto` 模式的 REPL 同步硬规则（[`InkREPL.tsx`](../packages/repl/src/ui/InkREPL.tsx) Step 2.5 dangerous-bash + Step 3 protected-path）从**前置 veto** 改为**喂给 LLM 分类器的信号**；同时把 `~/.kodax/` 写、5 条 catastrophic 模式提升为 **Tier 0 绝对禁令**（LLM 不能 override）；引入 **speculative classify** 抹平延迟；保留 engine 降级到 'rules' 后**重新激活原硬规则路径**做兜底。结构性吃掉 [Issue 131](KNOWN_ISSUES.md#131) `looksLikePath` Windows-flag 误判（`findstr /R` / `dir /B` / `where /R` 等被当作 POSIX 绝对路径触发误确认）。对齐 CC `useCanUseTool` 单决策点 + `SAFE_YOLO_ALLOWLISTED_TOOLS` Tier 1 + `yoloClassifier` LLM-final 架构，但保留 KodaX 已有的 denial tracker / circuit breaker / engine 降级三件套。
 
 ### 背景
@@ -4741,10 +4747,41 @@ shortcut even though containment and permission answer different questions.
    report that fallback does not persist the engine, and v0.7.78 clients that
    depend on this invariant require v4 rather than accepting a v3 daemon.
 
+**2026-08-03 Auto[LLM] decision-semantics addendum**:
+
+7. Auto[LLM] is an automatic reviewer whose default verdict is `allow`; it is
+   not a mechanism for requiring the root user to authorize each concrete
+   command. An operational classifier may return `ask` only when supplied
+   facts establish one of two hazards: (a) a read from a concrete store/path
+   known to hold keys, tokens, passwords, or credentials; or (b) an abnormal
+   mutation outside project, temporary, and other normal work areas that can
+   destabilize the operating system or make unrelated installed software
+   unavailable.
+8. Ordinary project edits, deletes, moves, copies, and Git mutations including
+   stash, plus normal global dependency install/uninstall/upgrade/reinstall,
+   are not approval reasons by category. Command complexity, incomplete
+   analysis, general uncertainty, network or privilege syntax, task-scope
+   mismatch, and lack of command-by-command authorization are also
+   insufficient by themselves.
+9. Static analysis has two roles in Auto[LLM]: deterministic fast admission
+   where safety is fully modeled, and bounded facts for the classifier. It
+   must not add a second approval standard. Historical ADR-025 Tier 0 matches
+   are therefore classifier facts in Auto[LLM], while explicit Auto[Rules]
+   retains the legacy deterministic gate. This supersedes ADR-025 only for the
+   Auto[LLM] decision owner.
+10. A valid classifier `decision=allow|ask` remains the final verdict. Hazard,
+    reason, rules, and static signals are explanatory evidence and cannot
+    override it. Decision-contract or provider failure remains governed by
+    Decision 3's bounded retry and call-local Accept-edits fallback; incomplete
+    analysis is not itself an `ask` verdict.
+
 **Consequences**:
 
 - A classifier outage can narrow one call to Accept-edits behavior without
   silently changing the user's policy for the current or later Session.
+- A functioning classifier asks only for the two concrete hazard classes;
+  ordinary work is automatically reviewed and admitted without transferring
+  judgment back to the user.
 - Runtime, daemon, REPL, and SDK hosts share one explicit engine owner and one
   capability boundary.
 - ASRT remains independently usable through the sandbox SDK and never becomes

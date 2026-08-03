@@ -3,7 +3,7 @@
  *
  * Mechanical pattern matches over a tool call. Signals are NOT verdicts;
  * the classifier consumes them as informational input alongside transcript
- * + user rules and produces the final decision (allow / block / escalate).
+ * + user rules and produces the final Auto[LLM] decision (allow / ask).
  *
  * Two invariants the producers must hold:
  *
@@ -17,10 +17,9 @@
  *      so the classifier can weight signals, but the verdict is not encoded
  *      here.
  *
- * Tier 0 (absolute deny) is a separate module — signals are pre-verdict
- * material consumed by Tier 2 (LLM classifier). The two paths are not
- * coupled: Tier 0 catches a fixed catastrophic-pattern set; signals
- * describe a wider surface for the classifier to reason about.
+ * The historical Tier 0 detector is a separate module, but its matches are
+ * also pre-verdict facts in Auto[LLM]. Only explicit Auto[Rules] treats that
+ * detector as a legacy approval gate.
  *
  * Design ref: ADR-025, FEATURE_158 (docs/features/v0.7.39.md).
  */

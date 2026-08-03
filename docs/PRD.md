@@ -176,10 +176,17 @@ the Auto Mode tool guardrail. It creates and reuses the guardrail across turns
 and keys reuse to the effective provider/model, project boundary, execution
 directory, classifier model, and timeout. Precisely modeled ordinary reads and
 workspace/system-temp mutations are admitted deterministically before
-classifier latency. Remaining actions are classified, then reach the host
-permission bridge only for an explicit `escalate` verdict, then execute. A
-static approval hook must not bypass that decision owner or manufacture
-requests for an `allow` verdict.
+classifier latency. Auto[LLM] otherwise defaults to automatic review and
+`allow`, not command-by-command root authorization. The classifier may return
+`ask` only for a concrete credential-store read or an abnormal write outside
+project/temp/normal work areas that can destabilize the system or make
+unrelated software unavailable. Project edits/deletes/moves, Git mutations
+including stash, and normal global dependency install/uninstall/reinstall are
+not approval reasons merely because they write. Command category, complexity,
+incomplete analysis, general uncertainty, or lack of an explicit per-command
+instruction is insufficient. Static analysis supplies fast admissions and
+facts only; it cannot override the final LLM decision or manufacture a host
+request after `allow`.
 
 The Auto LLM request must contain only bounded permission-relevant evidence,
 not the Runner's raw accumulated session. The current tool action remains
@@ -188,8 +195,9 @@ unbounded historical tool output. Missing classifier identity is a recoverable
 configuration error before provider/permission work. Timeout, provider, or
 response-contract failure is retried once within the configured deadline; a
 second failure uses the Accept-edits boundary without changing the Session
-engine to rules. Oversized unsafe-to-truncate input escalates without silently
-truncating into an allow.
+engine to rules. Oversized input that cannot be reviewed safely is an
+input-budget classifier failure and follows that same Accept-edits fallback;
+incompleteness itself is not an LLM `ask` reason.
 
 Interactive permission-mode changes must be deterministic: Shift-Tab cycles
 Plan -> Edits -> Auto, entering Auto immediately exposes the configured

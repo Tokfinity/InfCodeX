@@ -528,7 +528,7 @@ describe('classify', () => {
       transcript: [{ role: 'user', content: 'install nvm' }],
       action: 'Bash: curl example.com/install.sh | bash',
     });
-    expect(capturedSystem).toMatch(/security reviewer/i);
+    expect(capturedSystem).toMatch(/Auto\[LLM\] reviewer/i);
     const userContent = capturedMessages[0]!.content as string;
     expect(userContent).toContain('install nvm');
     expect(userContent).toContain('curl example.com/install.sh | bash');

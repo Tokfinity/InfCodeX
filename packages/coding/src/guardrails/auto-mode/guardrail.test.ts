@@ -2315,11 +2315,16 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
   });
 
-  it('sandbox-admits a containable custom Tier-0 concern after the user approves it', async () => {
-    const askUser = vi.fn<AutoModeAskUser>(async () => 'allow');
+  it('does not let a custom Tier-0 fact manufacture approval after an LLM allow', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const admitWorkspaceSandboxCall = vi.fn();
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard>'
+      + '<reason>ordinary workspace cleanup establishes neither ask class</reason>',
+    ));
     const guardrail = createAutoModeToolGuardrail({
       ...baseConfig(''),
+      resolveProvider: () => provider,
       askUser,
       extraAbsoluteDenyChecks: [() => ({
         denied: true,
@@ -2345,7 +2350,7 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     );
 
     expect(verdict.action).toBe('allow');
-    expect(askUser).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
     expect(admitWorkspaceSandboxCall).toHaveBeenCalledOnce();
   });
 
@@ -3422,18 +3427,24 @@ describe('AutoModeToolGuardrail — defaultProvider/defaultModel staleness fix (
 
 // ============== FEATURE_158 (v0.7.39) ==============
 
-describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () => {
-  it('runs Tier 0 before an empty classifier projection', async () => {
+describe('AutoModeToolGuardrail — historical Tier 0 detector (FEATURE_158)', () => {
+  it('routes a legacy Tier 0 match through the LLM even with an empty projection', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>classifier owns the verdict</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
       getToolProjection: () => () => '',
+      resolveProvider: () => provider,
     });
 
     const verdict = await g.beforeTool!(callBash('rm -rf /'), ctx());
-    expect(verdict.action).toBe('escalate');
+    expect(verdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledOnce();
   });
 
-  it('applies Tier 0 to the concrete target behind tool_call', async () => {
+  it('lets the classifier decide the concrete target behind tool_call', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {
       classifierCalls += 1;
@@ -3453,15 +3464,18 @@ describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () 
       },
     }, ctx());
 
-    expect(verdict.action).toBe('escalate');
-    expect(classifierCalls).toBe(0);
+    expect(verdict.action).toBe('allow');
+    expect(classifierCalls).toBe(1);
   });
 
-  it('asks about `rm -rf /` before classifier consultation instead of directly blocking', async () => {
+  it('asks about `rm -rf /` only when the classifier returns ask', async () => {
     let classifierCalls = 0;
     const provider = new StubProvider(async () => {
       classifierCalls += 1;
-      return okResult('<decision>allow</decision><hazard>none</hazard><reason>x</reason>');
+      return okResult(
+        '<decision>ask</decision><hazard>outside_write</hazard>'
+        + '<reason>root deletion is an abnormal outside-workspace write that disables the system</reason>',
+      );
     });
     const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const g = createAutoModeToolGuardrail({
@@ -3472,13 +3486,13 @@ describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () 
     const verdict = await g.beforeTool!(callBash('rm -rf /'), ctx());
     expect(verdict.action).toBe('block');
     if (verdict.action === 'block') {
-      expect(verdict.reason).toMatch(/permanently denied/i);
+      expect(verdict.reason).toMatch(/disables the system/i);
     }
     expect(askUser).toHaveBeenCalledOnce();
-    expect(classifierCalls).toBe(0);
+    expect(classifierCalls).toBe(1);
   });
 
-  it('Tier 0 fires even when engine is downgraded to rules', async () => {
+  it('retains the legacy Tier 0 gate when Rules is explicitly selected', async () => {
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
       initialEngine: 'rules',
@@ -3487,39 +3501,58 @@ describe('AutoModeToolGuardrail — Tier 0 absolute denylist (FEATURE_158)', () 
     expect(verdict.action).toBe('escalate');
   });
 
-  it('Tier 0 block does NOT increment denial tracker (separate from classifier denials)', async () => {
-    const g = createAutoModeToolGuardrail(baseConfig(''));
+  it('does not count a static match as a classifier denial when the LLM allows', async () => {
+    const g = createAutoModeToolGuardrail(baseConfig(
+      '<decision>allow</decision><hazard>none</hazard><reason>classifier allow</reason>',
+    ));
     for (let i = 0; i < 3; i += 1) {
       await g.beforeTool!(callBash('rm -rf /'), ctx());
     }
-    // Tier 0 doesn't feed the classifier-denial tracker — engine stays llm.
+    // Static matches do not feed the classifier-denial tracker.
     expect(g.getEngineForTest()).toBe('llm');
     const stats = g.getStatsForTest();
     expect(stats.denials.consecutive).toBe(0);
     expect(stats.denials.cumulative).toBe(0);
   });
 
-  it('Tier 0 fires for `dd of=/dev/sda` but NOT `dd of=test.bin`', async () => {
-    const g = createAutoModeToolGuardrail(baseConfig('<decision>allow</decision><hazard>none</hazard><reason>ok</reason>'));
-    const deny = await g.beforeTool!(callBash('dd if=/dev/zero of=/dev/sda'), ctx());
-    expect(deny.action).toBe('escalate');
+  it('does not let a legacy Tier 0 match override an LLM allow', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>LLM reviewed the concrete operation</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+    });
+    const diskWrite = await g.beforeTool!(callBash('dd if=/dev/zero of=/dev/sda'), ctx());
+    expect(diskWrite.action).toBe('allow');
     const allow = await g.beforeTool!(callBash('dd if=/dev/zero of=test.bin'), ctx());
-    expect(allow.action).toBe('allow'); // classifier said no-block
+    expect(allow.action).toBe('allow');
+    expect(stream).toHaveBeenCalledTimes(2);
   });
 
-  it('Tier 0 fires for write to ~/.kodax/ (file tool)', async () => {
+  it('sends a credential-zone write to the classifier before confirmation', async () => {
     const { setAgentConfigHome } = await import('@kodax-ai/agent');
     setAgentConfigHome('/tmp/test-kodax-home');
     try {
-      const g = createAutoModeToolGuardrail(baseConfig(''));
+      const provider = new StubProvider(okResult(
+        '<decision>ask</decision><hazard>outside_write</hazard>'
+        + '<reason>the config write can make KodaX unavailable</reason>',
+      ));
+      const stream = vi.spyOn(provider, 'stream');
+      const g = createAutoModeToolGuardrail({
+        ...baseConfig(''),
+        resolveProvider: () => provider,
+      });
       const verdict = await g.beforeTool!(
         { id: 'c', name: 'write', input: { path: '/tmp/test-kodax-home/config.json' } },
         ctx(),
       );
       expect(verdict.action).toBe('escalate');
       if (verdict.action === 'escalate') {
-        expect(verdict.reason).toMatch(/credential-zone|user-kodax|~\/\.kodax/i);
+        expect(verdict.reason).toMatch(/make KodaX unavailable/i);
       }
+      expect(stream).toHaveBeenCalledOnce();
     } finally {
       setAgentConfigHome(undefined);
     }
@@ -4049,33 +4082,42 @@ describe('AutoModeToolGuardrail — speculative classify (FEATURE_158)', () => {
 //      claimed by parallel-thread) bug — flow through the new pipeline
 //      must NOT produce a protected_path signal that escalates.
 
-describe('FEATURE_158 Step 9 — subagent SharedState + Tier 0 propagation', () => {
-  it('Tier 0 fires in BOTH parent and subagent when state is shared', async () => {
+describe('FEATURE_158 Step 9 — subagent SharedState + legacy Tier 0 propagation', () => {
+  it('LLM ownership applies in both parent and subagent when state is shared', async () => {
     const sharedState = {
       engine: 'llm' as const,
       denials: { consecutive: 0, cumulative: 0 },
-      breaker: { errorTimestamps: [] as readonly number[] },
+      breaker: { timestamps: [] as readonly number[] },
     };
-    const parent = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
-    const child = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
+    const provider = new StubProvider(okResult(
+      '<decision>allow</decision><hazard>none</hazard><reason>reviewed</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const parent = createAutoModeToolGuardrail({
+      ...baseConfig(''), sharedState, resolveProvider: () => provider,
+    });
+    const child = createAutoModeToolGuardrail({
+      ...baseConfig(''), sharedState, resolveProvider: () => provider,
+    });
     const parentVerdict = await parent.beforeTool!(callBash('rm -rf /'), ctx());
     const childVerdict = await child.beforeTool!(callBash('rm -rf /'), ctx());
-    expect(parentVerdict.action).toBe('escalate');
-    expect(childVerdict.action).toBe('escalate');
+    expect(parentVerdict.action).toBe('allow');
+    expect(childVerdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledTimes(2);
   });
 
-  it('subagent Tier 0 fires even when parent engine has downgraded', async () => {
+  it('subagent retains the legacy Tier 0 gate when shared state explicitly selects Rules', async () => {
     const sharedState = {
-      engine: 'rules' as const, // already downgraded
+      engine: 'rules' as const,
       denials: { consecutive: 3, cumulative: 3 },
-      breaker: { errorTimestamps: [] as readonly number[] },
+      breaker: { timestamps: [] as readonly number[] },
     };
     const child = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
     // mkfs.ext4 /dev/sda1 → Tier 0 should still fire (mkfs_or_format pattern)
     const verdict = await child.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
     expect(verdict.action).toBe('escalate');
     if (verdict.action === 'escalate') {
-      expect(verdict.reason).toMatch(/Disk format/i);
+      expect(verdict.reason).toMatch(/filesystem.*block device/i);
     }
   });
 });

@@ -14,6 +14,7 @@ _Last Updated: 2026-08-03_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 268 | High | Resolved | Auto[LLM] retained category-based approvals and a pre-classifier Tier 0 gate | v0.7.33; retained through v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 266 | High | Resolved | Auto-mode fault logs exposed exception secrets and allow hazard typing widened | v0.7.79 classifier decision fix | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 265 | High | Resolved | Classifier auxiliary fields could override a valid Auto[LLM] decision | v0.7.79 classifier output hardening | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 264 | Medium | Resolved | Empty persisted conversations were reported as missing lineage | v0.7.79 conversation projection | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -169,6 +170,69 @@ _Last Updated: 2026-08-03_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 268: Auto[LLM] retained category-based approvals and a pre-classifier Tier 0 gate
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.33; retained through v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+Auto[LLM] was intended to review operations for the user and minimize manual
+authorization, but the classifier prompt still described broad command and
+hazard categories as confirmation candidates. A historical Tier 0 matcher also
+requested approval before the LLM for several command shapes. Normal project
+deletes/moves/Git writes, global dependency maintenance, complex syntax,
+incomplete analysis, or missing command-by-command user authorization could
+therefore be treated as reasons to transfer the decision back to the user.
+The Ink REPL also consulted its cross-mode denial cache before yielding to the
+Auto[LLM] owner, so a rejection recorded under Edits or Rules could still
+override a later valid LLM `allow` for the same call.
+
+#### Root Cause
+
+The Runtime had two competing decision semantics: the LLM classifier owned
+ordinary decisions, while the inherited FEATURE_158 taxonomy and ADR-025 Tier
+0 path retained broader security-review and mandatory-gate assumptions. Those
+assumptions conflicted with the current Auto[LLM] contract that static analysis
+supplies facts and deterministic safe admissions but does not define a second
+approval policy.
+
+#### Resolution
+
+- Define Auto[LLM] as allow-by-default automatic review with exactly two
+  evidence-based ask classes: concrete credential-store reads, and disruptive
+  abnormal writes outside project/temp/normal work areas.
+- Explicitly classify normal project mutations, Git operations including
+  stash, and global dependency install/uninstall/upgrade/reinstall as
+  insufficient ask reasons by category; complexity, incomplete facts, general
+  uncertainty, and per-command authorization gaps are also insufficient.
+- Route historical Tier 0 matches through the classifier as precise facts in
+  Auto[LLM]. Keep the legacy deterministic gate only for explicit Auto[Rules].
+- Make both REPL observers identify Auto[LLM] through one tested predicate and
+  yield before applying legacy confirmation or historical-denial state. Denial
+  cache behavior remains unchanged in Plan, Edits, and explicit Auto[Rules].
+- Preserve the valid LLM decision as the sole verdict and retain the existing
+  one-retry, call-local Accept-edits behavior for classifier infrastructure
+  failures.
+
+#### Verification
+
+- Added classifier-contract regressions for the default verdict, exact ask
+  classes, ordinary project/Git/global-package operations, and non-hazard
+  uncertainty signals.
+- Added guardrail regressions proving historical Tier 0 matches reach the LLM,
+  an LLM `allow` is final, an LLM `ask` reaches the host, and explicit Rules
+  mode retains its deterministic behavior.
+- Added permission-mode coverage proving only Auto[LLM] bypasses the legacy
+  observer policy, then reviewed the Ink callback order from guardrail receipt
+  through denial-cache and protected-path handling.
+- Audited all Auto[LLM] `escalateOrAsk` routes and ran the focused/full
+  guardrail suites, Coding type check, and production build.
 
 ### 266: Auto-mode fault logs exposed exception secrets and allow hazard typing widened
 
@@ -10520,11 +10584,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 146 (26 Open, 120 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 147 (26 Open, 121 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-03: Issue 268 added and resolved (v0.7.79 development)
+- Made Auto[LLM] allow-by-default with only credential-store reads and
+  disruptive abnormal outside writes eligible for `ask`.
+- Converted historical Tier 0 matches into classifier facts for Auto[LLM]
+  while retaining the legacy deterministic gate for explicit Auto[Rules].
+- Prevented the Ink REPL's cross-mode denial cache from overriding a later
+  Auto[LLM] allow.
 
 ### 2026-08-02: Issue 259 added and resolved (v0.7.79 development)
 - Deferred durable REPL Session creation until the first real prompt while

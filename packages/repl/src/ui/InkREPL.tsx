@@ -272,7 +272,11 @@ import {
   bootstrapAutoMode,
   type AutoModeBootstrapResult,
 } from "../interactive/auto-mode-bootstrap.js";
-import { isAutoMode, createAutoInProjectDeprecationEmitter } from "../permission/types.js";
+import {
+  createAutoInProjectDeprecationEmitter,
+  isAutoLlmMode,
+  isAutoMode,
+} from "../permission/types.js";
 import { copyTextToClipboard } from "../common/clipboard.js";
 import { formatCompactionPolicy } from "../common/compaction-display.js";
 import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/agent";
@@ -7170,6 +7174,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Issue 052 fix: Read gitRoot from context prop, not options.context.
       const gitRoot = context.gitRoot;
 
+      // The runner guardrail has already decided this exact Auto[LLM] call.
+      // Return before the cross-mode denial cache and all legacy checks so a
+      // denial recorded under Edits/Rules cannot override a later LLM allow.
+      if (isAutoLlmMode(mode, autoModeEngine)) {
+        return true;
+      }
+
       // === 0. Denial tracker: skip recently denied operations ===
       // FEATURE_066: If the user already denied this exact operation, don't ask again
       if (isDeniedRecently(denialTrackerRef.current, tool, input)) {
@@ -7199,21 +7210,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         if (isBashReadCommand(command)) {
           return true; // Auto-allowed for safe read-only commands in all modes
         }
-      }
-
-      // === 2.4. FEATURE_158 (v0.7.39) auto[llm] short-circuit ===
-      // In `auto` mode with the LLM engine active, the REPL-side hard rules
-      // (Step 2.5 dangerous + Step 3 protected-path) are intentionally
-      // SKIPPED — those rules become signals consumed by the runner-level
-      // AutoModeToolGuardrail.beforeTool (Tier 0 absolute deny + signals[]
-      // fed into the classifier prompt + speculative race). This is the
-      // structural decision in ADR-025.
-      //
-      // An explicit engine switch to rules yields to the original Step 2.5/3
-      // checks. Classifier health failures keep the LLM engine selected and
-      // use the runner-level Accept-edits fallback instead.
-      if (isAutoMode(mode) && autoModeEngine === 'llm') {
-        return true; // Defer all further checks to AutoModeToolGuardrail.beforeTool
       }
 
       // === 2.5. Dangerous bash commands: always require confirmation ===

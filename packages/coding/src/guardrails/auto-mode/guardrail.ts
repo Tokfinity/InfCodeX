@@ -8,13 +8,14 @@
  *
  * Decision flow (per design doc "三层权限金字塔"):
  *
- *   1. Tier-0 deterministic critical match   → user confirmation
- *   2. exact safe read/workspace-temp effect → allow (zero token cost)
- *   3. Explicitly exempt empty projection    → allow
+ *   1. exact safe read/workspace-temp effect → allow (zero token cost)
+ *   2. Explicitly exempt empty projection    → allow
+ *   3. Static/high-impact pattern match      → classifier facts in LLM;
+ *                                               legacy gate in explicit Rules
  *   4. Recoverable projection/analyzer fault → safe facts to classifier
  *   5. Engine is rules → deterministic Tier 2, otherwise user confirms
  *   6. degraded classifier infrastructure    → Accept-edits fallback
- *   7. classify(...) sideQuery
+ *   7. classify(...) sideQuery (sole Auto[LLM] decision owner)
  *        allow                                → allow (record allow → reset consecutive)
  *        confirm                              → user confirmation (record concern)
  *        failure                              → Accept-edits fallback (record error)
@@ -398,7 +399,10 @@ export interface AutoModeGuardrailConfig {
    */
   readonly extraCollectors?: readonly SignalCollector[];
 
-  /** Layer-owned Tier-0 checks that run after the coding-side frozen list. */
+  /**
+   * Layer-owned high-impact pattern checks. In LLM mode they add classifier
+   * evidence; in explicitly selected Rules mode they retain the legacy gate.
+   */
   readonly extraAbsoluteDenyChecks?: readonly AbsoluteDenyCheck[];
 
   /**
@@ -1361,7 +1365,12 @@ export function createAutoModeToolGuardrail(
     // FEATURE_158: collect signals ONCE per call. Used by both the
     // classifier prompt and the escalate-to-user path (REPL UI renders
     // Scope/Risk from signals). Empty array when no collector matches.
-    const signals = collectAllSignals(guardedCall, projectRoot, signalCollectors, executionCwd);
+    let signals: readonly ToolCallSignal[] = collectAllSignals(
+      guardedCall,
+      projectRoot,
+      signalCollectors,
+      executionCwd,
+    );
     let permissionReview: AutoModePermissionReview | undefined;
     let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
 
@@ -1430,10 +1439,9 @@ export function createAutoModeToolGuardrail(
       });
     };
 
-    // FEATURE_158 — Tier 0 identifies catastrophic patterns before the
-    // classifier. It is a mandatory approval boundary, not an irreversible
-    // policy block: interactive users can still authorize an exact action.
-    // denialTracker is not incremented because Tier 0 is not a classifier concern.
+    // The historical "Tier 0" detector remains useful as deterministic facts,
+    // but Auto[LLM] has one decision owner: the classifier. Only explicitly
+    // selected Auto[Rules] retains the legacy pre-classifier approval gate.
     const tier0: AbsoluteDenyResult = [
       checkAbsoluteDeny,
       ...(config.extraAbsoluteDenyChecks ?? []),
@@ -1443,8 +1451,15 @@ export function createAutoModeToolGuardrail(
     if (tier0.denied) {
       logAutoModeWarning(
         config.log,
-        `[auto-mode] Tier 0 absolute denylist matched (${tier0.patternId}): ${tier0.reason}`,
+        `[auto-mode] high-impact static pattern matched (${tier0.patternId}): ${tier0.reason}`,
       );
+      if (state.engine === 'llm') {
+        signals = [...signals, {
+          kind: 'dangerous_pattern',
+          pattern: `static_match=${tier0.patternId}; ${tier0.reason}`,
+          severity: 'high',
+        }];
+      }
     }
 
     // Tier 1: explicitly exempt tools may opt out through an empty projection.
@@ -1465,6 +1480,9 @@ export function createAutoModeToolGuardrail(
         `[auto-mode] tool classifier projection failed for "${guardedCall.name}"; `
           + `using safe fallback (${errorCategory(error)})`,
       );
+      action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
+    }
+    if (tier0.denied && state.engine === 'llm' && action === '') {
       action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
     }
     const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
@@ -1526,9 +1544,9 @@ export function createAutoModeToolGuardrail(
         ctx.permissionIntent,
       );
     }
-    if (tier0.denied) return escalateOrAsk(tier0.reason);
+    if (tier0.denied && state.engine === 'rules') return escalateOrAsk(tier0.reason);
     if (
-      permissionReview
+      !tier0.denied && permissionReview
       && isDeterministicallyAllowed(permissionReview, intentEvidence)
     ) {
       return allowFinal();

@@ -4848,9 +4848,20 @@ For source compatibility, the public `ClassifierDecision` allow branch keeps
 allow remains authoritative, `decision_hazard_conflict` appears in
 `outputWarnings`, and the contradictory hazard value is not placed in that
 legacy field.
-Direct approval remains limited to a deterministic catastrophic boundary, a
-valid classifier `ask`, or classifier/configuration failure after the bounded
-retry and Accept-edits fallback have both been exhausted.
+Auto[LLM] is allow-by-default automatic review. An operational classifier is
+instructed to return `ask` only for a concrete read from a known key/token/
+credential store, or for an abnormal write outside project, temporary, and
+normal work areas whose concrete effect can destabilize the system or make
+unrelated installed software unavailable. Ordinary project mutations, Git
+stash and other Git writes, and normal global dependency install/uninstall/
+reinstall do not require per-command root authorization. Syntax complexity,
+incomplete analysis, general uncertainty, and command category are not ask
+reasons. Static signals, including historical catastrophic-pattern matches,
+are classifier facts rather than a second Auto[LLM] verdict; explicit
+Auto[Rules] retains its legacy deterministic gate. A host must honor a valid
+classifier `allow` without manufacturing another approval. Infrastructure or
+decision-contract failure still uses the bounded retry and documented
+Accept-edits fallback; only exhaustion beyond that fallback reaches approval.
 
 The permission event's `inputPreview` is a display-safe diagnostic projection:
 it is bounded, credential-redacted, valid JSON, and includes the effective
@@ -4869,8 +4880,8 @@ not serialized as an ordinary user rejection.
 The user-level `.kodax` directory is a credential/configuration boundary, not
 an ordinary project path. Direct shell mutations, output redirects, and
 recognized nested-shell payloads whose target is provably beneath that
-directory are identified before LLM classification and routed to permission
-approval rather than permanently policy-blocked. The check is segment-safe and
+directory are identified before LLM classification and supplied as precise
+facts rather than permanently policy-blocked. The check is segment-safe and
 Windows case-insensitive. KodaX deliberately does not scan arbitrary
 quoted language source for path-looking substrings: doing so would turn Python,
 JavaScript, YAML, and regular expressions into false Tier-0 matches. Trusted

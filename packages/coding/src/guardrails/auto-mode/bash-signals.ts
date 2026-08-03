@@ -52,16 +52,17 @@ const DANGEROUS_PATTERN_SEVERITY: Record<string, 'high' | 'medium'> = {
     'high',
   '\\bsudo\\b': 'high',
   '\\bchmod\\s+[0-7]*777\\b': 'high',
-  // mkfs/fdisk/dd if/format — already caught by Tier 0 for the catastrophic
-  // dd of=/dev/sd* and mkfs.*; this regex is broader (e.g. `dd if=/dev/zero
-  // of=test.bin` is benign) so we keep it as a high-severity signal not a hard
-  // Tier 0 block.
+  // mkfs/fdisk/dd if/format — catastrophic targets are also identified by the
+  // historical Tier 0 list. This regex is broader (e.g. `dd if=/dev/zero
+  // of=test.bin` is benign), so it remains a high-severity fact rather than an
+  // approval verdict.
   '\\b(mkfs|fdisk|dd\\s+if=|format)\\b': 'high',
   // curl | bash — pipe-to-shell is a known attack vector
   '\\bcurl\\b.*\\|\\s*(bash|sh|zsh)\\b': 'high',
   // SQL destructive
   '\\b(drop\\s+|truncate\\s+|delete\\s+from)\\b': 'high',
-  // rm -rf / or ~ — Tier 0 catches this; redundant signal acceptable
+  // rm -rf / or ~ — the historical Tier 0 detector also catches this;
+  // redundant facts are acceptable.
   '\\brm\\s+-rf\\s+[\\/~]': 'high',
   // System control
   '\\b(shutdown|reboot|halt|poweroff)\\b': 'medium',

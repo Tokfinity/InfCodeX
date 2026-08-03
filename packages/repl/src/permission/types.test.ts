@@ -8,6 +8,7 @@ import {
   PERMISSION_MODES,
   CANONICAL_PERMISSION_MODES,
   createAutoInProjectDeprecationEmitter,
+  isAutoLlmMode,
   isAutoMode,
   canonicalizePermissionMode,
   computeConfirmTools,
@@ -31,6 +32,15 @@ describe('PermissionMode v0.7.33 — auto + auto-in-project alias', () => {
     expect(isAutoMode('auto-in-project')).toBe(true);
     expect(isAutoMode('plan')).toBe(false);
     expect(isAutoMode('accept-edits')).toBe(false);
+  });
+
+  it('identifies only Auto[LLM] as owned by the LLM permission decision', () => {
+    expect(isAutoLlmMode('auto', 'llm')).toBe(true);
+    expect(isAutoLlmMode('auto-in-project', 'llm')).toBe(true);
+    expect(isAutoLlmMode('auto', 'rules')).toBe(false);
+    expect(isAutoLlmMode('accept-edits', 'llm')).toBe(false);
+    expect(isAutoLlmMode('plan', 'llm')).toBe(false);
+    expect(isAutoLlmMode('auto', undefined)).toBe(false);
   });
 
   it('canonicalizePermissionMode rewrites auto-in-project → auto', () => {

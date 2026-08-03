@@ -12,11 +12,9 @@
  *   - file_modification  (always emitted with target path — coarse-grained
  *                        flag for the classifier to anchor file-edit context)
  *
- * Tier 0 (absolute deny) for `~/.kodax/` writes is a separate module —
- * this collector still emits the protected_path signal for `~/.kodax/`
- * because the classifier prompt benefits from seeing it, but Tier 0
- * intercepts before the classifier ever runs in production. The signal
- * here remains useful for tests and for downgraded engine paths.
+ * The historical Tier 0 detector for `~/.kodax/` writes is a separate
+ * module. In Auto[LLM] both its match and this protected_path signal are
+ * facts for the classifier; explicit Auto[Rules] retains the legacy gate.
  *
  * Purity: deterministic given `call.input.path` + `projectRoot` + stable
  * env (KODAX_HOME, system temp). `getAgentConfigHome()` and `os.tmpdir()`

@@ -55,6 +55,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Runtime daemon stop now verifies complete process-level cleanup with an exact
+  Runtime/PID outcome fence and an independent stop-client watchdog. A hung
+  Runtime close or synchronously blocked daemon is reclaimed by captured OS
+  process identity without targeting a reused PID; forced unverified exits
+  remain failures, and a concurrently started replacement owner is reported
+  instead of presenting its profile as idle.
 - Auto[LLM] now deterministically admits structurally proven read-only
   PowerShell environment/version inspection, including safe sequential and
   pipeline stages with descriptor duplication, while arbitrary scripts,
@@ -77,6 +83,16 @@ All notable changes to this project will be documented in this file.
   unable to alter permission decisions if a host logger fails. The public
   `ClassifierDecision` allow branch retains its previous `hazard?: 'none'`
   source type while contradictory hazard values remain non-blocking warnings.
+  Auto[LLM] now explicitly defaults to automatic review and `allow`; the
+  classifier asks only for concrete credential-store reads or disruptive
+  abnormal writes outside project/temp/normal work areas. Ordinary project
+  mutations, Git operations including stash, and normal global dependency
+  install/uninstall/reinstall no longer require per-command root authorization
+  by category. Historical Tier 0 matches are classifier facts in Auto[LLM]
+  rather than a second approval gate, while explicit Auto[Rules] retains its
+  legacy deterministic behavior. The Ink and classic REPL observers now yield
+  before legacy confirmation and historical-denial checks, so a rejection
+  recorded under Edits/Rules cannot override a later Auto[LLM] allow.
 - Auto permission fast paths now preserve shell wildcard uncertainty for
   sensitive reads, route broad search selectors, indirect file lists,
   PowerShell path arrays/enumeration pipelines, and dynamic Git pathspecs to

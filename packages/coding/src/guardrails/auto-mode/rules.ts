@@ -16,10 +16,14 @@
  *
  * Schema (each field optional, defaults to []):
  *   {
- *     "allow":       string[],   // patterns the classifier defaults to allowing
- *     "soft_deny":   string[],   // patterns the classifier defaults to blocking
+ *     "allow":       string[],   // contextual examples supporting an allow
+ *     "soft_deny":   string[],   // contextual cautions for the classifier to inspect
  *     "environment": string[]    // background context the classifier sees verbatim
  *   }
+ *
+ * These strings are classifier context, never independent verdicts. In
+ * Auto[LLM], even `soft_deny` cannot create an approval class beyond the two
+ * evidence-based ask classes defined by the classifier contract.
  *
  * Merge: layers concatenated in order (user → project → local). Identical
  * strings deduplicated by stable insertion (later layers win position only

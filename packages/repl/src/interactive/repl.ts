@@ -72,6 +72,7 @@ import {
   computeConfirmTools,
   createAutoInProjectDeprecationEmitter,
   FILE_MODIFICATION_TOOLS,
+  isAutoLlmMode,
   isAutoMode,
   normalizePermissionMode,
 } from '../permission/types.js';
@@ -1447,6 +1448,18 @@ Keyboard Shortcuts:
               if (isBashReadCommand(command)) {
                 return true; // Auto-allowed for safe read-only commands
               }
+            }
+
+            // Auto[LLM] has a single decision owner. The runner guardrail has
+            // already reviewed this exact call before this legacy observer is
+            // invoked, so protected-path and confirmTools checks below must
+            // not manufacture a second approval after an LLM allow. Explicit
+            // Auto[Rules] continues through the legacy deterministic checks.
+            if (isAutoLlmMode(
+              mode,
+              autoModeBootstrap.getGuardrail().getEngine(),
+            )) {
+              return true;
             }
 
             // Protected paths: always confirm

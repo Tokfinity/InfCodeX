@@ -48,6 +48,18 @@ export function isAutoMode(mode: PermissionMode): boolean {
 }
 
 /**
+ * True only when the LLM guardrail owns the concrete Auto permission verdict.
+ * Legacy REPL observers use this to avoid applying a second denial/approval
+ * policy after the guardrail has already allowed the call.
+ */
+export function isAutoLlmMode(
+  mode: PermissionMode,
+  engine: 'llm' | 'rules' | undefined,
+): boolean {
+  return isAutoMode(mode) && engine === 'llm';
+}
+
+/**
  * Map legacy mode names to their canonical form. v0.7.33: auto-in-project → auto.
  * Use at value-read boundaries (settings load, persisted session restore) so
  * downstream code only ever sees canonical names.
