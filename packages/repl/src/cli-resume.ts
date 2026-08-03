@@ -60,7 +60,7 @@ async function collectActiveSessionFiles(sessionsDir: string): Promise<string[]>
     if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'archived') continue;
     try {
       for (const child of await fs.readdir(entryPath, { withFileTypes: true })) {
-        if (child.isFile() && isSessionFile(child.name)) {
+        if (child.isFile() && isSessionFile(child.name) && !child.name.startsWith('archived-')) {
           files.push(path.join(entryPath, child.name));
         }
       }
