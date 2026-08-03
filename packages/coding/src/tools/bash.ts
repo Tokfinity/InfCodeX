@@ -31,7 +31,10 @@ import {
   createShellCommandInvocation,
   resolveShellExecution,
 } from '../shell-execution/resolver.js';
-import { hardenShellCommandEnvironment } from '../shell-execution/environment.js';
+import {
+  hardenShellCommandEnvironment,
+  parseSandboxEnvironmentPass,
+} from '../shell-execution/environment.js';
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
 const FOREGROUND_CLOSE_DRAIN_MS = process.platform === 'win32' ? 2_000 : 1_000;
@@ -259,12 +262,16 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       KODAX_SESSION_TMP: ctx.sessionScratchDir,
     }
     : process.env;
+  const environmentPass = parseSandboxEnvironmentPass(
+    process.env.KODAX_SANDBOX_ENV_PASS,
+  );
   const legacyEnv = hardenShellCommandEnvironment(
     legacyEnvSource,
     usesWindowsCmd ? 'cmd' : 'bash',
     process.platform,
     ctx.providerCredentialEnvironmentNames,
     cwd,
+    environmentPass,
   );
   const legacyCommandInvocation = usesWindowsCmd
     ? {

@@ -262,6 +262,22 @@ function normalizeConfiguredExtensions(value: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : [];
 }
 
+function normalizeSandboxConfig(value: unknown): {
+  envPass?: string[];
+} | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const envPass = (value as { envPass?: unknown }).envPass;
+  if (!Array.isArray(envPass)) return undefined;
+  const names = envPass
+    .filter((name): name is string => typeof name === 'string')
+    .map((name) => name.trim())
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name));
+  return { envPass: [...new Set(names)] };
+}
+
 interface PersistedCoreConfig {
   readonly raw: string;
   readonly value: Record<string, unknown>;
@@ -1054,6 +1070,9 @@ export function loadConfig(): {
   workflow?: {
     maxConcurrency?: number;
   };
+  sandbox?: {
+    envPass?: string[];
+  };
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -1100,6 +1119,7 @@ export function loadConfig(): {
         workflow?: {
           maxConcurrency?: number;
         };
+        sandbox?: unknown;
       };
       const migrated = migrateLegacyAgentModeConfig(parsed);
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
@@ -1130,6 +1150,7 @@ export function loadConfig(): {
           reasoningMode: collapsedReasoning,
           extensions: normalizeConfiguredExtensions(effectiveExtensions),
           mcpServers: effectiveMcpServers,
+          sandbox: normalizeSandboxConfig(migrated.sandbox),
         }),
       );
     }
@@ -1275,6 +1296,7 @@ const CONFIG_ENV_BRIDGES: ReadonlyArray<{
   { configPath: 'repoIntelligence.workerOldSpaceMb', env: 'KODAX_REPO_INTELLIGENCE_WORKER_OLD_SPACE_MB', value: (c) => configNumberString(c.repoIntelligence?.workerOldSpaceMb) },
   { configPath: 'repoIntelligence.storageDir', env: 'KODAX_REPO_INTELLIGENCE_STORAGE_DIR', value: (c) => normalizedConfigString(c.repoIntelligence?.storageDir) },
   { configPath: 'workflow.maxConcurrency', env: 'KODAX_WORKFLOW_MAX_CONCURRENCY', value: (c) => configNumberString(c.workflow?.maxConcurrency) },
+  { configPath: 'sandbox.envPass', env: 'KODAX_SANDBOX_ENV_PASS', value: (c) => configStringList(c.sandbox?.envPass) || undefined },
 ];
 
 function applyConfigSurfaceBridges(config: ReturnType<typeof loadConfig>): void {
@@ -1365,6 +1387,9 @@ export function saveConfig(config: {
   };
   workflow?: {
     maxConcurrency?: number;
+  };
+  sandbox?: {
+    envPass?: string[];
   };
 }): void {
   const { extensions, mcpServers, ...coreConfig } = config;

@@ -23,10 +23,12 @@ import {
   shellExecutionContractFingerprint,
 } from './contract.js';
 import {
+  applyShellEnvironmentPass,
   buildShellProbeEnvironment,
   hardenShellCommandEnvironment,
   mergeWindowsRegistryEnvironment,
   parseWindowsRegistryEnvironment,
+  parseSandboxEnvironmentPass,
   sanitizeResolvedShellEnvironment,
 } from './environment.js';
 
@@ -215,6 +217,15 @@ export function createShellCommandInvocation(
   resolved: ResolvedShellExecution,
   command: string,
 ): ShellCommandInvocation {
+  const environmentPass = parseSandboxEnvironmentPass(
+    process.env.KODAX_SANDBOX_ENV_PASS,
+  );
+  const hardened = hardenShellCommandEnvironment(
+    resolved.env,
+    resolved.contract.shell.kind,
+    process.platform,
+    [],
+  );
   return {
     executable: resolved.executable,
     args: [
@@ -223,11 +234,11 @@ export function createShellCommandInvocation(
         ? `"${command.trimStart()}"`
         : command,
     ],
-    env: hardenShellCommandEnvironment(
-      resolved.env,
-      resolved.contract.shell.kind,
+    env: applyShellEnvironmentPass(
+      process.env,
+      hardened,
+      environmentPass,
       process.platform,
-      [],
     ),
     ...(resolved.contract.shell.kind === 'cmd'
       ? { windowsVerbatimArguments: true }

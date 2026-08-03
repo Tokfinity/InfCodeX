@@ -14,19 +14,19 @@
 | Current released version | `v0.7.78` (Git tag / GitHub Release / npm) |
 | Current package version | `@kodax-ai/kodax@0.7.79` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `69` |
+| Total tracked features | `70` |
 | InProgress | `1` |
 | Planned | `14` |
-| Completed | `48` |
+| Completed | `49` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 48 | `284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `284` and `281` are engineering-complete for the unpublished v0.7.79 candidate; `263`, `276`, and `277` shipped in v0.7.78. v0.7.78 remains the current Git/GitHub/npm release. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` are engineering-complete for the unpublished v0.7.79 candidate; `263`, `276`, and `277` shipped in v0.7.78. v0.7.78 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 8 | `280, 278, 279, 282, 283, 285, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -62,7 +62,7 @@
 | `v0.7.76` | `0` |
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
-| `v0.7.79` | `2` |
+| `v0.7.79` | `3` |
 | `v0.7.80` | `5` |
 | `v0.7.81` | `1` |
 | `v0.7.85` | `1` |
@@ -981,6 +981,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Version | Design | Notes |
 |---|---|---|---|---|
+| `286` | Explicit Shell Environment Passthrough | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_286-explicit-shell-environment-passthrough) | Adds minimal user-level `sandbox.envPass` exact-name passthrough for final command targets while retaining default credential filtering and immutable execution-control denies. |
 | `284` | Qwen 3.8 Max Token Plan Model Refresh | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_284-qwen-38-max-token-plan-model-refresh) | Makes `qwen3.8-max` the default production ID, retains Preview selection, and aligns Qwen 3.8 context/output/reasoning/image metadata. |
 | `281` | Explicit A2A Network Authorization | `v0.7.79` candidate | [v0.7.79](features/v0.7.79.md#feature_281-explicit-a2a-network-authorization) | Adds independent persisted private-address and non-loopback plaintext-HTTP permissions across config, CLI discovery/call, Runtime reconciliation, registration fingerprints, and execution. Exact loopback HTTP remains implicit; all broader authority remains default deny. |
 | `277` | Intent-Aligned Auto[LLM] Permissions and Optional ASRT Containment | `v0.7.78` | [v0.7.78](features/v0.7.78.md#feature_277-intent-aligned-autollm-permissions-and-optional-asrt-containment) | Shipped after the independent semantic-eval, integrated CI, binary, tag, and release-asset gates completed. |

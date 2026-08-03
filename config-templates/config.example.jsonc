@@ -43,6 +43,15 @@
   // UI/manual locale.
   // "locale": "zh",
 
+  // Sensitive environment variables are filtered from model-issued commands by
+  // default. List exact host variable names here to pass them to the command
+  // target (including ASRT); values are never stored in this file. Project
+  // config cannot extend this user-level list. Execution-control variables such
+  // as NODE_OPTIONS and BASH_ENV remain blocked.
+  // "sandbox": {
+  //   "envPass": ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY"]
+  // },
+
   // Custom providers store public connection metadata only. Put the actual
   // credential in the named environment variable, never in this file. Use
   // `kodax setup --custom` for the guided writer.

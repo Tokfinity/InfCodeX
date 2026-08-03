@@ -36,6 +36,7 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
     expect(String(content)).toContain('"compaction"');
     expect(String(content)).toContain('"triggerPercent": 75');
     expect(String(content)).toContain('"triggerTokens": 0');
+    expect(String(content)).toContain('"envPass"');
     expect(String(content)).not.toContain('mcpServers');
     expect(write.mock.calls.map(([written]) => written)).toEqual([
       KODAX_EXAMPLE_CONFIG_FILE,
@@ -107,6 +108,8 @@ describe('ensureExampleConfigFile (F1 first-launch template)', () => {
       'providerModels',
       'customProviders',
       'compaction',
+      'sandbox',
+      'envPass',
     ]) {
       expect(core, field).toContain(`"${field}"`);
     }

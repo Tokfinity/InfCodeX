@@ -47,5 +47,8 @@ describe('renderSetupGuide', () => {
     expect(guide).toContain('brew install ripgrep');
     expect(guide).toContain('bubblewrap, socat, and ripgrep');
     expect(guide).toContain('@kodax-ai/kodax/sandbox');
+    expect(guide).toContain('sandbox.envPass');
+    expect(guide).toContain('GH_TOKEN');
+    expect(guide).toContain('default list is empty');
   });
 });

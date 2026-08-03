@@ -36,7 +36,11 @@ Runtime sessions and runs resolve a credential-filtered shell environment in
 the effective cwd, execute through the same explicit interpreter, inherit the
 contract into native children and deterministic evaluators, and bind exact
 command grants to the contract fingerprint. The feature is opt-in; callers
-without `shellExecution` keep the legacy platform-shell path.
+without `shellExecution` keep the legacy platform-shell interpreter path.
+Credential-shaped variables are filtered from every model-issued command path.
+The KodaX CLI can restore exact host variables only for the final command target
+through user-level `sandbox.envPass`; its default list is empty and
+execution-control variables remain blocked.
 
 The same release replaces asynchronous semantic memory prefetch with sparse
 foreground intervention after tool/verification failure or committed

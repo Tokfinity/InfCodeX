@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- User-level `sandbox.envPass` now accepts an exact list of host environment
+  variable names to expose to model-issued command targets, including ASRT and
+  the ordinary fallback path. The default remains empty; configuration stores
+  names rather than values, project configuration cannot broaden the list, and
+  execution-control variables remain blocked. Commands can read and emit any
+  variable that the user explicitly allows.
+
+### Fixed
+
+- A2A integration watching now ignores unchanged content revisions, preventing
+  repeated false `hot-reloaded` notices and their unnecessary root-TUI render.
+  Explicit manual reload still repairs missing registrations and retries
+  transient discovery failures without requiring a file rewrite.
+
 ## [0.7.79] - 2026-08-03
 
 ### Added

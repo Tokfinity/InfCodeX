@@ -95,6 +95,34 @@ describe('shell execution environment', () => {
     });
   });
 
+  it('passes only explicitly allowlisted credentials and never execution controls', () => {
+    expect(hardenShellCommandEnvironment({
+      PATH: 'C:\\Windows\\System32',
+      GH_TOKEN: 'gh-secret',
+      github_token: 'github-secret',
+      OPENAI_API_KEY: 'provider-secret',
+      NODE_OPTIONS: '--require=C:\\hook.js',
+      SAFE_VALUE: 'safe',
+    }, 'cmd', 'win32', [], undefined, [
+      'GH_TOKEN',
+      'GITHUB_TOKEN',
+      'NODE_OPTIONS',
+    ])).toEqual({
+      PATH: 'C:\\Windows\\System32',
+      GH_TOKEN: 'gh-secret',
+      github_token: 'github-secret',
+      SAFE_VALUE: 'safe',
+      NoDefaultCurrentDirectoryInExePath: '1',
+    });
+
+    expect(hardenShellCommandEnvironment({
+      PATH: '/usr/bin',
+      github_token: 'case-sensitive-secret',
+    }, 'bash', 'linux', [], undefined, ['GITHUB_TOKEN'])).toEqual({
+      PATH: '/usr/bin',
+    });
+  });
+
   it('filters credentials before profile startup and after profile resolution', () => {
     const source = {
       PATH: 'C:\\system',

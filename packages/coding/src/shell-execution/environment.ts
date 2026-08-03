@@ -47,12 +47,22 @@ export function hardenShellCommandEnvironment(
   platform: NodeJS.Platform = process.platform,
   additionalDeniedNames: readonly string[] = [],
   executionCwd?: string,
+  allowedSensitiveNames: readonly string[] = [],
 ): NodeJS.ProcessEnv {
   const result = { ...source };
   for (const name of Object.keys(result)) {
-    if (isSensitiveShellEnvironmentName(name)
-      || isExecutionControlEnvironmentName(name)
-      || additionalDeniedNames.some((candidate) => candidate.toUpperCase() === name.toUpperCase())) {
+    const explicitlyAllowed = environmentNameIsListed(
+      name,
+      allowedSensitiveNames,
+      platform,
+    );
+    if (isExecutionControlEnvironmentName(name)
+      || (!explicitlyAllowed && (
+        isSensitiveShellEnvironmentName(name)
+        || additionalDeniedNames.some((candidate) => (
+          candidate.toUpperCase() === name.toUpperCase()
+        ))
+      ))) {
       deleteEnvironmentValue(result, name, platform);
     }
   }
@@ -62,6 +72,50 @@ export function hardenShellCommandEnvironment(
   // allowing a workspace-local executable to shadow a trusted bare command.
   setEnvironmentValue(result, 'NoDefaultCurrentDirectoryInExePath', '1', platform);
   return result;
+}
+
+export function parseSandboxEnvironmentPass(value: string | undefined): readonly string[] {
+  if (!value) return [];
+  return [...new Set(value
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
+}
+
+export function applyShellEnvironmentPass(
+  source: NodeJS.ProcessEnv,
+  target: NodeJS.ProcessEnv,
+  names: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const result = { ...target };
+  for (const requestedName of names) {
+    if (isExecutionControlEnvironmentName(requestedName)) continue;
+    const sourceName = Object.keys(source).find((name) => (
+      environmentNamesEqual(name, requestedName, platform)
+    ));
+    if (sourceName === undefined || source[sourceName] === undefined) continue;
+    setEnvironmentValue(result, sourceName, source[sourceName]!, platform);
+  }
+  return result;
+}
+
+function environmentNameIsListed(
+  name: string,
+  candidates: readonly string[],
+  platform: NodeJS.Platform,
+): boolean {
+  return candidates.some((candidate) => environmentNamesEqual(name, candidate, platform));
+}
+
+function environmentNamesEqual(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === 'win32'
+    ? left.toUpperCase() === right.toUpperCase()
+    : left === right;
 }
 
 function sanitizeCommandPath(

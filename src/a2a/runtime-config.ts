@@ -489,7 +489,8 @@ export function createConfiguredA2ARuntimeIntegration(input: {
         const initialDiagnostic = controller.status().diagnostic;
         if (initialDiagnostic) notify(`a2a: ${initialDiagnostic.message}`);
         await reconcile(initial.document);
-        controller.subscribe(async (snapshot) => {
+        controller.subscribe(async (snapshot, previous) => {
+          if (snapshot.revision === previous?.revision) return;
           await reconcile(snapshot.document);
           const enabled = Object.values(snapshot.document.agents).filter((agent) => agent.enabled).length;
           notify(`A2A configuration hot-reloaded (${enabled} enabled outbound Agents).`);
@@ -497,7 +498,13 @@ export function createConfiguredA2ARuntimeIntegration(input: {
         controller.startWatching();
         return {
           status: () => controller.status(),
-          async reload() { await controller.reload(); },
+          async reload() {
+            const previous = controller.snapshot();
+            const result = await controller.reload();
+            if (result.ok && result.snapshot.revision === previous?.revision) {
+              await reconcile(result.snapshot.document);
+            }
+          },
           close() { controller.close(); },
         };
       } catch (error: unknown) {

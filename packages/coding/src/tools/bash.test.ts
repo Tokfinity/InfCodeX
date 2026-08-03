@@ -223,6 +223,44 @@ describe('toolBash', () => {
     }
   });
 
+  it('passes explicitly allowed credentials to sandbox input and fallback execution', async () => {
+    const originalPass = process.env.KODAX_SANDBOX_ENV_PASS;
+    const originalGitHub = process.env.GITHUB_TOKEN;
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    process.env.KODAX_SANDBOX_ENV_PASS = 'GITHUB_TOKEN';
+    process.env.GITHUB_TOKEN = 'allowed-secret';
+    process.env.OPENAI_API_KEY = 'filtered-secret';
+    let preparedEnvironment: NodeJS.ProcessEnv | undefined;
+    const prepare = vi.fn(async (input: Parameters<KodaXShellSandbox['prepare']>[0]) => {
+      preparedEnvironment = input.env;
+      throw new Error('exercise normal-permission fallback');
+    });
+    const encoded = Buffer.from(
+      "process.stdout.write([process.env.GITHUB_TOKEN, process.env.OPENAI_API_KEY ?? 'missing'].join('|'))",
+      'utf8',
+    ).toString('base64');
+    try {
+      const result = await toolBash({
+        command: `node -e "eval(Buffer.from('${encoded}','base64').toString())"`,
+      }, {
+        backups: new Map(),
+        toolCallId: 'bash-pass-allowed-credential',
+        shellSandbox: { prepare },
+      });
+
+      expect(preparedEnvironment).toHaveProperty('GITHUB_TOKEN', 'allowed-secret');
+      expect(preparedEnvironment).not.toHaveProperty('OPENAI_API_KEY');
+      expect(completedCommandBody(result)).toContain('allowed-secret|missing');
+    } finally {
+      if (originalPass === undefined) delete process.env.KODAX_SANDBOX_ENV_PASS;
+      else process.env.KODAX_SANDBOX_ENV_PASS = originalPass;
+      if (originalGitHub === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = originalGitHub;
+      if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAI;
+    }
+  });
+
   it('does not fall back or spawn after cancellation during sandbox preparation', async () => {
     const controller = new AbortController();
     const reportToolSandboxObservation = vi.fn();

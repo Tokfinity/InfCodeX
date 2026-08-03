@@ -14,6 +14,7 @@ _Last Updated: 2026-08-03_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 274 | Medium | Resolved | Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws | v0.7.69 integration hot reload | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 273 | Medium | Resolved | Runtime actor subprocess test inherited Node environment-proxy warnings | v0.7.79 Runtime actor owner liveness test | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 272 | Medium | Resolved | Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 271 | Medium | Resolved | GLM review found an unbounded boundary projection and small lifecycle/parser hardening gaps | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -176,6 +177,60 @@ _Last Updated: 2026-08-03_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 274: Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.69 integration hot reload
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+An unchanged `~/.kodax/integrations/a2a.json` repeatedly produced
+`A2A configuration hot-reloaded (0 enabled outbound Agents).` Windows file
+watch notifications can fire for metadata or unrelated directory events even
+when the file bytes and content revision do not change. Every notice flowed
+through the integration event bridge into the root Ink component, so users
+could observe a UI stall before the false toast became visible.
+
+MCP and Extension subscribers already ignored identical revisions; A2A always
+reconciled and notified. A2A also intentionally supports explicit same-revision
+manual reload for repairing a missing live registration and retrying a
+temporary discovery failure, so removing every same-revision reconciliation
+would have broken an existing recovery contract.
+
+#### Root Cause
+
+The A2A controller subscriber did not compare `snapshot.revision` with the
+previous snapshot before automatic reconcile/notification. Filesystem watcher
+events therefore became user-visible reload events regardless of content.
+
+#### Resolution
+
+- Add the same revision guard used by MCP and Extensions to the automatic A2A
+  subscriber before reconcile and notification.
+- Keep explicit `handle.reload()` recovery: when its disk revision is
+  unchanged, it calls reconcile directly without emitting a hot-reload notice.
+- Preserve changed-revision hot activation and its single success notice.
+
+#### Files Modified
+
+- `src/a2a/runtime-config.ts`
+- `src/a2a/runtime-config.test.ts`
+
+#### Tests Added
+
+- An unchanged explicit reload emits no `hot-reloaded` event.
+- A changed revision still emits exactly one A2A hot-reload event.
+- Existing same-revision missing-registration repair and transient-failure
+  retry regressions remain green.
+
+#### Resolution Date
+
+2026-08-03
 
 ### 273: Runtime actor subprocess test inherited Node environment-proxy warnings
 
@@ -11021,7 +11076,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 153 (27 Open, 126 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 154 (27 Open, 127 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

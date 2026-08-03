@@ -222,6 +222,25 @@ history. SDK embedders can use the same capability independently through
 `@kodax-ai/kodax/sandbox`; see the
 [SDK sandbox guide](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778).
 
+Credential-shaped environment variables are filtered from model-issued shell
+commands by default. To expose exact host variables to those command targets,
+including ASRT, add only their names to the user-level core config:
+
+```json
+{
+  "sandbox": {
+    "envPass": ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY"]
+  }
+}
+```
+
+The default list is empty. Values remain in the host environment and are never
+stored in `config.json`; project configuration cannot extend the list.
+Matching is exact (case-insensitive on Windows), and execution-control
+variables such as `NODE_OPTIONS` and `BASH_ENV` remain blocked. Restart KodaX
+after changing the host variables or this setting; stop/restart a persistent
+KodaX daemon so it receives the new environment and configuration.
+
 For Qwen Token Plan, select `qwen-token-plan` and use its separate credential;
 `QWEN_API_KEY` does not authenticate this route:
 
@@ -567,8 +586,10 @@ resolves the shell environment in the effective project cwd and then executes
 the command through that same interpreter. Resolved environments are isolated
 by contract and cwd, expire after a bounded TTL, and can be explicitly
 refreshed. Provider credentials and execution-control variables are removed
-before profile/setup code and again before the command starts. When
-`shellExecution` is absent, established command behavior is unchanged. See
+before profile/setup code and again before the command starts. Credential-shaped
+variables are also filtered on the legacy platform-shell path; explicit names
+in user-level `sandbox.envPass` are restored only for the final command target.
+When `shellExecution` is absent, the established interpreter path is unchanged. See
 [SDK Embedder Guide section 28](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
 and the [Issue 214 regression guide](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
 

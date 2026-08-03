@@ -75,6 +75,7 @@ describe('FEATURE_218 manual registry', () => {
     const a2a = resolveKodaXManual({ topic: 'a2a' }).content;
     const sessions = resolveKodaXManual({ topic: 'sessions' }).content;
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+    const sandbox = resolveKodaXManual({ topic: 'sandbox' }).content;
 
     expect(providers).toContain('deepseek-v4-flash');
     expect(providers).toContain('deepseek-v4-pro');
@@ -102,6 +103,10 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('sessions.diagnostics()');
     expect(sdk).toContain('Job Object');
     expect(sdk).toContain('Issue 256');
+
+    expect(sandbox).toContain('sandbox.envPass');
+    expect(sandbox).toContain('GH_TOKEN');
+    expect(sandbox).toContain('default');
   });
 
   it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {

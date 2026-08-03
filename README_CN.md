@@ -202,7 +202,9 @@ v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime 
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一
 解释器执行命令。环境缓存按 contract 与 cwd 隔离，使用有界 TTL，也可由宿主显式
 刷新。Provider 凭据与执行控制变量会在加载 profile/setup 前以及实际执行前分别
-过滤。没有配置 `shellExecution` 的调用保持原有命令行为。详见
+过滤；旧的 platform-shell 路径同样会过滤凭据型变量。用户级 `sandbox.envPass`
+明确列出的变量只会在最终命令目标中恢复。没有配置 `shellExecution` 时仍保持原有
+解释器路径。详见
 [SDK Embedder Guide 第 28 节](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
 与 [Issue 214 回归指南](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)。
 
@@ -381,6 +383,22 @@ Auto[LLM] 的权限体验保持一致，只缺少 OS 级 containment；普通运
 逐命令 sandbox 路由属于内部机制，不显示在普通命令历史中。SDK 嵌入方还可通过
 `@kodax-ai/kodax/sandbox` 在 Auto[LLM] 之外独立使用该能力，
 见 [SDK sandbox 指南](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778)。
+
+模型发起的 shell 命令默认会过滤名称形似凭据的环境变量。若要把指定宿主变量
+透传给命令目标（包括 ASRT），只需在用户级 core 配置中列出变量名：
+
+```json
+{
+  "sandbox": {
+    "envPass": ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY"]
+  }
+}
+```
+
+默认列表为空；`config.json` 只保存变量名，不保存值，项目配置也不能扩大该列表。
+变量名精确匹配（Windows 不区分大小写），`NODE_OPTIONS`、`BASH_ENV` 等执行控制
+变量即使列入仍会被阻止。修改宿主环境变量或该配置后需重启 KodaX；若使用常驻
+daemon，还需先停止并重新启动 daemon，让它获取新的环境与配置。
 
 Qwen Token Plan 需要选择 `qwen-token-plan` 并使用单独的凭据；`QWEN_API_KEY`
 不能用于该路由：

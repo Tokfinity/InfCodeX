@@ -461,6 +461,19 @@ Workflow leaves, and deterministic evaluators inherit the contract. Exact
 command permission matchers bind the interpreter family and contract SHA-256.
 No contract keeps `shell: true` plus the legacy process environment.
 
+The CLI adds one user-level command-target exception without widening the
+shell-profile bootstrap boundary. `config.json#sandbox.envPass` is an exact
+list of host environment-variable names, defaulting to empty. The REPL config
+bridge projects the names (never values) through `KODAX_SANDBOX_ENV_PASS`.
+Legacy command preparation retains listed credentials; configured-shell
+resolution still strips them before profile/setup and restores them from the
+host only after final environment hardening. The resulting environment is the
+one passed to ASRT or the ordinary fallback target. Matching is
+case-insensitive only on Windows. Execution-control names (`NODE_OPTIONS`,
+`BASH_ENV`, `RIPGREP_CONFIG_PATH`, and imported Bash functions) cannot be
+restored. Project permission configuration has no path to broaden this
+user-level list.
+
 The default terminal bindings keep Shift-Tab for the three permission modes and
 Shift+Enter for newline input. Rapid Shift-Tab changes enter the per-Session
 Runtime settings queue in input order, so the final visible mode is also the

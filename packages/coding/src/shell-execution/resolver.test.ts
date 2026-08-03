@@ -84,6 +84,36 @@ afterEach(() => {
 });
 
 describe('resolved shell execution', () => {
+  it('injects sandbox envPass credentials only into the final command environment', async () => {
+    vi.stubEnv('GH_TOKEN', 'gh-secret');
+    vi.stubEnv('OPENAI_API_KEY', 'provider-secret');
+    vi.stubEnv('KODAX_SANDBOX_ENV_PASS', 'GH_TOKEN');
+    const cwd = await mkdtemp(path.join(tmpdir(), 'kodax-shell-env-pass-'));
+    const setup = process.platform === 'win32'
+      ? 'if defined GH_TOKEN (set "KODAX_SETUP_SAW_GH_TOKEN=yes") else (set "KODAX_SETUP_SAW_GH_TOKEN=no")'
+      : 'if [ -n "${GH_TOKEN+x}" ]; then export KODAX_SETUP_SAW_GH_TOKEN=yes; else export KODAX_SETUP_SAW_GH_TOKEN=no; fi';
+    const contract = platformContract(setup);
+
+    const allowed = await toolBash(
+      { command: nodePrint('GH_TOKEN') },
+      context(cwd, contract),
+    );
+    const denied = await toolBash(
+      { command: nodePrint('OPENAI_API_KEY') },
+      context(cwd, contract),
+    );
+    const setupObservation = await toolBash(
+      { command: nodePrint('KODAX_SETUP_SAW_GH_TOKEN') },
+      context(cwd, contract),
+    );
+
+    expect(allowed).toContain('gh-secret');
+    expect(denied).toContain('missing');
+    expect(denied).not.toContain('provider-secret');
+    expect(setupObservation).toContain('no');
+    expect(setupObservation).not.toContain('yes');
+  });
+
   it('lets two projects resolve different Node toolchains without cache crossover', async () => {
     const first = await mkdtemp(path.join(tmpdir(), 'kodax-shell-first-'));
     const second = await mkdtemp(path.join(tmpdir(), 'kodax-shell-second-'));

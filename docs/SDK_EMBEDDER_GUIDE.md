@@ -5270,6 +5270,28 @@ additional names but cannot weaken the built-in Provider credential deny set.
 shell. On Windows, `windowsPath: "registry"` re-reads current Machine/User
 environment values instead of reusing the daemon's startup PATH.
 
+The KodaX CLI additionally exposes a small user-level convenience setting for
+commands that intentionally need host credentials:
+
+```json
+{
+  "sandbox": {
+    "envPass": ["GH_TOKEN", "GITHUB_TOKEN"]
+  }
+}
+```
+
+`sandbox.envPass` defaults to empty and stores exact names, never values. It
+does not expose credentials to shell profile/setup resolution; the current
+host values are restored only into the final command environment, which then
+flows to ASRT or the ordinary fallback path. Windows matching is
+case-insensitive; POSIX matching is case-sensitive. `NODE_OPTIONS`, `BASH_ENV`,
+`RIPGREP_CONFIG_PATH`, and imported Bash functions remain blocked even if
+named. The CLI projects this list to `KODAX_SANDBOX_ENV_PASS`; an in-process
+SDK host that deliberately uses the same process-global convenience must set
+that variable before command execution. Restart a persistent daemon after
+changing either the list or the host variables.
+
 Resolution is two-stage and uses the effective cwd:
 
 1. sanitize the bootstrap environment, including credentials for built-in,
@@ -5292,7 +5314,9 @@ switch to PowerShell or Bash.
 
 Configured-shell failures are visible and fail closed: KodaX does not reinterpret
 the command through another shell. When `shellExecution` is absent, KodaX keeps
-the pre-v0.7.77 platform-shell behavior for compatibility. See
+the pre-v0.7.77 platform-shell interpreter behavior for compatibility; the
+credential filter and explicit `sandbox.envPass` final-target restoration still
+apply. See
 [`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)
 for cross-project, cache, cancellation, credential, and Windows argv checks.
 

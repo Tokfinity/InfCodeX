@@ -1110,6 +1110,45 @@ describe('configured A2A Runtime integration', () => {
     }
   });
 
+  it('does not report a hot reload when the A2A revision is unchanged', async () => {
+    const root = tempRoot();
+    const configHome = path.join(root, '.kodax');
+    writeA2A(configHome, { version: 2, agents: {} });
+    const events: string[] = [];
+    const integration = createConfiguredA2ARuntimeIntegration({
+      configHome,
+      onEvent: (message) => events.push(message),
+    });
+    const runtime = await createKodaXRuntime({
+      mode: 'embedded',
+      homeDir: path.join(root, 'runtime-revision-notice'),
+      externalAgents: integration.runtimeOptions,
+    });
+    const handle = await integration.start(runtime);
+    try {
+      await handle.reload();
+      expect(events.filter((message) => message.includes('hot-reloaded'))).toEqual([]);
+
+      writeA2A(configHome, {
+        version: 2,
+        agents: {
+          disabled: {
+            cardUrl: 'https://127.0.0.1/disabled/card',
+            enabled: false,
+            effect: 'none',
+          },
+        },
+      });
+      await handle.reload();
+      expect(events.filter((message) => message.includes('hot-reloaded'))).toEqual([
+        'A2A configuration hot-reloaded (0 enabled outbound Agents).',
+      ]);
+    } finally {
+      handle.close();
+      await runtime.close();
+    }
+  });
+
   it('registers configured Agents and reconciles add, failure, and removal without restart', async () => {
     const root = tempRoot();
     const configHome = path.join(root, '.kodax');
