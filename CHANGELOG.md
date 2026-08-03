@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.79] - 2026-08-01
+## [0.7.79] - 2026-08-03
 
 ### Added
 
@@ -175,6 +175,8 @@ All notable changes to this project will be documented in this file.
 - Parallel quality-strategy admission now conflicts only with a competing
   admission for the same parent Actor state, rather than unrelated child or
   progress updates.
+- TodoList content and labels now preserve the query and UI locale language
+  continuity (Issue 258).
 - Runtime teardown now preserves indeterminate lifecycle facts instead of
   reporting false success: Windows process-tree cleanup returns `unknown` when
   spawn-time root identity, snapshots, or descendant termination cannot be
@@ -203,6 +205,13 @@ All notable changes to this project will be documented in this file.
   frames obey the request-ID fence and cannot acknowledge unfinished requests.
   Daemon startup cleanup also surfaces an indeterminate process-tree outcome
   instead of treating an already-exited root as proof of descendant cleanup.
+
+### Performance
+
+- REPL recent-session page loading is bounded so large session histories do
+  not stall the picker or resume flow.
+- Workspace git inspection during REPL startup is parallelized, reducing
+  time to first prompt on large repositories.
 
 ## [0.7.78] - 2026-07-29
 
