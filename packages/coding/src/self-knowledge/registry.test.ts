@@ -158,6 +158,7 @@ describe('FEATURE_218 manual registry', () => {
     expect(install).toContain('/setup --help');
     expect(providers).toContain('qwen-token-plan');
     expect(providers).toContain('QWEN_TOKEN_API_KEY');
+    expect(providers).toContain('defaults to `qwen3.8-max`');
     expect(providers).toContain('qwen3.8-max-preview');
     expect(permissions).toContain('Runtime-owned');
     expect(permissions).toContain('allow once');

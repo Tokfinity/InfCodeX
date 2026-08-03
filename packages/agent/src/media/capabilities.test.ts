@@ -11,6 +11,7 @@ const ARK_CODING_IMAGE_MODELS = [
 ] as const;
 
 const QWEN_TOKEN_PLAN_IMAGE_MODELS = [
+  'qwen3.8-max',
   'qwen3.8-max-preview',
   'qwen3.7-plus',
   'qwen3.6-flash',

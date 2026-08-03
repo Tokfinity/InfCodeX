@@ -93,6 +93,7 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     // Token Plan is Credits-based rather than pay-per-token. These nominal
     // placeholders keep cost tracking non-zero; actual consumption lives in
     // the Alibaba Cloud subscription console.
+    'qwen3.8-max': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'qwen3.8-max-preview': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'qwen3.7-max': { inputPer1M: 0.005, outputPer1M: 0.015 },
     'qwen3.7-plus': { inputPer1M: 0.005, outputPer1M: 0.015 },

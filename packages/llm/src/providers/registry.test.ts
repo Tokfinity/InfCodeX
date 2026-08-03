@@ -92,6 +92,7 @@ describe('provider registry', () => {
     ['minimax-coding', 'MiniMax-M2.7-highspeed'],
     ['ark-coding', 'kimi-k2.7-code'],
     ['ark-coding', 'MiniMax-M2.7'],
+    ['qwen-token-plan', 'qwen3.8-max'],
     ['qwen-token-plan', 'qwen3.8-max-preview'],
   ])('%s/%s rejects attempts to disable always-on thinking', (provider, model) => {
     expect(getModelCapabilities(provider, model)?.reasoningProfile).toMatchObject({
@@ -138,8 +139,9 @@ describe('provider registry', () => {
     const tokenPlan = getProvider('qwen-token-plan');
 
     expect(tokenPlan.name).toBe('qwen-token-plan');
-    expect(tokenPlan.getModel()).toBe('qwen3.8-max-preview');
+    expect(tokenPlan.getModel()).toBe('qwen3.8-max');
     expect(tokenPlan.getAvailableModels()).toEqual([
+      'qwen3.8-max',
       'qwen3.8-max-preview',
       'qwen3.7-max',
       'qwen3.7-plus',
@@ -152,9 +154,13 @@ describe('provider registry', () => {
       expect(tokenPlan.getEffectiveContextWindow(model)).toBe(1_000_000);
     }
 
+    expect(tokenPlan.getEffectiveMaxOutputTokens('qwen3.8-max')).toBe(131_072);
+    expect(tokenPlan.getEffectiveMaxOutputTokens('qwen3.8-max-preview')).toBe(131_072);
     expect(tokenPlan.getEffectiveMaxOutputTokens('qwen3.7-plus')).toBe(64_000);
     expect(tokenPlan.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(tokenPlan.getEffectiveMaxOutputTokens('deepseek-v4-pro')).toBe(64_000);
+    expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'qwen3.8-max'))
+      .toBe('native-budget');
     expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'qwen3.8-max-preview'))
       .toBe('native-budget');
     expect(getProviderConfiguredReasoningCapability('qwen-token-plan', 'glm-5.2'))
@@ -163,6 +169,8 @@ describe('provider registry', () => {
       .toBe('native-effort');
     expectReasoningPreset('qwen-token-plan', 'qwen3.7-max', 'qwen-hybrid-thinking');
     expectReasoningPreset('qwen-token-plan', 'glm-5.2', 'zai-glm-5.2');
+    expect(getModelCapabilities('qwen-token-plan', 'qwen3.8-max')?.reasoningProfile)
+      .toMatchObject({ localRejectEfforts: ['none', 'minimal'] });
     expect(getModelCapabilities('qwen-token-plan', 'qwen3.8-max-preview')?.reasoningProfile)
       .toMatchObject({ localRejectEfforts: ['none', 'minimal'] });
     expect(getModelCapabilities('qwen-token-plan', 'qwen3.7-max')?.reasoningProfile)

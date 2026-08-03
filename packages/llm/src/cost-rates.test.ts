@@ -131,6 +131,15 @@ describe('cost-rates', () => {
       });
     });
 
+    it('should price both Qwen 3.8 Token Plan model IDs', () => {
+      const tokenPlan = DEFAULT_COST_RATES['qwen-token-plan'];
+      expect(tokenPlan['qwen3.8-max']).toEqual(tokenPlan['qwen3.8-max-preview']);
+      expect(tokenPlan['qwen3.8-max']).toEqual({
+        inputPer1M: 0.005,
+        outputPer1M: 0.015,
+      });
+    });
+
     it('should have empty entries for CLI bridge providers', () => {
       expect(DEFAULT_COST_RATES['gemini-cli']).toEqual({});
       expect(DEFAULT_COST_RATES['codex-cli']).toEqual({});

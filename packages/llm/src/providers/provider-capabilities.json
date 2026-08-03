@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-07-31",
+  "updatedAt": "2026-08-03",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -441,11 +441,16 @@
     },
     "qwen-token-plan": {
       "apiKeyEnv": "QWEN_TOKEN_API_KEY",
-      "model": "qwen3.8-max-preview",
+      "model": "qwen3.8-max",
       "models": [
+        {
+          "id": "qwen3.8-max-preview",
+          "displayName": "Qwen 3.8 Max Preview"
+        },
         {
           "id": "qwen3.7-max",
           "displayName": "Qwen 3.7 Max",
+          "maxOutputTokens": 64000,
           "reasoningProfile": {
             "reasoningPreset": "qwen-hybrid-thinking",
             "effortStrategy": "provider-budget",
@@ -475,6 +480,7 @@
         {
           "id": "qwen3.7-plus",
           "displayName": "Qwen 3.7 Plus",
+          "maxOutputTokens": 64000,
           "reasoningProfile": {
             "reasoningPreset": "qwen-hybrid-thinking",
             "effortStrategy": "provider-budget",
@@ -504,6 +510,7 @@
         {
           "id": "qwen3.6-flash",
           "displayName": "Qwen 3.6 Flash",
+          "maxOutputTokens": 64000,
           "reasoningProfile": {
             "reasoningPreset": "qwen-hybrid-thinking",
             "effortStrategy": "provider-budget",
@@ -562,6 +569,7 @@
         {
           "id": "deepseek-v4-pro",
           "displayName": "DeepSeek V4 Pro",
+          "maxOutputTokens": 64000,
           "reasoningCapability": "native-effort",
           "reasoningProfile": {
             "effortStrategy": "anthropic-reasoning-effort",
@@ -614,7 +622,7 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 1000000,
-      "maxOutputTokens": 64000,
+      "maxOutputTokens": 131072,
       "thinkingBudgetCap": 32000,
       "verifyStrategy": "count-tokens"
     },
