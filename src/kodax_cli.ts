@@ -56,13 +56,16 @@ import {
   runtimeDaemonEndpointFromState,
 } from './runtime-daemon/lifecycle.js';
 import {
+  appendRuntimeDaemonLog,
   classifyRuntimeDaemonHealth,
+  readRuntimeDaemonShutdownOutcome,
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonToken,
   removeRuntimeDaemonOwnershipIfUnchanged,
   isSameRuntimeDaemonPath,
   resolveRuntimeDaemonPaths,
   resolveRuntimeDaemonPathsFromConfigHome,
+  writeRuntimeDaemonShutdownOutcome,
   type RuntimeDaemonHealth,
   type RuntimeDaemonState,
 } from './runtime-daemon/state.js';
@@ -161,9 +164,11 @@ import {
 import {
   cleanupRegisteredManagedChildren,
   emitKodaXDiagnostic,
+  killPidTree,
   shutdownTracing,
   applyProcessHardening,
 } from '@kodax-ai/agent';
+import { readProcessStartIdentity } from '../packages/agent/src/runtime/process-tree.js';
 import {
   getGitRoot,
   loadConfig,
@@ -341,9 +346,17 @@ interface DaemonStartResult {
 
 interface DaemonStopResult {
   readonly stopped: boolean;
-  readonly reason?: RuntimeDaemonHealth | 'unverified_owner';
+  readonly reason?:
+    | RuntimeDaemonHealth
+    | 'unverified_owner'
+    | 'cleanup_failed'
+    | 'cleanup_unverified'
+    | 'replacement_running';
   readonly forced?: boolean;
+  /** A distinct live owner was observed after the requested daemon exited. */
+  readonly replacementRunning?: boolean;
   readonly health?: RuntimeDaemonHealth;
+  readonly error?: string;
   readonly state: RuntimeDaemonState | null;
 }
 
@@ -1556,9 +1569,13 @@ async function serveDaemonCommand(input: {
   readonly orphanExitMs?: number;
 }): Promise<void> {
   const daemonConfigHome = path.resolve(input.configHome);
+  const daemonPaths = resolveRuntimeDaemonPathsFromConfigHome(
+    daemonConfigHome,
+    input.profile,
+  );
   if (process.env.KODAX_DAEMON_SERVE === '1') {
     detachRuntimeDaemonBootstrapOutput(
-      resolveRuntimeDaemonPathsFromConfigHome(daemonConfigHome, input.profile),
+      daemonPaths,
     );
     const internalBootstrapBytes = Number.parseInt(
       process.env.KODAX_INTERNAL_DAEMON_TEST_BOOTSTRAP_BYTES ?? '',
@@ -1580,6 +1597,9 @@ async function serveDaemonCommand(input: {
   });
   let ownedRuntime: KodaXRuntime | undefined;
   let a2aHandle: ConfiguredA2ARuntimeHandle | undefined;
+  let completedNormally = false;
+  let ownedRuntimeId: string | undefined;
+  let primaryError: Error | undefined;
   try {
     const lease = await acquireRuntimeDaemonLease({
       profile: input.profile,
@@ -1638,9 +1658,11 @@ async function serveDaemonCommand(input: {
           `KodaX runtime daemon already owned by PID ${observation.state?.pid ?? 'unknown'}.`,
         ),
       );
+      completedNormally = true;
       return;
     }
     if (!ownedRuntime) throw new Error('Runtime daemon owner was not created.');
+    ownedRuntimeId = ownedRuntime.identity.runtimeId;
     const hostClosed = lease.hostClosed;
     if (!hostClosed) {
       await lease.shutdown();
@@ -1668,11 +1690,176 @@ async function serveDaemonCommand(input: {
       a2aHandle = undefined;
       await shutdown();
     }
-  } finally {
-    a2aHandle?.close();
-    a2aHandle = undefined;
-    extensions.hotReload.close();
-    await extensions.runtime.dispose();
+    completedNormally = true;
+  } catch (error: unknown) {
+    primaryError = normalizeCliError(error);
+  }
+
+  await applyDaemonFinalCleanupTestPause();
+
+  let cleanupError: Error | undefined;
+  try {
+    await cleanupDaemonServeProcessResources({
+      closeA2A: () => {
+        a2aHandle?.close();
+        a2aHandle = undefined;
+      },
+      closeHotReload: () => extensions.hotReload.close(),
+      disposeExtensions: () => extensions.runtime.dispose(),
+    });
+  } catch (error: unknown) {
+    cleanupError = normalizeCliError(error);
+  }
+
+  let finalError = combineDaemonShutdownErrors(primaryError, cleanupError);
+  if (ownedRuntimeId !== undefined) {
+    const succeeded = completedNormally && finalError === undefined;
+    try {
+      writeRuntimeDaemonShutdownOutcome(daemonPaths, {
+        version: 1,
+        runtimeId: ownedRuntimeId,
+        pid: process.pid,
+        status: succeeded ? 'succeeded' : 'failed',
+        completedAt: new Date().toISOString(),
+        ...(succeeded ? {} : {
+          error: 'Runtime daemon shutdown did not complete successfully. See daemon.log.',
+        }),
+      });
+    } catch (error: unknown) {
+      finalError = combineDaemonShutdownErrors(
+        finalError,
+        new Error('Runtime daemon shutdown outcome could not be persisted.', { cause: error }),
+      );
+    }
+    try {
+      appendRuntimeDaemonLog(
+        daemonPaths,
+        finalError === undefined ? 'info' : 'error',
+        finalError === undefined
+          ? 'Runtime daemon stopped.'
+          : 'Runtime daemon process cleanup failed.',
+      );
+    } catch {
+      // The durable outcome is the stop success fence; logging is best-effort here.
+    }
+  }
+
+  const ownsDaemonServeProcess =
+    process.env.KODAX_DAEMON_SERVE === '1' || process.env.VITEST !== 'true';
+  if (finalError !== undefined) {
+    if (ownsDaemonServeProcess) {
+      console.error(chalk.red(`[Error] ${finalError.message}`));
+      process.exit(1);
+    }
+    throw finalError;
+  }
+  if (completedNormally && ownsDaemonServeProcess) {
+    process.exit(process.exitCode ?? 0);
+  }
+}
+
+async function applyDaemonFinalCleanupTestPause(): Promise<void> {
+  const delayMs = parseInternalDaemonTestDuration(
+    process.env.KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_DELAY_MS,
+  );
+  if (delayMs > 0) await delay(delayMs);
+  const blockMs = parseInternalDaemonTestDuration(
+    process.env.KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_BLOCK_MS,
+  );
+  if (blockMs > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, blockMs);
+  }
+}
+
+function parseInternalDaemonTestDuration(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? Math.min(parsed, 30_000)
+    : 0;
+}
+
+function combineDaemonShutdownErrors(
+  primary: Error | undefined,
+  cleanup: Error | undefined,
+): Error | undefined {
+  if (primary === undefined) return cleanup;
+  if (cleanup === undefined) return primary;
+  return new AggregateError(
+    [primary, cleanup],
+    `Runtime daemon shutdown and process cleanup both failed: ${primary.message}; ${cleanup.message}`,
+  );
+}
+
+const DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = 10_000;
+
+function daemonFinalCleanupTimeoutMs(): number {
+  const configured = Number.parseInt(
+    process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS ?? '',
+    10,
+  );
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+}
+
+async function cleanupDaemonServeProcessResources(input: {
+  readonly closeA2A: () => void;
+  readonly closeHotReload: () => void;
+  readonly disposeExtensions: () => Promise<void>;
+}): Promise<void> {
+  const errors: Error[] = [];
+  const totalTimeoutMs = daemonFinalCleanupTimeoutMs();
+  const deadline = Date.now() + totalTimeoutMs;
+  const phaseTimeoutMs = Math.max(1, Math.min(2_000, Math.floor(totalTimeoutMs / 4)));
+  const attempt = async (
+    label: string,
+    operation: () => void | Promise<void>,
+    maximumMs = phaseTimeoutMs,
+  ): Promise<void> => {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    const timeoutMs = Math.min(remainingMs, maximumMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const operationPromise = Promise.resolve().then(operation);
+      await Promise.race([
+        operationPromise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`${label} cleanup timed out after ${timeoutMs}ms.`));
+          }, timeoutMs);
+        }),
+      ]);
+    } catch (error: unknown) {
+      const normalized = normalizeCliError(error);
+      errors.push(new Error(
+        `Daemon ${label} cleanup failed. ${normalized.message}`,
+        { cause: normalized },
+      ));
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+
+  await attempt('A2A', input.closeA2A);
+  await attempt('integration hot-reload', input.closeHotReload);
+  await attempt('extension Runtime', input.disposeExtensions);
+  await attempt('LSP', shutdownDefaultLspService);
+  await attempt('managed child process', async () => {
+    await cleanupRegisteredManagedChildren({
+      includeCurrentOwner: true,
+      requireCurrentOwnerCleanup: true,
+    });
+  }, Math.max(0, deadline - Date.now()));
+  await attempt('tracing', shutdownTracing);
+  if (process.env.KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_ERROR === '1') {
+    await attempt('injected final', () => {
+      throw new Error('Injected daemon final cleanup failure.');
+    });
+  }
+
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Runtime daemon process cleanup failed.');
   }
 }
 
@@ -1774,6 +1961,16 @@ async function stopDaemonCommand(input: {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
+  if (result.reason === 'cleanup_failed' || result.reason === 'cleanup_unverified') {
+    throw new Error(
+      result.error ?? `KodaX runtime daemon stop ${result.reason.replace('_', ' ')}.`,
+    );
+  }
+  if (result.reason === 'replacement_running') {
+    throw new Error(
+      `The requested daemon exited, but a replacement owns profile "${paths.profile}".`,
+    );
+  }
   if (result.reason === 'unverified_owner') {
     throw new Error(
       `Refusing to force stop daemon profile "${paths.profile}" because ownership could not be verified.`,
@@ -1804,7 +2001,6 @@ async function getDaemonStopResult(input: {
   readonly timeoutMs: number;
   readonly force?: boolean;
 }): Promise<DaemonStopResult> {
-  const deadline = Date.now() + input.timeoutMs;
   const paths = resolveRuntimeDaemonPathsFromConfigHome(
     input.configHome,
     input.profile,
@@ -1822,35 +2018,147 @@ async function getDaemonStopResult(input: {
     };
   }
 
-  const endpoint = runtimeDaemonEndpointFromState(observation.state);
+  const stoppedState = observation.state;
+  const expectedProcessStartIdentity = readProcessStartIdentity(stoppedState.pid);
+  await delayDaemonStopAfterObservationForTest();
+  const endpoint = runtimeDaemonEndpointFromState(stoppedState);
   const transport = await createRuntimeDaemonSocketClientTransport(endpoint, {
     connectTimeoutMs: input.timeoutMs,
   });
+  let transportCloseError: Error | undefined;
+  let stopAcceptedAt: number | undefined;
   try {
     const token = readRuntimeDaemonToken(paths);
-    await transport.request('initialize', {
+    const initialized = await transport.request('initialize', {
       profile: paths.profile,
       ...(token !== undefined ? { token } : {}),
       clientInfo: { name: 'kodax-cli', title: 'KodaX CLI' },
       capabilities: { configAdmin: true },
     });
+    if (!daemonStopTargetMatches(initialized, stoppedState)) {
+      throw new Error(
+        'Runtime daemon owner changed before the stop request; refusing to stop the replacement.',
+      );
+    }
     await transport.request('daemon.stop');
+    stopAcceptedAt = Date.now();
   } finally {
-    await transport.close?.();
+    const closeDeadline = (stopAcceptedAt ?? Date.now()) + input.timeoutMs;
+    transportCloseError = await closeDaemonStopTransportWithin(
+      () => transport.close?.(),
+      Math.max(0, closeDeadline - Date.now()),
+    );
   }
-  const after = await waitForDaemonStopped(paths, input.timeoutMs);
-  const afterHealth = classifyRuntimeDaemonHealth(after);
-  const processExited =
-    afterHealth !== 'healthy' &&
-    (await waitForDaemonProcessExit(
-      observation.state.pid,
-      Math.max(0, deadline - Date.now()),
-    ));
+  const deadline = (stopAcceptedAt ?? Date.now()) + input.timeoutMs;
+  let processExited = await waitForDaemonProcessExit(
+    stoppedState.pid,
+    Math.max(0, deadline - Date.now()),
+  );
+  let watchdogStatus: Awaited<ReturnType<typeof killPidTree>>['status'] | undefined;
+  if (!processExited && expectedProcessStartIdentity !== undefined) {
+    watchdogStatus = (await killPidTree(stoppedState.pid, {
+      expectedProcessStartIdentity,
+    })).status;
+    processExited = await waitForDaemonProcessExit(stoppedState.pid, 1_000);
+  }
+  const outcome = processExited
+    ? readRuntimeDaemonShutdownOutcome(paths, stoppedState)
+    : undefined;
+  const outcomeMatches = outcome?.runtimeId === stoppedState.runtimeId
+    && outcome.pid === stoppedState.pid;
+  const requestedDaemonStopped = processExited
+    && outcomeMatches
+    && outcome.status === 'succeeded';
+  let after = await observeRuntimeDaemonHealth(paths);
+  let afterHealth = classifyRuntimeDaemonHealth(after);
+  if (
+    processExited
+    && (afterHealth === 'missing' || afterHealth === 'stale')
+    && (after.state === undefined
+      || (after.state.runtimeId === stoppedState.runtimeId
+        && after.state.pid === stoppedState.pid))
+  ) {
+    forceStopDaemonOwnership(paths, afterHealth, after.state ?? null);
+    after = await observeRuntimeDaemonHealth(paths);
+    afterHealth = classifyRuntimeDaemonHealth(after);
+  }
+  const currentLockOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+  const replacementRunning = currentLockOwner !== undefined
+    && isRuntimeDaemonPidAlive(currentLockOwner.pid)
+    && (currentLockOwner.runtimeId !== stoppedState.runtimeId
+      || currentLockOwner.pid !== stoppedState.pid);
+  if (replacementRunning && afterHealth === 'missing') afterHealth = 'unhealthy';
+  const cleanupReason = requestedDaemonStopped
+    ? undefined
+    : outcomeMatches && outcome.status === 'failed'
+      ? 'cleanup_failed' as const
+      : 'cleanup_unverified' as const;
+  const cleanupError = outcomeMatches && outcome.status === 'failed'
+    ? outcome.error
+    : processExited
+      ? 'Runtime daemon exited without a verifiable successful cleanup outcome.'
+      : expectedProcessStartIdentity === undefined
+        ? 'Runtime daemon did not exit and its exact process identity is unavailable.'
+        : process.platform === 'win32'
+          ? `Runtime daemon did not exit after exact process-tree cleanup (${watchdogStatus ?? 'not-attempted'}).`
+          : 'Runtime daemon did not exit; unsafe POSIX cached-PID escalation was refused.';
   return {
-    stopped: processExited,
+    stopped: requestedDaemonStopped && !replacementRunning,
+    ...(replacementRunning ? { replacementRunning: true } : {}),
+    ...(cleanupReason === undefined && !replacementRunning ? {} : {
+      reason: cleanupReason ?? 'replacement_running',
+    }),
+    ...(cleanupReason === undefined ? {} : {
+      error: transportCloseError === undefined
+        ? cleanupError
+        : `${cleanupError} Stop transport cleanup also failed: ${transportCloseError.message}`,
+    }),
     health: afterHealth,
-    state: processExited ? (after.state ?? null) : observation.state,
+    state: after.state ?? null,
   };
+}
+
+async function delayDaemonStopAfterObservationForTest(): Promise<void> {
+  const markerFile = process.env.KODAX_INTERNAL_DAEMON_TEST_STOP_OBSERVED_FILE;
+  if (markerFile !== undefined) {
+    fsSync.writeFileSync(markerFile, `${process.pid}\n`, 'utf8');
+  }
+  const delayMs = parseInternalDaemonTestDuration(
+    process.env.KODAX_INTERNAL_DAEMON_TEST_STOP_AFTER_OBSERVATION_DELAY_MS,
+  );
+  if (delayMs > 0) await delay(delayMs);
+}
+
+function daemonStopTargetMatches(
+  initialized: unknown,
+  expected: RuntimeDaemonState,
+): boolean {
+  const record = isRecord(initialized) ? initialized : {};
+  const identity = isRecord(record.identity) ? record.identity : record;
+  return identity.runtimeId === expected.runtimeId
+    && identity.profile === expected.profile;
+}
+
+async function closeDaemonStopTransportWithin(
+  close: () => void | Promise<void> | undefined,
+  timeoutMs: number,
+): Promise<Error | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timedOut = await Promise.race([
+      Promise.resolve().then(close).then(() => false),
+      new Promise<true>((resolve) => {
+        timer = setTimeout(() => resolve(true), timeoutMs);
+      }),
+    ]);
+    return timedOut
+      ? new Error(`Stop transport cleanup timed out after ${timeoutMs}ms.`)
+      : undefined;
+  } catch (error: unknown) {
+    return normalizeCliError(error);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function forceStopDaemonOwnership(
@@ -2064,27 +2372,6 @@ function tailTextFile(file: string, lineCount: number): readonly string[] {
   const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   if (lines.at(-1) === '') lines.pop();
   return lines.slice(-lineCount);
-}
-
-async function waitForDaemonStopped(
-  paths: ReturnType<typeof resolveRuntimeDaemonPaths>,
-  timeoutMs: number,
-) {
-  const deadline = Date.now() + timeoutMs;
-  let latest = await observeRuntimeDaemonHealth(paths);
-  let latestStopped = latest;
-  while (Date.now() <= deadline) {
-    latest = await observeRuntimeDaemonHealth(paths);
-    const health = classifyRuntimeDaemonHealth(latest);
-    if (health === 'missing') {
-      return latest;
-    }
-    if (health !== 'healthy') {
-      latestStopped = latest;
-    }
-    await delay(100);
-  }
-  return latestStopped;
 }
 
 async function waitForDaemonProcessExit(

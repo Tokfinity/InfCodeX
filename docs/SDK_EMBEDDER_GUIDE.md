@@ -2730,6 +2730,33 @@ The same method name deliberately has deployment-specific ownership effects:
 automatically retry or replay an in-flight run after a Worker/daemon owner dies,
 because provider and tool side effects may already have happened.
 
+`runtime.shutdown` and `stopForInline()` responses mean the fenced stop was
+accepted; host-close logging and owner-lock release are also intermediate
+progress boundaries. A successful `kodax daemon stop` / `restart` additionally
+waits for the original daemon PID to disappear and verifies a shutdown-success
+outcome bound to that exact Runtime ID and PID. Before that process exits, the
+serve host completes bounded A2A/extension, LSP, managed-child-tree, and tracing
+cleanup; an unverified current-owner child tree, cleanup timeout, failed outcome,
+or missing outcome makes CLI stop fail instead of reporting a false success.
+The stop client also owns an outer watchdog that starts when the request is
+accepted. On Windows it captures the daemon's creation identity before
+requesting shutdown and can therefore reclaim that exact process tree if
+Runtime close never settles or synchronous code blocks the daemon event loop.
+Node 20 exposes only cached-PID signaling on POSIX, so KodaX fails closed there
+instead of risking a reused PID/PGID; the result is `cleanup_unverified` and the
+process is left to an external lifecycle manager until Issue 269 supplies a
+retained native handle/supervisor. A forced exit without a matching success
+outcome is never success. After the original PID exits, the client re-reads the profile; JSON
+results use `replacementRunning: true` and return the current state/health when
+a replacement daemon has already acquired the owner lock. Such a result also
+uses `stopped: false` and `reason: 'replacement_running'`, so existing callers
+that gate cleanup on `stopped` remain safe. Callers must not clean or rebuild a
+profile while that flag is present or health is non-missing.
+The administrative connection also verifies that `initialize.identity` still
+matches the Runtime ID/profile observed before connecting; if an old owner exits
+and a replacement binds the same endpoint first, the stale stop command fails
+without sending `daemon.stop` to the replacement.
+
 ### Daemon ownership and state
 
 Daemon ownership is scoped by `homeDir + profile`.
@@ -2778,7 +2805,9 @@ Operational guidance:
   configurations;
 - test harnesses that auto-start a process daemon must send authenticated
   `runtime.shutdown` (or run `kodax daemon stop --home <dir> --profile <name>`)
-  before deleting their temporary home; `runtime.close()` only detaches;
+  before deleting their temporary home; use the CLI command when the caller
+  needs a completed process-exit boundary, because `runtime.close()` only
+  detaches and the low-level shutdown response is acceptance, not completion;
 - KodaX's own Vitest harness also supplies an internal worker-PID marker so a
   forcibly terminated worker cannot strand its test daemon; this is a test-only
   fallback, not a public SDK option or a production idle-shutdown policy;

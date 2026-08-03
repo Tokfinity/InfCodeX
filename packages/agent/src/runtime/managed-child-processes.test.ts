@@ -15,7 +15,9 @@ import { killChildProcessTree } from './process-tree.js';
 const PARENT_WATCHED_CHILD_SCRIPT = 'const parent=process.ppid; setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 1000)';
 
 const mutableNodeFs = createRequire(import.meta.url)('node:fs') as {
+  readdirSync: typeof nodeFs.readdirSync;
   renameSync: typeof nodeFs.renameSync;
+  writeFileSync: typeof nodeFs.writeFileSync;
 };
 
 function childRegistryPath(home: string, pid: number, registrationId: string): string {
@@ -123,6 +125,79 @@ describe('managed child process registry', () => {
 
     expect(summary.killed).toBe(1);
     await expect(waitForExit(child)).resolves.toBeUndefined();
+  });
+
+  it('strictly cleans a current-owner child after its registry file is corrupted', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (child.pid === undefined) throw new Error('child pid missing');
+    registerManagedChildProcess(child, {
+      kind: 'test-child',
+      command: process.execPath,
+      args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
+    });
+    const [recordFile] = await registeredChildFiles(tempHome, child.pid);
+    if (recordFile === undefined) throw new Error('managed child record missing');
+    await writeFile(recordFile, '{corrupt', 'utf8');
+
+    await expect(cleanupRegisteredManagedChildren({
+      includeCurrentOwner: true,
+      requireCurrentOwnerCleanup: true,
+    })).resolves.toMatchObject({ killed: 1, skipped: 0 });
+    await expect(waitForExit(child)).resolves.toBeUndefined();
+  });
+
+  it('retains in-memory cleanup evidence when registry persistence fails', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', PARENT_WATCHED_CHILD_SCRIPT], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const writeFileSync = mutableNodeFs.writeFileSync;
+    mutableNodeFs.writeFileSync = (() => {
+      throw Object.assign(new Error('registry unavailable'), { code: 'EACCES' });
+    }) as typeof nodeFs.writeFileSync;
+    syncBuiltinESMExports();
+    try {
+      registerManagedChildProcess(child, {
+        kind: 'test-child',
+        command: process.execPath,
+        args: ['-e', PARENT_WATCHED_CHILD_SCRIPT],
+      });
+    } finally {
+      mutableNodeFs.writeFileSync = writeFileSync;
+      syncBuiltinESMExports();
+    }
+
+    await expect(cleanupRegisteredManagedChildren({
+      includeCurrentOwner: true,
+      requireCurrentOwnerCleanup: true,
+    })).resolves.toMatchObject({ killed: 1, skipped: 0 });
+    await expect(waitForExit(child)).resolves.toBeUndefined();
+  });
+
+  it('surfaces an unreadable registry during strict final cleanup', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    const readdirSync = mutableNodeFs.readdirSync;
+    mutableNodeFs.readdirSync = (() => {
+      throw Object.assign(new Error('registry unreadable'), { code: 'EACCES' });
+    }) as typeof nodeFs.readdirSync;
+    syncBuiltinESMExports();
+    try {
+      await expect(cleanupRegisteredManagedChildren({
+        includeCurrentOwner: true,
+        requireCurrentOwnerCleanup: true,
+      })).rejects.toThrow(/registry.*unreadable/i);
+    } finally {
+      mutableNodeFs.readdirSync = readdirSync;
+      syncBuiltinESMExports();
+    }
   });
 
   it('skips children owned by the current live process by default', async () => {
@@ -356,6 +431,10 @@ describe('managed child process registry', () => {
     const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
 
     expect(summary).toMatchObject({ killed: 0, pruned: 0, skipped: 1 });
+    await expect(cleanupRegisteredManagedChildren({
+      includeCurrentOwner: true,
+      requireCurrentOwnerCleanup: true,
+    })).rejects.toThrow(/could not verify 1 current-owner process tree/i);
     await expect(readFile(legacyFile, 'utf8')).resolves.toContain('legacy-child');
     await expect(readFile(unresolvedRegistryPath(tempHome, legacyFile), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });

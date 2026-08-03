@@ -2,6 +2,7 @@ import {
   spawnSync,
   type ChildProcess,
 } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 // Keep this file in sync with packages/llm/src/cli-events/process-tree.ts.
 // @kodax-ai/llm stays dependency-light, so it carries a small local copy.
@@ -103,7 +104,7 @@ export interface ProcessTreeKillOptions {
   readonly gracefulMs?: number;
   readonly forceMs?: number;
   readonly taskkillMs?: number;
-  /** Exact Windows creation identity captured when the process was spawned. */
+  /** Exact OS process-start identity captured before cleanup begins. */
   readonly expectedProcessStartIdentity?: string;
   /** Exact Windows tree identities retained by a managed-process registry. */
   readonly expectedProcessTreeIdentities?: readonly WindowsProcessTreeIdentity[];
@@ -356,6 +357,32 @@ function readWindowsProcessSnapshotNative(): WindowsProcessIdentity[] | undefine
 function readWindowsProcessSnapshot(): WindowsProcessIdentity[] | undefined {
   const nativeSnapshot = readWindowsProcessSnapshotNative();
   return nativeSnapshot ?? readWindowsProcessSnapshotFallback();
+}
+
+/** Read an OS-issued start identity so later cleanup never trusts a bare PID. */
+export function readProcessStartIdentity(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  if (process.platform === 'win32') {
+    const identity = readWindowsProcessSnapshot()
+      ?.find((candidate) => candidate.pid === pid);
+    return identity?.creationTime === '0' ? undefined : identity?.creationTime;
+  }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      return fields[19] === undefined ? undefined : `linux:${fields[19]}`;
+    } catch {
+      return undefined;
+    }
+  }
+  const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: DEFAULT_TASKKILL_MS,
+    windowsHide: true,
+  });
+  const value = result.status === 0 ? result.stdout.trim() : '';
+  return value === '' ? undefined : `${process.platform}:${value}`;
 }
 
 function collectDescendantIdentities(
@@ -692,6 +719,12 @@ export async function killPidTree(
     return killCapturedWindowsTree(capture, taskkillMs, forceMs);
   }
 
+  if (options.expectedProcessStartIdentity !== undefined) {
+    // Node exposes only kill(pid) on POSIX. A fresh identity check would still
+    // leave time for PID/PGID reuse before the signal syscall. Without a
+    // retained kernel process handle, fail closed.
+    return isPosixPidTreeAlive(pid) ? UNKNOWN : ALREADY_EXITED;
+  }
   const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
   if (!signalPosixPidTree(pid, 'SIGTERM')) {
     return ALREADY_EXITED;

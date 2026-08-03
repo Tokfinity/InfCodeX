@@ -33,6 +33,7 @@ interface InteractiveMainHarness {
   readonly initializeSetupConfiguration: ReturnType<typeof vi.fn>;
   readonly renderSetupGuide: ReturnType<typeof vi.fn>;
   readonly runProviderSetupWizard: ReturnType<typeof vi.fn>;
+  readonly daemonShutdown: ReturnType<typeof vi.fn>;
 }
 
 const originalArgv = process.argv;
@@ -41,6 +42,8 @@ const originalRuntimeMode = process.env.KODAX_RUNTIME_MODE;
 const originalProvider = process.env.KODAX_PROVIDER;
 const originalMockProviderApiKey = process.env.MOCK_PROVIDER_API_KEY;
 const originalExitCode = process.exitCode;
+const originalDaemonCleanupTimeout = process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+const daemonTempHomes: string[] = [];
 
 beforeEach(() => {
   vi.resetModules();
@@ -52,7 +55,7 @@ beforeEach(() => {
   process.exitCode = undefined;
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock('@kodax-ai/agent');
@@ -60,6 +63,7 @@ afterEach(() => {
   vi.doUnmock('@kodax-ai/repl');
   vi.doUnmock('./sdk-runtime.js');
   vi.doUnmock('./a2a/runtime-config.js');
+  vi.doUnmock('./runtime-daemon/manager.js');
   process.argv = originalArgv;
   if (originalVitest === undefined) {
     delete process.env.VITEST;
@@ -73,6 +77,14 @@ afterEach(() => {
   else process.env.KODAX_PROVIDER = originalProvider;
   if (originalMockProviderApiKey === undefined) delete process.env.MOCK_PROVIDER_API_KEY;
   else process.env.MOCK_PROVIDER_API_KEY = originalMockProviderApiKey;
+  if (originalDaemonCleanupTimeout === undefined) {
+    delete process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+  } else {
+    process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = originalDaemonCleanupTimeout;
+  }
+  for (const home of daemonTempHomes.splice(0)) {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 function createDeferred(): {
@@ -100,6 +112,7 @@ async function importMainWithMocks(options: {
     readonly configHome: string;
     readonly files: readonly Readonly<Record<string, unknown>>[];
   };
+  readonly mockDaemonLease?: boolean;
 } = {}): Promise<{
   readonly main: () => Promise<void>;
   readonly harness: InteractiveMainHarness;
@@ -162,6 +175,9 @@ async function importMainWithMocks(options: {
   ));
   const renderSetupGuide = vi.fn(() => 'KodaX setup guide');
   const runProviderSetupWizard = vi.fn(async () => ({ status: 'cancelled' as const }));
+  const daemonShutdown = vi.fn(async () => {
+    calls.push('daemon-shutdown');
+  });
   const createKodaXRuntime = vi.fn(async (runtimeOptionsInput: unknown) => {
     runtimeOptions.push(runtimeOptionsInput);
     const runtimeOptionsRecord = runtimeOptionsInput !== null && typeof runtimeOptionsInput === 'object'
@@ -381,6 +397,33 @@ async function importMainWithMocks(options: {
       })),
     })),
   }));
+  if (options.mockDaemonLease === true) {
+    vi.doMock('./runtime-daemon/manager.js', () => ({
+      acquireRuntimeDaemonLease: vi.fn(async (leaseOptions: {
+        readonly createRuntime: (runtimeId: string) => Promise<{
+          readonly close: () => Promise<void>;
+        }>;
+      }) => {
+        const runtime = await leaseOptions.createRuntime('rt_mock_interactive');
+        let shutdownAttempt: Promise<void> | undefined;
+        daemonShutdown.mockImplementation(() => {
+          shutdownAttempt ??= runtime.close().then(() => {
+            calls.push('daemon-shutdown');
+          });
+          return shutdownAttempt;
+        });
+        return {
+          transport: {},
+          endpoint: { path: 'mock-daemon-endpoint' },
+          paths: {},
+          ownsHost: true,
+          hostClosed: Promise.resolve(),
+          close: vi.fn(async () => undefined),
+          shutdown: daemonShutdown,
+        };
+      }),
+    }));
+  }
 
   const module = await import('./kodax_cli.js');
   return {
@@ -403,11 +446,146 @@ async function importMainWithMocks(options: {
       initializeSetupConfiguration,
       renderSetupGuide,
       runProviderSetupWizard,
+      daemonShutdown,
     },
   };
 }
 
 describe('CLI interactive exit lifecycle', () => {
+  it('completes process-level cleanup after a daemon serve host stops', async () => {
+    const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
+    daemonTempHomes.push(daemonHome);
+    process.env.VITEST = 'true';
+    process.argv = [
+      'node',
+      'kodax',
+      'daemon',
+      'serve',
+      '--home',
+      daemonHome,
+      '--profile',
+      'daemon-cleanup',
+      '--provider',
+      'mock-provider',
+    ];
+    const { main, harness } = await importMainWithMocks({
+      mockDaemonLease: true,
+    });
+
+    await main();
+
+    expect(harness.daemonShutdown).toHaveBeenCalledTimes(1);
+    const completed = harness.calls.filter((call) => [
+      'runtime-close',
+      'runtime-dispose',
+      'shutdown-lsp',
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ].includes(call));
+    expect(completed).toEqual([
+      'runtime-close',
+      'runtime-dispose',
+      'shutdown-lsp',
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ]);
+  });
+
+  it('reports daemon process cleanup failure after attempting later resources', async () => {
+    const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
+    daemonTempHomes.push(daemonHome);
+    process.env.VITEST = 'true';
+    process.argv = [
+      'node',
+      'kodax',
+      'daemon',
+      'serve',
+      '--home',
+      daemonHome,
+      '--profile',
+      'daemon-cleanup-failure',
+    ];
+    const { main, harness } = await importMainWithMocks({
+      mockDaemonLease: true,
+      lspShutdown: async () => {
+        throw new Error('LSP child remained alive');
+      },
+    });
+
+    await expect(main()).rejects.toThrow('Daemon LSP cleanup failed.');
+    expect(harness.calls).toEqual(expect.arrayContaining([
+      'shutdown-lsp',
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ]));
+  });
+
+  it('bounds a hung daemon cleanup phase and still attempts later resources', async () => {
+    const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
+    daemonTempHomes.push(daemonHome);
+    process.env.VITEST = 'true';
+    process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS = '25';
+    process.argv = [
+      'node',
+      'kodax',
+      'daemon',
+      'serve',
+      '--home',
+      daemonHome,
+      '--profile',
+      'daemon-cleanup-timeout',
+    ];
+    const { main, harness } = await importMainWithMocks({
+      mockDaemonLease: true,
+      lspShutdown: () => new Promise<void>(() => undefined),
+    });
+
+    await expect(main()).rejects.toThrow(/LSP cleanup timed out/i);
+    expect(harness.calls).toEqual(expect.arrayContaining([
+      'shutdown-lsp',
+      'cleanup-children-final',
+      'shutdown-tracing',
+    ]));
+  });
+
+  it('preserves a daemon host failure when final cleanup also fails', async () => {
+    const daemonHome = await mkdtemp(join(tmpdir(), 'kodax-daemon-cleanup-'));
+    daemonTempHomes.push(daemonHome);
+    process.env.VITEST = 'true';
+    process.argv = [
+      'node',
+      'kodax',
+      'daemon',
+      'serve',
+      '--home',
+      daemonHome,
+      '--profile',
+      'daemon-aggregate-failure',
+    ];
+    const { main } = await importMainWithMocks({
+      mockDaemonLease: true,
+      runtimeClose: async () => {
+        throw new Error('Runtime host close failed');
+      },
+      lspShutdown: async () => {
+        throw new Error('LSP child remained alive');
+      },
+    });
+
+    const failure = await main().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    const messages = failure instanceof AggregateError
+      ? failure.errors.map((error: unknown) => error instanceof Error ? error.message : String(error))
+      : [];
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.stringMatching(/Runtime host close failed/i),
+      expect.stringMatching(/Daemon LSP cleanup failed/i),
+    ]));
+  });
+
   it('hydrates Runtime configuration before deciding whether first-run setup is needed', async () => {
     const shellCredential = 'KODAX_TEST_SHELL_PROFILE_CREDENTIAL';
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');

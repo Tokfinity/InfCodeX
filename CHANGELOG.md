@@ -57,10 +57,11 @@ All notable changes to this project will be documented in this file.
 
 - Runtime daemon stop now verifies complete process-level cleanup with an exact
   Runtime/PID outcome fence and an independent stop-client watchdog. A hung
-  Runtime close or synchronously blocked daemon is reclaimed by captured OS
-  process identity without targeting a reused PID; forced unverified exits
-  remain failures, and a concurrently started replacement owner is reported
-  instead of presenting its profile as idle.
+  Runtime close or synchronously blocked daemon is reclaimed on Windows through
+  exact creation-time process handles; forced unverified exits remain failures,
+  and a concurrently started replacement owner is reported instead of
+  presenting its profile as idle. POSIX refuses unsafe cached-PID escalation
+  until a retained native process handle/supervisor is available (Issue 269).
 - Auto[LLM] now deterministically admits structurally proven read-only
   PowerShell environment/version inspection, including safe sequential and
   pipeline stages with descriptor duplication, while arbitrary scripts,

@@ -200,6 +200,9 @@ export async function startRuntimeDaemonHost(
       }
       if (!runtimeClosed) {
         try {
+          if (process.env.KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG === '1') {
+            await new Promise<void>(() => undefined);
+          }
           await options.runtime.close();
           runtimeClosed = true;
         } catch (error: unknown) {
@@ -207,7 +210,7 @@ export async function startRuntimeDaemonHost(
         }
       }
       try {
-        appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon stopped.');
+        appendRuntimeDaemonLog(options.paths, 'info', 'Runtime daemon host stopped.');
       } catch (error: unknown) {
         failures.push(`stop log: ${normalizeHostError(error).message}`);
       }
@@ -237,7 +240,7 @@ export async function startRuntimeDaemonHost(
       }
       if (failures.length > 0) {
         try {
-          appendRuntimeDaemonLog(options.paths, 'error', 'Runtime daemon stopped with cleanup failures.', {
+          appendRuntimeDaemonLog(options.paths, 'error', 'Runtime daemon host stopped with cleanup failures.', {
             failures,
           });
         } catch (error: unknown) {

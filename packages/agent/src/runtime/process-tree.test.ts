@@ -7,6 +7,7 @@ import {
   killChildProcessTree,
   killChildProcessTreeSync,
   killPidTree,
+  readProcessStartIdentity,
   rememberChildProcessTree,
 } from './process-tree.js';
 
@@ -116,6 +117,73 @@ describe('process tree cleanup', () => {
 
     expect(calls).toContainEqual({ pid: -12345, signal: 'SIGTERM' });
     expect(calls).toContainEqual({ pid: -12345, signal: 'SIGKILL' });
+  });
+
+  it('reads a stable start identity for the current process', () => {
+    const first = readProcessStartIdentity(process.pid);
+    const second = readProcessStartIdentity(process.pid);
+
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+  });
+
+  it('does not send a destructive POSIX signal when exact identity is requested', async () => {
+    const calls: Array<{ pid: number; signal: NodeJS.Signals | number | undefined }> = [];
+    const mockKill = vi.fn((pid: number, signal?: NodeJS.Signals | number) => {
+      calls.push({ pid, signal });
+      return true;
+    }) as typeof process.kill;
+    setPlatform('linux');
+    setKill(mockKill);
+
+    await expect(killPidTree(12_345, {
+      expectedProcessStartIdentity: 'linux:exact-owner',
+      forceMs: 0,
+    })).resolves.toEqual({ status: 'unknown' });
+    expect(calls.some(({ signal }) => signal === 'SIGTERM' || signal === 'SIGKILL'))
+      .toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('does not signal a reused POSIX pid', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    if (child.pid === undefined) throw new Error('test process pid missing');
+    const identity = readProcessStartIdentity(child.pid);
+    if (identity === undefined) throw new Error('test process identity missing');
+
+    try {
+      await expect(killPidTree(child.pid, {
+        expectedProcessStartIdentity: `${identity}:reused`,
+        forceMs: 0,
+      })).resolves.toEqual({ status: 'unknown' });
+      expect(isPidAlive(child.pid)).toBe(true);
+    } finally {
+      process.kill(-child.pid, 'SIGKILL');
+      await waitForPidExit(child.pid, 2_000).catch(() => undefined);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('fails closed for a matching POSIX identity', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    if (child.pid === undefined) throw new Error('test process pid missing');
+    const identity = readProcessStartIdentity(child.pid);
+    if (identity === undefined) throw new Error('test process identity missing');
+
+    try {
+      await expect(killPidTree(child.pid, {
+        expectedProcessStartIdentity: identity,
+        forceMs: 0,
+      })).resolves.toEqual({ status: 'unknown' });
+      expect(isPidAlive(child.pid)).toBe(true);
+    } finally {
+      await killPidTree(child.pid, { forceMs: 100 });
+      await waitForPidExit(child.pid, 2_000).catch(() => undefined);
+    }
   });
 
   it('reports unknown when a POSIX tree is still observable after force termination', async () => {

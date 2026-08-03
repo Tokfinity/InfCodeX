@@ -14,7 +14,9 @@ _Last Updated: 2026-08-03_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 269 | High | Open | POSIX daemon hard-stop lacks a retained kernel process handle | v0.7.79 daemon stop watchdog | - | 2026-08-03 | - |
 | 268 | High | Resolved | Auto[LLM] retained category-based approvals and a pre-classifier Tier 0 gate | v0.7.33; retained through v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
+| 267 | High | Resolved | Daemon serve host could outlive a successful Runtime stop | v0.7.66 process-hosted daemon | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 266 | High | Resolved | Auto-mode fault logs exposed exception secrets and allow hazard typing widened | v0.7.79 classifier decision fix | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 265 | High | Resolved | Classifier auxiliary fields could override a valid Auto[LLM] decision | v0.7.79 classifier output hardening | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 264 | Medium | Resolved | Empty persisted conversations were reported as missing lineage | v0.7.79 conversation projection | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -171,6 +173,50 @@ _Last Updated: 2026-08-03_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 269: POSIX daemon hard-stop lacks a retained kernel process handle
+
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.7.79 daemon stop watchdog
+- **Created**: 2026-08-03
+
+#### Original Problem
+
+After an accepted daemon stop, a permanently pending Runtime close or
+synchronously blocked event loop needs an independent process to reclaim the
+serve process and its descendants. Windows can bind termination to an exact
+creation-time process handle. Node.js 20 on POSIX exposes only numeric
+`kill(pid)` / `kill(-pgid)` signaling. Reading `/proc/<pid>/stat` or `ps` before
+signaling still leaves a check-to-signal interval in which the process/group can
+exit and the number can be reused, so a purported exact hard-stop could target
+an unrelated process.
+
+#### Context
+
+- Normal graceful daemon shutdown remains cross-platform and requires the
+  Runtime/PID success outcome before `stopped: true`.
+- Windows caller-side watchdog escalation is exact and covered by blocked-host,
+  blocked-event-loop, live MCP-child, and directory-handle smoke tests.
+- POSIX watchdog escalation now fails closed as `cleanup_unverified` without
+  sending a cached-PID signal. This prevents false success and unrelated process
+  termination, but an external lifecycle manager may still be needed to reclaim
+  a truly blocked daemon.
+
+#### Root Cause
+
+The stop caller is not the process that originally spawned the detached daemon
+and therefore retains no `uv_process_t`/pidfd/kqueue process handle. File owner
+locks and persisted start timestamps can detect many stale states but cannot
+make a later POSIX signal syscall atomic with that identity check.
+
+#### Proposed Solution
+
+Introduce a minimal native/supervisor boundary that retains an exact kernel
+process handle for the daemon lifetime and owns its process-group/container
+cleanup. The design must preserve the current one-owner/multi-client refusal
+semantics, add no bare-PID fallback, exit with the daemon, and cover Linux and
+macOS process-tree plus application-directory release regressions.
+
 ### 268: Auto[LLM] retained category-based approvals and a pre-classifier Tier 0 gate
 
 - **Priority**: High
@@ -233,6 +279,102 @@ approval policy.
   through denial-cache and protected-path handling.
 - Audited all Auto[LLM] `escalateOrAsk` routes and ran the focused/full
   guardrail suites, Coding type check, and production build.
+
+### 267: Daemon serve host could outlive a successful Runtime stop
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.66 process-hosted daemon
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+After real work had settled and stop preflight accepted shutdown, the daemon
+could log `stop requested`, `stopping`, and `stopped` and release its owner
+state while the `daemon serve` OS process remained alive. Residual LSP,
+managed-child, tracing, or other process-level handles could then retain the
+application working directory and prevent KodaX Space from cleaning or
+rebuilding it.
+
+#### Root Cause
+
+The host close path correctly closed the socket, daemon management services,
+reverse bridges, and embedded Runtime. However, `daemon serve` runs as a
+Commander subcommand; after its action completed, `main()` returned at the
+subcommand boundary and never reached the ordinary CLI finalizer that closes
+the default LSP service, reclaims current-owner managed children, and shuts
+down tracing. Process termination therefore depended on Node's event loop
+happening to be empty after the host-level `stopped` boundary.
+
+#### Resolution
+
+- Give `daemon serve` an explicit process-resource finalizer covering A2A,
+  integration hot reload, extension Runtime, default LSP, current-owner managed
+  child trees, and tracing. Every cleanup is attempted and multiple failures
+  remain observable as an aggregate error. A daemon-side total deadline plus
+  per-phase budgets prevent an unresolved disposer from blocking all later
+  cleanup indefinitely.
+- Make current-owner managed-child cleanup fail when exact tree reclamation
+  cannot be verified, while continuing to ignore live foreign-owner records.
+  Current-process registrations remain in memory even when registry persistence
+  fails, and strict final cleanup reclaims that active set independently before
+  reading persisted recovery records; unreadable registries fail closed.
+- After all graceful cleanup succeeds, explicitly terminate the dedicated
+  daemon-serve host so residual third-party event-loop handles cannot keep the
+  OS process alive. A failed or timed-out finalizer also exits the dedicated
+  serve process with a non-zero code after publishing the failure outcome, so
+  leftover event-loop handles cannot defeat the deadline. Existing stop
+  preflight and draining fences are unchanged.
+- Bind a durable shutdown outcome to the exact Runtime ID and host PID. CLI stop
+  succeeds only when that success outcome and actual PID exit agree; cleanup
+  failure or a missing fence is reported as failure. Per-owner outcome files
+  keep a concurrently starting replacement daemon from erasing the old
+  instance's verification boundary.
+- Start an independent stop-client watchdog once `daemon.stop` is accepted.
+  If host/Runtime close hangs or the daemon event loop blocks synchronously,
+  the Windows client reclaims only the PID whose OS creation identity was
+  captured before the request. POSIX fails closed without signaling until
+  Issue 269 supplies a retained native handle. Forced exit without the exact
+  success outcome remains an observable `cleanup_unverified` failure, and stale
+  old-owner files are removed only when their Runtime/PID fence is unchanged.
+- After the original PID and outcome have been verified, re-observe both state
+  and the live owner lock. A replacement daemon is returned as the current
+  profile owner (`stopped: false`, `reason: replacement_running`, and
+  `replacementRunning: true`) instead of allowing existing or new Space
+  clients to treat the profile directory as idle.
+- Fence the administrative request itself: the `initialize` response must
+  still match the Runtime ID/profile observed before connecting. A replacement
+  that reuses the same endpoint is never sent the stale caller's stop request.
+
+#### Verification
+
+- Added a lifecycle regression proving host shutdown is followed in order by
+  extension, LSP, exact managed-child, and tracing cleanup, that a hung phase is
+  bounded, later phases still run, and host plus finalizer errors are aggregated.
+- Added managed-child regressions for corrupted/missing persistence evidence,
+  registration-write failure, and unreadable strict-cleanup registries, plus
+  state tests for Runtime/PID-isolated shutdown outcomes.
+- Extended the process-distinct SDK smoke test to prewarm a real MCP child,
+  execute a real Runtime Run to terminal idle state, stop the daemon, and prove
+  both daemon and child PIDs are gone, owner files are absent, and the daemon
+  directory can be renamed.
+- Added a detached-process failure smoke test proving host PID exit cannot turn
+  a failed final cleanup into `stopped: true`.
+- Added process-distinct watchdog smoke tests for a permanently pending Runtime
+  host close and a 30-second synchronous cleanup block. The blocked path keeps
+  a real MCP child alive in the application directory and proves both PIDs,
+  owner files, and directory handles are reclaimed. A replacement-owner race
+  also starts the new daemon after ownership release but before the original
+  serve PID exits.
+- Added a two-stop-client race proving a stale observer cannot stop a replacement
+  daemon that acquires the old endpoint before the delayed request is sent.
+- Added OS process-start identity tests proving Windows exact creation-time
+  capture and POSIX PID-reuse refusal.
+- Extended public SDK rollback coverage to wait for the original daemon PID
+  after each accepted stop; existing connected-client and active-work refusal
+  tests remain authoritative and unchanged.
 
 ### 266: Auto-mode fault logs exposed exception secrets and allow hazard typing widened
 
@@ -10584,11 +10726,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 147 (26 Open, 121 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 149 (27 Open, 122 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-03: Issue 269 added (v0.7.79 development)
+- Confirmed Node 20 POSIX cached-PID signaling cannot make the watchdog's
+  identity check atomic with process-tree termination.
+- Made expected-identity POSIX escalation fail closed and tracked a retained
+  pidfd/kqueue/native-supervisor boundary as the required complete solution.
 
 ### 2026-08-03: Issue 268 added and resolved (v0.7.79 development)
 - Made Auto[LLM] allow-by-default with only credential-store reads and
@@ -10597,6 +10745,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   while retaining the legacy deterministic gate for explicit Auto[Rules].
 - Prevented the Ink REPL's cross-mode denial cache from overriding a later
   Auto[LLM] allow.
+
+### 2026-08-03: Issue 267 added and resolved (v0.7.79 development)
+- Completed daemon-serve process cleanup after host shutdown, made unresolved
+  current-owner child trees fail closed, and explicitly exited the dedicated
+  host only after graceful cleanup succeeded.
+- Added real Run, MCP-child PID, public SDK stop, owner-file, and directory
+  release regressions without weakening connected-client or active-work stop
+  refusal.
+- Added exact OS-process watchdog escalation for hung/asynchronously pending or
+  synchronously blocked shutdown, and replacement-owner re-observation before
+  reporting the profile's final state.
 
 ### 2026-08-02: Issue 259 added and resolved (v0.7.79 development)
 - Deferred durable REPL Session creation until the first real prompt while

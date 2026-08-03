@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   claimRuntimeDaemonOwnership,
   classifyRuntimeDaemonHealth,
+  clearRuntimeDaemonShutdownOutcome,
   commitRuntimeDaemonRollbackPolicy,
   createRuntimeDaemonToken,
   enableRuntimeDaemonOwner,
   normalizeRuntimeDaemonProfile,
+  readRuntimeDaemonShutdownOutcome,
   readRuntimeOwnerPolicy,
   readRuntimeDaemonLockOwner,
   readRuntimeDaemonState,
@@ -23,6 +25,7 @@ import {
   resolveRuntimeDaemonPathsFromConfigHome,
   tryAcquireRuntimeDaemonLock,
   updateRuntimeOwnerPolicy,
+  writeRuntimeDaemonShutdownOutcome,
   writeRuntimeDaemonState,
   writeRuntimeDaemonToken,
   type RuntimeDaemonState,
@@ -91,6 +94,47 @@ describe('runtime daemon state paths', () => {
     expect(paths.configHome).toBe(path.resolve(configHome));
     expect(paths.rootDir).toBe(path.join(path.resolve(configHome), 'runtime', 'daemon', 'space'));
     expect(paths.stateFile).toBe(path.join(paths.rootDir, 'daemon.json'));
+  });
+
+  it('round-trips and clears a runtime-bound daemon shutdown outcome', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'space');
+    const outcome = {
+      version: 1 as const,
+      runtimeId: 'runtime-shutdown',
+      pid: 4321,
+      status: 'succeeded' as const,
+      completedAt: '2026-08-03T00:00:00.000Z',
+    };
+
+    writeRuntimeDaemonShutdownOutcome(paths, outcome);
+
+    expect(readRuntimeDaemonShutdownOutcome(paths, outcome)).toEqual(outcome);
+    expect(readRuntimeDaemonShutdownOutcome(paths, outcome)).toEqual(outcome);
+    clearRuntimeDaemonShutdownOutcome(paths, outcome);
+    expect(readRuntimeDaemonShutdownOutcome(paths, outcome)).toBeUndefined();
+  });
+
+  it('keeps shutdown outcomes isolated across consecutive daemon owners', () => {
+    const paths = resolveRuntimeDaemonPaths(tempHome(), 'space');
+    const first = {
+      version: 1 as const,
+      runtimeId: 'runtime-first',
+      pid: 4321,
+      status: 'succeeded' as const,
+      completedAt: '2026-08-03T00:00:00.000Z',
+    };
+    const second = {
+      ...first,
+      runtimeId: 'runtime-second',
+      pid: 5432,
+    };
+
+    writeRuntimeDaemonShutdownOutcome(paths, first);
+    writeRuntimeDaemonShutdownOutcome(paths, second);
+    clearRuntimeDaemonShutdownOutcome(paths, second);
+
+    expect(readRuntimeDaemonShutdownOutcome(paths, first)).toEqual(first);
+    expect(readRuntimeDaemonShutdownOutcome(paths, second)).toBeUndefined();
   });
 
   it('preserves the legacy endpoint scope for canonical config and isolates arbitrary config homes', () => {

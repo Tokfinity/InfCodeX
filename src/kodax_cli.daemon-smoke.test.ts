@@ -11,6 +11,7 @@ import {
   killPidTree,
   rememberChildProcessTree,
 } from '@kodax-ai/agent';
+import { createMcpTestServerFixture } from '../packages/agent/src/capabilities/mcp/test-helpers.js';
 
 import {
   acquireKodaXInlineOwner,
@@ -574,6 +575,7 @@ describe('daemon CLI smoke', () => {
     }
     await child;
     await waitForDaemonClientCount(first, 1);
+    const firstDaemonPid = readDaemonPid(homeDir, profile);
     const firstCommit = await first.daemon.inspect();
     await expect(first.daemon.stopForInline({
       expectedRuntimeId: firstCommit.runtimeId,
@@ -582,6 +584,7 @@ describe('daemon CLI smoke', () => {
     })).resolves.toMatchObject({ accepted: true, ownerPolicy: { mode: 'inline', revision: 1 } });
     await first.close();
     await waitForDaemonState(profile, homeDir, false);
+    await waitForDaemonPidExit(firstDaemonPid, 10_000);
     expect(getKodaXRuntimeOwnerState({ homeDir, profile })).toMatchObject({
       policy: { mode: 'inline', revision: 1 },
       ownerStatus: 'unowned',
@@ -600,6 +603,7 @@ describe('daemon CLI smoke', () => {
       clientInfo: { name: 'management-second', instanceId: 'management-second' },
       requirements: { daemonManagement: 1 },
     });
+    const secondDaemonPid = readDaemonPid(homeDir, profile);
     const secondCommit = await second.daemon.inspect();
     await second.daemon.stopForInline({
       expectedRuntimeId: secondCommit.runtimeId,
@@ -608,6 +612,7 @@ describe('daemon CLI smoke', () => {
     });
     await second.close();
     await waitForDaemonState(profile, homeDir, false);
+    await waitForDaemonPidExit(secondDaemonPid, 10_000);
 
     const secondInline = acquireKodaXInlineOwner({ homeDir, profile });
     expect(secondInline.ownerPolicy).toMatchObject({ mode: 'inline', revision: 3 });
@@ -637,10 +642,30 @@ describe('daemon CLI smoke', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-shared-smoke-'));
     tempRoots.push(homeDir);
     const profile = `shared-${process.pid}-${Date.now()}`;
+    const mcpFixture = await createMcpTestServerFixture(homeDir);
+    const applicationDir = path.join(homeDir, 'space-application');
+    fs.mkdirSync(applicationDir, { recursive: true });
+    const mcpServer = mcpFixture.servers[mcpFixture.serverId];
+    if (mcpServer === undefined) throw new Error('MCP test server is missing.');
+    const integrationDir = path.join(homeDir, '.kodax', 'integrations');
+    fs.mkdirSync(integrationDir, { recursive: true });
+    fs.writeFileSync(path.join(integrationDir, 'mcp.json'), JSON.stringify({
+      version: 1,
+      servers: {
+        ...mcpFixture.servers,
+        [mcpFixture.serverId]: { ...mcpServer, cwd: applicationDir },
+      },
+    }), 'utf8');
     await runDaemonCommand([
       'start', '--home', homeDir, '--profile', profile,
       '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
     ]);
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const daemonPid = readDaemonPid(homeDir, profile);
+    const mcpPid = await waitForManagedChildPid(
+      path.join(homeDir, '.kodax'),
+      mcpFixture.scriptPath,
+    );
 
     const spaceScript = `
       const { createKodaXRuntime } = await import('./src/sdk-runtime.ts');
@@ -724,6 +749,23 @@ describe('daemon CLI smoke', () => {
     });
     expect(new Set(observer.terminalEvents).size).toBe(observer.terminalEvents.length);
     expect(readAllDaemonText(homeDir)).not.toContain('SPACE_SMOKE_SECRET_DO_NOT_PERSIST');
+
+    const stop = await runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '30000', '--json',
+    ]);
+    expect(stop).toMatchObject({ stopped: true, health: 'missing' });
+    await waitForDaemonPidExit(daemonPid, 5_000);
+    await waitForDaemonPidExit(mcpPid, 5_000);
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+
+    const releasedRoot = `${paths.rootDir}.released`;
+    fs.renameSync(paths.rootDir, releasedRoot);
+    fs.renameSync(releasedRoot, paths.rootDir);
+    const releasedApplication = `${applicationDir}.released`;
+    fs.renameSync(applicationDir, releasedApplication);
+    fs.renameSync(releasedApplication, applicationDir);
   }, 120_000);
 
   it('resumes client-owned credential and Host Tool leases from a distinct process', async () => {
@@ -1046,6 +1088,192 @@ describe('daemon CLI smoke', () => {
     expect(fs.existsSync(paths.stateFile)).toBe(true);
     expect(fs.existsSync(paths.lockFile)).toBe(true);
   }, 30_000);
+
+  it('does not report stop success when detached serve final cleanup fails', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cleanup-failure-'));
+    tempRoots.push(homeDir);
+    const profile = `cleanup-failure-${process.pid}-${Date.now()}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ], {
+      KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_ERROR: '1',
+    });
+    const daemonPid = readDaemonPid(homeDir, profile);
+
+    const stop = await runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '30000', '--json',
+    ]);
+
+    expect(stop).toMatchObject({
+      stopped: false,
+      reason: 'cleanup_failed',
+      health: 'missing',
+    });
+    await waitForDaemonPidExit(daemonPid, 5_000);
+  }, 60_000);
+
+  it.skipIf(process.platform !== 'win32')('force-reclaims the exact daemon process when Runtime host close hangs', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-host-close-hang-'));
+    tempRoots.push(homeDir);
+    const profile = `host-close-hang-${process.pid}-${Date.now()}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ], {
+      KODAX_INTERNAL_DAEMON_TEST_HOST_CLOSE_HANG: '1',
+    });
+    const daemonPid = readDaemonPid(homeDir, profile);
+
+    const stop = await runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '1000', '--json',
+    ], {}, 30_000);
+
+    expect(stop).toMatchObject({
+      stopped: false,
+      reason: 'cleanup_unverified',
+      health: 'missing',
+      state: null,
+    });
+    await waitForDaemonPidExit(daemonPid, 5_000);
+    await waitForDaemonState(profile, homeDir, false, 5_000);
+  }, 60_000);
+
+  it.skipIf(process.platform !== 'win32')('force-reclaims the exact daemon process when final cleanup blocks synchronously', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-cleanup-block-'));
+    tempRoots.push(homeDir);
+    const profile = `cleanup-block-${process.pid}-${Date.now()}`;
+    const mcpFixture = await createMcpTestServerFixture(homeDir);
+    const applicationDir = path.join(homeDir, 'blocked-application');
+    fs.mkdirSync(applicationDir, { recursive: true });
+    const mcpServer = mcpFixture.servers[mcpFixture.serverId];
+    if (mcpServer === undefined) throw new Error('MCP test server is missing.');
+    const integrationDir = path.join(homeDir, '.kodax', 'integrations');
+    fs.mkdirSync(integrationDir, { recursive: true });
+    fs.writeFileSync(path.join(integrationDir, 'mcp.json'), JSON.stringify({
+      version: 1,
+      servers: {
+        ...mcpFixture.servers,
+        [mcpFixture.serverId]: { ...mcpServer, cwd: applicationDir },
+      },
+    }), 'utf8');
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ], {
+      KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_BLOCK_MS: '30000',
+    });
+    const daemonPid = readDaemonPid(homeDir, profile);
+    const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const mcpPid = await waitForManagedChildPid(
+      path.join(homeDir, '.kodax'),
+      mcpFixture.scriptPath,
+    );
+
+    const stop = await runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '1000', '--json',
+    ], {}, 30_000);
+
+    expect(stop).toMatchObject({
+      stopped: false,
+      reason: 'cleanup_unverified',
+      health: 'missing',
+      state: null,
+    });
+    await waitForDaemonPidExit(daemonPid, 5_000);
+    await waitForDaemonPidExit(mcpPid, 5_000);
+    expect(fs.existsSync(paths.stateFile)).toBe(false);
+    expect(fs.existsSync(paths.lockFile)).toBe(false);
+
+    const releasedRoot = `${paths.rootDir}.released`;
+    fs.renameSync(paths.rootDir, releasedRoot);
+    fs.renameSync(releasedRoot, paths.rootDir);
+    const releasedApplication = `${applicationDir}.released`;
+    fs.renameSync(applicationDir, releasedApplication);
+    fs.renameSync(releasedApplication, applicationDir);
+  }, 60_000);
+
+  it('reports a replacement daemon that takes ownership while the old process exits', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-replacement-race-'));
+    tempRoots.push(homeDir);
+    const profile = `replacement-race-${process.pid}-${Date.now()}`;
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ], {
+      KODAX_INTERNAL_DAEMON_TEST_FINAL_CLEANUP_DELAY_MS: '8000',
+    });
+    const oldPid = readDaemonPid(homeDir, profile);
+    const stopPromise = runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '30000', '--json',
+    ], {}, 45_000);
+    await waitForDaemonState(profile, homeDir, false, 10_000);
+
+    const replacement = await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ]);
+    const replacementPid = readDaemonPid(homeDir, profile);
+    const stop = await stopPromise;
+
+    expect(replacement).toMatchObject({ started: true, health: 'healthy' });
+    expect(replacementPid).not.toBe(oldPid);
+    expect(stop).toMatchObject({
+      stopped: false,
+      reason: 'replacement_running',
+      replacementRunning: true,
+      health: 'healthy',
+      state: { pid: replacementPid },
+    });
+    await waitForDaemonPidExit(oldPid, 5_000);
+  }, 90_000);
+
+  it('does not send a stale stop request to a replacement daemon on the same endpoint', async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-stale-stop-race-'));
+    tempRoots.push(homeDir);
+    const profile = `stale-stop-race-${process.pid}-${Date.now()}`;
+    const observedFile = path.join(homeDir, 'stop-observed');
+    await runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ]);
+    const oldPid = readDaemonPid(homeDir, profile);
+    const staleStop = runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '30000', '--json',
+    ], {
+      KODAX_INTERNAL_DAEMON_TEST_STOP_OBSERVED_FILE: observedFile,
+      KODAX_INTERNAL_DAEMON_TEST_STOP_AFTER_OBSERVATION_DELAY_MS: '10000',
+    }, 45_000);
+    await waitForFile(observedFile);
+
+    await expect(runDaemonCommand([
+      'stop', '--home', homeDir, '--profile', profile,
+      '--timeout-ms', '30000', '--json',
+    ])).resolves.toMatchObject({ stopped: true, health: 'missing' });
+    await waitForDaemonPidExit(oldPid, 5_000);
+    await expect(runDaemonCommand([
+      'start', '--home', homeDir, '--profile', profile,
+      '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+    ])).resolves.toMatchObject({ started: true, health: 'healthy' });
+    const replacementPid = readDaemonPid(homeDir, profile);
+
+    await expect(staleStop).rejects.toThrow(
+      'Runtime daemon owner changed before the stop request',
+    );
+    expect(isRuntimeDaemonPidAlive(replacementPid)).toBe(true);
+    await expect(observeRuntimeDaemonHealth(resolveRuntimeDaemonPaths(homeDir, profile)))
+      .resolves.toMatchObject({
+        pidAlive: true,
+        endpointReachable: true,
+        identityMatches: true,
+        state: { pid: replacementPid, status: 'ready' },
+      });
+  }, 90_000);
 });
 
 async function runDaemonCommand(
@@ -1231,6 +1459,54 @@ async function waitForDaemonPidExit(pid: number, timeoutMs: number): Promise<voi
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+function readDaemonPid(homeDir: string, profile: string): number {
+  const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+  const state: unknown = JSON.parse(fs.readFileSync(paths.stateFile, 'utf8'));
+  if (
+    state === null
+    || typeof state !== 'object'
+    || !('pid' in state)
+    || typeof state.pid !== 'number'
+  ) {
+    throw new Error(`Daemon profile ${profile} did not publish a numeric PID.`);
+  }
+  return state.pid;
+}
+
+async function waitForManagedChildPid(
+  configHome: string,
+  expectedArg: string,
+): Promise<number> {
+  const registryDir = path.join(configHome, 'processes', 'children');
+  const deadline = Date.now() + 30_000;
+  while (Date.now() <= deadline) {
+    if (fs.existsSync(registryDir)) {
+      for (const entry of fs.readdirSync(registryDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(
+            fs.readFileSync(path.join(registryDir, entry.name), 'utf8'),
+          );
+        } catch {
+          continue;
+        }
+        if (
+          parsed !== null
+          && typeof parsed === 'object'
+          && 'pid' in parsed
+          && typeof parsed.pid === 'number'
+          && 'args' in parsed
+          && Array.isArray(parsed.args)
+          && (parsed.args as readonly unknown[]).includes(expectedArg)
+        ) return parsed.pid;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for managed child registered with ${expectedArg}.`);
 }
 
 async function stopDaemonBestEffort(homeDir: string): Promise<void> {

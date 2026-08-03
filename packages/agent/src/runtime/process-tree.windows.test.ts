@@ -16,6 +16,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 const {
   killChildProcessTree,
   killPidTree,
+  readProcessStartIdentity,
   rememberChildProcessTree,
   rememberedChildProcessTreeIsComplete,
 } = await import('./process-tree.js');
@@ -62,6 +63,14 @@ describe('Windows process-tree identity fences', () => {
       value: originalPlatform,
     });
     vi.clearAllMocks();
+  });
+
+  it('reads the exact Windows process creation identity', () => {
+    setWindows();
+    spawnSyncMock.mockReturnValue(snapshot(''));
+    spawnSyncMock.mockReturnValueOnce(snapshot('4242,1,111\n'));
+
+    expect(readProcessStartIdentity(4_242)).toBe('111');
   });
 
   it('does not target a reused root PID after the tracked child exits', async () => {

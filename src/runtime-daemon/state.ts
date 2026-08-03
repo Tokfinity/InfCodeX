@@ -32,6 +32,20 @@ export interface RuntimeDaemonLogEntry {
   readonly data?: Record<string, unknown>;
 }
 
+export interface RuntimeDaemonShutdownOutcome {
+  readonly version: 1;
+  readonly runtimeId: string;
+  readonly pid: number;
+  readonly status: 'succeeded' | 'failed';
+  readonly completedAt: string;
+  readonly error?: string;
+}
+
+export interface RuntimeDaemonShutdownIdentity {
+  readonly runtimeId: string;
+  readonly pid: number;
+}
+
 export interface RuntimeDaemonPaths {
   readonly profile: string;
   readonly configHome: string;
@@ -534,6 +548,58 @@ export function readRuntimeDaemonState(paths: RuntimeDaemonPaths): RuntimeDaemon
   }
 }
 
+function runtimeDaemonShutdownOutcomePath(
+  paths: RuntimeDaemonPaths,
+  identity: RuntimeDaemonShutdownIdentity,
+): string {
+  return path.join(
+    paths.rootDir,
+    `shutdown-outcome.${encodeURIComponent(identity.runtimeId)}.${identity.pid}.json`,
+  );
+}
+
+export function writeRuntimeDaemonShutdownOutcome(
+  paths: RuntimeDaemonPaths,
+  outcome: RuntimeDaemonShutdownOutcome,
+): void {
+  ensureRuntimeDaemonDirectories(paths);
+  const target = runtimeDaemonShutdownOutcomePath(paths, outcome);
+  const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(outcome, null, 2)}\n`, 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temporary, target);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
+export function readRuntimeDaemonShutdownOutcome(
+  paths: RuntimeDaemonPaths,
+  identity: RuntimeDaemonShutdownIdentity,
+): RuntimeDaemonShutdownOutcome | undefined {
+  try {
+    const parsed: unknown = JSON.parse(
+      fs.readFileSync(runtimeDaemonShutdownOutcomePath(paths, identity), 'utf8'),
+    );
+    return isRuntimeDaemonShutdownOutcome(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearRuntimeDaemonShutdownOutcome(
+  paths: RuntimeDaemonPaths,
+  identity: RuntimeDaemonShutdownIdentity,
+): void {
+  fs.rmSync(runtimeDaemonShutdownOutcomePath(paths, identity), { force: true });
+}
+
 export function tryAcquireRuntimeDaemonLock(
   paths: RuntimeDaemonPaths,
   owner: RuntimeDaemonLockOwner,
@@ -907,6 +973,18 @@ function isRuntimeDaemonLogEntry(value: unknown): value is RuntimeDaemonLogEntry
 
 function isRuntimeDaemonLogLevel(value: unknown): value is RuntimeDaemonLogLevel {
   return value === 'info' || value === 'warn' || value === 'error';
+}
+
+function isRuntimeDaemonShutdownOutcome(
+  value: unknown,
+): value is RuntimeDaemonShutdownOutcome {
+  if (!isPlainRecord(value)) return false;
+  return value.version === 1
+    && typeof value.runtimeId === 'string'
+    && typeof value.pid === 'number'
+    && (value.status === 'succeeded' || value.status === 'failed')
+    && typeof value.completedAt === 'string'
+    && (value.error === undefined || typeof value.error === 'string');
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
