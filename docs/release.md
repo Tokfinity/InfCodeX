@@ -108,11 +108,10 @@ tagged or published. Its prepared scope is:
 - first-run credential guidance, MCP environment-reference expansion, and
   protected Windows global-install ASRT runner preparation.
 
-FEATURE_280 remains `Planned` with target `v0.7.79`; none of the items above
-claim its cache-stable prompt/tool-surface outcome. Before tagging, the owner
-must either complete its preregistered acceptance gates or explicitly move it
-to a later version and update `docs/features/v0.7.79.md`, `FEATURE_LIST.md`,
-and the changelog together.
+FEATURE_280 was explicitly rescheduled to `v0.7.81` on 2026-08-03; none of the
+items above claim its cache-stable prompt/tool-surface outcome.
+`docs/features/v0.7.79.md`, `FEATURE_LIST.md`, the README/README_CN release
+notes, and this checklist were updated together with that decision.
 
 Issue 256 is independently release-blocking. Identity-checked Windows process
 snapshots prevent PID-reuse mis-kills and expose observable uncertainty, but

@@ -192,8 +192,8 @@ Session 状态、有界只读诊断、字节保持的 Session 导出、严格 tr
 OpenAI-compatible 自定义 provider 现在可在 provider 或 model 级选择 `max_tokens`
 或 `max_completion_tokens`。DeepSeek V4 Flash/Pro 使用各自的 reasoning profile，
 并正确标记为纯文本。详见 [v0.7.79 设计](docs/features/v0.7.79.md)与
-[发布准备清单](docs/release.md#v0779-release-preparation)。FEATURE_280 仍是计划项，
-本候选版没有把它表述为已交付；打 tag 前必须完成或显式改期。Issue 256 同样是
+[发布准备清单](docs/release.md#v0779-release-preparation)。FEATURE_280 已显式改期到
+v0.7.81，本候选版没有把它表述为已交付。Issue 256 同样是
 release blocker：Windows 的快照式进程祖先关系尚不能提供 spawn-time Job Object
 级后代 containment，也没有可独立失效的 Worker owner lease。
 

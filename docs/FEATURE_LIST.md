@@ -443,7 +443,8 @@
 > databases are not v0.7.80 dependencies.
 >
 > **2026-07-30 F280 cache-stable prompt/tool optimization**: `FEATURE_280`
-> consumes `v0.7.79` to reduce real multi-turn model cost without weakening
+> was targeted at `v0.7.79` and was explicitly rescheduled to `v0.7.81` on
+> 2026-08-03 to reduce real multi-turn model cost without weakening
 > tool selection, arguments, permissions, recovery, or cache reuse. It freezes
 > stable prompt/tool projections per task, bounds built-in discovery results,
 > adds a qualified exact/unique MCP call-ready fast path, and evaluates
@@ -501,11 +502,10 @@ event-coalescing, standalone child-process, lineage, shell cleanup, packaged
 sidecar, provider-compatibility, setup, and Windows ASRT fixes recorded in
 `CHANGELOG.md` and `KNOWN_ISSUES.md`.
 
-`FEATURE_280` remains `Planned` with target `v0.7.79`. It is not included in
-the completed candidate claims. Before tag/release, the owner must either
-complete its preregistered acceptance gates or explicitly reschedule it and
-update the v0.7.79 feature design, this tracker, changelog, and release
-checklist together.
+`FEATURE_280` was explicitly rescheduled to `v0.7.81` on 2026-08-03. It is not
+included in the completed candidate claims, and the v0.7.79 feature design,
+this tracker, the release checklist, and the README release notes were updated
+together with that decision.
 
 The same candidate contains a non-Feature release-hardening addendum. Issue 257
 delivers the evidence-checked ordinary-conversation projection without changing
@@ -932,7 +932,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.79` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.81` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
 | `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
 | `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
 | `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |

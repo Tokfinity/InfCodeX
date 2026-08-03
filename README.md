@@ -554,8 +554,8 @@ OpenAI-compatible custom providers can now choose `max_tokens` or
 separate reasoning profiles and are advertised as text-only. See the
 [v0.7.79 design](docs/features/v0.7.79.md) and
 [release preparation checklist](docs/release.md#v0779-release-preparation).
-FEATURE_280 remains planned and is not represented as shipped by this
-candidate; it must be completed or explicitly rescheduled before tagging.
+FEATURE_280 was explicitly rescheduled to v0.7.81 and is not represented as
+shipped by this candidate.
 Issue 256 is also a release blocker: Windows snapshot-based process ancestry
 does not yet provide spawn-time Job Object-grade descendant containment or an
 independently invalidatable Worker owner lease.
