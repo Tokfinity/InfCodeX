@@ -4753,10 +4753,11 @@ shortcut even though containment and permission answer different questions.
    not a mechanism for requiring the root user to authorize each concrete
    command. An operational classifier may return `ask` only when supplied
    facts establish one of two hazards: (a) a read from a concrete store/path
-   known to hold keys, tokens, passwords, or credentials; or (b) an abnormal
-   mutation outside project, temporary, and other normal work areas that can
-   destabilize the operating system or make unrelated installed software
-   unavailable.
+   known to hold keys, tokens, passwords, or credentials, or a concrete KodaX
+   credential/permission/trust configuration mutation whose target controls
+   authorization; or (b) direct destruction/formatting of critical system data
+   or devices, or direct essential-resource exhaustion, that can destabilize
+   the operating system or make unrelated installed software unavailable.
 8. Ordinary project edits, deletes, moves, copies, and Git mutations including
    stash, plus normal global dependency install/uninstall/upgrade/reinstall,
    are not approval reasons by category. Command complexity, incomplete
@@ -4774,6 +4775,10 @@ shortcut even though containment and permission answer different questions.
     override it. Decision-contract or provider failure remains governed by
     Decision 3's bounded retry and call-local Accept-edits fallback; incomplete
     analysis is not itself an `ask` verdict.
+11. A user's rejection of an `ask` cancels only that tool-call attempt and must
+    return explicit safer-alternative guidance to the main agent. It does not
+    create a persistent path, command-prefix, or task denial. Any revised call
+    is reviewed normally and the classifier's new decision remains final.
 
 **Consequences**:
 

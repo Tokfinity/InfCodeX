@@ -14,6 +14,9 @@ _Last Updated: 2026-08-03_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 272 | Medium | Resolved | Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
+| 271 | Medium | Resolved | GLM review found an unbounded boundary projection and small lifecycle/parser hardening gaps | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
+| 270 | High | Resolved | Always-on classifier low effort could produce an impossible output/thinking budget | v0.7.73 side-query effort fallback; exposed by v0.7.79 Qwen 3.8 default | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 269 | High | Open | POSIX daemon hard-stop lacks a retained kernel process handle | v0.7.79 daemon stop watchdog | - | 2026-08-03 | - |
 | 268 | High | Resolved | Auto[LLM] retained category-based approvals and a pre-classifier Tier 0 gate | v0.7.33; retained through v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 267 | High | Resolved | Daemon serve host could outlive a successful Runtime stop | v0.7.66 process-hosted daemon | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -173,6 +176,238 @@ _Last Updated: 2026-08-03_
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 
+### 272: Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+Qwen review identified three concrete release gaps. MCP stdio `close()` returned
+success when the root had exited naturally but descendant cleanup remained
+`unknown`; the retained cleanup child then made every subsequent `open()` fail.
+Root production sources imported three Agent implementation files through
+workspace-relative `packages/agent/src/...` paths instead of declared package
+entrypoints. Finally, each accepted daemon stop wrote a runtime/PID-bound
+shutdown outcome without a retention bound, so one JSON file accumulated per
+daemon owner.
+
+The report also described unreadable Windows descendant identities. That is the
+already-open Issue 256 safety boundary: a second bare-PID observation cannot
+exclude PID reuse, so KodaX must retain evidence and return `unknown` rather
+than kill an unverified process. Cleanup-budget exhaustion is likewise a real
+cleanup failure, not a skipped-success case. Latest-only event ordering and
+sticky indeterminate persistence errors are intentional bounded/fail-closed
+semantics; their host-visible observation behavior needed documentation, not a
+runtime change.
+
+#### Root Cause
+
+The MCP natural-exit exception treated the server root's business lifecycle as
+proof of process-tree cleanup even though reopen state correctly retained the
+opposite fact. New daemon/process and history helpers were exported by their
+implementation modules but not by package barrels. Shutdown outcomes were
+designed as a durable stop fence without a bounded multi-reader lifecycle.
+
+#### Resolution
+
+- Made every MCP `unknown` cleanup result reject `close()` with
+  `McpTransportCleanupIncompleteError`, preserving retry evidence and aligning
+  the immediate result with the already-blocked reopen state.
+- Promoted process start identity, cooperative history search/query validation,
+  and Skill creator dispatch through the existing Agent root/subpath barrels;
+  root production code now imports only declared package entrypoints. Vitest
+  subpath aliases were ordered before the package-root alias.
+- Retained shutdown outcomes for multiple concurrent stop readers while pruning
+  the profile to the newest 32 owner-bound results; pruning failures emit a
+  diagnostic without rewriting the durable daemon result.
+- Added the missing archived-resume and empty-lineage changes to the v0.7.79
+  changelog, documented Runtime event persistence observation semantics, and
+  removed the ignored, reproducible v0.7.76 package tarball from the workspace.
+
+#### Files Modified
+
+- `packages/agent/src/capabilities/mcp/transport.ts`
+- `packages/agent/src/capabilities/mcp/transport.cleanup.test.ts`
+- `packages/agent/src/index.ts`
+- `packages/agent/src/session-lineage/index.ts`
+- `packages/agent/src/capabilities/skills/index.ts`
+- `packages/agent/src/public-entrypoints.test.ts`
+- `src/kodax_cli.ts`
+- `src/sdk-runtime.ts`
+- `src/kodax_cli.daemon-smoke.test.ts`
+- `src/runtime-daemon/state.ts`
+- `src/runtime-daemon/state.test.ts`
+- `vitest.config.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `CHANGELOG.md`
+- `docs/KNOWN_ISSUES.md`
+
+#### Verification
+
+- `npx vitest run packages/agent/src/capabilities/mcp/transport.cleanup.test.ts packages/agent/src/public-entrypoints.test.ts`
+- `npx vitest run src/kodax_cli.daemon-smoke.test.ts -t "prints JSON for real start/stop commands and releases daemon state"`
+- `npx tsc -b packages/agent/tsconfig.json --pretty false`
+- `npx vitest run -c vitest.fast.config.ts tests/tracker-consistency.test.ts`
+
+### 271: GLM review found an unbounded boundary projection and small lifecycle/parser hardening gaps
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+GLM review reported that revision-fenced conversation forks projected compacted
+history synchronously while holding the source Session write lock without
+forwarding the projection's existing checkpoint. It also identified three
+small hardening gaps: Git mutation flags after the first character of a short
+option cluster were not recognized, a newly spawned Windows child could be
+missed by its first process snapshot, and a daemon shutdown fault-injection
+environment variable was accepted outside an explicit test environment.
+
+The review's broader Session performance characterization was not accurate.
+The overlap projection uses KMP and is linear in the compared sequences, rewind
+does not call the fork projection, and ordinary `sessions.load()`, resume, and
+conversation-page cache paths are separate. The report's `sessions.load()`
+event observation is an intentional pure-read contract, classifier
+`allow + hazard != none` is an explicit decision-authority design, archived
+file filtering is applied after collection, and the persistent per-Session
+conversation cache deliberately has no cross-Session LRU that would recreate
+cold-load latency.
+
+#### Root Cause
+
+The reusable conversation-history builder already accepted checkpoints, but
+the newer `historyBoundary` fork adapter did not expose or forward one. The
+other gaps were narrow drift between conservative parsers, duplicated
+dependency-light process-tree implementations, and test fault injection.
+
+#### Resolution
+
+- Threaded a checkpoint through conversation-boundary fork projection and its
+  lineage path, fork, label, goal, epoch, provenance, overlap, and audit scans,
+  then bound it to the existing 15-second Session read budget while the file
+  lock is held. No ordinary Session load, resume, or cache behavior changed.
+- Reused short-option cluster parsing for Git branch/tag mutation flags and
+  added the effectful `branch -u/-t` aliases; removed language-runtime names
+  that can no longer reach the safe-read toolchain check.
+- Retried one complete Windows snapshot when a live newly spawned root is
+  absent, in both Agent and dependency-light LLM copies, and documented their
+  intentionally different exports and timeout plumbing.
+- Restricted the daemon close-hang injection to `NODE_ENV=test` and documented
+  the pure-read `sessions.load()` versus Run-lifecycle event contract for SDK
+  embedders.
+
+#### Files Modified
+
+- `packages/repl/src/session/conversation-history.ts`
+- `packages/repl/src/session/conversation-history.test.ts`
+- `packages/repl/src/interactive/storage.ts`
+- `packages/repl/src/permission/permission.ts`
+- `packages/repl/src/permission/permission.test.ts`
+- `packages/agent/src/runtime/process-tree.ts`
+- `packages/agent/src/runtime/process-tree.windows.test.ts`
+- `packages/llm/src/cli-events/process-tree.ts`
+- `packages/llm/src/cli-events/process-tree.windows.test.ts`
+- `src/runtime-daemon/host.ts`
+- `src/kodax_cli.daemon-smoke.test.ts`
+- `docs/SDK_EMBEDDER_GUIDE.md`
+- `CHANGELOG.md`
+- `docs/KNOWN_ISSUES.md`
+
+#### Verification
+
+- `npx vitest run packages/repl/src/session/conversation-history.test.ts packages/repl/src/permission/permission.test.ts packages/agent/src/runtime/process-tree.windows.test.ts packages/llm/src/cli-events/process-tree.windows.test.ts`
+- `npx vitest run src/kodax_cli.daemon-smoke.test.ts -t "force-reclaims the exact daemon process when Runtime host close hangs"`
+- `npx vitest run -c vitest.fast.config.ts tests/tracker-consistency.test.ts`
+
+### 270: Always-on classifier low effort could produce an impossible output/thinking budget
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.73 side-query effort fallback; exposed by v0.7.79 Qwen 3.8 default
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-03
+- **Resolved**: 2026-08-03
+
+#### Original Problem
+
+Auto[LLM] correctly selected `low` instead of unsupported `none` when the main
+classifier model could not disable thinking. The classifier still passed its
+256-token structured-answer cap as the provider's complete output limit. On
+Qwen Token Plan `qwen3.8-max`, the Anthropic-compatible adapter clamped the low
+thinking budget to its minimum 1024 tokens, producing an invalid request:
+
+```text
+max_tokens=256
+thinking.budget_tokens=1024
+```
+
+The provider rejected the request before any output in roughly 70-80 ms. Both
+classifier attempts repeated the same impossible request, and ordinary
+read-only Git inspection fell through to a user authorization prompt carrying
+`classifier error: provider request failed`.
+
+#### Root Cause
+
+`SideQueryRequest.maxOutputTokens` was documented as a small structured-sidecar
+response cap, but `sideQuery()` forwarded it as the provider's total output
+window without coordinating always-on reasoning. The effort resolver and output
+budget resolver were independent. Provider-budget adapters require room for
+both thinking and final text, while effort-only always-on models can similarly
+consume a tiny cap before emitting the classifier contract.
+
+#### Resolution
+
+- Resolve the effective side-query reasoning profile once before invocation.
+- Keep the caller's 256 tokens as the final classifier-answer allowance.
+- When the profile proves thinking cannot be disabled, add one bounded
+  1024-token low-effort thinking window and send a 1280-token total cap.
+- Make friendly custom-provider profiles that omit `off` explicitly advertise
+  `supportsDisabledThinking:false` and reject only `none`, so they reach the
+  same reserve path without constraining a declared `minimal` effort.
+- Preserve 256 for thinking-off models and for explicit `none`; explicit
+  unsupported requests remain strict.
+- Raise the classifier's bounded default deadline from 20 to 30 seconds after a
+  real Kimi Code off-mode probe completed successfully at 24.3 seconds TTFT;
+  explicit SDK/session/config timeout overrides remain authoritative.
+- Add an Anthropic-compatible wire regression proving the Qwen-shaped request
+  is `max_tokens=1280` with `budget_tokens=1024`, plus prompt-only always-on and
+  unchanged thinking-off side-query tests.
+
+The complete same-provider classifier-model selection policy is deliberately
+not part of this patch. It is designed as `FEATURE_285` for v0.7.80.
+
+#### Files Modified
+
+- `packages/llm/src/side-query.ts`
+- `packages/llm/src/side-query.test.ts`
+- `packages/llm/src/providers/anthropic-reasoning-capability.test.ts`
+- `packages/llm/src/providers/custom-provider.ts`
+- `packages/llm/src/providers/custom-providers.test.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.ts`
+- `packages/coding/src/guardrails/auto-mode/classify.test.ts`
+- `packages/repl/src/common/permission-config.ts`
+- `config.example.jsonc`
+- `config-templates/config.example.jsonc`
+- `tests/auto-mode-classifier-timeout.eval.ts`
+- `docs/features/v0.7.80.md`
+- `docs/FEATURE_LIST.md`
+- `docs/KNOWN_ISSUES.md`
+
+#### Verification
+
+- `npx vitest run packages/llm/src/side-query.test.ts packages/llm/src/providers/anthropic-reasoning-capability.test.ts packages/coding/src/guardrails/auto-mode/classify.test.ts`
+- `npx tsc -b packages/llm/tsconfig.json --pretty false`
+
 ### 269: POSIX daemon hard-stop lacks a retained kernel process handle
 
 - **Priority**: High
@@ -251,8 +486,9 @@ approval policy.
 #### Resolution
 
 - Define Auto[LLM] as allow-by-default automatic review with exactly two
-  evidence-based ask classes: concrete credential-store reads, and disruptive
-  abnormal writes outside project/temp/normal work areas.
+  evidence-based ask classes: concrete credential reads or KodaX authorization-
+  control mutations, and concrete system destruction or essential-resource
+  exhaustion that can destabilize the OS or unrelated software.
 - Explicitly classify normal project mutations, Git operations including
   stash, and global dependency install/uninstall/upgrade/reinstall as
   insufficient ask reasons by category; complexity, incomplete facts, general
@@ -265,6 +501,9 @@ approval policy.
 - Preserve the valid LLM decision as the sole verdict and retain the existing
   one-retry, call-local Accept-edits behavior for classifier infrastructure
   failures.
+- Make a user's rejection cancel only the current tool call and return explicit
+  safer-alternative guidance to the main Agent. A revised call is reviewed
+  independently; no persistent path, prefix, or task denial is created.
 
 #### Verification
 
@@ -331,7 +570,8 @@ happening to be empty after the host-level `stopped` boundary.
   succeeds only when that success outcome and actual PID exit agree; cleanup
   failure or a missing fence is reported as failure. Per-owner outcome files
   keep a concurrently starting replacement daemon from erasing the old
-  instance's verification boundary.
+  instance's verification boundary; the newest 32 outcomes are retained so
+  concurrent stop clients can verify the same owner without unbounded growth.
 - Start an independent stop-client watchdog once `daemon.stop` is accepted.
   If host/Runtime close hangs or the daemon event loop blocks synchronously,
   the Windows client reclaims only the PID whose OS creation identity was
@@ -355,7 +595,7 @@ happening to be empty after the host-level `stopped` boundary.
   bounded, later phases still run, and host plus finalizer errors are aggregated.
 - Added managed-child regressions for corrupted/missing persistence evidence,
   registration-write failure, and unreadable strict-cleanup registries, plus
-  state tests for Runtime/PID-isolated shutdown outcomes.
+  state tests for Runtime/PID-isolated, bounded multi-reader shutdown outcomes.
 - Extended the process-distinct SDK smoke test to prewarm a real MCP child,
   execute a real Runtime Run to terminal idle state, stop the daemon, and prove
   both daemon and child PIDs are gone, owner files are absent, and the daemon
@@ -1166,9 +1406,11 @@ snapshot is unavailable or the captured ancestry is incomplete; cleanup never
 falls back to a bare PID. An incomplete capture remains `unknown`, and managed
 paths retain or quarantine the available recovery evidence. An explicit cleanup
 of a live root surfaces a typed incomplete result. If the root had already
-exited naturally, LLM, MCP, and daemon-startup callers preserve the completed
-business result while retaining any managed evidence instead of converting a
-successful operation into a teardown failure. This does not detect the
+exited naturally, LLM and daemon-startup callers preserve the completed
+business result while retaining any managed evidence. MCP `close()` instead
+surfaces its typed retryable error because the same retained evidence blocks
+reopen; it never reports a clean transport close while descendants remain
+unverified. This does not detect the
 lost-ancestor case described above, and LLM execution has no durable
 managed-registry evidence. Once both owner and root are confirmed gone,
 permanently non-actionable incomplete or older-version registry records are
@@ -10726,11 +10968,28 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 149 (27 Open, 122 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 152 (27 Open, 125 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-03: Issue 272 added and resolved (v0.7.79 development)
+- Made MCP close surface every unverified descendant cleanup immediately and
+  kept reopen blocked until a retry proves termination.
+- Replaced production workspace-private Agent imports with public entrypoints
+  and bounded runtime-bound daemon shutdown outcomes for concurrent readers.
+- Completed the v0.7.79 changelog and SDK persistence notes, while retaining
+  the exact-identity and indeterminate-commit fail-closed designs.
+
+### 2026-08-03: Issue 271 added and resolved (v0.7.79 development)
+- Bounded revision-fenced fork projection without touching ordinary Session
+  load/resume/cache paths.
+- Closed narrow Git short-cluster, first Windows snapshot, duplicated-copy
+  comment, and production fault-injection hardening gaps.
+- Documented intentional `sessions.load()` and classifier-decision contracts;
+  rejected cache LRU and archived-filter findings that do not match runtime
+  behavior.
 
 ### 2026-08-03: Issue 269 added (v0.7.79 development)
 - Confirmed Node 20 POSIX cached-PID signaling cannot make the watchdog's
@@ -10739,12 +10998,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   pidfd/kqueue/native-supervisor boundary as the required complete solution.
 
 ### 2026-08-03: Issue 268 added and resolved (v0.7.79 development)
-- Made Auto[LLM] allow-by-default with only credential-store reads and
-  disruptive abnormal outside writes eligible for `ask`.
+- Made Auto[LLM] allow-by-default with only concrete credential/security-
+  control access and concrete system destruction/resource exhaustion eligible
+  for `ask`.
 - Converted historical Tier 0 matches into classifier facts for Auto[LLM]
   while retaining the legacy deterministic gate for explicit Auto[Rules].
 - Prevented the Ink REPL's cross-mode denial cache from overriding a later
   Auto[LLM] allow.
+- Made a user's rejection call-local with explicit safer-alternative feedback;
+  revised calls still receive a fresh, final classifier decision.
 
 ### 2026-08-03: Issue 267 added and resolved (v0.7.79 development)
 - Completed daemon-serve process cleanup after host shutdown, made unresolved

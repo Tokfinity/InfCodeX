@@ -14,12 +14,12 @@
 | Current released version | `v0.7.78` (Git tag / GitHub Release / npm) |
 | Current package version | `@kodax-ai/kodax@0.7.79` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `68` |
+| Total tracked features | `69` |
 | InProgress | `1` |
-| Planned | `13` |
+| Planned | `14` |
 | Completed | `48` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
@@ -28,7 +28,7 @@
 |---|---:|---|---|
 | Completed | 48 | `284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `284` and `281` are engineering-complete for the unpublished v0.7.79 candidate; `263`, `276`, and `277` shipped in v0.7.78. v0.7.78 remains the current Git/GitHub/npm release. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 7 | `280, 278, 279, 282, 283, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
+| Planned, near-term | 8 | `280, 278, 279, 282, 283, 285, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -63,7 +63,7 @@
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
 | `v0.7.79` | `2` |
-| `v0.7.80` | `4` |
+| `v0.7.80` | `5` |
 | `v0.7.81` | `1` |
 | `v0.7.85` | `1` |
 | `v0.7.90` | `1` |
@@ -940,6 +940,7 @@ fixed GitHub binary archive sidecar omission before tagging.
 | `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
 | `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
 | `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
+| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
 | `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
 | `105` | Mixture-of-Agents Virtual Provider | Core / LLM Provider + Test-Time Scaling | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |

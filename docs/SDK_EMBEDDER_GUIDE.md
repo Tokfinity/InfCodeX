@@ -812,6 +812,14 @@ keep `readFullTranscript(id)` available for an audit/details view.
 `loadSession(id)` remains the model-context API. Do not assume `uiHistory`
 exists; it is intentionally a small, lossy replay cache.
 
+`loadSession(id)` and Runtime `sessions.load(id)` are pure snapshot reads. They
+do not emit `session.loaded`; a host that explicitly loads a snapshot should
+update its own selected/loaded UI state from the resolved promise. The
+compatibility `session.loaded` event (and the CLI bridge's `onSessionStart`)
+remains bound to the Provider Run execution boundary, where a Session actually
+becomes active. Do not use that Run-lifecycle event as a generic data-load
+notification.
+
 `loadFullTranscript(id).transcriptEntries` is the structured host-facing
 scrollback. Each entry has stable ownership and ordering fields:
 
@@ -4109,6 +4117,17 @@ The capability changes event allocation/persistence pressure, not reconstructed
 stream content: flush boundaries remain explicit and an accumulated merge
 never exceeds 8 KiB.
 
+Observation boundaries such as `events.subscribe()`, `events.replay()`, and
+Session status projection flush pending events before answering, so they can
+surface a durable-persistence failure instead of returning a stale waterline.
+A determinate append failure retains one bounded batch for a later explicit
+retry. If both append and rollback fail, commit state is unknowable: the error
+is intentionally sticky and the Runtime must be closed/recreated rather than
+guessing or replaying the batch. Latest-only progress coalescing preserves its
+required first sample plus the most recent sample; discarded intermediate
+snapshots are not lifecycle events, and surviving samples retain their latest
+emission order.
+
 When a healthy profile daemon is too old, the SDK first requires
 `daemonManagement:1`, takes a revision/owner-policy fenced preflight, and
 replaces it only when no active or queued run, Workflow, Agent turn, pending
@@ -4701,7 +4720,7 @@ await runtime.sessions.updateSettings(session.id, {
   permissionMode: 'auto',
   autoModeEngine: 'llm',
   autoModeClassifierModel: 'zhipu:glm-5.2', // optional; otherwise follow the run model
-  autoModeTimeoutMs: 20_000,                // positive safe integer, optional
+  autoModeTimeoutMs: 30_000,                // positive safe integer, optional
   autoModeSpeculativeWindowMs: 0,           // non-negative safe integer, optional
   executionCwd: projectDirectory,
 });
@@ -4793,7 +4812,7 @@ Authenticated child constraints are checked before deterministic admission:
 for example, `Do not execute shell commands` keeps even a read-only shell call
 under review, while `Do not modify files` does not make an ordinary read ask.
 
-The classifier deadline remains 20 seconds by default and includes connection
+The classifier deadline is 30 seconds by default and includes connection
 setup, provider Retry-After/backoff, inference, and stream completion. KodaX
 retries one timeout/provider/response-contract failure once; a second failure
 uses the Accept-edits safety boundary and never switches to Auto[rules].
@@ -4878,10 +4897,10 @@ allow remains authoritative, `decision_hazard_conflict` appears in
 `outputWarnings`, and the contradictory hazard value is not placed in that
 legacy field.
 Auto[LLM] is allow-by-default automatic review. An operational classifier is
-instructed to return `ask` only for a concrete read from a known key/token/
-credential store, or for an abnormal write outside project, temporary, and
-normal work areas whose concrete effect can destabilize the system or make
-unrelated installed software unavailable. Ordinary project mutations, Git
+instructed to return `ask` only for one of two evidence-based classes: a
+concrete read from a known key/token/credential store or a mutation to KodaX
+authorization controls; or direct system destruction/resource exhaustion that
+can destabilize the OS or unrelated software. Ordinary project mutations, Git
 stash and other Git writes, and normal global dependency install/uninstall/
 reinstall do not require per-command root authorization. Syntax complexity,
 incomplete analysis, general uncertainty, and command category are not ask

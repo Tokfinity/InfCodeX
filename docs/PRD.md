@@ -178,15 +178,18 @@ directory, classifier model, and timeout. Precisely modeled ordinary reads and
 workspace/system-temp mutations are admitted deterministically before
 classifier latency. Auto[LLM] otherwise defaults to automatic review and
 `allow`, not command-by-command root authorization. The classifier may return
-`ask` only for a concrete credential-store read or an abnormal write outside
-project/temp/normal work areas that can destabilize the system or make
-unrelated software unavailable. Project edits/deletes/moves, Git mutations
+`ask` only for (1) a concrete credential-store read or a concrete mutation of
+KodaX credential/permission/trust controls, or (2) direct destruction,
+formatting, or essential-resource exhaustion that can destabilize the system
+or make unrelated software unavailable. Project edits/deletes/moves, Git mutations
 including stash, and normal global dependency install/uninstall/reinstall are
 not approval reasons merely because they write. Command category, complexity,
 incomplete analysis, general uncertainty, or lack of an explicit per-command
 instruction is insufficient. Static analysis supplies fast admissions and
 facts only; it cannot override the final LLM decision or manufacture a host
-request after `allow`.
+request after `allow`. A user's rejection cancels that attempt and tells the
+agent to seek a safer alternative; it does not persist as a path, prefix, or
+task denial, and a revised call receives a fresh classifier decision.
 
 The Auto LLM request must contain only bounded permission-relevant evidence,
 not the Runner's raw accumulated session. The current tool action remains

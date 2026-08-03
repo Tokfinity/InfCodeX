@@ -55,6 +55,28 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The dual-layout CLI resume scan no longer resurfaces migrated
+  `archived-*.jsonl` Sessions from project subdirectories, and empty persisted
+  conversations now resolve as a valid empty lineage instead of a missing-
+  lineage diagnostic (Issue 264).
+- Side queries now reserve a bounded 1024-token low-thinking window in addition
+  to the caller's final-answer allowance when a model cannot disable reasoning,
+  including friendly custom-provider profiles that omit `off`. This prevents
+  impossible `max_tokens=256` / `budget_tokens=1024` classifier requests; the
+  default classifier deadline is now 30 seconds while explicit overrides remain
+  authoritative (Issue 270).
+- MCP stdio `close()` now reports a retryable incomplete-cleanup error whenever
+  descendant termination is unverified, including after natural root exit,
+  instead of returning success while blocking the next `open()`. Production
+  CLI/Runtime imports now use Agent package entrypoints, and daemon shutdown
+  outcomes retain a bounded 32-owner multi-reader verification window instead
+  of accumulating without limit or disappearing after the first stop client.
+- Revision-fenced conversation forks now enforce the existing bounded Session
+  read budget throughout synchronous lineage projection without changing
+  `sessions.load()` or ordinary resume paths. Windows child capture retries one
+  complete process snapshot when a newly spawned root is initially absent;
+  Git read-only parsing now detects mutation flags anywhere in a short-option
+  cluster, and the daemon close-hang fault injection is gated to test mode.
 - Runtime daemon stop now verifies complete process-level cleanup with an exact
   Runtime/PID outcome fence and an independent stop-client watchdog. A hung
   Runtime close or synchronously blocked daemon is reclaimed on Windows through
@@ -85,8 +107,9 @@ All notable changes to this project will be documented in this file.
   `ClassifierDecision` allow branch retains its previous `hazard?: 'none'`
   source type while contradictory hazard values remain non-blocking warnings.
   Auto[LLM] now explicitly defaults to automatic review and `allow`; the
-  classifier asks only for concrete credential-store reads or disruptive
-  abnormal writes outside project/temp/normal work areas. Ordinary project
+  classifier asks only for concrete credential reads, mutations to KodaX
+  authorization controls, or direct system destruction/resource exhaustion.
+  Ordinary project
   mutations, Git operations including stash, and normal global dependency
   install/uninstall/reinstall no longer require per-command root authorization
   by category. Historical Tier 0 matches are classifier facts in Auto[LLM]
@@ -133,9 +156,7 @@ All notable changes to this project will be documented in this file.
   clause, and `read-only` is distinguished from `read only <target>`.
   Copy/delete/move/rename fast paths now require direct action-to-target
   binding; exclusion-shaped or ambiguous authority is decided by Auto[LLM],
-  whose `allow` verdict still avoids user approval. Classifier envelopes whose
-  nominal allow conflicts with a hazardous or approval-seeking reason are
-  retried as contract failures instead of being accepted. Unquoted physical
+  whose `allow` verdict still avoids user approval. Unquoted physical
   line boundaries are now parsed as complete command sequences and active
   command substitution cannot hide inside quoted read arguments. Git signature
   verification shares one indirect-execution rule across every read fast path,
