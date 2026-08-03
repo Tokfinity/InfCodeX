@@ -1,7 +1,103 @@
-import { describe, expect, it } from 'vitest';
-import { parseClassifierOutput } from './parse-output.js';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import {
+  parseClassifierOutput,
+  type ClassifierDecision,
+} from './parse-output.js';
 
 describe('parseClassifierOutput', () => {
+  it.each([
+    [
+      '<decision>allow</decision>',
+      'allow',
+      ['missing_hazard', 'missing_reason'],
+    ],
+    [
+      '<decision>ask</decision>',
+      'block',
+      ['missing_hazard', 'missing_reason'],
+    ],
+    [
+      '<decision>allow</decision><hazard>unknown</hazard>'
+        + '<reason>Ask the user first.</reason>',
+      'allow',
+      ['invalid_hazard', 'decision_reason_conflict'],
+    ],
+    [
+      '<decision>allow</decision><hazard>protected_read</hazard>'
+        + '<reason>reads an SSH key</reason>',
+      'allow',
+      ['decision_hazard_conflict'],
+    ],
+    [
+      '<decision>ask</decision><hazard>none</hazard>'
+        + '<reason>blocking is unnecessary</reason>',
+      'block',
+      ['decision_hazard_conflict', 'decision_reason_conflict'],
+    ],
+  ])(
+    'keeps a valid structured decision authoritative when auxiliaries are diagnostic: %s',
+    (raw, kind, warnings) => {
+      expect(parseClassifierOutput(raw)).toMatchObject({ kind, warnings });
+    },
+  );
+
+  it('uses a neutral display reason when an ask decision has no usable reason', () => {
+    expect(parseClassifierOutput('<decision>ask</decision>')).toMatchObject({
+      kind: 'block',
+      reason: 'Auto[LLM] classifier requested user confirmation.',
+    });
+  });
+
+  it('preserves the public allow hazard type while retaining a conflicting hazard as a warning', () => {
+    type AllowDecision = Extract<ClassifierDecision, { kind: 'allow' }>;
+    expectTypeOf<AllowDecision['hazard']>().toEqualTypeOf<'none' | undefined>();
+
+    const decision = parseClassifierOutput(
+      '<decision>allow</decision><hazard>protected_read</hazard>'
+        + '<reason>the decision remains authoritative</reason>',
+    );
+    expect(decision).toMatchObject({
+      kind: 'allow',
+      warnings: ['decision_hazard_conflict'],
+    });
+    expect(decision).not.toHaveProperty('hazard');
+    if (decision.kind === 'allow') {
+      const compatibleHazard: 'none' | undefined = decision.hazard;
+      expect(compatibleHazard).toBeUndefined();
+    }
+  });
+
+  it('accepts surrounding prose as a warning when there is one unambiguous decision', () => {
+    expect(parseClassifierOutput(
+      'Decision follows: <decision>allow</decision><hazard>none</hazard><reason>safe</reason>',
+    )).toMatchObject({
+      kind: 'allow',
+      warnings: ['structured_format_violation'],
+    });
+  });
+
+  it.each([
+    '<decision>allow</decision><decision>ask</decision>',
+    '<decision>allow</decision><decision>ask',
+    '<decision>allow</decision><block>yes</block>',
+    '<decision>allow</decision><block>yes',
+  ])('rejects an ambiguous decision plane: %s', (raw) => {
+    expect(parseClassifierOutput(raw)).toMatchObject({
+      kind: 'unparseable',
+      failureCode: 'ambiguous_decision',
+    });
+  });
+
+  it.each([
+    '<decision>allow</decision><hazard>none</hazard>'
+      + '<reason><decision-maker> judged the command safe</reason>',
+    '<decision>allow</decision><hazard>none</hazard>'
+      + '<reason><block-list> is empty</reason>',
+    '<block>no</block><reason><decision-maker> judged the command safe</reason>',
+  ])('does not treat a longer auxiliary tag name as another decision marker: %s', (raw) => {
+    expect(parseClassifierOutput(raw)).toMatchObject({ kind: 'allow' });
+  });
+
   it('parses a structured allow decision with no hazard', () => {
     expect(parseClassifierOutput(
       '<decision>allow</decision><hazard>none</hazard><reason>deterministic read</reason>',
@@ -20,9 +116,21 @@ describe('parseClassifierOutput', () => {
   it.each([
     'prefix\n```xml\n<decision>allow</decision><hazard>none</hazard><reason>safe</reason>\n```',
     '```xml\n<decision>allow</decision><hazard>none</hazard><reason>safe</reason>\n```\nsuffix',
-    '```xml\n<decision>allow</decision><hazard>none</hazard><reason>safe</reason>\n```\n```xml\n<decision>ask</decision><hazard>intent_conflict</hazard><reason>unsafe</reason>\n```',
-  ])('rejects prose or multiple envelopes outside a Markdown fence', (raw) => {
-    expect(parseClassifierOutput(raw).kind).toBe('unparseable');
+  ])('keeps one fenced decision despite surrounding prose: %s', (raw) => {
+    expect(parseClassifierOutput(raw)).toMatchObject({
+      kind: 'allow',
+      warnings: ['structured_format_violation'],
+    });
+  });
+
+  it('rejects multiple fenced decisions as ambiguous', () => {
+    const raw = '```xml\n<decision>allow</decision><hazard>none</hazard><reason>safe</reason>\n```'
+      + '\n```xml\n<decision>ask</decision><hazard>intent_conflict</hazard>'
+      + '<reason>unsafe</reason>\n```';
+    expect(parseClassifierOutput(raw)).toMatchObject({
+      kind: 'unparseable',
+      failureCode: 'ambiguous_decision',
+    });
   });
 
   it('accepts an allow reason that explicitly says confirmation is unnecessary', () => {
@@ -82,14 +190,31 @@ describe('parseClassifierOutput', () => {
     '<decision>allow</decision><hazard>none</hazard><reason>Confirmation is recommended.</reason>',
     '<decision>ask</decision><hazard>intent_conflict</hazard><reason>No approval is needed.</reason>',
     '<decision>ask</decision><hazard>intent_conflict</hazard><reason>Proceed without user confirmation.</reason>',
-  ])('rejects inconsistent structured output: %s', (raw) => {
-    expect(parseClassifierOutput(raw).kind).toBe('unparseable');
+  ])('keeps the structured decision and reports inconsistent auxiliaries: %s', (raw) => {
+    const result = parseClassifierOutput(raw);
+    expect(result.kind).toBe(raw.includes('<decision>ask</decision>') ? 'block' : 'allow');
+    if (result.kind !== 'unparseable') {
+      expect(result.warnings?.some((warning) => (
+        warning === 'decision_hazard_conflict'
+        || warning === 'decision_reason_conflict'
+      ))).toBe(true);
+    }
   });
 
   it('parses a clean block=yes with reason', () => {
     const r = parseClassifierOutput('<block>yes</block><reason>command exfiltrates ssh key</reason>');
     expect(r.kind).toBe('block');
     if (r.kind === 'block') expect(r.reason).toBe('command exfiltrates ssh key');
+  });
+
+  it('keeps one legacy decision authoritative when only structured auxiliaries leak in', () => {
+    expect(parseClassifierOutput(
+      '<block>no</block><hazard>none</hazard><reason>safe</reason>',
+    )).toMatchObject({
+      kind: 'allow',
+      protocol: 'legacy_v1',
+      warnings: ['legacy_format_violation'],
+    });
   });
 
   it('parses a clean block=no with reason', () => {
@@ -139,11 +264,11 @@ describe('parseClassifierOutput', () => {
     '<block>no</block><reason>Confirmation is recommended.</reason>',
     '<block>yes</block><reason>This action is safe; there is no hazard.</reason>',
     '<block>yes</block><reason>No approval is needed.</reason>',
-  ])('rejects a self-contradictory legacy decision: %s', (raw) => {
+  ])('keeps the legacy decision and reports a contradictory reason: %s', (raw) => {
     expect(parseClassifierOutput(raw)).toMatchObject({
-      kind: 'unparseable',
-      failureCode: 'decision_hazard_conflict',
-      observedProtocol: 'legacy_v1',
+      kind: raw.includes('<block>yes</block>') ? 'block' : 'allow',
+      warnings: ['decision_reason_conflict'],
+      protocol: 'legacy_v1',
     });
   });
 
@@ -158,11 +283,14 @@ describe('parseClassifierOutput', () => {
     )).toMatchObject({ kind: 'allow', hazard: 'none' });
   });
 
-  it('still rejects a mixed safe claim followed by a confirmation requirement', () => {
+  it('keeps an allow with a mixed reason and reports the contradiction', () => {
     expect(parseClassifierOutput(
       '<decision>allow</decision><hazard>none</hazard>'
       + '<reason>No confirmation is needed for the read, but wait for user approval.</reason>',
-    ).kind).toBe('unparseable');
+    )).toMatchObject({
+      kind: 'allow',
+      warnings: ['decision_reason_conflict'],
+    });
   });
 
   it('parses an exact legacy allow without a reason', () => {
@@ -179,12 +307,12 @@ describe('parseClassifierOutput', () => {
     if (r.kind === 'block') expect(r.reason).toBe('trim me');
   });
 
-  it('rejects prose surrounding a legacy decision', () => {
+  it('keeps a legacy decision with surrounding prose and reports its format', () => {
     const r = parseClassifierOutput('   Sure! <block>no</block><reason>ok</reason>  trailing  ');
     expect(r).toMatchObject({
-      kind: 'unparseable',
-      failureCode: 'legacy_format_violation',
-      observedProtocol: 'legacy_v1',
+      kind: 'allow',
+      warnings: ['legacy_format_violation'],
+      protocol: 'legacy_v1',
     });
   });
 
@@ -216,14 +344,22 @@ describe('parseClassifierOutput', () => {
     expect(r.kind).toBe('unparseable');
   });
 
-  it('treats a blocking decision without a reason as a contract failure', () => {
+  it('keeps a legacy ask without a reason and reports the missing auxiliary', () => {
     const r = parseClassifierOutput('<block>yes</block>');
-    expect(r.kind).toBe('unparseable');
+    expect(r).toMatchObject({
+      kind: 'block',
+      reason: 'Auto[LLM] classifier requested user confirmation.',
+      warnings: ['missing_reason'],
+    });
   });
 
-  it('treats an empty blocking reason as a contract failure', () => {
+  it('keeps a legacy ask with an empty reason and reports the missing auxiliary', () => {
     const r = parseClassifierOutput('<block>yes</block><reason></reason>');
-    expect(r.kind).toBe('unparseable');
+    expect(r).toMatchObject({
+      kind: 'block',
+      reason: 'Auto[LLM] classifier requested user confirmation.',
+      warnings: ['missing_reason'],
+    });
   });
 
   it('truncates excessively long reasons to a sane upper bound', () => {
@@ -236,9 +372,11 @@ describe('parseClassifierOutput', () => {
     }
   });
 
-  it('rejects multiple legacy decisions instead of taking the first', () => {
-    const r = parseClassifierOutput('<block>yes</block><reason>real</reason><block>no</block>');
-    expect(r.kind).toBe('unparseable');
+  it.each([
+    '<block>yes</block><reason>real</reason><block>no</block>',
+    '<block>yes</block><reason>real</reason><block>no',
+  ])('rejects multiple legacy decisions instead of taking the first: %s', (raw) => {
+    expect(parseClassifierOutput(raw).kind).toBe('unparseable');
   });
 
   it('rejects a legacy decision nested inside the reason', () => {
@@ -246,21 +384,29 @@ describe('parseClassifierOutput', () => {
       '<block>no</block><reason>safe <block>yes</block></reason>',
     )).toMatchObject({
       kind: 'unparseable',
-      failureCode: 'legacy_format_violation',
+      failureCode: 'ambiguous_decision',
       observedProtocol: 'legacy_v1',
     });
   });
 
+  it('keeps one structured decision with surrounding prose as a warning', () => {
+    expect(parseClassifierOutput(
+      'I refuse. <decision>allow</decision><hazard>none</hazard><reason>safe</reason>',
+    )).toMatchObject({
+      kind: 'allow',
+      warnings: ['structured_format_violation'],
+    });
+  });
+
   it.each([
-    'I refuse. <decision>allow</decision><hazard>none</hazard><reason>safe</reason>',
     '<decision>allow</decision><hazard>none</hazard><reason>safe</reason>'
       + '<decision>ask</decision><hazard>intent_conflict</hazard><reason>unsafe</reason>',
     '<decision>allow</decision><hazard>none</hazard><reason>safe</reason>'
       + '<block>yes</block><reason>unsafe</reason>',
-  ])('rejects non-exclusive structured output: %s', (raw) => {
+  ])('rejects multiple decision mechanisms: %s', (raw) => {
     expect(parseClassifierOutput(raw)).toMatchObject({
       kind: 'unparseable',
-      failureCode: 'structured_format_violation',
+      failureCode: 'ambiguous_decision',
       observedProtocol: 'structured_v2',
     });
   });

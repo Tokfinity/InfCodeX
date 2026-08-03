@@ -102,6 +102,57 @@ describe('classify', () => {
     expect(result.kind).toBe('allow');
   });
 
+  it('adopts a valid allow decision once when auxiliary fields are missing', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream('<decision>allow</decision>');
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: inspect project metadata',
+    });
+
+    expect(result.kind).toBe('allow');
+    expect(providerCalls).toBe(1);
+    expect(result.attempts).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        outputWarnings: ['missing_hazard', 'missing_reason'],
+      }),
+    ]);
+  });
+
+  it('adopts a valid ask decision once when auxiliary fields are missing', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream('<decision>ask</decision>');
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: opaque operation',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'confirm',
+      reason: 'Auto[LLM] classifier requested user confirmation.',
+      attempts: [{
+        outcome: 'confirm',
+        outputWarnings: ['missing_hazard', 'missing_reason'],
+      }],
+    });
+    expect(providerCalls).toBe(1);
+  });
+
   it('sends useful redacted current and historical tool metadata to the side provider', async () => {
     let classifierPrompt = '';
     const provider = new StubProvider(async (_signal, messages) => {
@@ -179,6 +230,73 @@ describe('classify', () => {
         expect.objectContaining({
           outcome: 'contract_error',
           parseFailureCode: 'missing_decision',
+        }),
+      ]);
+    }
+  });
+
+  it('retries ambiguous decisions once, then returns a contract failure', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream(
+        '<decision>allow</decision><decision>ask</decision>',
+      );
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: opaque operation',
+    });
+
+    expect(result.kind).toBe('failure');
+    expect(providerCalls).toBe(2);
+    if (result.kind === 'failure') {
+      expect(result.failureKind).toBe('contract_error');
+      expect(result.attempts).toHaveLength(2);
+      expect(result.attempts).toEqual([
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'ambiguous_decision',
+        }),
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'ambiguous_decision',
+        }),
+      ]);
+    }
+  });
+
+  it('retries an invalid decision once, then returns a contract failure', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okStream('<decision>maybe</decision><hazard>none</hazard><reason>safe</reason>');
+    });
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: opaque operation',
+    });
+
+    expect(result.kind).toBe('failure');
+    expect(providerCalls).toBe(2);
+    if (result.kind === 'failure') {
+      expect(result.failureKind).toBe('contract_error');
+      expect(result.attempts).toEqual([
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'invalid_decision',
+        }),
+        expect.objectContaining({
+          outcome: 'contract_error',
+          parseFailureCode: 'invalid_decision',
         }),
       ]);
     }
@@ -349,19 +467,14 @@ describe('classify', () => {
     });
   });
 
-  it('retries a contradictory structured decision instead of asking the user', async () => {
+  it('adopts a contradictory structured decision and records auxiliary warnings', async () => {
     let providerCalls = 0;
     const provider = new StubProvider(async () => {
       providerCalls += 1;
-      return providerCalls === 1
-        ? okStream(
-          '<decision>ask</decision><hazard>none</hazard>'
-          + '<reason>blocking is unnecessary</reason>',
-        )
-        : okStream(
-          '<decision>allow</decision><hazard>none</hazard>'
-          + '<reason>ordinary read</reason>',
-        );
+      return okStream(
+        '<decision>ask</decision><hazard>none</hazard>'
+        + '<reason>blocking is unnecessary</reason>',
+      );
     });
 
     const result = await classify({
@@ -382,10 +495,17 @@ describe('classify', () => {
       },
     });
 
-    expect(result.kind).toBe('allow');
-    expect(providerCalls).toBe(2);
+    expect(result).toMatchObject({
+      kind: 'confirm',
+      reason: 'Auto[LLM] classifier requested user confirmation.',
+    });
+    expect(providerCalls).toBe(1);
     expect(result.attempts.map((attempt) => attempt.outcome))
-      .toEqual(['contract_error', 'allow']);
+      .toEqual(['confirm']);
+    expect(result.attempts[0]?.outputWarnings).toEqual([
+      'decision_hazard_conflict',
+      'decision_reason_conflict',
+    ]);
   });
 
   it('passes the action through to the classifier prompt', async () => {

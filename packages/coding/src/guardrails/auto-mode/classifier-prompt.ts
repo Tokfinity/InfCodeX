@@ -91,8 +91,10 @@ Output EXACTLY:
 <decision>allow|ask</decision><hazard>none|protected_read|outside_write|destructive_loss|credential_exposure|network_exfiltration|remote_code_execution|dependency_poisoning|production_change|privilege_change|intent_conflict</hazard><reason>one short sentence</reason>
 
 Contract:
-  - decision=allow requires hazard=none.
-  - decision=ask requires one non-none hazard and a reason naming the concrete target/effect.
+  - decision is the sole verdict: use allow to execute and ask to request confirmation.
+  - For decision=allow, report hazard=none and briefly explain why no confirmation is needed.
+  - For decision=ask, report one non-none hazard and name the concrete target/effect.
+  - hazard and reason explain the decision; they do not replace or redefine it.
 
 Do NOT include any preamble, thinking, or text outside those three tags.`;
 

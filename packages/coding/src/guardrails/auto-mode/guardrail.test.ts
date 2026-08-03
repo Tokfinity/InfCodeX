@@ -88,12 +88,12 @@ const callBash = (command: string): RunnerToolCall => ({
 
 describe('AutoModeToolGuardrail — Tier 1', () => {
   it.each(['read', 'grep', 'glob'])(
-    'fails closed for deterministic %s without a permission analyzer',
+    'routes deterministic %s through the classifier when its analyzer is unavailable',
     async (toolName) => {
     let classifierCalled = false;
     const provider = new StubProvider(async () => {
       classifierCalled = true;
-      return okResult('<decision>ask</decision><hazard>intent_conflict</hazard><reason>should not happen</reason>');
+      return okResult('<decision>allow</decision>');
     });
     const g = createAutoModeToolGuardrail({
       ...baseConfig('<decision>allow</decision><hazard>none</hazard><reason>x</reason>'),
@@ -103,8 +103,8 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       { id: 'c1', name: toolName, input: { path: '/tmp/x' } },
       ctx(),
     );
-    expect(verdict.action).toBe('escalate');
-    expect(classifierCalled).toBe(false);
+    expect(verdict.action).toBe('allow');
+    expect(classifierCalled).toBe(true);
     },
   );
 
@@ -2395,35 +2395,174 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(classifierCalled).toBe(true);
   });
 
-  it('escalates an invalid custom projector instead of crashing or allowing', async () => {
+  it('uses safe classifier facts when a custom projector throws', async () => {
+    const secret = 'projector-private-value';
+    const log = vi.fn();
+    const provider = new StubProvider(okResult('<decision>allow</decision>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
-      getToolProjection: () => () => { throw new Error('broken projector'); },
+      getToolProjection: () => () => {
+        throw new Error(`Incorrect API key provided ${secret}\n${'x'.repeat(2_000)}`);
+      },
+      resolveProvider: () => provider,
+      askUser,
+      log,
     });
 
     const verdict = await g.beforeTool!(callBash('echo ok'), ctx());
-    expect(verdict.action).toBe('escalate');
-    if (verdict.action === 'escalate') {
-      expect(verdict.reason).toMatch(/projection failed/i);
-    }
+    expect(verdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('command=echo ok');
+    const logMessage = String(log.mock.calls[0]?.[1]);
+    expect(logMessage).toContain('(Error)');
+    expect(logMessage).not.toContain('Incorrect API key provided');
+    expect(logMessage).not.toContain(secret);
+    expect(logMessage.length).toBeLessThanOrEqual(768);
   });
 
-  it('escalates when a custom projector returns a non-string value', async () => {
+  it('uses safe classifier facts when a custom projector returns a non-string value', async () => {
     const invalidProjector = (() => 42) as unknown as (input: unknown) => string;
+    const provider = new StubProvider(okResult('<decision>allow</decision>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
     const g = createAutoModeToolGuardrail({
       ...baseConfig(''),
       getToolProjection: () => invalidProjector,
+      resolveProvider: () => provider,
+      askUser,
     });
 
     const verdict = await g.beforeTool!(callBash('echo ok'), ctx());
-    expect(verdict.action).toBe('escalate');
-    if (verdict.action === 'escalate') {
-      expect(verdict.reason).toMatch(/projection failed/i);
-    }
+    expect(verdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('command=echo ok');
+  });
+
+  it('uses safe classifier facts when a direct-read analyzer is unavailable', async () => {
+    const provider = new StubProvider(okResult('<decision>allow</decision>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      askUser,
+    });
+
+    const verdict = await g.beforeTool!(
+      { id: 'read-no-analyzer', name: 'read', input: { path: 'README.md' } },
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('path=README.md');
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('analyzer_unavailable');
+  });
+
+  it('uses safe classifier facts when a direct-read analyzer throws', async () => {
+    const secret = 'analyzer-private-value';
+    const log = vi.fn();
+    const provider = new StubProvider(okResult('<decision>allow</decision>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      askUser,
+      analyzeCall: () => {
+        throw new Error(`read analyzer failed because password is ${secret}\n${'y'.repeat(2_000)}`);
+      },
+      log,
+    });
+
+    const verdict = await g.beforeTool!(
+      { id: 'read-broken-analyzer', name: 'read', input: { path: 'README.md' } },
+      ctx(),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(stream).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('path=README.md');
+    expect(String(stream.mock.calls[0]?.[0]?.[0]?.content)).toContain('analyzer_failed');
+    const logMessage = String(log.mock.calls[0]?.[1]);
+    expect(logMessage).toContain('(Error)');
+    expect(logMessage).not.toContain('password is');
+    expect(logMessage).not.toContain(secret);
+    expect(logMessage.length).toBeLessThanOrEqual(768);
   });
 });
 
 describe('AutoModeToolGuardrail — classifier verdicts', () => {
+  it('adopts allow without asking when classifier auxiliaries are missing', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail(baseConfig(
+      '<decision>allow</decision>',
+      { askUser },
+    ));
+
+    const verdict = await g.beforeTool!(callBash('node --version'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(askUser).not.toHaveBeenCalled();
+    expect(g.getStats().classifierHealth).toBe('healthy');
+  });
+
+  it('adopts ask once and exposes auxiliary warnings as diagnostics', async () => {
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'allow');
+    const g = createAutoModeToolGuardrail(baseConfig(
+      '<decision>ask</decision>',
+      { askUser },
+    ));
+
+    const verdict = await g.beforeTool!(callBash('node scripts/task.js'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(askUser).toHaveBeenCalledOnce();
+    expect(askUser.mock.calls[0]?.[1]).toBe(
+      'Auto[LLM] classifier requested user confirmation.',
+    );
+    expect(askUser.mock.calls[0]?.[3]).toMatchObject({
+      source: 'classifier_confirm',
+      classifierAttempts: [{
+        outcome: 'confirm',
+        outputWarnings: ['missing_hazard', 'missing_reason'],
+      }],
+    });
+  });
+
+  it('does not count auxiliary warnings as circuit-breaker failures', async () => {
+    let providerCalls = 0;
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      return okResult('<decision>allow</decision>');
+    });
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      askUser,
+    });
+
+    for (let i = 0; i < 6; i += 1) {
+      const verdict = await g.beforeTool!(
+        callBash(`node scripts/task-${i}.js`),
+        ctx(),
+      );
+      expect(verdict.action).toBe('allow');
+    }
+
+    expect(providerCalls).toBe(6);
+    expect(askUser).not.toHaveBeenCalled();
+    expect(g.getStats().classifierHealth).toBe('healthy');
+    expect(g.getStats().breaker.timestamps).toEqual([]);
+  });
+
   it('allow: classifier says <decision>allow</decision><hazard>none</hazard>', async () => {
     const g = createAutoModeToolGuardrail(baseConfig('<decision>allow</decision><hazard>none</hazard><reason>safe</reason>'));
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
@@ -2484,6 +2623,93 @@ describe('AutoModeToolGuardrail — classifier verdicts', () => {
     });
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(verdict.action).toBe('escalate');
+  });
+
+  it('contains provider-resolution exceptions inside classifier fallback without logging secrets', async () => {
+    const secret = 'provider-resolution-private-value';
+    const log = vi.fn();
+    const askUser = vi.fn<AutoModeAskUser>(async () => 'block');
+    const allowOnClassifierFailure = vi.fn(async () => true);
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => {
+        throw new Error(`Incorrect API key provided ${secret}`);
+      },
+      allowOnClassifierFailure,
+      askUser,
+      log,
+    });
+
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(allowOnClassifierFailure).toHaveBeenCalledOnce();
+    expect(askUser).not.toHaveBeenCalled();
+    const logText = log.mock.calls.map((call) => String(call[1])).join('\n');
+    expect(logText).not.toContain('Incorrect API key provided');
+    expect(logText).not.toContain(secret);
+  });
+
+  it.each(['getDefaultModel', 'getClaudeMd', 'getCostTracker'] as const)(
+    'contains a throwing %s callback inside classifier fallback',
+    async (callbackName) => {
+      const secret = `${callbackName}-private-value`;
+      const allowOnClassifierFailure = vi.fn(async () => true);
+      const throwingCallback = () => {
+        throw new Error(`private callback value ${secret}`);
+      };
+      const g = createAutoModeToolGuardrail({
+        ...baseConfig(''),
+        [callbackName]: throwingCallback,
+        allowOnClassifierFailure,
+      });
+
+      const verdict = await g.beforeTool!(callBash('ls'), ctx());
+
+      expect(verdict.action).toBe('allow');
+      expect(allowOnClassifierFailure).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not let a throwing host logger alter classifier fallback', async () => {
+    const allowOnClassifierFailure = vi.fn(async () => true);
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => {
+        throw new Error('provider unavailable');
+      },
+      allowOnClassifierFailure,
+      log: () => {
+        throw new Error('logger unavailable');
+      },
+    });
+
+    const verdict = await g.beforeTool!(callBash('ls'), ctx());
+
+    expect(verdict.action).toBe('allow');
+    expect(allowOnClassifierFailure).toHaveBeenCalledOnce();
+  });
+
+  it('redacts and bounds an Accept-edits fallback exception without changing escalation', async () => {
+    const secret = 'fallback-private-value';
+    const log = vi.fn();
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => new StubProvider(async () => { throw new Error('500 Internal'); }),
+      allowOnClassifierFailure: () => {
+        throw new Error(`fallback received private credential ${secret}\n${'z'.repeat(2_000)}`);
+      },
+      log,
+    });
+
+    const verdict = await g.beforeTool!(callBash('node scripts/task.js'), ctx());
+
+    expect(verdict.action).toBe('escalate');
+    const logMessage = String(log.mock.calls[0]?.[1]);
+    expect(logMessage).toContain('(Error)');
+    expect(logMessage).not.toContain('private credential');
+    expect(logMessage).not.toContain(secret);
+    expect(logMessage.length).toBeLessThanOrEqual(768);
   });
 
   it('does not use Accept-edits fallback for a protected or unresolved read', async () => {
@@ -2699,6 +2925,33 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
         executionCwd: '/project/packages/app',
       }),
     );
+  });
+
+  it('redacts and bounds a rules-evaluator exception in logs and escalation reason', async () => {
+    const secret = 'rules-private-value';
+    const log = vi.fn();
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      evaluateRulesCall: () => {
+        throw new Error(`rules received secret ${secret}\n${'r'.repeat(2_000)}`);
+      },
+      initialEngine: 'rules',
+      log,
+    });
+
+    const verdict = await g.beforeTool!(callBash('echo ok > result.txt'), ctx());
+
+    expect(verdict.action).toBe('escalate');
+    if (verdict.action === 'escalate') {
+      expect(verdict.reason).toContain('(Error)');
+      expect(verdict.reason).not.toContain('received secret');
+      expect(verdict.reason).not.toContain(secret);
+    }
+    const logMessage = String(log.mock.calls[0]?.[1]);
+    expect(logMessage).toContain('(Error)');
+    expect(logMessage).not.toContain('received secret');
+    expect(logMessage).not.toContain(secret);
+    expect(logMessage.length).toBeLessThanOrEqual(768);
   });
 
   it('initialEngine omitted defaults to "llm" (existing behaviour preserved)', async () => {

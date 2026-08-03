@@ -39,6 +39,12 @@ class ClassifierProbeProvider extends KodaXBaseProvider {
     reasoningCapability: 'none',
   };
 
+  constructor(private readonly output = (
+    '<decision>allow</decision><hazard>none</hazard><reason>reviewed</reason>'
+  )) {
+    super();
+  }
+
   async stream(
     messages: KodaXMessage[],
     _tools: KodaXToolDefinition[],
@@ -51,7 +57,7 @@ class ClassifierProbeProvider extends KodaXBaseProvider {
     return {
       textBlocks: [{
         type: 'text',
-        text: '<decision>allow</decision><hazard>none</hazard><reason>reviewed</reason>',
+        text: this.output,
       }],
       toolBlocks: [],
       thinkingBlocks: [],
@@ -2495,6 +2501,47 @@ describe('Auto[rules] deterministic Tier 2', () => {
 });
 
 describe('Auto[LLM] environment-provider routing', () => {
+  it.each([
+    ['node --version', 'Check the Node.js version.'],
+    ['powershell -File scripts/build.ps1', 'Run the requested build script.'],
+    ['git push origin HEAD', 'Push the current commit to origin.'],
+    ['curl https://example.com/status', 'Fetch the requested status URL.'],
+    ['Get-Content .env', 'Read the requested environment file.'],
+    ['rm -rf build', 'Remove the generated build directory.'],
+  ])('honors a decision-only allow without asking the user for %s', async (
+    command,
+    intent,
+  ) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const provider = new ClassifierProbeProvider('<decision>allow</decision>');
+    let approvalRequests = 0;
+    const guardrail = createAutoModeToolGuardrail({
+      rules: { allow: [], soft_deny: [], environment: [] },
+      getToolProjection: () => (input) => `Bash: ${String(
+        (input as Readonly<Record<string, unknown>>).command ?? '',
+      )}`,
+      resolveProvider: () => provider,
+      defaultProvider: provider.name,
+      defaultModel: 'classifier-probe',
+      projectRoot,
+      executionCwd: projectRoot,
+      analyzeCall: (toolCall) => analyzeAutoModeCall(toolCall, context(projectRoot)),
+      askUser: async () => {
+        approvalRequests += 1;
+        return 'block';
+      },
+    });
+
+    const verdict = await guardrail.beforeTool!(call('bash', { command }), {
+      agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+      messages: [{ role: 'user', content: intent }],
+    });
+
+    expect(verdict.action).toBe('allow');
+    expect(provider.calls).toHaveLength(1);
+    expect(approvalRequests).toBe(0);
+  });
+
   it.each([
     ['rm -rf build', 'Delete the build directory.'],
     ['rm -rf .', 'Delete the current project directory.'],

@@ -1229,6 +1229,7 @@ export type {
   ClassifierDecision,
   ClassifierHazard,
   ClassifierObservedProtocol,
+  ClassifierOutputWarningCode,
   ClassifierParseFailureCode,
   ClassifierProtocol,
 } from './guardrails/auto-mode/parse-output.js';

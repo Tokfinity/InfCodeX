@@ -10,10 +10,11 @@
  *
  *   1. Tier-0 deterministic critical match   → user confirmation
  *   2. exact safe read/workspace-temp effect → allow (zero token cost)
- *   3. Tool projection is '' (Tier 1)        → allow
- *   4. Engine is rules → deterministic Tier 2, otherwise user confirms
- *   5. degraded classifier infrastructure    → Accept-edits fallback
- *   6. classify(...) sideQuery
+ *   3. Explicitly exempt empty projection    → allow
+ *   4. Recoverable projection/analyzer fault → safe facts to classifier
+ *   5. Engine is rules → deterministic Tier 2, otherwise user confirms
+ *   6. degraded classifier infrastructure    → Accept-edits fallback
+ *   7. classify(...) sideQuery
  *        allow                                → allow (record allow → reset consecutive)
  *        confirm                              → user confirmation (record concern)
  *        failure                              → Accept-edits fallback (record error)
@@ -82,7 +83,10 @@ import {
   buildPermissionIntentEvidence,
   type PermissionIntentEvidence,
 } from './permission-intent.js';
-import { safeFallbackToClassifierInput } from '../../tools/classifier-projection.js';
+import {
+  redactClassifierProjection,
+  safeFallbackToClassifierInput,
+} from '../../tools/classifier-projection.js';
 import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
 
 export type AutoModeEngine = 'llm' | 'rules';
@@ -261,7 +265,8 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * Runtime-owned compact facts used by deterministic read admission and the
-   * LLM permission reviewer. Direct read tools fail closed when this is absent.
+   * LLM permission reviewer. When absent or faulty, direct read tools use a
+   * bounded metadata-only projection and remain LLM-reviewed.
    */
   readonly analyzeCall?: AutoModeCallAnalyzer;
 
@@ -463,6 +468,42 @@ const APPROVAL_TIMEOUT_REASON =
   '[approval_timeout] The requested operation was not executed because user approval timed out. '
   + 'Try a safer, narrower, or reversible way to continue. If no safer alternative exists, '
   + 'stop the task and wait for explicit user approval before retrying.';
+const AUTO_MODE_FAILURE_LOG_MAX_LENGTH = 768;
+const AUTO_MODE_FAILURE_LOG_SCAN_MAX_LENGTH = 4_096;
+
+function errorCategory(error: unknown): string {
+  if (error instanceof EvalError) return 'EvalError';
+  if (error instanceof RangeError) return 'RangeError';
+  if (error instanceof ReferenceError) return 'ReferenceError';
+  if (error instanceof SyntaxError) return 'SyntaxError';
+  if (error instanceof TypeError) return 'TypeError';
+  if (error instanceof URIError) return 'URIError';
+  if (error instanceof DOMException) return 'DOMException';
+  if (error instanceof Error) return 'Error';
+  return 'non-Error';
+}
+
+function redactAndBoundFailureText(value: string, maxLength: number): string {
+  const normalized = redactClassifierProjection(
+    value.slice(0, AUTO_MODE_FAILURE_LOG_SCAN_MAX_LENGTH),
+  ).replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1)}…`
+    : normalized;
+}
+
+function logAutoModeWarning(
+  log: AutoModeGuardrailConfig['log'],
+  message: string,
+): void {
+  if (!log) return;
+  try {
+    log('warn', redactAndBoundFailureText(message, AUTO_MODE_FAILURE_LOG_MAX_LENGTH));
+  } catch {
+    // Host logging is observational. A logger failure must not change an
+    // allow/ask/fallback decision, and there is no safe logger to report it to.
+  }
+}
 
 type MutationOperationKind = 'copy' | 'create' | 'delete' | 'move' | 'rename' | 'write';
 
@@ -1366,10 +1407,27 @@ export function createAutoModeToolGuardrail(
           return allowFinal();
         }
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        config.log?.('warn', `[auto-mode] Accept-edits fallback failed: ${detail}`);
+        logAutoModeWarning(
+          config.log,
+          `[auto-mode] Accept-edits fallback failed (${errorCategory(error)})`,
+        );
       }
       return escalateOrAsk(reason, diagnostics);
+    };
+
+    const fallbackOnClassifierException = (
+      error: unknown,
+    ): Promise<GuardrailVerdict> => {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw error;
+      }
+      state.breaker = recordBreakerError(state.breaker, Date.now());
+      const reason = `classifier error (${errorCategory(error)})`;
+      logAutoModeWarning(config.log, `[auto-mode] ${reason}`);
+      return allowOrAskOnClassifierFailure(reason, {
+        source: 'classifier_failure',
+        classifierFailureKind: 'provider_error',
+      });
     };
 
     // FEATURE_158 — Tier 0 identifies catastrophic patterns before the
@@ -1383,8 +1441,8 @@ export function createAutoModeToolGuardrail(
       result.denied ? result : check(guardedCall, projectRoot, executionCwd)
     ), { denied: false });
     if (tier0.denied) {
-      config.log?.(
-        'warn',
+      logAutoModeWarning(
+        config.log,
         `[auto-mode] Tier 0 absolute denylist matched (${tier0.patternId}): ${tier0.reason}`,
       );
     }
@@ -1401,14 +1459,28 @@ export function createAutoModeToolGuardrail(
         : safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
       if (typeof projected !== 'string') throw new TypeError('invalid classifier projection');
       action = projected;
-    } catch {
-      const reason = `tool classifier projection failed for "${guardedCall.name}"`;
-      config.log?.('warn', `[auto-mode] ${reason}`);
-      return escalateOrAsk(reason);
+    } catch (error) {
+      logAutoModeWarning(
+        config.log,
+        `[auto-mode] tool classifier projection failed for "${guardedCall.name}"; `
+          + `using safe fallback (${errorCategory(error)})`,
+      );
+      action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
     }
     const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
     if (requiresReadAnalysis && !config.analyzeCall) {
-      return escalateOrAsk('read safety analyzer is unavailable');
+      if (action === '') {
+        action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
+      }
+      permissionReview = fallbackPermissionReview(
+        guardedCall.name,
+        action,
+        'analyzer_unavailable',
+      );
+      logAutoModeWarning(
+        config.log,
+        '[auto-mode] read safety analyzer is unavailable; using classifier fallback',
+      );
     }
     if (config.analyzeCall && (action !== '' || requiresReadAnalysis)) {
       try {
@@ -1420,10 +1492,12 @@ export function createAutoModeToolGuardrail(
             config.trustProcessEnvironmentPathExpansion !== false,
         });
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        config.log?.('warn', `[auto-mode] permission analyzer failed: ${detail}`);
-        if (action === '' && requiresReadAnalysis) {
-          return escalateOrAsk(`read safety analysis failed: ${detail}`);
+        logAutoModeWarning(
+          config.log,
+          `[auto-mode] permission analyzer failed (${errorCategory(error)}); using classifier fallback`,
+        );
+        if (action === '') {
+          action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
         }
         permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
       }
@@ -1494,9 +1568,8 @@ export function createAutoModeToolGuardrail(
             config.trustProcessEnvironmentPathExpansion !== false,
         });
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        const reason = `auto-mode rules could not evaluate this call: ${detail}`;
-        config.log?.('warn', `[auto-mode] ${reason}`);
+        const reason = `auto-mode rules could not evaluate this call (${errorCategory(error)})`;
+        logAutoModeWarning(config.log, `[auto-mode] ${reason}`);
         return escalateOrAsk(reason);
       }
       if (decision.action === 'allow') return allowFinal();
@@ -1508,10 +1581,15 @@ export function createAutoModeToolGuardrail(
     // A missing model is a local configuration error, not classifier
     // infrastructure instability. Apply the same bounded fallback without
     // calling the provider or advancing either tracker.
-    const resolved = resolveClassifierModel(buildResolveOptions(config));
+    let resolved: ReturnType<typeof resolveClassifierModel>;
+    try {
+      resolved = resolveClassifierModel(buildResolveOptions(config));
+    } catch (error) {
+      return fallbackOnClassifierException(error);
+    }
     if (typeof resolved.model !== 'string' || resolved.model.trim().length === 0) {
       const reason = 'auto-mode classifier model is not configured; select a model before using Auto LLM';
-      config.log?.('warn', `[auto-mode] ${reason}`);
+      logAutoModeWarning(config.log, `[auto-mode] ${reason}`);
       return allowOrAskOnClassifierFailure(reason, {
         source: 'configuration',
       });
@@ -1530,7 +1608,12 @@ export function createAutoModeToolGuardrail(
     // Resolve the configured provider only after the final model check and
     // threshold gates. Provider lookup itself is local; the first network
     // request happens later inside classify().
-    const provider = providerOverride ?? config.resolveProvider(resolved.providerName);
+    let provider: KodaXBaseProvider | undefined;
+    try {
+      provider = providerOverride ?? config.resolveProvider(resolved.providerName);
+    } catch (error) {
+      return fallbackOnClassifierException(error);
+    }
     if (!provider) {
       return allowOrAskOnClassifierFailure(
         `classifier provider "${resolved.providerName}" is not configured`,
@@ -1556,25 +1639,30 @@ export function createAutoModeToolGuardrail(
     // never aborted on window expiry (tokens are already in flight) and its cost
     // is settled exactly once inside classify(), so awaiting it again here does
     // not double-count.
-    const classifyPromise: Promise<ClassifyDecision> = classify({
-      provider,
-      model: resolved.model,
-      rules: config.rules,
-      // Runtime compact review deliberately excludes AGENTS.md. Legacy SDK
-      // consumers without an analyzer retain the prior live/static behavior.
-      claudeMd: intentEvidence ? undefined : config.getClaudeMd?.() ?? config.claudeMd,
-      // classify() ignores transcript when intentEvidence is present; keeping
-      // the parameter here preserves its standalone/legacy API.
-      transcript: ctx.messages ?? [],
-      action: permissionAction,
-      intentEvidence,
-      getToolProjection: config.getToolProjection,
-      signals,
-      timeoutMs,
-      abortSignal: ctx.abortSignal,
-      costTracker: config.getCostTracker?.(),
-      setCostTracker: config.setCostTracker,
-    });
+    let classifyPromise: Promise<ClassifyDecision>;
+    try {
+      classifyPromise = classify({
+        provider,
+        model: resolved.model,
+        rules: config.rules,
+        // Runtime compact review deliberately excludes AGENTS.md. Legacy SDK
+        // consumers without an analyzer retain the prior live/static behavior.
+        claudeMd: intentEvidence ? undefined : config.getClaudeMd?.() ?? config.claudeMd,
+        // classify() ignores transcript when intentEvidence is present; keeping
+        // the parameter here preserves its standalone/legacy API.
+        transcript: ctx.messages ?? [],
+        action: permissionAction,
+        intentEvidence,
+        getToolProjection: config.getToolProjection,
+        signals,
+        timeoutMs,
+        abortSignal: ctx.abortSignal,
+        costTracker: config.getCostTracker?.(),
+        setCostTracker: config.setCostTracker,
+      });
+    } catch (error) {
+      return fallbackOnClassifierException(error);
+    }
 
     // Issue 143 (WS2): the speculative window only earns its keep when a human
     // is waiting on the confirm dialog — it trades a possible early escalate for
@@ -1600,18 +1688,7 @@ export function createAutoModeToolGuardrail(
         decision = raceResult.value;
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        throw err;
-      }
-      // Any other error gets routed through the breaker
-      state.breaker = recordBreakerError(state.breaker, Date.now());
-      return allowOrAskOnClassifierFailure(
-        `classifier error: ${err instanceof Error ? err.message : String(err)}`,
-        {
-          source: 'classifier_failure',
-          classifierFailureKind: 'provider_error',
-        },
-      );
+      return fallbackOnClassifierException(err);
     }
 
     // Map decision to verdict and update diagnostic trackers.

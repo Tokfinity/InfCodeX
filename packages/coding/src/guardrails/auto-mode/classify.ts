@@ -35,6 +35,7 @@ import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';
 import type {
   ClassifierObservedProtocol,
+  ClassifierOutputWarningCode,
   ClassifierParseFailureCode,
 } from './parse-output.js';
 import type { AutoRules } from './rules.js';
@@ -95,6 +96,7 @@ export interface ClassifierAttemptDiagnostics {
   readonly diagnostics?: SideQueryDiagnostics;
   readonly observedProtocol?: ClassifierObservedProtocol;
   readonly parseFailureCode?: ClassifierParseFailureCode | 'tool_use';
+  readonly outputWarnings?: readonly ClassifierOutputWarningCode[];
 }
 
 interface ClassifyDecisionDetails {
@@ -189,6 +191,9 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
       ...(interpreted.parseFailureCode !== undefined
         ? { parseFailureCode: interpreted.parseFailureCode }
         : {}),
+      ...(interpreted.outputWarnings !== undefined
+        ? { outputWarnings: interpreted.outputWarnings }
+        : {}),
     });
 
     if (interpreted.outcome === 'allow' || interpreted.outcome === 'confirm') {
@@ -221,6 +226,7 @@ interface InterpretedAttempt {
   readonly reason: string;
   readonly observedProtocol?: ClassifierObservedProtocol;
   readonly parseFailureCode?: ClassifierParseFailureCode | 'tool_use';
+  readonly outputWarnings?: readonly ClassifierOutputWarningCode[];
 }
 
 function interpretAttempt(
@@ -246,6 +252,9 @@ function interpretAttempt(
         outcome: decision.kind === 'block' ? 'confirm' : 'allow',
         reason: decision.reason,
         observedProtocol: decision.protocol,
+        ...(decision.warnings !== undefined
+          ? { outputWarnings: decision.warnings }
+          : {}),
       };
     }
 

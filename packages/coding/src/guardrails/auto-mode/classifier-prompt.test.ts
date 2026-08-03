@@ -16,6 +16,7 @@ describe('buildClassifierPrompt', () => {
     expect(out.system).toMatch(/<decision>/);
     expect(out.system).toMatch(/<hazard>/);
     expect(out.system).toMatch(/<reason>/);
+    expect(out.system).toMatch(/decision is the sole verdict/i);
   });
 
   it('includes the user-supplied rules in their own sections', () => {
