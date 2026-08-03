@@ -87,24 +87,28 @@ describe('resolved shell execution', () => {
   it('injects sandbox envPass credentials only into the final command environment', async () => {
     vi.stubEnv('GH_TOKEN', 'gh-secret');
     vi.stubEnv('OPENAI_API_KEY', 'provider-secret');
-    vi.stubEnv('KODAX_SANDBOX_ENV_PASS', 'GH_TOKEN');
+    vi.stubEnv('KODAX_SANDBOX_ENV_PASS', 'OPENAI_API_KEY');
     const cwd = await mkdtemp(path.join(tmpdir(), 'kodax-shell-env-pass-'));
     const setup = process.platform === 'win32'
       ? 'if defined GH_TOKEN (set "KODAX_SETUP_SAW_GH_TOKEN=yes") else (set "KODAX_SETUP_SAW_GH_TOKEN=no")'
       : 'if [ -n "${GH_TOKEN+x}" ]; then export KODAX_SETUP_SAW_GH_TOKEN=yes; else export KODAX_SETUP_SAW_GH_TOKEN=no; fi';
     const contract = platformContract(setup);
+    const sdkContext = {
+      ...context(cwd, contract),
+      sandbox: { envPass: ['GH_TOKEN'] },
+    };
 
     const allowed = await toolBash(
       { command: nodePrint('GH_TOKEN') },
-      context(cwd, contract),
+      sdkContext,
     );
     const denied = await toolBash(
       { command: nodePrint('OPENAI_API_KEY') },
-      context(cwd, contract),
+      sdkContext,
     );
     const setupObservation = await toolBash(
       { command: nodePrint('KODAX_SETUP_SAW_GH_TOKEN') },
-      context(cwd, contract),
+      sdkContext,
     );
 
     expect(allowed).toContain('gh-secret');

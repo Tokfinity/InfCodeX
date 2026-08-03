@@ -96,6 +96,18 @@ describe('F270 actor principal wiring', () => {
     });
   });
 
+  it('binds SDK sandbox envPass to the current run and child snapshot', () => {
+    const sandbox = { envPass: ['GH_TOKEN'] } as const;
+    const ctx = buildToolExecutionContext({
+      options: { provider: 'mock', sandbox },
+      runtime: undefined,
+      managedProtocolPayloadRef: { current: undefined },
+    });
+
+    expect(ctx.sandbox).toEqual(sandbox);
+    expect(ctx.parentAgentConfig?.sandbox).toEqual(sandbox);
+  });
+
   it('creates one root-bound collaboration principal for a standalone AMA run', () => {
     const ctx = buildToolExecutionContext({
       options: { provider: 'mock', agentMode: 'ama' },

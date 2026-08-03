@@ -474,6 +474,12 @@ case-insensitive only on Windows. Execution-control names (`NODE_OPTIONS`,
 restored. Project permission configuration has no path to broaden this
 user-level list.
 
+The public SDK mirrors the config shape as Run-scoped
+`KodaXOptions.sandbox.envPass`. It crosses Worker/daemon transports as names
+only, overrides the process fallback for that Run, and propagates to native and
+Workflow child commands plus deterministic evaluators. The execution host—not
+the SDK payload—remains the source of values.
+
 The default terminal bindings keep Shift-Tab for the three permission modes and
 Shift+Enter for newline input. Rapid Shift-Tab changes enter the per-Session
 Runtime settings queue in input order, so the final visible mode is also the

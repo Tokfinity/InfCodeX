@@ -42,6 +42,15 @@ The KodaX CLI can restore exact host variables only for the final command target
 through user-level `sandbox.envPass`; its default list is empty and
 execution-control variables remain blocked.
 
+SDK callers use the same Run-scoped shape without changing global state:
+
+```ts
+await runKodaX({
+  provider: 'openai',
+  sandbox: { envPass: ['GH_TOKEN'] },
+}, 'Inspect the authenticated repository.');
+```
+
 The same release replaces asynchronous semantic memory prefetch with sparse
 foreground intervention after tool/verification failure or committed
 compaction. The default path performs deterministic exact selection with zero

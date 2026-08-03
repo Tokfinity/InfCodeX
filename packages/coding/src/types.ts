@@ -1965,6 +1965,8 @@ export interface KodaXOptions {
   workflow?: {
     readonly maxConcurrency?: number;
   };
+  /** Host environment names exposed only to final command targets. Defaults to none. */
+  sandbox?: KodaXSandboxOptions;
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**
@@ -2006,6 +2008,11 @@ export interface KodaXOptions {
    * This does not control internal cleanup/resource-protection watchdogs.
    */
   timeouts?: KodaXTimeoutConfig;
+}
+
+export interface KodaXSandboxOptions {
+  /** Exact host environment-variable names; values are never carried in this option. */
+  readonly envPass?: readonly string[];
 }
 
 /**
@@ -2420,6 +2427,8 @@ export interface KodaXToolExecutionContext {
   executionCwd?: string;
   /** Validated shell execution policy inherited by native child runtimes. */
   shellExecution?: KodaXShellExecutionContract;
+  /** Run-scoped command-target environment policy supplied by the SDK host. */
+  sandbox?: KodaXSandboxOptions;
   /** Runtime-owned OS sandbox broker for selected concrete shell calls. */
   shellSandbox?: KodaXShellSandbox;
   /** Structured containment metadata; never model-visible or persisted as conversation text. */
@@ -2510,6 +2519,7 @@ export interface KodaXToolExecutionContext {
     readonly contextDiagnostics?: boolean;
     readonly disablePromptCache?: boolean;
     readonly shellExecution?: KodaXShellExecutionContract;
+    readonly sandbox?: KodaXSandboxOptions;
     readonly permissionIntent?: import('@kodax-ai/agent').GuardrailPermissionIntent;
   };
   /** Parent SDK/REPL callback surface used to preserve nested Agent telemetry. */

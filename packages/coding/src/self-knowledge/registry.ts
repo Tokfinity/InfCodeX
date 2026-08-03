@@ -480,6 +480,8 @@ const TOPICS: readonly KodaXManualTopic[] = [
       "`\"sandbox\": { \"envPass\": [\"GH_TOKEN\", \"GITHUB_TOKEN\"] }` in config.json.",
       "`sandbox.envPass` defaults to empty, stores names rather than values, uses exact names",
       "(case-insensitive on Windows), and applies to ASRT plus the normal fallback path.",
+      "SDK hosts pass the same Run-scoped shape as `KodaXOptions.sandbox`; Worker/daemon",
+      "transports carry names only, and native child Agents inherit the current Run's list.",
       "Execution-control variables such as NODE_OPTIONS and BASH_ENV remain blocked.",
       "When ASRT is unavailable or fails before target launch, local Auto[LLM] keeps the same",
       "deterministic/LLM/user permission decisions and can use the ordinary execution path; only",

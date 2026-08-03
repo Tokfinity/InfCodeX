@@ -593,6 +593,7 @@ export function buildRunnerAgentChain(
                       ctx.providerCredentialEnvironmentNames,
                   }
                 : {}),
+              ...(ctx.sandbox !== undefined ? { sandbox: ctx.sandbox } : {}),
             });
             evaluatorOutputs.push(
               `[evaluator:${id}] ${formatDeterministicEvaluatorResult(checkResult)}`,

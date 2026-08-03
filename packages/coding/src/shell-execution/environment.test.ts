@@ -7,6 +7,7 @@ import {
   hardenShellCommandEnvironment,
   mergeWindowsRegistryEnvironment,
   mergeWindowsRegistryPath,
+  normalizeSandboxEnvironmentPass,
   parseWindowsRegistryEnvironment,
   parseWindowsRegistryPath,
   sanitizeResolvedShellEnvironment,
@@ -23,6 +24,17 @@ const contract: KodaXShellExecutionContract = {
 };
 
 describe('shell execution environment', () => {
+  it('normalizes SDK environment names without accepting values or patterns', () => {
+    expect(normalizeSandboxEnvironmentPass([
+      ' GH_TOKEN ',
+      'GH_TOKEN',
+      'GITHUB_*',
+      'TOKEN=value',
+      42,
+    ])).toEqual(['GH_TOKEN']);
+    expect(normalizeSandboxEnvironmentPass({ envPass: ['GH_TOKEN'] })).toEqual([]);
+  });
+
   it('prevents cmd from searching the execution cwd before PATH', () => {
     expect(hardenShellCommandEnvironment({
       PATH: 'C:\\Windows\\System32',

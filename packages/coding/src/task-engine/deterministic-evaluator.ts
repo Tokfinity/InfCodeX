@@ -30,11 +30,16 @@ import {
   finishBashOutputCollector,
   type BashOutputCollector,
 } from '../tools/bash-output-collector.js';
-import type { KodaXShellExecutionContract } from '../types.js';
+import type { KodaXSandboxOptions, KodaXShellExecutionContract } from '../types.js';
 import {
   createShellCommandInvocation,
   resolveShellExecution,
 } from '../shell-execution/resolver.js';
+import {
+  hardenShellCommandEnvironment,
+  normalizeSandboxEnvironmentPass,
+  parseSandboxEnvironmentPass,
+} from '../shell-execution/environment.js';
 
 export type DeterministicEvaluatorHint = 'build' | 'test' | 'lint';
 
@@ -61,6 +66,8 @@ export interface RunDeterministicEvaluatorInput {
   readonly sessionScratchDir?: string;
   /** Exact non-standard Provider credential variables to remove. */
   readonly providerCredentialEnvironmentNames?: readonly string[];
+  /** Run-scoped command-target environment policy supplied by the SDK host. */
+  readonly sandbox?: KodaXSandboxOptions;
   /** Timeout in milliseconds. Default 90 000 (90s). */
   readonly timeoutMs?: number;
   /**
@@ -135,6 +142,20 @@ export async function runDeterministicEvaluator(
   const command = defaultCommandFor(input);
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
+  const environmentPass = input.sandbox === undefined
+    ? parseSandboxEnvironmentPass(process.env.KODAX_SANDBOX_ENV_PASS)
+    : normalizeSandboxEnvironmentPass(input.sandbox.envPass);
+  const fallbackEnvironmentSource = input.sessionScratchDir === undefined
+    ? process.env
+    : { ...process.env, KODAX_SESSION_TMP: input.sessionScratchDir };
+  const fallbackEnvironment = hardenShellCommandEnvironment(
+    fallbackEnvironmentSource,
+    process.platform === 'win32' ? 'cmd' : 'bash',
+    process.platform,
+    input.providerCredentialEnvironmentNames,
+    input.cwd,
+    environmentPass,
+  );
   let configuredInvocation:
     | ReturnType<typeof createShellCommandInvocation>
     | undefined;
@@ -146,7 +167,11 @@ export async function runDeterministicEvaluator(
         input.sessionScratchDir,
         input.providerCredentialEnvironmentNames,
       );
-      configuredInvocation = createShellCommandInvocation(resolved, command);
+      configuredInvocation = createShellCommandInvocation(
+        resolved,
+        command,
+        environmentPass,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
@@ -166,6 +191,7 @@ export async function runDeterministicEvaluator(
     const proc = configuredInvocation === undefined
       ? spawn(command, {
           cwd: input.cwd,
+          env: fallbackEnvironment,
           shell: true,
           windowsHide: true,
           detached: process.platform !== 'win32',

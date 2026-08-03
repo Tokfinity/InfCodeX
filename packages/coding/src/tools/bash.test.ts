@@ -227,7 +227,7 @@ describe('toolBash', () => {
     const originalPass = process.env.KODAX_SANDBOX_ENV_PASS;
     const originalGitHub = process.env.GITHUB_TOKEN;
     const originalOpenAI = process.env.OPENAI_API_KEY;
-    process.env.KODAX_SANDBOX_ENV_PASS = 'GITHUB_TOKEN';
+    process.env.KODAX_SANDBOX_ENV_PASS = 'OPENAI_API_KEY';
     process.env.GITHUB_TOKEN = 'allowed-secret';
     process.env.OPENAI_API_KEY = 'filtered-secret';
     let preparedEnvironment: NodeJS.ProcessEnv | undefined;
@@ -246,6 +246,7 @@ describe('toolBash', () => {
         backups: new Map(),
         toolCallId: 'bash-pass-allowed-credential',
         shellSandbox: { prepare },
+        sandbox: { envPass: ['GITHUB_TOKEN'] },
       });
 
       expect(preparedEnvironment).toHaveProperty('GITHUB_TOKEN', 'allowed-secret');

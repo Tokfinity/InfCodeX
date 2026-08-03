@@ -47,12 +47,16 @@ filtering, template/setup synchronization, and `kodax_manual` drift.
    `config.example.jsonc` documents `sandbox.envPass` without credential values.
 7. Ask KodaX how to pass `GH_TOKEN` into sandboxed commands and confirm
    `kodax_manual` returns the same field/default/restart guidance.
+8. Start two SDK Runs with different `KodaXOptions.sandbox.envPass` lists.
+   Confirm each Run and its native child/evaluator sees only its own listed
+   variables, and confirm the daemon transport carries names rather than values.
 
 ## Pass Criteria
 
 - Default credential filtering is unchanged.
 - Only exact configured names become visible to final command targets.
 - Execution-control variables remain blocked.
+- SDK configuration is Run-scoped and does not require process-global mutation.
 - Config, templates, and KodaX diagnostics contain names only. An authorized
   command can deliberately print a listed value, so command output must still
   be handled as sensitive data and may be retained in logs or Session data.

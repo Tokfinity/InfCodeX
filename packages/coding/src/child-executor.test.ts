@@ -210,6 +210,38 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     expect(childOptions.context?.shellExecution).toEqual(shellExecution);
   });
 
+  it('inherits the SDK sandbox environment pass list into native child runtimes', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('inspected'));
+    const sandbox = { envPass: ['GH_TOKEN'] } as const;
+
+    await executeChildAgents(
+      [createBundle()],
+      { ...createCtx(), sandbox },
+      createOptions({ parentOptions: { provider: 'anthropic', sandbox } }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly sandbox?: unknown;
+    };
+    expect(childOptions.sandbox).toEqual(sandbox);
+  });
+
+  it('inherits the SDK sandbox environment pass list into write-capable native children', async () => {
+    mockRunKodaX.mockResolvedValue(okResult('updated'));
+    const sandbox = { envPass: ['GH_TOKEN'] } as const;
+
+    await executeChildAgents(
+      [createBundle({ readOnly: false })],
+      { ...createCtx(), sandbox },
+      createOptions({ parentOptions: { provider: 'anthropic', sandbox } }),
+    );
+
+    const childOptions = mockRunKodaX.mock.calls[0]?.[0] as {
+      readonly sandbox?: unknown;
+    };
+    expect(childOptions.sandbox).toEqual(sandbox);
+  });
+
   it('keeps root user authority separate from the generated child briefing', async () => {
     mockRunKodaX.mockResolvedValue(okResult('inspected'));
     const bundle = createBundle({

@@ -27,6 +27,7 @@ import {
   buildShellProbeEnvironment,
   hardenShellCommandEnvironment,
   mergeWindowsRegistryEnvironment,
+  normalizeSandboxEnvironmentPass,
   parseWindowsRegistryEnvironment,
   parseSandboxEnvironmentPass,
   sanitizeResolvedShellEnvironment,
@@ -216,10 +217,11 @@ function shellResolutionAbortError(): Error {
 export function createShellCommandInvocation(
   resolved: ResolvedShellExecution,
   command: string,
+  environmentPass?: readonly string[],
 ): ShellCommandInvocation {
-  const environmentPass = parseSandboxEnvironmentPass(
-    process.env.KODAX_SANDBOX_ENV_PASS,
-  );
+  const normalizedEnvironmentPass = environmentPass === undefined
+    ? parseSandboxEnvironmentPass(process.env.KODAX_SANDBOX_ENV_PASS)
+    : normalizeSandboxEnvironmentPass(environmentPass);
   const hardened = hardenShellCommandEnvironment(
     resolved.env,
     resolved.contract.shell.kind,
@@ -237,7 +239,7 @@ export function createShellCommandInvocation(
     env: applyShellEnvironmentPass(
       process.env,
       hardened,
-      environmentPass,
+      normalizedEnvironmentPass,
       process.platform,
     ),
     ...(resolved.contract.shell.kind === 'cmd'

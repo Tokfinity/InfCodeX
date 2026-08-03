@@ -161,6 +161,7 @@ export function buildToolExecutionContext(
     lspService: options.context?.lspService ?? getDefaultLspService(),
     executionCwd,
     shellExecution: options.context?.shellExecution,
+    sandbox: options.sandbox,
     shellSandbox: options.context?.shellSandbox,
     providerCredentialEnvironmentNames: getProviderCredentialEnvironmentNames(),
     sessionScratchDir,
@@ -206,6 +207,7 @@ export function buildToolExecutionContext(
       ...(options.context?.shellExecution !== undefined
         ? { shellExecution: options.context.shellExecution }
         : {}),
+      ...(options.sandbox !== undefined ? { sandbox: options.sandbox } : {}),
       ...(options.context?.permissionIntent !== undefined
         ? { permissionIntent: options.context.permissionIntent }
         : {}),

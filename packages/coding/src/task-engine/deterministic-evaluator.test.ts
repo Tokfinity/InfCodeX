@@ -25,6 +25,7 @@ afterEach(() => {
 describe('runDeterministicEvaluator', () => {
   it('uses the configured project shell environment without provider credentials', async () => {
     vi.stubEnv('KODAX_EVALUATOR_PROVIDER_AUTH', 'must-not-leak');
+    vi.stubEnv('GH_TOKEN', 'allowed-evaluator-secret');
     const cwd = await mkdtemp(path.join(tmpdir(), 'kodax-evaluator-shell-'));
     const setup = process.platform === 'win32'
       ? 'set "KODAX_EVALUATOR_TOOLCHAIN=project-node"'
@@ -41,6 +42,7 @@ describe('runDeterministicEvaluator', () => {
     const script = [
       "process.stdout.write(process.env.KODAX_EVALUATOR_TOOLCHAIN||'missing')",
       "process.stdout.write('|'+(process.env.KODAX_EVALUATOR_PROVIDER_AUTH||'missing'))",
+      "process.stdout.write('|'+(process.env.GH_TOKEN||'missing'))",
     ].join(';');
 
     const result = await runDeterministicEvaluator({
@@ -48,13 +50,61 @@ describe('runDeterministicEvaluator', () => {
       cwd,
       shellExecution,
       providerCredentialEnvironmentNames: ['KODAX_EVALUATOR_PROVIDER_AUTH'],
+      sandbox: { envPass: ['GH_TOKEN'] },
       commandOverride: `"${process.execPath}" -e "${script}"`,
       timeoutMs: 5_000,
     });
 
     expect(result.status).toBe('pass');
-    expect(result.stdoutTail).toBe('project-node|missing');
+    expect(result.stdoutTail).toBe('project-node|missing|allowed-evaluator-secret');
     expect(result.stdoutTail).not.toContain('must-not-leak');
+  });
+
+  it('honors an explicit empty SDK envPass without configured shell execution', async () => {
+    vi.stubEnv('KODAX_EVALUATOR_REVIEW_TOKEN', 'must-not-leak');
+    vi.stubEnv('KODAX_SANDBOX_ENV_PASS', 'KODAX_EVALUATOR_REVIEW_TOKEN');
+
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      sandbox: { envPass: [] },
+      commandOverride: 'node -e "process.stdout.write(process.env.KODAX_EVALUATOR_REVIEW_TOKEN||\'missing\')"',
+      timeoutMs: 5_000,
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.stdoutTail).toBe('missing');
+  });
+
+  it('passes only SDK-listed credentials without configured shell execution', async () => {
+    vi.stubEnv('GH_TOKEN', 'allowed-evaluator-secret');
+    vi.stubEnv('OPENAI_API_KEY', 'must-not-leak');
+
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      sandbox: { envPass: ['GH_TOKEN'] },
+      commandOverride: 'node -e "process.stdout.write([process.env.GH_TOKEN||\'missing\',process.env.OPENAI_API_KEY||\'missing\'].join(\'|\'))"',
+      timeoutMs: 5_000,
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.stdoutTail).toBe('allowed-evaluator-secret|missing');
+  });
+
+  it('retains the process envPass fallback without configured shell execution', async () => {
+    vi.stubEnv('KODAX_EVALUATOR_REVIEW_TOKEN', 'fallback-evaluator-secret');
+    vi.stubEnv('KODAX_SANDBOX_ENV_PASS', 'KODAX_EVALUATOR_REVIEW_TOKEN');
+
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      commandOverride: 'node -e "process.stdout.write(process.env.KODAX_EVALUATOR_REVIEW_TOKEN||\'missing\')"',
+      timeoutMs: 5_000,
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.stdoutTail).toBe('fallback-evaluator-secret');
   });
 
   it("reports 'pass' for an exit-0 command override", async () => {

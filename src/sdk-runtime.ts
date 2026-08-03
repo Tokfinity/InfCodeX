@@ -1740,6 +1740,7 @@ export type RuntimeDaemonKodaXOptions = Pick<
   | "selfManual"
   | "compaction"
   | "timeouts"
+  | "sandbox"
 > & {
   readonly context?: RuntimeDaemonContextOptions;
 };

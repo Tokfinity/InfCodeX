@@ -5270,8 +5270,8 @@ additional names but cannot weaken the built-in Provider credential deny set.
 shell. On Windows, `windowsPath: "registry"` re-reads current Machine/User
 environment values instead of reusing the daemon's startup PATH.
 
-The KodaX CLI additionally exposes a small user-level convenience setting for
-commands that intentionally need host credentials:
+The CLI config and SDK expose the same small command-target setting for commands
+that intentionally need host credentials:
 
 ```json
 {
@@ -5281,16 +5281,36 @@ commands that intentionally need host credentials:
 }
 ```
 
+SDK callers pass the same shape per Run, without mutating `process.env` config:
+
+```ts
+const handle = await runtime.runs.start({
+  sessionId: session.id,
+  prompt: 'Inspect the authenticated GitHub repository.',
+  options: {
+    sandbox: { envPass: ['GH_TOKEN', 'GITHUB_TOKEN'] },
+  },
+});
+```
+
+Direct `runKodaX()` / `startKodaX()` callers use the same
+`KodaXOptions.sandbox` field. The option is Run-scoped, overrides the process-
+level fallback even when `envPass` is empty, and is inherited by native child
+Agents, Workflow children, and deterministic evaluators. Concurrent SDK Runs
+can therefore use different lists without changing global configuration.
+
 `sandbox.envPass` defaults to empty and stores exact names, never values. It
 does not expose credentials to shell profile/setup resolution; the current
 host values are restored only into the final command environment, which then
 flows to ASRT or the ordinary fallback path. Windows matching is
 case-insensitive; POSIX matching is case-sensitive. `NODE_OPTIONS`, `BASH_ENV`,
 `RIPGREP_CONFIG_PATH`, and imported Bash functions remain blocked even if
-named. The CLI projects this list to `KODAX_SANDBOX_ENV_PASS`; an in-process
-SDK host that deliberately uses the same process-global convenience must set
-that variable before command execution. Restart a persistent daemon after
-changing either the list or the host variables.
+named. The CLI projects its user config to the Run option through
+`KODAX_SANDBOX_ENV_PASS`; that environment variable remains a CLI/backward-
+compatibility fallback rather than the SDK API. Worker and daemon transports
+carry names only. Values are read from the command-execution host environment;
+an auto-started daemon inherits that environment, while an attached persistent
+daemon must already have the variables and must restart after they change.
 
 Resolution is two-stage and uses the effective cwd:
 

@@ -5230,6 +5230,7 @@ complete -c kodax -l version -d 'Show version'`);
           reasoningMode: kodaXOptions.reasoningMode,
           agentMode: kodaXOptions.agentMode,
           maxIter: kodaXOptions.maxIter,
+          sandbox: kodaXOptions.sandbox,
           extensionRuntime: kodaXOptions.extensionRuntime,
           session: kodaXOptions.session,
           storage: new FileSessionStorage({ cwd: process.cwd() }),

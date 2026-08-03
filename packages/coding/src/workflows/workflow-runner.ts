@@ -500,6 +500,7 @@ export async function runWorkflowFromOptions(
       contextDiagnostics: workflowOptions.context?.contextDiagnostics,
       permissionIntent: workflowOptions.context?.permissionIntent,
       disablePromptCache: workflowOptions.disablePromptCache,
+      sandbox: workflowOptions.sandbox,
       extensionRuntime: workflowOptions.extensionRuntime,
       events: workflowOptions.events,
     },

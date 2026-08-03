@@ -188,6 +188,7 @@ describe('interactive daemon runtime bridge', () => {
       skillDynamicContext: {
         disable: true,
       },
+      sandbox: { envPass: ['GH_TOKEN'] },
     } as unknown as KodaXOptions;
 
     const wire = toDaemonRuntimeRunOptions(toRuntimeOwnedInteractiveOptions(
@@ -213,6 +214,7 @@ describe('interactive daemon runtime bridge', () => {
       },
       events: { workflowCorrelation: { runId: 'workflow-1' } },
       skillDynamicContext: { disable: true },
+      sandbox: { envPass: ['GH_TOKEN'] },
     });
     expect(encoded).not.toContain('abortSignal');
     expect(encoded).not.toContain('storage');

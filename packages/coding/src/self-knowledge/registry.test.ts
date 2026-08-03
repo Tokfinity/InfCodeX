@@ -107,6 +107,8 @@ describe('FEATURE_218 manual registry', () => {
     expect(sandbox).toContain('sandbox.envPass');
     expect(sandbox).toContain('GH_TOKEN');
     expect(sandbox).toContain('default');
+    expect(sandbox).toContain('KodaXOptions.sandbox');
+    expect(sandbox).toContain('Run-scoped');
   });
 
   it('documents the v0.7.77 adaptive AMA and governed memory intervention contracts', () => {

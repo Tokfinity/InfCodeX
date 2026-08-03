@@ -33,6 +33,7 @@ import {
 } from '../shell-execution/resolver.js';
 import {
   hardenShellCommandEnvironment,
+  normalizeSandboxEnvironmentPass,
   parseSandboxEnvironmentPass,
 } from '../shell-execution/environment.js';
 
@@ -262,9 +263,9 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       KODAX_SESSION_TMP: ctx.sessionScratchDir,
     }
     : process.env;
-  const environmentPass = parseSandboxEnvironmentPass(
-    process.env.KODAX_SANDBOX_ENV_PASS,
-  );
+  const environmentPass = ctx.sandbox === undefined
+    ? parseSandboxEnvironmentPass(process.env.KODAX_SANDBOX_ENV_PASS)
+    : normalizeSandboxEnvironmentPass(ctx.sandbox.envPass);
   const legacyEnv = hardenShellCommandEnvironment(
     legacyEnvSource,
     usesWindowsCmd ? 'cmd' : 'bash',
@@ -300,7 +301,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
         ctx.providerCredentialEnvironmentNames,
         ctx.abortSignal,
       );
-      commandInvocation = createShellCommandInvocation(resolved, command);
+      commandInvocation = createShellCommandInvocation(resolved, command, environmentPass);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         return cancelledCommandResult(command);

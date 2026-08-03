@@ -13,7 +13,9 @@ All notable changes to this project will be documented in this file.
   the ordinary fallback path. The default remains empty; configuration stores
   names rather than values, project configuration cannot broaden the list, and
   execution-control variables remain blocked. Commands can read and emit any
-  variable that the user explicitly allows.
+  variable that the user explicitly allows. SDK callers can supply the same
+  Run-scoped setting through `KodaXOptions.sandbox`, including Worker and daemon
+  transports, without mutating process-global configuration.
 
 ### Fixed
 

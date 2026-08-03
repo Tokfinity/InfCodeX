@@ -181,6 +181,7 @@ export type {
   KodaXToolVisibilityPolicy,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
+  KodaXSandboxOptions,
   KodaXCompactionOverride,
   KodaXSelfManualConfig,
   KodaXSkillDynamicContextPolicy,
@@ -238,6 +239,7 @@ export {
   shellExecutionContractFingerprint,
 } from './shell-execution/contract.js';
 export { clearShellExecutionEnvironmentCache } from './shell-execution/resolver.js';
+export { parseSandboxEnvironmentPass } from './shell-execution/environment.js';
 
 // ============== Core Errors ==============
 

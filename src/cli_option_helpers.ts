@@ -8,6 +8,7 @@ import {
   KODAX_REASONING_MODE_SEQUENCE,
   normalizeReasoningEffortValue,
   parseReasoningEffortEnv,
+  parseSandboxEnvironmentPass,
 } from '@kodax-ai/coding';
 import {
   createCliEvents,
@@ -387,6 +388,9 @@ export function parseOptionalNonNegativeInt(value: string | undefined): number |
 }
 
 export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false): KodaXOptions {
+  const sandboxEnvironmentPass = parseSandboxEnvironmentPass(
+    process.env.KODAX_SANDBOX_ENV_PASS,
+  );
   return {
     provider: cliOptions.provider,
     model: cliOptions.model,
@@ -397,6 +401,7 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
     maxIter: cliOptions.maxIter,
     extensionRuntime: cliOptions.extensionRuntime,
     session: buildSessionOptions(cliOptions),
+    sandbox: { envPass: sandboxEnvironmentPass },
     context: {
       repoIntelligenceMode: resolveRepoIntelligenceModeFromEnv(),
       repoIntelligenceTrace: resolveRepoIntelligenceTraceFromEnv(),

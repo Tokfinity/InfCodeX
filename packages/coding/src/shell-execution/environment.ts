@@ -76,8 +76,13 @@ export function hardenShellCommandEnvironment(
 
 export function parseSandboxEnvironmentPass(value: string | undefined): readonly string[] {
   if (!value) return [];
+  return normalizeSandboxEnvironmentPass(value.split(','));
+}
+
+export function normalizeSandboxEnvironmentPass(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
   return [...new Set(value
-    .split(',')
+    .filter((name): name is string => typeof name === 'string')
     .map((name) => name.trim())
     .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))];
 }

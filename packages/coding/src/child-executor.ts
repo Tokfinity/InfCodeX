@@ -199,7 +199,7 @@ export interface ChildExecutorOptions {
   /** Parent-provided persistence capability for an isolated child-owned lineage. */
   readonly historyStorage?: KodaXSessionStorage;
   readonly parentOptions: Readonly<Partial<
-    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction' | 'disablePromptCache'>
+    Pick<KodaXOptions, 'provider' | 'model' | 'effort' | 'reasoningMode' | 'extensionRuntime' | 'events' | 'compaction' | 'disablePromptCache' | 'sandbox'>
     & Pick<KodaXContextOptions, 'repoIntelligenceMode' | 'repoIntelligenceTrace' | 'contextDiagnostics' | 'shellExecution' | 'permissionIntent'>
   >>;
   readonly parentRole: string;
@@ -1387,6 +1387,7 @@ async function runReadChildBody(
         // dynamic-context policy as the parent — otherwise a `disable:true` /
         // broker-mediated host is silently bypassed for every dispatched child.
         skillDynamicContext: scope.ctx.skillDynamicContext,
+        sandbox: options.parentOptions.sandbox ?? scope.ctx.sandbox,
         context: {
           gitRoot: scope.ctx.gitRoot,
           executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
@@ -1677,6 +1678,7 @@ async function runWriteChildBody(
         // FEATURE_222 (R4): write children inherit the parent's skill
         // dynamic-context policy so their skill tool is equally gated.
         skillDynamicContext: childCtx.skillDynamicContext,
+        sandbox: options.parentOptions.sandbox ?? childCtx.sandbox,
         context: {
           gitRoot: childCtx.gitRoot,
           executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,

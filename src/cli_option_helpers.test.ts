@@ -141,6 +141,19 @@ describe('normalizeCliSessionFlags', () => {
 });
 
 describe('createKodaXOptions', () => {
+  it('projects configured sandbox environment names into run-scoped options', () => {
+    const previous = process.env.KODAX_SANDBOX_ENV_PASS;
+    process.env.KODAX_SANDBOX_ENV_PASS = 'GH_TOKEN, GITHUB_TOKEN,GH_TOKEN';
+    try {
+      expect(createKodaXOptions(createCliOptions()).sandbox).toEqual({
+        envPass: ['GH_TOKEN', 'GITHUB_TOKEN'],
+      });
+    } finally {
+      if (previous === undefined) delete process.env.KODAX_SANDBOX_ENV_PASS;
+      else process.env.KODAX_SANDBOX_ENV_PASS = previous;
+    }
+  });
+
   it('projects repo intelligence mode and trace flags from runtime env into context', () => {
     const previousMode = process.env.KODAX_REPO_INTELLIGENCE;
     const previousTrace = process.env.KODAX_REPO_INTELLIGENCE_TRACE;

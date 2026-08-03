@@ -399,6 +399,8 @@ Auto[LLM] 的权限体验保持一致，只缺少 OS 级 containment；普通运
 变量名精确匹配（Windows 不区分大小写），`NODE_OPTIONS`、`BASH_ENV` 等执行控制
 变量即使列入仍会被阻止。修改宿主环境变量或该配置后需重启 KodaX；若使用常驻
 daemon，还需先停止并重新启动 daemon，让它获取新的环境与配置。
+SDK 调用方可按 Run 传入同结构的 `KodaXOptions.sandbox`，并发 Run 无需修改全局配置，
+也可以各自使用不同的变量名列表。
 
 Qwen Token Plan 需要选择 `qwen-token-plan` 并使用单独的凭据；`QWEN_API_KEY`
 不能用于该路由：

@@ -240,6 +240,8 @@ Matching is exact (case-insensitive on Windows), and execution-control
 variables such as `NODE_OPTIONS` and `BASH_ENV` remain blocked. Restart KodaX
 after changing the host variables or this setting; stop/restart a persistent
 KodaX daemon so it receives the new environment and configuration.
+SDK callers pass the same shape per Run as `KodaXOptions.sandbox`, so concurrent
+Runs can use different lists without mutating process-global configuration.
 
 For Qwen Token Plan, select `qwen-token-plan` and use its separate credential;
 `QWEN_API_KEY` does not authenticate this route:
