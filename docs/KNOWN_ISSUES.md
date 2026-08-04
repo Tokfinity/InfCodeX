@@ -14,6 +14,8 @@ _Last Updated: 2026-08-04_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 development | 2026-08-04 | 2026-08-04 |
+| 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 development | 2026-08-04 | 2026-08-04 |
 | 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 development | 2026-08-04 | 2026-08-04 |
 | 275 | High | Resolved | Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged | v0.7.79 development | v0.7.80 development | 2026-08-04 | 2026-08-04 |
 | 274 | Medium | Resolved | Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws | v0.7.69 integration hot reload | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -179,6 +181,135 @@ _Last Updated: 2026-08-04_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 278: Managed Runtime publishes completed turns without a durable canonical Session boundary
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 Runtime Session persistence
+- **Fixed**: v0.7.80 development
+- **Created**: 2026-08-04
+- **Resolved**: 2026-08-04
+
+#### Original Problem
+
+Session `20260804_190529_pkd099b5340c90` ran for about 47 minutes under managed
+Runtime Run `run_msek090v_83fd011b`. Its 7.79 MB event journal contains 6,291
+valid events: the first turn published `turn.completed`, a queued input was
+delivered into a second turn, and daemon restart eventually terminalized the
+Run as `daemon_crashed`. After restart, however, the canonical Session remained
+a valid empty v2 lineage with `activeMessageCount=0`, `lineageEntryCount=0`, and
+a resolved zero-entry conversation cache. All public SDK transcript/history
+reads therefore correctly returned zero records; the body was never committed.
+
+#### Context
+
+Runtime declares `persistedByHost: false`, making the Coding Runner the
+canonical Session owner. Managed AMA can publish a completed turn and deliver a
+subsequent queued prompt while retaining all conversation state in process
+memory until the overall Run ends. A hard daemon exit cannot enter the normal
+or error snapshot path. The Run event log preserves many second-order events
+but omits the complete initial prompt, so the affected Session cannot be
+silently reconstructed as a complete conversation.
+
+#### Root Cause
+
+- Managed multi-turn execution rotates `turn.completed` / `turn.started`
+  boundaries without first committing the completed transcript to canonical
+  Session storage.
+- Accepted and delivered input durability is represented in the Run journal,
+  but the canonical lineage has no corresponding atomic boundary.
+- Crash terminal reconciliation can therefore describe a completed/delivered
+  Run history that contradicts the persisted Session transcript.
+
+#### Proposed Solution
+
+- Persist the initial accepted prompt before execution can publish model/tool
+  events, and persist each completed turn before publishing `turn.completed` or
+  delivering the next queued prompt.
+- Preserve the existing normal final snapshot while making intermediate writes
+  serialized, monotonic, and fail-loud; a persistence failure must stop the
+  boundary transition instead of publishing a false durable completion.
+- Add SDK/Runtime regressions for crash after initial prompt, crash during a
+  queued turn after a completed predecessor, normal multi-turn completion, and
+  persistence failure.
+- Any recovery utility may expose only event-log facts that are provable and
+  must label the missing initial prompt/body rather than synthesizing a
+  seemingly complete canonical history.
+
+#### Resolution
+
+- Managed Runner execution now saves the initial accepted prompt before its
+  live Turn starts or Provider execution begins.
+- Both mid-turn queue drainage and idle-yield resume save the completed
+  transcript before `turn.completed`, then save the queued user message before
+  `run.input.delivered` and before the next Provider call.
+- Runtime-owned Sessions (`persistedByHost: false`) use a required snapshot
+  path: missing/unwritable canonical storage fails the boundary and prevents a
+  false completion. Ordinary SDK/error-cleanup snapshots remain best-effort.
+- Runtime/Runner regressions cover initial-turn crash, queued-turn crash,
+  normal multi-turn completion, persistence failure, lifecycle ordering, and
+  recovery of a valid JSONL prefix with a file-identifying diagnostic.
+- No recovery data was written into the affected production Session: its
+  Runtime journal cannot prove the missing initial prompt, so automatically
+  presenting a reconstructed full transcript would be lossy and misleading.
+
+### 277: Synchronous tokenization precedes tool-output byte/line spill
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.74 tool attention admission
+- **Fixed**: v0.7.80 development
+- **Created**: 2026-08-04
+- **Resolved**: 2026-08-04
+
+#### Original Problem
+
+Session `20260804_183141_cv5f6b9421209c` returned a Bash result containing the
+conversation-cache `identityFilter`, including about 174,763 consecutive
+Base64-like ASCII bytes. Tool-result admission synchronously ran the raw output
+through `js-tiktoken` before the existing byte/line policy could spill it. The
+daemon event loop stopped responding, the Runtime read timed out after 15
+seconds, and the client remained busy until restart.
+
+#### Context
+
+Affected paths include the Agent token estimator, Coding tool-result admission,
+and Bash capture. The fix must spill by byte/line policy before token estimation
+and keep estimation linear and allocation-light.
+
+#### Root Cause
+
+- `packages/agent/src/tokenizer.ts` synchronously loads `cl100k_base` and calls
+  `encode(text).length` on the main runtime thread.
+- `packages/coding/src/tools/tool-result-policy.ts` token-counts raw batch
+  entries before applying tool-specific byte/line caps.
+- Bash's early spill proof uses `capacityTokens * 128`, allowing ordinary
+  policy-breaking output to reach materialization and token admission.
+
+#### Proposed Solution
+
+- Enforce existing tool byte/line policies first, persist complete output, and
+  estimate only the bounded preview.
+- Replace main-path BPE tokenization with a UTF-8/UTF-16 multilingual estimate
+  plus a bounded dense-encoded-data detector.
+- Use Provider usage as the context baseline and fast estimates for subsequent
+  message deltas, retaining context reserve, compaction, and overflow recovery.
+
+#### Resolution
+
+- Tool-result admission now enforces each existing byte/line policy before any
+  token estimate, spilling the complete raw value and estimating only its
+  bounded preview. Batch admission performs the same physical pre-pass.
+- Bash capture starts recoverable spooling at the existing 32 KiB/600-line
+  policy and removed the `capacityTokens * 128` BPE-derived threshold.
+- The main-thread `js-tiktoken` dependency and `cl100k_base` vocabulary were
+  removed. Token accounting now uses the O(n), O(1)-space UTF-8/UTF-16 estimate
+  plus the 512-unit dense encoded-data detector; safety margin remains in the
+  context reserve layer.
+- Regressions cover the 174,763-byte continuous-`A` reproduction, random
+  Base64/Hex, multilingual text, JSON/code, Emoji, long single-line/multiline
+  results, artifact readability, estimator ordering, and event-loop latency.
 
 ### 276: Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding
 

@@ -69,6 +69,7 @@ import { getSessionScratchDir } from '../session-scratch.js';
 import {
   buildAutoRepoIntelligenceContext,
   emitResilienceDebug,
+  saveRequiredSessionSnapshot,
   saveSessionSnapshot,
 } from '../agent.js';
 import {
@@ -253,6 +254,7 @@ import { createExtensionRuntimeSessionController } from '../agent-runtime/middle
 import {
   buildRuntimeSessionState,
   snapshotRuntimeSessionState,
+  type RuntimeSessionState,
 } from '../agent-runtime/runtime-session-state.js';
 // CAP-010: shared tri-state permission gate. AMA's
 // `toolObserver.beforeTool` delegates to this so the extension
@@ -535,11 +537,15 @@ export const __runnerDrivenTestables = {
 
 interface ManagedLiveTurnController {
   currentTurnId(): string;
-  startTurn(input: {
+  markInitialInputDurable(): void;
+  prepareTurn(input: {
     readonly deliveryKind: KodaXTurnDeliveryKind;
     readonly promptId?: string;
     readonly userText?: string;
-  }): string;
+  }): {
+    readonly turnId: string;
+    start(): void;
+  };
 }
 
 function resolveAgentSystemPrompt(agent: Agent): string {
@@ -591,6 +597,35 @@ function attachTurnIdsFromUserBoundaries(
     }
     return { ...message, turnId: activeTurnId };
   });
+}
+
+function buildPersistableManagedTranscript(
+  messages: readonly KodaXMessage[],
+  entryAgent?: Agent,
+): KodaXMessage[] {
+  const withoutRunnerSystem = entryAgent
+    ? dropRunnerInjectedSystemMessage(messages, entryAgent)
+    : messages;
+  return attachTurnIdsFromUserBoundaries(
+    stripManagedRunContextMessages(withoutRunnerSystem),
+  );
+}
+
+async function saveManagedRunBoundary(
+  options: KodaXOptions,
+  sessionId: string,
+  data: {
+    messages: KodaXMessage[];
+    title: string;
+    gitRoot?: string;
+    runtimeSessionState?: RuntimeSessionState;
+  },
+): Promise<void> {
+  if (options.session?.persistedByHost === false) {
+    await saveRequiredSessionSnapshot(options, sessionId, data);
+    return;
+  }
+  await saveSessionSnapshot(options, sessionId, data);
 }
 
 interface RunnerMemoryRuntime {
@@ -957,27 +992,34 @@ export async function runManagedTaskViaRunner(
   );
   const optionsWithSessionId = startedMemoryRuntime.options;
   const runnerMemoryRuntime = startedMemoryRuntime.runtime;
-  emitSessionStart(liveEvents, { provider: providerName, sessionId: initialSessionId });
-  emitTurnStarted(liveEvents, liveTurnScopeRef.current);
+  let liveLifecycleStarted = false;
   const emitLiveTurnCompleted = (
     status: 'completed' | 'cancelled' | 'interrupted',
   ): void => {
     const scope = liveTurnScopeRef.current;
+    if (!liveLifecycleStarted) return;
     if (terminalTurnIds.has(scope.turnId)) return;
     terminalTurnIds.add(scope.turnId);
     emitTurnCompleted(liveEvents, scope, status);
   };
   const emitLiveTurnFailed = (error: Error): void => {
     const scope = liveTurnScopeRef.current;
+    if (!liveLifecycleStarted) return;
     if (terminalTurnIds.has(scope.turnId)) return;
     terminalTurnIds.add(scope.turnId);
     emitTurnFailed(liveEvents, scope, error);
   };
   const liveTurnController: ManagedLiveTurnController = {
     currentTurnId: () => liveTurnScopeRef.current.turnId,
-    startTurn: (input) => {
+    markInitialInputDurable: () => {
+      if (liveLifecycleStarted) return;
+      liveLifecycleStarted = true;
+      emitSessionStart(liveEvents, { provider: providerName, sessionId: initialSessionId });
+      emitTurnStarted(liveEvents, liveTurnScopeRef.current);
+    },
+    prepareTurn: (input) => {
       emitLiveTurnCompleted('completed');
-      liveTurnScopeRef.current = createLiveTurnScope({
+      const nextScope = createLiveTurnScope({
         sessionId: initialSessionId,
         deliveryKind: input.deliveryKind,
         promptId: input.promptId,
@@ -987,14 +1029,23 @@ export async function runManagedTaskViaRunner(
         agentId: liveTurnScope.agentId,
         ownsContextRevision: liveTurnScope.ownsContextRevision,
       });
-      emitTurnStarted(liveEvents, liveTurnScopeRef.current);
-      if (runnerMemoryRuntime !== undefined && input.userText !== undefined) {
-        runnerMemoryRuntime.currentUserTurn = {
-          text: input.userText,
-          turnId: liveTurnScopeRef.current.turnId,
-        };
-      }
-      return liveTurnScopeRef.current.turnId;
+      let started = false;
+      return {
+        turnId: nextScope.turnId,
+        start: () => {
+          if (started) return;
+          started = true;
+          liveTurnScopeRef.current = nextScope;
+          liveLifecycleStarted = true;
+          emitTurnStarted(liveEvents, nextScope);
+          if (runnerMemoryRuntime !== undefined && input.userText !== undefined) {
+            runnerMemoryRuntime.currentUserTurn = {
+              text: input.userText,
+              turnId: nextScope.turnId,
+            };
+          }
+        },
+      };
     },
   };
   try {
@@ -2027,6 +2078,18 @@ async function runManagedTaskViaRunnerInner(
   // FEATURE_193 (v0.7.43): V1 chain (Scout/Planner/Generator) retired. The
   // Worker single-loop is the only entry path.
   const entryAgent: Agent = chain.worker;
+  const persistManagedBoundary = async (
+    messages: readonly KodaXMessage[],
+  ): Promise<void> => {
+    await saveManagedRunBoundary(options, resolvedSessionId, {
+      messages: buildPersistableManagedTranscript(messages, entryAgent),
+      title: prompt.slice(0, 80),
+      gitRoot: options.context?.gitRoot ?? undefined,
+      runtimeSessionState,
+    });
+  };
+  await persistManagedBoundary(runnerInput);
+  liveTurnController.markInitialInputDurable();
   const compactionHook = await buildManagedTaskCompactionHook(options, {
     resolvedContextCapacity,
     contextTokenSnapshotRef,
@@ -2291,12 +2354,14 @@ async function runManagedTaskViaRunnerInner(
   // Pre-extraction this block was ~80 LoC inline; the adapter module
   // owns the goal-accounting + sendMessage-counter-reset + base-drain
   // composition so runner-driven stays at the dispatch-loop layer.
-  const composeMidTurnPromptMessages = (
+  const composeMidTurnPromptMessages = async (
     prompts: readonly QueuedMessage[],
     timestamp: string,
-  ): KodaXMessage[] => {
-    const queuedTurnId = prompts.length > 0
-      ? liveTurnController.startTurn({
+    transcript: readonly KodaXMessage[],
+  ): Promise<KodaXMessage[]> => {
+    if (prompts.length > 0) await persistManagedBoundary(transcript);
+    const preparedTurn = prompts.length > 0
+      ? liveTurnController.prepareTurn({
           deliveryKind: 'queued',
           promptId: prompts[0]?.id,
           userText: prompts.map((message) => message.content).join('\n'),
@@ -2311,11 +2376,13 @@ async function runManagedTaskViaRunnerInner(
       return {
         role: 'user',
         content: buildPromptMessageContent(message.content, inputArtifacts),
-        ...(queuedTurnId ? { turnId: queuedTurnId } : {}),
+        ...(preparedTurn ? { turnId: preparedTurn.turnId } : {}),
         timestamp,
       };
     });
     if (prompts.length > 0) {
+      await persistManagedBoundary([...transcript, ...messages]);
+      preparedTurn?.start();
       options.events?.onMidTurnUserMessages?.(
         prompts.map((message) => message.content),
         { queuedMessageIds: prompts.map((message) => message.id) },
@@ -2386,7 +2453,11 @@ async function runManagedTaskViaRunnerInner(
     const prompts = drained.filter((message) => message.mode === 'prompt');
     const mailbox = drained.filter((message) => message.mode !== 'prompt');
     const timestamp = new Date().toISOString();
-    const promptMessages = composeMidTurnPromptMessages(prompts, timestamp);
+    const promptMessages = await composeMidTurnPromptMessages(
+      prompts,
+      timestamp,
+      turnCtx.transcript,
+    );
     const syntheticMessage = await composeMidTurnMailboxMessage(
       mailbox,
       turnCtx.transcript,
@@ -2555,6 +2626,7 @@ async function runManagedTaskViaRunnerInner(
   //     verbatim then stops; Q2 never gets answered.
   //   - Bug F (abort listener cleanup): owned by the agent-layer
   //     `waitForWakeEvent`.
+  let preparedIdleTurn: ReturnType<ManagedLiveTurnController['prepareTurn']> | undefined;
   const runResult = await (async () => {
     const sessionRuntime = isSessionBindableExtensionRuntime(extensionRuntime)
       ? extensionRuntime
@@ -2643,7 +2715,18 @@ async function runManagedTaskViaRunnerInner(
     // NOT the `beforeNextTurn` mid-turn drain, so it reached the agent but
     // never the UI. Route it to the same `onMidTurnUserMessages` sink so it is
     // recorded + rendered in the transcript exactly like a mid-turn message.
-    onResumedUserPrompts: (contents, queuedMessageIds) => {
+    onResumedUserPrompts: async (
+      contents,
+      queuedMessageIds,
+      promptMessage,
+      previousRunResult,
+    ) => {
+      await persistManagedBoundary([
+        ...previousRunResult.messages,
+        promptMessage,
+      ]);
+      preparedIdleTurn?.start();
+      preparedIdleTurn = undefined;
       if (memoryRuntime !== undefined) {
         memoryRuntime.currentUserTurn = {
           text: contents.join('\n'),
@@ -2652,7 +2735,11 @@ async function runManagedTaskViaRunnerInner(
       }
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
-    resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
+    resolveResumeTurnId: async (previousRunResult) => {
+      await persistManagedBoundary(previousRunResult.messages);
+      preparedIdleTurn = liveTurnController.prepareTurn({ deliveryKind: 'queued' });
+      return preparedIdleTurn.turnId;
+    },
     buildResumeContextMessages: () => {
       const runtimeContextMessage = buildManagedRuntimeContextDelta();
       return runtimeContextMessage ? [runtimeContextMessage] : [];
@@ -2863,10 +2950,9 @@ async function runManagedTaskViaRunnerInner(
 
   // Persist session snapshot to disk so `/resume <id>` and `--continue`
   // can reload the AMA conversation. The Runner-driven path has a
-  // single non-error terminal (here). `saveSessionSnapshot` early-
-  // returns when `options.session?.storage` is undefined and absorbs
-  // any `storage.save` rejections internally (CAP-013-003 closed in
-  // P3.6a), so we don't need a guard or try/catch at this call site.
+  // single non-error terminal (here). Runtime-owned Sessions use the
+  // required variant so `turn.completed` cannot outrun canonical storage;
+  // ordinary SDK callers preserve the historical best-effort behavior.
   //
   // FEATURE_060 Track 2: pass `result.messages` by reference instead of
   // spreading. `result.messages` was already cloned at line 4676 from
@@ -2874,7 +2960,7 @@ async function runManagedTaskViaRunnerInner(
   // in-memory copy of the full transcript. `saveSessionSnapshot` does
   // not mutate the passed array (it forwards directly to
   // `storage.save`), so reference-passing is safe.
-  await saveSessionSnapshot(options, result.sessionId, {
+  await saveManagedRunBoundary(options, result.sessionId, {
     messages: result.messages,
     title: prompt.slice(0, 80),
     gitRoot: options.context?.gitRoot ?? undefined,

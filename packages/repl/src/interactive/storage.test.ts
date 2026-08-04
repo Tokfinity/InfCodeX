@@ -1059,6 +1059,57 @@ describe('FileSessionStorage', () => {
     expect(existsSync(recentPath)).toBe(true);
   });
 
+  it('recovers a valid canonical prefix and diagnoses a partially written tail', async () => {
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const sessionId = 'partial-tail-prefix-recovery';
+    const timestamp = '2026-08-04T19:54:11.000Z';
+    const entry = {
+      id: 'entry_before_daemon_crash',
+      parentId: null,
+      timestamp,
+      type: 'message' as const,
+      message: { role: 'user' as const, content: 'durable before crash' },
+    };
+    const diagnostics: string[] = [];
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({
+          _type: 'meta',
+          id: sessionId,
+          title: 'Partial Tail Prefix Recovery',
+          gitRoot: '/tmp/test-repo',
+          createdAt: timestamp,
+          lineageVersion: 2,
+          activeEntryId: entry.id,
+          activeMessageCount: 1,
+        }),
+        JSON.stringify({ _type: 'lineage_entry', entry }),
+        '{"_type":"lineage_entry","entry":',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const { FileSessionStorage } = await import('./storage.js');
+    const { setKodaXDiagnosticSink } = await import('@kodax-ai/agent');
+    const restoreDiagnostics = setKodaXDiagnosticSink((diagnostic) => {
+      diagnostics.push(diagnostic.message);
+    });
+    try {
+      const storage = new FileSessionStorage({ sessionsDir });
+
+      await expect(storage.load(sessionId)).resolves.toMatchObject({
+        messages: [{ role: 'user', content: 'durable before crash' }],
+      });
+      expect(diagnostics).toContainEqual(
+        expect.stringContaining(`${sessionId}.jsonl`),
+      );
+    } finally {
+      restoreDiagnostics();
+    }
+  });
+
   it('cleanupOldSessions never removes an old Session with a durable Actor owner', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const { deriveProjectKeyFromRoot } = await import('./project-key.js');

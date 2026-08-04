@@ -25,7 +25,10 @@ import {
 } from './bash-output-collector.js';
 import { filterBashOutputBodies } from './output-filters/registry.js';
 import { shellMemoryMutationDenial } from './memory-mutation-guard.js';
-import { TOOL_RESULT_INCOMPLETE_MARKER } from './tool-result-policy.js';
+import {
+  getToolResultPolicy,
+  TOOL_RESULT_INCOMPLETE_MARKER,
+} from './tool-result-policy.js';
 import { persistToolOutput } from './truncate.js';
 import {
   createShellCommandInvocation,
@@ -39,9 +42,6 @@ import {
 
 const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
 const FOREGROUND_CLOSE_DRAIN_MS = process.platform === 'win32' ? 2_000 : 1_000;
-// cl100k_base's longest vocabulary token is 128 bytes. Therefore raw output
-// above capacity * 128 cannot fit even in the most compressible tokenization.
-const MAX_TOKEN_BYTES = 128;
 
 type ManagedChildProcess = Parameters<typeof killChildProcessTree>[0];
 type KillChildProcessTreeOptions = NonNullable<Parameters<typeof killChildProcessTree>[1]>;
@@ -103,10 +103,14 @@ async function buildGuaranteedOversizeResult(
   stderr: BashOutputCollector,
   ctx: KodaXToolExecutionContext,
 ): Promise<string | undefined> {
+  const policy = getToolResultPolicy('bash');
+  const totalBytes = stdout.totalBytes + stderr.totalBytes;
+  const totalLines = stdout.totalLines + stderr.totalLines;
   const capacityTokens = ctx.toolResultCapacityTokens ?? ctx.maximumInputTokens;
-  if (capacityTokens === undefined) return undefined;
-  const capacityBytesUpperBound = Math.max(0, Math.floor(capacityTokens)) * MAX_TOKEN_BYTES;
-  if (stdout.totalBytes + stderr.totalBytes <= capacityBytesUpperBound) return undefined;
+  const exceedsCapacity = capacityTokens !== undefined
+    && totalBytes > Math.max(0, Math.floor(capacityTokens)) * 4;
+  const exceedsPolicy = totalBytes > policy.maxBytes || totalLines > policy.maxLines;
+  if (!exceedsPolicy && !exceedsCapacity) return undefined;
 
   const recovery = startForegroundOutputRecovery(stdout, stderr);
   if (!recovery.stdout.path || !recovery.stderr.path) return undefined;
@@ -134,7 +138,9 @@ async function buildGuaranteedOversizeResult(
     `stdout recovery: ${recovery.stdout.path}`,
     `stderr recovery: ${recovery.stderr.path}`,
     completion,
-    `[${TOOL_RESULT_INCOMPLETE_MARKER}. Raw Bash output is provably larger than the active request capacity and was not materialized inline. Full output saved to: ${recoveryPath}.]`,
+    `[${TOOL_RESULT_INCOMPLETE_MARKER}. Raw Bash output exceeded `
+      + `${exceedsPolicy ? `the ${policy.maxBytes}-byte/${policy.maxLines}-line policy` : 'the active request capacity'} `
+      + `and was not materialized inline. Full output saved to: ${recoveryPath}.]`,
   ].join('\n');
 }
 
@@ -502,8 +508,13 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       process.off('exit', cleanupOnProcessExit);
       unregisterManagedChild();
     };
-    const stdout = createBashOutputCollector();
-    const stderr = createBashOutputCollector();
+    const bashOutputPolicy = getToolResultPolicy('bash');
+    const collectorOptions = {
+      spoolThresholdBytes: bashOutputPolicy.maxBytes,
+      spoolThresholdLines: bashOutputPolicy.maxLines,
+    };
+    const stdout = createBashOutputCollector(collectorOptions);
+    const stderr = createBashOutputCollector(collectorOptions);
     const disposeCollectors = (): void => {
       disposeBashOutputCollector(stdout);
       disposeBashOutputCollector(stderr);

@@ -751,7 +751,7 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 | Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
 | `@kodax-ai/llm` | LLM abstraction (16 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
-| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, media/input artifacts, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/media`, `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, jimp, yaml |
+| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, media/input artifacts, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/media`, `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, fflate, jimp, yaml |
 | `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. canonical Actor collaboration tools) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
@@ -1448,7 +1448,7 @@ const policy = new DefaultSummaryCompaction({ thresholdRatio: 0.8, keepRecent: 1
 loops. It does not replace or disable KodaX's always-on coding-runtime policy
 described under FEATURE_272 above.
 
-**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `AgentActorController` / `AgentTurnScheduler` · session-id generation · tiktoken-based token estimation · `CompactionPolicy` interface.
+**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `AgentActorController` / `AgentTurnScheduler` · session-id generation · provider-neutral O(n) token estimation · `CompactionPolicy` interface.
 
 ### `@kodax-ai/kodax/skills` — Skills System
 

@@ -125,13 +125,17 @@ export interface RunWithIdleYieldOptions<
   readonly onResumedUserPrompts?: (
     contents: readonly string[],
     queuedMessageIds: readonly string[],
-  ) => void;
+    promptMessage: AgentMessage,
+    runResult: TRunResult,
+  ) => void | Promise<void>;
   /**
    * Optional attribution hook for real user prompts spliced during an
    * idle-yield resume. The agent layer stays transport-agnostic; callers that
    * expose live turn IDs can stamp the generated prompt message here.
    */
-  readonly resolveResumeTurnId?: () => string | undefined;
+  readonly resolveResumeTurnId?: (
+    runResult: TRunResult,
+  ) => string | undefined | Promise<string | undefined>;
   /**
    * Optional fresh runtime context inserted after the completed transcript
    * and immediately before wake messages. The callback runs for every idle
@@ -265,8 +269,13 @@ export async function runWithIdleYield<
       // FEATURE_213 — surface the user-typed prompt(s) drained on this wake to
       // the UI, so a follow-up typed while waiting for a sub-agent appears in
       // the transcript (it otherwise only reaches the agent input below).
-      opts.onResumedUserPrompts,
-      opts.resolveResumeTurnId,
+      opts.onResumedUserPrompts
+        ? (contents, ids, promptMessage) =>
+            opts.onResumedUserPrompts?.(contents, ids, promptMessage, runResult)
+        : undefined,
+      opts.resolveResumeTurnId
+        ? () => opts.resolveResumeTurnId?.(runResult)
+        : undefined,
         runResult.messages,
       );
     } catch (error) {

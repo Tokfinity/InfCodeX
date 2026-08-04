@@ -672,6 +672,7 @@ export interface ConnectKodaXRuntimeOptions {
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
+  managedRunDurability: 1,
   runtimeEventCoalescing: 1,
 } as const);
 
@@ -712,6 +713,8 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonSafeRunInput?: 1;
   readonly sharedSessionSettings?: 1;
   readonly durableRecoveryQueries?: 1;
+  /** Require durable accepted-input and completed-turn boundaries for managed Runs. */
+  readonly managedRunDurability?: 1;
   readonly daemonManagement?: 1;
   /** Require an auto-started daemon whose current host has orphan idle-exit enabled. */
   readonly daemonOrphanExit?: 1;
@@ -3207,6 +3210,7 @@ export async function createKodaXRuntime(
       requirements: autoStart
         ? {
             ...options.requirements,
+            managedRunDurability: 1 as const,
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
@@ -3273,6 +3277,13 @@ export async function createKodaXRuntime(
     },
     actorControlPlane: { version: 1, methodNamespace: "agents" },
     sandboxRuntime: sandboxRuntimeCapability(),
+    managedRunDurability: {
+      version: 1,
+      initialInputBeforeExecution: true,
+      completedTurnBeforeEvent: true,
+      deliveredInputBeforeEvent: true,
+      persistenceFailure: "fail_closed",
+    },
     runtimeEventCoalescing: { version: 1 },
     runtimeAutoModeGuardrail: {
       version: 4,
@@ -4039,6 +4050,7 @@ function assertRuntimeCapabilities(
     requirements?.daemonSafeRunInput === undefined &&
     requirements?.sharedSessionSettings === undefined &&
     requirements?.durableRecoveryQueries === undefined &&
+    requirements?.managedRunDurability === undefined &&
     requirements?.daemonManagement === undefined &&
     requirements?.daemonOrphanExit === undefined &&
     requirements?.runtimeEventCoalescing === undefined &&
@@ -4091,6 +4103,7 @@ function assertRuntimeCapabilities(
     ["daemonSafeRunInput", requirements.daemonSafeRunInput],
     ["sharedSessionSettings", requirements.sharedSessionSettings],
     ["durableRecoveryQueries", requirements.durableRecoveryQueries],
+    ["managedRunDurability", requirements.managedRunDurability],
     ["daemonManagement", requirements.daemonManagement],
     ["daemonOrphanExit", requirements.daemonOrphanExit],
     ["runtimeEventCoalescing", requirements.runtimeEventCoalescing],
@@ -4414,6 +4427,7 @@ async function connectKodaXRuntimeInternal(
       options.autoStart === true
         ? {
             ...options.requirements,
+            managedRunDurability: 1 as const,
             runtimeAutoModeGuardrail: 4 as const,
             runtimeEventCoalescing: 1 as const,
             ...(options.daemonOrphanExitMs !== undefined
@@ -4422,6 +4436,10 @@ async function connectKodaXRuntimeInternal(
           }
         : options.requirements;
     const requiredUpgrade = [
+      {
+        name: "managedRunDurability",
+        version: requirements?.managedRunDurability,
+      },
       {
         name: "runtimeAutoModeGuardrail",
         version: requirements?.runtimeAutoModeGuardrail,

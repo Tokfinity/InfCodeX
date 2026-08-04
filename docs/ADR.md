@@ -575,7 +575,7 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax-ai/agent` 
 | Team | `team/` | Multi-instance state broadcast + system-prompt injection（FEATURE_125） |
 | Construction | `construction/` | Self-Construction runtime / agent-resolver / sandbox-runner（FEATURE_087/088/089/090/101） |
 | Runtime middleware | `runtime-middleware/` | 通用 substrate middleware（compaction-trigger / max-tokens-continuation / permission-gate 接口层） |
-| Tokenizer | `tokenizer.ts` | js-tiktoken 适配 |
+| Tokenizer | `tokenizer.ts` | O(n) multilingual/dense-data estimate; Provider usage remains authoritative |
 
 **判定规则**：任何"非 coding agent 也需要"的 agent 平台能力 → `@kodax-ai/agent`。
 
@@ -3891,13 +3891,22 @@ Cbatch    = max(0, Pmax - currentPhysicalRequestTokens)
 - `task_output` 对仍在运行的任务可显示有明确标记的 live tail；任务进入终态后返回完整输出。
 - web search/fetch 的 256/512KiB 是上游资源采集安全上限，不是 token 优化。命中时结果必须含
   `SOURCE_INCOMPLETE`，禁止把截断内容表述为完整来源。
-- 32KB / 600 行仅是 v0.7.61 的历史 UI/经验值，不能参与当前 token policy；512KiB 仅是 Bash
-  collector 的 memory→spool 阈值。collector 记录总字节数；若字节数已超过
-  `当前请求剩余 token × cl100k_base 最大 token 字节数（128）`，则可严格证明完整输出不可能
-  进入该请求，此时直接封存 spool，避免先把超大文件重新物化进内存再由 batch owner 溢出。
+- 2026-08-04 安全纠偏后，工具已有的 bytes/lines policy 是 token policy 之前的硬边界；Bash
+  在 32KiB / 600 行处立即把完整输出封存为 artifact，只让有界 preview 进入后续估算。
+  `capacityTokens × 128` 的宽松预判已删除，原始超大文本不得进入 tokenizer。
   直落盘结果必须把 canonical manifest 路径通过 tool-call ID 的可信 side-channel 传给 SA 和 AMA
   的最终 batch owner，并把 incomplete marker 放在结果末尾；不得从原始工具文本猜测可信路径，
   也不得在最终准入时把同一 marker 再落盘一层。
+
+**2026-08-04 tokenizer 与 managed Run durability addendum**：主事件循环不再加载
+Provider-specific BPE 词表。`countTokens` / `estimateTokens` 使用 UTF-8 bytes 与 UTF-16 code
+units 的 O(n) 多语言估算，并对长 Base64/Hex/随机编码串采用保守 dense-data 下界；Provider
+最近一次真实 usage 仍是上下文基线，估算器只负责新增尾部与保护预算。Runtime-owned managed
+Run 在执行初始输入前、发布 `turn.completed` 前、发布 `run.input.delivered` 前写入 canonical
+Session；任一 required write 失败均 fail closed。该契约公开为 `managedRunDurability` v1，
+auto-start SDK 客户端会拒绝或安全升级缺少该能力的旧 daemon。canonical 中存在 queued prompt
+只证明输入已接受并保全；只有 durable `run.input.delivered` 才证明它已交付给执行 turn。若 event
+journal 写失败，Run 在下一次 provider 调用前失败，保留该 accepted prompt 而不伪造 delivery。
 - 物理请求 fallback 在 provider 未返回 usage 时也必须从最终 envelope 估算：最终 system prompt
   只计一次（skills 已合并后不得重复）、active tool schemas、messages/framing、cache 占用以及同一
   next request 的 edit-recovery 等 synthetic sibling 都要计入；有效 provider usage 仍是权威值。

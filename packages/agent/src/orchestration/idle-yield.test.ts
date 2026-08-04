@@ -212,7 +212,11 @@ describe('Actor-aware idle yield', () => {
     }, () => [], undefined, onUserPrompts);
 
     expect(messages).toMatchObject([{ role: 'user', content: 'change direction' }]);
-    expect(onUserPrompts).toHaveBeenCalledWith(['change direction'], ['msg-1']);
+    expect(onUserPrompts).toHaveBeenCalledWith(
+      ['change direction'],
+      ['msg-1'],
+      expect.objectContaining({ role: 'user', content: 'change direction' }),
+    );
   });
 
   it('keeps explicit Actor mailbox messages synthetic instead of user-authored', async () => {

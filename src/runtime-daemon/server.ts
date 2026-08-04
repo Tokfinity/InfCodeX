@@ -2133,6 +2133,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.a2aConfigReconciler;
   delete safeOverrides.actorControlPlane;
   delete safeOverrides.integrationConfigResilience;
+  delete safeOverrides.managedRunDurability;
   delete safeOverrides.daemonOrphanExit;
   delete safeOverrides.runtimeEventCoalescing;
   delete safeOverrides.runtimeAutoModeGuardrail;
@@ -2155,6 +2156,13 @@ function runtimeDaemonCapabilities(
       methodNamespace: "agents",
     },
     sandboxRuntime: sandboxRuntimeCapability(),
+    managedRunDurability: {
+      version: 1,
+      initialInputBeforeExecution: true,
+      completedTurnBeforeEvent: true,
+      deliveredInputBeforeEvent: true,
+      persistenceFailure: "fail_closed",
+    },
     ...(runtimeEventCoalescing
       ? { runtimeEventCoalescing: { version: 1 } }
       : {}),

@@ -181,9 +181,53 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
-  it('publishes pre-spawn Runtime event coalescing and orphan-exit capabilities', () => {
+  it('replaces an idle daemon that lacks managed Run durability', async () => {
+    const calls: string[] = [];
+    const oldTransport = createLegacyTransport({
+      preflight: createPreflight(),
+      calls,
+      close: vi.fn(async () => undefined),
+      capabilities: {
+        managedRunDurability: undefined,
+        daemonManagement: { version: 1 },
+        runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+        runtimeEventCoalescing: { version: 1 },
+      },
+      onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+    });
+    const newClose = vi.fn(async () => undefined);
+    upgradeMocks.acquireProcessLease
+      .mockResolvedValueOnce(createLease(oldTransport))
+      .mockResolvedValueOnce(createLease(createCurrentTransport(calls, newClose)));
+    upgradeMocks.readLockOwner.mockReturnValue({
+      runtimeId: RUNTIME_ID,
+      pid: 101,
+      createdAt: '2026-07-19T00:00:00.000Z',
+      kind: 'daemon',
+    });
+
+    const runtime = await connectKodaXRuntime({
+      autoStart: true,
+      profile: PROFILE,
+      homeDir: path.join('C:', 'kodax-upgrade-test'),
+    });
+
+    expect(runtime.identity.runtimeId).toBe('runtime_current');
+    expect(calls).toEqual([
+      'old:initialize',
+      'old:daemon.management.get',
+      'old:daemon.rollbackToInline',
+      'old:close',
+      'new:initialize',
+    ]);
+    await runtime.close();
+    expect(newClose).toHaveBeenCalled();
+  });
+
+  it('publishes pre-spawn managed durability, event coalescing, and orphan-exit capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       daemonOrphanExit: 1,
+      managedRunDurability: 1,
       runtimeEventCoalescing: 1,
     });
   });
@@ -417,9 +461,12 @@ function createLegacyTransport(input: {
       if (method === 'initialize') {
         return initializeResult(
           RUNTIME_ID,
-          input.capabilities ?? {
-            daemonManagement: { version: 1 },
-            runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
+          {
+            managedRunDurability: { version: 1 },
+            ...(input.capabilities ?? {
+              daemonManagement: { version: 1 },
+              runtimeAutoModeGuardrail: { version: 1, owner: 'session-runtime' },
+            }),
           },
         );
       }
@@ -462,6 +509,7 @@ function createCurrentTransport(
         throw new Error(`Unexpected current daemon request: ${method}`);
       }
       return initializeResult('runtime_current', {
+        managedRunDurability: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
         daemonOrphanExit: {

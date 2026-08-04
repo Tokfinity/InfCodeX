@@ -17,6 +17,9 @@ export interface BashOutputCollector {
   chunks: Buffer[];
   memoryBytes: number;
   totalBytes: number;
+  totalLines: number;
+  spoolThresholdBytes: number;
+  spoolThresholdLines: number;
   spoolPath?: string;
   spoolFd?: number;
   spoolDisabled: boolean;
@@ -25,11 +28,22 @@ export interface BashOutputCollector {
   finalBuffer?: Buffer;
 }
 
-export function createBashOutputCollector(): BashOutputCollector {
+export interface BashOutputCollectorOptions {
+  readonly spoolThresholdBytes?: number;
+  readonly spoolThresholdLines?: number;
+}
+
+export function createBashOutputCollector(
+  options: BashOutputCollectorOptions = {},
+): BashOutputCollector {
   return {
     chunks: [],
     memoryBytes: 0,
     totalBytes: 0,
+    totalLines: 0,
+    spoolThresholdBytes:
+      options.spoolThresholdBytes ?? BASH_CAPTURE_SPOOL_THRESHOLD_BYTES,
+    spoolThresholdLines: options.spoolThresholdLines ?? Number.MAX_SAFE_INTEGER,
     spoolDisabled: false,
     preserveSpoolOnDispose: false,
     closed: false,
@@ -104,7 +118,11 @@ function tryStartSpool(collector: BashOutputCollector): void {
 export function appendBashOutputChunk(collector: BashOutputCollector, chunk: Buffer): void {
   if (collector.closed) return;
   const copy = Buffer.from(chunk);
+  if (copy.length > 0 && collector.totalBytes === 0) collector.totalLines = 1;
   collector.totalBytes += copy.length;
+  for (let index = 0; index < copy.length; index += 1) {
+    if (copy[index] === 10) collector.totalLines += 1;
+  }
 
   if (collector.spoolFd !== undefined) {
     const written = writeBuffer(collector.spoolFd, copy);
@@ -119,7 +137,13 @@ export function appendBashOutputChunk(collector: BashOutputCollector, chunk: Buf
 
   collector.chunks.push(copy);
   collector.memoryBytes += copy.length;
-  if (!collector.spoolDisabled && collector.memoryBytes > BASH_CAPTURE_SPOOL_THRESHOLD_BYTES) {
+  if (
+    !collector.spoolDisabled
+    && (
+      collector.memoryBytes > collector.spoolThresholdBytes
+      || collector.totalLines > collector.spoolThresholdLines
+    )
+  ) {
     tryStartSpool(collector);
   }
 }

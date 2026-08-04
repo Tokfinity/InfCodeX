@@ -921,14 +921,20 @@ describe('runtime daemon client proxy', () => {
 
   it('returns stable timeout and cancellation errors for daemon history reads', async () => {
     const calls: Array<{ readonly method: string; readonly params: unknown }> = [];
+    const interruptedReads: AbortSignal[] = [];
     const base = fakeTransport(calls);
     const transport: RuntimeDaemonClientTransport = {
       ...base,
-      request(method, params, operation) {
+      request(method, params, operation, control) {
         if (method === 'session.transcript') {
-          return new Promise(() => undefined);
+          if (control?.signal !== undefined) interruptedReads.push(control.signal);
+          return new Promise((_resolve, reject) => {
+            control?.signal?.addEventListener('abort', () => {
+              reject(control.signal?.reason);
+            }, { once: true });
+          });
         }
-        return base.request(method, params, operation);
+        return base.request(method, params, operation, control);
       },
     };
     const client = createRuntimeDaemonClient({
@@ -946,6 +952,7 @@ describe('runtime daemon client proxy', () => {
     await expect(
       client.sessions.transcript('session-1', { timeoutMs: 1 }),
     ).rejects.toMatchObject({ code: 'read_timeout' });
+    expect(interruptedReads[0]?.aborted).toBe(true);
 
     const controller = new AbortController();
     const cancelled = client.sessions.transcript('session-1', {
@@ -953,6 +960,11 @@ describe('runtime daemon client proxy', () => {
     });
     controller.abort();
     await expect(cancelled).rejects.toMatchObject({ code: 'read_cancelled' });
+    expect(interruptedReads[1]?.aborted).toBe(true);
+    await expect(client.sessions.create({ title: 'after timeout' })).resolves.toMatchObject({
+      id: 'session-1',
+      title: 'after timeout',
+    });
     await client.close();
   });
 

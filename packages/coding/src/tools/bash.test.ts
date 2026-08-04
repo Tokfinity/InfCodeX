@@ -340,7 +340,7 @@ describe('toolBash', () => {
     },
   );
 
-  it('returns complete large command output without an inner line or byte preview', async () => {
+  it('spills large command output at the Bash byte/line policy', async () => {
     // NOTE: keep this shell-portable — backticks / ${...} inside the double-
     // quoted -e script get interpreted by POSIX `sh` (command substitution +
     // parameter expansion) before node sees them, which on Linux CI produced
@@ -351,24 +351,45 @@ describe('toolBash', () => {
       executionCwd: tempDir,
     });
 
-    expect(result).toContain('line-1\n');
-    expect(result).toContain('line-3000');
-    expect(result).not.toContain('Bash output truncated to the tail');
+    expect(result).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(result).not.toContain('line-1\n');
+    const outputPath = parseRecoveryOutputPath(result, 'stdout');
+    const artifact = await fs.readFile(outputPath, 'utf-8');
+    expect(artifact).toContain('line-1\n');
+    expect(artifact).toContain('line-3000');
   });
 
-  it('captures stdout and stderr from the first byte after the in-memory threshold is crossed', async () => {
+  it('captures stdout and stderr from the first byte after the policy threshold is crossed', async () => {
     const command = 'node -e "process.stdout.write(\'stdout-first-byte\\n\'+\'x\'.repeat(600*1024)+\'\\nstdout-last-byte\'); process.stderr.write(\'stderr-first-byte\\n\'+\'y\'.repeat(600*1024)+\'\\nstderr-last-byte\')"';
     const result = await toolBash({ command }, {
       backups: new Map(),
       executionCwd: tempDir,
     });
 
-    const body = completedCommandBody(result);
-    expect(body).toContain('stdout-first-byte');
-    expect(body).toContain('stdout-last-byte');
-    expect(body).toContain('[stderr]\nstderr-first-byte');
-    expect(body).toContain('stderr-last-byte');
-    expect(body).not.toContain('capture capped');
+    expect(result).toContain('KODAX_RESULT_INCOMPLETE');
+    const stdoutPath = parseRecoveryOutputPath(result, 'stdout');
+    const stderrPath = parseRecoveryOutputPath(result, 'stderr');
+    await expect(fs.readFile(stdoutPath, 'utf-8')).resolves.toEqual(expect.stringContaining('stdout-first-byte'));
+    await expect(fs.readFile(stdoutPath, 'utf-8')).resolves.toEqual(expect.stringContaining('stdout-last-byte'));
+    await expect(fs.readFile(stderrPath, 'utf-8')).resolves.toEqual(expect.stringContaining('stderr-first-byte'));
+    await expect(fs.readFile(stderrPath, 'utf-8')).resolves.toEqual(expect.stringContaining('stderr-last-byte'));
+  });
+
+  it('spills 174,763 continuous A bytes without materializing them inline', async () => {
+    const content = 'A'.repeat(174_763);
+    const command = 'node -e "process.stdout.write(\'A\'.repeat(174763))"';
+    const result = await toolBash({ command }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+      toolCallId: 'dense-bash-output',
+    });
+
+    expect(result).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(result.length).toBeLessThan(4_096);
+    const outputPath = parseRecoveryOutputPath(result, 'stdout');
+    const artifact = await fs.readFile(outputPath, 'utf-8');
+    expect(artifact).toContain(content);
+    expect(artifact).toContain('KODAX_CAPTURE_COMPLETE');
   });
 
   it('keeps a canonical artifact when raw bytes prove the output cannot fit any request', async () => {

@@ -208,6 +208,13 @@ describe("createKodaXRuntime", () => {
     expect(runtime.capabilities.runtimeEventCoalescing).toEqual({
       version: 1,
     });
+    expect(runtime.capabilities.managedRunDurability).toMatchObject({
+      version: 1,
+      initialInputBeforeExecution: true,
+      completedTurnBeforeEvent: true,
+      deliveredInputBeforeEvent: true,
+      persistenceFailure: "fail_closed",
+    });
     const session = await runtime.sessions.create({ title: "Worker Session" });
     await expect(runtime.sessions.list()).resolves.toEqual([
       expect.objectContaining({ id: session.id, title: "Worker Session" }),
@@ -502,6 +509,35 @@ describe("createKodaXRuntime", () => {
         requirements: { integrationConfigResilience: 1 },
       }),
     ).rejects.toThrow(/does not support.*integrationConfigResilience/i);
+  });
+
+  it("fails closed when a daemon lacks managed Run durability", async () => {
+    const { connectKodaXRuntime } = await import("./sdk-runtime.js");
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== "initialize") return null;
+        return {
+          identity: {
+            runtimeId: "daemon-without-managed-run-durability",
+            mode: "daemon",
+            profile: "default",
+            startedAt: "2026-08-04T00:00:00.000Z",
+            version: "0.7.80",
+          },
+          capabilities: {},
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(
+      connectKodaXRuntime({
+        transport,
+        requirements: { managedRunDurability: 1 },
+      }),
+    ).rejects.toThrow(/does not support.*managedRunDurability/i);
   });
 
   it("fails closed when an older daemon lacks fenced external Agent administration", async () => {
@@ -3889,6 +3925,132 @@ describe("createKodaXRuntime", () => {
     expect(
       codingMock.startKodaX.mock.calls[0]?.[0].session?.persistedByHost,
     ).toBe(false);
+    await runtime.close();
+  });
+
+  it("keeps completed and delivered managed turns canonical when the active Run crashes", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const sessionsDir = path.join(tempRoot, "managed-durable-boundary-sessions");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Managed Durable Boundary",
+    });
+    let signalStarted: (() => void) | undefined;
+    let releaseQueuedInput: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const queuedInputReady = new Promise<void>((resolve) => {
+      releaseQueuedInput = resolve;
+    });
+
+    codingMock.startKodaX.mockImplementation((options: KodaXOptions) => {
+      const result = (async (): Promise<KodaXResult> => {
+        const storage = options.session?.storage;
+        if (!storage) throw new Error("Runtime canonical storage missing");
+        const initial: KodaXMessage = {
+          role: "user",
+          content: "FIRST_MANAGED_PROMPT",
+          turnId: "turn-durable-1",
+        };
+        await storage.save(session.id, {
+          messages: [initial],
+          title: "Managed Durable Boundary",
+          gitRoot: tempRoot,
+        });
+        options.events?.onTurnStarted?.({
+          sessionId: session.id,
+          seq: 1,
+          turnId: "turn-durable-1",
+          contextId: session.id,
+          contextKind: "root",
+          contextRevision: 0,
+          deliveryKind: "initial",
+        });
+        options.context?.interruptInput?.reopenInputWindow();
+        signalStarted?.();
+        await queuedInputReady;
+
+        const completed: KodaXMessage[] = [
+          initial,
+          {
+            role: "assistant",
+            content: "FIRST_MANAGED_ANSWER",
+            turnId: "turn-durable-1",
+          },
+        ];
+        await storage.save(session.id, {
+          messages: completed,
+          title: "Managed Durable Boundary",
+          gitRoot: tempRoot,
+        });
+        options.events?.onTurnCompleted?.({
+          sessionId: session.id,
+          seq: 2,
+          turnId: "turn-durable-1",
+          contextId: session.id,
+          contextKind: "root",
+          contextRevision: 0,
+          status: "completed",
+        });
+
+        const queued = getMessageQueue().dequeue({
+          agentId: actorQueueId(session.id, "/root"),
+          maxPriority: "user",
+          mode: "prompt",
+        });
+        const queuedPrompt = queued[0];
+        if (!queuedPrompt) throw new Error("Runtime queued prompt missing");
+        await storage.save(session.id, {
+          messages: [
+            ...completed,
+            {
+              role: "user",
+              content: queuedPrompt.content,
+              turnId: "turn-durable-2",
+            },
+          ],
+          title: "Managed Durable Boundary",
+          gitRoot: tempRoot,
+        });
+        options.events?.onMidTurnUserMessages?.(
+          [queuedPrompt.content],
+          { queuedMessageIds: [queuedPrompt.id] },
+        );
+        throw new Error("simulated daemon crash during queued turn");
+      })();
+      return fakeRunningSession(options, result);
+    });
+
+    const run = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "FIRST_MANAGED_PROMPT",
+    });
+    await started;
+    const queued = await runtime.runs.submitInput({
+      sessionId: session.id,
+      afterRunId: run.runId,
+      delivery: "interrupt",
+      input: { type: "text", text: "SECOND_MANAGED_PROMPT" },
+    });
+    expect(queued.accepted).toBe(true);
+    releaseQueuedInput?.();
+    await run.result;
+
+    const canonical = await new FileSessionStorage({ sessionsDir }).load(session.id);
+    const canonicalJson = JSON.stringify(canonical?.messages);
+    expect(canonicalJson).toContain("FIRST_MANAGED_PROMPT");
+    expect(canonicalJson).toContain("FIRST_MANAGED_ANSWER");
+    expect(canonicalJson).toContain("SECOND_MANAGED_PROMPT");
+    const lifecycle = await runtime.events.replay({ runId: run.runId });
+    const completedIndex = lifecycle.findIndex((event) => event.type === "turn.completed");
+    const deliveredIndex = lifecycle.findIndex((event) => event.type === "run.input.delivered");
+    expect(completedIndex).toBeGreaterThanOrEqual(0);
+    expect(deliveredIndex).toBeGreaterThan(completedIndex);
     await runtime.close();
   });
 

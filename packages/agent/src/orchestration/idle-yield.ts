@@ -444,8 +444,9 @@ export async function composeIdleYieldUserMessage(
   onUserPrompts?: (
     prompts: readonly string[],
     queuedMessageIds: readonly string[],
-  ) => void,
-  resolveTurnId?: () => string | undefined,
+    promptMessage: KodaXMessage,
+  ) => void | Promise<void>,
+  resolveTurnId?: () => string | undefined | Promise<string | undefined>,
   priorMessages: readonly KodaXMessage[] = [],
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: PromptFragment[] = [];
@@ -493,7 +494,7 @@ export async function composeIdleYieldUserMessage(
   // (synthetic, not user-visible) so the agent still observes the
   // resolution rather than silently looping again.
   const messages: KodaXMessage[] = [];
-  const promptTurnId = promptFragments.length > 0 ? resolveTurnId?.() : undefined;
+  const promptTurnId = promptFragments.length > 0 ? await resolveTurnId?.() : undefined;
   const promptMessage: KodaXMessage | undefined = promptFragments.length > 0
     ? {
         role: 'user',
@@ -534,9 +535,10 @@ export async function composeIdleYieldUserMessage(
     // FEATURE_213 — tell the caller about the user's typed prompt(s) so the UI
     // records them. The message below only reaches the AGENT transcript; the UI
     // renders from its own history/ledger and would otherwise never see this.
-    onUserPrompts?.(
+    await onUserPrompts?.(
       promptFragments.map((fragment) => fragment.content),
       promptFragments.map((fragment) => fragment.id),
+      promptMessage,
     );
     // No `_synthetic` flag — this IS the user's typed input echoed into
     // the transcript as a normal user bubble.

@@ -138,6 +138,22 @@ export function getToolResultPolicy(toolName: string): ToolResultPolicy {
   return TOOL_RESULT_POLICIES[toolName] ?? DEFAULT_POLICY;
 }
 
+function exceedsLineLimit(content: string, maxLines: number): boolean {
+  if (maxLines < 1) return content.length > 0;
+  let lines = 1;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.charCodeAt(index) !== 10) continue;
+    lines += 1;
+    if (lines > maxLines) return true;
+  }
+  return false;
+}
+
+function exceedsToolResultPolicy(content: string, policy: ToolResultPolicy): boolean {
+  if (Buffer.byteLength(content, 'utf8') > policy.maxBytes) return true;
+  return exceedsLineLimit(content, policy.maxLines);
+}
+
 function buildToolResultHint(toolName: string): string {
   switch (toolName) {
     case 'read':
@@ -227,7 +243,8 @@ export async function applyToolResultGuardrail(
       policy,
     };
   }
-  if (!options?.forceSpill && maxInlineTokens === undefined) {
+  const exceedsPhysicalPolicy = exceedsToolResultPolicy(content, policy);
+  if (!options?.forceSpill && !exceedsPhysicalPolicy && maxInlineTokens === undefined) {
     return {
       content,
       truncated: false,
@@ -236,6 +253,7 @@ export async function applyToolResultGuardrail(
   }
   if (
     !options?.forceSpill
+    && !exceedsPhysicalPolicy
     && maxInlineTokens !== undefined
     && countTokens(content) <= maxInlineTokens
   ) {
@@ -247,7 +265,9 @@ export async function applyToolResultGuardrail(
   }
   // Under forceSpill, we still want the same head/tail preview behaviour, but
   // we treat any content as "must spill" so we go through the spill path.
-  const effectivePolicy: ToolResultPolicy = maxInlineTokens !== undefined
+  const effectivePolicy: ToolResultPolicy = exceedsPhysicalPolicy
+    ? policy
+    : maxInlineTokens !== undefined
     ? {
         ...policy,
         maxBytes: Buffer.byteLength(content, 'utf-8'),
@@ -365,11 +385,20 @@ export async function applyToolResultBatchGuardrail(
   budget: ToolResultCapacity | undefined,
   additionalMessageTokens = 0,
 ): Promise<ToolResultBatchEntry[]> {
-  if (!budget || entries.length === 0) {
-    return [...entries];
-  }
+  if (entries.length === 0) return [];
 
-  const result = entries.map((entry) => ({ ...entry }));
+  const result = await Promise.all(entries.map(async (entry): Promise<ToolResultBatchEntry> => {
+    const guarded = await applyToolResultGuardrail(entry.toolName, entry.content, ctx, {
+      existingOutputPath: entry.outputPath,
+    });
+    return {
+      ...entry,
+      content: guarded.content,
+      ...(guarded.outputPath ? { outputPath: guarded.outputPath } : {}),
+    };
+  }));
+  if (!budget) return result;
+
   const entryTokens = result.map((entry) => countToolResultTokens(entry.content));
   const fixedMessageTokens = Math.max(0, Math.floor(additionalMessageTokens));
   const physicalCapacityTokens = Math.max(0, Math.floor(budget.aggregateInlineTokens));

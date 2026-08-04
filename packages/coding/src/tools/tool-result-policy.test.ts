@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setKodaXDiagnosticSink, type KodaXDiagnostic } from '@kodax-ai/agent';
 import {
   applyToolResultBatchGuardrail,
@@ -11,6 +11,7 @@ import {
 import { buildToolResultBudgetFromUsage } from './tool-result-budget.js';
 import { TOOL_OUTPUT_DIR_ENV } from './truncate.js';
 import { countTokens } from '../tokenizer.js';
+import * as tokenizer from '../tokenizer.js';
 
 describe('tool result guardrail', () => {
   let tempDir = '';
@@ -28,28 +29,29 @@ describe('tool result guardrail', () => {
     }
   });
 
-  it('keeps oversized generic output complete when no physical capacity is supplied', async () => {
+  it('applies the tool byte policy before physical token capacity is supplied', async () => {
     const content = Array.from({ length: 3000 }, (_, index) => `line-${index + 1}`).join('\n');
     const result = await applyToolResultGuardrail('write', content, {
       backups: new Map(),
       executionCwd: process.cwd(),
     });
 
-    expect(result.truncated).toBe(false);
-    expect(result.content).toBe(content);
-    expect(await fs.readdir(tempDir)).toEqual([]);
+    expect(result.truncated).toBe(true);
+    expect(result.content).toContain('KODAX_RESULT_INCOMPLETE');
+    expect(await fs.readFile(result.outputPath!, 'utf8')).toBe(content);
   });
 
-  it('does not apply the bash tail policy without capacity pressure', async () => {
+  it('applies the bash line policy without capacity pressure', async () => {
     const content = Array.from({ length: 1200 }, (_, index) => `line-${index + 1}`).join('\n');
     const result = await applyToolResultGuardrail('bash', content, {
       backups: new Map(),
       executionCwd: process.cwd(),
     });
 
-    expect(result.truncated).toBe(false);
+    expect(result.truncated).toBe(true);
     expect(result.content).toContain('line-1200');
-    expect(result.content).toContain('line-1\nline-2');
+    expect(result.content).not.toContain('line-1\nline-2');
+    expect(await fs.readFile(result.outputPath!, 'utf8')).toBe(content);
   });
 
   it('returns small output unchanged', async () => {
@@ -177,12 +179,45 @@ describe('tool result guardrail', () => {
     expect(await fs.readFile(result[0]!.outputPath!, 'utf8')).toBe(content);
   });
 
+  it('spills the 174,763-byte dense Bash result before token estimation', async () => {
+    const content = 'A'.repeat(174_763);
+    const originalCountTokens = tokenizer.countTokens;
+    const countedLengths: number[] = [];
+    const countSpy = vi.spyOn(tokenizer, 'countTokens').mockImplementation((text) => {
+      countedLengths.push(text.length);
+      if (text === content) {
+        throw new Error('raw tool output reached token estimation');
+      }
+      return originalCountTokens(text);
+    });
+
+    try {
+      const result = await applyToolResultBatchGuardrail([{
+        id: 'dense-bash-output',
+        toolName: 'bash',
+        content,
+      }], {
+        backups: new Map(),
+        executionCwd: process.cwd(),
+      }, {
+        aggregateInlineTokens: 200_000,
+      });
+
+      expect(result[0]?.content).toContain('KODAX_RESULT_INCOMPLETE');
+      expect(result[0]!.content.length).toBeLessThan(40 * 1024);
+      expect(await fs.readFile(result[0]!.outputPath!, 'utf8')).toBe(content);
+      expect(countedLengths.every((length) => length < content.length)).toBe(true);
+    } finally {
+      countSpy.mockRestore();
+    }
+  });
+
   it('spills the largest result when a batch crosses the attention boundary', async () => {
-    const content = 'token '.repeat(12_000);
+    const content = 'token '.repeat(10_500);
     expect(countTokens(content)).toBeLessThan(16_000);
     const entries = Array.from({ length: 4 }, (_, index) => ({
       id: `batch-${index}`,
-      toolName: 'bash',
+      toolName: 'tool_call',
       content: `${index}:${content}`,
     }));
 

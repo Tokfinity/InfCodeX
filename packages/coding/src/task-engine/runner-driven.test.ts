@@ -134,6 +134,352 @@ describe('managed runner queue routing', () => {
     expect(resolveActiveRootQueueRoute()).toBeUndefined();
   });
 
+  it('durably records the initial Runtime prompt before provider execution', async () => {
+    const sessionId = 'runtime-initial-durable-boundary';
+    let stored: KodaXSessionData | null = null;
+    const crash = new Error('simulated daemon crash after provider start');
+    const save = vi.fn(async (_id: string, data: KodaXSessionData) => {
+      stored = structuredClone(data);
+    });
+
+    await expect(runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: {
+          id: sessionId,
+          persistedByHost: false,
+          storage: {
+            load: vi.fn(async () => stored),
+            save,
+          },
+        },
+      },
+      'INITIAL_PROMPT_DURABILITY_SENTINEL',
+      async () => {
+        expect(JSON.stringify(stored?.messages)).toContain(
+          'INITIAL_PROMPT_DURABILITY_SENTINEL',
+        );
+        throw crash;
+      },
+    )).rejects.toBe(crash);
+
+    expect(save).toHaveBeenCalled();
+    expect(JSON.stringify(stored?.messages)).toContain(
+      'INITIAL_PROMPT_DURABILITY_SENTINEL',
+    );
+  });
+
+  it('persists a completed turn and delivered queued prompt before the next Runtime turn runs', async () => {
+    const sessionId = 'runtime-queued-durable-boundaries';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    let stored: KodaXSessionData | null = null;
+    let providerCall = 0;
+    const crash = new Error('simulated daemon crash in queued turn');
+    const completedSnapshots: KodaXSessionData[] = [];
+    const deliveredSnapshots: KodaXSessionData[] = [];
+    const save = vi.fn(async (_id: string, data: KodaXSessionData) => {
+      stored = structuredClone(data);
+    });
+
+    try {
+      await expect(runManagedTaskViaRunner(
+        {
+          ...makeOptions(),
+          context: {
+            ...makeOptions().context,
+            interruptInput: {
+              closeInputWindow() {},
+              reopenInputWindow() {},
+            },
+          },
+          session: {
+            id: sessionId,
+            persistedByHost: false,
+            storage: {
+              load: vi.fn(async () => stored),
+              save,
+            },
+          },
+          events: {
+            onTurnCompleted() {
+              if (stored !== null) completedSnapshots.push(structuredClone(stored));
+            },
+            onMidTurnUserMessages() {
+              if (stored !== null) deliveredSnapshots.push(structuredClone(stored));
+            },
+          },
+        },
+        'FIRST_RUNTIME_PROMPT',
+        async () => {
+          providerCall += 1;
+          if (providerCall === 1) {
+            getMessageQueue().enqueue({
+              agentId: queueAgentId,
+              priority: 'user',
+              mode: 'prompt',
+              content: 'QUEUED_RUNTIME_PROMPT',
+            });
+            return { textBlocks: [{ text: 'FIRST_RUNTIME_ANSWER' }], toolBlocks: [] };
+          }
+
+          const durableTranscript = JSON.stringify(stored?.messages);
+          expect(durableTranscript).toContain('FIRST_RUNTIME_PROMPT');
+          expect(durableTranscript).toContain('FIRST_RUNTIME_ANSWER');
+          expect(durableTranscript).toContain('QUEUED_RUNTIME_PROMPT');
+          throw crash;
+        },
+      )).rejects.toBe(crash);
+
+      expect(completedSnapshots).toHaveLength(1);
+      expect(JSON.stringify(completedSnapshots[0]?.messages)).toContain(
+        'FIRST_RUNTIME_ANSWER',
+      );
+      expect(deliveredSnapshots).toHaveLength(1);
+      expect(JSON.stringify(deliveredSnapshots[0]?.messages)).toContain(
+        'QUEUED_RUNTIME_PROMPT',
+      );
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
+  it('persists the complete canonical transcript after a normal Runtime multi-turn run', async () => {
+    const sessionId = 'runtime-normal-multi-turn-persistence';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    let stored: KodaXSessionData | null = null;
+    let providerCall = 0;
+
+    try {
+      await runManagedTaskViaRunner(
+        {
+          ...makeOptions(),
+          context: {
+            ...makeOptions().context,
+            interruptInput: {
+              closeInputWindow() {},
+              reopenInputWindow() {},
+            },
+          },
+          session: {
+            id: sessionId,
+            persistedByHost: false,
+            storage: {
+              load: vi.fn(async () => stored),
+              save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+                stored = structuredClone(data);
+              }),
+            },
+          },
+        },
+        'NORMAL_FIRST_PROMPT',
+        async () => {
+          providerCall += 1;
+          if (providerCall === 1) {
+            getMessageQueue().enqueue({
+              agentId: queueAgentId,
+              priority: 'user',
+              mode: 'prompt',
+              content: 'NORMAL_QUEUED_PROMPT',
+            });
+            return { textBlocks: [{ text: 'NORMAL_FIRST_ANSWER' }], toolBlocks: [] };
+          }
+          return { textBlocks: [{ text: 'NORMAL_SECOND_ANSWER' }], toolBlocks: [] };
+        },
+      );
+
+      const durableTranscript = JSON.stringify(stored?.messages);
+      expect(durableTranscript).toContain('NORMAL_FIRST_PROMPT');
+      expect(durableTranscript).toContain('NORMAL_FIRST_ANSWER');
+      expect(durableTranscript).toContain('NORMAL_QUEUED_PROMPT');
+      expect(durableTranscript).toContain('NORMAL_SECOND_ANSWER');
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
+  it('does not start a Runtime turn when its initial durable write fails', async () => {
+    const failure = new Error('canonical storage unavailable');
+    const providerCall = vi.fn(async () => ({
+      textBlocks: [{ text: 'unreachable' }],
+      toolBlocks: [],
+    }));
+    const started = vi.fn();
+    const completed = vi.fn();
+
+    await expect(runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: {
+          id: 'runtime-required-save-failure',
+          persistedByHost: false,
+          storage: {
+            load: vi.fn(async () => null),
+            save: vi.fn().mockRejectedValue(failure),
+          },
+        },
+        events: {
+          onTurnStarted: started,
+          onTurnCompleted: completed,
+        },
+      },
+      'must be durable before execution',
+      providerCall,
+    )).rejects.toBe(failure);
+
+    expect(providerCall).not.toHaveBeenCalled();
+    expect(started).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('does not start or deliver a queued Runtime turn when its prompt snapshot fails', async () => {
+    const sessionId = 'runtime-queued-save-failure';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const failure = new Error('queued canonical boundary unavailable');
+    let stored: KodaXSessionData | null = null;
+    let saveCount = 0;
+    const started = vi.fn();
+    const completed = vi.fn();
+    const delivered = vi.fn();
+    const providerCall = vi.fn(async () => {
+      getMessageQueue().enqueue({
+        agentId: queueAgentId,
+        priority: 'user',
+        mode: 'prompt',
+        content: 'QUEUED_PROMPT_WITH_FAILED_SAVE',
+      });
+      return { textBlocks: [{ text: 'DURABLE_FIRST_ANSWER' }], toolBlocks: [] };
+    });
+
+    try {
+      await expect(runManagedTaskViaRunner(
+        {
+          ...makeOptions(),
+          context: {
+            ...makeOptions().context,
+            interruptInput: {
+              closeInputWindow() {},
+              reopenInputWindow() {},
+            },
+          },
+          session: {
+            id: sessionId,
+            persistedByHost: false,
+            storage: {
+              load: vi.fn(async () => stored),
+              save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+                saveCount += 1;
+                if (saveCount === 3) throw failure;
+                stored = structuredClone(data);
+              }),
+            },
+          },
+          events: {
+            onTurnStarted: started,
+            onTurnCompleted: completed,
+            onMidTurnUserMessages: delivered,
+          },
+        },
+        'DURABLE_FIRST_PROMPT',
+        providerCall,
+      )).rejects.toBe(failure);
+
+      expect(started).toHaveBeenCalledTimes(1);
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(delivered).not.toHaveBeenCalled();
+      expect(providerCall).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(stored?.messages)).toContain('DURABLE_FIRST_ANSWER');
+      expect(JSON.stringify(stored?.messages)).not.toContain(
+        'QUEUED_PROMPT_WITH_FAILED_SAVE',
+      );
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
+  it('keeps a queued prompt canonical and stops before provider execution when delivery persistence fails', async () => {
+    const sessionId = 'runtime-delivery-journal-failure';
+    const queueAgentId = `actor:${sessionId}:/root`;
+    const failure = new Error('run.input.delivered journal unavailable');
+    let stored: KodaXSessionData | null = null;
+    const started = vi.fn();
+    const completed = vi.fn();
+    const failed = vi.fn();
+    let providerCalls = 0;
+
+    try {
+      await expect(runManagedTaskViaRunner(
+        {
+          ...makeOptions(),
+          context: {
+            ...makeOptions().context,
+            interruptInput: {
+              closeInputWindow() {},
+              reopenInputWindow() {},
+            },
+          },
+          session: {
+            id: sessionId,
+            persistedByHost: false,
+            storage: {
+              load: vi.fn(async () => stored),
+              save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+                stored = structuredClone(data);
+              }),
+            },
+          },
+          events: {
+            onTurnStarted: started,
+            onTurnCompleted: completed,
+            onTurnFailed: failed,
+            onMidTurnUserMessages: () => {
+              throw failure;
+            },
+          },
+        },
+        'DELIVERY_FAILURE_FIRST_PROMPT',
+        async () => {
+          providerCalls += 1;
+          if (providerCalls > 1) {
+            return { textBlocks: [{ text: 'unreachable' }], toolBlocks: [] };
+          }
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'ACCEPTED_BUT_NOT_DELIVERED_PROMPT',
+          });
+          return { textBlocks: [{ text: 'DELIVERY_FAILURE_FIRST_ANSWER' }], toolBlocks: [] };
+        },
+      )).rejects.toBe(failure);
+
+      expect(providerCalls).toBe(1);
+      expect(started).toHaveBeenCalledTimes(2);
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(stored?.messages)).toContain(
+        'ACCEPTED_BUT_NOT_DELIVERED_PROMPT',
+      );
+    } finally {
+      getMessageQueue().dequeue({
+        agentId: queueAgentId,
+        maxPriority: 'user',
+        mode: 'prompt',
+      });
+    }
+  });
+
   it('delivers an interrupt accepted during the final no-tool request before completing the run', async () => {
     const sessionId = 'terminal-interrupt-session';
     const queueAgentId = `actor:${sessionId}:/root`;

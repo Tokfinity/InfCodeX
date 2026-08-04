@@ -100,7 +100,10 @@ export {
 } from './agent-runtime/provider-payload.js';
 export { checkPromiseSignal } from './agent-runtime/thinking-mode-replay.js';
 export { emitResilienceDebug } from './agent-runtime/resilience-debug.js';
-export { saveSessionSnapshot } from './agent-runtime/middleware/session-snapshot.js';
+export {
+  saveRequiredSessionSnapshot,
+  saveSessionSnapshot,
+} from './agent-runtime/middleware/session-snapshot.js';
 export { describeTransientProviderRetry } from './agent-runtime/provider-retry-policy.js';
 export {
   cleanupIncompleteToolCalls,

@@ -70,7 +70,6 @@
   },
   "dependencies": {
     "@kodax-ai/llm": "*",
-    "js-tiktoken": "^1.0.12",
     "fflate": "^0.8.2",
     "jimp": "^1.6.0",
     "typescript": "^5.9.3",

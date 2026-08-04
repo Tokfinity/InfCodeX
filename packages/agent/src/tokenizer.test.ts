@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
 
-import { estimateTokens, countTokens } from './tokenizer.js';
+import {
+  countTokens,
+  estimateMultilingualTokens,
+  estimateTokens,
+  looksLikeDenseEncodedData,
+} from './tokenizer.js';
 
 describe('estimateTokens — image block accounting', () => {
   it('counts a single image block at ~1500 tokens', () => {
@@ -97,5 +102,49 @@ describe('countTokens', () => {
 
   it('returns positive count for non-empty text', () => {
     expect(countTokens('hello')).toBeGreaterThan(0);
+  });
+
+  it('interpolates ASCII and BMP Chinese from UTF-8 bytes and UTF-16 units', () => {
+    expect(estimateMultilingualTokens('a'.repeat(400))).toBe(100);
+    expect(estimateMultilingualTokens('中'.repeat(100))).toBe(100);
+    expect(estimateMultilingualTokens(`${'a'.repeat(200)}${'中'.repeat(100)}`)).toBe(150);
+  });
+
+  it.each([
+    ['continuous ASCII', 'A'.repeat(512)],
+    ['random Base64', Buffer.from(
+      Array.from({ length: 512 }, (_, index) => (index * 73 + 41) % 256),
+    ).toString('base64')],
+    ['random Hex', Buffer.from(
+      Array.from({ length: 256 }, (_, index) => (index * 47 + 19) % 256),
+    ).toString('hex')],
+    ['URL-safe base64', 'AbCdEf0123456789-_'.repeat(29)],
+  ])('detects dense encoded data: %s', (_label, text) => {
+    expect(looksLikeDenseEncodedData(text)).toBe(true);
+    expect(countTokens(text)).toBeGreaterThanOrEqual(Math.ceil(text.length * 0.75));
+  });
+
+  it.each([
+    ['English', 'The quick brown fox jumps over the lazy dog. '.repeat(20)],
+    ['Chinese', '这是一个用于验证多语言估算的句子。'.repeat(20)],
+    ['JSON/code', JSON.stringify({ value: 'hello', enabled: true, count: 42 }).repeat(20)],
+    ['Emoji', '🙂🚀👩‍💻'.repeat(50)],
+    ['multiline', Array.from({ length: 100 }, (_, index) => `line-${index}`).join('\n')],
+  ])('estimates bounded %s content without BPE tokenization', (_label, text) => {
+    expect(countTokens(text)).toBeGreaterThan(0);
+    expect(Number.isFinite(countTokens(text))).toBe(true);
+  });
+
+  it('handles the 174,763-byte reproduction without stalling the event loop', async () => {
+    const text = 'A'.repeat(174_763);
+    const startedAt = performance.now();
+    const nextTimer = new Promise<number>((resolve) => {
+      setTimeout(() => resolve(performance.now() - startedAt), 0);
+    });
+    const tokens = countTokens(text);
+
+    expect(tokens).toBe(Math.ceil(text.length * 0.75));
+    expect(performance.now() - startedAt).toBeLessThan(250);
+    expect(await nextTimer).toBeLessThan(250);
   });
 });

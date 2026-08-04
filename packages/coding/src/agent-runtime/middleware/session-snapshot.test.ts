@@ -22,6 +22,7 @@ import type { KodaXOptions } from '../../types.js';
 import { buildRuntimeSessionState } from '../runtime-session-state.js';
 import {
   markStartKodaXGeneratedSessionId,
+  saveRequiredSessionSnapshot,
   saveSessionSnapshot,
 } from './session-snapshot.js';
 
@@ -48,6 +49,39 @@ const minimalData = {
   title: 'test',
   gitRoot: '/repo',
 };
+
+describe('saveRequiredSessionSnapshot', () => {
+  it('rejects when canonical storage is unavailable', async () => {
+    const opts = {
+      provider: 'anthropic',
+      session: { id: 'runtime-owned-without-storage', persistedByHost: false },
+    } as KodaXOptions;
+
+    await expect(
+      saveRequiredSessionSnapshot(opts, opts.session!.id!, minimalData),
+    ).rejects.toThrow('requires session.storage');
+  });
+
+  it('surfaces canonical storage failures after emitting a diagnostic', async () => {
+    const failure = new Error('disk full');
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: 'runtime-owned-save-failure',
+        persistedByHost: false,
+        storage: { save: vi.fn().mockRejectedValue(failure) } as never,
+      },
+    } as KodaXOptions;
+
+    await expect(
+      saveRequiredSessionSnapshot(opts, opts.session!.id!, minimalData),
+    ).rejects.toBe(failure);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      source: 'coding:session-snapshot',
+      level: 'error',
+    }));
+  });
+});
 
 describe('saveSessionSnapshot — silent no-op when no storage', () => {
   it('returns early without throwing when options.session is undefined', async () => {

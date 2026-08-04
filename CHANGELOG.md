@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Runtime SDK capability negotiation now advertises `managedRunDurability` v1,
+  allowing embedders to reject or safely replace daemons that do not guarantee
+  canonical managed-Run boundaries.
+
+### Changed
+
+- Public `countTokens` / `estimateTokens` keep their existing signatures but
+  now use a provider-neutral O(n) multilingual and dense-data estimate instead
+  of synchronous `cl100k_base` BPE tokenization.
+
+### Fixed
+
+- Oversized tool output is byte/line-spilled before token estimation, avoiding
+  main-loop stalls on long Base64/ASCII output while preserving a bounded
+  preview and complete artifact.
+- Runtime-owned managed Runs durably save the initial accepted prompt, each
+  completed turn, and each queued prompt before publishing the corresponding
+  lifecycle event. Required persistence failures fail closed, and queued turns
+  are not started until their user input is canonical.
+
 ## [0.7.80] - 2026-08-04
 
 ### Added

@@ -27,9 +27,9 @@
  *   mutations do not mutate the persisted snapshot.
  *
  * **Storage failure isolation (CAP-013-003 / CAP-SESSION-SNAPSHOT-003)**:
- * `storage.save` rejections are absorbed locally and logged via
- * diagnostics. The function NEVER propagates
- * a storage error to the caller. Rationale: snapshots are best-effort
+ * `saveSessionSnapshot` absorbs `storage.save` rejections locally and logs
+ * diagnostics. `saveRequiredSessionSnapshot` instead propagates failures at
+ * Runtime-owned durable boundaries. Ordinary snapshots remain best-effort
  * session continuity, NOT load-bearing for the run's success/failure.
  * Particularly important inside the catch-block cleanup chain
  * (`runCatchCleanup`) where a storage failure would otherwise clobber
@@ -162,16 +162,19 @@ function isSafeAuthoritativeTranscript(messages: readonly KodaXMessage[]): boole
   return pendingToolUseIds.size === 0;
 }
 
-export async function saveSessionSnapshot(
+interface SessionSnapshotData {
+  messages: KodaXMessage[];
+  title: string;
+  gitRoot?: string;
+  errorMetadata?: SessionErrorMetadata;
+  runtimeSessionState?: RuntimeSessionState;
+}
+
+async function saveSessionSnapshotWithPolicy(
   options: KodaXOptions,
   sessionId: string,
-  data: {
-    messages: KodaXMessage[];
-    title: string;
-    gitRoot?: string;
-    errorMetadata?: SessionErrorMetadata;
-    runtimeSessionState?: RuntimeSessionState;
-  },
+  data: SessionSnapshotData,
+  required: boolean,
 ): Promise<void> {
   // FEATURE_173 dual-writer fix: when the host (interactive REPL) owns
   // persistence it writes the full lineage / uiHistory / artifactLedger
@@ -193,6 +196,11 @@ export async function saveSessionSnapshot(
   }
 
   if (!options.session?.storage) {
+    if (required) {
+      throw new Error(
+        `Durable managed Run persistence requires session.storage for session "${sessionId}".`,
+      );
+    }
     // v0.7.43 — when an SDK embedder supplies `session.id` but no
     // `session.storage`, the run completes successfully but nothing
     // lands on disk; the embedder's "sessions" UI silently stays empty.
@@ -310,8 +318,32 @@ export async function saveSessionSnapshot(
     emitKodaXDiagnostic({
       source: 'coding:session-snapshot',
       level: 'error',
-      message: 'storage.save failed; continuing without snapshot persistence.',
+      message: required
+        ? 'storage.save failed at a required canonical Session boundary.'
+        : 'storage.save failed; continuing without snapshot persistence.',
       detail: storageError,
     });
+    if (required) throw storageError;
   }
+}
+
+/** Best-effort snapshot used by ordinary SDK and error-cleanup paths. */
+export async function saveSessionSnapshot(
+  options: KodaXOptions,
+  sessionId: string,
+  data: SessionSnapshotData,
+): Promise<void> {
+  await saveSessionSnapshotWithPolicy(options, sessionId, data, false);
+}
+
+/**
+ * Required canonical boundary used when Runtime declares itself the Session
+ * owner. A published durable lifecycle event must never outrun this write.
+ */
+export async function saveRequiredSessionSnapshot(
+  options: KodaXOptions,
+  sessionId: string,
+  data: SessionSnapshotData,
+): Promise<void> {
+  await saveSessionSnapshotWithPolicy(options, sessionId, data, true);
 }

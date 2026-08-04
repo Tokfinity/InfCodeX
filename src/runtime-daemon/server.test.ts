@@ -1068,6 +1068,13 @@ describe('runtime daemon dispatcher', () => {
           },
           typedRuntimeEvents: { version: 1 },
           daemonSafeRunInput: { version: 1 },
+          managedRunDurability: {
+            version: 1,
+            initialInputBeforeExecution: true,
+            completedTurnBeforeEvent: true,
+            deliveredInputBeforeEvent: true,
+            persistenceFailure: 'fail_closed',
+          },
           runtimeEventCoalescing: { version: 1 },
           runtimeAutoModeGuardrail: {
             version: 4,
@@ -1428,6 +1435,7 @@ describe('runtime daemon dispatcher', () => {
         events: true,
         contextDiagnostics: true,
         actorControlPlane: { version: 1, methodNamespace: 'agents' },
+        managedRunDurability: { version: 1 },
         runtimeEventCoalescing: { version: 1 },
       });
     }
