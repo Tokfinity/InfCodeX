@@ -181,7 +181,7 @@ deadline 时才超时；embedded、Worker 与 daemon 的 Runtime Auto v4 均声�
 `fallbackPersistsEngine:false`。Actor owner 还会验证 Runtime identity，而不是只看
 PID，因此 PID 复用不会卡住已崩溃 owner。恢复 Session 选择器也改为显示宿主本地时区。
 
-**v0.7.79 发布准备候选版**：configured outbound A2A Agent 现在可持久化两项彼此独立、
+**v0.7.79 发布**：configured outbound A2A Agent 现在可持久化两项彼此独立、
 默认拒绝的网络权限：private-address 访问与非 loopback 明文 HTTP。embedded Worker
 与共享 daemon 会协调并执行同一份授权配置。Runtime 宿主同时获得唯一权威的
 Session 状态、有界只读诊断、字节保持的 Session 导出、严格 transcript 观测，
@@ -192,9 +192,27 @@ Session 状态、有界只读诊断、字节保持的 Session 导出、严格 tr
 OpenAI-compatible 自定义 provider 现在可在 provider 或 model 级选择 `max_tokens`
 或 `max_completion_tokens`。DeepSeek V4 Flash/Pro 使用各自的 reasoning profile，
 并正确标记为纯文本。详见 [v0.7.79 设计](docs/features/v0.7.79.md)与
-[发布准备清单](docs/release.md#v0779-release-preparation)。FEATURE_280 已显式改期到
-v0.7.81，本候选版没有把它表述为已交付。Issue 256 同样已显式改期到 v0.7.84，
-本候选版没有把它表述为已交付。
+[发布清单](docs/release.md#v0779-release-preparation)。FEATURE_280 已显式改期到
+v0.7.81（2026-08-04 再改期到 v0.7.86），本版本没有把它表述为已交付。Issue 256 同样已显式改期到 v0.7.84，
+本版本没有把它表述为已交付。
+
+**v0.7.80 加固发布**：CLI 现在支持在 `~/.kodax/config.json` 中配置
+`worker.configuredA2A`：嵌入式 Runtime 改为 Worker 托管，并在 Worker owner 内
+装载 configured A2A 执行平面，因此 configured outbound Agent 会以
+`external:<name>` 出现在 `list_dispatchable_agents` 中并可用 `spawn_agent`
+调度。该模式会拒绝 configured MCP server 或 Extension（它们无法跨 Worker
+边界）；如需保留这些能力，请使用默认 inline Runtime。Worker 托管的嵌入式
+CLI 会话也会像 daemon 模式一样把 run options 收敛为
+JSON 安全的 wire DTO，而不再以 `RuntimeTransportBoundaryError` 崩溃。Auto
+permission 分析不再把普通搜索范围与工具 metadata 当作 unresolved，
+`max_tokens` 截断的 classifier 重试改用 1024-token 预算（Issue 275）。Managed
+AMA 回合现在以 500 次迭代的机械 panic fuse 约束单次不间断工具循环，每次
+idle-yield 恢复都会重置计数——它只是失控循环的熔断，绝不是累计任务预算；触发
+熔断的 Runner 会抛出携带恢复 transcript 的结构化 `RunnerIterationLimitError`。
+Managed-run 重复循环已被封堵，并行 review 与 delegation 指引已恢复并收紧。
+FEATURE_278/279/282/283/285 已显式改期到 v0.7.85，因此 v0.7.80 仍是
+debug/patch 槽位，没有把未完成特性表述为已交付。详见
+[v0.7.80 发布清单](docs/release.md#v0780-release-preparation)。
 
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
@@ -935,6 +953,8 @@ MCP、A2A、Extension 分别使用 `~/.kodax/integrations/` 下的一个用户�
 loopback HTTP 无需这两项授权。OAuth token endpoint 仍保持更严格的
 HTTPS 或精确 loopback 规则。Worker-hosted SDK Runtime 可通过
 `worker: { configuredA2A: true }` 让 Worker owner 装载同一配置执行平面。
+CLI 同样支持在 `~/.kodax/config.json` 中配置 `"worker": { "configuredA2A": true }`，
+将嵌入式运行时改为 Worker 托管并装载配置的 A2A 执行平面。
 `a2a serve` 会在监听前装载已配置的 MCP/Extension 能力并固定执行权威，同时热加载
 公开信息、鉴权和限额。Agent、Skill、Extension 工具权威、工作区、tool policy
 或任务存储变更必须显式重启服务。

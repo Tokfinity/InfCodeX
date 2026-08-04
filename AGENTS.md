@@ -1,6 +1,6 @@
 # KodaX Development Rules
 
-> Project-specific rules. For general standards see `~/.claude/rules/`.
+Spend time on thinking. DO NOT send optional commentary.
 
 ---
 

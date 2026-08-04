@@ -81,11 +81,93 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.80 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.80`. This candidate is not
+tagged or published. Its prepared scope is:
+
+- the CLI honors `worker.configuredA2A` in `~/.kodax/config.json`: the embedded
+  Runtime becomes Worker-hosted and loads the configured A2A plane inside the
+  Worker owner, so configured outbound Agents appear as `external:<name>` and
+  can be dispatched with `spawn_agent`. The mode rejects configured MCP servers
+  or Extensions (they cannot cross the Worker boundary); Worker-hosted embedded
+  CLI sessions also reduce run options to the JSON-safe wire DTO exactly like
+  daemon mode instead of crashing with `RuntimeTransportBoundaryError`;
+- a structured `RunnerIterationLimitError` failure carrying the last legal
+  transcript, plus a 500-iteration per-invocation panic fuse for one
+  uninterrupted managed tool loop that resets on every idle-yield resume while
+  the managed-task idle-yield lifecycle stays unbounded;
+- Issue 275 Auto permission fix: ordinary search scopes, directory and Git
+  reads, and trusted tool side-effect metadata stay on the deterministic read
+  path, GET-only `web_fetch` is a network read, and a
+  `max_tokens`-truncated classifier retry uses a 1024-token output budget;
+- managed-run repetition-loop prevention with bounded managed-run/runtime
+  context projections, stall detection, and verifier-recorder/LLM-judge
+  convergence, restoring parallel review and tightening parallel delegation
+  guidance.
+
+FEATURE_278/279/282/283/285 were explicitly rescheduled to `v0.7.85` on
+2026-08-04 per the
+[roadmap reschedule](../FEATURE_LIST.md#2026-08-04-v0780-roadmap-reschedule);
+v0.7.80 is a debug/patch slot and none of the items above claim a feature
+outcome. Issue 256 remains scheduled for `v0.7.84` and is not a v0.7.80 gate;
+Issue 275 was resolved in this candidate.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature and
+   issue trackers, this checklist, SDK/package guides, configuration examples,
+   and `kodax_manual` agree on the 0.7.80 behavior;
+2. no incomplete feature or known High release blocker is presented as shipped;
+   FEATURE_278/279/282/283/285 have the explicit v0.7.85 disposition above, and
+   Issue 256 is not a v0.7.80 gate;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. a clean-install-equivalent deterministic gate passes on the exact candidate:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused human verification covers
+   [`ISSUE_243_v0.7.79_REGRESSION_GUIDE.md`](test-guides/ISSUE_243_v0.7.79_REGRESSION_GUIDE.md)
+   (configured A2A in embedded/Worker/daemon modes, now including the CLI
+   `worker.configuredA2A` opt-in) and
+   [`ISSUE_274_v0.7.79_REGRESSION_GUIDE.md`](test-guides/ISSUE_274_v0.7.79_REGRESSION_GUIDE.md),
+   plus standalone `--version`, exactly-one-command execution, an Auto[LLM]
+   read-heavy session (Issue 275), and a managed task that completes across
+   idle-yield child completions without repetition or a panic-fuse exit;
+6. the exact publish-shaped `kodax-ai-kodax-0.7.80.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,
+   provider capabilities, and built-in Skills must be present;
+7. any performance evidence from `npm run bench:session-cold-open` follows
+   `benchmark/EVAL_GUIDELINES.md` and is recorded as supporting evidence, not a
+   substitute for correctness gates or a task-quality claim;
+8. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+9. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.80`. The tag-triggered workflow
+    must finish green and the GitHub Release must contain all five archives plus
+    `SHA256SUMS`. npm publication remains the maintainer-owned
+    `node scripts/release.mjs` step after the audited bytes are approved.
+
 ## v0.7.79 release preparation
 
 Release state: the root package, all four workspace packages, and every
-`package-lock.json` workspace entry are version `0.7.79`. This candidate is not
-tagged or published. Its prepared scope is:
+`package-lock.json` workspace entry are version `0.7.79`. v0.7.79 was tagged at
+commit `bbdc12c0` on 2026-08-04 after the push CI run and the manual
+`target=all` release run were green, and the audited bytes were published to
+npm. The prepared scope below remains the record of that release gate:
 
 - FEATURE_281 explicit configured-A2A network authorization, including the
   Worker-hosted configured plane and independent default-deny permissions for
@@ -108,8 +190,10 @@ tagged or published. Its prepared scope is:
 - first-run credential guidance, MCP environment-reference expansion, and
   protected Windows global-install ASRT runner preparation.
 
-FEATURE_280 was explicitly rescheduled to `v0.7.81` on 2026-08-03; none of the
-items above claim its cache-stable prompt/tool-surface outcome.
+FEATURE_280 was explicitly rescheduled to `v0.7.81` on 2026-08-03, then to
+`v0.7.86` on 2026-08-04 per the
+[roadmap reschedule](../FEATURE_LIST.md#2026-08-04-v0780-roadmap-reschedule);
+none of the items above claim its cache-stable prompt/tool-surface outcome.
 `docs/features/v0.7.79.md`, `FEATURE_LIST.md`, the README/README_CN release
 notes, and this checklist were updated together with that decision.
 

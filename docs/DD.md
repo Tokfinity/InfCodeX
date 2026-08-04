@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-01
+> Last updated: 2026-08-04
 >
-> Current release baseline: `v0.7.79` development candidate
-> (`@kodax-ai/kodax@0.7.79`)
+> Current release baseline: `v0.7.80` development candidate
+> (`@kodax-ai/kodax@0.7.80`)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,11 +20,15 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.79`. The development
-candidate adds explicit configured-A2A network authorization, Worker-hosted A2A
-dispatch, strict read-only Runtime Session observation, durable lifecycle and
-history recovery, an evidence-checked ordinary-conversation projection,
-streaming-event coalescing, and Windows global-install ASRT support. It retains
+The root workspace package is `@kodax-ai/kodax@0.7.80`. The development
+candidate (a debug/patch slot after the v0.7.79 release; FEATURE_278/279/282/
+283/285 were rescheduled to v0.7.85) adds CLI `worker.configuredA2A` support
+for a Worker-hosted embedded Runtime (rejecting configured MCP servers or
+Extensions that cannot cross the Worker boundary), daemon-style transport
+sanitization of Worker-hosted run options, a structured
+`RunnerIterationLimitError` with a
+500-iteration per-invocation panic fuse for one uninterrupted managed tool
+loop, and the Issue 275 Auto permission fixes. It retains
 v0.7.78's evidence-gated project Skill canaries, complete first-run split
 configuration, intent-aligned Auto[LLM] permission behavior, optional
 workspace-scoped ASRT containment, and standalone `/sandbox` SDK. Issue 256 is

@@ -11,24 +11,24 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.78` (Git tag / GitHub Release / npm) |
-| Current package version | `@kodax-ai/kodax@0.7.79` development candidate (unpublished) |
+| Current released version | `v0.7.79` (Git tag / GitHub Release / npm) |
+| Current package version | `@kodax-ai/kodax@0.7.80` development candidate (unpublished) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `70` |
+| Total tracked features | `71` |
 | InProgress | `1` |
-| Planned | `14` |
+| Planned | `15` |
 | Completed | `49` |
 | Reviewed out of active roadmap | `6` (`108, 231, 232, 235, 238, 244`) |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286` |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 221, 224, 225, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
 ### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` are engineering-complete for the unpublished v0.7.79 candidate; `263`, `276`, and `277` shipped in v0.7.78. v0.7.78 remains the current Git/GitHub/npm release. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.79 remains the current Git/GitHub/npm release; the v0.7.80 candidate is the debug/patch slot. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 8 | `280, 278, 279, 282, 283, 285, 265, 105` | `v0.7.79` -> `v0.7.80` -> `v0.7.85` -> `v0.7.90` |
+| Planned, near-term | 9 | `287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.79` -> `v0.7.81` -> `v0.7.85` -> `v0.7.86` -> `v0.7.90` -> `v0.7.95` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -63,11 +63,12 @@
 | `v0.7.77` | `2` |
 | `v0.7.78` | `3` |
 | `v0.7.79` | `3` |
-| `v0.7.80` | `5` |
+| `v0.7.80` | `0` |
 | `v0.7.81` | `1` |
-| `v0.7.85` | `1` |
+| `v0.7.85` | `5` |
+| `v0.7.86` | `1` |
 | `v0.7.90` | `1` |
-| `v0.7.95` | `0` |
+| `v0.7.95` | `1` |
 | `v0.7.100` | `1` |
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
@@ -495,32 +496,100 @@
 
 ---
 
-## v0.7.79 Release Preparation Record
+## v0.7.79 Release Record
 
-The unpublished `@kodax-ai/kodax@0.7.79` candidate includes completed
-`FEATURE_281` and `FEATURE_284` plus the Runtime Session observation/export/diagnostic,
+The `@kodax-ai/kodax@0.7.79` release (tagged `bbdc12c0` on 2026-08-04,
+published to npm) includes completed `FEATURE_281` and `FEATURE_284` plus the
+Runtime Session observation/export/diagnostic,
 event-coalescing, standalone child-process, lineage, shell cleanup, packaged
 sidecar, provider-compatibility, setup, and Windows ASRT fixes recorded in
 `CHANGELOG.md` and `KNOWN_ISSUES.md`.
 
-`FEATURE_280` was explicitly rescheduled to `v0.7.81` on 2026-08-03. It is not
-included in the completed candidate claims, and the v0.7.79 feature design,
+`FEATURE_280` was explicitly rescheduled to `v0.7.81` on 2026-08-03, then to
+`v0.7.86` on 2026-08-04. It is not
+included in the release claims, and the v0.7.79 feature design,
 this tracker, the release checklist, and the README release notes were updated
 together with that decision.
 
-The same candidate contains a non-Feature release-hardening addendum. Issue 257
+The same release contains a non-Feature release-hardening addendum. Issue 257
 delivers the evidence-checked ordinary-conversation projection without changing
 raw transcript audit semantics. Issue 256 was explicitly rescheduled to
-`v0.7.84` on 2026-08-04 and is not part of this candidate: snapshot-based
+`v0.7.84` on 2026-08-04 and is not part of this release: snapshot-based
 Windows ancestry cannot prove descendant closure after an intermediate parent
 exits, so spawn-time Job Object containment and a host-issued Worker owner
-lease are required in v0.7.84, not at v0.7.79 tag readiness.
+lease are required in v0.7.84.
 
 The release checklist is [docs/release.md](release.md#v0779-release-preparation).
 The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.80 Release Preparation Record
+
+`v0.7.80` is a debug/patch slot. `FEATURE_278/279/282/283/285` were explicitly
+rescheduled to `v0.7.85` on 2026-08-04 (designs stay in
+[features/v0.7.80.md](features/v0.7.80.md)); `v0.7.81` is the empty slot for
+`FEATURE_287`'s target. The unpublished `@kodax-ai/kodax@0.7.80` candidate
+contains the non-Feature hardening recorded in `CHANGELOG.md`,
+`KNOWN_ISSUES.md` (Issue 275 resolved), and
+[docs/release.md](release.md#v0780-release-preparation):
+
+- the CLI honors `worker.configuredA2A` in `~/.kodax/config.json`, creating a
+  Worker-hosted embedded Runtime that loads the configured A2A plane inside the
+  Worker owner (rejecting configured MCP servers or Extensions that cannot
+  cross the Worker boundary), with daemon-style transport sanitization of run
+  options;
+- a structured `RunnerIterationLimitError` failure plus a 500-iteration
+  per-invocation panic fuse for one uninterrupted managed tool loop (idle-yield
+  resumes reset the counter; the managed-task lifecycle stays unbounded);
+- Issue 275 Auto permission fix (ordinary search scopes / trusted tool
+  side-effect metadata stay deterministic; `max_tokens`-truncated classifier
+  retries with a 1024-token budget);
+- managed-run repetition-loop prevention, restored parallel review, and
+  tightened parallel delegation guidance.
+
+The release checklist is [docs/release.md](release.md#v0780-release-preparation).
+
+---
+
+## 2026-08-04 v0.7.80+ Roadmap Reschedule
+
+At explicit user direction, every planned `v0.7.x` feature moves back by five
+minor versions so the next several slots can serve as release/debug buffer:
+
+- `FEATURE_278`, `FEATURE_279`, `FEATURE_282`, `FEATURE_283`, `FEATURE_285`:
+  `v0.7.80` -> `v0.7.85`.
+- `FEATURE_280`: `v0.7.81` -> `v0.7.86` (follows its 2026-08-03 move from
+  `v0.7.79` to `v0.7.81`).
+- `FEATURE_265`: `v0.7.85` -> `v0.7.90`.
+- `FEATURE_105`: `v0.7.90` -> `v0.7.95`.
+- `FEATURE_225` stays at `v0.7.100` (InProgress, unchanged).
+
+The design documents keep their per-version homes
+(`docs/features/v0.7.80.md`, `v0.7.85.md`, `v0.7.90.md`) with updated
+Status/Target fields; `v0.7.80` and `v0.7.81` become empty debug/patch slots.
+Issue 256 remains scheduled for `v0.7.84` (bug fix, not a feature).
+
+---
+
+## 2026-08-04 Virtual-Provider Split
+
+`FEATURE_287` was created to split the virtual-Provider work (previously
+planned as a single `FEATURE_105`) into two independently releasable features
+at explicit user direction:
+
+- `FEATURE_287` (v0.7.81): virtual-Provider skeleton + **Advisor mode**
+  (host-owned escalation triggers, no model-visible consult tool), shipped
+  first; design in [v0.7.81](features/v0.7.81.md).
+- `FEATURE_105` (v0.7.95): **MoA mode** on the same skeleton; design remains in
+  [v0.7.90](features/v0.7.90.md).
+
+Advisor mode validates the provider-neutral skeleton (effective-target
+resolution, prepare/rebase, advisory transcript, physical-call ledger,
+role-separated cache) with one real mode before MoA adds parallel fan-out.
 
 ---
 
@@ -936,14 +1005,15 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.81` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
-| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
-| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
-| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
-| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
-| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.80` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
-| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.85` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
-| `105` | Mixture-of-Agents Virtual Provider | Core / LLM Provider + Test-Time Scaling | High | `v0.7.90` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
+| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.7.81` | [v0.7.81](features/v0.7.81.md#feature_287-advisor-mode-virtual-provider) |
+| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
+| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
+| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
+| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
+| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.86` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
+| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.90` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
+| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.7.95` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |

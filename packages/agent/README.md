@@ -90,11 +90,17 @@ token reserve all participate in its evidence fingerprint. Qualified
 credential sentences are rejected before they can become model-visible memory
 evidence.
 
-The v0.7.79 candidate hardens Session-lineage reconciliation for upgraded
+The v0.7.79 release hardens Session-lineage reconciliation for upgraded
 v0.7.78 data: the first full reconciliation reuses the exact persisted active
 context, no-input reconciliation is idempotent, and an intentional same-content
 new query remains a distinct lineage entry. Durable-island recovery preserves
 parent-before-child order and compaction clone provenance.
+
+The v0.7.80 candidate adds a structured `RunnerIterationLimitError` with a
+recovery transcript: a Runner that exhausts its mechanical tool-loop fuse fails
+with `code: 'RUNNER_ITERATION_LIMIT'` and carries the last legal transcript,
+readable through `readRunnerRecoveryTranscript`, so callers can distinguish a
+runaway tool loop from other failures.
 
 Windows process-tree cleanup now identity-checks observed roots and descendants
 and returns an indeterminate outcome when evidence is incomplete. Snapshot

@@ -6,23 +6,68 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.80] - 2026-08-04
+
 ### Added
 
-- User-level `sandbox.envPass` now accepts an exact list of host environment
-  variable names to expose to model-issued command targets, including ASRT and
-  the ordinary fallback path. The default remains empty; configuration stores
-  names rather than values, project configuration cannot broaden the list, and
-  execution-control variables remain blocked. Commands can read and emit any
-  variable that the user explicitly allows. SDK callers can supply the same
-  Run-scoped setting through `KodaXOptions.sandbox`, including Worker and daemon
-  transports, without mutating process-global configuration.
+- The CLI honors `worker.configuredA2A` in `~/.kodax/config.json`: the embedded
+  Runtime is created Worker-hosted with the configured A2A plane installed
+  inside the Worker owner, so configured outbound A2A Agents appear as
+  `external:<name>` in `list_dispatchable_agents` and can be dispatched with
+  `spawn_agent` instead of being silently ignored. The function-valued inline
+  `externalAgents` plane is skipped in that mode because it cannot cross the
+  Worker boundary, and the mode rejects configured MCP servers or Extensions —
+  use the default inline Runtime to retain those capabilities while loading
+  configured A2A. Config templates document the `worker` block.
+- `@kodax-ai/agent` now exports the structured `RunnerIterationLimitError` and
+  `isRunnerIterationLimitError` guard. A Runner that exhausts its mechanical
+  tool-loop fuse fails with `code: 'RUNNER_ITERATION_LIMIT'` and carries the
+  last legal transcript, readable through `readRunnerRecoveryTranscript`, so
+  callers can distinguish a runaway tool loop from other failures.
+
+### Changed
+
+- Managed AMA turns now bound one uninterrupted `Runner.run` tool loop by a
+  500-iteration mechanical panic fuse instead of being unbounded. Each
+  idle-yield resume starts a fresh Runner invocation and resets the counter, so
+  the fuse is a runaway-loop breaker, never a cumulative task budget; the
+  managed-task idle-yield lifecycle itself remains unbounded. Iteration events
+  (`onIterationStart`/`onIterationEnd`) now report the real fuse instead of a
+  JSON-unsafe Infinity sentinel, and a fuse exit keeps the Runner-attached
+  recovery transcript and checkpoint available for diagnosis or resume instead
+  of deleting them.
 
 ### Fixed
 
-- A2A integration watching now ignores unchanged content revisions, preventing
-  repeated false `hot-reloaded` notices and their unnecessary root-TUI render.
-  Explicit manual reload still repairs missing registrations and retries
-  transient discovery failures without requiring a file rewrite.
+- Auto permission analysis no longer treats ordinary grep/glob/directory and
+  Git metadata/content reads as unresolved, and no longer invents an unknown
+  effect for tools with trusted side-effect metadata — GET-only `web_fetch` is
+  reclassified as a network read. A classifier response truncated by
+  `max_tokens` is retried once with a 1024-token output budget instead of
+  repeating the same impossible 256-token attempt (Issue 275).
+- Managed runs can no longer spin in repetition loops across idle-yield child
+  completions: bounded managed-run/runtime context projections, stall
+  detection, verifier-recorder and LLM-judge convergence, and worker-role
+  prompt guidance keep repeated convergence stable while parallel review is
+  restored.
+- `quality_strategy` Actor-Turn evidence refs stay inside the executing
+  Actor's controlled subtree: same-parent sibling provenance is rejected as
+  outside the visibility boundary, while unknown actors and stale exact turn
+  refs drop the optional telemetry without blocking the underlying legal Actor
+  operation.
+- Parallel delegation guidance is tightened so independent work lanes fan out
+  through ordinary Actor operations while genuinely indivisible or strongly
+  serial work stays solo, without re-opening the managed-run repetition
+  regression.
+- CLI sessions on a Worker-hosted embedded Runtime now reduce run options to
+  the JSON-safe wire DTO before crossing the Worker transport boundary: host
+  callbacks (`events.beforeToolExecute`, `onTextDelta`), session storage,
+  memory identity, and the host-owned extension runtime are stripped, matching
+  daemon-mode sanitization instead of crashing with
+  `RuntimeTransportBoundaryError`. Daemon mode itself keeps its loud
+  host-binding rejection — a configured `events.beforeToolExecute` or
+  `extensionRuntime` still errors instead of being silently disabled; only
+  Worker-hosted embedded Runtimes strip them.
 
 ## [0.7.79] - 2026-08-03
 
@@ -46,6 +91,14 @@ All notable changes to this project will be documented in this file.
   reports unresolved legacy ambiguity, and supplies revision-fenced
   fork/rewind boundaries while leaving raw transcript audit data unchanged.
   Standalone session consumers receive the same mutation boundary contract.
+- User-level `sandbox.envPass` now accepts an exact list of host environment
+  variable names to expose to model-issued command targets, including ASRT and
+  the ordinary fallback path. The default remains empty; configuration stores
+  names rather than values, project configuration cannot broaden the list, and
+  execution-control variables remain blocked. Commands can read and emit any
+  variable that the user explicitly allows. SDK callers can supply the same
+  Run-scoped setting through `KodaXOptions.sandbox`, including Worker and daemon
+  transports, without mutating process-global configuration.
 
 ### Changed
 
@@ -276,6 +329,10 @@ All notable changes to this project will be documented in this file.
   frames obey the request-ID fence and cannot acknowledge unfinished requests.
   Daemon startup cleanup also surfaces an indeterminate process-tree outcome
   instead of treating an already-exited root as proof of descendant cleanup.
+- A2A integration watching now ignores unchanged content revisions, preventing
+  repeated false `hot-reloaded` notices and their unnecessary root-TUI render.
+  Explicit manual reload still repairs missing registrations and retries
+  transient discovery failures without requiring a file rewrite.
 
 ### Performance
 

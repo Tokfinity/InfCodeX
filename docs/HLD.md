@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-01
+> Last updated: 2026-08-04
 >
-> Current implementation baseline: `v0.7.79` development candidate
-> (`@kodax-ai/kodax@0.7.79` workspace package)
+> Current implementation baseline: `v0.7.80` development candidate
+> (`@kodax-ai/kodax@0.7.80` workspace package)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because

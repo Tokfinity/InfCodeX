@@ -559,7 +559,7 @@ hosts. Actor ownership additionally uses Runtime identity rather than PID alone,
 so PID reuse cannot pin a crashed owner. The resume Session picker also renders
 timestamps in the host's local timezone.
 
-**v0.7.79 release-preparation candidate:** Configured outbound A2A Agents can persist two
+**v0.7.79 release:** Configured outbound A2A Agents can persist two
 independent, default-deny network permissions: private-address access and
 non-loopback plaintext HTTP. The embedded Worker and shared daemon reconcile
 and execute the same authorized configuration. Runtime embedders also gain one
@@ -574,11 +574,32 @@ OpenAI-compatible custom providers can now choose `max_tokens` or
 `max_completion_tokens` per provider or model. DeepSeek V4 Flash and Pro use
 separate reasoning profiles and are advertised as text-only. See the
 [v0.7.79 design](docs/features/v0.7.79.md) and
-[release preparation checklist](docs/release.md#v0779-release-preparation).
-FEATURE_280 was explicitly rescheduled to v0.7.81 and is not represented as
-shipped by this candidate.
+[release checklist](docs/release.md#v0779-release-preparation).
+FEATURE_280 was explicitly rescheduled to v0.7.81 (then to v0.7.86 on
+2026-08-04) and is not represented as shipped by this release.
 Issue 256 was explicitly rescheduled to v0.7.84 and is likewise not represented
-as shipped by this candidate.
+as shipped by this release.
+
+**v0.7.80 hardening release:** The CLI honors `worker.configuredA2A` in
+`~/.kodax/config.json`: the embedded Runtime becomes Worker-hosted and loads
+the configured A2A plane inside the Worker owner, so configured outbound
+Agents appear as `external:<name>` in `list_dispatchable_agents` and can be
+dispatched with `spawn_agent`. The mode rejects configured MCP servers or
+Extensions (they cannot cross the Worker boundary); use the default inline
+Runtime to retain those capabilities. Worker-hosted embedded CLI sessions also
+reduce run options to the JSON-safe wire DTO exactly like daemon mode instead of
+crashing with `RuntimeTransportBoundaryError`. Auto permission analysis no
+longer treats ordinary search scopes and tool metadata as unresolved, and a
+`max_tokens`-truncated classifier retry uses a 1024-token budget (Issue 275).
+Managed AMA turns now bound one uninterrupted tool loop by a 500-iteration
+panic fuse that resets on every idle-yield resume — a runaway-loop breaker,
+never a cumulative task budget — and a fused Runner fails with a structured
+`RunnerIterationLimitError` carrying the recovery transcript. Managed-run
+repetition loops are closed; parallel review and delegation guidance are
+restored and tightened. FEATURE_278/279/282/283/285 were explicitly
+rescheduled to v0.7.85, so v0.7.80 remains a debug/patch slot and no incomplete
+feature is represented as shipped. See the
+[v0.7.80 release checklist](docs/release.md#v0780-release-preparation).
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
@@ -878,7 +899,9 @@ independent, persisted, default-deny permissions (`--allow-private` and
 `--allow-insecure-http`); exact loopback HTTP remains available without either.
 OAuth token endpoints retain their stricter HTTPS-or-exact-loopback rule.
 Worker-hosted SDK Runtimes can load this same configured plane inside the Worker
-owner with `worker: { configuredA2A: true }`. `a2a serve` loads
+owner with `worker: { configuredA2A: true }`. The CLI honors the same opt-in
+from `~/.kodax/config.json` (`"worker": { "configuredA2A": true }`) by creating
+a Worker-hosted embedded Runtime that loads the configured A2A plane. `a2a serve` loads
 its configured MCP/Extension capability surface before listening and pins that
 execution authority; it hot-reloads publication, authentication, and limits.
 
