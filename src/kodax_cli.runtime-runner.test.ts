@@ -566,6 +566,151 @@ describe('interactive daemon runtime bridge', () => {
       events: { beforeToolExecute: async () => true },
     } as unknown as KodaXOptions)).toThrow(/events\.beforeToolExecute.*cannot cross/i);
   });
+
+  it('transport-sanitizes run options for a Worker-hosted embedded runtime', async () => {
+    let capturedOptions: unknown;
+    let eventListener: ((event: RuntimeEvent) => void) | undefined;
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-worker-a2a',
+        mode: 'embedded',
+        isolation: 'worker',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'plan' })),
+      },
+      runs: {
+        start: vi.fn(async (input: RuntimeStartRunInput) => {
+          capturedOptions = input.options;
+          return {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            result: Promise.resolve({
+              runId: 'run-1',
+              sessionId: 'session-1',
+              phase: 'completed' as const,
+              result: successfulResult(),
+            }),
+          };
+        }),
+      },
+      events: {
+        subscribe: vi.fn((_filter, listener: (event: RuntimeEvent) => void) => {
+          eventListener = listener;
+          return { close: vi.fn() };
+        }),
+      },
+      permissions: { respond: vi.fn(async () => true) },
+    } as unknown as KodaXRuntime;
+
+    await createInteractiveRuntimeRunner(runtime)({
+      options: {
+        provider: 'mock-provider',
+        extensionRuntime: { activate: async () => undefined },
+        events: {
+          beforeToolExecute: async () => true,
+          onTextDelta: () => undefined,
+          workflowCorrelation: { runId: 'workflow-1' },
+        },
+        session: {
+          id: 'session-1',
+          storage: { load: async () => null },
+          initialMessages: [{ role: 'user', content: 'hello' }],
+        },
+        context: {
+          executionCwd: 'C:/workspace',
+          memoryIdentity: {
+            configHome: 'C:/host-home',
+            tenantId: 'host-tenant',
+            agentId: 'host-agent',
+            projectId: 'host-project',
+            sessionId: 'host-session',
+          },
+        },
+      } as unknown as KodaXOptions,
+      prompt: 'inspect',
+      sessionId: 'session-1',
+    });
+
+    expect(capturedOptions).toMatchObject({
+      provider: 'mock-provider',
+      session: { id: 'session-1' },
+      context: { executionCwd: 'C:/workspace' },
+      events: { workflowCorrelation: { runId: 'workflow-1' } },
+    });
+    // Host-only bindings are stripped before the Worker transport boundary.
+    const serialized = JSON.stringify(capturedOptions);
+    expect(serialized).not.toContain('beforeToolExecute');
+    expect(serialized).not.toContain('onTextDelta');
+    expect(serialized).not.toContain('storage');
+    expect(serialized).not.toContain('memoryIdentity');
+    expect((capturedOptions as { extensionRuntime?: unknown }).extensionRuntime)
+      .toBeUndefined();
+    expect((capturedOptions as { session?: unknown }).session)
+      .not.toHaveProperty('storage');
+    expect((capturedOptions as { context?: unknown }).context)
+      .not.toHaveProperty('memoryIdentity');
+  });
+
+  it('keeps run options intact for an inline embedded runtime', async () => {
+    let capturedOptions: unknown;
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-inline',
+        mode: 'embedded',
+        isolation: 'inline',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'plan' })),
+      },
+      runs: {
+        start: vi.fn(async (input: RuntimeStartRunInput) => {
+          capturedOptions = input.options;
+          return {
+            runId: 'run-1',
+            sessionId: 'session-1',
+            result: Promise.resolve({
+              runId: 'run-1',
+              sessionId: 'session-1',
+              phase: 'completed' as const,
+              result: successfulResult(),
+            }),
+          };
+        }),
+      },
+      events: {
+        subscribe: vi.fn(() => ({ close: vi.fn() })),
+      },
+      permissions: { respond: vi.fn(async () => true) },
+    } as unknown as KodaXRuntime;
+
+    const beforeToolExecute = vi.fn(async () => true);
+    const extensionRuntime = { activate: async () => undefined };
+    await createInteractiveRuntimeRunner(runtime)({
+      options: {
+        provider: 'mock-provider',
+        extensionRuntime,
+        events: { beforeToolExecute },
+      } as unknown as KodaXOptions,
+      prompt: 'inspect',
+      sessionId: 'session-1',
+    });
+
+    expect(capturedOptions).toMatchObject({
+      provider: 'mock-provider',
+      extensionRuntime,
+    });
+    expect((capturedOptions as { events?: { beforeToolExecute?: unknown } }).events?.beforeToolExecute)
+      .toBe(beforeToolExecute);
+  });
 });
 
 function runtimeEvent(type: RuntimeEvent['type'], payload: unknown): RuntimeEvent {

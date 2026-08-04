@@ -691,8 +691,17 @@ export function createInteractiveRuntimeRunner(
     }
 
     const bridge = createRuntimeReplEventBridge(runtime, input);
+    // Worker-hosted embedded Runtimes (isolation: 'worker') are transport
+    // isolated exactly like the daemon: host-owned callbacks (events, session
+    // storage, extension runtime) cannot cross the boundary, so run options
+    // must be reduced to the JSON-safe wire DTO before run.start.
+    const transportIsolated =
+      runtime.identity.mode === 'daemon' ||
+      runtime.identity.isolation === 'worker';
     const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
-      omitLegacyBeforeToolExecute: input.legacyPermissionHook === true,
+      omitLegacyBeforeToolExecute:
+        input.legacyPermissionHook === true || transportIsolated,
+      omitExtensionRuntime: transportIsolated,
     });
     const abortSignal = input.options.abortSignal;
     let abortRun: (() => void) | undefined;
@@ -704,7 +713,7 @@ export function createInteractiveRuntimeRunner(
         permissionBroker:
           input.requestPermission === undefined ? 'runtime' : 'client',
         options:
-          runtime.identity.mode === 'daemon'
+          transportIsolated
             ? toDaemonRuntimeRunOptions(runtimeOptions)
             : runtimeOptions,
       });
@@ -737,7 +746,10 @@ export function createInteractiveRuntimeRunner(
 /** Keep the shared Session Runtime as the sole owner of Auto receipts. */
 export function toRuntimeOwnedInteractiveOptions(
   options: KodaXOptions,
-  sanitization: { readonly omitLegacyBeforeToolExecute?: boolean } = {},
+  sanitization: {
+    readonly omitLegacyBeforeToolExecute?: boolean;
+    readonly omitExtensionRuntime?: boolean;
+  } = {},
 ): KodaXOptions {
   const guardrails = options.guardrails?.filter(
     (guardrail) => guardrail.kind !== 'tool' || guardrail.name !== 'auto-mode',
@@ -747,6 +759,9 @@ export function toRuntimeOwnedInteractiveOptions(
     : options.events;
   return {
     ...options,
+    ...(sanitization.omitExtensionRuntime
+      ? { extensionRuntime: undefined }
+      : {}),
     ...(guardrails !== undefined
       ? { guardrails: guardrails.length > 0 ? guardrails : undefined }
       : {}),
@@ -4909,8 +4924,15 @@ complete -c kodax -l version -d 'Show version'`);
   const getCliRuntime = async (): Promise<KodaXRuntime> => {
     if (cliRuntime !== undefined) return cliRuntime;
     const mode = options.runtimeMode ?? 'embedded';
+    // `worker.configuredA2A` opts a Worker-hosted embedded Runtime into the
+    // configured A2A plane: the Worker owner loads and reconciles
+    // ~/.kodax/integrations/a2a.json inside the Worker, installing the full
+    // list/describe/preflight and external Actor dispatch surface there.
+    // Function-valued externalAgents cannot cross the Worker boundary, so the
+    // inline parent-side integration is skipped in that mode.
+    const workerHosted = mode === 'embedded' && config.worker?.configuredA2A === true;
     const a2aIntegration =
-      mode === 'embedded'
+      mode === 'embedded' && !workerHosted
         ? createConfiguredA2ARuntimeIntegration({
             configHome: KODAX_DIR,
             onEvent: integrationEvents.onEvent,
@@ -4922,6 +4944,9 @@ complete -c kodax -l version -d 'Show version'`);
       autoStartDaemon: mode === 'daemon',
       defaultProvider: options.provider,
       ...(options.model !== undefined ? { defaultModel: options.model } : {}),
+      ...(workerHosted
+        ? { isolation: 'worker', worker: { configuredA2A: true } }
+        : {}),
       ...(a2aIntegration
         ? { externalAgents: a2aIntegration.runtimeOptions }
         : {}),

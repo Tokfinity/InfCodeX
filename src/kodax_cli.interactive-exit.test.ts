@@ -13,6 +13,7 @@ interface RuntimeConfig {
   readonly sessionRetentionDays?: number;
   readonly extensions?: readonly string[];
   readonly mcpServers?: Record<string, { readonly connect?: string }>;
+  readonly worker?: { readonly configuredA2A?: boolean };
 }
 
 interface InteractiveMainHarness {
@@ -1000,6 +1001,42 @@ describe('CLI interactive exit lifecycle', () => {
       autoStartDaemon: false,
       externalAgents: expect.objectContaining({ factories: [] }),
     });
+  });
+
+  it('creates a Worker-hosted runtime with the configured A2A plane when worker.configuredA2A is set', async () => {
+    process.argv = ['node', 'kodax', '-p', 'configured A2A task'];
+    const { main, harness } = await importMainWithMocks({
+      config: { provider: 'mock-provider', worker: { configuredA2A: true } },
+    });
+
+    await main();
+
+    expect(harness.createKodaXRuntime).toHaveBeenCalledOnce();
+    expect(harness.runtimeOptions[0]).toMatchObject({
+      mode: 'embedded',
+      profile: 'default',
+      isolation: 'worker',
+      worker: { configuredA2A: true },
+    });
+    // Function-valued externalAgents cannot cross the Worker boundary; the
+    // Worker owner installs the configured A2A plane itself.
+    expect(harness.runtimeOptions[0]).not.toHaveProperty('externalAgents');
+  });
+
+  it('keeps the inline external-agents plane when worker.configuredA2A is unset', async () => {
+    process.argv = ['node', 'kodax', '-p', 'inline A2A task'];
+    const { main, harness } = await importMainWithMocks({
+      config: { provider: 'mock-provider' },
+    });
+
+    await main();
+
+    expect(harness.runtimeOptions[0]).toMatchObject({
+      mode: 'embedded',
+      externalAgents: expect.objectContaining({ factories: [] }),
+    });
+    expect(harness.runtimeOptions[0]).not.toHaveProperty('isolation');
+    expect(harness.runtimeOptions[0]).not.toHaveProperty('worker');
   });
 
   it('does not fall through to interactive mode after daemon subcommands', async () => {

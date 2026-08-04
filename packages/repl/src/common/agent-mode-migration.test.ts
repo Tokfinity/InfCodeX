@@ -29,6 +29,18 @@ afterEach(() => {
 });
 
 describe('v0.7.72 agent-mode config migration', () => {
+  it('surfaces the worker.configuredA2A opt-in from config.json', async () => {
+    const { utils } = await loadWithConfig({
+      provider: 'openai',
+      worker: { configuredA2A: true },
+    });
+
+    expect(utils.loadConfig()).toMatchObject({
+      provider: 'openai',
+      worker: { configuredA2A: true },
+    });
+  });
+
   it.each(['amaw', 'ama-workflow'])('migrates persisted %s to AMA exactly once', async (legacyMode) => {
     const warning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
     const { home, utils } = await loadWithConfig({ agentMode: legacyMode, provider: 'openai' });
