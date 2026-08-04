@@ -1,7 +1,9 @@
 import { access } from 'node:fs/promises';
 
 import {
+  AgentControlError,
   type AgentMetadataValue,
+  type AgentTurn,
 } from '@kodax-ai/agent';
 
 import type {
@@ -112,8 +114,27 @@ export async function assertPatternEvidenceRefVisible(
   }
   const target = parseActorTurnEvidenceRef(ref);
   if (target !== undefined) {
-    const output = ctx.actorControl?.output(target.actorPath, target.turnId);
-    if (output === undefined || output.state === 'accepted' || output.state === 'running') {
+    let targetTurn: AgentTurn | undefined;
+    try {
+      targetTurn = ctx.actorControl
+        ?.get(target.actorPath)
+        .turns.find((turn) => turn.turnId === target.turnId);
+    } catch (error) {
+      if (
+        error instanceof AgentControlError
+        && (error.code === 'actor_not_found' || error.code === 'no_active_turn')
+      ) {
+        throw new QualityStrategyMetadataError(
+          `quality_strategy target ${ref} is not a visible exact Actor Turn.`,
+        );
+      }
+      throw error;
+    }
+    if (
+      targetTurn === undefined
+      || targetTurn.state === 'accepted'
+      || targetTurn.state === 'running'
+    ) {
       throw new QualityStrategyMetadataError(
         `quality_strategy target ${ref} must already be terminal.`,
       );

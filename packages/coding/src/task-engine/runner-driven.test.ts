@@ -253,6 +253,7 @@ describe('managed runner queue routing', () => {
     let inputWindowOpen = true;
     let turn = 0;
     let resumedWithInterrupt = false;
+    let resumedTranscript: readonly KodaXMessage[] = [];
     const actorSession = new CodingActorSession({
       sessionId,
       executor: {
@@ -302,6 +303,7 @@ describe('managed runner queue routing', () => {
               toolBlocks: [],
             };
           }
+          resumedTranscript = [...transcript];
           expect(JSON.stringify(transcript)).toContain('interrupt while idle-yielding');
           resumedWithInterrupt = true;
           return {
@@ -315,6 +317,12 @@ describe('managed runner queue routing', () => {
       expect(resumedWithInterrupt).toBe(true);
       expect(result.lastText).toBe('resumed answer');
       expect(inputWindowOpen).toBe(false);
+      const runtimeDeltaIndex = resumedTranscript.findIndex((message) =>
+        message._source === 'managed-runtime-context');
+      const wakeMessageIndex = resumedTranscript.findIndex((message) =>
+        JSON.stringify(message.content).includes('interrupt while idle-yielding'));
+      expect(runtimeDeltaIndex).toBeGreaterThanOrEqual(0);
+      expect(wakeMessageIndex).toBeGreaterThan(runtimeDeltaIndex);
     } finally {
       await actorSession.close('test complete');
       getMessageQueue().dequeue({
@@ -4228,7 +4236,21 @@ describe('Shard 6d-d — session continuity', () => {
         ...makeOptions(),
         session: {
           id: sessionId,
-          initialMessages: first.messages,
+          initialMessages: [
+            ...first.messages,
+            {
+              role: 'user',
+              content: 'STALE MANAGED CONTEXT MUST NOT REPLAY',
+              _synthetic: true,
+              _source: 'managed-run-context',
+            },
+            {
+              role: 'user',
+              content: 'STALE RUNTIME DELTA MUST NOT REPLAY',
+              _synthetic: true,
+              _source: 'managed-runtime-context',
+            },
+          ],
         },
       },
       secondPrompt,
@@ -4256,10 +4278,18 @@ describe('Shard 6d-d — session continuity', () => {
     expect(firstContextIndex).toBeLessThan(firstTaskIndex);
     expect(firstCall.ephemeralSuffix).toBeUndefined();
     expect(secondCall.ephemeralSuffix).toBeUndefined();
-    expect(secondCall.transcript.slice(0, firstCall.transcript.length))
-      .toEqual(firstCall.transcript);
+    expect(first.messages.some((message) =>
+      message._source === 'managed-run-context'
+      || message._source === 'managed-runtime-context')).toBe(false);
+    const visibleFirstTranscript = firstCall.transcript.filter((message) =>
+      message._source !== 'managed-run-context'
+      && message._source !== 'managed-runtime-context');
+    expect(secondCall.transcript.slice(0, visibleFirstTranscript.length))
+      .toEqual(visibleFirstTranscript);
     expect(secondCall.transcript.filter((message) =>
-      message._source === 'managed-run-context')).toHaveLength(2);
+      message._source === 'managed-run-context')).toHaveLength(1);
+    expect(JSON.stringify(secondCall.transcript)).not.toContain('STALE MANAGED CONTEXT');
+    expect(JSON.stringify(secondCall.transcript)).not.toContain('STALE RUNTIME DELTA');
     expect(secondCall.transcript.at(-1)).toEqual(expect.objectContaining({
       role: 'user',
       content: secondPrompt,

@@ -1023,6 +1023,33 @@ describe('CLI interactive exit lifecycle', () => {
     expect(harness.runtimeOptions[0]).not.toHaveProperty('externalAgents');
   });
 
+  it.each([
+    {
+      label: 'configured MCP servers',
+      config: {
+        provider: 'mock-provider',
+        worker: { configuredA2A: true },
+        mcpServers: { reporting: { connect: 'lazy' } },
+      },
+    },
+    {
+      label: 'configured extensions',
+      config: {
+        provider: 'mock-provider',
+        worker: { configuredA2A: true },
+        extensions: ['C:/extensions/reviewer.mjs'],
+      },
+    },
+  ])('rejects Worker-hosted A2A when $label would be lost at the transport boundary', async ({
+    config,
+  }) => {
+    process.argv = ['node', 'kodax', '-p', 'preserve all configured capabilities'];
+    const { main, harness } = await importMainWithMocks({ config });
+
+    await expect(main()).rejects.toThrow(/worker\.configuredA2A.*MCP.*Extensions.*inline/i);
+    expect(harness.createKodaXRuntime).not.toHaveBeenCalled();
+  });
+
   it('keeps the inline external-agents plane when worker.configuredA2A is unset', async () => {
     process.argv = ['node', 'kodax', '-p', 'inline A2A task'];
     const { main, harness } = await importMainWithMocks({

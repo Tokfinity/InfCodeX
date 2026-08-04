@@ -253,7 +253,7 @@ describe.each([
   ['native ephemeral suffix', true],
   ['legacy provider lowering', false],
 ] as const)('AMA context reinjection after automatic compaction: %s', (_name, native) => {
-  it('keeps one canonical managed context before the task and compaction summary', async () => {
+  it('keeps one canonical context in-run and excludes it from durable history', async () => {
     const requests: PhysicalRequest[] = [];
     const snapshots: RuntimeContextBudgetSnapshot[] = [];
     const timeline: string[] = [];
@@ -311,10 +311,11 @@ describe.each([
     expect(compactableTranscript).not.toContain('managed-run-context');
 
     const durableTranscript = JSON.stringify(result.messages);
-    expect(countOccurrences(durableTranscript, SKILLS_ADDENDUM_SENTINEL)).toBe(1);
-    expect(countOccurrences(durableTranscript, SELECTED_SKILL_SENTINEL)).toBe(1);
-    expect(countOccurrences(durableTranscript, TASK_CONSTRAINT_SENTINEL)).toBe(1);
-    expect(countOccurrences(durableTranscript, 'managed-run-context')).toBe(1);
+    expect(countOccurrences(durableTranscript, SKILLS_ADDENDUM_SENTINEL)).toBe(0);
+    expect(countOccurrences(durableTranscript, SELECTED_SKILL_SENTINEL)).toBe(0);
+    expect(countOccurrences(durableTranscript, TASK_CONSTRAINT_SENTINEL)).toBe(0);
+    expect(countOccurrences(durableTranscript, 'managed-run-context')).toBe(0);
+    expect(durableTranscript).toContain('compaction-checkpoint');
 
     expect(snapshots).toHaveLength(2);
     for (const snapshot of snapshots) {

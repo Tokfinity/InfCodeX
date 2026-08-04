@@ -305,6 +305,14 @@ export async function buildManagedTaskCompactionHook(
       const compactableMessages = canonicalManagedContext
         ? stripManagedRunContextMessages(mutableMessages)
         : mutableMessages;
+      const mutableMessageTokens = estimateTokens(mutableMessages);
+      const fixedOverheadTokens = Math.max(
+        0,
+        currentTokens - mutableMessageTokens,
+      );
+      const compactableCurrentTokens = canonicalManagedContext
+        ? fixedOverheadTokens + estimateTokens(compactableMessages)
+        : currentTokens;
       const systemPrompt = typeof immutableSystem?.content === 'string'
         ? immutableSystem.content
         : undefined;
@@ -333,7 +341,7 @@ export async function buildManagedTaskCompactionHook(
         contextWindow,
         undefined,
         systemPrompt,
-        currentTokens,
+        compactableCurrentTokens,
         CODING_SUMMARY_PROMPT,
         CODING_UPDATE_SUMMARY_PROMPT,
         activeModel,
@@ -353,10 +361,6 @@ export async function buildManagedTaskCompactionHook(
         return undefined;
       }
 
-      const fixedOverheadTokens = Math.max(
-        0,
-        currentTokens - estimateTokens(mutableMessages),
-      );
       const attached = await attachManagedCompactionContext(
         result,
         fixedOverheadTokens,

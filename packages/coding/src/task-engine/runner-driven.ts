@@ -335,6 +335,7 @@ import {
 import {
   createManagedRunContextMessage,
   createManagedRuntimeContextMessage,
+  stripManagedRunContextMessages,
 } from './_internal/managed-task/managed-run-context.js';
 import {
   buildRunnerLlmAdapter,
@@ -1443,15 +1444,22 @@ async function runManagedTaskViaRunnerInner(
   // even though the task completed successfully.
   const checkpointingEnabled = Boolean(options.events?.askUser);
   const pendingCheckpointWrites: Array<Promise<unknown>> = [];
-  const cleanupRunCheckpoint = async (): Promise<void> => {
+  const flushPendingCheckpointWrites = async (): Promise<void> => {
     if (!checkpointingEnabled) return;
     await Promise.allSettled(pendingCheckpointWrites);
+  };
+  const deleteRunCheckpoint = async (): Promise<void> => {
+    if (!checkpointingEnabled) return;
     try {
       await deleteCheckpoint(workspaceDir);
     } catch {
       // best-effort cleanup; stale checkpoints will be handled by
       // handlePreRunCheckpoint on the next run.
     }
+  };
+  const cleanupRunCheckpoint = async (): Promise<void> => {
+    await flushPendingCheckpointWrites();
+    await deleteRunCheckpoint();
   };
   const checkpointWriter = (role: KodaXTaskRole): void => {
     // FEATURE_193 (v0.7.43): legacy Scout-driven skillMap re-persist
@@ -1480,9 +1488,12 @@ async function runManagedTaskViaRunnerInner(
     }), todoDriftReminderState);
     // Snapshot write — best-effort, must not throw out of the observer
     // callback or we'd abort the Runner mid-emit.
-    void writeManagedTaskSnapshotArtifacts(snapshot.evidence.workspaceDir, snapshot)
-      .catch(() => undefined);
+    const snapshotWrite = writeManagedTaskSnapshotArtifacts(
+      snapshot.evidence.workspaceDir,
+      snapshot,
+    ).then(() => true).catch(() => false);
     if (!checkpointingEnabled) {
+      void snapshotWrite;
       return;
     }
     // FEATURE_193 (v0.7.43): `scoutCompleted` always false on V2 (Scout
@@ -1491,13 +1502,17 @@ async function runManagedTaskViaRunnerInner(
     // V2 writes propagate `false` for every snapshot.
     const scoutCompleted = false;
     const currentRound = rolesRef.emitted.length;
-    pendingCheckpointWrites.push(writeCurrentCheckpoint({
-      options,
-      managedTask: snapshot,
-      currentRound,
-      completedWorkerIds: rolesRef.emitted.map((r) => r),
-      scoutCompleted,
-    }));
+    pendingCheckpointWrites.push(snapshotWrite.then((snapshotReady) => (
+      snapshotReady
+        ? writeCurrentCheckpoint({
+            options,
+            managedTask: snapshot,
+            currentRound,
+            completedWorkerIds: rolesRef.emitted.map((r) => r),
+            scoutCompleted,
+          })
+        : undefined
+    )));
   };
 
   const observer = buildObserverBridge(
@@ -1990,7 +2005,7 @@ async function runManagedTaskViaRunnerInner(
       })
     : undefined;
   const runnerInput = [
-    ...resolvedInitial.messages,
+    ...stripManagedRunContextMessages(resolvedInitial.messages),
     ...(canonicalManagedContext ? [canonicalManagedContext] : []),
     currentUserMessage,
   ];
@@ -2337,11 +2352,7 @@ async function runManagedTaskViaRunnerInner(
     };
   };
 
-  const baseBeforeNextTurn: (ctx: {
-    readonly transcript: readonly KodaXMessage[];
-    readonly iteration: number;
-    readonly lastTurnToolNames?: readonly string[];
-  }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
+  const buildManagedRuntimeContextDelta = (): KodaXMessage | undefined => {
     const currentContext = rolePromptContextFactory('worker', recorder);
     const currentRuntimeContext = resolveRoleRuntimeStateContext(currentContext);
     const currentRuntimeFingerprint = resolveRoleRuntimeStateFingerprint(currentContext);
@@ -2358,6 +2369,15 @@ async function runManagedTaskViaRunnerInner(
         })
       : undefined;
     managedRuntimeContextBaseline = currentRuntimeFingerprint;
+    return runtimeContextMessage;
+  };
+
+  const baseBeforeNextTurn: (ctx: {
+    readonly transcript: readonly KodaXMessage[];
+    readonly iteration: number;
+    readonly lastTurnToolNames?: readonly string[];
+  }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
+    const runtimeContextMessage = buildManagedRuntimeContextDelta();
     const drained = maybeDrainMidTurn({
       agentId: messageQueueAgentId,
       lastTurnToolNames: turnCtx.lastTurnToolNames ?? [],
@@ -2484,22 +2504,7 @@ async function runManagedTaskViaRunnerInner(
       // this counter. The fuse catches one uninterrupted runaway tool loop;
       // it never becomes a cumulative managed-task budget.
       maxToolLoopIterations: MANAGED_RUNNER_PANIC_ITERATIONS,
-    }).catch(async (err: unknown) => {
-      options.context?.interruptInput?.closeInputWindow();
-      // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
-      // any LLM / Runner error before the rejection propagates.
-      // Without this, a non-success terminal exit leaves a fresh
-      // checkpoint.json on disk, which the next query's
-      // findValidCheckpoint scan picks up and triggers the "found
-      // incomplete task" prompt.
-      // A panic-fuse exit is explicitly resumable: Runner attached the last
-      // legal transcript and the checkpoint remains available for diagnosis
-      // or recovery. Other errors keep the established stale-checkpoint
-      // cleanup behavior.
-      if (!isRunnerIterationLimitError(err)) {
-        await cleanupRunCheckpoint();
-      }
-      throw err;
+      maxTotalIterations: MANAGED_RUNNER_PANIC_ITERATIONS,
     });
   };
 
@@ -2648,6 +2653,10 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
+    buildResumeContextMessages: () => {
+      const runtimeContextMessage = buildManagedRuntimeContextDelta();
+      return runtimeContextMessage ? [runtimeContextMessage] : [];
+    },
     // A managed task may legitimately resume after arbitrarily many child
     // completions. Keep the generic wrapper's defensive default for other
     // callers, but do not turn it into a task-wide ceiling here.
@@ -2655,6 +2664,15 @@ async function runManagedTaskViaRunnerInner(
       });
     } catch (error) {
       options.context?.interruptInput?.closeInputWindow();
+      if (isRunnerIterationLimitError(error)) {
+        // Persist the last legal managed state and wait for all earlier writes
+        // before surfacing the resumable mechanical-fuse failure.
+        checkpointWriter('worker');
+        await flushPendingCheckpointWrites();
+      } else {
+        // Ordinary failures must not leave a stale resumable checkpoint.
+        await cleanupRunCheckpoint();
+      }
       throw error;
     } finally {
       releaseRuntimeBinding?.();
@@ -2738,9 +2756,11 @@ async function runManagedTaskViaRunnerInner(
   // equal to currentTokens when the provider returned usage — the REPL
   // uses the delta only to adjust subsequent local estimates.
   const tokenState = tokenStateRef.current;
-  const persistedTranscriptMessages = dropRunnerInjectedSystemMessage(
-    effectiveRunResult.messages,
-    entryAgent,
+  const persistedTranscriptMessages = stripManagedRunContextMessages(
+    dropRunnerInjectedSystemMessage(
+      effectiveRunResult.messages,
+      entryAgent,
+    ),
   );
   const resultMessages = attachTurnIdsFromUserBoundaries(persistedTranscriptMessages);
   const contextTokenSnapshot = contextTokenSnapshotRef.current

@@ -636,14 +636,12 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         scope: { type: 'string', description: 'Optional bounded scope hint (e.g. "packages/llm/src/")' },
         evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefix with file:, diff:, finding:, or exact agent-turn:<canonical-path>#turn=<id>. Legacy agent:<path> resolves latest. Actor output must already be terminal and visible.' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
-        // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
-        // no-op for now; FEATURE_102 (v0.7.45) will translate this
-        // to a concrete model selection. Surfacing the field now so
-        // prompt-eval data starts accumulating.
+        // FEATURE_120 + FEATURE_102 — model tier hint resolved by the child
+        // executor against configured fast/deep operator tiers.
         model_hint: {
           type: 'string',
           enum: ['fast', 'balanced', 'deep'],
-          description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short focused lookups (reading a handful of files, a simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); a future routing feature will activate the hint. Mark "fast" only for trivial focused lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
+          description: 'Optional active routing hint for a tier-appropriate child model. "fast" selects the configured fast operator tier for short focused lookups (a few files or a simple grep); "balanced" (default; same as omit) inherits the normal child selection; "deep" selects the configured deep operator tier for heavy multi-file analysis or synthesis. If the requested tier is not configured, routing safely falls back to the inherited provider/model. Mark tiers deliberately; when in doubt, omit.',
         },
         agent_id: {
           type: 'string',

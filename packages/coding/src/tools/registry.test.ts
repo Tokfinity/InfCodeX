@@ -112,6 +112,9 @@ describe('tool registry', () => {
     expect(props?.agent_id?.type).toBe('string');
     expect(props?.effort?.type).toBe('string');
     expect(props?.effort?.description).toMatch(/Reasoning effort/);
+    expect(props?.model_hint?.description).toMatch(/active routing hint/i);
+    expect(props?.model_hint?.description).toMatch(/configured fast operator tier/i);
+    expect(props?.model_hint?.description).not.toMatch(/no-op|future routing/i);
     expect(required).not.toContain('agent_id');
     expect(required).not.toContain('effort');
   });

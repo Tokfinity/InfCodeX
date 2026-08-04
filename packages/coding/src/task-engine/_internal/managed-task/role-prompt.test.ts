@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createRolePrompt } from './role-prompt.js';
-import { buildFallbackRoutingDecision } from '../../../reasoning.js';
+import {
+  buildFallbackRoutingDecision,
+  type ReasoningPlan,
+} from '../../../reasoning.js';
+import type { KodaXRepoRoutingSignals } from '../../../types.js';
+import { applyCurrentDiffReviewRoutingFloor } from './review-routing.js';
 import type { ManagedRolePromptContext } from './role-prompt-types.js';
 
 const userQuestion = '你底层用的是什么模型？';
@@ -677,6 +682,140 @@ describe('F270 — explicit Workflow activation policy', () => {
     );
     expect(rendered.indexOf('BROAD REVIEW FAN-OUT')).toBeLessThan(
       rendered.indexOf('Primary task:'),
+    );
+  });
+
+  it.each([
+    ['Review this change set for merge blockers.', 'current-worktree'],
+    ['Audit the diff for merge blockers.', 'current-worktree'],
+    ['Review diff for merge blockers.', 'current-worktree'],
+    ['Review the changed files for merge blockers.', 'current-worktree'],
+    ['请审查当前改动中的合并阻塞问题。', 'current-worktree'],
+    ['请审查当前变更中的合并阻塞问题。', 'current-worktree'],
+    ['请看下当前改动中的合并阻塞问题。', 'current-worktree'],
+    ['请对比 v0.7.76 到 v0.7.79 的变更并审查合并阻塞问题。', 'compare-range'],
+    ['Review 38aa0dfb^..HEAD for merge blockers.', 'compare-range'],
+    ['Audit v0.7.76...v0.7.79 for merge blockers.', 'compare-range'],
+  ] as const)(
+    'routes the natural review request "%s" into the authoritative fan-out prompt',
+    (prompt, expectedTarget) => {
+      const repoSignals: KodaXRepoRoutingSignals = {
+        changedFileCount: 45,
+        changedLineCount: 6_500,
+        addedLineCount: 3_800,
+        deletedLineCount: 2_700,
+        touchedModuleCount: 6,
+        changedModules: ['agent', 'coding', 'repl'],
+        crossModule: true,
+        reviewScale: 'massive',
+        riskHints: [],
+        plannerBias: false,
+        investigationBias: false,
+        lowConfidence: false,
+      };
+      const initialPlan: ReasoningPlan = {
+        effort: 'medium',
+        decision: buildFallbackRoutingDecision(prompt),
+        promptOverlay: '',
+      };
+      const routed = applyCurrentDiffReviewRoutingFloor(
+        initialPlan,
+        prompt,
+        repoSignals,
+      );
+      const rendered = createRolePrompt(
+        'worker',
+        prompt,
+        routed.plan.decision,
+        undefined,
+        undefined,
+        'kodax/role/worker',
+        undefined,
+        {
+          ...buildContext({ provider: 'p', model: 'm' }),
+          originalTask: prompt,
+          actorCapacity: { maxConcurrentThreads: 4, activeNonRootTurns: 0 },
+        },
+        undefined,
+        false,
+        'context',
+      );
+
+      expect(routed.reviewTarget).toBe(expectedTarget);
+      expect(routed.plan.decision.primaryTask).toBe('review');
+      expect(rendered).toContain(`Review target: ${expectedTarget}`);
+      expect(rendered).toContain('BROAD REVIEW FAN-OUT (authoritative task policy):');
+      expect(rendered).toContain('call `changed_scope` once, then fan out');
+    },
+  );
+
+  it.each([
+    'Fix the diff renderer bug across the changed modules.',
+    'Analyze the diff renderer bug across the changed modules.',
+    'Check the current parser bug before implementing the fix.',
+  ])('does not turn the implementation task "%s" into a review', (prompt) => {
+    const routed = applyCurrentDiffReviewRoutingFloor(
+      {
+        effort: 'medium',
+        decision: buildFallbackRoutingDecision(prompt),
+        promptOverlay: '',
+      },
+      prompt,
+      {
+        changedFileCount: 45,
+        changedLineCount: 6_500,
+        addedLineCount: 3_800,
+        deletedLineCount: 2_700,
+        touchedModuleCount: 6,
+        changedModules: ['agent', 'coding', 'repl'],
+        crossModule: true,
+        reviewScale: 'massive',
+        riskHints: [],
+        plannerBias: false,
+        investigationBias: false,
+        lowConfidence: false,
+      },
+    );
+
+    expect(routed.plan.decision.primaryTask).toBe('bugfix');
+    expect(routed.applied).not.toBe(true);
+  });
+
+  it.each([
+    'Audit range checks in the parser.',
+    'Review workspace architecture.',
+    '审查并比较变更检测算法。',
+    '审查并比较 React 与 Vue 的实现。',
+    '审查从 React 到 Vue 的迁移方案。',
+  ])('does not mistake the general review "%s" for a Git diff review', (prompt) => {
+    const routed = applyCurrentDiffReviewRoutingFloor(
+      {
+        effort: 'medium',
+        decision: buildFallbackRoutingDecision(prompt),
+        promptOverlay: '',
+      },
+      prompt,
+      {
+        changedFileCount: 45,
+        changedLineCount: 6_500,
+        addedLineCount: 3_800,
+        deletedLineCount: 2_700,
+        touchedModuleCount: 6,
+        changedModules: ['agent', 'coding', 'repl'],
+        crossModule: true,
+        reviewScale: 'massive',
+        riskHints: [],
+        plannerBias: false,
+        investigationBias: false,
+        lowConfidence: false,
+      },
+    );
+
+    expect(routed.reviewTarget).toBe('general');
+    expect(routed.plan.decision.routingNotes ?? []).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Diff-driven review surface'),
+      ]),
     );
   });
 

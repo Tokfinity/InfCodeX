@@ -26,6 +26,26 @@ import type { ReasoningPlan } from '../../../reasoning.js';
 
 type ReviewTarget = NonNullable<KodaXTaskRoutingDecision['reviewTarget']>;
 
+const CHINESE_COMPARE_PAIR_PATTERNS = [
+  /(?:对比|比较)\s*(?:(提交|版本|分支|标签|引用)\s*)?([a-zA-Z0-9][a-zA-Z0-9._/~^-]*)\s*(?:到|至|和|与|及)\s*([a-zA-Z0-9][a-zA-Z0-9._/~^-]*)(?:\s*的)?(提交|版本|分支|标签|引用)?/,
+  /(?:从|自)\s*(?:(提交|版本|分支|标签|引用)\s*)?([a-zA-Z0-9][a-zA-Z0-9._/~^-]*)\s*(?:到|至)\s*([a-zA-Z0-9][a-zA-Z0-9._/~^-]*)(?:\s*的)?(提交|版本|分支|标签|引用)?/,
+] as const;
+
+function hasExplicitChineseCompareRange(prompt: string): boolean {
+  for (const pattern of CHINESE_COMPARE_PAIR_PATTERNS) {
+    const match = pattern.exec(prompt);
+    if (match === null) continue;
+    const [, prefix, left, right, suffix] = match;
+    const refLike = (value: string | undefined): boolean =>
+      value !== undefined
+      && /^(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:[~^]\d*)?|(?:origin|refs?\/).+)$/i.test(value);
+    if (prefix !== undefined || suffix !== undefined || (refLike(left) && refLike(right))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Classify the prompt's review target: `compare-range` (between commits),
  * `current-worktree` (staged/unstaged), or `general`. Mirrors legacy
@@ -35,14 +55,20 @@ type ReviewTarget = NonNullable<KodaXTaskRoutingDecision['reviewTarget']>;
 export function inferReviewTarget(prompt: string): ReviewTarget {
   const normalized = ` ${prompt.toLowerCase()} `;
   if (
-    /\b(compare|range|between|since|from\s+\S+\s+to\s+\S+|commit-range|commit range|diff range)\b/.test(normalized)
-    || /提交范围|提交区间|版本范围|对比.*提交|比较.*提交/.test(prompt)
+    /\b(commit[- ]range|diff range)\b/.test(normalized)
+    || /\b[a-z0-9](?:[a-z0-9._/-]*[a-z0-9/~^])?\.{2,3}[a-z0-9](?:[a-z0-9._/-]*[a-z0-9/~^])?\b/.test(normalized)
+    || /\b(?:compare|comparison(?:\s+of)?)\s+(?:commits?|versions?|releases?|tags?|branches?|refs?|revisions?|shas?)\s+\S+\s+(?:to|with|against|and)\s+\S+\b/.test(normalized)
+    || /\b(?:compare|comparison(?:\s+of)?)\s+(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:~\d+|\^\d*)?|(?:origin|refs?\/)\S+)\s+(?:to|with|against|and)\s+(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:~\d+|\^\d*)?|(?:origin|refs?\/)\S+)\b/.test(normalized)
+    || /\b(?:between\s+|from\s+)(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:~\d+|\^\d*)?|(?:origin|refs?\/)\S+)\s+(?:and|to)\s+(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:~\d+|\^\d*)?|(?:origin|refs?\/)\S+)\b/.test(normalized)
+    || /\bsince\s+(?:v?\d+(?:\.\d+)+|[0-9a-f]{7,40}|head(?:~\d+|\^\d*)?|(?:origin|refs?\/)\S+)\b/.test(normalized)
+    || /提交(?:范围|区间)|版本范围/.test(prompt)
+    || hasExplicitChineseCompareRange(prompt)
   ) {
     return 'compare-range';
   }
   if (
-    /\b(current|worktree|workspace|working tree|staged|unstaged|uncommitted|local changes?|current code changes?|current workspace changes?)\b/.test(normalized)
-    || /当前(?:工作区|代码)?改动|当前代码改动|当前工作区改动|所有当前代码改动/.test(prompt)
+    /\b(staged|unstaged|uncommitted|local changes?|current changes?|change[ -]?set|changed files?|current code changes?|current workspace changes?|dirty\s+(?:worktree|workspace|working tree)|(?:worktree|workspace|working tree)\s+changes?|changes?\s+in\s+(?:the\s+)?(?:worktree|workspace|working tree)|(?:the|current|git|workspace)\s+diff|(?:review|audit)\s+diff|diff review)\b/.test(normalized)
+    || /当前(?:工作区|代码)?(?:的)?(?:改动|变更|差异)|(?:工作区|未提交|本地|代码)(?:的)?(?:改动|变更|差异)|(?:改动|变更|差异)集|变更文件|已改文件/.test(prompt)
   ) {
     return 'current-worktree';
   }
@@ -58,8 +84,8 @@ export function inferReviewTarget(prompt: string): ReviewTarget {
 export function isDiffDrivenReviewPrompt(prompt: string): boolean {
   const normalized = ` ${prompt.toLowerCase()} `;
   return (
-    /\b(review|code review|audit|look at the changes|changed files|current code changes?|current workspace changes?)\b/.test(normalized)
-    || /review一下|评审|审查|看下改动|代码改动/.test(prompt)
+    /\b(review|code review|audit)\b/.test(normalized)
+    || /代码(?:审查|评审)|审查|评审|检查.*(?:改动|变更|差异)|查看.*(?:改动|变更|差异)|看(?:一)?下.*(?:改动|变更|差异)/.test(prompt)
   );
 }
 

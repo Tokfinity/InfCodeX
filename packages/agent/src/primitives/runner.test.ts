@@ -612,7 +612,12 @@ describe('Runner', () => {
         limitReached: true,
       });
       expect((caught as Error).message).toMatch(/MAX_TOOL_LOOP_ITERATIONS/);
-      expect(readRunnerRecoveryTranscript(caught)?.length).toBeGreaterThan(1);
+      const recoveryTranscript = readRunnerRecoveryTranscript(caught);
+      expect(recoveryTranscript?.length).toBeGreaterThan(1);
+      expect(recoveryTranscript?.[0]?.role).toBe('user');
+      expect(isRunnerIterationLimitError({
+        code: 'RUNNER_ITERATION_LIMIT',
+      })).toBe(false);
       expect(llm).toHaveBeenCalledTimes(MAX_TOOL_LOOP_ITERATIONS);
     });
 
@@ -1167,6 +1172,32 @@ describe('Runner', () => {
 
       expect(llm).toHaveBeenCalledTimes(2);
       expect(result.output).toBe('follow-up answer');
+    });
+
+    it('honors an explicit total-iteration fuse without continuation expansion', async () => {
+      const agent = createAgent({ name: 'hard-total-iteration-fuse', instructions: 'sys' });
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => ({
+        text: 'first answer',
+        toolCalls: [],
+      }));
+      const drain = vi.fn(async () => [
+        { role: 'user' as const, content: 'must not extend the hard fuse' },
+      ]);
+
+      const result = await Runner.run(agent, 'hi', {
+        llm,
+        maxToolLoopIterations: 1,
+        maxTotalIterations: 1,
+        terminalContinuation: {
+          closeInputWindow: vi.fn(),
+          reopenInputWindow: vi.fn(),
+          drain,
+        },
+      });
+
+      expect(llm).toHaveBeenCalledTimes(1);
+      expect(drain).not.toHaveBeenCalled();
+      expect(result.output).toBe('first answer');
     });
 
     it('bounds repeated terminal continuations beyond the configured iteration cap', async () => {

@@ -4891,6 +4891,9 @@ complete -c kodax -l version -d 'Show version'`);
     process.env.KODAX_RUNTIME_MODE,
     configWithExtensions.runtimeMode,
   );
+  const workerHostedEmbedded =
+    selectedRuntimeMode === 'embedded'
+    && config.worker?.configuredA2A === true;
   const sessionFlags = normalizeCliSessionFlags(opts);
   // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
@@ -4930,9 +4933,8 @@ complete -c kodax -l version -d 'Show version'`);
     // list/describe/preflight and external Actor dispatch surface there.
     // Function-valued externalAgents cannot cross the Worker boundary, so the
     // inline parent-side integration is skipped in that mode.
-    const workerHosted = mode === 'embedded' && config.worker?.configuredA2A === true;
     const a2aIntegration =
-      mode === 'embedded' && !workerHosted
+      mode === 'embedded' && !workerHostedEmbedded
         ? createConfiguredA2ARuntimeIntegration({
             configHome: KODAX_DIR,
             onEvent: integrationEvents.onEvent,
@@ -4944,7 +4946,7 @@ complete -c kodax -l version -d 'Show version'`);
       autoStartDaemon: mode === 'daemon',
       defaultProvider: options.provider,
       ...(options.model !== undefined ? { defaultModel: options.model } : {}),
-      ...(workerHosted
+      ...(workerHostedEmbedded
         ? { isolation: 'worker', worker: { configuredA2A: true } }
         : {}),
       ...(a2aIntegration
@@ -5124,7 +5126,20 @@ complete -c kodax -l version -d 'Show version'`);
           'Add the extension to the daemon profile config or use --runtime-mode embedded.',
       );
     }
-    if (selectedRuntimeMode !== 'daemon') {
+    if (
+      workerHostedEmbedded
+      && (
+        activeExtensions.length > 0
+        || Object.keys(configWithExtensions.mcpServers ?? {}).length > 0
+      )
+    ) {
+      throw new Error(
+        'worker.configuredA2A cannot preserve configured MCP servers or Extensions ' +
+          'across the Runtime Worker boundary. Remove worker.configuredA2A to use ' +
+          'the default inline Runtime, which already loads the configured A2A plane.',
+      );
+    }
+    if (selectedRuntimeMode !== 'daemon' && !workerHostedEmbedded) {
       extensionRuntime = createExtensionRuntime({ config });
       // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
       // serve elicitation through the REPL's live ask-user dialogs. In print /

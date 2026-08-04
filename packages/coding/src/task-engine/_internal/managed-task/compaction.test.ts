@@ -221,6 +221,42 @@ describe('managed history compaction', () => {
     expect(result[1]?._source).toBe('compaction-checkpoint');
   });
 
+  it('excludes stripped managed contexts from the semantic compactor token override', async () => {
+    const staleContext: KodaXMessage = {
+      role: 'user',
+      content: `=== Managed Run Context ===\n${'stale context '.repeat(2_000)}`,
+      _synthetic: true,
+      _source: 'managed-run-context',
+    };
+    const runtimeDelta: KodaXMessage = {
+      role: 'user',
+      content: `=== Managed Run Context ===\n${'runtime delta '.repeat(1_000)}`,
+      _synthetic: true,
+      _source: 'managed-runtime-context',
+    };
+    const compactableMessages = makeMessages();
+    const mutableMessages = [staleContext, ...compactableMessages, runtimeDelta];
+    const fixedEnvelopeTokens = 12_345;
+    const currentTokens = fixedEnvelopeTokens + estimateTokens(mutableMessages);
+    compactMock.mockImplementation(async (messages: KodaXMessage[]) => (
+      compactedResult(messages)
+    ));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(20),
+      contextTokenSnapshotRef: {
+        current: snapshot(currentTokens, mutableMessages),
+      },
+      canonicalManagedContext: () => staleContext,
+    });
+
+    await hook?.(mutableMessages);
+
+    expect(compactMock.mock.calls[0]?.[0]).toEqual(compactableMessages);
+    expect(compactMock.mock.calls[0]?.[6]).toBe(
+      fixedEnvelopeTokens + estimateTokens(compactableMessages),
+    );
+  });
+
   it('preserves the exact Runner system message for the next LLM turn while adding a summary', async () => {
     const systemText = 'IMMUTABLE_WORKER_SYSTEM_PROMPT_BYTE_SENTINEL';
     const agent = createAgent({

@@ -355,6 +355,102 @@ describe('F270 canonical collaboration tools', () => {
       .toEqual(expect.arrayContaining(['/root/unknown-target', '/root/missing-target']));
   });
 
+  it('ignores unknown and stale exact Actor Turn refs without blocking legal spawns', async () => {
+    const baseStrategy = {
+      schemaVersion: 1,
+      pattern: 'adversarial-verification',
+      role: 'challenger',
+      laneRelation: 'opposition',
+    };
+
+    const unknownCase = await context();
+    const unknown = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'unknown-exact-target',
+      objective: 'Inspect without stale optional strategy telemetry.',
+      quality_strategy: {
+        ...baseStrategy,
+        stageId: 'unknown-exact-target',
+        targetEvidenceRefs: ['agent-turn:/root/not-visible#turn=turn-missing'],
+      },
+    }, unknownCase.ctx)) as Record<string, unknown>;
+
+    expect(unknown).toMatchObject({
+      ok: true,
+      actorPath: '/root/unknown-exact-target',
+    });
+    expect(unknownCase.executor.pending[0]?.input.turn.metadata?.qualityStrategy)
+      .toBeUndefined();
+
+    const staleCase = await context();
+    await executeTool('spawn_agent', {
+      task_name: 'known-source',
+      objective: 'Provide an Actor path with one current turn.',
+    }, staleCase.ctx);
+    const stale = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'stale-exact-target',
+      objective: 'Inspect without stale optional strategy telemetry.',
+      quality_strategy: {
+        ...baseStrategy,
+        stageId: 'stale-exact-target',
+        targetEvidenceRefs: ['agent-turn:/root/known-source#turn=turn-stale'],
+      },
+    }, staleCase.ctx)) as Record<string, unknown>;
+
+    expect(stale).toMatchObject({
+      ok: true,
+      actorPath: '/root/stale-exact-target',
+    });
+    expect(staleCase.executor.pending[1]?.input.turn.metadata?.qualityStrategy)
+      .toBeUndefined();
+  });
+
+  it('does not downgrade a forbidden Actor evidence target into optional telemetry', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      maxConcurrentThreadsPerSession: 8,
+    });
+    const caller = await controller.spawn('/root', {
+      taskName: 'caller',
+      objective: 'Coordinate one private branch.',
+    });
+    await controller.spawn('/root', {
+      taskName: 'peer',
+      objective: 'Own a separate private branch.',
+    });
+    const privateTurn = await controller.spawn('/root/peer', {
+      taskName: 'private-child',
+      objective: 'Produce evidence hidden from the caller branch.',
+    });
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root/caller'),
+      actorTurnRef: { actorPath: '/root/caller', turnId: caller.turnId },
+    };
+
+    const result = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'unauthorized-evidence-reader',
+      objective: 'Must not start with forbidden evidence telemetry.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'forbidden-evidence',
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: [
+          `agent-turn:${privateTurn.actorPath}#turn=${privateTurn.turnId}`,
+        ],
+      },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'permission_denied' },
+    });
+    expect(controller.list('/root').actors.some((actor) =>
+      actor.path === '/root/caller/unauthorized-evidence-reader')).toBe(false);
+  });
+
   it('preserves running same-strategy follow-up and drops a conflicting telemetry switch', async () => {
     const { ctx, executor } = await context();
     const qualityStrategy = {

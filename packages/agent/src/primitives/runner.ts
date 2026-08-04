@@ -129,16 +129,17 @@ export interface RunOptions {
   readonly permissionIntent?: GuardrailPermissionIntent;
   /**
    * Per-run override for the tool-loop iteration cap. When omitted, the
-   * loop uses `MAX_TOOL_LOOP_ITERATIONS` (20) — a safe ceiling for
-   * stand-alone agent runs. Managed-task orchestration (multi-role
-   * handoff chain: Scout → Planner → Generator → Evaluator) needs a much
-   * higher cap because the iteration counter is shared across every
-   * role in the chain. Legacy `runManagedTask` gave each role its own
-   * `DEFAULT_MANAGED_WORK_BUDGET` (200) — the Runner-driven path passes
-   * that value here so long investigations don't trip the safety valve
-   * after ~20 tool calls.
+   * loop uses `MAX_TOOL_LOOP_ITERATIONS` (20), a safe ceiling for
+   * stand-alone runs. Terminal continuations may consume the Runner's small
+   * bounded continuation reserve unless `maxTotalIterations` narrows it.
    */
   readonly maxToolLoopIterations?: number;
+  /**
+   * Optional absolute per-run ceiling that continuation reserves cannot
+   * extend. Callers that omit it retain the bounded continuation reserve;
+   * managed orchestration uses it as a mechanical runaway fuse.
+   */
+  readonly maxTotalIterations?: number;
   /**
    * v0.7.26 parity: observer callbacks fired around every tool
    * invocation. Legacy `runManagedTask` emitted `events.onToolResult`
@@ -457,7 +458,10 @@ export class RunnerIterationLimitError extends Error {
   constructor(message: string, messages: readonly AgentMessage[]) {
     super(message);
     this.name = 'RunnerIterationLimitError';
-    attachRunnerRecoveryTranscript(this, messages);
+    const recoverableTranscript = messages[0]?.role === 'system'
+      ? messages.slice(1)
+      : messages;
+    attachRunnerRecoveryTranscript(this, recoverableTranscript);
   }
 }
 
@@ -469,7 +473,9 @@ export function isRunnerIterationLimitError(
       error
       && typeof error === 'object'
       && 'code' in error
-      && error.code === 'RUNNER_ITERATION_LIMIT',
+      && error.code === 'RUNNER_ITERATION_LIMIT'
+      && 'limitReached' in error
+      && error.limitReached === true,
     );
 }
 
@@ -810,12 +816,16 @@ async function genericRun<TData>(
   // .maxIterations` at the handoff site and re-take min-wins.
   const optsCap = opts.maxToolLoopIterations ?? MAX_TOOL_LOOP_ITERATIONS;
   const manifestCap = getAdmittedAgentBindings(startAgent)?.manifest.maxIterations;
-  const iterationCap =
-    typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
+  const totalCap = opts.maxTotalIterations ?? Number.POSITIVE_INFINITY;
+  const iterationCap = Math.min(
+    typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap,
+    totalCap,
+  );
   let iterationLimit = iterationCap;
-  const absoluteIterationLimit = typeof manifestCap === 'number'
+  const continuationLimit = typeof manifestCap === 'number'
     ? Math.min(iterationCap + MAX_RUN_CONTINUATION_ITERATIONS, manifestCap)
     : iterationCap + MAX_RUN_CONTINUATION_ITERATIONS;
+  const absoluteIterationLimit = Math.min(continuationLimit, totalCap);
   // FEATURE_184 (v0.7.45) — Stop hook reanimate budget. Per-run counter
   // tracks how many times the hook converted a text-only termination
   // into a synthetic-user-message continuation. Bounded by
@@ -840,8 +850,9 @@ async function genericRun<TData>(
     iterationLimit += 1;
     return true;
   };
-  const hasContinuationCapacity = (): boolean =>
-    !Number.isFinite(iterationLimit) || iterationLimit < absoluteIterationLimit;
+  const canAdmitInputDuringNextIteration = (iteration: number): boolean =>
+    !Number.isFinite(absoluteIterationLimit)
+    || iteration + 2 < absoluteIterationLimit;
   const consumeTerminalContinuation = async (ctx: {
     readonly agent: Agent;
     readonly iteration: number;
@@ -863,7 +874,7 @@ async function genericRun<TData>(
       transcript.push(message);
       await commitMessage(opts, message);
     }
-    if (hasContinuationCapacity()) {
+    if (canAdmitInputDuringNextIteration(ctx.iteration)) {
       continuation.reopenInputWindow();
     }
     return true;
@@ -1088,7 +1099,7 @@ async function genericRun<TData>(
           reanimateCount += 1;
           if (
             opts.terminalContinuation
-            && hasContinuationCapacity()
+            && canAdmitInputDuringNextIteration(iteration)
           ) {
             opts.terminalContinuation.reopenInputWindow();
           }
@@ -1497,7 +1508,7 @@ async function genericRun<TData>(
           && iteration + 1 >= iterationLimit
           && reserveContinuationIteration(iteration)
         ) {
-          if (hasContinuationCapacity()) {
+          if (canAdmitInputDuringNextIteration(iteration)) {
             opts.terminalContinuation.reopenInputWindow();
           }
         }
