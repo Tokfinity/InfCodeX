@@ -122,6 +122,8 @@ export type ClassifyDecision =
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 30_000;
 /** The classifier returns three short XML tags; a coding-turn-sized budget is wasteful. */
 export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
+/** A truncated first response gets one larger, still-bounded contract window. */
+const CLASSIFIER_TRUNCATION_RETRY_OUTPUT_TOKENS = 1024;
 /** Very large shell/script projections cannot be safely truncated and auto-approved. */
 export const MAX_CLASSIFIER_ACTION_BYTES = 16 * 1024;
 /** Defense in depth for rules, signals, and all serialized prompt sections. */
@@ -165,6 +167,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
   const attempts: ClassifierAttemptDiagnostics[] = [];
   let costTracker = opts.costTracker;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
+  let maxOutputTokens = CLASSIFIER_MAX_OUTPUT_TOKENS;
 
   for (let attempt = 1; attempt <= CLASSIFIER_MAX_ATTEMPTS; attempt += 1) {
     const result = await sideQuery({
@@ -172,7 +175,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
       model: opts.model,
       system: prompt.system,
       messages: prompt.messages,
-      maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
       timeoutMs,
       abortSignal: opts.abortSignal,
       querySource: QUERY_SOURCE,
@@ -215,6 +218,9 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
         diagnostics: result.diagnostics,
         attempts,
       };
+    }
+    if (result.stopReason === 'max_tokens') {
+      maxOutputTokens = CLASSIFIER_TRUNCATION_RETRY_OUTPUT_TOKENS;
     }
   }
 

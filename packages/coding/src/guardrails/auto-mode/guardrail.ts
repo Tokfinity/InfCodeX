@@ -89,6 +89,7 @@ import {
   safeFallbackToClassifierInput,
 } from '../../tools/classifier-projection.js';
 import { resolveToolBridgeTarget } from '../../tools/tool-bridge.js';
+import type { ToolSideEffect } from '../../tools/side-effect.js';
 
 export type AutoModeEngine = 'llm' | 'rules';
 
@@ -154,6 +155,8 @@ export interface AutoModeRulesContext {
    * that equivalence cannot be proven.
    */
   readonly trustProcessEnvironmentPathExpansion?: boolean;
+  /** Trusted host metadata used when a tool has no path-specific analyzer. */
+  readonly toolSideEffect?: ToolSideEffect;
 }
 
 export type AutoModePermissionBoundary =
@@ -280,6 +283,9 @@ export interface AutoModeGuardrailConfig {
   readonly getToolProjection: (
     toolName: string,
   ) => ((input: unknown) => string) | undefined;
+
+  /** Optional trusted side-effect metadata for analyzer-less tools. */
+  readonly getToolSideEffect?: (toolName: string) => ToolSideEffect | undefined;
 
   /**
    * Resolve a provider name to an instance. Returns `undefined` when
@@ -1166,7 +1172,9 @@ function isDeterministicallyAllowedOperation(
   operation: AutoModePermissionOperation,
 ): boolean {
   if (operation.options?.whatIf === true) return true;
-  if (operation.kind === 'execute') return operation.options?.readOnly === true;
+  if (operation.kind === 'execute') {
+    return operation.options?.readOnly === true || operation.options?.contained === true;
+  }
   if (operation.kind === 'unknown') return false;
   if (operation.kind === 'read') {
     return operation.target.boundary !== 'protected'
@@ -1378,6 +1386,15 @@ export function createAutoModeToolGuardrail(
     );
     let permissionReview: AutoModePermissionReview | undefined;
     let intentEvidence: ReturnType<typeof buildPermissionIntentEvidence> | undefined;
+    let toolSideEffect: ToolSideEffect | undefined;
+    try {
+      toolSideEffect = config.getToolSideEffect?.(guardedCall.name);
+    } catch (error) {
+      logAutoModeWarning(
+        config.log,
+        `[auto-mode] tool side-effect lookup failed (${errorCategory(error)})`,
+      );
+    }
 
     const allowFinal = (): GuardrailVerdict => {
       if (
@@ -1511,6 +1528,7 @@ export function createAutoModeToolGuardrail(
           projectRoot,
           executionCwd,
           signals,
+          toolSideEffect,
           trustProcessEnvironmentPathExpansion:
             config.trustProcessEnvironmentPathExpansion !== false,
         });
@@ -1524,6 +1542,13 @@ export function createAutoModeToolGuardrail(
         }
         permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
       }
+    }
+    if (!permissionReview && !requiresReadAnalysis && toolSideEffect) {
+      permissionReview = permissionReviewFromDeclaredSideEffect(
+        guardedCall.name,
+        toolSideEffect,
+        guardedCall.input,
+      );
     }
     if (!permissionReview && ctx.permissionIntent !== undefined && action !== '') {
       permissionReview = fallbackPermissionReview(
@@ -1587,6 +1612,7 @@ export function createAutoModeToolGuardrail(
           projectRoot,
           executionCwd,
           signals,
+          toolSideEffect,
           trustProcessEnvironmentPathExpansion:
             config.trustProcessEnvironmentPathExpansion !== false,
         });
@@ -1935,4 +1961,60 @@ function fallbackPermissionReview(
     }],
     risks: [risk],
   };
+}
+
+function permissionReviewFromDeclaredSideEffect(
+  toolName: string,
+  sideEffect: ToolSideEffect,
+  input: Readonly<Record<string, unknown>>,
+): AutoModePermissionReview | undefined {
+  const contained = sideEffect === 'mutates-state';
+  const readOnly = sideEffect === 'readonly' || sideEffect === 'reads-network';
+  const paths = declaredToolPaths(input);
+  if (sideEffect === 'readonly' && paths.length > 0) {
+    return {
+      schemaVersion: 1,
+      analysis: { status: 'incomplete', shell: 'tool', binding: 'partial' },
+      operations: paths.map((targetPath) => ({
+        kind: 'read', target: { path: targetPath, boundary: 'unresolved' },
+      })),
+      risks: ['target_unresolved'],
+    };
+  }
+  if (!contained && !readOnly) return undefined;
+  return {
+    schemaVersion: 1,
+    analysis: { status: 'complete', shell: 'tool', binding: 'exact' },
+    operations: [{
+      kind: 'execute',
+      summary: `${sideEffect} tool ${toolName}`,
+      options: contained ? { contained: true } : { readOnly: true },
+    }],
+    risks: [],
+  };
+}
+
+const DECLARED_TOOL_PATH_FIELDS = [
+  'path', 'file_path', 'filePath', 'target_path', 'targetPath',
+  'source_path', 'sourcePath', 'input_path', 'inputPath',
+  'cwd', 'directory', 'root', 'worktree_path', 'worktreePath',
+] as const;
+const DECLARED_TOOL_PATH_ARRAY_FIELDS = [
+  'paths', 'file_paths', 'filePaths', 'target_paths', 'targetPaths',
+  'input_paths', 'inputPaths',
+] as const;
+
+function declaredToolPaths(input: Readonly<Record<string, unknown>>): readonly string[] {
+  const paths = DECLARED_TOOL_PATH_FIELDS.flatMap((field) => (
+    typeof input[field] === 'string' && input[field].trim() ? [input[field]] : []
+  ));
+  for (const field of DECLARED_TOOL_PATH_ARRAY_FIELDS) {
+    const values = input[field];
+    if (Array.isArray(values)) {
+      paths.push(...values.filter((value): value is string => (
+        typeof value === 'string' && value.trim().length > 0
+      )));
+    }
+  }
+  return [...new Set(paths)];
 }

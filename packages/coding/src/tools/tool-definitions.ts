@@ -922,14 +922,12 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolWebSearch,
-    // FEATURE_247: read-only network research — distinct from web_fetch
-    // (mutates-network) so a Partner/permission policy can allow research while
-    // blocking mutating network calls. planModeAllowed is unchanged.
+    // FEATURE_247: read-only network research.
     sideEffect: 'reads-network',
     // Plan mode permits web_search: it's functionally a query (no remote
     // mutation), common in planning workflows ("research the API before
-    // I propose the change"). web_fetch is NOT planModeAllowed because
-    // it can issue POST/PUT requests that mutate remote state.
+    // I propose the change"). web_fetch remains outside plan mode by its
+    // explicit planModeAllowed policy, not because it mutates remote state.
     planModeAllowed: true,
     toClassifierInput: (input) => {
       const i = input as Record<string, unknown>;
@@ -938,7 +936,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'web_fetch',
-    description: 'Fetch a specific remote source by URL and return bounded text with provenance and trust hints. The handler converts HTML to markdown and caches each unique URL for a short window so repeated reads within the same task are free. If the response is a redirect (3xx), the tool stops and reports the new target URL — re-issue `web_fetch` against that new URL rather than chasing the redirect manually, so the cache + provenance line up with what the user actually sees. For GitHub URLs specifically (`github.com/...` / `raw.githubusercontent.com/...`), prefer `bash` with the `gh` CLI when available — `gh api` / `gh pr view` / `gh issue view` are faster, return structured output, and avoid markdown-conversion artifacts; using `web_fetch` on a github.com URL when `gh` would work is the most common "tool waste" pattern in this surface. Despite the `mutates-network` side-effect classification (some providers route POST requests through this surface), the LLM-facing semantics are read-only. Use `web_search` first when you do not yet have a specific URL.',
+    description: 'Fetch a specific remote source by URL and return bounded text with provenance and trust hints. The handler converts HTML to markdown and caches each unique URL for a short window so repeated reads within the same task are free. If the response is a redirect (3xx), the tool stops and reports the new target URL — re-issue `web_fetch` against that new URL rather than chasing the redirect manually, so the cache + provenance line up with what the user actually sees. For GitHub URLs specifically (`github.com/...` / `raw.githubusercontent.com/...`), prefer `bash` with the `gh` CLI when available — `gh api` / `gh pr view` / `gh issue view` are faster, return structured output, and avoid markdown-conversion artifacts; using `web_fetch` on a github.com URL when `gh` would work is the most common "tool waste" pattern in this surface. The operation is read-only: the built-in path uses HTTP GET and provider-backed paths use readCapability. Use `web_search` first when you do not yet have a specific URL.',
     input_schema: {
       type: 'object',
       properties: {
@@ -948,7 +946,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       },
     },
     handler: toolWebFetch,
-    sideEffect: 'mutates-network',
+    sideEffect: 'reads-network',
     toClassifierInput: (input) => {
       const i = input as Record<string, unknown>;
       return [

@@ -408,8 +408,15 @@ describe('Auto[rules] deterministic Tier 2', () => {
   });
 
   it.each([
-    ['grep', { path: '.', glob: '*.json', pattern: 'token' }],
+    ['grep', { path: '.', glob: '**/.aws/**', pattern: 'token' }],
+    ['grep', { path: '.', glob: '**/.k?be/**', pattern: 'token' }],
+    ['grep', { path: '.', glob: '**/.s[s]h/**', pattern: 'token' }],
     ['glob', { path: '.', pattern: '**/.npmrc' }],
+    ['glob', { path: '.', pattern: '**/.c?dex/**' }],
+    ['glob', { path: '.', pattern: '**/{.aws,.azure}/**' }],
+    ['glob', { path: '.', pattern: '!(README).env' }],
+    ['glob', { path: '.', pattern: '!(README|notes).env' }],
+    ['glob', { path: '.', pattern: '@(credentials.json|README.md)' }],
   ] as const)('escalates %s when a search filter can select protected files', (toolName, input) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call(toolName, input), context(projectRoot));
@@ -421,39 +428,44 @@ describe('Auto[rules] deterministic Tier 2', () => {
   });
 
   it.each([
+    ['grep', { path: 'src/sdk-runtime.ts', glob: '*.ts', pattern: 'token' }],
+    ['grep', { path: '.', glob: '*.json', pattern: 'token' }],
     ['grep', { path: '.', glob: '*.ts', pattern: 'token' }],
     ['glob', { path: '.', pattern: '**/*.md' }],
-    ['glob', { path: '.', pattern: '@(credentials.json|README.md)' }],
     ['glob', { path: '.', pattern: '!(README).json' }],
-  ] as const)('routes %s filters without provable concrete targets through review', (toolName, input) => {
+  ] as const)('allows an ordinary %s selector without treating the pattern as a target', (toolName, input) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
+    fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, 'src', 'sdk-runtime.ts'), 'export const token = true;');
     const assessment = assessAutoModeCall(call(toolName, input), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks.some((risk) => (
-      risk === 'sensitive_read' || risk === 'target_unresolved'
-    ))).toBe(true);
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.analysis).toMatchObject({ status: 'complete', binding: 'exact' });
+    expect(assessment.review.risks).toEqual([]);
   });
 
-  it('routes a structured grep directory through review without a per-file fence', () => {
+  it('models a structured grep directory as its actual read boundary', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('grep', {
       path: projectRoot,
       pattern: 'token',
     }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+      kind: 'read', target: expect.objectContaining({ boundary: 'workspace' }),
+    }));
+    expect(assessment.review.risks).toEqual([]);
   });
 
-  it('routes a structured grep defaulting to the workspace directory through review', () => {
+  it('models a structured grep default as a workspace read', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('grep', {
       pattern: 'token',
     }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it('models the reported PowerShell environment inspection as an exact read', () => {
@@ -754,6 +766,8 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'cat .env*',
     'cat .e?v',
     'cat .en[v]',
+    'cat .k?be/config',
+    'cat .c?dex/auth.json',
     'Get-Content .env*',
     'Get-Content -Path .env*',
     'Get-Content -Path:.env*',
@@ -763,16 +777,17 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'sls token .env*',
     'type .env*',
     'rg token .env*',
+    'rg token -g "**/.s?h/**" .',
     'git diff -- .env*',
   ])('does not deterministically allow a read glob that can expand to protected data: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
     expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.analysis.status).toBe('incomplete');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.review.analysis.status).toBe('complete');
+    expect(assessment.review.risks).toContain('sensitive_read');
     expect(assessment.review.operations).toContainEqual(expect.objectContaining({
-      kind: 'read', target: expect.objectContaining({ boundary: 'unresolved' }),
+      kind: 'read', target: expect.objectContaining({ boundary: 'protected' }),
     }));
   });
 
@@ -808,7 +823,7 @@ describe('Auto[rules] deterministic Tier 2', () => {
     );
 
     expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.review.risks).toContain('sensitive_read');
   });
 
   it.each([
@@ -1185,7 +1200,6 @@ describe('Auto[rules] deterministic Tier 2', () => {
   it.each([
     "rg --hidden --glob '.npmrc' registry .",
     "grep -R --include='.npmrc' registry .",
-    "rg --glob '*.json' token .",
   ])('routes a shell search filter that can select protected files through review: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
@@ -1199,15 +1213,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
   it.each([
     "rg --glob '*.ts' token .",
     "grep -R --include='*.md' token .",
-    "rg --hidden --glob 'src/**/credentials.json' token .",
-    "rg --hidden --type-add 'secret:.npmrc' -tsecret registry .",
-  ])('routes broad shell search filters through review: %s', (command) => {
+    "rg --glob '*.json' token .",
+  ])('keeps an ordinary shell search selector deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks.some((risk) => (
-      risk === 'sensitive_read' || risk === 'target_unresolved'
-    ))).toBe(true);
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1221,12 +1232,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'grep -drecurse registry .',
     'findstr /S registry *',
     'git grep registry',
-  ])('routes an unscoped content search through review: %s', (command) => {
+  ])('models an ordinary recursive or default-scope content search as read-only: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1262,12 +1273,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git stash show --only-untracked',
     'git stash show',
     'git stash show stash@{0}',
-  ])('routes unscoped Git content output through review: %s', (command) => {
+  ])('keeps ordinary Git content output deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1296,13 +1307,13 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git diff -- README.md',
     'git log -p -- README.md',
     'git stash show -p -- README.md',
-  ])('routes Git reads that may invoke repository helpers through review: %s', (command) => {
+  ])('keeps ordinary Git metadata and content reads deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.analysis.status).toBe('incomplete');
-    expect(assessment.review.risks).toContain('indirect_execution');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.analysis.status).toBe('complete');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1316,7 +1327,7 @@ describe('Auto[rules] deterministic Tier 2', () => {
       .toBe('allow');
   });
 
-  it.runIf(GIT_AVAILABLE)('proves configured textconv execution and routes the unguarded read to the classifier', () => {
+  it.runIf(GIT_AVAILABLE)('does not execute a configured textconv while analyzing an ordinary Git read', () => {
     const projectRoot = createRoot('kodax-auto-rules-git-helper-');
     const runGit = (args: readonly string[]) => {
       const result = spawnSync('git', [...args], {
@@ -1356,8 +1367,8 @@ describe('Auto[rules] deterministic Tier 2', () => {
       call('bash', { command: 'git show HEAD -- sample.txt' }),
       context(projectRoot),
     );
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('indirect_execution');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
     expect(fs.existsSync(markerPath)).toBe(false);
 
     runGit(['show', '--no-textconv', '--no-ext-diff', '--format=', 'HEAD', '--', 'sample.txt']);
@@ -1370,12 +1381,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git grep token 0123456789abcdef0123456789abcdef01234567',
     'git grep --cached token',
     'git grep token HEAD HEAD~1',
-  ])('does not mistake a Git tree-ish for a scoped grep path: %s', (command) => {
+  ])('keeps a Git tree-ish content search deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1415,7 +1426,6 @@ describe('Auto[rules] deterministic Tier 2', () => {
   });
 
   it.each([
-    "git log '-L1,1:*.md' --format=",
     "git log -L '1,1:$TARGET' --format=",
   ])('routes a dynamic Git line-log target through review: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
@@ -1425,14 +1435,24 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(assessment.review.risks).toContain('target_unresolved');
   });
 
-  it('routes an exact non-sensitive Git line-log target through helper review', () => {
+  it('does not treat a literal Git line-log wildcard as a dynamic binding', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', {
+      command: "git log '-L1,1:*.md' --format=",
+    }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
+  });
+
+  it('keeps an exact non-sensitive Git line-log target deterministic', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', {
       command: "git log '-L1,1:README.md' --format=",
     }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('indirect_execution');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1668,13 +1688,13 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git stash list --format=%G?',
     'git stash list --pretty=customSecurityFormat',
     'git stash list --show-signature',
-  ])('routes Git signature verification that may invoke a configured helper: %s', (command) => {
+  ])('keeps Git signature and metadata inspection deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('indirect_execution');
-    expect(assessment.review.analysis.status).toBe('incomplete');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
+    expect(assessment.review.analysis.status).toBe('complete');
   });
 
   it.each([
@@ -1844,12 +1864,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git grep --untracked registry',
     'git grep --no-i registry',
     'git grep --unt registry',
-  ])('routes Git grep expanded read scopes through review: %s', (command) => {
+  ])('keeps Git grep expanded read scopes deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.risks).toContain('target_unresolved');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it('does not treat an excluding Git pathspec as a protected read target', () => {
@@ -1861,16 +1881,16 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(assessment.review.risks).not.toContain('sensitive_read');
   });
 
-  it('does not mistake a Git pickaxe pattern for a sensitive path while reviewing helper execution', () => {
+  it('does not mistake a Git pickaxe pattern for a sensitive path', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(
       call('bash', { command: 'git diff -G .env -- README.md' }),
       context(projectRoot),
     );
 
-    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.decision.action).toBe('allow');
     expect(assessment.review.risks).not.toContain('sensitive_read');
-    expect(assessment.review.risks).toContain('indirect_execution');
+    expect(assessment.review.risks).toEqual([]);
   });
 
   it.each([
@@ -1916,13 +1936,13 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(decision.action).toBe('allow');
   });
 
-  it('reviews a Git status redirect because status may invoke an fsmonitor helper', () => {
+  it('allows a Git status redirect inside the workspace', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const decision = evaluateAutoRulesCall(
       call('bash', { command: 'git status > reports/status.txt' }),
       context(projectRoot),
     );
-    expect(decision.action).toBe('escalate');
+    expect(decision.action).toBe('allow');
   });
 
   it.each([
@@ -2346,12 +2366,12 @@ describe('Auto[rules] deterministic Tier 2', () => {
     'git describe --dirty=-changed',
     'git describe --broken',
     'git describe --broken=-broken',
-  ])('reviews git describe modes that may refresh the index: %s', (command) => {
+  ])('keeps git describe worktree-state reads deterministic: %s', (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
 
-    expect(assessment.decision.action).toBe('escalate');
-    expect(assessment.review.analysis.status).toBe('incomplete');
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.analysis.status).toBe('complete');
   });
 
   it('keeps an ordinary git describe query deterministic', () => {
@@ -2490,7 +2510,42 @@ describe('Auto[rules] deterministic Tier 2', () => {
       .toBe('escalate');
   });
 
-  it('escalates unknown tools even when they carry an in-workspace path field', () => {
+  it('uses declared side effects when a tool has no dedicated analyzer', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const cases = [
+      ['extension_reader', 'readonly', {}, 'allow'],
+      ['extension_file_reader', 'readonly', { file_path: 'src/inside.ts' }, 'allow'],
+      ['extension_search', 'reads-network', {}, 'allow'],
+      ['agent_control', 'mutates-state', {}, 'allow'],
+      ['extension_writer', 'mutates-fs', { path: 'src/inside.ts' }, 'allow'],
+      ['remote_mutation', 'mutates-network', {}, 'escalate'],
+    ] as const;
+
+    for (const [name, toolSideEffect, input, expected] of cases) {
+      const assessment = assessAutoModeCall(
+        call(name, input),
+        { ...context(projectRoot), toolSideEffect },
+      );
+      expect(assessment.decision.action, name).toBe(expected);
+    }
+  });
+
+  it.each([
+    ['path', '.ssh/id_rsa'],
+    ['file_path', '.aws/credentials'],
+    ['filePath', '.codex/auth.json'],
+  ] as const)('does not let readonly metadata hide a protected %s input', (field, target) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(
+      call('extension_reader', { [field]: target }),
+      { ...context(projectRoot), toolSideEffect: 'readonly' },
+    );
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('escalates an unknown tool without trusted side-effect metadata', () => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const decision = evaluateAutoRulesCall(
       call('extension_writer', { path: 'src/inside.ts' }),
@@ -2636,9 +2691,6 @@ describe('Auto[LLM] environment-provider routing', () => {
     ['echo "safe\n$(node script.js)"', 'Run the requested Node.js substitution.'],
     ['echo safe\\ #$(node script.js)', 'Run the requested Node.js substitution.'],
     ['echo safe\\\n#$(node script.js)', 'Run the requested Node.js substitution.'],
-    ['git stash list --format=%G?', 'Inspect the requested stash signature state.'],
-    ['git describe --dirty', 'Describe the current revision and mark a dirty worktree.'],
-    ['git describe --broken=-broken', 'Describe the current revision and mark a broken worktree.'],
   ])('calls the classifier once for an explicitly requested unresolved effect: %s', async (
     command,
     intent,
@@ -2665,6 +2717,37 @@ describe('Auto[LLM] environment-provider routing', () => {
 
     expect(verdict.action).toBe('allow');
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it.each([
+    call('grep', { path: 'src/sdk-runtime.ts', glob: '*.ts', pattern: 'permission' }),
+    call('glob', { path: '.', pattern: '**/*.ts' }),
+    call('bash', { command: 'rg permission src' }),
+    call('bash', { command: 'git log --oneline --no-merges' }),
+    call('bash', { command: 'git diff --stat' }),
+  ])('does not invoke the classifier for an ordinary read: $name', async (toolCall) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    fs.mkdirSync(path.join(projectRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, 'src', 'sdk-runtime.ts'), 'export const permission = true;');
+    const provider = new ClassifierProbeProvider();
+    const guardrail = createAutoModeToolGuardrail({
+      rules: { allow: [], soft_deny: [], environment: [] },
+      getToolProjection: () => () => 'ordinary read',
+      resolveProvider: () => provider,
+      defaultProvider: provider.name,
+      defaultModel: 'classifier-probe',
+      projectRoot,
+      executionCwd: projectRoot,
+      analyzeCall: (candidate) => analyzeAutoModeCall(candidate, context(projectRoot)),
+    });
+
+    const verdict = await guardrail.beforeTool!(toolCall, {
+      agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+      messages: [{ role: 'user', content: 'Review the project.' }],
+    });
+
+    expect(verdict.action).toBe('allow');
+    expect(provider.calls).toHaveLength(0);
   });
 
   it.each([
@@ -2723,7 +2806,6 @@ describe('Auto[LLM] environment-provider routing', () => {
   it.each([
     "git show HEAD -- ':(attr:secret)README.md'",
     "git grep token -- ':(prefix:2)README.md'",
-    'git show :/release-message',
   ])('consults the classifier for a Git content scope that cannot be normalized: %s', async (command) => {
     const projectRoot = createRoot('kodax-auto-rules-project-');
     const provider = new ClassifierProbeProvider();
@@ -2747,6 +2829,32 @@ describe('Auto[LLM] environment-provider routing', () => {
 
     expect(verdict.action).toBe('allow');
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('keeps a Git commit-message search deterministic', async () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const provider = new ClassifierProbeProvider();
+    const guardrail = createAutoModeToolGuardrail({
+      rules: { allow: [], soft_deny: [], environment: [] },
+      getToolProjection: () => () => 'Bash: git show :/release-message',
+      resolveProvider: () => provider,
+      defaultProvider: provider.name,
+      defaultModel: 'classifier-probe',
+      projectRoot,
+      executionCwd: projectRoot,
+      analyzeCall: (toolCall) => analyzeAutoModeCall(toolCall, context(projectRoot)),
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      call('bash', { command: 'git show :/release-message' }),
+      {
+        agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+        messages: [{ role: 'user', content: 'Inspect the requested Git information.' }],
+      },
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(provider.calls).toHaveLength(0);
   });
 
   it.each([
@@ -2813,11 +2921,6 @@ describe('Auto[LLM] environment-provider routing', () => {
     'git remote -v',
     'git remote get-url origin',
     'git remote show origin',
-    'git status --short',
-    'git show HEAD -- README.md',
-    'git diff -- README.md',
-    'git log -p -- README.md',
-    'git stash show -p -- README.md',
     'type .e^nv',
     'findstr token .e^nv',
     'git show HEAD:^.env',
@@ -2848,29 +2951,6 @@ describe('Auto[LLM] environment-provider routing', () => {
     'chmod --reference=.env target.txt',
     'chmod --reference .git/config target.txt',
     'chown --reference=.env target.txt',
-    'git tag -v v1.0.0',
-    'git tag --verify v1.0.0',
-    'git show --show-signature HEAD -- README.md',
-    'git log --show-signature -1 -- README.md',
-    'git log --show-sign -1 -- README.md',
-    'git log --format=%G? -1 -- README.md',
-    'git show --format %GS --stat HEAD',
-    'git log --pretty=format:%GK -1 -- README.md',
-    'git log --form=%GT -1 -- README.md',
-    'git log --format="%+G?" -1 -- README.md',
-    'git show --format="%-GS" --stat HEAD',
-    'git log --pretty="format:% G?" -1 -- README.md',
-    'git log --format="%%%G?" -1 -- README.md',
-    'git log --pretty=customSecurityFormat -1 -- README.md',
-    'git show --pretty=customSecurityFormat --stat HEAD',
-    'git branch --format="%(signature:grade)" --list',
-    'git tag --format "%(signature:signername)" --list',
-    'git branch --for="%(signature:key)" --list',
-    'git tag --format="%(*signature:grade)" --list',
-    'git branch --format="%%%(signature:grade)" --list',
-    'git stash list --format=%G?',
-    'git stash list --pretty=customSecurityFormat',
-    'git stash list --show-signature',
     'less README.md',
     'node --version',
     'python --version',

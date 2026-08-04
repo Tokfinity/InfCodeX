@@ -14,6 +14,7 @@ _Last Updated: 2026-08-04_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 275 | High | Resolved | Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged | v0.7.79 development | v0.7.79 development | 2026-08-04 | 2026-08-04 |
 | 274 | Medium | Resolved | Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws | v0.7.69 integration hot reload | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 273 | Medium | Resolved | Runtime actor subprocess test inherited Node environment-proxy warnings | v0.7.79 Runtime actor owner liveness test | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 272 | Medium | Resolved | Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -177,6 +178,65 @@ _Last Updated: 2026-08-04_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 275: Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.79 development
+- **Fixed**: v0.7.79 development
+- **Created**: 2026-08-04
+- **Resolved**: 2026-08-04
+
+#### Original Problem
+
+Auto[Rules] converted ordinary grep/glob selectors and directory-wide searches
+into unresolved pseudo-paths, while ordinary Git content and metadata reads
+were routed through helper-related uncertainty. Tools without a dedicated path
+analyzer ignored their trusted side-effect metadata. Auto[LLM] therefore sent
+many harmless reads to the classifier; if the classifier then returned a
+truncated response, both attempts used the same 256-token output limit and the
+failure could become a user confirmation. Session
+`20260804_114722_2w61e690e24c48` exposed the repeated `max_tokens` path.
+
+#### Root Cause
+
+- Search selectors were conflated with concrete filesystem targets.
+- Implicit directory and Git read scopes were represented as unresolved even
+  though non-sensitive reads are allowed by policy.
+- The guardrail did not consume registry `sideEffect` metadata when a tool had
+  no dedicated analyzer.
+- Classifier retries did not adapt their output budget after truncation.
+
+#### Resolution
+
+- Model ordinary grep/glob/directory and Git metadata/content operations as
+  complete reads while retaining protected credential selectors, dynamic
+  bindings, device namespaces, and explicit executable Git options as review
+  boundaries. Match credential-specific wildcard selectors with the same glob
+  semantics used by tools, without treating broad selectors such as `*.json`
+  as explicit credential targets.
+- Pass trusted tool side effects into the SDK guardrail and Runtime evaluator;
+  admit declared read-only/network-read and contained Agent-state tools without
+  inventing an unknown effect. Reclassify the GET-only `web_fetch` tool as a
+  network read. Path-bearing custom read-only tools still use path analysis, or
+  the classifier when a host has not supplied one.
+- Keep the first classifier attempt at 256 output tokens, but raise the single
+  retry to 1024 only when the first response ended with `max_tokens`.
+
+#### Tests Added
+
+- Structured `grep` on `src/sdk-runtime.ts`, ordinary glob and shell search,
+  Git reads, network reads, and internal Agent tools avoid classifier/user
+  confirmation paths.
+- Credential-matching wildcard selectors, including wildcarded protected
+  directory names, custom read-only tool paths, and Windows device namespaces
+  remain reviewed.
+- A truncated classifier response retries with output budgets `[256, 1024]`.
+
+#### Resolution Date
+
+2026-08-04
 
 ### 274: Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws
 
@@ -11081,11 +11141,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 154 (27 Open, 127 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 155 (27 Open, 128 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-04: Issue 275 resolved (v0.7.79 development)
+- Kept ordinary search selectors, directory scopes, and Git reads on the
+  deterministic read path while retaining credential and dynamic boundaries.
+- Used trusted tool side-effect metadata for network reads and contained Agent
+  tools, and adapted a truncated classifier retry from 256 to 1024 tokens.
 
 ### 2026-08-04: Issue 256 rescheduled to v0.7.84 (no longer blocks v0.7.79)
 - Issue 256 was explicitly rescheduled from a v0.7.79 release blocker to a

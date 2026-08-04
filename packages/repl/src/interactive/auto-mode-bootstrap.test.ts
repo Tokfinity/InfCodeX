@@ -163,6 +163,40 @@ describe('bootstrapAutoMode', () => {
     }
   });
 
+  it('uses trusted side-effect metadata for read-only and contained internal tools', async () => {
+    const projectRoot = createTempDirSync('kodax-bootstrap-rules-', process.cwd());
+    const askUser = vi.fn(async () => 'allow' as const);
+    try {
+      const result = await bootstrapAutoMode({
+        ...baseDeps(),
+        askUser,
+        projectRoot,
+        executionCwd: projectRoot,
+        autoModeSettings: { engine: 'rules' as const },
+      });
+      const guardrail = result.getGuardrail();
+      for (const name of [
+        'web_search',
+        'web_fetch',
+        'mcp_read_resource',
+        'mcp_get_prompt',
+        'spawn_agent',
+      ]) {
+        const verdict = await guardrail.beforeTool!(
+          { id: `declared-${name}`, name, input: {} },
+          {
+            agent: { name: 'test', instructions: '' } as GuardrailContext['agent'],
+            abortSignal: new AbortController().signal,
+          },
+        );
+        expect(verdict.action, name).toBe('allow');
+      }
+      expect(askUser).not.toHaveBeenCalled();
+    } finally {
+      removeTempDirSync(projectRoot);
+    }
+  });
+
   it('keeps an out-of-workspace edit behind confirmation without falsely calling rules a downgrade', async () => {
     const projectRoot = createTempDirSync('kodax-bootstrap-rules-', process.cwd());
     const outsideRoot = createTempDirSync('kodax-bootstrap-outside-', process.cwd());

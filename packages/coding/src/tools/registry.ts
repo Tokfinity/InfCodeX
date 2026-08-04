@@ -333,8 +333,9 @@ export function isToolFileMutation(name: string): boolean {
  *
  * Lets an SDK embedder's permission broker (e.g. KodaX-Space Partner) allow
  * web research / MCP reads (`web_search`, `mcp_read_resource`, `mcp_get_prompt`)
- * while still blocking mutating network calls (`web_fetch`, `mcp_call` →
- * `mutates-network`). Fail-closed: unknown names return `false`.
+ * while still blocking mutating network calls (`mcp_call` →
+ * `mutates-network`). `web_fetch` is a bounded read-only GET. Fail-closed:
+ * unknown names return `false`.
  *
  * Note: `isToolMutation` intentionally still returns `true` for a
  * `reads-network` tool (only `readonly` is treated as non-mutating there), so

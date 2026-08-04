@@ -38,7 +38,7 @@
  *                            eligibility is still driven by `planModeAllowed`,
  *                            unchanged.
  *   - `'mutates-network'` — performs a network request that may mutate remote
- *                            state (web_fetch with a mutating method, mcp_call).
+ *                            state (for example mcp_call).
  *   - `'mutates-state'`   — changes internal session/agent state without
  *                            FS or shell side effects (todo_update,
  *                            send_message, spawn_agent, followup_task,

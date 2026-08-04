@@ -295,8 +295,7 @@ function isGitReadCommand(argv: readonly string[]): boolean {
   const normalizedArgs = args.map((token) => token.toLowerCase());
   const optionBoundary = normalizedArgs.indexOf('--');
   const optionArgs = optionBoundary < 0 ? normalizedArgs : normalizedArgs.slice(0, optionBoundary);
-  if (gitSignatureInspectionMayExecute(subcommand, args)
-    || optionArgs.some((token) => GIT_READ_EXECUTION_FLAGS.has(token)
+  if (optionArgs.some((token) => GIT_READ_EXECUTION_FLAGS.has(token)
     || [...GIT_READ_EXECUTION_FLAGS].some((flag) => token.startsWith(`${flag}=`)))
     || (subcommand === 'grep' && hasGitGrepPagerOption(args))) {
     return false;
@@ -327,6 +326,7 @@ function isGitReadCommand(argv: readonly string[]): boolean {
     ) && (!hasPositional || explicitlyLists);
   }
   if (subcommand === 'tag') {
+    if (gitSignatureInspectionMayExecute(subcommand, args)) return true;
     const listsTags = args.length === 0
       || normalizedArgs.every((token) => token.startsWith('-'))
       || normalizedArgs.includes('-l') || normalizedArgs.includes('--list');

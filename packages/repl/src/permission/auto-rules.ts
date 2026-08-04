@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getAgentConfigHome, isPathInsideDirectory } from '@kodax-ai/agent';
+import { minimatch } from 'minimatch';
 import type {
   AutoModePermissionOperation,
   AutoModePermissionReview,
@@ -14,7 +15,6 @@ import {
   collectDeterministicBashWriteTargets,
   extractPathsFromCommand,
   findGitSubcommandIndex,
-  gitSignatureInspectionMayExecute,
   isBashReadCommand,
   isBashWriteCommand,
   isShellReadOnlyArgv,
@@ -38,6 +38,7 @@ const SENSITIVE_FILES = new Set([
   '.profile', '.bash_history', '.zsh_history',
 ]);
 const ENV_TEMPLATE_FILES = new Set(['.env.example', '.env.sample', '.env.template']);
+const SENSITIVE_SELECTOR_NAMES = [...SENSITIVE_PATH_PARTS, ...SENSITIVE_FILES];
 const SENSITIVE_ENV_NAME = /(?:^|_)(?:api_?key|access_?key|secret|token|password|passwd|credentials?|private_?key|signing_?key|encryption_?key|auth|cookie|pat|jwt|database_?url|db_?url|redis_?url|mongodb_?url|connection_?string|sentry_?dsn)(?:_|$)|^(?:pgpassword|mysql_pwd|kubeconfig|git_askpass)$/i;
 // Provider values are user-controlled process data, not filesystem metadata.
 // Only a small set of conventional diagnostic names is safe enough for the
@@ -175,8 +176,57 @@ function hasShellReadExpansion(targetPath: string): boolean {
     || /^:\([^)]*\battr(?::|=|\s)/i.test(expanded);
 }
 
+function hasDynamicShellReadExpansion(targetPath: string): boolean {
+  const expanded = expandPermissionPath(targetPath);
+  return /[$%`^]/.test(expanded)
+    || /![^!\r\n]+!/.test(expanded)
+    || /^~/.test(expanded)
+    || /^\\\\[.?]\\/.test(expanded)
+    || /^:\([^)]*\battr(?::|=|\s)/i.test(expanded);
+}
+
 function unresolvedSearchFilterTarget(filter: string): string {
   return `\${search-filter:${filter}}`;
+}
+
+function selectorLiteralEvidence(pattern: string, sensitiveName: string): number {
+  const extension = sensitiveName.startsWith('.') ? '' : path.posix.extname(sensitiveName);
+  const withoutExtension = extension && pattern.toLowerCase().endsWith(extension)
+    ? pattern.slice(0, -extension.length)
+    : pattern;
+  const withoutNegativeExtglobs = withoutExtension.replace(/!\([^()]*\)/g, '');
+  const singletonClasses = withoutNegativeExtglobs.replace(
+    /\[([^\]]*)\]/g,
+    (_match, body: string) => /^[a-z0-9]$/i.test(body) ? body : '',
+  );
+  return (singletonClasses.match(/[a-z0-9]/gi) ?? []).length;
+}
+
+function globSensitiveSelectorCandidate(value: string): string | undefined {
+  for (const segment of value.split(/[\\/]+/)) {
+    for (const sensitiveName of SENSITIVE_SELECTOR_NAMES) {
+      if (selectorLiteralEvidence(segment, sensitiveName) < 2) continue;
+      if (minimatch(sensitiveName, segment, {
+        dot: true,
+        nocase: true,
+        nonegate: true,
+        windowsPathsNoEscape: true,
+      })) return sensitiveName;
+    }
+  }
+  return undefined;
+}
+
+function sensitiveSearchSelectorCandidate(value: string): string | undefined {
+  if (isExcludingGitPathspec(value)) return undefined;
+  const direct = sensitivePathCandidate(value);
+  if (direct) return direct;
+  const fragments = value.toLowerCase().split(/[\\/|,(){}]+/)
+    .map((fragment) => fragment.replace(/^[!+@*?\[\]]+|[!+@*?\[\]]+$/g, ''))
+    .filter(Boolean);
+  const explicit = fragments.find((fragment) => isSensitivePath(fragment));
+  if (explicit) return explicit;
+  return globSensitiveSelectorCandidate(value);
 }
 
 function collectLiteralReadTargets(tree: BashCommandTree): ReadonlySet<string> {
@@ -937,15 +987,12 @@ function readToolTarget(
 ): string {
   const searchFilter = toolName === 'glob' ? input.pattern : input.glob;
   if (typeof searchFilter === 'string') {
-    const sensitive = sensitivePathCandidate(searchFilter);
-    return sensitive ?? unresolvedSearchFilterTarget(searchFilter);
+    const sensitive = sensitiveSearchSelectorCandidate(searchFilter);
+    if (sensitive) return sensitive;
   }
   const targetPath = typeof input.path === 'string' && input.path.trim()
     ? input.path
     : toolName === 'read' ? '' : context.executionCwd;
-  if (toolName === 'grep' && targetPath && isExistingDirectoryTarget(targetPath, context)) {
-    return unresolvedSearchFilterTarget(`grep directory ${targetPath}`);
-  }
   return targetPath;
 }
 
@@ -1301,31 +1348,6 @@ function gitLineLogTarget(value: string): string | undefined {
   return undefined;
 }
 
-function grepUsesRecursiveDirectoryTraversal(argv: readonly string[]): boolean {
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? '';
-    const lower = token.toLowerCase();
-    if (gitLongOptionMatches(token, '--recursive')) return true;
-    if (gitLongOptionMatches(token, '--directories')) {
-      const separator = token.indexOf('=');
-      const action = separator >= 0 ? token.slice(separator + 1) : argv[++index];
-      if (!action || !/^(?:read|skip)$/i.test(action)) return true;
-      continue;
-    }
-    if (!/^-[^-]/.test(token)) continue;
-    for (let optionIndex = 1; optionIndex < token.length; optionIndex += 1) {
-      const option = token[optionIndex] ?? '';
-      if (option === 'r' || option === 'R') return true;
-      if (option !== 'd') continue;
-      const attached = token.slice(optionIndex + 1).replace(/^=/, '');
-      const action = attached || argv[++index];
-      if (!action || !/^(?:read|skip)$/i.test(action)) return true;
-      break;
-    }
-  }
-  return false;
-}
-
 function gitLongOptionMatches(token: string, fullName: string): boolean {
   const separator = token.indexOf('=');
   const option = (separator >= 0 ? token.slice(0, separator) : token).toLowerCase();
@@ -1390,23 +1412,25 @@ function collectSensitiveReadTargets(
       return;
     }
     const canonical = canonicalizePath(value, context.executionCwd);
-    const candidate = sensitivePathCandidate(value)
+    const candidate = (literal
+      ? sensitivePathCandidate(value)
+      : sensitiveSearchSelectorCandidate(value))
       ?? (canonical && isSensitivePath(canonical) ? canonical : undefined);
     if (candidate) {
       targets.add(candidate);
       return;
     }
-    // A shell glob/dynamic operand cannot be proven not to expand to .env or
-    // another protected path. Route it to the classifier as unresolved rather
-    // than treating the read command itself as sufficient proof of safety.
-    if (!literal && hasShellReadExpansion(value)) targets.add(value);
+    // Dynamic bindings remain unresolved. Ordinary wildcard selectors are
+    // search-set evidence, not a concrete sensitive target; explicit
+    // credential-like selectors were handled above.
+    if (!literal && hasDynamicShellReadExpansion(value)) targets.add(value);
   };
   const addSearchFilter = (value: string | undefined): void => {
     if (!value) return;
     // ripgrep's leading ! is an exclusion selector, not an input target.
     if (value.startsWith('!')) return;
-    const sensitive = sensitivePathCandidate(value);
-    targets.add(sensitive ?? unresolvedSearchFilterTarget(value));
+    const sensitive = sensitiveSearchSelectorCandidate(value);
+    if (sensitive) targets.add(sensitive);
   };
   for (const target of extractedPaths) {
     addCandidate(target, literalTargets.has(target));
@@ -1429,16 +1453,8 @@ function collectSensitiveReadTargets(
         const subcommandIndex = findGitSubcommandIndex(stage.argv);
         if (subcommandIndex === undefined) continue;
         const subcommand = stage.argv[subcommandIndex]?.toLowerCase();
-        if (subcommand === 'grep' && stage.argv.slice(subcommandIndex + 1).some((token) => (
-          gitLongOptionMatches(token, '--no-index')
-          || gitLongOptionMatches(token, '--untracked')
-        ))) {
-          targets.add(unresolvedSearchFilterTarget('git grep expanded read scope'));
-        }
         let pathsOnly = false;
         let grepPatternSeen = false;
-        let positiveGrepPathSeen = false;
-        let positiveContentPathSeen = false;
         for (let index = subcommandIndex + 1; index < stage.argv.length; index += 1) {
           const token = stage.argv[index] ?? '';
           const lower = token.toLowerCase();
@@ -1492,7 +1508,6 @@ function collectSensitiveReadTargets(
               continue;
             }
             addCandidate(lineTarget);
-            positiveContentPathSeen = true;
             if (isExistingDirectoryTarget(lineTarget, context)) {
               targets.add(unresolvedSearchFilterTarget('Git line-log directory target'));
             }
@@ -1521,26 +1536,7 @@ function collectSensitiveReadTargets(
             || subcommand === 'show'
             || objectPath !== undefined) {
             addCandidate(objectPath ?? token);
-            if (subcommand === 'grep' && !isExcludingGitPathspec(token)) {
-              positiveGrepPathSeen = true;
-            }
-            if ((pathsOnly || objectPath !== undefined)
-              && !isExcludingGitPathspec(token)) {
-              positiveContentPathSeen = true;
-              if (isExistingDirectoryTarget(token, context)) {
-                targets.add(unresolvedSearchFilterTarget('Git directory pathspec'));
-              }
-            }
           }
-        }
-        if (subcommand === 'grep' && !positiveGrepPathSeen) {
-          targets.add(unresolvedSearchFilterTarget('git grep implicit tracked scope'));
-        }
-        if (gitReadEmitsContent(
-          subcommand,
-          stage.argv.slice(subcommandIndex + 1),
-        ) && !positiveContentPathSeen) {
-          targets.add(unresolvedSearchFilterTarget(`git ${subcommand ?? 'read'} content scope`));
         }
         continue;
       }
@@ -1587,26 +1583,6 @@ function collectSensitiveReadTargets(
         continue;
       }
       if (REGEX_READ_COMMANDS.has(executable)) {
-        if ((executable === 'rg' || executable === 'ripgrep')
-          && !stage.argv.slice(1).some((token) => /^--(?:help|version)$/i.test(token))) {
-          const positional = stage.argv.slice(1).filter((token) => !token.startsWith('-'));
-          const lastPositional = positional.at(-1) ?? '';
-          const hasExplicitPath = positional.length > 1
-            && /(?:[\\/.]|[*?\[\]{}]|^~|^%|^\$)/.test(lastPositional);
-          if (!hasExplicitPath || positional.some((token) => (
-            isExistingDirectoryTarget(token, context)
-          ))) {
-            targets.add(unresolvedSearchFilterTarget('ripgrep directory scope'));
-          }
-        }
-        if (['grep', 'egrep', 'fgrep'].includes(executable)
-          && grepUsesRecursiveDirectoryTraversal(stage.argv)) {
-          targets.add(unresolvedSearchFilterTarget('recursive grep scope'));
-        }
-        if (executable === 'findstr'
-          && stage.argv.slice(1).some((token) => /^\/s$/i.test(token))) {
-          targets.add(unresolvedSearchFilterTarget('recursive findstr scope'));
-        }
         if (executable === 'rg' || executable === 'ripgrep') {
           const customTypes = new Map<string, string>();
           const selectedTypes = new Set<string>();
@@ -1982,34 +1958,6 @@ function indirectReadReason(tree: BashCommandTree): string | undefined {
       }
       const symlinkReason = recursiveSymlinkFollowReason(stage);
       if (symlinkReason) return symlinkReason;
-      if (executable === 'git') {
-        const subcommandIndex = findGitSubcommandIndex(stage.argv);
-        const subcommand = subcommandIndex === undefined
-          ? undefined
-          : stage.argv[subcommandIndex]?.toLowerCase();
-        const args = subcommandIndex === undefined ? [] : stage.argv.slice(subcommandIndex + 1);
-        if (gitSignatureInspectionMayExecute(subcommand, args)) {
-          return 'git signature inspection may invoke a repository-configured signature-verification helper';
-        }
-        if (subcommand === 'status') {
-          return 'git status may invoke a repository-configured core.fsmonitor helper';
-        }
-        if (subcommand === 'describe' && args.some((token) => (
-          gitLongOptionMatches(token, '--dirty')
-          || gitLongOptionMatches(token, '--broken')
-        ))) {
-          return 'git describe worktree-state modes may refresh the index or invoke fsmonitor';
-        }
-        const emitsDiffContent = gitReadEmitsContent(subcommand, args);
-        const readsRawBlob = subcommand === 'show'
-          && args.some((token) => gitObjectPath(token) !== undefined)
-          && !args.includes('--');
-        const disablesTextconv = args.some((token) => token.toLowerCase() === '--no-textconv');
-        const disablesExternalDiff = args.some((token) => token.toLowerCase() === '--no-ext-diff');
-        if (emitsDiffContent && !readsRawBlob && (!disablesTextconv || !disablesExternalDiff)) {
-          return 'git content inspection may invoke repository-configured textconv or external-diff helpers';
-        }
-      }
       if (executable === 'findstr'
         && stage.argv.slice(1).some((token) => /^\/f:/i.test(token))) {
         return 'findstr file-list targets cannot be resolved before reading the list';
@@ -2150,14 +2098,19 @@ function collectShellOperations(
     }
     for (const target of readTargets) {
       if (modeledTargets.has(target)) continue;
-      const sensitive = sensitivePathCandidate(target);
+      const literal = literalReadTargets.has(target);
+      const sensitive = literal
+        ? sensitivePathCandidate(target)
+        : sensitiveSearchSelectorCandidate(target);
+      const ordinarySelector = !literal && hasShellReadExpansion(target)
+        && !hasDynamicShellReadExpansion(target);
       operations.push({
         kind: 'read',
         target: sensitive
           ? { path: target, boundary: 'protected' }
-          : !literalReadTargets.has(target) && hasShellReadExpansion(target)
+          : !literal && hasDynamicShellReadExpansion(target)
           ? { path: target, boundary: 'unresolved' }
-          : classifyTarget(target, context, literalReadTargets.has(target)),
+          : classifyTarget(ordinarySelector ? context.executionCwd : target, context, literal),
       });
       modeledTargets.add(target);
     }
@@ -2502,7 +2455,9 @@ function operationPaths(operation: AutoModePermissionOperation): readonly AutoMo
 
 function isOperationAllowed(operation: AutoModePermissionOperation): boolean {
   if (operation.options?.whatIf === true) return true;
-  if (operation.kind === 'execute') return operation.options?.readOnly === true;
+  if (operation.kind === 'execute') {
+    return operation.options?.readOnly === true || operation.options?.contained === true;
+  }
   if (operation.kind === 'unknown') return false;
   if (operation.kind === 'read') {
     return operation.target.boundary !== 'protected'
@@ -2588,6 +2543,70 @@ function assessment(
   return { decision, review: permissionReview };
 }
 
+const DECLARED_TOOL_PATH_FIELDS = [
+  'path', 'file_path', 'filePath', 'target_path', 'targetPath',
+  'source_path', 'sourcePath', 'input_path', 'inputPath',
+  'cwd', 'directory', 'root', 'worktree_path', 'worktreePath',
+] as const;
+const DECLARED_TOOL_PATH_ARRAY_FIELDS = [
+  'paths', 'file_paths', 'filePaths', 'target_paths', 'targetPaths',
+  'input_paths', 'inputPaths',
+] as const;
+
+function declaredToolPaths(input: Readonly<Record<string, unknown>>): readonly string[] {
+  const paths = DECLARED_TOOL_PATH_FIELDS.flatMap((field) => (
+    typeof input[field] === 'string' && input[field].trim() ? [input[field]] : []
+  ));
+  for (const field of DECLARED_TOOL_PATH_ARRAY_FIELDS) {
+    const values = input[field];
+    if (Array.isArray(values)) {
+      paths.push(...values.filter((value): value is string => (
+        typeof value === 'string' && value.trim().length > 0
+      )));
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function assessDeclaredToolEffect(
+  call: Parameters<AutoModeRulesEvaluator>[0],
+  context: AutoModeRulesContext,
+): AutoModeCallAssessment | undefined {
+  const paths = declaredToolPaths(call.input);
+  const filesystemEffect = context.toolSideEffect === 'readonly'
+    ? 'read'
+    : context.toolSideEffect === 'mutates-fs' ? 'write' : undefined;
+  if (filesystemEffect && paths.length > 0) {
+    const operations: AutoModePermissionOperation[] = paths.map((targetPath) => ({
+      kind: filesystemEffect,
+      target: classifyTarget(targetPath, context),
+    }));
+    const complete = operations.every((operation) => (
+      operation.kind !== 'read' && operation.kind !== 'write'
+        ? true
+        : operation.target.boundary !== 'unresolved'
+    ));
+    const allowed = complete && operations.every(isOperationAllowed);
+    return assessment(
+      allowed ? { action: 'allow' } : escalate(`auto-mode requires confirmation for ${filesystemEffect} targets`),
+      review(complete ? 'complete' : 'incomplete', 'tool', operations, collectRisks(operations)),
+    );
+  }
+  const contained = context.toolSideEffect === 'mutates-state';
+  const readOnly = context.toolSideEffect === 'readonly'
+    || context.toolSideEffect === 'reads-network';
+  if (!contained && !readOnly) return undefined;
+  const operation: AutoModePermissionOperation = {
+    kind: 'execute',
+    summary: `${context.toolSideEffect} tool ${call.name}`,
+    options: contained ? { contained: true } : { readOnly: true },
+  };
+  return assessment(
+    { action: 'allow' },
+    review('complete', 'tool', [operation], []),
+  );
+}
+
 export function assessAutoModeCall(
   call: Parameters<AutoModeRulesEvaluator>[0],
   context: AutoModeRulesContext,
@@ -2595,6 +2614,8 @@ export function assessAutoModeCall(
   if (FILE_TOOLS.has(call.name)) return assessFileCall(call.input, context);
   if (READ_FILE_TOOLS.has(call.name)) return assessReadFileCall(call.name, call.input, context);
   if (call.name === 'bash') return assessBashCall(call.input, context);
+  const declared = assessDeclaredToolEffect(call, context);
+  if (declared) return declared;
   return assessment(
     escalate(`auto-mode rules require confirmation for tool "${call.name}"`),
     review(

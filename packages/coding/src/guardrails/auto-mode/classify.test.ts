@@ -556,6 +556,44 @@ describe('classify', () => {
     expect(maxOutputTokensOverride).toBe(256);
   });
 
+  it('increases the retry budget after a max_tokens response omits the decision', async () => {
+    let providerCalls = 0;
+    const outputBudgets: number[] = [];
+    const provider = new StubProvider(async () => {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        return {
+          ...okStream('The request appears safe because it only reads project metadata.'),
+          stopReason: 'max_tokens',
+        };
+      }
+      return okStream(
+        '<decision>allow</decision><hazard>none</hazard><reason>read-only metadata</reason>',
+      );
+    });
+    const original = provider.stream.bind(provider);
+    provider.stream = async (msgs, tools, system, reasoning, streamOptions, signal) => {
+      if (streamOptions?.maxOutputTokensOverride !== undefined) {
+        outputBudgets.push(streamOptions.maxOutputTokensOverride);
+      }
+      return original(msgs, tools, system, reasoning, streamOptions, signal);
+    };
+
+    const result = await classify({
+      provider,
+      model: 'stub-default',
+      rules: emptyRules,
+      transcript: [],
+      action: 'Bash: git log --oneline -5',
+    });
+
+    expect(result.kind).toBe('allow');
+    expect(providerCalls).toBe(2);
+    expect(outputBudgets).toEqual([256, 1024]);
+    expect(result.attempts.map((attempt) => attempt.outcome))
+      .toEqual(['contract_error', 'allow']);
+  });
+
   it('bounds a 1.6 MB resumed-session tool result before calling the provider', async () => {
     let capturedMessages: KodaXMessage[] = [];
     const provider = new StubProvider(async () =>

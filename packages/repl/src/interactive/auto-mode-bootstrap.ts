@@ -158,6 +158,10 @@ export async function bootstrapAutoMode(
           ?? getBuiltinRegisteredToolDefinition(toolName);
         return def?.toClassifierInput;
       },
+      getToolSideEffect: (toolName) => (
+        getRegisteredToolDefinition(toolName)
+        ?? getBuiltinRegisteredToolDefinition(toolName)
+      )?.sideEffect,
       resolveProvider: (name): KodaXBaseProvider | undefined => {
         try {
           return resolveCodingProvider(name);

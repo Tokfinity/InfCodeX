@@ -87,6 +87,70 @@ const callBash = (command: string): RunnerToolCall => ({
 });
 
 describe('AutoModeToolGuardrail — Tier 1', () => {
+  it.each([
+    ['extension_reader', 'readonly'],
+    ['extension_search', 'reads-network'],
+    ['agent_control', 'mutates-state'],
+  ] as const)('uses declared %s effects when no dedicated analyzer exists', async (
+    toolName,
+    sideEffect,
+  ) => {
+    const provider = new StubProvider(okResult('<decision>ask</decision>'));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => () => `Tool: ${toolName}`,
+      getToolSideEffect: () => sideEffect,
+      resolveProvider: () => provider,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'declared-effect', name: toolName, input: {} },
+      ctx([{ role: 'user', content: 'Use the requested tool.' }]),
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it('routes an analyzer-less readonly tool with an explicit path through the classifier', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>ask</decision><hazard>credential_exposure</hazard><reason>reads an explicit SSH credential path and requires user confirmation</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => undefined,
+      getToolSideEffect: () => 'readonly',
+      resolveProvider: () => provider,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'custom-read', name: 'custom_reader', input: { path: '~/.ssh/id_rsa' } },
+      ctx([{ role: 'user', content: 'Inspect the requested file.' }]),
+    );
+
+    expect(verdict.action).toBe('escalate');
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it('does not Accept-edits-fallback an unresolved analyzer-less read path', async () => {
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      getToolProjection: () => undefined,
+      getToolSideEffect: () => 'readonly',
+      resolveProvider: () => undefined,
+      allowOnClassifierFailure: async () => true,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'custom-read', name: 'custom_reader', input: { path: '~/.ssh/id_rsa' } },
+      ctx([{ role: 'user', content: 'Inspect the requested file.' }]),
+    );
+
+    expect(verdict.action).toBe('escalate');
+  });
+
   it.each(['read', 'grep', 'glob'])(
     'routes deterministic %s through the classifier when its analyzer is unavailable',
     async (toolName) => {

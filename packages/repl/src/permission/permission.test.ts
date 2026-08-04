@@ -193,7 +193,7 @@ describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
     ).toContain("Tool 'send_message'");
   });
 
-  it('web_fetch / mcp_call block (mutating network, not planModeAllowed)', () => {
+  it('web_fetch / mcp_call block in plan mode through their explicit plan policy', () => {
     const projectRoot = createProjectRoot();
     expect(getPlanModeBlockReason('web_fetch', { url: 'https://x' }, projectRoot)).toContain(
       "Tool 'web_fetch'",
@@ -342,6 +342,12 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     'git grep -eTOKEN README.md',
     'git config get user.email',
     'git config list --name-only',
+    'git tag -v v0.7.78',
+    'git tag --verify v0.7.78',
+    'git show --show-signature HEAD',
+    'git log --format=%G? -1',
+    'git branch --format="%(signature:grade)" --list',
+    'git tag --format="%(*signature:grade)" --list',
   ])('recognizes read-only git commands after benign global options: %s', (command) => {
     expect(isBashReadCommand(command)).toBe(true);
   });
@@ -358,12 +364,6 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
     'git grep -Oless transcriptSearch',
     'git grep -inOless transcriptSearch',
     'git grep --ext-grep transcriptSearch',
-    'git tag -v v0.7.78',
-    'git tag --verify v0.7.78',
-    'git show --show-signature HEAD',
-    'git log --format=%G? -1',
-    'git branch --format="%(signature:grade)" --list',
-    'git tag --format="%(*signature:grade)" --list',
     'git branch -uxyz',
     'git branch -t',
     'git branch -ld',

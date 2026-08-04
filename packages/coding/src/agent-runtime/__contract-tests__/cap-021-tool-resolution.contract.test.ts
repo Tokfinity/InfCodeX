@@ -65,9 +65,9 @@ describe('FEATURE_247 (R2): applyToolVisibilityPolicy', () => {
     expect(readOnlyish).toContain('read');
     expect(readOnlyish).toContain('glob');
     expect(readOnlyish).toContain('web_search'); // reads-network (R9)
+    expect(readOnlyish).toContain('web_fetch'); // reads-network (GET/readCapability)
     expect(readOnlyish).not.toContain('write'); // mutates-fs
     expect(readOnlyish).not.toContain('bash'); // mutates-shell
-    expect(readOnlyish).not.toContain('web_fetch'); // mutates-network
     expect(readOnlyish).not.toContain('spawn_agent'); // mutates-state
   });
 

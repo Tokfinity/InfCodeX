@@ -399,18 +399,16 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     expect(bash?.sideEffect).toBe('mutates-shell');
   });
 
-  it('classifies web_fetch + mcp_call as mutates-network', () => {
-    const webFetch = listBuiltinToolDefinitions().find((t) => t.name === 'web_fetch');
+  it('classifies mcp_call as mutates-network', () => {
     const mcpCall = listBuiltinToolDefinitions().find((t) => t.name === 'mcp_call');
-    expect(webFetch?.sideEffect).toBe('mutates-network');
     expect(mcpCall?.sideEffect).toBe('mutates-network');
   });
 
   // FEATURE_247 (R9): read-only network research is a distinct side-effect
   // class so a Partner/permission policy can allow research while blocking
   // mutating network calls.
-  it('classifies web_search + mcp_read_resource + mcp_get_prompt as reads-network', () => {
-    for (const name of ['web_search', 'mcp_read_resource', 'mcp_get_prompt']) {
+  it('classifies network retrieval tools as reads-network', () => {
+    for (const name of ['web_search', 'web_fetch', 'mcp_read_resource', 'mcp_get_prompt']) {
       const tool = listBuiltinToolDefinitions().find((t) => t.name === name);
       expect(tool?.sideEffect, `${name} sideEffect`).toBe('reads-network');
     }
@@ -420,7 +418,7 @@ describe('v0.7.42 — tool sideEffect metadata', () => {
     expect(isToolNetworkRead('web_search')).toBe(true);
     expect(isToolNetworkRead('mcp_read_resource')).toBe(true);
     expect(isToolNetworkRead('mcp_get_prompt')).toBe(true);
-    expect(isToolNetworkRead('web_fetch')).toBe(false);
+    expect(isToolNetworkRead('web_fetch')).toBe(true);
     expect(isToolNetworkRead('mcp_call')).toBe(false);
     expect(isToolNetworkRead('read')).toBe(false);
     expect(isToolNetworkRead('totally_unknown_tool')).toBe(false); // fail-closed
