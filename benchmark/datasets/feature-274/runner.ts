@@ -15,14 +15,16 @@ import {
 import type { ModelAlias } from '../../harness/aliases.js';
 import { MODEL_ALIASES } from '../../harness/aliases.js';
 import { runOneShot } from '../../harness/harness.js';
-import { buildWorkerStableInstructions } from '../../../packages/coding/src/agents/worker-role-prompt.js';
+import {
+  buildParallelFirstCollaborationGuidance,
+  buildWorkerStableInstructions,
+} from '../../../packages/coding/src/agents/worker-role-prompt.js';
 import {
   buildVerifierUserMessage,
   VERIFIER_REPORT_TOOL,
   VERIFIER_SYSTEM_PROMPT,
 } from '../../../packages/coding/src/agent-runtime/middleware/sidecar-verifier/verifier-prompts.js';
 import type { PatternTrace } from '../../../packages/coding/src/orchestration/pattern-trace.js';
-import { renderAmaPatternPlaybook } from '../../../packages/coding/src/orchestration/pattern-catalog.js';
 import { getToolDefinition } from '../../../packages/coding/src/tools/registry.js';
 import {
   FEATURE_274_JOURNEY_CASES,
@@ -382,10 +384,13 @@ function verifierSpec(
 function feature274SystemPrompt(arm: Feature274Arm): string {
   const candidate = buildWorkerStableInstructions();
   if (arm === 'candidate') return candidate;
-  const playbook = renderAmaPatternPlaybook();
-  const baseline = candidate.replace(`\n\n${playbook}`, '');
-  if (baseline === candidate || baseline.includes(playbook)) {
-    throw new Error('feature-274 baseline prompt could not remove exactly one pattern playbook');
+  // The six-pattern catalog playbook was retired from the Worker prompt
+  // (parallel-first collaboration guidance replaced it); the baseline arm
+  // removes the current pattern-guidance block instead.
+  const patternGuidance = buildParallelFirstCollaborationGuidance();
+  const baseline = candidate.replace(`\n\n${patternGuidance}`, '');
+  if (baseline === candidate || baseline.includes(patternGuidance)) {
+    throw new Error('feature-274 baseline prompt could not remove exactly one pattern guidance block');
   }
   return baseline;
 }

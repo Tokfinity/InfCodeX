@@ -121,6 +121,28 @@ export function buildWorkerReviewFanoutContract(
 }
 
 /**
+ * Pure builder. The parallel-first collaboration guidance block embedded in
+ * `buildWorkerStableInstructions()`. Exported so benchmark harnesses that
+ * construct with/without-pattern-guidance prompt arms stay byte-exact.
+ */
+export function buildParallelFirstCollaborationGuidance(): string {
+  return [
+    'PARALLEL-FIRST COLLABORATION:',
+    '- When a task has two or more substantive independent lanes and child start slots are available, fan them out with `spawn_agent` calls in the same assistant response. Do not serially perform every lane first.',
+    '- Broad review and audit work is presumptively multi-lane: split it by module, file group, or failure-mode axis unless the discovered scope is genuinely indivisible.',
+    '- For a change-set review with unknown scope, call `changed_scope` once, then fan out before `changed_diff_bundle` or reading every diff locally. For repository/module audits, preserve the requested scope and use the matching repo-intelligence tool instead.',
+    '- Split lanes by distinct evidence scopes or mutually exclusive write sets. Read-only investigations and independent background lanes are especially suitable for parallel execution.',
+    '- Before spawning, separate the immediate blocking step from independent background lanes. Keep the immediate blocking step with the root when the root\'s very next action depends on it; delegate background work that can run alongside useful local work.',
+    '- Prefer a bounded code-change Agent over a read-only explorer when the patch has clear disjoint write ownership. Dispatch it with `read_only:false` and shared isolation, and name the exact files and generated outputs it exclusively owns. The root and siblings must not touch that write set until the child finishes. Its edits are already visible in the root workspace: review them and do not reapply or redo them. Use worktree isolation only with an explicit merge-back strategy.',
+    '- Delegate verification only when it can run in parallel with non-overlapping work, the verification target is already stable, no concurrent writer can modify its dependency surface, and it can catch a concrete risk before integration. Do not verify an in-progress shared-workspace patch; the root performs final integrated verification.',
+    '- Keep the root on the critical path and continue useful non-overlapping work while children run; the root remains responsible for synthesis and the final result.',
+    '- Do not duplicate delegated work locally or across children. Give every child a concrete bounded objective and a distinct ownership boundary.',
+    '- Use solo execution only when the work is genuinely indivisible, has strong serial dependencies, or no child start slot is available.',
+    '- `quality_strategy` is optional telemetry/provenance. Add it when useful for later PatternTrace reconstruction, but never delay or skip an otherwise valid dispatch because it is absent.',
+  ].join('\n');
+}
+
+/**
  * Pure builder. Returns the system prompt the role-prompt entry point
  * splices in for the V2 Worker (the only active AMA role after
  * FEATURE_193). Intentionally context-light — the runner-driven path
@@ -229,20 +251,7 @@ export function buildWorkerStableInstructions(): string {
     '- SPECIALIST ROUTING: when a registered specialist Agent matches the task domain, use its canonical `agent_id` from `list_dispatchable_agents`.',
   ].join('\n');
 
-  const parallelFirstCollaboration = [
-    'PARALLEL-FIRST COLLABORATION:',
-    '- When a task has two or more substantive independent lanes and child start slots are available, fan them out with `spawn_agent` calls in the same assistant response. Do not serially perform every lane first.',
-    '- Broad review and audit work is presumptively multi-lane: split it by module, file group, or failure-mode axis unless the discovered scope is genuinely indivisible.',
-    '- For a change-set review with unknown scope, call `changed_scope` once, then fan out before `changed_diff_bundle` or reading every diff locally. For repository/module audits, preserve the requested scope and use the matching repo-intelligence tool instead.',
-    '- Split lanes by distinct evidence scopes or mutually exclusive write sets. Read-only investigations and independent background lanes are especially suitable for parallel execution.',
-    '- Before spawning, separate the immediate blocking step from independent background lanes. Keep the immediate blocking step with the root when the root\'s very next action depends on it; delegate background work that can run alongside useful local work.',
-    '- Prefer a bounded code-change Agent over a read-only explorer when the patch has clear disjoint write ownership. Dispatch it with `read_only:false` and shared isolation, and name the exact files and generated outputs it exclusively owns. The root and siblings must not touch that write set until the child finishes. Its edits are already visible in the root workspace: review them and do not reapply or redo them. Use worktree isolation only with an explicit merge-back strategy.',
-    '- Delegate verification only when it can run in parallel with non-overlapping work, the verification target is already stable, no concurrent writer can modify its dependency surface, and it can catch a concrete risk before integration. Do not verify an in-progress shared-workspace patch; the root performs final integrated verification.',
-    '- Keep the root on the critical path and continue useful non-overlapping work while children run; the root remains responsible for synthesis and the final result.',
-    '- Do not duplicate delegated work locally or across children. Give every child a concrete bounded objective and a distinct ownership boundary.',
-    '- Use solo execution only when the work is genuinely indivisible, has strong serial dependencies, or no child start slot is available.',
-    '- `quality_strategy` is optional telemetry/provenance. Add it when useful for later PatternTrace reconstruction, but never delay or skip an otherwise valid dispatch because it is absent.',
-  ].join('\n');
+  const parallelFirstCollaboration = buildParallelFirstCollaborationGuidance();
 
   const childSteeringRules = [
     'AGENT STEERING:',
