@@ -1621,6 +1621,9 @@ describe('executeChildAgents', () => {
     expect(briefing).toContain('## Coordination with peers');
     expect(briefing).toContain('STOP and report back to the coordinator');
     expect(briefing).toContain('parallel');
+    expect(briefing).toContain('Only modify the exact files or generated outputs assigned');
+    expect(briefing).toContain('immediately visible to the parent and siblings');
+    expect(briefing).toContain('Exact files or generated outputs changed');
   });
 
   it('read-child briefing does NOT include the "Coordination with peers" section', async () => {
@@ -1639,6 +1642,7 @@ describe('executeChildAgents', () => {
     const briefing = mockRunKodaX.mock.calls[0]![1] as string;
     expect(briefing).not.toContain('## Coordination with peers');
     expect(briefing).not.toContain('STOP and report back to the coordinator');
+    expect(briefing).not.toContain('Exact files or generated outputs changed');
   });
 });
 

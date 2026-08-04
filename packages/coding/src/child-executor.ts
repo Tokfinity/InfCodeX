@@ -1901,6 +1901,7 @@ async function buildChildBriefing(
           // FEATURE_188 v0.7.42 (ADR-034) — write children share parent
           // cwd with siblings, so peer-coordination is prompt-enforced.
           `## Coordination with peers`,
+          `Only modify the exact files or generated outputs assigned in the Objective and Scope. In shared isolation, your edits are immediately visible to the parent and siblings; they must not touch or reapply your write set while you work.`,
           `Other agents may be working in parallel in this same repository. Before making any file modification, briefly check whether your target path could be touched by a peer (e.g. the coordinator dispatched another sibling whose scope overlaps yours, or the user mentioned a parallel thread). If you cannot confidently rule out a conflict, STOP and report back to the coordinator with what you observed rather than proceeding with the edit. The coordinator will resolve the conflict or hand you an updated scope.`,
         ]),
     ``,
@@ -1915,6 +1916,7 @@ async function buildChildBriefing(
     ``,
     `## Output Format`,
     `When done, provide a concise text summary:`,
+    ...(bundle.readOnly ? [] : [`- Exact files or generated outputs changed`]),
     `- Key findings (file:line references)`,
     `- Severity assessment (if applicable)`,
     `- Specific recommendations`,

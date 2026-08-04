@@ -626,7 +626,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'spawn_agent',
-    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. For a broad multi-file review, start distinct read-only lanes as soon as scope is known. Continue useful work after launch; use wait_agent only when mailbox evidence becomes critical.',
+    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. For a broad multi-file review, start distinct read-only lanes as soon as scope is known. For implementation, use a bounded code-change lane only with disjoint write ownership: set read_only:false, keep the default shared isolation, and name the exact exclusive paths and generated outputs. Its edits appear directly in the root workspace and must not be reapplied; use worktree isolation only with an explicit merge-back strategy. Continue useful work after launch; use wait_agent only when mailbox evidence becomes critical.',
     input_schema: {
       type: 'object',
       properties: {

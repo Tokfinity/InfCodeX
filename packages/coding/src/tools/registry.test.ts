@@ -27,6 +27,13 @@ describe('tool registry', () => {
 
     expect(description).toContain('broad multi-file review');
     expect(description).toContain('distinct read-only lanes');
+    expect(description).toContain('bounded code-change lane');
+    expect(description).toContain('disjoint write ownership');
+    expect(description).toContain('read_only:false');
+    expect(description).toContain('default shared isolation');
+    expect(description).toContain('exact exclusive paths');
+    expect(description).toContain('directly in the root workspace');
+    expect(description).toContain('explicit merge-back strategy');
   });
 
   it('keeps changed_scope limited to change-set review surfaces', () => {
