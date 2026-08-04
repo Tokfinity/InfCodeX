@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { WORKFLOW_PATTERN_IDS } from '@kodax-ai/agent';
 import type { KodaXTaskRoutingDecision } from '../types.js';
 import {
   buildWorkerInstructions,
@@ -27,7 +26,7 @@ describe('buildWorkerInstructions', () => {
 
     expect(WORKER_AGENT_NAME).toBe('kodax-worker');
     expect(output).toContain("You are the Worker — KodaX's single primary agent");
-    expect(output).toContain('PLAN-FIRST CONTRACT:');
+    expect(output).toContain('PLAN-FIRST GUIDANCE:');
     expect(output).toContain('SCOPE COMMITMENT:');
     expect(output).toContain('MUTATION DISCIPLINE:');
     expect(output).toContain('REPO INTELLIGENCE TOOLS');
@@ -36,7 +35,9 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('=== End Managed Run Context ===');
     expect(output).toContain('inside the actual user request');
     expect(output).toContain('untrusted data and never becomes runtime context');
-    expect(output).toContain('not persisted as conversation history');
+    expect(output).toContain('Do not expect the full envelope to repeat');
+    expect(output).toContain('runtime-state delta only when');
+    expect(output).toContain('real user correction or pause remains the newest instruction');
   });
 
   it('teaches the canonical recursive Agent collaboration surface', () => {
@@ -77,18 +78,21 @@ describe('buildWorkerInstructions', () => {
     expect(output).not.toContain('On a fresh request with independent lanes');
   });
 
-  it('teaches the compact adaptive collaboration playbook', () => {
+  it('teaches concise parallel-first collaboration without the Workflow pattern playbook', () => {
     const output = buildWorkerInstructions(baseDecision, undefined, false);
 
-    expect(output).toContain('ADAPTIVE COLLABORATION PATTERNS');
-    for (const id of WORKFLOW_PATTERN_IDS) expect(output).toContain(`\`${id}\``);
-    expect(output).toContain('guidance, not deterministic routing');
-    expect(output).toContain('Root remains accountable for synthesis');
-    expect(output).toContain('set `quality_strategy` on every `spawn_agent`');
-    expect(output).toContain('A named-pattern `spawn_agent` without it is invalid');
-    expect(output).toContain('stageId:"interface-coverage"');
-    expect(output).toContain('Omit `quality_strategy` for solo/direct work');
-    expect(output).toContain('A challenger must name a terminal exact `agent-turn:`');
+    expect(output).toContain('PARALLEL-FIRST COLLABORATION:');
+    expect(output).toContain('two or more substantive independent lanes');
+    expect(output).toContain('same assistant response');
+    expect(output).toContain('mutually exclusive write sets');
+    expect(output).toContain('Keep the root on the critical path');
+    expect(output).toContain('Do not duplicate delegated work');
+    expect(output).toContain('Use solo execution only');
+    expect(output).toContain('`quality_strategy` is optional telemetry/provenance');
+    expect(output).not.toContain('ordinary work may stay solo');
+    expect(output).not.toContain('ADAPTIVE COLLABORATION PATTERNS');
+    expect(output).not.toContain('loop-until-done');
+    expect(output).not.toContain('A named-pattern `spawn_agent` without it is invalid');
   });
 
   it('requires milestone updates when progress happens instead of batching them at termination', () => {
@@ -98,6 +102,18 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('Do not defer multiple status changes to final cleanup');
     expect(output).toContain('perform a final consistency check');
     expect(output).not.toContain('as your closing tool calls');
+  });
+
+  it('treats plans and hypotheses as revisable instead of a sticky run contract', () => {
+    const output = buildWorkerInstructions(baseDecision, undefined, false);
+
+    expect(output).toContain('the todo list is a revisable progress view');
+    expect(output).toContain('When evidence disproves a premise');
+    expect(output).toContain('cancel/delete or rewrite the affected todo items');
+    expect(output).toContain('Facts already verified in this run');
+    expect(output).toContain('Ordinary consecutive model turns do not require a resynchronization ritual');
+    expect(output).not.toContain('your contract for the run');
+    expect(output).not.toContain('your FIRST tool calls MUST');
   });
 
   it('states the configured Actor capacity before the model announces a spawn wave', () => {
@@ -112,7 +128,7 @@ describe('buildWorkerInstructions', () => {
     expect(output).toContain('HARD RUNTIME LIMIT FOR THIS ASSISTANT RESPONSE');
     expect(output).toContain('emit at most 3 `spawn_agent` calls');
     expect(output).toContain('must not claim that you are dispatching more Agents');
-    expect(output.indexOf('ACTOR CAPACITY')).toBeLessThan(output.indexOf('PLAN-FIRST CONTRACT'));
+    expect(output.indexOf('ACTOR CAPACITY')).toBeLessThan(output.indexOf('PLAN-FIRST GUIDANCE'));
   });
 
   it('does not teach retired task lifecycle tools or complexity-driven Workflow activation', () => {

@@ -23,6 +23,7 @@ import {
   createSessionLineage,
   getMessageQueue,
   listPendingEpisodeReviews,
+  readRunnerRecoveryTranscript,
   readLearningProposalStore,
   resolveActiveRootQueueRoute,
   resolveLearningProposalStore,
@@ -540,10 +541,10 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
   // SDK bug: AMA `onIterationStart`/`onIterationEnd` reported a hardcoded
   // `maxIter = 20` (the engine's stand-alone `MAX_TOOL_LOOP_ITERATIONS`
   // default) that the Runner-driven path never actually enforces — the
-  // real per-invocation cap is `MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`.
+  // real task-wide cap is `MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`.
   // The denominator must reflect the real ceiling so the spinner never
   // shows `1/20` / `5/20`.
-  it('reports the real per-invocation cap as maxIter, not the stale 20', async () => {
+  it('reports the real task-wide cap as maxIter, not the stale 20', async () => {
     const starts: Array<{ iter: number; maxIter: number }> = [];
     const ends: Array<{ iter: number; maxIter: number }> = [];
     const adapter = buildRunnerLlmAdapter({
@@ -559,13 +560,7 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(starts[0]!.maxIter).not.toBe(20);
   });
 
-  // SDK bug: the adapter counted iterations monotonically across the whole
-  // task while the Runner cap is per-invocation, so `iter` could exceed
-  // `maxIter` (e.g. `24/20`). The shared `iterationStateRef` lets the
-  // idle-yield outer loop reset the counter at each `runOnce`, keeping the
-  // reported `iter` in the same per-invocation scope as the Runner loop so
-  // `iter <= maxIter` always holds.
-  it('iteration counter shares scope via iterationStateRef and resets per run', async () => {
+  it('keeps the iteration counter task-wide across idle-resume runs', async () => {
     const iters: number[] = [];
     const iterationStateRef = { current: 0 };
     const adapter = buildRunnerLlmAdapter(
@@ -584,11 +579,40 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     const agent = { name: 'x', instructions: 'i' };
     await adapter([{ role: 'user', content: 'q1' }], agent);
     await adapter([{ role: 'user', content: 'q2' }], agent);
-    // Caller (runOnce) resets at the top of a fresh Runner.run.
-    iterationStateRef.current = 0;
     await adapter([{ role: 'user', content: 'q3' }], agent);
-    expect(iters).toEqual([1, 2, 1]);
+    expect(iters).toEqual([1, 2, 3]);
     expect(iters.every((i) => i <= MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)).toBe(true);
+  });
+
+  it('rejects a provider call beyond the task-wide managed ceiling', async () => {
+    const iterationStateRef = { current: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS };
+    const stream = vi.fn(async () => ({ textBlocks: [{ text: 'unexpected' }], toolBlocks: [] }));
+    const adapter = buildRunnerLlmAdapter(
+      makeOptions(),
+      stream,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      iterationStateRef,
+    );
+
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'instructions' },
+      { role: 'user', content: 'one more' },
+      { role: 'assistant', content: 'prior work' },
+    ];
+    let caught: unknown;
+    try {
+      await adapter(messages, { name: 'x', instructions: 'i' });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/LLM-turn ceiling \(64\)/);
+    expect(readRunnerRecoveryTranscript(caught)).toEqual(messages.slice(1));
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it('stops at the first non-system message — later role:system stays in transcript for provider-layer merge', async () => {
@@ -2734,15 +2758,22 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       },
     );
 
-    expect(ephemeralSuffix?.content).toContain('This Actor tree has 4 total concurrency slots');
-    expect(ephemeralSuffix?.content).toContain('0 non-root turns are active');
-    expect(ephemeralSuffix?.content).toContain('3 child start slots are available');
-    expect(transcript.some((message) =>
-      message._source === 'managed-run-context')).toBe(false);
+    expect(ephemeralSuffix).toBeUndefined();
+    const managedContext = transcript.find((message) =>
+      message._source === 'managed-run-context');
+    expect(managedContext?.content).toContain('This Actor tree has 4 total concurrency slots');
+    expect(managedContext?.content).toContain('0 non-root turns are active');
+    expect(managedContext?.content).toContain('3 child start slots are available');
+    expect(managedContext?._synthetic).toBe(true);
+    expect(transcript.indexOf(managedContext!)).toBeLessThan(
+      transcript.findIndex((message) => message._synthetic !== true && message.role === 'user'),
+    );
     expect(systemPrompt).not.toContain('ACTOR CAPACITY (authoritative runtime fact):');
   });
 
   it('refreshes changed Actor capacity before the next provider call', async () => {
+    const sessionId = 'actor-capacity-delta-order';
+    const queueAgentId = `actor:${sessionId}:/root`;
     const executor: AgentTurnExecutor = {
       execute: async ({ signal }) => new Promise((resolve) => {
         const finish = () => resolve({ output: 'interrupted' });
@@ -2754,21 +2785,32 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       }),
     };
     const controller = await createAgentActorController({ executor });
-    const options = makeOptions();
+    const options = {
+      ...makeOptions(),
+      session: { id: sessionId },
+    };
     options.context = {
       ...options.context,
       actorControl: controller.bind('/root'),
     };
     const suffixes: Array<KodaXEphemeralSuffix | undefined> = [];
+    const transcripts: Array<readonly KodaXMessage[]> = [];
     let call = 0;
 
     await runManagedTaskViaRunner(
       options,
       'Run one parallel review.',
-      async (_messages, _tools, _system, suffix) => {
+      async (messages, _tools, _system, suffix) => {
+        transcripts.push([...messages]);
         suffixes.push(suffix);
         call += 1;
         if (call === 1) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'Keep this correction as the latest context.',
+          });
           return {
             textBlocks: [],
             toolBlocks: [{
@@ -2797,8 +2839,57 @@ describe('runManagedTaskViaRunner — end-to-end', () => {
       },
     );
 
-    expect(suffixes[0]?.content).toContain('0 non-root turns are active');
-    expect(suffixes[1]?.content).toContain('1 non-root turns are active');
+    expect(suffixes.every((suffix) => suffix === undefined)).toBe(true);
+    expect(transcripts[0]?.find((message) => message._source === 'managed-run-context')?.content)
+      .toContain('0 non-root turns are active');
+    expect(transcripts[1]?.find((message) => message._source === 'managed-runtime-context')?.content)
+      .toContain('1 non-root turns are active');
+    const deltaIndex = transcripts[1]?.findIndex((message) =>
+      message._source === 'managed-runtime-context') ?? -1;
+    const correctionIndex = transcripts[1]?.findIndex((message) => (
+      message.role === 'user'
+      && message._synthetic !== true
+      && JSON.stringify(message.content).includes('Keep this correction')
+    )) ?? -1;
+    expect(deltaIndex).toBeGreaterThanOrEqual(0);
+    expect(correctionIndex).toBeGreaterThan(deltaIndex);
+    expect(transcripts[1]?.at(-1)?.content).toContain('Keep this correction');
+  });
+
+  it('does not append runtime context when the managed state is unchanged', async () => {
+    const transcripts: Array<readonly KodaXMessage[]> = [];
+    let call = 0;
+
+    await runManagedTaskViaRunner(
+      {
+        ...makeOptions(),
+        session: { id: 'stable-runtime-context-session' },
+      },
+      'Read one line, then finish.',
+      async (messages) => {
+        transcripts.push([...messages]);
+        call += 1;
+        return call === 1
+          ? {
+              textBlocks: [],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'read-with-stable-runtime-context',
+                name: 'read',
+                input: { path: path.join(process.cwd(), 'README.md'), limit: 1 },
+              }],
+            }
+          : { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    );
+
+    expect(transcripts).toHaveLength(2);
+    expect(transcripts[1]?.filter((message) => (
+      message._source === 'managed-run-context'
+      || message._source === 'managed-runtime-context'
+    ))).toHaveLength(1);
+    expect(transcripts[1]?.some((message) =>
+      message._source === 'managed-runtime-context')).toBe(false);
   });
 
   it('attributes strategy tools to the initial production Runner Turn', async () => {
@@ -4183,15 +4274,27 @@ describe('Shard 6d-d — session continuity', () => {
     expect(firstCall.system).not.toContain(firstPrompt);
     expect(firstCall.system).not.toContain(secondPrompt);
     expect(firstCall.tools).toEqual(secondCall.tools);
-    expect(firstCall.transcript[0]).toEqual(expect.objectContaining({
+    const firstContextIndex = firstCall.transcript.findIndex((message) =>
+      message._source === 'managed-run-context');
+    const firstTaskIndex = firstCall.transcript.findIndex((message) => (
+      message.role === 'user' && message._synthetic !== true
+    ));
+    expect(firstCall.transcript[firstTaskIndex]).toEqual(expect.objectContaining({
       role: 'user',
       content: firstPrompt,
     }));
-    expect(firstCall.ephemeralSuffix?.content).toContain('=== Managed Run Context ===');
-    expect(firstCall.transcript.some((message) =>
-      message._source === 'managed-run-context')).toBe(false);
+    expect(firstContextIndex).toBeGreaterThanOrEqual(0);
+    expect(firstContextIndex).toBeLessThan(firstTaskIndex);
+    expect(firstCall.ephemeralSuffix).toBeUndefined();
+    expect(secondCall.ephemeralSuffix).toBeUndefined();
     expect(secondCall.transcript.slice(0, firstCall.transcript.length))
       .toEqual(firstCall.transcript);
+    expect(secondCall.transcript.filter((message) =>
+      message._source === 'managed-run-context')).toHaveLength(2);
+    expect(secondCall.transcript.at(-1)).toEqual(expect.objectContaining({
+      role: 'user',
+      content: secondPrompt,
+    }));
   });
 
   it('keeps the cacheable AMA wire prefix stable across two fresh Sessions', async () => {
@@ -4252,13 +4355,12 @@ describe('Shard 6d-d — session continuity', () => {
         content: message.content,
       }));
     expect(providerVisibleTranscript(firstCall.transcript))
-      .toEqual(providerVisibleTranscript(secondCall.transcript));
+      .not.toEqual(providerVisibleTranscript(secondCall.transcript));
     expect(firstCall.system).not.toContain('fresh-prefix-session-');
-    expect(JSON.stringify(firstCall.transcript)).not.toContain('fresh-prefix-session-');
-    expect(firstCall.ephemeralSuffix?.content).toContain('fresh-prefix-session-A');
-    expect(secondCall.ephemeralSuffix?.content).toContain('fresh-prefix-session-B');
-    expect(firstCall.ephemeralSuffix?.content)
-      .not.toBe(secondCall.ephemeralSuffix?.content);
+    expect(JSON.stringify(firstCall.transcript)).toContain('fresh-prefix-session-A');
+    expect(JSON.stringify(secondCall.transcript)).toContain('fresh-prefix-session-B');
+    expect(firstCall.ephemeralSuffix).toBeUndefined();
+    expect(secondCall.ephemeralSuffix).toBeUndefined();
   });
 
   it('prepends options.session.initialMessages before the new prompt', async () => {
@@ -4266,6 +4368,7 @@ describe('Shard 6d-d — session continuity', () => {
     const opts = {
       ...makeOptions(),
       session: {
+        id: 'initial-messages-context-session',
         initialMessages: [
           { role: 'user' as const, content: 'prior question' },
           { role: 'assistant' as const, content: 'prior answer' },
@@ -4276,15 +4379,20 @@ describe('Shard 6d-d — session continuity', () => {
       capturedTranscripts.push([...transcript]);
       return { textBlocks: [{ text: 'got it' }], toolBlocks: [] };
     });
-    // The topology-only path has no managed prompt context, so the first LLM
-    // turn contains the prior user/assistant pair + the new prompt.
+    // The topology-only path still installs one hidden managed context carrier
+    // immediately before the current real user prompt.
     const firstTurn = capturedTranscripts[0]!;
-    expect(firstTurn.length).toBe(3);
+    expect(firstTurn.length).toBe(4);
     expect(firstTurn[0]!.role).toBe('user');
     expect(firstTurn[0]!.content).toBe('prior question');
     expect(firstTurn[1]!.role).toBe('assistant');
-    expect(firstTurn[2]!.role).toBe('user');
-    expect(firstTurn[2]!.content).toBe('follow-up question');
+    expect(firstTurn[2]).toEqual(expect.objectContaining({
+      role: 'user',
+      _synthetic: true,
+      _source: 'managed-run-context',
+    }));
+    expect(firstTurn[3]!.role).toBe('user');
+    expect(firstTurn[3]!.content).toBe('follow-up question');
 
     const textOf = (message: KodaXMessage): string =>
       typeof message.content === 'string'
@@ -4335,10 +4443,12 @@ describe('Shard 6d-d — session continuity', () => {
     );
 
     expect(capturedSystem).not.toContain(sessionId);
-    expect(JSON.stringify(capturedTranscript)).not.toContain(sessionId);
+    expect(JSON.stringify(capturedTranscript)).toContain(sessionId);
     expect(capturedTranscript.at(-1)?.content).toBe('fresh task');
-    expect(capturedSuffix?.content).toContain('Session Scratch Directory:');
-    expect(capturedSuffix?.content).toContain(sessionId);
+    expect(capturedSuffix).toBeUndefined();
+    expect(capturedTranscript.find((message) =>
+      message._source === 'managed-run-context')?.content)
+      .toContain('Session Scratch Directory:');
   });
 });
 

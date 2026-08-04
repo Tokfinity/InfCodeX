@@ -104,7 +104,7 @@ export function wrapEmitterWithRecorder(
   // through this wrapper. FEATURE_193 (v0.7.43): only the verdict-slot
   // dispatch remains — scout seeding and contract replan-seed branches
   // were retired with the V1 chain.
-  //   - accept → autoCompleteOnAccept
+  //   - accept → preserve the Worker's explicit plan state
   //   - revise (Worker retry) → markInProgressFailed + arm the
   //                             pending reset-failed flag
   //   - revise (replan, defensive) → reset
@@ -147,9 +147,7 @@ export function wrapEmitterWithRecorder(
           const verdictPayload = recorder.verdict?.payload.verdict;
           const status = verdictPayload?.status;
           const nextHarness = verdictPayload?.nextHarness;
-          if (status === 'accept') {
-            todoStore.autoCompleteOnAccept();
-          } else if (status === 'revise') {
+          if (status === 'revise') {
             if (nextHarness === 'H2_PLAN_EXECUTE_EVAL') {
               // Replan disposition — drop the list. (Production V2 path
               // never sets nextHarness=H2 since Planner is retired, but

@@ -326,4 +326,68 @@ describe('createLlmJudgedStopHook', () => {
     });
     expect(await hook(baseCtx)).toBeUndefined();
   });
+
+  it('keeps caller cancellation separate from a fail-open judge verdict', async () => {
+    const controller = new AbortController();
+    let observed = false;
+    let mapped = false;
+    const provider = fakeProvider((
+      _messages,
+      _tools,
+      _system,
+      _reasoning,
+      _streamOptions,
+      signal,
+    ) => new Promise<KodaXStreamResult>((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        reject(new DOMException('Request aborted', 'AbortError'));
+      }, { once: true });
+    }));
+    const hook = createLlmJudgedStopHook<TestVerdict>({
+      provider,
+      systemPrompt: 'judge',
+      reportTool: REPORT_TOOL,
+      reportToolName: 'emit_verdict',
+      buildUserMessage: () => 'm',
+      parseToolCall,
+      defaultVerdict,
+      mapVerdict: () => {
+        mapped = true;
+        return undefined;
+      },
+      onVerdict: () => {
+        observed = true;
+      },
+    });
+
+    const result = hook({ ...baseCtx, abortSignal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    expect(observed).toBe(false);
+    expect(mapped).toBe(false);
+  });
+
+  it('cancels promptly even when the Provider ignores AbortSignal', async () => {
+    const controller = new AbortController();
+    const provider = fakeProvider(() => new Promise<KodaXStreamResult>(() => {}));
+    const hook = createLlmJudgedStopHook<TestVerdict>({
+      provider,
+      systemPrompt: 'judge',
+      reportTool: REPORT_TOOL,
+      reportToolName: 'emit_verdict',
+      buildUserMessage: () => 'm',
+      parseToolCall,
+      defaultVerdict,
+      mapVerdict: () => undefined,
+      timeoutMs: 30_000,
+    });
+
+    const result = hook({ ...baseCtx, abortSignal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });

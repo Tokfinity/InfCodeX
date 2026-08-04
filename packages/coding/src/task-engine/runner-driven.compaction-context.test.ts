@@ -253,7 +253,7 @@ describe.each([
   ['native ephemeral suffix', true],
   ['legacy provider lowering', false],
 ] as const)('AMA context reinjection after automatic compaction: %s', (_name, native) => {
-  it('keeps managed run context request-only and present exactly once before and after compaction', async () => {
+  it('keeps one canonical managed context before the task and compaction summary', async () => {
     const requests: PhysicalRequest[] = [];
     const snapshots: RuntimeContextBudgetSnapshot[] = [];
     const timeline: string[] = [];
@@ -294,11 +294,14 @@ describe.each([
       expect(request.system).not.toContain(SKILLS_ADDENDUM_SENTINEL);
       expect(request.system).not.toContain(SELECTED_SKILL_SENTINEL);
       expect(request.system).not.toContain(TASK_CONSTRAINT_SENTINEL);
-      if (native) {
-        expect(request.suffix?.content).toContain(SKILLS_ADDENDUM_SENTINEL);
-      } else {
-        expect(request.suffix).toBeUndefined();
-      }
+      expect(request.suffix).toBeUndefined();
+      const contextIndex = request.messages.findIndex((message) =>
+        message._source === 'managed-run-context');
+      const anchorIndex = request.messages.findIndex((message) => (
+        message._synthetic !== true && message.role === 'user'
+      ) || message._source === 'compaction-checkpoint');
+      expect(contextIndex).toBeGreaterThanOrEqual(0);
+      expect(contextIndex).toBeLessThan(anchorIndex);
     }
 
     const compactableTranscript = JSON.stringify(compactMock.mock.calls[0]?.[0]);
@@ -308,10 +311,10 @@ describe.each([
     expect(compactableTranscript).not.toContain('managed-run-context');
 
     const durableTranscript = JSON.stringify(result.messages);
-    expect(durableTranscript).not.toContain(SKILLS_ADDENDUM_SENTINEL);
-    expect(durableTranscript).not.toContain(SELECTED_SKILL_SENTINEL);
-    expect(durableTranscript).not.toContain(TASK_CONSTRAINT_SENTINEL);
-    expect(durableTranscript).not.toContain('managed-run-context');
+    expect(countOccurrences(durableTranscript, SKILLS_ADDENDUM_SENTINEL)).toBe(1);
+    expect(countOccurrences(durableTranscript, SELECTED_SKILL_SENTINEL)).toBe(1);
+    expect(countOccurrences(durableTranscript, TASK_CONSTRAINT_SENTINEL)).toBe(1);
+    expect(countOccurrences(durableTranscript, 'managed-run-context')).toBe(1);
 
     expect(snapshots).toHaveLength(2);
     for (const snapshot of snapshots) {

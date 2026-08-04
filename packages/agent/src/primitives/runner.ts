@@ -687,6 +687,13 @@ async function genericRun<TData>(
   opts: RunOptions | undefined,
   agentSpan: Span | null,
 ): Promise<RunResult<TData>> {
+  const throwIfAborted = (): void => {
+    if (!opts?.abortSignal?.aborted) return;
+    const error = new Error('Runner cancelled by caller.');
+    error.name = 'AbortError';
+    throw error;
+  };
+  throwIfAborted();
   if (!opts?.llm) {
     throw new Error(
       `Runner.run: agent "${startAgent.name}" has no registered preset dispatcher and no \`llm\` callback was provided. `
@@ -836,6 +843,7 @@ async function genericRun<TData>(
     return true;
   };
   for (let iteration = 0; iteration < iterationLimit; iteration += 1) {
+    throwIfAborted();
     // Close before the last absolute generation starts. Waiting until its
     // terminal candidate would admit input that no bounded next turn can
     // consume.
@@ -879,6 +887,7 @@ async function genericRun<TData>(
         }
       }
     }
+    throwIfAborted();
 
     const { result: turn, wasPlainString } = await runGenerationTurn(
       currentAgent,
@@ -886,6 +895,7 @@ async function genericRun<TData>(
       opts.llm,
       agentSpan,
     );
+    throwIfAborted();
     for (const injectedInputMessage of turn.injectedInputMessages ?? []) {
       transcript.push(injectedInputMessage);
       await commitMessage(opts, injectedInputMessage);
@@ -972,6 +982,12 @@ async function genericRun<TData>(
           hookError = error;
           stopResult = undefined;
         }
+
+        // A verifier/provider abort must never be reclassified as the hook's
+        // fail-open `undefined` accept path. Lifecycle cancellation wins over
+        // all semantic verdicts, including a hook that swallowed its own
+        // provider AbortError.
+        throwIfAborted();
 
         if (hookError !== undefined) {
           agentSpan?.addChild('stop-hook', {

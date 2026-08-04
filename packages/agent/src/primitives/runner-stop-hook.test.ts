@@ -77,6 +77,21 @@ describe('Runner stopHook — FEATURE_184 Phase A primitive', () => {
     expect(result.stoppedByHook).toBeUndefined();
   });
 
+  it('treats cancellation during a stop hook as an aborted run, not acceptance', async () => {
+    const controller = new AbortController();
+    const run = Runner.run(agentNoTools, 'hi', {
+      llm: async () => 'candidate final text',
+      abortSignal: controller.signal,
+      stopHook: async () => {
+        controller.abort();
+        return undefined;
+      },
+      tracer: null,
+    });
+
+    await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('does NOT fire the hook on a tool-use iteration', async () => {
     // The hook only fires on text-only termination. A tool-using turn
     // (toolCalls.length > 0) skips the hook entirely on that iteration.

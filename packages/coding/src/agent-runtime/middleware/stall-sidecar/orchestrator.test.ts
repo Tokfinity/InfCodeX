@@ -62,6 +62,40 @@ class CannedSidecarProvider extends KodaXBaseProvider {
   }
 }
 
+class DeferredSidecarProvider extends KodaXBaseProvider {
+  readonly name = 'deferred-sidecar';
+  readonly supportsThinking = false;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'DEFERRED_SIDECAR',
+    model: 'deferred',
+    supportsThinking: false,
+    contextWindow: 100000,
+  };
+
+  public captured = 0;
+  private resolveStream?: (result: KodaXStreamResult) => void;
+
+  async stream(): Promise<KodaXStreamResult> {
+    this.captured += 1;
+    return new Promise<KodaXStreamResult>((resolve) => {
+      this.resolveStream = resolve;
+    });
+  }
+
+  resolve(nudge: string): void {
+    this.resolveStream?.({
+      textBlocks: [],
+      thinkingBlocks: [],
+      toolBlocks: [{
+        type: 'tool_use',
+        id: 'tu_deferred',
+        name: 'report_stall_judgment',
+        input: { isStuck: true, reason: 'canned', suggestedTool: '', nudge },
+      }],
+    });
+  }
+}
+
 async function flushMicrotasks(): Promise<void> {
   // The orchestrator stores the sidecar promise in pendingPromises;
   // tests can await all of them via `Promise.all(debug.pendingSidecarPromises())`.
@@ -270,6 +304,32 @@ describe('FEATURE_178 (v0.7.42): createStallOrchestrator', () => {
       orch.reset();
       expect(orch.debug.hasPendingNudge()).toBe(false);
       expect(orch.debug.transcriptSize()).toBe(0);
+    });
+
+    it('suppresses concurrent sidecars and ignores a pre-reset verdict', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new DeferredSidecarProvider();
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      expect(orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } }))
+        .toBe(true);
+      expect(orch.recordToolUse({ name: 'read', id: 't4', input: { path: 'a.ts' } }))
+        .toBe(true);
+      expect(provider.captured).toBe(1);
+
+      orch.reset();
+      provider.resolve('stale nudge');
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+
+      expect(orch.debug.hasPendingNudge()).toBe(false);
     });
   });
 

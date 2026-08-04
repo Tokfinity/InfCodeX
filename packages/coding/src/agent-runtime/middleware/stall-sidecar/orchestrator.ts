@@ -132,6 +132,8 @@ export function createStallOrchestrator(
 ): StallOrchestrator {
   const transcript: KodaXMessage[] = [];
   let pendingNudge: string | undefined;
+  let generation = 0;
+  let sidecarInFlight = false;
   const pendingPromises: Promise<unknown>[] = [];
 
   function pushTranscript(message: KodaXMessage): void {
@@ -157,6 +159,7 @@ export function createStallOrchestrator(
 
       const signal = options.detector.recordToolUse(call.name, call.input);
       if (signal.kind !== 'stall') return false;
+      if (sidecarInFlight) return true;
 
       const snapshot = snapshotTranscript();
       const userMessage = buildSidecarUserMessage({
@@ -170,6 +173,8 @@ export function createStallOrchestrator(
       // fuzzy match — same envelope a verifier `sidecarFinished` log
       // line reports.
       const sidecarStartedAt = Date.now();
+      const signalGeneration = generation;
+      sidecarInFlight = true;
       const promise = invokeStallSidecar({
         provider: options.provider,
         model: options.model,
@@ -179,6 +184,7 @@ export function createStallOrchestrator(
         timeoutMs: options.timeoutMs,
       })
         .then((verdict) => {
+          if (signalGeneration !== generation) return;
           const elapsedMs = Date.now() - sidecarStartedAt;
           options.onVerdict?.(signal, verdict, elapsedMs);
           if (verdict.isStuck && verdict.nudge) {
@@ -189,6 +195,9 @@ export function createStallOrchestrator(
           // invokeStallSidecar already swallows all errors and returns
           // safe-default verdicts. Defensive belt-and-suspenders catch
           // here in case the contract ever changes.
+        })
+        .finally(() => {
+          if (signalGeneration === generation) sidecarInFlight = false;
         });
       pendingPromises.push(promise);
       return true;
@@ -216,9 +225,10 @@ export function createStallOrchestrator(
     reset() {
       transcript.length = 0;
       pendingNudge = undefined;
-      // Don't clear pendingPromises — let them resolve naturally; their
-      // resolution handlers no-op once `pendingNudge` is the new (empty)
-      // ref. New stalls produced after reset will re-arm correctly.
+      generation += 1;
+      sidecarInFlight = false;
+      // Existing promises may resolve naturally; the generation fence makes
+      // verdicts from the pre-compaction transcript a no-op.
     },
 
     debug: {

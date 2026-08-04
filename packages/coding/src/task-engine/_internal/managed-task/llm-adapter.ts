@@ -111,6 +111,7 @@ import {
 } from './sanitize.js';
 import type { ContextTokenSnapshotRef } from './compaction.js';
 import type { TodoStore } from '../../todo-store.js';
+import { buildManagedProgressGateReminder } from '../../managed-progress-gate.js';
 import {
   buildTodoReminderText,
   detectAgentTransition,
@@ -302,6 +303,7 @@ export function buildRunnerLlmAdapter(
   const localIterationState = { current: 0 };
   const iterationState = iterationStateRef ?? localIterationState;
   const MAX_ITER_HINT = MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS;
+  let pendingRuntimeReminders: string[] = [];
 
   // Cost tracker — one per session; `recordUsage` is called after every
   // provider.stream usage payload. REPL /cost reads through
@@ -314,6 +316,18 @@ export function buildRunnerLlmAdapter(
   const activeModel = options.modelOverride ?? options.model;
 
   return async (messages, agent) => {
+    if (iterationState.current >= MAX_ITER_HINT) {
+      const error = new Error(
+        `Managed task exceeded its LLM-turn ceiling (${MAX_ITER_HINT}). `
+        + 'The task did not converge before the containment boundary.',
+      );
+      let recoveryCut = 0;
+      while (recoveryCut < messages.length && messages[recoveryCut]?.role === 'system') {
+        recoveryCut += 1;
+      }
+      attachRunnerRecoveryTranscript(error, messages.slice(recoveryCut));
+      throw error;
+    }
     // Strip every leading contiguous system message and concatenate their
     // content. v0.7.22-style flows pushed a single agent-instructions system
     // prompt and nothing else, so taking only `messages[0]` was enough. The
@@ -340,8 +354,16 @@ export function buildRunnerLlmAdapter(
     const system = systemParts.join('\n\n');
     let transcript = messages.slice(cut);
     const ephemeralSuffix = getEphemeralSuffix?.();
-    const runtimeReminders: string[] = [];
+    const runtimeReminders = pendingRuntimeReminders;
+    pendingRuntimeReminders = [];
     const injectedInputMessages: KodaXMessage[] = [];
+
+    const progressGateReminder = buildManagedProgressGateReminder(
+      iterationState.current + 1,
+    );
+    if (progressGateReminder) {
+      runtimeReminders.push(progressGateReminder);
+    }
 
     if (todoStore && todoDriftReminderState) {
       const reminder = consumeTodoDriftReminderText(todoDriftReminderState, todoStore);
@@ -388,8 +410,24 @@ export function buildRunnerLlmAdapter(
         turnId: reminderAnchor?.turnId,
         timestamp: reminderAnchor?.timestamp ?? new Date().toISOString(),
       };
-      injectedInputMessages.push(reminderMessage);
-      transcript = [...transcript, reminderMessage];
+      const latest = transcript.at(-1);
+      const latestIsRealUserInput = latest?.role === 'user'
+        && latest._synthetic !== true
+        && (
+          typeof latest.content === 'string'
+          || latest.content.some((block) => block.type !== 'tool_result')
+        );
+      if (latestIsRealUserInput) {
+        // Runner can only persist injected inputs by appending them. Locally
+        // moving this reminder before a new user correction would therefore
+        // make the Provider request differ from the authoritative transcript
+        // and break the strict prefix on the next call. Defer it to the next
+        // append-safe boundary; the user correction remains the newest input.
+        pendingRuntimeReminders = runtimeReminders;
+      } else {
+        injectedInputMessages.push(reminderMessage);
+        transcript = [...transcript, reminderMessage];
+      }
     }
 
     const wireTools: KodaXToolDefinition[] = (agent.tools ?? [])

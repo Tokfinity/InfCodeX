@@ -9,7 +9,7 @@ import type {
   AgentMetadataValue,
   AgentSpawnInput,
 } from '@kodax-ai/agent';
-import { getMessageQueue } from '@kodax-ai/agent';
+import { emitKodaXDiagnostic, getMessageQueue } from '@kodax-ai/agent';
 import type { KodaXMessage, KodaXTaskResultMetadata } from '@kodax-ai/llm';
 
 import type { KodaXToolExecutionContext } from '../types.js';
@@ -20,10 +20,11 @@ import {
   resolveCodingDispatchableAgent,
 } from '../external-agents/local-catalog.js';
 import {
-  assertStageCanAcceptTurn,
   buildStoredActorStrategy,
+  isQualityStrategyMetadataError,
   toActorStrategyMetadataValue,
 } from '../orchestration/pattern-strategy.js';
+import type { StoredActorStrategyMetadata } from '../orchestration/pattern-strategy.js';
 
 const MAX_BROADCAST_RECIPIENTS = 20;
 const DEFAULT_LIST_PAGE_SIZE = 20;
@@ -116,7 +117,7 @@ export async function toolSpawnAgent(
     const toolCeiling = selector.tools === undefined
       ? undefined
       : intersectToolCeilings(selector.tools, parentTools);
-    const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
+    const qualityStrategy = await buildOptionalStoredActorStrategy(input.quality_strategy, ctx);
     const spawn: AgentSpawnInput = {
       taskName,
       objective,
@@ -140,11 +141,7 @@ export async function toolSpawnAgent(
           : toActorStrategyMetadataValue(qualityStrategy),
       ),
     };
-    const turn = await withTurnAdmission(client, () => (
-      qualityStrategy === undefined
-        ? client.spawn(spawn)
-        : spawnStrategyTurn(client, spawn, qualityStrategy)
-    ));
+    const turn = await withTurnAdmission(client, () => client.spawn(spawn));
     return render({ ok: true, ...turn });
   } catch (error) {
     return renderActorError('spawn_agent', error);
@@ -204,13 +201,12 @@ export async function toolFollowupTask(
   const client = requireActorControl(ctx);
   try {
     const actorPath = resolveTarget(client, requiredString(input, 'target'));
-    const qualityStrategy = await buildStoredActorStrategy(input.quality_strategy, ctx);
+    const qualityStrategy = await buildOptionalStoredActorStrategy(input.quality_strategy, ctx);
     const objective = requiredString(input, 'objective');
-    const result = await withTurnAdmission(client, () => (
-      qualityStrategy === undefined
-        ? client.followup(actorPath, objective)
-        : followupStrategyTurn(client, actorPath, objective, qualityStrategy)
-    ));
+    const result = await withTurnAdmission(
+      client,
+      () => followupWithOptionalStrategy(client, actorPath, objective, qualityStrategy),
+    );
     return render({ ok: true, actorPath, ...result });
   } catch (error) {
     return renderActorError('followup_task', error);
@@ -514,43 +510,46 @@ function spawnMetadata(
   };
 }
 
-async function spawnStrategyTurn(
-  client: AgentActorClient,
-  input: AgentSpawnInput,
-  strategy: NonNullable<Awaited<ReturnType<typeof buildStoredActorStrategy>>>,
-): Promise<Awaited<ReturnType<AgentActorClient['spawn']>>> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const mutationOptions = assertStageCanAcceptTurn(client, strategy);
-    try {
-      return await client.spawn(input, mutationOptions);
-    } catch (error) {
-      if (!isRevisionConflict(error) || attempt > 0) throw error;
+async function buildOptionalStoredActorStrategy(
+  value: unknown,
+  ctx: KodaXToolExecutionContext,
+): Promise<StoredActorStrategyMetadata | undefined> {
+  try {
+    return await buildStoredActorStrategy(value, ctx);
+  } catch (error) {
+    if (isQualityStrategyMetadataError(error)) {
+      emitKodaXDiagnostic({
+        source: 'coding:agent-collaboration',
+        level: 'warn',
+        message: 'Ignoring invalid optional quality_strategy metadata.',
+        detail: { reason: error.message },
+      });
+      return undefined;
     }
+    throw error;
   }
-  throw new Error('quality_strategy admission could not stabilize.');
 }
 
-async function followupStrategyTurn(
+async function followupWithOptionalStrategy(
   client: AgentActorClient,
   actorPath: string,
   objective: string,
-  strategy: NonNullable<Awaited<ReturnType<typeof buildStoredActorStrategy>>>,
+  strategy: StoredActorStrategyMetadata | undefined,
 ): Promise<Awaited<ReturnType<AgentActorClient['followup']>>> {
+  if (strategy === undefined) return client.followup(actorPath, objective);
   const metadata = { qualityStrategy: toActorStrategyMetadataValue(strategy) };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const mutationOptions = assertStageCanAcceptTurn(client, strategy);
-    try {
-      return await client.followup(
-        actorPath,
-        objective,
-        metadata,
-        mutationOptions,
-      );
-    } catch (error) {
-      if (!isRevisionConflict(error) || attempt > 0) throw error;
-    }
+  try {
+    return await client.followup(actorPath, objective, metadata);
+  } catch (error) {
+    if (!isRunningQualityStrategyConflict(error)) throw error;
+    emitKodaXDiagnostic({
+      source: 'coding:agent-collaboration',
+      level: 'warn',
+      message: 'Retrying followup without stale optional quality_strategy metadata.',
+      detail: { actorPath },
+    });
+    return client.followup(actorPath, objective);
   }
-  throw new Error('quality_strategy admission could not stabilize.');
 }
 
 async function withTurnAdmission<T>(
@@ -573,11 +572,14 @@ async function withTurnAdmission<T>(
   }
 }
 
-function isRevisionConflict(error: unknown): boolean {
+function isRunningQualityStrategyConflict(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
     && 'code' in error
-    && error.code === 'revision_conflict';
+    && error.code === 'invalid_message'
+    && 'message' in error
+    && typeof error.message === 'string'
+    && error.message.includes('quality strategy');
 }
 
 async function resolveAgentSelector(

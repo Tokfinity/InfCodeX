@@ -34,7 +34,7 @@ export interface ManagedRolePromptContext {
     gitRoot?: string;
     /**
      * Session-scoped directory for helper scripts and scratch outputs.
-     * Rendered only in request-tail managed context, never in stable System.
+     * Rendered in the hidden run-context carrier, never in stable System.
      */
     scratchDir?: string;
     platform: NodeJS.Platform;
@@ -102,15 +102,17 @@ export interface ManagedRolePromptContext {
   isResumeAfterReviseFailure?: boolean;
   /**
    * FEATURE_125 v0.7.41 — Team Mode "Other active KodaX sessions" block.
-   * Pre-rendered by the runner-driven adapter once per LLM round via
+   * Re-rendered at Runner turn boundaries via
    * `buildOtherInstancesPromptBlock(discoverInstances(...))`. Empty string
    * (or omitted) means no siblings were alive at round start; the block
    * is skipped in the section list — same composition pattern as
    * `capabilityContextBlock` / `promptOverlay`. NOT cached in the stable
    * prefix: sibling state changes between rounds, so the block must be
-   * re-rendered per LLM call.
+   * emitted only when the snapshot changes.
    */
   teamModeSection?: string;
+  /** Clock-free identity for Team Mode change detection. */
+  teamModeFingerprint?: string;
   /** Per-round Actor scheduler facts used to size a spawn wave before tool calls. */
   actorCapacity?: {
     readonly maxConcurrentThreads: number;

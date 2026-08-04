@@ -666,7 +666,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         fork_turns: { description: 'History fork: all (default), none, or a positive recent-turn count.' },
         quality_strategy: {
           type: 'object',
-          description: 'Optional {schemaVersion:1,stageId,pattern,role,laneRelation?,targetEvidenceRefs?} stage. Use a named playbook pattern; role is classifier|investigator|generator|filter|judge|challenger and relation is coverage|replication|opposition. Actor targets use exact agent-turn refs. Runtime validates it and stamps the owner Turn.',
+          description: 'Optional telemetry/provenance {schemaVersion:1,stageId,pattern,role,laneRelation?,targetEvidenceRefs?}. It helps PatternTrace reconstruction but never controls otherwise legal spawn admission; invalid metadata is ignored. Actor targets use exact agent-turn refs.',
         },
       },
       required: ['task_name', 'objective'],
@@ -807,7 +807,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
         objective: { type: 'string', description: 'Additional objective or changed evidence.' },
         quality_strategy: {
           type: 'object',
-          description: 'Optional quality_strategy stage; a running Actor requires an exact current-stage match, while an idle Actor may start a new stage.',
+          description: 'Optional telemetry/provenance for PatternTrace reconstruction. It never controls otherwise legal follow-up admission; invalid or conflicting metadata is ignored.',
         },
       },
       required: ['target', 'objective'],
@@ -1538,7 +1538,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
       'Insert ONE new pending item into the visible plan list — purely additive, existing items untouched. The store auto-generates the id (monotonic `todo_<n>`); never pass an id — any caller-supplied id is rejected at the schema layer.\n\n'
       + 'Write the user-visible `subject`, `description`, and `activeForm` in the primary natural language of the user\'s request unless the user explicitly asks for another language. Keep code identifiers, file paths, commands, and quoted evidence in their source language.\n\n'
       + '## When to Use This Tool\n\n'
-      + '- AT THE START of a non-trivial multi-step task — commit the full plan up front by batching one `todo_create` call per planned step in the same response, so the user sees the intended trajectory.\n'
+      + '- For a non-trivial multi-step task with no existing plan — create a small batch of semantic milestones so the user sees the intended trajectory. If a plan already exists after continuation/resume, continue it instead of recreating it.\n'
       + '- WHEN you receive a user request with multiple distinct sub-tasks — capture each as its own item.\n'
       + '- WHEN you discover an additional step mid-task — add it additively so the user sees the plan growing rather than the original list being silently rewritten.\n'
       + '- BEFORE spawning several child Agents via `spawn_agent` — capture the user-visible semantic milestones, not one item per child Agent. Several Agents may support one milestone; split rows only when they produce genuinely separate deliverables.\n\n'

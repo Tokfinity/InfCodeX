@@ -16,7 +16,7 @@
  *
  * **What this helper preserves from wrapEmitterWithRecorder verdict slot**:
  *   - recorder.verdict assignment
- *   - TodoStore.autoCompleteOnAccept() on accept
+ *   - TodoStore retry bookkeeping on revise
  *   - TodoStore.markInProgressFailed() + arm pendingFailedResetRef on revise
  *   - observer.onRoleEmit('evaluator', recorder) for downstream events
  *   - 90%-threshold budget-extension dialog
@@ -230,7 +230,8 @@ export interface ApplySidecarVerdictOptions {
  * Order of operations:
  *   1. Assemble synthetic ProtocolEmitterMetadata
  *   2. Write recorder.verdict
- *   3. Dispatch TodoStore action keyed on verdict status
+ *   3. Dispatch retry-only TodoStore action for revise. Accept never
+ *      manufactures completed work from pending plan items.
  *   4. Fire observer.onRoleEmit('evaluator', recorder) so downstream
  *      observer chain (round counter, evidence entries, REPL status,
  *      checkpoint writer) keeps working
@@ -253,24 +254,14 @@ export async function applySidecarVerdictToRecorder(
   recorder.verdict = metadata;
   if (todoStore) {
     const status = verdict.verdict;
-    if (status === 'accept') {
-      const todoReconciledCount = todoStore.autoCompleteOnAccept();
-      if (todoReconciledCount > 0) {
-        emitKodaXDiagnostic({
-          source: 'coding:sidecar-verifier',
-          level: 'debug',
-          message: `Sidecar accept reconciled ${todoReconciledCount} open Todo item(s) after the Worker terminal turn.`,
-          detail: { todoReconciledCount },
-        });
-      }
-    } else if (status === 'revise') {
+    if (status === 'revise') {
       todoStore.markInProgressFailed('Sidecar verifier requested revision');
       if (pendingFailedResetRef) {
         pendingFailedResetRef.current = true;
       }
     }
-    // status === 'blocked' is terminal — leave the list as-is so
-    // the final UI render reflects whatever state work reached.
+    // accept/blocked are terminal. Preserve the list exactly as the Worker
+    // left it so UI/history cannot claim unperformed work was completed.
   }
 
   // 'evaluator' label is legacy compat: downstream consumers key on this

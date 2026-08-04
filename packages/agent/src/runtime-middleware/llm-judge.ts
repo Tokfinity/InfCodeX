@@ -145,14 +145,20 @@ export async function invokeLlmJudge<TVerdict>(
   const messages: KodaXMessage[] = [{ role: 'user', content: options.userMessage }];
   const streamController = new AbortController();
   const streamSignal = streamController.signal;
-  const onCallerAbort = () => streamController.abort();
+  let onCallerAbort: () => void = () => {};
+  const callerAbortPromise = new Promise<TVerdict>((resolve) => {
+    onCallerAbort = () => {
+      streamController.abort();
+      resolve(options.defaultVerdict('provider_error'));
+    };
+  });
   // Register the listener BEFORE reading `aborted` so there is no gap (even a
   // theoretical one under a future async refactor) where an abort between the
   // check and the registration is missed. `addEventListener` on an already-
   // aborted signal never fires, so the explicit post-check covers that case.
   options.abortSignal?.addEventListener('abort', onCallerAbort, { once: true });
   if (options.abortSignal?.aborted) {
-    streamController.abort();
+    onCallerAbort();
   }
 
   const streamPromise = (async (): Promise<TVerdict> => {
@@ -205,7 +211,7 @@ export async function invokeLlmJudge<TVerdict>(
     }, timeoutMs);
   });
 
-  const verdict = await Promise.race([streamPromise, timeoutPromise]);
+  const verdict = await Promise.race([streamPromise, timeoutPromise, callerAbortPromise]);
   if (timeoutHandle) clearTimeout(timeoutHandle);
   options.abortSignal?.removeEventListener('abort', onCallerAbort);
   return verdict;
@@ -229,6 +235,13 @@ export interface CreateLlmJudgedStopHookOptions<TVerdict> {
   readonly maxOutputTokens?: number;
 }
 
+function throwIfJudgeCallerAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error('LLM judge cancelled by caller.');
+  error.name = 'AbortError';
+  throw error;
+}
+
 /**
  * Factory: returns a `StopHookFn` that runs `invokeLlmJudge` when the
  * main agent terminates a turn text-only, then maps the verdict to the
@@ -240,7 +253,9 @@ export function createLlmJudgedStopHook<TVerdict>(
   options: CreateLlmJudgedStopHookOptions<TVerdict>,
 ): StopHookFn {
   return async (ctx): Promise<StopHookResult> => {
+    throwIfJudgeCallerAborted(ctx.abortSignal);
     const userMessage = await options.buildUserMessage(ctx);
+    throwIfJudgeCallerAborted(ctx.abortSignal);
     const verdict = await invokeLlmJudge<TVerdict>({
       provider: options.provider,
       model: options.model,
@@ -254,6 +269,11 @@ export function createLlmJudgedStopHook<TVerdict>(
       abortSignal: ctx.abortSignal,
       maxOutputTokens: options.maxOutputTokens,
     });
+    // `invokeLlmJudge` intentionally fails open for provider failures, but a
+    // caller cancellation is lifecycle state, not an accept verdict. Check
+    // again before any observer or mapper can turn an aborted verifier call
+    // into successful task completion.
+    throwIfJudgeCallerAborted(ctx.abortSignal);
     options.onVerdict?.(verdict);
     return options.mapVerdict(verdict);
   };

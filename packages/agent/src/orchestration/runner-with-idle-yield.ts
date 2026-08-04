@@ -95,7 +95,7 @@ export interface RunWithIdleYieldOptions<
    * targets).
    */
   readonly agentId: string | undefined;
-  /** Optional cancellation. Tears the loop down on the next wait boundary. */
+  /** Optional cancellation. Rejects with AbortError at the next boundary. */
   readonly abortSignal?: AbortSignal;
   /**
    * Choose the agent for the next iteration after a wake. Caller has
@@ -143,9 +143,7 @@ export interface RunWithIdleYieldOptions<
     wakeMessages: readonly AgentMessage[],
   ) => readonly AgentMessage[] | Promise<readonly AgentMessage[]>;
   /**
-   * Optional hook fired when the iteration cap is hit. Coding does not
-   * currently log here (matches v0.7.38 behavior — silent break) but
-   * the hook exists so SDK consumers can record the prompt-bug signal.
+   * Optional hook fired before the iteration-cap error is thrown.
    */
   readonly onIterationCap?: () => void;
   /**
@@ -181,13 +179,13 @@ export interface RunWithIdleYieldOptions<
  * On each iteration:
  *   1. Invoke `runOnce(currentAgent, currentInput)`.
  *   2. Increment the iteration counter. If it exceeds
- *      `maxIterations`, call `onIterationCap?.()` and break.
+ *      `maxIterations`, call `onIterationCap?.()` and reject.
  *   3. Compute the snapshot via `computeSnapshot(runResult)`.
  *   4. If `detectIdleYield(snapshot)` is false (run terminal or
  *      handoff/verdict already emitted), break.
  *   5. Fire `onIdleWaiting?.(currentAgent, runResult)`.
  *   6. Park in `waitForWakeEvent({registry, messageQueue, agentId, abortSignal})`.
- *   7. If wake is `aborted`, break.
+ *   7. If wake is `aborted`, reject with AbortError.
  *   8. Build synthetic user message via `composeIdleYieldUserMessage`.
  *      If undefined (truly empty wake), break.
  *   9. Replay: `currentInput = [...runResult.messages, syntheticUserMessage]`,
@@ -228,7 +226,9 @@ export async function runWithIdleYield<
     // sees its result returned without entering an extra wait.
     if (++iterations > maxIterations) {
       opts.onIterationCap?.();
-      break;
+      throw new Error(
+        `runWithIdleYield exceeded its iteration ceiling (${maxIterations}) without converging.`,
+      );
     }
 
     const snapshot = opts.computeSnapshot(runResult);
@@ -241,7 +241,11 @@ export async function runWithIdleYield<
       agentId: opts.agentId,
       abortSignal: opts.abortSignal,
     });
-    if (wakeEvent.kind === 'aborted') break;
+    if (wakeEvent.kind === 'aborted') {
+      const error = new Error('Idle-yield wait cancelled by caller.');
+      error.name = 'AbortError';
+      throw error;
+    }
 
     // FEATURE_159 (v0.7.40) — `composeIdleYieldUserMessage` now returns
     // an array; mode-split may emit two separate messages (synthetic

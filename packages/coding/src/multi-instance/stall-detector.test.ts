@@ -157,6 +157,112 @@ describe('FEATURE_178 (v0.7.42): L1 stall detector', () => {
     });
   });
 
+  describe('Rule C: repeated repository-probe family without an evidence boundary', () => {
+    it('fires after eight varied read/grep/glob probes even when inputs differ', () => {
+      const d = createStallDetector({ disabled: false });
+      const probes = [
+        ['read', { path: 'a.ts' }],
+        ['grep', { pattern: 'creator', path: 'src' }],
+        ['glob', { pattern: '**/*.ts' }],
+        ['read', { path: 'b.ts' }],
+        ['grep', { pattern: 'worker', path: 'packages' }],
+        ['read', { path: 'c.ts' }],
+        ['glob', { pattern: '**/*runtime*' }],
+        ['grep', { pattern: 'isolation', path: 'src' }],
+      ] as const;
+      for (const [name, input] of probes.slice(0, -1)) {
+        expect(d.recordToolUse(name, input).kind).toBe('no_stall');
+      }
+      const signal = d.recordToolUse(probes[7]![0], probes[7]![1]);
+      expect(signal.kind).toBe('stall');
+      if (signal.kind === 'stall') {
+        expect(signal.probeFamily).toBe('repository-inspection');
+        expect(signal.occurrenceCount).toBe(8);
+        expect(signal.envelope).toContain('probe_family=repository-inspection');
+      }
+    });
+
+    it('treats a non-probe tool as a progress boundary for family counting', () => {
+      const d = createStallDetector({ disabled: false });
+      for (let i = 0; i < 7; i++) {
+        d.recordToolUse('read', { path: `${i}.ts` });
+      }
+      d.recordToolUse('edit', { path: '0.ts', old_string: 'a', new_string: 'b' });
+      for (let i = 0; i < 7; i++) {
+        expect(d.recordToolUse('grep', { pattern: `p${i}` }).kind).toBe('no_stall');
+      }
+    });
+
+    it('classifies read-only shell searches into the same probe family', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      expect(d.recordToolUse('bash', { command: 'rg "creator" packages' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('bash', { command: 'git grep worker' }).kind).toBe('no_stall');
+      const signal = d.recordToolUse('bash', { command: 'Get-ChildItem -Recurse | Select-String isolation' });
+      expect(signal.kind).toBe('stall');
+      if (signal.kind === 'stall') {
+        expect(signal.probeFamily).toBe('repository-inspection');
+      }
+    });
+
+    it('covers the complete repo-explorer and LSP probe surface', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      expect(d.recordToolUse('repo_overview', {}).kind).toBe('no_stall');
+      expect(d.recordToolUse('changed_diff_bundle', { paths: ['a.ts'] }).kind).toBe('no_stall');
+      const signal = d.recordToolUse('lsp_definition', { path: 'a.ts', line: 1, character: 1 });
+      expect(signal.kind).toBe('stall');
+      if (signal.kind === 'stall') {
+        expect(signal.probeFamily).toBe('repository-inspection');
+      }
+    });
+
+    it('does not treat read-only git inventory commands as progress', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      expect(d.recordToolUse('bash', { command: 'git ls-files packages' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('bash', { command: 'git branch --list' }).kind).toBe('no_stall');
+      const signal = d.recordToolUse('bash', { command: 'git rev-parse HEAD' });
+      expect(signal.kind).toBe('stall');
+    });
+
+    it('does not let plan/list rituals erase repository-probe progress', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      expect(d.recordToolUse('read', { path: 'a.ts' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('todo_get', { id: 'todo-1' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('module_context', { path: 'packages/coding' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('list_agents', {}).kind).toBe('no_stall');
+      const signal = d.recordToolUse('symbol_context', { symbol: 'runManagedTask' });
+      expect(signal.kind).toBe('stall');
+      if (signal.kind === 'stall') {
+        expect(signal.probeFamily).toBe('repository-inspection');
+      }
+    });
+
+    it('fires the semantic family at most once per progress epoch', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      d.recordToolUse('read', { path: 'a.ts' });
+      d.recordToolUse('read', { path: 'b.ts' });
+      expect(d.recordToolUse('read', { path: 'c.ts' }).kind).toBe('stall');
+      expect(d.recordToolUse('read', { path: 'd.ts' }).kind).toBe('no_stall');
+
+      d.recordToolUse('edit', { path: 'a.ts', old_string: 'a', new_string: 'b' });
+      d.recordToolUse('grep', { pattern: 'one' });
+      d.recordToolUse('grep', { pattern: 'two' });
+      expect(d.recordToolUse('grep', { pattern: 'three' }).kind).toBe('stall');
+    });
+
+    it('starts a new probe epoch after a multi_edit mutation', () => {
+      const d = createStallDetector({ disabled: false, probeFamilyThreshold: 3 });
+      d.recordToolUse('read', { path: 'a.ts' });
+      d.recordToolUse('grep', { pattern: 'before' });
+      d.recordToolUse('multi_edit', {
+        path: 'a.ts',
+        edits: [{ old_string: 'a', new_string: 'b' }],
+      });
+      expect(d.recordToolUse('read', { path: 'b.ts' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('grep', { pattern: 'after' }).kind).toBe('no_stall');
+      expect(d.recordToolUse('lsp_hover', { path: 'b.ts', line: 1, character: 1 }).kind).toBe('stall');
+    });
+  });
+
   describe('Window scope', () => {
     it('drops the oldest event when window overflows', () => {
       const d = createStallDetector({ disabled: false, windowSize: 4 });

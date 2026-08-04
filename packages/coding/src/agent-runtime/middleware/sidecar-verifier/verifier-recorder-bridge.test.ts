@@ -277,7 +277,7 @@ describe('applySidecarVerdictToRecorder — side effects', () => {
     expect(observer.onRoleEmit).toHaveBeenCalledWith('evaluator', recorder);
   });
 
-  it('accept → todoStore.autoCompleteOnAccept fires', async () => {
+  it('accept preserves open todo state instead of manufacturing completion', async () => {
     const recorder = makeRecorder();
     const observer = makeObserver();
     const todoStore = makeTodoStore();
@@ -287,11 +287,11 @@ describe('applySidecarVerdictToRecorder — side effects', () => {
       todoStore,
       verdict: { verdict: 'accept', reason: '', trace: 'verifier_ok' },
     });
-    expect(todoStore.autoCompleteOnAccept).toHaveBeenCalled();
+    expect(todoStore.autoCompleteOnAccept).not.toHaveBeenCalled();
     expect(todoStore.markInProgressFailed).not.toHaveBeenCalled();
   });
 
-  it('emits a diagnostic when the accept fallback reconciles stale open todos', async () => {
+  it('accept emits no reconciliation diagnostic for open todos', async () => {
     const recorder = makeRecorder();
     const observer = makeObserver();
     const todoStore = makeTodoStore();
@@ -312,12 +312,11 @@ describe('applySidecarVerdictToRecorder — side effects', () => {
       restoreDiagnostics();
     }
 
-    expect(diagnostics).toContainEqual({
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({
       source: 'coding:sidecar-verifier',
-      level: 'debug',
-      message: 'Sidecar accept reconciled 3 open Todo item(s) after the Worker terminal turn.',
-      detail: { todoReconciledCount: 3 },
-    });
+      message: expect.stringContaining('reconciled'),
+    }));
+    expect(todoStore.autoCompleteOnAccept).not.toHaveBeenCalled();
   });
 
   it('revise → todoStore.markInProgressFailed + sets pendingFailedResetRef', async () => {

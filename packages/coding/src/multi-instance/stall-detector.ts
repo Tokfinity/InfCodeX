@@ -39,6 +39,8 @@
  * DI-clean: no I/O. Pure in-memory ring buffer.
  */
 
+import { REPO_EXPLORER_TOOL_NAMES } from '../construction/builtin-agents.js';
+
 /**
  * Killswitch: when this env var is exactly the string '0', the detector
  * is disabled entirely (factory returns a no-op shim). Any other value —
@@ -62,6 +64,13 @@ export interface StallDetectorOptions {
    * reading). When unset, reads `process.env.KODAX_STALL_DETECT`.
    */
   readonly disabled?: boolean;
+
+  /**
+   * Number of consecutive repository-inspection probes with varied inputs
+   * that should ask the L2 sidecar to check for a semantic loop. Default 8.
+   * Any non-probe tool starts a fresh family epoch.
+   */
+  readonly probeFamilyThreshold?: number;
 }
 
 export type StallSignal =
@@ -76,6 +85,8 @@ export type StallSignal =
       readonly occurrenceCount: number;
       /** How many of those occurrences carried `cacheHit=true`. */
       readonly cacheHitCount: number;
+      /** Semantic family that fired even though exact inputs differed. */
+      readonly probeFamily?: 'repository-inspection';
       /**
        * The 1-based turn indices (relative to detector creation) where
        * each occurrence was recorded. Stable for sidecar prompts.
@@ -124,6 +135,8 @@ interface RecordedEvent {
   readonly inputJson: string;
   readonly cacheHit: boolean;
   readonly turn: number;
+  readonly probeFamily?: 'repository-inspection';
+  readonly familyEpoch: number;
 }
 
 /**
@@ -178,6 +191,55 @@ export function buildStallSignalEnvelope(params: {
 }
 
 const DEFAULT_WINDOW_SIZE = 20;
+const DEFAULT_PROBE_FAMILY_THRESHOLD = 8;
+const REPOSITORY_PROBE_TOOLS = new Set(REPO_EXPLORER_TOOL_NAMES);
+const PROGRESS_BOUNDARY_TOOLS = new Set([
+  'edit',
+  'write',
+  'multi_edit',
+  'insert_after_anchor',
+  'undo',
+  'delete',
+  'remove',
+  'rename',
+  'apply_patch',
+  'spawn_agent',
+  'followup_task',
+]);
+
+function isReadOnlyShellProbe(command: string): boolean {
+  const repositoryInspection = /(?:^|[\s|;&])(?:rg|grep|findstr)(?:\s|$)|git\s+(?:grep|log|show|status|diff|ls-files|rev-parse)\b|\b(?:Get-Content|Get-ChildItem|Get-Item|Select-String)\b/i;
+  if (repositoryInspection.test(command)) return true;
+  if (!/\bgit\s+branch\b/i.test(command)) return false;
+  return !/\bgit\s+branch\s+(?:-[dDmMcC]\b|--(?:delete|move|copy)\b)/i.test(command);
+}
+
+function repositoryProbeFamily(
+  toolName: string,
+  input: unknown,
+): 'repository-inspection' | undefined {
+  if (REPOSITORY_PROBE_TOOLS.has(toolName)) {
+    return 'repository-inspection';
+  }
+  if (toolName !== 'bash' || input === null || typeof input !== 'object') {
+    return undefined;
+  }
+  const command = (input as Record<string, unknown>).command;
+  if (typeof command !== 'string') return undefined;
+  return isReadOnlyShellProbe(command)
+    ? 'repository-inspection'
+    : undefined;
+}
+
+function isProbeProgressBoundary(toolName: string, input: unknown): boolean {
+  if (PROGRESS_BOUNDARY_TOOLS.has(toolName)) return true;
+  if (toolName === 'bash') return repositoryProbeFamily(toolName, input) === undefined;
+  if (toolName !== 'todo_update' || input === null || typeof input !== 'object') {
+    return false;
+  }
+  const status = (input as Record<string, unknown>).status;
+  return status === 'completed' || status === 'cancelled' || status === 'deleted';
+}
 
 /**
  * Build a fresh per-task stall detector. Cheap — call once at managed
@@ -199,14 +261,24 @@ export function createStallDetector(
   }
 
   const windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
+  const probeFamilyThreshold = Math.max(
+    3,
+    options.probeFamilyThreshold ?? DEFAULT_PROBE_FAMILY_THRESHOLD,
+  );
   const events: RecordedEvent[] = [];
   let nextTurn = 1;
+  let familyEpoch = 0;
+  let firedProbeFamilyEpoch = -1;
 
   return {
     recordToolUse(toolName, input, cacheHit = false) {
       const inputJson = stableStringify(input);
       const turn = nextTurn++;
-      events.push({ toolName, inputJson, cacheHit, turn });
+      const probeFamily = repositoryProbeFamily(toolName, input);
+      if (probeFamily === undefined && isProbeProgressBoundary(toolName, input)) {
+        familyEpoch += 1;
+      }
+      events.push({ toolName, inputJson, cacheHit, turn, probeFamily, familyEpoch });
       if (events.length > windowSize) {
         events.splice(0, events.length - windowSize);
       }
@@ -223,6 +295,40 @@ export function createStallDetector(
       const ruleA = matches.length >= 3;
       const ruleB = matches.length >= 2 && cacheHitCount >= 1;
       if (!ruleA && !ruleB) {
+        if (probeFamily !== undefined) {
+          const familyMatches = events.filter(
+            (event) => event.probeFamily === probeFamily
+              && event.familyEpoch === familyEpoch,
+          );
+          if (
+            familyMatches.length >= probeFamilyThreshold
+            && firedProbeFamilyEpoch !== familyEpoch
+          ) {
+            firedProbeFamilyEpoch = familyEpoch;
+            const familyTurns = familyMatches.map((event) => event.turn);
+            const familyCacheHits = familyMatches.filter((event) => event.cacheHit).length;
+            const distinctCalls = new Set(
+              familyMatches.map((event) => `${event.toolName}:${event.inputJson}`),
+            ).size;
+            const envelope = `${buildStallSignalEnvelope({
+              toolName,
+              inputJson,
+              occurrenceCount: familyMatches.length,
+              cacheHitCount: familyCacheHits,
+              turns: familyTurns,
+            })} probe_family=${probeFamily} family_occurrence_count=${familyMatches.length} distinct_call_count=${distinctCalls}`;
+            return {
+              kind: 'stall',
+              toolName,
+              inputJson,
+              occurrenceCount: familyMatches.length,
+              cacheHitCount: familyCacheHits,
+              probeFamily,
+              turns: familyTurns,
+              envelope,
+            };
+          }
+        }
         return { kind: 'no_stall' };
       }
 
@@ -248,6 +354,8 @@ export function createStallDetector(
     reset() {
       events.length = 0;
       nextTurn = 1;
+      familyEpoch = 0;
+      firedProbeFamilyEpoch = -1;
     },
 
     size() {

@@ -116,8 +116,9 @@ describe('FEATURE_218 manual registry', () => {
     const memory = resolveKodaXManual({ topic: 'memory' }).content;
     const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
 
-    expect(agents).toContain('six-pattern');
-    expect(agents).toContain('fan-out-and-synthesize');
+    expect(agents).toContain('parallel-first');
+    expect(agents).toContain('fan them out');
+    expect(agents).toContain('not a Worker dispatch gate');
     expect(agents).toContain('quality_strategy');
     expect(agents).toContain('PatternTrace');
     expect(agents).toMatch(/sole\s+terminal-answer quality adjudicator/);

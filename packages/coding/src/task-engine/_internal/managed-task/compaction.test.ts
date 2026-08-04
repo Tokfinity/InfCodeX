@@ -192,6 +192,35 @@ describe('managed history compaction', () => {
     expect(result?.[1]?.content).toContain('Complete semantic summary');
   });
 
+  it('reinstalls canonical managed context before the compacted summary', async () => {
+    const canonicalContext: KodaXMessage = {
+      role: 'user',
+      content: '=== Managed Run Context ===\nCANONICAL_CONTEXT_SENTINEL',
+      _synthetic: true,
+      _source: 'managed-run-context',
+    };
+    const mutableMessages = [canonicalContext, ...makeMessages()];
+    compactMock.mockImplementation(async (messages: KodaXMessage[]) => (
+      compactedResult(messages)
+    ));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(20),
+      contextTokenSnapshotRef: {
+        current: snapshot(88_000, mutableMessages),
+      },
+      canonicalManagedContext: () => canonicalContext,
+    });
+
+    const result = await hook?.(mutableMessages) as readonly KodaXMessage[];
+
+    expect(JSON.stringify(compactMock.mock.calls[0]?.[0]))
+      .not.toContain('CANONICAL_CONTEXT_SENTINEL');
+    expect(result.filter((message) =>
+      message._source === 'managed-run-context')).toHaveLength(1);
+    expect(result[0]).toEqual(canonicalContext);
+    expect(result[1]?._source).toBe('compaction-checkpoint');
+  });
+
   it('preserves the exact Runner system message for the next LLM turn while adding a summary', async () => {
     const systemText = 'IMMUTABLE_WORKER_SYSTEM_PROMPT_BYTE_SENTINEL';
     const agent = createAgent({

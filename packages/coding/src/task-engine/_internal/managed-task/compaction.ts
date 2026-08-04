@@ -39,6 +39,10 @@ import { resolveContextTokenCount } from '../../../token-accounting.js';
 import { estimateToolSchemaTokens } from '../../../agent-runtime/context-budget.js';
 import { createCompactionPromptCacheObserver } from '../../../agent-runtime/prompt-cache-diagnostics.js';
 import { derivePromptCacheAffinityKey } from '../../../agent-runtime/prompt-cache-affinity.js';
+import {
+  installCanonicalManagedRunContext,
+  stripManagedRunContextMessages,
+} from './managed-run-context.js';
 
 const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;
 
@@ -59,6 +63,8 @@ export interface BuildManagedTaskCompactionHookOptions {
   /** Exact reasoning envelope used by the managed provider request. */
   readonly reasoning?: KodaXReasoningRequest;
   readonly onPostCompact?: () => void;
+  /** Fresh canonical run context to reinstall outside semantic summaries. */
+  readonly canonicalManagedContext?: () => KodaXMessage | undefined;
 }
 
 interface AttachedCompactionContext {
@@ -295,6 +301,10 @@ export async function buildManagedTaskCompactionHook(
     events?.onCompactStart?.();
     try {
       const { immutableSystem, mutableMessages } = splitImmutableSystem(messages);
+      const canonicalManagedContext = hookOptions.canonicalManagedContext?.();
+      const compactableMessages = canonicalManagedContext
+        ? stripManagedRunContextMessages(mutableMessages)
+        : mutableMessages;
       const systemPrompt = typeof immutableSystem?.content === 'string'
         ? immutableSystem.content
         : undefined;
@@ -317,7 +327,7 @@ export async function buildManagedTaskCompactionHook(
           }
         : undefined;
       const result = await intelligentCompact(
-        mutableMessages,
+        compactableMessages,
         compactionConfig,
         provider,
         contextWindow,
@@ -353,11 +363,14 @@ export async function buildManagedTaskCompactionHook(
         contextWindow,
         reservedResponseTokens,
       );
+      const attachedMessages = canonicalManagedContext
+        ? installCanonicalManagedRunContext(attached.messages, canonicalManagedContext)
+        : attached.messages;
       const finalMessages = prependImmutableSystem(
         immutableSystem,
-        attached.messages,
+        attachedMessages,
       );
-      const finalTokens = fixedOverheadTokens + estimateTokens(attached.messages);
+      const finalTokens = fixedOverheadTokens + estimateTokens(attachedMessages);
       if (exceedsContextCapacity({
         contextWindow,
         currentTokens: finalTokens,

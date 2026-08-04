@@ -110,6 +110,57 @@ describe('Actor-aware idle yield', () => {
     await expect(waiting).resolves.toEqual({ kind: 'aborted' });
   });
 
+  it('propagates idle-yield cancellation instead of returning a stale success', async () => {
+    const abort = new AbortController();
+    abort.abort('closed');
+    const agent = createAgent({ name: 'worker', instructions: 'sys' });
+
+    await expect(runWithIdleYield({
+      initialAgent: agent,
+      initialInput: [{ role: 'user', content: 'start' }],
+      runOnce: async () => ({ messages: [{ role: 'assistant', content: 'waiting' }] }),
+      computeSnapshot: () => ({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 1,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
+      }),
+      messageQueue: new MessageQueue(),
+      agentId: '/root',
+      abortSignal: abort.signal,
+      resumeAgent: () => agent,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('fails closed when unresolved idle resumes exceed the outer ceiling', async () => {
+    const messageQueue = new MessageQueue();
+    messageQueue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      agentId: '/root',
+      content: '<agent-completed>still unresolved</agent-completed>',
+    });
+    const agent = createAgent({ name: 'worker', instructions: 'sys' });
+
+    await expect(runWithIdleYield({
+      initialAgent: agent,
+      initialInput: [{ role: 'user', content: 'start' }],
+      runOnce: async () => ({ messages: [{ role: 'assistant', content: 'waiting' }] }),
+      computeSnapshot: () => ({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 1,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
+      }),
+      messageQueue,
+      agentId: '/root',
+      resumeAgent: () => agent,
+      maxIterations: 1,
+    })).rejects.toThrow(/iteration ceiling \(1\)/);
+  });
+
   it('reports user prompts drained during a wait as real transcript messages', async () => {
     const onUserPrompts = vi.fn();
     const messages = await composeIdleYieldUserMessage({

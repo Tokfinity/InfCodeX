@@ -71,10 +71,10 @@ export function renderAmaPatternPlaybook(): string {
     'ADAPTIVE COLLABORATION PATTERNS (guidance, not deterministic routing):',
     ...COLLABORATION_PATTERN_CATALOG.map((definition) =>
       `- \`${definition.id}\`: ${definition.purpose} Evidence: ${definition.expectedEvidence[0]}. Stop: ${definition.stopRules[0]}.`),
-    '- Compose stages only when they add decision value; ordinary work may stay solo. Root remains accountable for synthesis.',
-    '- When delegating a named pattern stage, set `quality_strategy` on every `spawn_agent` or stage-changing `followup_task`: use `{schemaVersion:1, stageId, pattern, role, laneRelation?, targetEvidenceRefs?}`. A named-pattern `spawn_agent` without it is invalid. Keep one stable `stageId` across participants in the same stage. Example coverage lane: `{schemaVersion:1,stageId:"interface-coverage",pattern:"fan-out-and-synthesize",role:"investigator",laneRelation:"coverage"}`.',
+    '- Compose stages only when they add decision value. Root remains accountable for synthesis.',
+    '- Optional `quality_strategy` metadata may describe a named stage on `spawn_agent` or a stage-changing `followup_task`: use `{schemaVersion:1, stageId, pattern, role, laneRelation?, targetEvidenceRefs?}`. Keep one stable `stageId` across participants in the same stage. Example coverage lane: `{schemaVersion:1,stageId:"interface-coverage",pattern:"fan-out-and-synthesize",role:"investigator",laneRelation:"coverage"}`. Missing or invalid metadata never makes an otherwise legal Agent operation invalid.',
     '- Use `laneRelation:"coverage"` for distinct scopes, `"replication"` only for genuinely independent checks, and `"opposition"` for challengers. A challenger must name a terminal exact `agent-turn:` or immutable evidence target.',
-    '- Omit `quality_strategy` for solo/direct work. Metadata records intent and provenance; it never proves correctness or requires starting an Agent for telemetry.',
+    '- Metadata records optional intent and provenance; it never proves correctness, controls dispatch admission, or requires starting an Agent for telemetry.',
   ].join('\n');
 }
 

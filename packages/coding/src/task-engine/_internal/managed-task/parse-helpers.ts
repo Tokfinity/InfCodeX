@@ -210,7 +210,7 @@ export function buildVerificationDegradedVisibleText(
  * that forgot to call the emit tool but emitted a well-formed
  * `kodax-task-*` fenced block could still advance the state machine.
  * The Runner-driven path lost this fallback — a missed emit call now
- * stalls the entire run until the 500-iteration safety cap trips.
+ * stalls the entire run until the managed iteration safety cap trips.
  *
  * This helper re-wires the same fallback. The adapter layer
  * (`buildRunnerLlmAdapter`) detects "role X finished a turn without

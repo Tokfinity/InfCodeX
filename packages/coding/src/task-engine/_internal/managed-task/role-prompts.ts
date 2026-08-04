@@ -53,10 +53,11 @@ function createResolvedRolePrompt(
   promptContext: RunnerChainPromptContext,
   verification: KodaXTaskVerificationContract | undefined,
   renderMode: 'stable' | 'context',
+  resolvedContext?: ManagedRolePromptContext,
 ): string {
-  const ctx = promptContext.contextFactory
+  const ctx = resolvedContext ?? (promptContext.contextFactory
     ? promptContext.contextFactory(role, recorder)
-    : { originalTask: promptContext.prompt };
+    : { originalTask: promptContext.prompt });
   const toolPolicy = promptContext.toolPolicyFactory
     ? promptContext.toolPolicyFactory(role, recorder)
     : promptContext.toolPolicy;
@@ -132,17 +133,14 @@ export function resolveRoleInstructions(
     : basePrompt;
 }
 
-/**
- * Resolve volatile per-run facts as request-only user-role tail context.
- * Keeping this material after Provider cache breakpoints preserves the stable
- * prefix while retaining every managed-task contract and repository fact.
- */
+/** Resolve the full run-scoped context installed before the real user task. */
 export function resolveRoleRunContext(
   role: KodaXTaskRole,
   agentName: string,
   recorder: VerdictRecorder,
   promptContext: RunnerChainPromptContext | undefined,
   verification: KodaXTaskVerificationContract | undefined,
+  resolvedContext?: ManagedRolePromptContext,
 ): string | undefined {
   if (!promptContext) return undefined;
   const roleContext = createResolvedRolePrompt(
@@ -152,17 +150,18 @@ export function resolveRoleRunContext(
     promptContext,
     verification,
     'context',
+    resolvedContext,
   );
   const repoBlock = promptContext.repoIntelligenceContext?.trim();
   const composed = repoBlock
-    ? `${repoBlock}\n\n${roleContext}`
+    ? `${roleContext}\n\n${repoBlock}`
     : roleContext;
   return composed.trim().length > 0
     ? `=== Managed Run Context ===\n${composed}\n=== End Managed Run Context ===`
     : undefined;
 }
 
-/** Render runtime facts for topology-only callers that have no full task plan. */
+/** Render the small runtime-state surface used for changed-only deltas. */
 export function resolveRoleRuntimeStateContext(
   context: ManagedRolePromptContext | undefined,
 ): string | undefined {
@@ -180,6 +179,21 @@ export function resolveRoleRuntimeStateContext(
   return composed.length > 0
     ? `=== Managed Run Context ===\nRuntime state refresh:\n${composed}\n=== End Managed Run Context ===`
     : undefined;
+}
+
+/** Clock-free comparison key for changed-only runtime context emission. */
+export function resolveRoleRuntimeStateFingerprint(
+  context: ManagedRolePromptContext | undefined,
+): string | undefined {
+  if (!context) return undefined;
+  const snapshot = {
+    scratchDir: context.workspace?.scratchDir,
+    actorCapacity: context.actorCapacity,
+    teamMode: context.teamModeFingerprint,
+  };
+  return Object.values(snapshot).every((value) => value === undefined)
+    ? undefined
+    : JSON.stringify(snapshot);
 }
 
 /**

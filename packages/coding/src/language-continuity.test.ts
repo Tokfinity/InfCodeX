@@ -65,7 +65,7 @@ describe('language-continuity rule coverage (③)', () => {
     expect(runWorkflow?.description).toContain("same natural language as the user's request");
   });
 
-  it('keeps the F274 Worker playbook plus AMA quality_strategy schemas within 3,000 bytes', () => {
+  it('keeps the dormant F274 catalog renderer plus optional telemetry schemas within 3,000 bytes', () => {
     const strategySchemas = BUILTIN_TOOL_DEFINITIONS
       .filter((tool) => tool.name === 'spawn_agent' || tool.name === 'followup_task')
       .map((tool) => tool.input_schema.properties?.quality_strategy);

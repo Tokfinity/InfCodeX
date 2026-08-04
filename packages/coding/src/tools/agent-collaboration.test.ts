@@ -129,7 +129,7 @@ describe('F270 canonical collaboration tools', () => {
     });
   });
 
-  it('validates quality_strategy and stamps the trusted owner Turn reference', async () => {
+  it('stamps valid quality_strategy telemetry and ignores invalid optional metadata', async () => {
     const { ctx, executor } = await context();
     const qualityStrategy = {
       schemaVersion: 1,
@@ -157,10 +157,39 @@ describe('F270 canonical collaboration tools', () => {
       objective: 'Try an invented pattern.',
       quality_strategy: { ...qualityStrategy, pattern: 'majority-vote' },
     }, ctx)) as Record<string, unknown>;
-    expect(invalid).toMatchObject({
+    expect(invalid).toMatchObject({ ok: true, actorPath: '/root/invalid-strategy' });
+    expect(executor.pending[1]?.input.turn.metadata?.qualityStrategy).toBeUndefined();
+  });
+
+  it('does not misclassify host policy failures as optional metadata errors', async () => {
+    const { ctx } = await context();
+    const policyCtx: KodaXToolExecutionContext = {
+      ...ctx,
+      assertReadablePath: () => {
+        throw new Error('host policy denied evidence access');
+      },
+    };
+
+    const result = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'policy-denied',
+      objective: 'Must not start.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'policy-check',
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: ['file:packages/coding/src/index.ts'],
+      },
+    }, policyCtx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
       ok: false,
-      error: { code: 'agent_control_failed' },
+      error: { message: 'host policy denied evidence access' },
     });
+    expect(ctx.actorControl?.list().actors.some((actor) => (
+      actor.path === '/root/policy-denied'
+    ))).toBe(false);
   });
 
   it('admits a full parallel strategy wave while children report startup progress', async () => {
@@ -214,7 +243,7 @@ describe('F270 canonical collaboration tools', () => {
     expect(controller.list('/root').activeNonRootTurns).toBe(3);
   });
 
-  it('retains the tree-revision fence for legacy clients without admission revisions', async () => {
+  it('does not make ordinary spawn admission depend on strategy metadata fences', async () => {
     const { ctx, executor } = await context();
     const current = ctx.actorControl;
     if (!current) throw new Error('Expected Actor control.');
@@ -246,9 +275,7 @@ describe('F270 canonical collaboration tools', () => {
     }, legacyCtx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({ ok: true });
-    expect(observedOptions).toEqual([
-      { expectedTreeRevision: expect.any(Number) },
-    ]);
+    expect(observedOptions).toEqual([undefined]);
     expect(executor.pending).toHaveLength(1);
   });
 
@@ -296,7 +323,7 @@ describe('F270 canonical collaboration tools', () => {
     expect(ctx.actorControl?.list().activeNonRootTurns).toBe(3);
   });
 
-  it('rejects unknown and unreadable strategy targets before creating an Actor', async () => {
+  it('ignores invalid provenance refs while still creating ordinary legal Actors', async () => {
     const { ctx } = await context();
     const base = {
       schemaVersion: 1,
@@ -307,7 +334,7 @@ describe('F270 canonical collaboration tools', () => {
     };
     const unknown = JSON.parse(await executeTool('spawn_agent', {
       task_name: 'unknown-target',
-      objective: 'Must not start.',
+      objective: 'Inspect without optional strategy telemetry.',
       quality_strategy: {
         ...base,
         targetEvidenceRefs: ['tool-result:not-visible'],
@@ -315,20 +342,20 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
     const missing = JSON.parse(await executeTool('spawn_agent', {
       task_name: 'missing-target',
-      objective: 'Must not start.',
+      objective: 'Inspect without optional strategy telemetry.',
       quality_strategy: {
         ...base,
         targetEvidenceRefs: ['file:packages/coding/src/does-not-exist.ts'],
       },
     }, ctx)) as Record<string, unknown>;
 
-    expect(unknown).toMatchObject({ ok: false });
-    expect(missing).toMatchObject({ ok: false });
+    expect(unknown).toMatchObject({ ok: true, actorPath: '/root/unknown-target' });
+    expect(missing).toMatchObject({ ok: true, actorPath: '/root/missing-target' });
     expect(ctx.actorControl?.list().actors.map((actor) => actor.path))
-      .not.toEqual(expect.arrayContaining(['/root/unknown-target', '/root/missing-target']));
+      .toEqual(expect.arrayContaining(['/root/unknown-target', '/root/missing-target']));
   });
 
-  it('preserves running same-strategy follow-up and rejects a strategy switch before delivery', async () => {
+  it('preserves running same-strategy follow-up and drops a conflicting telemetry switch', async () => {
     const { ctx, executor } = await context();
     const qualityStrategy = {
       schemaVersion: 1,
@@ -361,12 +388,10 @@ describe('F270 canonical collaboration tools', () => {
         targetEvidenceRefs: ['finding:coverage candidate'],
       },
     }, ctx)) as Record<string, unknown>;
-    expect(switched).toMatchObject({
-      ok: false,
-      error: { code: 'invalid_message' },
-    });
+    expect(switched).toMatchObject({ ok: true, delivery: 'current_turn' });
     await expect(executor.pending[0]?.input.drainMailbox()).resolves.toMatchObject([
       { content: 'Also inspect the adjacent test.', kind: 'followup' },
+      { content: 'Become a challenger.', kind: 'followup' },
     ]);
   });
 
@@ -406,7 +431,7 @@ describe('F270 canonical collaboration tools', () => {
     });
   });
 
-  it('does not reopen a terminal stage id for the same owner Turn', async () => {
+  it('does not gate ordinary spawn when optional telemetry reuses a terminal stage id', async () => {
     const { ctx, executor } = await context();
     const qualityStrategy = {
       schemaVersion: 1,
@@ -429,13 +454,7 @@ describe('F270 canonical collaboration tools', () => {
       quality_strategy: qualityStrategy,
     }, ctx)) as Record<string, unknown>;
 
-    expect(reopened).toMatchObject({
-      ok: false,
-      error: {
-        code: 'invalid_message',
-        message: expect.stringContaining('closed'),
-      },
-    });
+    expect(reopened).toMatchObject({ ok: true, actorPath: '/root/late-lane' });
   });
 
   it('returns a stable structured capacity fact without creating a ghost actor', async () => {
@@ -445,7 +464,9 @@ describe('F270 canonical collaboration tools', () => {
     }
 
     const rejected = JSON.parse(await executeTool('spawn_agent', {
-      task_name: 'd', objective: 'D',
+      task_name: 'd',
+      objective: 'D',
+      quality_strategy: { pattern: 'invented-and-invalid' },
     }, ctx)) as Record<string, unknown>;
     const listed = JSON.parse(await executeTool('list_agents', {}, ctx)) as {
       readonly actors: readonly { readonly path: string }[];
@@ -462,6 +483,26 @@ describe('F270 canonical collaboration tools', () => {
       },
     });
     expect(listed.actors.some((actor) => actor.path === '/root/d')).toBe(false);
+  });
+
+  it('keeps lifecycle admission fail-closed when optional strategy metadata is invalid', async () => {
+    const { ctx, controller } = await context();
+    await executeTool('spawn_agent', {
+      task_name: 'closed-child',
+      objective: 'Initial work.',
+    }, ctx);
+    await controller.close('/root', '/root/closed-child');
+
+    const result = JSON.parse(await executeTool('followup_task', {
+      target: 'closed-child',
+      objective: 'Must remain closed.',
+      quality_strategy: { pattern: 'invented-and-invalid' },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'actor_closed' },
+    });
   });
 
   it('exposes mailbox-driven wait without raw Actor event controls', () => {
@@ -693,6 +734,7 @@ describe('F270 canonical collaboration tools', () => {
       task_name: 'writer',
       objective: 'Attempt a write.',
       read_only: false,
+      quality_strategy: { pattern: 'invented-and-invalid' },
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({

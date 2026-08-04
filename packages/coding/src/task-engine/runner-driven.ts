@@ -28,7 +28,6 @@
  */
 
 import type {
-  KodaXEphemeralSuffix,
   KodaXMessage,
   KodaXTaskResultMetadata,
   KodaXToolResultContentItem,
@@ -328,8 +327,13 @@ import {
 } from './_internal/managed-task/agent-chain.js';
 import {
   resolveRoleRunContext,
+  resolveRoleRuntimeStateFingerprint,
   resolveRoleRuntimeStateContext,
 } from './_internal/managed-task/role-prompts.js';
+import {
+  createManagedRunContextMessage,
+  createManagedRuntimeContextMessage,
+} from './_internal/managed-task/managed-run-context.js';
 import {
   buildRunnerLlmAdapter,
   resolveManagedProviderReasoning,
@@ -1584,8 +1588,9 @@ async function runManagedTaskViaRunnerInner(
       : undefined,
   );
   // Build the full role-prompt context. Stable rules remain in System while
-  // decision, contract, repository, memory, Session, verification, and live
-  // Actor facts are rendered as request-only tail context. The context factory closes over
+  // decision, contract, repository, memory, Session, and verification facts
+  // are installed once before the real user task. Live Actor/Team facts are
+  // refreshed only when their snapshot changes. The context factory closes over
   // the recorder so Scout's post-emit `skillMap` / `scope` reach
   // downstream Generator / Evaluator prompts at invocation time.
   // v0.7.26 NEW-1 — resolve workspace environment once so every role
@@ -1690,6 +1695,7 @@ async function runManagedTaskViaRunnerInner(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  const promptOverlay = plan?.promptOverlay?.trim();
   const rolePromptContextFactory: RolePromptContextFactory = (role, currentRecorder) => {
     // FEATURE_193 (v0.7.43): `scoutPayload = currentRecorder.scout?.payload.scout`
     // read removed (V1 scout slot deleted). All downstream scoutPayload-derived
@@ -1701,9 +1707,10 @@ async function runManagedTaskViaRunnerInner(
     // disabled via KODAX_DISABLE_MULTI_INSTANCE=1). The active writer's
     // pid is excluded so we never describe ourselves to the LLM.
     // `discoverInstances` does one readdir + N stat — cheap enough to
-    // call on every role-prompt build without caching. Failure is
+    // call at each managed turn boundary. Failure is
     // swallowed so a transient fs hiccup never blocks the LLM call.
     let teamModeBlock: string | undefined;
+    let teamModeFingerprint: string | undefined;
     try {
       const writer = getActiveTeamModeWriter();
       if (writer) {
@@ -1711,6 +1718,21 @@ async function runManagedTaskViaRunnerInner(
         siblingSnapshotRef.current = siblings;
         if (siblings.length > 0) {
           teamModeBlock = buildOtherInstancesPromptBlock(siblings);
+          teamModeFingerprint = JSON.stringify(
+            [...siblings]
+              .sort((left, right) => left.pid - right.pid)
+              .map(({ pid, state }) => ({
+                pid,
+                cwd: state.meta.cwd,
+                startedAt: state.meta.startedAt,
+                gitBranch: state.meta.gitBranch,
+                agentPhase: state.agentPhase,
+                currentIntent: state.currentIntent,
+                activeFiles: state.activeFiles,
+                recentlyModifiedFiles: state.recentlyModifiedFiles,
+                currentTodoSummary: state.currentTodoSummary,
+              })),
+          );
         }
       } else {
         siblingSnapshotRef.current = undefined;
@@ -1725,6 +1747,7 @@ async function runManagedTaskViaRunnerInner(
       capabilityContextBlock: prebuiltCapabilityContextBlock,
       stableCapabilityContextBlock: prebuiltStableCapabilityContextBlock,
       ...(teamModeBlock ? { teamModeSection: teamModeBlock } : {}),
+      ...(teamModeFingerprint ? { teamModeFingerprint } : {}),
       ...(actorTree ? {
         actorCapacity: {
           maxConcurrentThreads: actorTree.maxConcurrentThreads,
@@ -1769,7 +1792,7 @@ async function runManagedTaskViaRunnerInner(
     return ctx;
   };
   // Pre-compute the repo-intelligence context block once per
-  // Runner-driven entry so the request-only managed suffix carries repo
+  // Runner-driven entry so the hidden managed context carries repo
   // overview + changed scope + active module + impact metadata from turn 1
   // without changing the stable System prefix. Best-effort: failure to build
   // must not fail the run.
@@ -1843,24 +1866,35 @@ async function runManagedTaskViaRunnerInner(
   // callback retired — Scout role gone, no payload to surface. The
   // adapter still accepts the getter slot for signature compatibility;
   // it permanently returns `undefined` on V2.
-  // Per-run iteration counter shared with the adapter. `runOnce` resets it
-  // to 0 at the top of every fresh `Runner.run` so the `iter` reported to
-  // `onIterationStart`/`onIterationEnd` stays in the same per-invocation
-  // scope as the Runner's tool loop (`iter <= maxIter` holds across
-  // idle-yield resumes instead of accumulating past the cap).
+  // Per-task managed LLM-turn counter shared across every idle-yield resume.
+  // The adapter enforces the same 64-call ceiling across the entire managed
+  // task, including Runner continuation turns.
   const iterationStateRef = { current: 0 };
-  const resolveManagedRunEphemeralSuffix = (): KodaXEphemeralSuffix | undefined => {
-    const content = resolveRoleRunContext(
+  const captureManagedRunContext = (): {
+    readonly full?: string;
+    readonly runtime?: string;
+    readonly runtimeFingerprint?: string;
+  } => {
+    const resolvedContext = rolePromptContextFactory('worker', recorder);
+    const full = resolveRoleRunContext(
       'worker',
       WORKER_AGENT_NAME,
       recorder,
       chainPromptContext,
       options.context?.taskVerification,
-    ) ?? resolveRoleRuntimeStateContext(
-      rolePromptContextFactory('worker', recorder),
-    );
-    return content ? { content } : undefined;
+      resolvedContext,
+    ) ?? resolveRoleRuntimeStateContext(resolvedContext);
+    const runtime = resolveRoleRuntimeStateContext(resolvedContext);
+    const runtimeFingerprint = resolveRoleRuntimeStateFingerprint(resolvedContext);
+    return {
+      ...(full ? { full } : {}),
+      ...(runtime ? { runtime } : {}),
+      ...(runtimeFingerprint ? { runtimeFingerprint } : {}),
+    };
   };
+  const initialManagedContext = captureManagedRunContext();
+  let managedRuntimeContextBaseline = initialManagedContext.runtimeFingerprint;
+  let pendingCompactedRuntimeContext: string | undefined;
   const llm = buildRunnerLlmAdapter(
     options,
     adapterOverride,
@@ -1879,7 +1913,6 @@ async function runManagedTaskViaRunnerInner(
       mcpCatalogText: amaMcpCatalogText,
       contextWindow: resolvedContextCapacity.contextWindow,
     },
-    resolveManagedRunEphemeralSuffix,
   );
 
   // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
@@ -1891,7 +1924,6 @@ async function runManagedTaskViaRunnerInner(
   // stitching put this onto the user prompt head, which made the
   // routing notes look like user input to the LLM instead of platform
   // truth. The user prompt now carries only the actual user request.
-  const promptOverlay = plan?.promptOverlay?.trim();
   const promptWithOverlay = prompt;
 
   // Session continuity: when the caller passes `options.session.initialMessages`
@@ -1943,14 +1975,22 @@ async function runManagedTaskViaRunnerInner(
     promptWithOverlay,
     options.context?.inputArtifacts,
   );
+  const currentMessageTimestamp = new Date().toISOString();
   const currentUserMessage: KodaXMessage = {
     role: 'user',
     content: userMessageContent,
     turnId: liveTurnController.currentTurnId(),
-    timestamp: new Date().toISOString(),
+    timestamp: currentMessageTimestamp,
   };
+  const canonicalManagedContext = initialManagedContext.full
+    ? createManagedRunContextMessage(initialManagedContext.full, {
+        turnId: liveTurnController.currentTurnId(),
+        timestamp: currentMessageTimestamp,
+      })
+    : undefined;
   const runnerInput = [
     ...resolvedInitial.messages,
+    ...(canonicalManagedContext ? [canonicalManagedContext] : []),
     currentUserMessage,
   ];
 
@@ -1976,6 +2016,16 @@ async function runManagedTaskViaRunnerInner(
     contextTokenSnapshotRef,
     activeToolDefinitions: entryAgent.tools,
     reasoning: resolveManagedProviderReasoning(options, entryAgent),
+    canonicalManagedContext: () => {
+      const snapshot = captureManagedRunContext();
+      pendingCompactedRuntimeContext = snapshot.runtimeFingerprint;
+      return snapshot.full
+        ? createManagedRunContextMessage(snapshot.full, {
+            turnId: liveTurnController.currentTurnId(),
+            timestamp: new Date().toISOString(),
+          })
+        : undefined;
+    },
     // FEATURE_177 v0.7.42 — clear the read-file-state cache after a
     // real compaction. The cache returns stubs that point the LLM at
     // earlier `tool_result` blocks; after summarization those blocks
@@ -1990,6 +2040,8 @@ async function runManagedTaskViaRunnerInner(
     // transcript buffer, AND any pending nudge so we don't fire on
     // legitimate post-compact re-reads or inject a now-stale nudge.
     onPostCompact: () => {
+      managedRuntimeContextBaseline = pendingCompactedRuntimeContext;
+      pendingCompactedRuntimeContext = undefined;
       readFileStateCache.clear();
       stallDetector.reset();
       stallSidecar.reset();
@@ -2289,11 +2341,27 @@ async function runManagedTaskViaRunnerInner(
     readonly iteration: number;
     readonly lastTurnToolNames?: readonly string[];
   }) => Promise<readonly KodaXMessage[]> = async (turnCtx) => {
+    const currentContext = rolePromptContextFactory('worker', recorder);
+    const currentRuntimeContext = resolveRoleRuntimeStateContext(currentContext);
+    const currentRuntimeFingerprint = resolveRoleRuntimeStateFingerprint(currentContext);
+    const runtimeContextChanged = currentRuntimeFingerprint !== managedRuntimeContextBaseline;
+    const runtimeContextMessage = runtimeContextChanged
+      ? createManagedRuntimeContextMessage(currentRuntimeContext ?? [
+          '=== Managed Run Context ===',
+          'Runtime state refresh:',
+          'No dynamic runtime-state sections remain active.',
+          '=== End Managed Run Context ===',
+        ].join('\n'), {
+          turnId: liveTurnController.currentTurnId(),
+          timestamp: new Date().toISOString(),
+        })
+      : undefined;
+    managedRuntimeContextBaseline = currentRuntimeFingerprint;
     const drained = maybeDrainMidTurn({
       agentId: messageQueueAgentId,
       lastTurnToolNames: turnCtx.lastTurnToolNames ?? [],
     });
-    if (drained.length === 0) return [];
+    if (drained.length === 0) return runtimeContextMessage ? [runtimeContextMessage] : [];
     const prompts = drained.filter((message) => message.mode === 'prompt');
     const mailbox = drained.filter((message) => message.mode !== 'prompt');
     const timestamp = new Date().toISOString();
@@ -2305,6 +2373,7 @@ async function runManagedTaskViaRunnerInner(
       timestamp,
     );
     return [
+      ...(runtimeContextMessage ? [runtimeContextMessage] : []),
       ...(syntheticMessage ? [syntheticMessage] : []),
       ...promptMessages,
     ];
@@ -2338,12 +2407,8 @@ async function runManagedTaskViaRunnerInner(
   // (the wrapper only requires `messages`, so the wider type is
   // structurally OK).
   const runOnce = (agent: Agent, input: readonly KodaXMessage[]) => {
-    // Reset the iteration counter for this fresh Runner.run so the
-    // reported `iter` shares scope with the Runner's tool loop (which
-    // counts 0..iterationCap). Across idle-yield resumes each runOnce is a
-    // new Runner.run with its own loop, so the counter restarts here —
-    // keeping `iter <= maxIter` true rather than accumulating across runs.
-    iterationStateRef.current = 0;
+    // `iterationStateRef` deliberately stays cumulative across idle resumes;
+    // the adapter owns the task-wide provider-call containment boundary.
     return Runner.run(agent, input, {
       llm,
       abortSignal: options.abortSignal,
@@ -2416,15 +2481,10 @@ async function runManagedTaskViaRunnerInner(
       // Iteration cap for the entire chain. Core's default (20) is
       // meant for stand-alone single-agent runs and is far too low
       // for a multi-role investigation + execution + verify chain.
-      // This is a hard SAFETY ceiling — the real throttle is the
-      // budget controller (H0=100 / H1=H2=200 base, +100/+200 on
-      // 90%-threshold user approval). A 500-turn ceiling allows
-      // 2-3 extensions plus ample room for tool-heavy iterations
-      // (each LLM turn can carry multiple parallel tool calls).
-      // The budget-extension dialog (Shard 6b) catches the user at
-      // the 90% threshold long before this cap, so reaching 500
-      // genuinely indicates a prompt / tool-design bug worth
-      // flagging.
+      // This is a hard SAFETY ceiling. Semantic convergence gates ask
+      // the Worker to invalidate, pivot, and conclude at 12/24/40;
+      // iteration 64 is the final mechanical containment boundary if
+      // those model-facing controls fail.
       // Shared with the LLM adapter as the reported `maxIter` denominator
       // so the SDK iteration callbacks reflect the real cap, not a stale 20.
       maxToolLoopIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,

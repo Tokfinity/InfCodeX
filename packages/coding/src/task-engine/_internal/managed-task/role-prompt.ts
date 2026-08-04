@@ -325,20 +325,23 @@ export function createRolePrompt(
         ].filter((section): section is string => Boolean(section)).join('\n\n');
       }
       if (renderMode === 'context') {
+        // Keep contract-critical fragments first. The aggregate hard cap may
+        // shed bulky repository/capability evidence, but never before the
+        // current task, verification, tool policy, and selected Skill.
         return [
           workspaceRunContextSection,
           actorCapacityContract,
-          capabilityContextSection,
-          teamModeSection,
           decisionSummary,
-          roundInstructionSection,
-          contractSection,
-          metadataSection,
           verificationSection,
           toolPolicySection,
           workerSkillSection,
-          previousRoleSummarySection,
           buildWorkerRoutingContext(decision),
+          roundInstructionSection,
+          metadataSection,
+          contractSection,
+          previousRoleSummarySection,
+          teamModeSection,
+          capabilityContextSection,
         ].filter((section): section is string => Boolean(section)).join('\n\n');
       }
       return [

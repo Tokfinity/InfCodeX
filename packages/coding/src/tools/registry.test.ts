@@ -22,7 +22,7 @@ const TEST_CONTEXT: KodaXToolExecutionContext = {
 };
 
 describe('tool registry', () => {
-  it('F274: keeps the budgeted playbook and quality-strategy bytes within budget', () => {
+  it('F274: keeps the dormant catalog renderer and optional telemetry schemas within budget', () => {
     const schemaDeltas = ['spawn_agent', 'followup_task'].map((name) => {
       const definition = getToolDefinition(name);
       if (definition === undefined) throw new Error(`${name} tool definition is missing`);
@@ -50,10 +50,10 @@ describe('tool registry', () => {
     const staticInputDelta = promptDelta + toolSchemaDelta;
 
     expect({ promptDelta, schemaDeltas, toolSchemaDelta, staticInputDelta }).toEqual({
-      promptDelta: 2_425,
-      schemaDeltas: [376, 184],
-      toolSchemaDelta: 560,
-      staticInputDelta: 2_985,
+      promptDelta: 2_418,
+      schemaDeltas: [316, 215],
+      toolSchemaDelta: 531,
+      staticInputDelta: 2_949,
     });
     expect(staticInputDelta).toBeLessThanOrEqual(3_000);
   });

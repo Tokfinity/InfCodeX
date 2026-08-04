@@ -126,9 +126,9 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
 // The runner pre-computes these via `buildCapabilityContextSections()`
 // once per AMA entry and threads the joined block onto
 // `ManagedRolePromptContext.capabilityContextBlock`. This test asserts
-// (a) the block is rendered when present, (b) it lives between the
-// workspace section and the decision summary so capability truth sits
-// next to runtime truth, (c) it is omitted cleanly when absent, and
+// (a) the block is rendered when present, (b) contract-critical context
+// precedes the potentially large block so hard-capping cannot remove the
+// task contract first, (c) it is omitted cleanly when absent, and
 // (d) the 5 sections that ride on other Runner paths are NOT in this
 // block (they would otherwise duplicate).
 describe('FEATURE_144 — AMA worker capability-context parity', () => {
@@ -136,6 +136,7 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
   function renderRole(
     role: 'worker',
     capabilityContextBlock: string | undefined,
+    renderMode: 'combined' | 'context' = 'combined',
   ): string {
     const decision = buildFallbackRoutingDecision(userQuestion);
     const base = buildContext({ provider: 'p', model: 'm' });
@@ -154,6 +155,7 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
       ctx,
       undefined,
       false,
+      renderMode,
     );
   }
 
@@ -252,6 +254,10 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
       expect(stable).not.toContain(marker);
     }
     expect(stable).not.toContain('ORIGINAL_QUERY_SENTINEL');
+    expect(dynamic.indexOf('VERIFICATION_SENTINEL'))
+      .toBeLessThan(dynamic.indexOf('DYNAMIC_CAPABILITY_SENTINEL'));
+    expect(dynamic.indexOf('TOOL_POLICY_SENTINEL'))
+      .toBeLessThan(dynamic.indexOf('DYNAMIC_CAPABILITY_SENTINEL'));
   });
 
   it('renders capabilityContextBlock for every role when present', () => {
@@ -273,16 +279,14 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
     }
   });
 
-  it('positions capability block between workspaceSection and decisionSummary', () => {
+  it('positions the capability block after contract-critical routing context', () => {
     const block = '## MCP Capability Provider\nFROZEN_MCP_MARKER';
     for (const role of roles) {
-      const rendered = renderRole(role, block);
-      const envIdx = rendered.indexOf('## Environment');
+      const rendered = renderRole(role, block, 'context');
       const capIdx = rendered.indexOf('FROZEN_MCP_MARKER');
       const decisionIdx = rendered.indexOf('Primary task:');
-      expect(envIdx, `role=${role}: workspaceSection present`).toBeGreaterThanOrEqual(0);
-      expect(capIdx, `role=${role}: capability block present`).toBeGreaterThan(envIdx);
-      expect(decisionIdx, `role=${role}: decisionSummary present`).toBeGreaterThan(capIdx);
+      expect(decisionIdx, `role=${role}: decisionSummary present`).toBeGreaterThanOrEqual(0);
+      expect(capIdx, `role=${role}: capability block present`).toBeGreaterThan(decisionIdx);
     }
   });
 
@@ -402,7 +406,7 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     // Pinned tokens from `buildWorkerInstructions` — if the entry
     // wire breaks, these disappear and the V2 path silently falls
     // back to a context-only prompt with no planning guidance.
-    expect(rendered).toContain('PLAN-FIRST CONTRACT:');
+    expect(rendered).toContain('PLAN-FIRST GUIDANCE:');
     expect(rendered).toContain('SCOPE COMMITMENT:');
     expect(rendered).toContain('MUTATION DISCIPLINE');
     expect(rendered).toContain('AGENT COLLABORATION:');
