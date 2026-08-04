@@ -14,6 +14,7 @@ _Last Updated: 2026-08-04_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 development | 2026-08-04 | 2026-08-04 |
 | 275 | High | Resolved | Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged | v0.7.79 development | v0.7.80 development | 2026-08-04 | 2026-08-04 |
 | 274 | Medium | Resolved | Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws | v0.7.69 integration hot reload | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 273 | Medium | Resolved | Runtime actor subprocess test inherited Node environment-proxy warnings | v0.7.79 Runtime actor owner liveness test | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -178,6 +179,83 @@ _Last Updated: 2026-08-04_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 276: Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.80 release preparation
+- **Fixed**: v0.7.80 development
+- **Created**: 2026-08-04
+- **Resolved**: 2026-08-04
+
+#### Original Problem
+
+Release preparation made an obsolete F274 six-pattern benchmark compare the
+current parallel-first prompt while retaining the old experiment revision,
+baseline commit, cases, scorer, and fake-provider marker. The unit test could
+therefore treat both arms as baseline and still pass. A companion Actor change
+used lifecycle/output control to validate exact evidence references even though
+F270/F274 distinguish same-parent visibility from control, causing visible peer
+provenance or optional `quality_strategy` metadata to block or degrade otherwise
+legal collaboration. The daemon bridge also removed a custom
+`learningReviewer` callback without the loud rejection applied to other host
+bindings, and performed daemon option validation only after Session writes.
+
+#### Root Cause
+
+- A historical eval runner dynamically rebuilt frozen arms from the current
+  production prompt instead of preserving registered bytes.
+- An outdated direct-sibling test mislabeled control scope as visibility scope.
+- Host-only daemon bindings were maintained in separate stripping and
+  validation lists, and validation occurred too late in the run bridge.
+
+#### Proposed Solution
+
+- Restore the historical F274 experiment as a byte-frozen archival fixture and
+  add explicit arm sentinels so a stale fake provider cannot pass.
+- Validate exact Actor Turn references through caller visibility and terminal
+  membership; discard invalid optional provenance without blocking admission.
+- Reject every daemon host callback before creating or mutating a Session.
+
+#### Context
+
+Affected components: F274 benchmark release gates, Actor collaboration
+provenance, `spawn_agent`/`followup_task`, and the interactive daemon bridge.
+
+#### Resolution
+
+- Restored F274 as a byte-frozen archival experiment: both prompt arms, four
+  policy-tool payloads, verifier system/tool payloads, and all Layer 3
+  LLM-facing inputs now have registered hashes and fail closed on drift. The
+  fake-provider test also proves both historical arms are exercised.
+- Restored exact Actor Turn evidence validation to visibility semantics, while
+  preserving lifecycle/output control separately. Same-parent peer evidence is
+  accepted; hidden, unknown, or stale optional provenance is dropped without
+  blocking legal spawn or follow-up operations.
+- Added `learningReviewer` to daemon host-binding rejection and moved daemon
+  wire validation before every Session load, creation, or settings update.
+
+#### Files Changed
+
+- `benchmark/datasets/feature-274/runner.ts` and frozen fixtures
+- `packages/coding/src/orchestration/pattern-strategy.ts`
+- `src/kodax_cli.ts`
+- Focused tests for all three boundaries
+
+#### Tests Added
+
+- Historical F274 prompt/tool/verifier hashes, arm sentinels, and scorer
+  cross-platform normalization.
+- Same-parent terminal evidence, hidden private descendants, and stale
+  follow-up provenance.
+- Loud daemon `learningReviewer` rejection before persistent Session writes.
+
+#### Resolution Date
+
+2026-08-04
+
+---
 
 ### 275: Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged
 
@@ -11160,7 +11238,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 155 (27 Open, 128 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 156 (27 Open, 129 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

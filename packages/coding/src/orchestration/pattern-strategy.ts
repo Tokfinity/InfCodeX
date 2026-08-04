@@ -3,7 +3,7 @@ import { access } from 'node:fs/promises';
 import {
   AgentControlError,
   type AgentMetadataValue,
-  type AgentOutput,
+  type AgentTurn,
 } from '@kodax-ai/agent';
 
 import type {
@@ -114,43 +114,26 @@ export async function assertPatternEvidenceRefVisible(
   }
   const target = parseActorTurnEvidenceRef(ref);
   if (target !== undefined) {
-    let output: AgentOutput | undefined;
+    let targetTurn: AgentTurn | undefined;
     try {
-      // Control-scope gate: `output()` restricts evidence to the executing
-      // Actor's own controlled subtree (the root Actor or one of the caller's
-      // direct children). The wider `get()`/isVisible view would admit
-      // same-parent sibling evidence that the caller cannot control.
-      output = ctx.actorControl?.output(target.actorPath, target.turnId);
+      // Evidence references require visibility, not lifecycle/output control.
+      // Same-parent peers are visible to one another, while private peer
+      // descendants remain outside this projection.
+      targetTurn = ctx.actorControl
+        ?.get(target.actorPath)
+        .turns.find((turn) => turn.turnId === target.turnId);
     } catch (error) {
-      if (
-        error instanceof AgentControlError
-        && (error.code === 'actor_not_found' || error.code === 'no_active_turn')
-      ) {
+      if (error instanceof AgentControlError) {
         throw new QualityStrategyMetadataError(
           `quality_strategy target ${ref} is not a visible exact Actor Turn.`,
         );
       }
-      if (error instanceof AgentControlError && error.code === 'permission_denied') {
-        // output() reports both a genuine scope violation and a stale exact
-        // turn ref (the turn does not belong to the actor) as permission_denied.
-        // A stale ref on an otherwise visible actor is optional telemetry and
-        // must not block the underlying legal Actor operation; a real scope
-        // violation stays fail-closed.
-        const detail = ctx.actorControl?.get(target.actorPath);
-        const staleRef = detail === undefined
-          || !detail.turns.some((turn) => turn.turnId === target.turnId);
-        if (staleRef) {
-          throw new QualityStrategyMetadataError(
-            `quality_strategy target ${ref} is not a visible exact Actor Turn.`,
-          );
-        }
-      }
       throw error;
     }
     if (
-      output === undefined
-      || output.state === 'accepted'
-      || output.state === 'running'
+      targetTurn === undefined
+      || targetTurn.state === 'accepted'
+      || targetTurn.state === 'running'
     ) {
       throw new QualityStrategyMetadataError(
         `quality_strategy target ${ref} must already be terminal.`,

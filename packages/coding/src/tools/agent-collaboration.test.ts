@@ -404,7 +404,7 @@ describe('F270 canonical collaboration tools', () => {
       .toBeUndefined();
   });
 
-  it('does not downgrade a forbidden Actor evidence target into optional telemetry', async () => {
+  it('drops a hidden Actor evidence target without blocking an otherwise legal spawn', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({
       executor,
@@ -422,6 +422,12 @@ describe('F270 canonical collaboration tools', () => {
       taskName: 'private-child',
       objective: 'Produce evidence hidden from the caller branch.',
     });
+    executor.pending[2]?.resolve({ output: 'terminal private evidence' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(controller.bind('/root/peer').output(
+      privateTurn.actorPath,
+      privateTurn.turnId,
+    ).state).toBe('completed');
     const ctx: KodaXToolExecutionContext = {
       backups: new Map(),
       actorControl: controller.bind('/root/caller'),
@@ -444,11 +450,56 @@ describe('F270 canonical collaboration tools', () => {
     }, ctx)) as Record<string, unknown>;
 
     expect(result).toMatchObject({
-      ok: false,
-      error: { code: 'permission_denied' },
+      ok: true,
+      actorPath: '/root/caller/unauthorized-evidence-reader',
     });
-    expect(controller.list('/root').actors.some((actor) =>
-      actor.path === '/root/caller/unauthorized-evidence-reader')).toBe(false);
+    expect(executor.pending[3]?.input.turn.metadata?.qualityStrategy).toBeUndefined();
+  });
+
+  it('accepts terminal exact-Turn provenance from a visible same-parent Actor', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      maxConcurrentThreadsPerSession: 8,
+    });
+    const caller = await controller.spawn('/root', {
+      taskName: 'caller',
+      objective: 'Coordinate one peer review.',
+    });
+    const peer = await controller.spawn('/root', {
+      taskName: 'peer',
+      objective: 'Produce visible peer evidence.',
+    });
+    executor.pending[1]?.resolve({ output: 'terminal peer evidence' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const ctx: KodaXToolExecutionContext = {
+      backups: new Map(),
+      actorControl: controller.bind('/root/caller'),
+      actorTurnRef: { actorPath: '/root/caller', turnId: caller.turnId },
+    };
+
+    const result = JSON.parse(await executeTool('spawn_agent', {
+      task_name: 'peer-challenger',
+      objective: 'Challenge the visible peer evidence.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'peer-challenge',
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: [
+          `agent-turn:${peer.actorPath}#turn=${peer.turnId}`,
+        ],
+      },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(result).toMatchObject({
+      ok: true,
+      actorPath: '/root/caller/peer-challenger',
+    });
+    expect(executor.pending[2]?.input.turn.metadata?.qualityStrategy).toMatchObject({
+      targetEvidenceRefs: [`agent-turn:${peer.actorPath}#turn=${peer.turnId}`],
+    });
   });
 
   it('preserves running same-strategy follow-up and drops a conflicting telemetry switch', async () => {
@@ -525,6 +576,34 @@ describe('F270 canonical collaboration tools', () => {
       stageId: 'challenge-1',
       ownerTurnRef: { actorPath: '/root', turnId: 'root-turn-2' },
     });
+  });
+
+  it('starts an idle follow-up after dropping stale optional provenance', async () => {
+    const { ctx, executor } = await context();
+    await executeTool('spawn_agent', {
+      task_name: 'reusable-with-stale-ref',
+      objective: 'Complete the first turn.',
+    }, ctx);
+    executor.pending[0]?.resolve({ output: 'first turn complete' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const followup = JSON.parse(await executeTool('followup_task', {
+      target: 'reusable-with-stale-ref',
+      objective: 'Start a legal follow-up without stale telemetry.',
+      quality_strategy: {
+        schemaVersion: 1,
+        stageId: 'stale-followup-ref',
+        pattern: 'adversarial-verification',
+        role: 'challenger',
+        laneRelation: 'opposition',
+        targetEvidenceRefs: [
+          'agent-turn:/root/reusable-with-stale-ref#turn=turn-stale',
+        ],
+      },
+    }, ctx)) as Record<string, unknown>;
+
+    expect(followup).toMatchObject({ ok: true, delivery: 'started_turn' });
+    expect(executor.pending[1]?.input.turn.metadata?.qualityStrategy).toBeUndefined();
   });
 
   it('does not gate ordinary spawn when optional telemetry reuses a terminal stage id', async () => {

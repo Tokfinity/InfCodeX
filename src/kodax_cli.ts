@@ -668,6 +668,23 @@ export function createInteractiveRuntimeRunner(
   return async (
     input: InteractiveRuntimeRunnerInput,
   ): Promise<Awaited<ReturnType<typeof runManagedTask>>> => {
+    // Validate transport-isolated options before any durable Session write.
+    // An impossible Run must not leave an empty Session or changed settings.
+    const transportIsolated =
+      runtime.identity.mode === 'daemon' ||
+      runtime.identity.isolation === 'worker';
+    const workerHosted = runtime.identity.isolation === 'worker';
+    const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
+      // Only Worker isolation strips callbacks the outer CLI has already
+      // rejected. Daemon mode keeps host bindings for loud validation below.
+      omitLegacyBeforeToolExecute:
+        input.legacyPermissionHook === true || workerHosted,
+      omitExtensionRuntime: workerHosted,
+    });
+    const startOptions = transportIsolated
+      ? toDaemonRuntimeRunOptions(runtimeOptions)
+      : runtimeOptions;
+
     await ensureCliRuntimeSession(
       runtime,
       input.sessionId,
@@ -689,26 +706,7 @@ export function createInteractiveRuntimeRunner(
         permissionMode: input.permissionMode,
       });
     }
-
     const bridge = createRuntimeReplEventBridge(runtime, input);
-    // Worker-hosted embedded Runtimes (isolation: 'worker') are transport
-    // isolated exactly like the daemon: host-owned callbacks (events, session
-    // storage, extension runtime) cannot cross the boundary, so run options
-    // must be reduced to the JSON-safe wire DTO before run.start.
-    const transportIsolated =
-      runtime.identity.mode === 'daemon' ||
-      runtime.identity.isolation === 'worker';
-    const workerHosted = runtime.identity.isolation === 'worker';
-    const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
-      // Only a Worker-hosted embedded Runtime strips host callbacks silently:
-      // it has no inline host that could honor them. Daemon mode keeps the
-      // loud host-binding rejection in toDaemonRuntimeRunOptions so a
-      // configured `events.beforeToolExecute` / `extensionRuntime` is never
-      // silently disabled.
-      omitLegacyBeforeToolExecute:
-        input.legacyPermissionHook === true || workerHosted,
-      omitExtensionRuntime: workerHosted,
-    });
     const abortSignal = input.options.abortSignal;
     let abortRun: (() => void) | undefined;
     try {
@@ -718,10 +716,7 @@ export function createInteractiveRuntimeRunner(
         mode: 'managed_task',
         permissionBroker:
           input.requestPermission === undefined ? 'runtime' : 'client',
-        options:
-          transportIsolated
-            ? toDaemonRuntimeRunOptions(runtimeOptions)
-            : runtimeOptions,
+        options: startOptions,
       });
       bridge.setRunId(handle.runId);
       abortRun = () => {
@@ -928,6 +923,7 @@ function assertDaemonHostBindingsAbsent(options: KodaXOptions): void {
     ['extensionRuntime', options.extensionRuntime],
     ['sessionControl', options.sessionControl],
     ['memoryReviewer', options.memoryReviewer],
+    ['learningReviewer', options.learningReviewer],
     ['memoryRecallRunner', options.memoryRecallRunner],
     ['guardrails', options.guardrails],
     ['events.beforeToolExecute', options.events?.beforeToolExecute],

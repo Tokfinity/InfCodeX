@@ -16,16 +16,11 @@ import type { ModelAlias } from '../../harness/aliases.js';
 import { MODEL_ALIASES } from '../../harness/aliases.js';
 import { runOneShot } from '../../harness/harness.js';
 import {
-  buildParallelFirstCollaborationGuidance,
-  buildWorkerStableInstructions,
-} from '../../../packages/coding/src/agents/worker-role-prompt.js';
-import {
   buildVerifierUserMessage,
   VERIFIER_REPORT_TOOL,
   VERIFIER_SYSTEM_PROMPT,
 } from '../../../packages/coding/src/agent-runtime/middleware/sidecar-verifier/verifier-prompts.js';
 import type { PatternTrace } from '../../../packages/coding/src/orchestration/pattern-trace.js';
-import { getToolDefinition } from '../../../packages/coding/src/tools/registry.js';
 import {
   FEATURE_274_JOURNEY_CASES,
   FEATURE_274_POLICY_CASES,
@@ -45,19 +40,28 @@ type Feature274Stage = 'pilot' | 'layer2' | 'layer3';
 type Feature274BudgetStage = 'pilot' | 'expansion' | 'layer3';
 
 const BASELINE_COMMIT = '2b5f75eb1b2b59977e9e207a89ea6df476b7364d';
+const CANDIDATE_PROMPT_COMMIT = '25d5521e3eadc20ff1da2bd69d171736724bbcba';
+const BASELINE_PROMPT_SHA256 = 'e6619f99d6bfd9f773400884c6c303dd719f56e0823e8bf9e8f1d43cba9f0be7';
+const CANDIDATE_PROMPT_SHA256 = 'd86691a3731c84f1113f7ddd79d66505cc635dab6816506998660932c32b3d00';
+const VERIFIER_SYSTEM_PROMPT_SHA256 = 'c17200f7880e15f04251acaa1f331c621a5759685b054f76ef9417c4bf244103';
+const VERIFIER_TOOL_SHA256 = 'aebb9536fd70264b05863f935988098d5f8338e6d2e096278acd376f96757aec';
+const LAYER3_LLM_INPUTS_SHA256 = 'b93d220b5f317f6f4412904bc69c66a423c22860434da144793cab5b8a63ee59';
 const PILOT_CASE_IDS = new Set([
   'simple-direct-solo',
   'independent-interface-coverage',
   'concrete-candidate-challenge',
   'explicit-workflow-request',
 ]);
-const POLICY_TOOL_NAMES = [
-  'read',
-  'edit',
-  'bash',
-  'spawn_agent',
-  'run_workflow',
-] as const;
+const TOOL_PAYLOAD_SHA256 = {
+  baseline: {
+    standard: 'a10e33b12c579d3b8020afec79a01e60a53995371a430348d367eb36c21eb188',
+    explicitWorkflow: 'b5ba23fdfd994bcd9c6ddbf2162c6f6668d342fbb31d8de9573cc5d52770cc36',
+  },
+  candidate: {
+    standard: '2065c0b2321bd1b6c2ce4f1f4e3fc983c00b2c8a7eb7f187a10c64f2bb6e2adc',
+    explicitWorkflow: 'f615fd9c456ebb6689226225ce454c6bf0acef7f35db8bcddbc24587af43e53a',
+  },
+} as const;
 
 const LIMITS = {
   pilot: {
@@ -145,6 +149,7 @@ export interface Feature274RunManifest {
   readonly gitCommit: string;
   readonly sourcePatchSha256: string;
   readonly baselineCommit: string;
+  readonly candidatePromptCommit: string;
   readonly exactBytes: {
     readonly baselineSystemPromptSha256: string;
     readonly candidateSystemPromptSha256: string;
@@ -155,6 +160,7 @@ export interface Feature274RunManifest {
     readonly candidateExplicitWorkflowToolsSha256: string;
     readonly verifierSystemPromptSha256: string;
     readonly verifierToolSha256: string;
+    readonly layer3LlmInputsSha256: string;
     readonly scorerSha256: string;
   };
   readonly aliases: Readonly<Record<string, unknown>>;
@@ -172,6 +178,7 @@ export function buildFeature274RunManifest(
   const candidatePrompt = feature274SystemPrompt('candidate');
   const baselineTools = feature274Tools('baseline', false);
   const candidateTools = feature274Tools('candidate', false);
+  const verifierSpecs = layer3Specs();
   return {
     schemaVersion: 1,
     featureId: 274,
@@ -180,6 +187,7 @@ export function buildFeature274RunManifest(
     gitCommit: git('rev-parse', 'HEAD').trim(),
     sourcePatchSha256: sha256(git('diff', '--binary', '--submodule=diff', 'HEAD')),
     baselineCommit: BASELINE_COMMIT,
+    candidatePromptCommit: CANDIDATE_PROMPT_COMMIT,
     exactBytes: {
       baselineSystemPromptSha256: sha256(baselinePrompt),
       candidateSystemPromptSha256: sha256(candidatePrompt),
@@ -194,6 +202,7 @@ export function buildFeature274RunManifest(
       )),
       verifierSystemPromptSha256: sha256(VERIFIER_SYSTEM_PROMPT),
       verifierToolSha256: sha256(JSON.stringify(VERIFIER_REPORT_TOOL)),
+      layer3LlmInputsSha256: layer3LlmInputsSha256(verifierSpecs),
       scorerSha256: scoringSourceHash(),
     },
     aliases: Object.fromEntries(
@@ -335,12 +344,40 @@ function policySpec(
 }
 
 function layer3Specs(): readonly Feature274CellSpec[] {
-  return FEATURE_274_JOURNEY_CASES.flatMap((evalCase) =>
+  assertFrozenVerifierPayloads();
+  const specs = FEATURE_274_JOURNEY_CASES.flatMap((evalCase) =>
     (['baseline', 'candidate'] as const).flatMap((arm) =>
       [0, 1].flatMap((repetition) =>
         ([1, 2] as const).map((round) =>
           verifierSpec(evalCase, arm, repetition, round)))),
   );
+  const actualSha256 = layer3LlmInputsSha256(specs);
+  if (actualSha256 !== LAYER3_LLM_INPUTS_SHA256) {
+    throw new Error(
+      `feature-274 Layer 3 LLM inputs hash mismatch: expected ${LAYER3_LLM_INPUTS_SHA256}, got ${actualSha256}`,
+    );
+  }
+  return specs;
+}
+
+function assertFrozenVerifierPayloads(): void {
+  const systemPromptSha256 = sha256(VERIFIER_SYSTEM_PROMPT);
+  const toolSha256 = sha256(JSON.stringify(VERIFIER_REPORT_TOOL));
+  if (
+    systemPromptSha256 !== VERIFIER_SYSTEM_PROMPT_SHA256
+    || toolSha256 !== VERIFIER_TOOL_SHA256
+  ) {
+    throw new Error('feature-274 verifier payloads differ from the frozen v0.7.77 experiment');
+  }
+}
+
+function layer3LlmInputsSha256(specs: readonly Feature274CellSpec[]): string {
+  return sha256(JSON.stringify(specs.map((spec) => ({
+    systemPrompt: spec.systemPrompt,
+    tools: spec.tools,
+    userMessage: spec.userMessage,
+    priorMessages: spec.priorMessages,
+  }))));
 }
 
 function verifierSpec(
@@ -382,45 +419,58 @@ function verifierSpec(
 }
 
 function feature274SystemPrompt(arm: Feature274Arm): string {
-  const candidate = buildWorkerStableInstructions();
-  if (arm === 'candidate') return candidate;
-  // The six-pattern catalog playbook was retired from the Worker prompt
-  // (parallel-first collaboration guidance replaced it); the baseline arm
-  // removes the current pattern-guidance block instead.
-  const patternGuidance = buildParallelFirstCollaborationGuidance();
-  const baseline = candidate.replace(`\n\n${patternGuidance}`, '');
-  if (baseline === candidate || baseline.includes(patternGuidance)) {
-    throw new Error('feature-274 baseline prompt could not remove exactly one pattern guidance block');
+  const fileName = arm === 'baseline'
+    ? 'baseline-worker-prompt.txt'
+    : 'candidate-worker-prompt.txt';
+  const expectedSha256 = arm === 'baseline'
+    ? BASELINE_PROMPT_SHA256
+    : CANDIDATE_PROMPT_SHA256;
+  const prompt = readFileSync(new URL(`./fixtures/${fileName}`, import.meta.url), 'utf8')
+    .replaceAll('\r\n', '\n')
+    .replace(/\n$/, '');
+  const actualSha256 = sha256(prompt);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(
+      `feature-274 ${arm} prompt fixture hash mismatch: expected ${expectedSha256}, got ${actualSha256}`,
+    );
   }
-  return baseline;
+  const containsPlaybook = prompt.includes('ADAPTIVE COLLABORATION PATTERNS');
+  if (containsPlaybook !== (arm === 'candidate') || prompt.includes('PARALLEL-FIRST COLLABORATION')) {
+    throw new Error(`feature-274 ${arm} prompt fixture does not match the frozen v0.7.77 experiment`);
+  }
+  return prompt;
 }
 
 function feature274Tools(
   arm: Feature274Arm,
   explicitWorkflow: boolean,
 ): readonly KodaXToolDefinition[] {
-  return POLICY_TOOL_NAMES
-    .filter((name) => name !== 'run_workflow' || explicitWorkflow)
-    .map((name) => {
-      const definition = getToolDefinition(name);
-      if (definition === undefined) throw new Error(`feature-274 tool missing: ${name}`);
-      return arm === 'candidate' ? definition : removeQualityStrategy(definition);
-    });
-}
-
-function removeQualityStrategy(definition: KodaXToolDefinition): KodaXToolDefinition {
-  if (definition.name !== 'spawn_agent' && definition.name !== 'followup_task') {
-    return definition;
+  const suffix = explicitWorkflow ? '-explicit-workflow-tools.json' : '-tools.json';
+  const payload = JSON.parse(readFileSync(
+    new URL(`./fixtures/${arm}${suffix}`, import.meta.url),
+    'utf8',
+  )) as unknown;
+  if (
+    !Array.isArray(payload)
+    || !payload.every((definition) => (
+      isRecord(definition)
+      && typeof definition.name === 'string'
+      && typeof definition.description === 'string'
+      && isRecord(definition.input_schema)
+    ))
+  ) {
+    throw new Error(`feature-274 ${arm} tool fixture is malformed`);
   }
-  const schema = structuredClone(definition.input_schema);
-  if (!isRecord(schema) || !isRecord(schema.properties)) {
-    throw new Error(`feature-274 ${definition.name} schema is malformed`);
+  const expectedSha256 = TOOL_PAYLOAD_SHA256[arm][
+    explicitWorkflow ? 'explicitWorkflow' : 'standard'
+  ];
+  const actualSha256 = sha256(JSON.stringify(payload));
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(
+      `feature-274 ${arm} tool fixture hash mismatch: expected ${expectedSha256}, got ${actualSha256}`,
+    );
   }
-  const { quality_strategy: _removed, ...properties } = schema.properties;
-  return {
-    ...definition,
-    input_schema: { ...schema, properties } as KodaXToolDefinition['input_schema'],
-  };
+  return payload as readonly KodaXToolDefinition[];
 }
 
 function policyProbeFacts(evalCase: Feature274PolicyCase): string {
@@ -884,7 +934,7 @@ function scoringSourceHash(): string {
   return sha256([
     readFileSync(new URL('./cases.ts', import.meta.url), 'utf8'),
     readFileSync(new URL('./runner.ts', import.meta.url), 'utf8'),
-  ].join('\n'));
+  ].map((source) => source.replaceAll('\r\n', '\n')).join('\n'));
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {

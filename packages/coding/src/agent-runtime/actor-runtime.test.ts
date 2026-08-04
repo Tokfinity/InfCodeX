@@ -292,7 +292,7 @@ describe('F270 coding Actor runtime adapter', () => {
       .not.toHaveProperty('qualityStrategyDegradedReasons');
   });
 
-  it('rejects new support provenance outside the executing Actor visibility boundary', async () => {
+  it('accepts terminal support provenance from a visible same-parent Actor', async () => {
     executeChildAgentsMock.mockResolvedValueOnce(completedChild('sibling result'));
     const session = new CodingActorSession({ sessionId: 'session-1' });
     const { ctx, options } = environment();
@@ -312,7 +312,7 @@ describe('F270 coding Actor runtime adapter', () => {
         disposition: 'confirmed',
         evidenceRefs: [supportRef],
       }],
-      assertedCoverage: ['unavailable sibling support'],
+      assertedCoverage: ['visible sibling support'],
     }));
 
     const challenger = await root.spawn({
@@ -334,12 +334,15 @@ describe('F270 coding Actor runtime adapter', () => {
 
     expect(root.output(challenger.actorPath, challenger.turnId).structured).toEqual({
       schemaVersion: 1,
-      outcomes: [],
-      assertedCoverage: [],
+      outcomes: [{
+        target: { evidenceRef: 'finding:declared' },
+        disposition: 'confirmed',
+        evidenceRefs: [supportRef],
+      }],
+      assertedCoverage: ['visible sibling support'],
     });
-    expect(root.get(challenger.actorPath).turns[0]?.metadata).toMatchObject({
-      qualityStrategyDegradedReasons: ['invalid_disposition_evidence'],
-    });
+    expect(root.get(challenger.actorPath).turns[0]?.metadata)
+      .not.toHaveProperty('qualityStrategyDegradedReasons');
   });
 
   it.each([

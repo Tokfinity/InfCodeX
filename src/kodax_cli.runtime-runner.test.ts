@@ -565,6 +565,15 @@ describe('interactive daemon runtime bridge', () => {
     expect(() => toDaemonRuntimeRunOptions({
       events: { beforeToolExecute: async () => true },
     } as unknown as KodaXOptions)).toThrow(/events\.beforeToolExecute.*cannot cross/i);
+
+    expect(() => toDaemonRuntimeRunOptions({
+      learningReviewer: async () => ({
+        schemaVersion: 1,
+        summary: 'custom review',
+        memoryPlan: { actions: [], warnings: [] },
+        skillPlan: { actions: [], warnings: [] },
+      }),
+    } as unknown as KodaXOptions)).toThrow(/learningReviewer.*cannot cross/i);
   });
 
   it('keeps the loud daemon host-binding rejection through the runner', async () => {
@@ -594,6 +603,8 @@ describe('interactive daemon runtime bridge', () => {
       prompt: 'inspect',
       sessionId: 'session-1',
     })).rejects.toThrow(/events\.beforeToolExecute.*cannot cross/i);
+    expect(runtime.sessions.load).not.toHaveBeenCalled();
+    expect(runtime.sessions.updateSettings).not.toHaveBeenCalled();
     expect(runtime.runs.start).not.toHaveBeenCalled();
   });
 

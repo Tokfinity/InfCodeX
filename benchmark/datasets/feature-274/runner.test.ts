@@ -32,9 +32,29 @@ describe('FEATURE_274 paid runner safety', () => {
   it('freezes exact bytes and keeps static prompt growth within the registered cap', () => {
     const manifest = buildFeature274RunManifest(path.join(os.tmpdir(), 'f274-manifest-test'));
     expect(manifest.gitCommit).toMatch(/^[a-f0-9]{40}$/);
-    expect(manifest.exactBytes.promptByteDelta).toBeGreaterThan(0);
-    expect(manifest.exactBytes.promptByteDelta).toBeLessThanOrEqual(3_000);
-    expect(manifest.exactBytes.scorerSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(manifest.baselineCommit).toBe('2b5f75eb1b2b59977e9e207a89ea6df476b7364d');
+    expect(manifest.candidatePromptCommit).toBe('25d5521e3eadc20ff1da2bd69d171736724bbcba');
+    expect(manifest.exactBytes.baselineSystemPromptSha256)
+      .toBe('e6619f99d6bfd9f773400884c6c303dd719f56e0823e8bf9e8f1d43cba9f0be7');
+    expect(manifest.exactBytes.candidateSystemPromptSha256)
+      .toBe('d86691a3731c84f1113f7ddd79d66505cc635dab6816506998660932c32b3d00');
+    expect(manifest.exactBytes.promptByteDelta).toBe(2_425);
+    expect(manifest.exactBytes.baselineToolsSha256)
+      .toBe('a10e33b12c579d3b8020afec79a01e60a53995371a430348d367eb36c21eb188');
+    expect(manifest.exactBytes.candidateToolsSha256)
+      .toBe('2065c0b2321bd1b6c2ce4f1f4e3fc983c00b2c8a7eb7f187a10c64f2bb6e2adc');
+    expect(manifest.exactBytes.baselineExplicitWorkflowToolsSha256)
+      .toBe('b5ba23fdfd994bcd9c6ddbf2162c6f6668d342fbb31d8de9573cc5d52770cc36');
+    expect(manifest.exactBytes.candidateExplicitWorkflowToolsSha256)
+      .toBe('f615fd9c456ebb6689226225ce454c6bf0acef7f35db8bcddbc24587af43e53a');
+    expect(manifest.exactBytes.verifierSystemPromptSha256)
+      .toBe('c17200f7880e15f04251acaa1f331c621a5759685b054f76ef9417c4bf244103');
+    expect(manifest.exactBytes.verifierToolSha256)
+      .toBe('aebb9536fd70264b05863f935988098d5f8338e6d2e096278acd376f96757aec');
+    expect(manifest.exactBytes.layer3LlmInputsSha256)
+      .toBe('b93d220b5f317f6f4412904bc69c66a423c22860434da144793cab5b8a63ee59');
+    expect(manifest.exactBytes.scorerSha256)
+      .toBe('bafb9069e9162d2401fa7f1dc27680f28b13e5a9bfaca67c0019ad7f98699496');
   });
 
   it('runs the eight-call pilot once and resumes without another provider call', async () => {
@@ -60,6 +80,16 @@ describe('FEATURE_274 paid runner safety', () => {
       externalCallsThisRun: 8,
     });
     expect(runOneShotMock).toHaveBeenCalledTimes(8);
+    const systemPrompts = runOneShotMock.mock.calls.map((call) => (
+      call[1] as { readonly systemPrompt: string }
+    ).systemPrompt);
+    expect(new Set(systemPrompts)).toHaveLength(2);
+    expect(systemPrompts.filter((prompt) => (
+      prompt.includes('ADAPTIVE COLLABORATION PATTERNS')
+    ))).toHaveLength(4);
+    expect(systemPrompts.every((prompt) => (
+      !prompt.includes('PARALLEL-FIRST COLLABORATION')
+    ))).toBe(true);
 
     const experiment = JSON.parse(await readFile(
       path.join(rawRoot, 'experiment.json'),
