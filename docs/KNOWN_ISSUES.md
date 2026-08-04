@@ -14,10 +14,10 @@ _Last Updated: 2026-08-04_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 development | 2026-08-04 | 2026-08-04 |
-| 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 development | 2026-08-04 | 2026-08-04 |
-| 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 development | 2026-08-04 | 2026-08-04 |
-| 275 | High | Resolved | Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged | v0.7.79 development | v0.7.80 development | 2026-08-04 | 2026-08-04 |
+| 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 release | 2026-08-04 | 2026-08-04 |
+| 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 release | 2026-08-04 | 2026-08-04 |
+| 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 release | 2026-08-04 | 2026-08-04 |
+| 275 | High | Resolved | Auto permission analysis treated ordinary search scopes and tool metadata as unresolved and retried truncated classifiers unchanged | v0.7.79 development | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 274 | Medium | Resolved | Unchanged A2A revisions emit false hot-reload notices and trigger unnecessary TUI redraws | v0.7.69 integration hot reload | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 273 | Medium | Resolved | Runtime actor subprocess test inherited Node environment-proxy warnings | v0.7.79 Runtime actor owner liveness test | v0.7.79 development | 2026-08-03 | 2026-08-03 |
 | 272 | Medium | Resolved | Qwen review found false-success MCP close, private package imports, and daemon outcome accumulation | v0.7.79 development | v0.7.79 development | 2026-08-03 | 2026-08-03 |
@@ -187,7 +187,7 @@ _Last Updated: 2026-08-04_
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.79 Runtime Session persistence
-- **Fixed**: v0.7.80 development
+- **Fixed**: v0.7.80 release
 - **Created**: 2026-08-04
 - **Resolved**: 2026-08-04
 
@@ -259,7 +259,7 @@ silently reconstructed as a complete conversation.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.74 tool attention admission
-- **Fixed**: v0.7.80 development
+- **Fixed**: v0.7.80 release
 - **Created**: 2026-08-04
 - **Resolved**: 2026-08-04
 
@@ -316,7 +316,7 @@ and keep estimation linear and allocation-light.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.80 release preparation
-- **Fixed**: v0.7.80 development
+- **Fixed**: v0.7.80 release
 - **Created**: 2026-08-04
 - **Resolved**: 2026-08-04
 
@@ -393,7 +393,7 @@ provenance, `spawn_agent`/`followup_task`, and the interactive daemon bridge.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.79 development
-- **Fixed**: v0.7.80 development
+- **Fixed**: v0.7.80 release
 - **Created**: 2026-08-04
 - **Resolved**: 2026-08-04
 
@@ -11390,13 +11390,13 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-08-04: Issue 275 resolved (v0.7.80 development)
+### 2026-08-04: Issue 275 resolved (v0.7.80)
 - Kept ordinary search selectors, directory scopes, and Git reads on the
   deterministic read path while retaining credential and dynamic boundaries.
 - Used trusted tool side-effect metadata for network reads and contained Agent
   tools, and adapted a truncated classifier retry from 256 to 1024 tokens.
 
-### 2026-08-04: v0.7.80 hardening candidate
+### 2026-08-04: v0.7.80 hardening release
 - The CLI honors `worker.configuredA2A` in `~/.kodax/config.json` (Worker-hosted
   embedded Runtime with the configured A2A plane inside the Worker owner) and
   sanitizes Worker-hosted run options exactly like daemon mode

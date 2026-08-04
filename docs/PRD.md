@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-01
+> Last updated: 2026-08-04
 >
-> Current implementation baseline: `v0.7.79` development candidate
-> (`@kodax-ai/kodax@0.7.79` workspace package)
+> Current implementation baseline: `v0.7.80` release
+> (`@kodax-ai/kodax@0.7.80` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no

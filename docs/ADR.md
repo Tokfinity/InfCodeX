@@ -1,6 +1,15 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-01
+> Last updated: 2026-08-04
+>
+> **v0.7.80 release addendum:** the CLI can opt its embedded Runtime into the
+> configured A2A plane inside a Worker, managed AMA turns have a per-invocation
+> 500-iteration panic fuse with structured recovery failure, and Auto permission
+> analysis now shares the deterministic analyzer with the SDK. npm publication
+> remains a separate manual operator step.
+>
+> This header and addendum are authoritative for the v0.7.80 release; the long
+> architecture-state notice below is retained as historical context.
 >
 > **v0.7.79 Runtime observation and A2A authorization addendum:** Runtime
 > Session status, diagnostics, export, transcript paging, and recovery now use

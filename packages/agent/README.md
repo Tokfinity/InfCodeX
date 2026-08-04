@@ -96,7 +96,7 @@ context, no-input reconciliation is idempotent, and an intentional same-content
 new query remains a distinct lineage entry. Durable-island recovery preserves
 parent-before-child order and compaction clone provenance.
 
-The v0.7.80 candidate adds a structured `RunnerIterationLimitError` with a
+The v0.7.80 release adds a structured `RunnerIterationLimitError` with a
 recovery transcript: a Runner that exhausts its mechanical tool-loop fuse fails
 with `code: 'RUNNER_ITERATION_LIMIT'` and carries the last legal transcript,
 readable through `readRunnerRecoveryTranscript`, so callers can distinguish a

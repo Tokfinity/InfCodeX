@@ -6,17 +6,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+No changes yet.
+
+---
+
+## [0.7.80] - 2026-08-04
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Added
 
 - Runtime SDK capability negotiation now advertises `managedRunDurability` v1,
   allowing embedders to reject or safely replace daemons that do not guarantee
   canonical managed-Run boundaries.
+- The CLI honors `worker.configuredA2A` in `~/.kodax/config.json`: the embedded
+  Runtime is created Worker-hosted with the configured A2A plane installed
+  inside the Worker owner, so configured outbound A2A Agents appear as
+  `external:<name>` in `list_dispatchable_agents` and can be dispatched with
+  `spawn_agent`. The function-valued inline `externalAgents` plane is skipped
+  in that mode because it cannot cross the Worker boundary, and the mode
+  rejects configured MCP servers or Extensions. Config templates document the
+  `worker` block.
+- `@kodax-ai/agent` now exports the structured `RunnerIterationLimitError` and
+  `isRunnerIterationLimitError` guard. A Runner that exhausts its mechanical
+  tool-loop fuse fails with `code: 'RUNNER_ITERATION_LIMIT'` and carries the
+  last legal transcript, readable through `readRunnerRecoveryTranscript`, so
+  callers can distinguish a runaway tool loop from other failures.
 
 ### Changed
 
 - Public `countTokens` / `estimateTokens` keep their existing signatures but
   now use a provider-neutral O(n) multilingual and dense-data estimate instead
   of synchronous `cl100k_base` BPE tokenization.
+- Managed AMA turns now bound one uninterrupted `Runner.run` tool loop by a
+  500-iteration mechanical panic fuse instead of being unbounded. Each
+  idle-yield resume starts a fresh Runner invocation and resets the counter, so
+  the fuse is a runaway-loop breaker, never a cumulative task budget; the
+  managed-task idle-yield lifecycle itself remains unbounded. Iteration events
+  report the real fuse and a fuse exit keeps the recovery transcript and
+  checkpoint available for diagnosis or resume.
 
 ### Fixed
 
@@ -33,39 +62,6 @@ All notable changes to this project will be documented in this file.
   completed turn, and each queued prompt before publishing the corresponding
   lifecycle event. Required persistence failures fail closed, and queued turns
   are not started until their user input is canonical.
-
-## [0.7.80] - 2026-08-04
-
-### Added
-
-- The CLI honors `worker.configuredA2A` in `~/.kodax/config.json`: the embedded
-  Runtime is created Worker-hosted with the configured A2A plane installed
-  inside the Worker owner, so configured outbound A2A Agents appear as
-  `external:<name>` in `list_dispatchable_agents` and can be dispatched with
-  `spawn_agent` instead of being silently ignored. The function-valued inline
-  `externalAgents` plane is skipped in that mode because it cannot cross the
-  Worker boundary, and the mode rejects configured MCP servers or Extensions —
-  use the default inline Runtime to retain those capabilities while loading
-  configured A2A. Config templates document the `worker` block.
-- `@kodax-ai/agent` now exports the structured `RunnerIterationLimitError` and
-  `isRunnerIterationLimitError` guard. A Runner that exhausts its mechanical
-  tool-loop fuse fails with `code: 'RUNNER_ITERATION_LIMIT'` and carries the
-  last legal transcript, readable through `readRunnerRecoveryTranscript`, so
-  callers can distinguish a runaway tool loop from other failures.
-
-### Changed
-
-- Managed AMA turns now bound one uninterrupted `Runner.run` tool loop by a
-  500-iteration mechanical panic fuse instead of being unbounded. Each
-  idle-yield resume starts a fresh Runner invocation and resets the counter, so
-  the fuse is a runaway-loop breaker, never a cumulative task budget; the
-  managed-task idle-yield lifecycle itself remains unbounded. Iteration events
-  (`onIterationStart`/`onIterationEnd`) now report the real fuse instead of a
-  JSON-unsafe Infinity sentinel, and a fuse exit keeps the Runner-attached
-  recovery transcript and checkpoint available for diagnosis or resume instead
-  of deleting them.
-
-### Fixed
 
 - Auto permission analysis no longer treats ordinary grep/glob/directory and
   Git metadata/content reads as unresolved, and no longer invents an unknown

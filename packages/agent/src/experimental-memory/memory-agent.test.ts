@@ -524,13 +524,18 @@ describe('FEATURE_260 MemoryAgent', () => {
       },
     }).startSession({ identity, objective: 'Keep the request bounded' });
     session.observe(constraint({
-      summary: multiTokenCharacter.repeat(512),
-      evidence: ['a', 'b', 'd'].map((suffix) => ({
-        ref: `${multiTokenCharacter.repeat(255)}${suffix}`,
+      summary: multiTokenCharacter.repeat(1024),
+    }));
+    session.observe(constraint({
+      id: 'observation-2',
+      sequence: 2,
+      summary: multiTokenCharacter.repeat(1024),
+      evidence: [{
+        ref: 'user:turn-2',
         requestedGrade: 'authoritative' as const,
         source: 'user' as const,
         observedAt: '2026-07-12T00:00:00.000Z',
-      })),
+      }],
     }));
 
     expect(session.recall({
@@ -539,7 +544,7 @@ describe('FEATURE_260 MemoryAgent', () => {
       decisionContext: 'Apply the exact constraint.',
       decisionIntent: 'write',
       actionSignature: 'write:generated',
-      throughSequence: 1,
+      throughSequence: 2,
     })).toBeUndefined();
     expect(trace.at(-1)).toMatchObject({
       type: 'memory.decision',

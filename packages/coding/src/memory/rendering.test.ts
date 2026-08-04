@@ -24,9 +24,9 @@ describe('FEATURE_275 memory evidence rendering', () => {
     expect(rendered!.length).toBeLessThan(MEMORY_EVIDENCE_TOKEN_RESERVE);
   });
 
-  it('drops a prompt-safe multi-byte envelope that exceeds the physical token reserve', () => {
+  it('keeps the maximum prompt-safe multi-byte envelope within the physical token reserve', () => {
     const multiTokenCharacter = '\u0802';
-    const claim = multiTokenCharacter.repeat(512);
+    const claim = multiTokenCharacter.repeat(2_048);
     const refs = ['a', 'b', 'd'].map(
       (suffix) => `${multiTokenCharacter.repeat(255)}${suffix}`,
     );
@@ -37,7 +37,7 @@ describe('FEATURE_275 memory evidence rendering', () => {
       MEMORY_EVIDENCE_OVERRIDE,
     ].join('\n');
 
-    expect(countTokens(candidate)).toBeGreaterThan(MEMORY_EVIDENCE_TOKEN_RESERVE);
-    expect(renderMemoryEvidenceEnvelope(claim, refs)).toBeUndefined();
+    expect(countTokens(candidate)).toBeLessThanOrEqual(MEMORY_EVIDENCE_TOKEN_RESERVE);
+    expect(renderMemoryEvidenceEnvelope(claim, refs)).toContain(`Claim: ${claim}`);
   });
 });

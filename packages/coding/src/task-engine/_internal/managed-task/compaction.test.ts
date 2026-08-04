@@ -320,7 +320,7 @@ describe('managed history compaction', () => {
     const hook = await buildManagedTaskCompactionHook(options(), {
       resolvedContextCapacity: resolvedCapacity(
         100,
-        30_000,
+        60_000,
         2_000,
       ),
       contextTokenSnapshotRef: ref,

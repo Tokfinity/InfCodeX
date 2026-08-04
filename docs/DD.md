@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-04
 >
-> Current release baseline: `v0.7.80` development candidate
-> (`@kodax-ai/kodax@0.7.80`)
+> Current release baseline: `v0.7.80`
+> (`@kodax-ai/kodax@0.7.80`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,8 +20,8 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.80`. The development
-candidate (a debug/patch slot after the v0.7.79 release; FEATURE_278/279/282/
+The root workspace package is `@kodax-ai/kodax@0.7.80`. This debug/patch
+release after v0.7.79; FEATURE_278/279/282/
 283/285 were rescheduled to v0.7.85) adds CLI `worker.configuredA2A` support
 for a Worker-hosted embedded Runtime (rejecting configured MCP servers or
 Extensions that cannot cross the Worker boundary), daemon-style transport

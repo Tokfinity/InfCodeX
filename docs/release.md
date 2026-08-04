@@ -84,8 +84,9 @@ dist/binary/linux-x64/kodax --version
 ## v0.7.80 release preparation
 
 Release state: the root package, all four workspace packages, and every
-`package-lock.json` workspace entry are version `0.7.80`. This candidate is not
-tagged or published. Its prepared scope is:
+`package-lock.json` workspace entry are version `0.7.80`. This release is
+prepared for the `v0.7.80` tag and GitHub Release; npm publication remains a
+separate manual operator step. Its scope is:
 
 - the CLI honors `worker.configuredA2A` in `~/.kodax/config.json`: the embedded
   Runtime becomes Worker-hosted and loads the configured A2A plane inside the
@@ -112,7 +113,7 @@ FEATURE_278/279/282/283/285 were explicitly rescheduled to `v0.7.85` on
 [roadmap reschedule](../FEATURE_LIST.md#2026-08-04-v0780-roadmap-reschedule);
 v0.7.80 is a debug/patch slot and none of the items above claim a feature
 outcome. Issue 256 remains scheduled for `v0.7.84` and is not a v0.7.80 gate;
-Issue 275 was resolved in this candidate.
+Issue 275 was resolved in this release.
 
 Before tagging, all of the following must be true:
 
@@ -124,7 +125,8 @@ Before tagging, all of the following must be true:
    Issue 256 is not a v0.7.80 gate;
 3. both the root repository and `docs/features` submodule are clean, and the
    parent points to a submodule commit reachable from its remote;
-4. a clean-install-equivalent deterministic gate passes on the exact candidate:
+4. a clean-install-equivalent deterministic gate passes on the exact release
+   commit:
 
    ```bash
    npm ci
@@ -149,6 +151,9 @@ Before tagging, all of the following must be true:
    and installed into an empty consumer that imports the root plus all 12 SDK
    subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,
    provider capabilities, and built-in Skills must be present;
+
+   Local `--pack-only` audit evidence: SHA-256
+   `DF73C5256044043F16727688C9283D2596E2914A40789AEA1E3D8BC3EF58156A`.
 7. any performance evidence from `npm run bench:session-cold-open` follows
    `benchmark/EVAL_GUIDELINES.md` and is recorded as supporting evidence, not a
    substitute for correctness gates or a task-quality claim;

@@ -122,6 +122,9 @@ describe('FEATURE_218 manual registry', () => {
     expect(agents).toContain('quality_strategy');
     expect(agents).toContain('PatternTrace');
     expect(agents).toMatch(/sole\s+terminal-answer quality adjudicator/);
+    expect(agents).toContain('500 tool-loop');
+    expect(agents).toContain('RunnerIterationLimitError');
+    expect(agents).toContain('readRunnerRecoveryTranscript');
     expect(memory).toContain('MemorySession.intervene()');
     expect(memory).toContain('tool_failure');
     expect(memory).toContain('verification_failure');

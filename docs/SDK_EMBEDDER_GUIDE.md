@@ -3062,7 +3062,7 @@ fields requires a protocol version bump.
 ### v0.7.69 Runtime verification record
 
 This subsection is the historical verification record for the original shared
-Runtime delivery. Current 0.7.80 candidate gates and evidence live in
+Runtime delivery. Current 0.7.80 release gates and evidence live in
 [`docs/release.md`](release.md#v0780-release-preparation).
 
 The v0.7.69 release validation covers the runtime migration, the Worker

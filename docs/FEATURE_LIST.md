@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.79` (Git tag / GitHub Release / npm) |
-| Current package version | `@kodax-ai/kodax@0.7.80` development candidate (unpublished) |
+| Current released version | `v0.7.80` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.80` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `71` |
 | InProgress | `1` |
@@ -26,9 +26,9 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.79 remains the current Git/GitHub/npm release; the v0.7.80 candidate is the debug/patch slot. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.80 is the current Git/GitHub release and remains a feature-free debug/patch slot; npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 9 | `287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.79` -> `v0.7.81` -> `v0.7.85` -> `v0.7.86` -> `v0.7.90` -> `v0.7.95` |
+| Planned, near-term | 9 | `287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.81` -> `v0.7.85` -> `v0.7.86` -> `v0.7.90` -> `v0.7.95` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -527,12 +527,12 @@ The completed F284 Qwen Token Plan verification is
 
 ---
 
-## v0.7.80 Release Preparation Record
+## v0.7.80 Release Record
 
-`v0.7.80` is a debug/patch slot. `FEATURE_278/279/282/283/285` were explicitly
+`v0.7.80` is a debug/patch release. `FEATURE_278/279/282/283/285` were explicitly
 rescheduled to `v0.7.85` on 2026-08-04 (designs stay in
 [features/v0.7.80.md](features/v0.7.80.md)); `v0.7.81` is the empty slot for
-`FEATURE_287`'s target. The unpublished `@kodax-ai/kodax@0.7.80` candidate
+`FEATURE_287`'s target. The `@kodax-ai/kodax@0.7.80` release
 contains the non-Feature hardening recorded in `CHANGELOG.md`,
 `KNOWN_ISSUES.md` (Issue 275 resolved), and
 [docs/release.md](release.md#v0780-release-preparation):

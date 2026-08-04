@@ -76,7 +76,7 @@ export, the evidence-checked ordinary-conversation projection, Runtime
 status/diagnostic/coalescing capabilities, and the open Windows descendant-
 containment boundary tracked as Issue 256.
 
-The v0.7.80 candidate makes AMA parallel-first (independent lanes fan out
+The v0.7.80 release makes AMA parallel-first (independent lanes fan out
 through ordinary Actor operations while indivisible work stays solo), bounds one
 uninterrupted managed tool loop by a 500-iteration panic fuse that resets on
 every idle-yield resume (the managed-task lifecycle stays unbounded), and lets
