@@ -449,6 +449,30 @@ export function readRunnerRecoveryTranscript(
   return Array.isArray(messages) ? messages : undefined;
 }
 
+/** Structured failure emitted when a Runner exhausts its mechanical fuse. */
+export class RunnerIterationLimitError extends Error {
+  readonly code = 'RUNNER_ITERATION_LIMIT';
+  readonly limitReached = true;
+
+  constructor(message: string, messages: readonly AgentMessage[]) {
+    super(message);
+    this.name = 'RunnerIterationLimitError';
+    attachRunnerRecoveryTranscript(this, messages);
+  }
+}
+
+export function isRunnerIterationLimitError(
+  error: unknown,
+): error is RunnerIterationLimitError {
+  return error instanceof RunnerIterationLimitError
+    || Boolean(
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && error.code === 'RUNNER_ITERATION_LIMIT',
+    );
+}
+
 /**
  * Stream events emitted by `Runner.runStream`. The event surface is
  * intentionally small in v0.7.23; FEATURE_084 expands it to mirror the
@@ -1487,12 +1511,14 @@ async function genericRun<TData>(
   // by the hook + LLM disagreeing forever — surface that distinctly
   // so the caller doesn't chase a tool-call bug that doesn't exist.
   if (allIterationsWereReanimates && reanimateCount > 0) {
-    throw new Error(
+    throw new RunnerIterationLimitError(
       `Runner.run: agent "${currentAgent.name}" exceeded MAX_TOOL_LOOP_ITERATIONS (${iterationCap}) via stop-hook reanimate loop (reanimateCount=${reanimateCount}, budget=${reanimateBudget}). The stop hook + LLM never converged on a terminal output. Lower stopHookReanimateBudget or fix the hook.`,
+      transcript,
     );
   }
-  throw new Error(
+  throw new RunnerIterationLimitError(
     `Runner.run: agent "${currentAgent.name}" exceeded MAX_TOOL_LOOP_ITERATIONS (${iterationCap}) — the LLM kept requesting tool calls without terminating. This likely indicates a prompt or tool design bug.`,
+    transcript,
   );
 }
 

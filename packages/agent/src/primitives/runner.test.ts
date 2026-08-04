@@ -17,6 +17,7 @@ import { createAgent, type Agent, type AgentMessage, type Guardrail } from './ag
 import type { InputGuardrail, ToolGuardrail } from './guardrail.js';
 import { createInMemorySession } from './session.js';
 import {
+  isRunnerIterationLimitError,
   readRunnerRecoveryTranscript,
   Runner,
   _resetPresetDispatchers,
@@ -598,8 +599,20 @@ describe('Runner', () => {
         text: '',
         toolCalls: [{ id: `c-${Math.random()}`, name: 'echo', input: { text: 'x' } }],
       }));
-      await expect(Runner.run(agent, 'hi', { llm }))
-        .rejects.toThrow(/MAX_TOOL_LOOP_ITERATIONS/);
+      let caught: unknown;
+      try {
+        await Runner.run(agent, 'hi', { llm });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(isRunnerIterationLimitError(caught)).toBe(true);
+      expect(caught).toMatchObject({
+        code: 'RUNNER_ITERATION_LIMIT',
+        limitReached: true,
+      });
+      expect((caught as Error).message).toMatch(/MAX_TOOL_LOOP_ITERATIONS/);
+      expect(readRunnerRecoveryTranscript(caught)?.length).toBeGreaterThan(1);
       expect(llm).toHaveBeenCalledTimes(MAX_TOOL_LOOP_ITERATIONS);
     });
 

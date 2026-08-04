@@ -216,11 +216,13 @@ export type {
 } from './primitives/runner.js';
 export {
   Runner,
+  RunnerIterationLimitError,
   attachRunnerRecoveryTranscript,
   buildSystemPrompt,
   registerPresetDispatcher,
   _resetPresetDispatchers,
   extractAssistantTextFromMessage,
+  isRunnerIterationLimitError,
   readRunnerRecoveryTranscript,
 } from './primitives/runner.js';
 
