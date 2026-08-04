@@ -626,7 +626,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'spawn_agent',
-    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. Continue useful work after launch; use wait_agent only when mailbox evidence becomes critical.',
+    description: 'Create a named direct-child Agent and start its first turn. The Runtime mints the canonical path and atomically applies the session-wide concurrency and work-budget limits. For a broad multi-file review, start distinct read-only lanes as soon as scope is known. Continue useful work after launch; use wait_agent only when mailbox evidence becomes critical.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1655,7 +1655,7 @@ const BUILTIN_TOOL_DEFINITION_SOURCE: LocalToolDefinition[] = [
   },
   {
     name: 'changed_scope',
-    description: 'Analyze which files, areas, and categories are touched by the current git diff or a comparison range. This is the canonical entry point for any review / change-audit / commit-prep workflow — call it first to see the change surface before issuing per-file diffs. Returns files grouped by area/category (e.g., "tests", "docs", "core") with a one-line summary per file. The `scope` parameter selects which change set: `unstaged` (working tree vs HEAD), `staged` (index vs HEAD), `all` (working tree + index vs HEAD, default), `compare` (HEAD vs base_ref). Pair with `changed_diff_bundle` to fetch the actual diffs for the files identified.',
+    description: 'Analyze which files, areas, and categories are touched by the current git diff or a comparison range. This is the canonical entry point for current-worktree, compare-range, and other change-set review / commit-prep workflows — call it first to see that change surface before issuing per-file diffs. Do not use it to expand an explicitly scoped repository, module, or file audit into unrelated dirty-worktree changes. Returns files grouped by area/category (e.g., "tests", "docs", "core") with a one-line summary per file. The `scope` parameter selects which change set: `unstaged` (working tree vs HEAD), `staged` (index vs HEAD), `all` (working tree + index vs HEAD, default), `compare` (HEAD vs base_ref). When it reveals independent areas, fan out distinct read-only review lanes before the root fetches its own `changed_diff_bundle`.',
     input_schema: {
       type: 'object',
       properties: {

@@ -816,6 +816,8 @@ async function genericRun<TData>(
     iterationLimit += 1;
     return true;
   };
+  const hasContinuationCapacity = (): boolean =>
+    !Number.isFinite(iterationLimit) || iterationLimit < absoluteIterationLimit;
   const consumeTerminalContinuation = async (ctx: {
     readonly agent: Agent;
     readonly iteration: number;
@@ -837,7 +839,7 @@ async function genericRun<TData>(
       transcript.push(message);
       await commitMessage(opts, message);
     }
-    if (iterationLimit < absoluteIterationLimit) {
+    if (hasContinuationCapacity()) {
       continuation.reopenInputWindow();
     }
     return true;
@@ -1062,7 +1064,7 @@ async function genericRun<TData>(
           reanimateCount += 1;
           if (
             opts.terminalContinuation
-            && iterationLimit < absoluteIterationLimit
+            && hasContinuationCapacity()
           ) {
             opts.terminalContinuation.reopenInputWindow();
           }
@@ -1471,7 +1473,7 @@ async function genericRun<TData>(
           && iteration + 1 >= iterationLimit
           && reserveContinuationIteration(iteration)
         ) {
-          if (iterationLimit < absoluteIterationLimit) {
+          if (hasContinuationCapacity()) {
             opts.terminalContinuation.reopenInputWindow();
           }
         }

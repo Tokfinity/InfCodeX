@@ -161,6 +161,42 @@ describe('Actor-aware idle yield', () => {
     })).rejects.toThrow(/iteration ceiling \(1\)/);
   });
 
+  it('does not impose the default outer ceiling when the caller is unbounded', async () => {
+    const messageQueue = new MessageQueue();
+    const agent = createAgent({ name: 'worker', instructions: 'sys' });
+    let calls = 0;
+
+    await runWithIdleYield({
+      initialAgent: agent,
+      initialInput: [{ role: 'user', content: 'start' }],
+      runOnce: async () => {
+        calls += 1;
+        if (calls <= 65) {
+          messageQueue.enqueue({
+            priority: 'background',
+            mode: 'task-notification',
+            agentId: '/root',
+            content: `<agent-completed>child ${calls}</agent-completed>`,
+          });
+        }
+        return { messages: [{ role: 'assistant', content: `turn ${calls}` }] };
+      },
+      computeSnapshot: () => ({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: calls <= 65 ? 1 : 0,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: calls <= 65,
+      }),
+      messageQueue,
+      agentId: '/root',
+      resumeAgent: () => agent,
+      maxIterations: Number.POSITIVE_INFINITY,
+    });
+
+    expect(calls).toBe(66);
+  });
+
   it('reports user prompts drained during a wait as real transcript messages', async () => {
     const onUserPrompts = vi.fn();
     const messages = await composeIdleYieldUserMessage({

@@ -111,7 +111,6 @@ import {
 } from './sanitize.js';
 import type { ContextTokenSnapshotRef } from './compaction.js';
 import type { TodoStore } from '../../todo-store.js';
-import { buildManagedProgressGateReminder } from '../../managed-progress-gate.js';
 import {
   buildTodoReminderText,
   detectAgentTransition,
@@ -274,8 +273,8 @@ export function buildRunnerLlmAdapter(
    * loop it reports against: the caller resets `current` to 0 at the top
    * of every `runOnce` (each fresh `Runner.run`), so the value the
    * adapter reports stays aligned with the Runner's per-invocation
-   * iteration index and `iter <= maxIter` holds even across idle-yield
-   * resumes. Omitting it (tests / direct invocations) falls back to a
+   * iteration index even across idle-yield resumes. Omitting it (tests /
+   * direct invocations) falls back to a
    * local per-adapter counter — same shape, just not reset across runs.
    */
   iterationStateRef?: { current: number },
@@ -297,12 +296,15 @@ export function buildRunnerLlmAdapter(
   // FEATURE_072 parity: the REPL's token-count indicator reads
   // `onIterationEnd` to refresh after each worker LLM turn. The iteration
   // index is reported as the `iter` of `onIterationStart`/`onIterationEnd`;
-  // its denominator (`maxIter`) is the real per-invocation Runner cap
-  // (`MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`), not a stale constant — so
-  // the SDK callback reflects the ceiling the Runner actually enforces.
+  // `maxIter = 0` is the public, JSON-safe representation of an unbounded
+  // managed run. The Runner itself receives positive infinity; that internal
+  // sentinel must not leak into event DTOs because JSON.stringify maps it to
+  // null and breaks numeric event consumers.
   const localIterationState = { current: 0 };
   const iterationState = iterationStateRef ?? localIterationState;
-  const MAX_ITER_HINT = MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS;
+  const MAX_ITER_HINT = Number.isFinite(MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)
+    ? MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS
+    : 0;
   let pendingRuntimeReminders: string[] = [];
 
   // Cost tracker — one per session; `recordUsage` is called after every
@@ -316,18 +318,6 @@ export function buildRunnerLlmAdapter(
   const activeModel = options.modelOverride ?? options.model;
 
   return async (messages, agent) => {
-    if (iterationState.current >= MAX_ITER_HINT) {
-      const error = new Error(
-        `Managed task exceeded its LLM-turn ceiling (${MAX_ITER_HINT}). `
-        + 'The task did not converge before the containment boundary.',
-      );
-      let recoveryCut = 0;
-      while (recoveryCut < messages.length && messages[recoveryCut]?.role === 'system') {
-        recoveryCut += 1;
-      }
-      attachRunnerRecoveryTranscript(error, messages.slice(recoveryCut));
-      throw error;
-    }
     // Strip every leading contiguous system message and concatenate their
     // content. v0.7.22-style flows pushed a single agent-instructions system
     // prompt and nothing else, so taking only `messages[0]` was enough. The
@@ -357,13 +347,6 @@ export function buildRunnerLlmAdapter(
     const runtimeReminders = pendingRuntimeReminders;
     pendingRuntimeReminders = [];
     const injectedInputMessages: KodaXMessage[] = [];
-
-    const progressGateReminder = buildManagedProgressGateReminder(
-      iterationState.current + 1,
-    );
-    if (progressGateReminder) {
-      runtimeReminders.push(progressGateReminder);
-    }
 
     if (todoStore && todoDriftReminderState) {
       const reminder = consumeTodoDriftReminderText(todoDriftReminderState, todoStore);

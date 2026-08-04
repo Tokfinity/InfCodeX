@@ -23,7 +23,6 @@ import {
   createSessionLineage,
   getMessageQueue,
   listPendingEpisodeReviews,
-  readRunnerRecoveryTranscript,
   readLearningProposalStore,
   resolveActiveRootQueueRoute,
   resolveLearningProposalStore,
@@ -44,7 +43,6 @@ import {
   createTodoDriftReminderState,
   observeTodoDriftAfterToolResult,
 } from './todo-drift-reminder.js';
-import { MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS } from '../constants.js';
 import type { AgentTurnExecutor, RunnableTool } from '@kodax-ai/agent';
 import type {
   KodaXEphemeralSuffix,
@@ -541,10 +539,8 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
   // SDK bug: AMA `onIterationStart`/`onIterationEnd` reported a hardcoded
   // `maxIter = 20` (the engine's stand-alone `MAX_TOOL_LOOP_ITERATIONS`
   // default) that the Runner-driven path never actually enforces — the
-  // real task-wide cap is `MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS`.
-  // The denominator must reflect the real ceiling so the spinner never
-  // shows `1/20` / `5/20`.
-  it('reports the real task-wide cap as maxIter, not the stale 20', async () => {
+  // Managed turns are not bounded by the standalone Runner's default 20.
+  it('reports the managed iteration scope as unbounded, not the stale 20', async () => {
     const starts: Array<{ iter: number; maxIter: number }> = [];
     const ends: Array<{ iter: number; maxIter: number }> = [];
     const adapter = buildRunnerLlmAdapter({
@@ -555,12 +551,11 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       },
     } as unknown as KodaXOptions, async () => ({ textBlocks: [{ text: 'ok' }], toolBlocks: [] }));
     await adapter([{ role: 'user', content: 'q' }], { name: 'x', instructions: 'i' });
-    expect(starts).toEqual([{ iter: 1, maxIter: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS }]);
-    expect(ends[0]!.maxIter).toBe(MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS);
-    expect(starts[0]!.maxIter).not.toBe(20);
+    expect(starts).toEqual([{ iter: 1, maxIter: 0 }]);
+    expect(ends[0]!.maxIter).toBe(0);
   });
 
-  it('keeps the iteration counter task-wide across idle-resume runs', async () => {
+  it('resets the iteration counter for a fresh Runner invocation', async () => {
     const iters: number[] = [];
     const iterationStateRef = { current: 0 };
     const adapter = buildRunnerLlmAdapter(
@@ -579,40 +574,9 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     const agent = { name: 'x', instructions: 'i' };
     await adapter([{ role: 'user', content: 'q1' }], agent);
     await adapter([{ role: 'user', content: 'q2' }], agent);
+    iterationStateRef.current = 0;
     await adapter([{ role: 'user', content: 'q3' }], agent);
-    expect(iters).toEqual([1, 2, 3]);
-    expect(iters.every((i) => i <= MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)).toBe(true);
-  });
-
-  it('rejects a provider call beyond the task-wide managed ceiling', async () => {
-    const iterationStateRef = { current: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS };
-    const stream = vi.fn(async () => ({ textBlocks: [{ text: 'unexpected' }], toolBlocks: [] }));
-    const adapter = buildRunnerLlmAdapter(
-      makeOptions(),
-      stream,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      iterationStateRef,
-    );
-
-    const messages: KodaXMessage[] = [
-      { role: 'system', content: 'instructions' },
-      { role: 'user', content: 'one more' },
-      { role: 'assistant', content: 'prior work' },
-    ];
-    let caught: unknown;
-    try {
-      await adapter(messages, { name: 'x', instructions: 'i' });
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toMatch(/LLM-turn ceiling \(64\)/);
-    expect(readRunnerRecoveryTranscript(caught)).toEqual(messages.slice(1));
-    expect(stream).not.toHaveBeenCalled();
+    expect(iters).toEqual([1, 2, 1]);
   });
 
   it('stops at the first non-system message — later role:system stays in transcript for provider-layer merge', async () => {

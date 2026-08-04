@@ -31,7 +31,7 @@ import type {
 // and isRepoIntelligenceWorkingToolName removed — only used by deleted V1 cases.
 import {
   buildWorkerActorCapacityContract,
-  buildWorkerInstructions,
+  buildWorkerReviewFanoutContract,
   buildWorkerRoutingContext,
   buildWorkerStableInstructions,
   EXPLICIT_WORKFLOW_POLICY,
@@ -102,6 +102,9 @@ export function createRolePrompt(
     `Work intent: ${decision.workIntent}`,
     `Complexity hint: ${decision.complexity}`,
     `Risk: ${decision.riskLevel}`,
+    `Review scale: ${decision.reviewScale ?? 'not classified'}`,
+    `Review target: ${decision.reviewTarget ?? 'general'}`,
+    `Independent QA needed: ${decision.needsIndependentQA ? 'yes' : 'no'}`,
     `Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
 
@@ -291,7 +294,7 @@ export function createRolePrompt(
   switch (role) {
     case 'worker': {
       // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
-      // Wraps `buildWorkerInstructions` (decisional + plan-first +
+      // Combines the canonical Worker fragments (decisional + plan-first +
       // mutation + dispatch + handoff fragments) with the same
       // workspace / capability / overlay / decisionSummary / contract /
       // metadata / verification / tool-policy context layers the legacy
@@ -302,15 +305,17 @@ export function createRolePrompt(
       // both plans and executes, so it needs the planner-style map AND
       // the generator-style execution surface.
       const workerSkillSection = generatorSkillSection;
-      const isResumeAfterReviseFailure = rolePromptContext?.isResumeAfterReviseFailure === true;
       const actorCapacityContract = buildWorkerActorCapacityContract(
         rolePromptContext?.actorCapacity,
       );
-      const workerInstructions = buildWorkerInstructions(
+      const reviewFanoutContract = buildWorkerReviewFanoutContract(
         decision,
-        verification,
-        isResumeAfterReviseFailure,
+        rolePromptContext?.actorCapacity,
       );
+      const workerInstructions = [
+        buildWorkerRoutingContext(decision),
+        buildWorkerStableInstructions(),
+      ].join('\n\n');
       if (renderMode === 'stable') {
         return [
           workspaceSection,
@@ -331,6 +336,7 @@ export function createRolePrompt(
         return [
           workspaceRunContextSection,
           actorCapacityContract,
+          reviewFanoutContract,
           decisionSummary,
           verificationSection,
           toolPolicySection,
@@ -346,6 +352,7 @@ export function createRolePrompt(
       }
       return [
         actorCapacityContract,
+        reviewFanoutContract,
         // Worker is its own role announcement, but we still emit the
         // canonical decisionSummary + originalTask / agent / contract
         // sections so the LLM sees the same machine-readable context

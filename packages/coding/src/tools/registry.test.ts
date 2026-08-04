@@ -22,6 +22,22 @@ const TEST_CONTEXT: KodaXToolExecutionContext = {
 };
 
 describe('tool registry', () => {
+  it('makes the resident spawn surface explicit for broad read-only review fan-out', () => {
+    const description = getToolDefinition('spawn_agent')?.description ?? '';
+
+    expect(description).toContain('broad multi-file review');
+    expect(description).toContain('distinct read-only lanes');
+  });
+
+  it('keeps changed_scope limited to change-set review surfaces', () => {
+    const description = getToolDefinition('changed_scope')?.description ?? '';
+
+    expect(description).toContain('current-worktree');
+    expect(description).toContain('change-set review');
+    expect(description).toContain('Do not use it to expand an explicitly scoped');
+    expect(description).not.toContain('canonical entry point for any review');
+  });
+
   it('F274: keeps the dormant catalog renderer and optional telemetry schemas within budget', () => {
     const schemaDeltas = ['spawn_agent', 'followup_task'].map((name) => {
       const definition = getToolDefinition(name);

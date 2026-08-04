@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { KodaXTaskRoutingDecision } from '../types.js';
 import {
   buildWorkerInstructions,
+  buildWorkerReviewFanoutContract,
   EXPLICIT_WORKFLOW_POLICY,
   ULTRA_AGENT_POLICY,
   WORKER_AGENT_NAME,
@@ -82,17 +83,86 @@ describe('buildWorkerInstructions', () => {
     const output = buildWorkerInstructions(baseDecision, undefined, false);
 
     expect(output).toContain('PARALLEL-FIRST COLLABORATION:');
+    expect(output.indexOf('PARALLEL-FIRST COLLABORATION:')).toBeLessThan(
+      output.indexOf('PLAN-FIRST GUIDANCE:'),
+    );
     expect(output).toContain('two or more substantive independent lanes');
     expect(output).toContain('same assistant response');
+    expect(output).toContain('Broad review and audit work is presumptively multi-lane');
+    expect(output).toContain('fan out before `changed_diff_bundle`');
     expect(output).toContain('mutually exclusive write sets');
     expect(output).toContain('Keep the root on the critical path');
     expect(output).toContain('Do not duplicate delegated work');
     expect(output).toContain('Use solo execution only');
     expect(output).toContain('`quality_strategy` is optional telemetry/provenance');
     expect(output).not.toContain('ordinary work may stay solo');
+    expect(output).not.toContain('Review tasks: "scope via `changed_scope`');
+    expect(output).not.toContain('Use before any review/audit task to scope');
     expect(output).not.toContain('ADAPTIVE COLLABORATION PATTERNS');
     expect(output).not.toContain('loop-until-done');
     expect(output).not.toContain('A named-pattern `spawn_agent` without it is invalid');
+  });
+
+  it('turns a large review decision into an immediate capacity-aware fan-out contract', () => {
+    const output = buildWorkerInstructions({
+      ...baseDecision,
+      primaryTask: 'review',
+      workIntent: 'new',
+      complexity: 'complex',
+      reviewScale: 'large',
+      reviewTarget: 'current-worktree',
+      needsIndependentQA: true,
+    }, undefined, false, {
+      maxConcurrentThreads: 4,
+      activeNonRootTurns: 0,
+    });
+
+    expect(output).toContain('BROAD REVIEW FAN-OUT (authoritative task policy):');
+    expect(output).toContain('Review scale: large');
+    expect(output).toContain('Review target: current-worktree');
+    expect(output).toContain('Independent QA needed: yes');
+    expect(output).toContain('start at least 2 distinct read-only review Agents');
+    expect(output).toContain('call `changed_scope` once, then fan out');
+    expect(output).toContain('before the root reads every diff');
+    expect(output.indexOf('ACTOR CAPACITY')).toBeLessThan(
+      output.indexOf('BROAD REVIEW FAN-OUT'),
+    );
+    expect(output.indexOf('BROAD REVIEW FAN-OUT')).toBeLessThan(
+      output.indexOf('PLAN-FIRST GUIDANCE'),
+    );
+  });
+
+  it('does not broaden a bounded general review from unrelated dirty-worktree scale', () => {
+    const output = buildWorkerInstructions({
+      ...baseDecision,
+      primaryTask: 'review',
+      complexity: 'complex',
+      reviewScale: 'massive',
+      reviewTarget: 'general',
+    }, undefined, false, {
+      maxConcurrentThreads: 4,
+      activeNonRootTurns: 0,
+    });
+
+    expect(output).not.toContain('BROAD REVIEW FAN-OUT (authoritative task policy):');
+  });
+
+  it('fans out a systemic repository review without expanding into unrelated changes', () => {
+    const output = buildWorkerReviewFanoutContract({
+      ...baseDecision,
+      primaryTask: 'review',
+      complexity: 'systemic',
+      reviewTarget: 'general',
+    }, {
+      maxConcurrentThreads: 4,
+      activeNonRootTurns: 0,
+    });
+
+    expect(output).toContain('BROAD REVIEW FAN-OUT (authoritative task policy):');
+    expect(output).toContain('Review scale: systemic-scope');
+    expect(output).toContain('Preserve the exact user-requested repository/module scope');
+    expect(output).toContain('do not expand into unrelated dirty-worktree changes');
+    expect(output).not.toContain('call `changed_scope` once');
   });
 
   it('requires milestone updates when progress happens instead of batching them at termination', () => {

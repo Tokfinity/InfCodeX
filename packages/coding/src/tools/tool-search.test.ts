@@ -68,6 +68,14 @@ describe('FEATURE_189 B.2 — deferred-tools registry', () => {
       expect(hint.length, `${name} hint too long: ${hint.length}`).toBeLessThanOrEqual(250);
     }
   });
+
+  it('teaches the changed-scope to review-fan-out transition', () => {
+    expect(DEFERRED_TOOL_HINTS.changed_scope).toContain(
+      'fan out independent review lanes before reading every diff',
+    );
+    expect(DEFERRED_TOOL_HINTS.changed_scope).toContain('change-set reviews');
+    expect(DEFERRED_TOOL_HINTS.changed_scope).not.toContain('canonical review entry');
+  });
 });
 
 describe('FEATURE_189 B.2 — unlockDeferredToolForContext', () => {

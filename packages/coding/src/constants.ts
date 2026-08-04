@@ -33,25 +33,21 @@ export const KODAX_MAX_EMPTY_COMPLETION_RETRIES = 2;
 export const KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS = 500;
 
 /**
- * Hard safety ceiling for the managed-task (AMA) Runner tool loop.
+ * Managed-task (AMA) Runner tool-loop limit.
  *
  * The runner-driven AMA chain invokes `Runner.run` with this value as
  * `maxToolLoopIterations`. The engine default (`MAX_TOOL_LOOP_ITERATIONS`
  * = 20) targets stand-alone single-agent runs and is far too low for a
- * multi-step investigation + execution + verify chain. This is a hard
- * SAFETY ceiling, not the normal target. Managed runs receive semantic
- * convergence checkpoints at iterations 12/24/40; 64 is the final mechanical
- * containment boundary if a model ignores those checkpoints. The previous
- * value (500) allowed prompt regressions to consume hundreds of provider calls
- * before the runtime intervened.
+ * multi-step investigation + execution + verify chain. Managed runs are
+ * intentionally unbounded by round count, matching Codex's turn loop. They
+ * terminate when the model completes or an explicit cancellation/error ends
+ * the run; compaction and stall controls address capacity and repetition
+ * without treating legitimate task length as a failure.
  *
- * The LLM adapter (`buildRunnerLlmAdapter`) reports this same value as the
- * `maxIter` in `onIterationStart` / `onIterationEnd` so the SDK callback
- * reflects the real effective per-invocation ceiling instead of a stale
- * constant. Keeping both sites on this single source of truth guarantees
- * the reported denominator always matches the cap the Runner enforces.
+ * This sentinel stays inside the Runner contract. Public iteration events use
+ * `maxIter = 0` for an unbounded run so their payload remains JSON-safe.
  */
-export const MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS = 64;
+export const MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS = Number.POSITIVE_INFINITY;
 
 /** Prefix used to detect user-cancelled tool results in the agent loop. */
 export const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';

@@ -1866,9 +1866,8 @@ async function runManagedTaskViaRunnerInner(
   // callback retired — Scout role gone, no payload to surface. The
   // adapter still accepts the getter slot for signature compatibility;
   // it permanently returns `undefined` on V2.
-  // Per-task managed LLM-turn counter shared across every idle-yield resume.
-  // The adapter enforces the same 64-call ceiling across the entire managed
-  // task, including Runner continuation turns.
+  // Per-Runner invocation LLM-turn counter. Idle-yield resumes are fresh
+  // invocations and reset this event-display scope below.
   const iterationStateRef = { current: 0 };
   const captureManagedRunContext = (): {
     readonly full?: string;
@@ -2407,8 +2406,7 @@ async function runManagedTaskViaRunnerInner(
   // (the wrapper only requires `messages`, so the wider type is
   // structurally OK).
   const runOnce = (agent: Agent, input: readonly KodaXMessage[]) => {
-    // `iterationStateRef` deliberately stays cumulative across idle resumes;
-    // the adapter owns the task-wide provider-call containment boundary.
+    iterationStateRef.current = 0;
     return Runner.run(agent, input, {
       llm,
       abortSignal: options.abortSignal,
@@ -2478,15 +2476,13 @@ async function runManagedTaskViaRunnerInner(
       // only termination on an active goal returns a continuation
       // prompt and the Runner reanimates the loop.
       stopHook,
-      // Iteration cap for the entire chain. Core's default (20) is
-      // meant for stand-alone single-agent runs and is far too low
-      // for a multi-role investigation + execution + verify chain.
-      // This is a hard SAFETY ceiling. Semantic convergence gates ask
-      // the Worker to invalidate, pivot, and conclude at 12/24/40;
-      // iteration 64 is the final mechanical containment boundary if
-      // those model-facing controls fail.
-      // Shared with the LLM adapter as the reported `maxIter` denominator
-      // so the SDK iteration callbacks reflect the real cap, not a stale 20.
+      // Core's default (20) is meant for stand-alone single-agent runs
+      // and is far too low for a multi-step managed task.
+      // Managed turns intentionally have no round-count ceiling. They end
+      // through model completion or explicit cancellation/error; context
+      // compaction and semantic stall controls remain independent safeguards.
+      // The LLM adapter receives the same policy so iteration callbacks can
+      // represent the run as unbounded instead of reporting a stale cap.
       maxToolLoopIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
     }).catch(async (err: unknown) => {
       options.context?.interruptInput?.closeInputWindow();
@@ -2646,11 +2642,10 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
     },
     resolveResumeTurnId: () => liveTurnController.startTurn({ deliveryKind: 'queued' }),
-    // `maxIterations` omitted — wrapper defaults to 64, matching the
-    // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
-    // the (max+1)th iteration AFTER runOnce returns but BEFORE the
-    // snapshot, so a legitimate run that completes at the cap still
-    // returns its result.
+    // A managed task may legitimately resume after arbitrarily many child
+    // completions. Keep the generic wrapper's defensive default for other
+    // callers, but do not turn it into a task-wide ceiling here.
+    maxIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
       });
     } catch (error) {
       options.context?.interruptInput?.closeInputWindow();

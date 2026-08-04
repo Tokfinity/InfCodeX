@@ -74,6 +74,52 @@ export function buildWorkerActorCapacityContract(
     : ['ACTOR CAPACITY (authoritative runtime fact):', ...guidance].join('\n');
 }
 
+export function buildWorkerReviewFanoutContract(
+  decision: KodaXTaskRoutingDecision,
+  actorCapacity: WorkerActorCapacity | undefined,
+): string | undefined {
+  const reviewTarget = decision.reviewTarget ?? 'general';
+  const isDiffScopedReview = reviewTarget === 'current-worktree'
+    || reviewTarget === 'compare-range';
+  const isSystemicGeneralReview = reviewTarget === 'general'
+    && decision.complexity === 'systemic';
+  const hasBroadDiffScale = decision.reviewScale === 'large'
+    || decision.reviewScale === 'massive';
+  if (
+    decision.primaryTask !== 'review'
+    || (!isSystemicGeneralReview && !(isDiffScopedReview && hasBroadDiffScale))
+  ) {
+    return undefined;
+  }
+  const availableStartSlots = actorCapacity === undefined
+    ? undefined
+    : Math.max(
+        0,
+        actorCapacity.maxConcurrentThreads - 1 - actorCapacity.activeNonRootTurns,
+      );
+  const launchRule = availableStartSlots === undefined
+    ? '- Check current Actor capacity; when at least 2 child start slots are available, start at least 2 distinct read-only review Agents.'
+    : availableStartSlots >= 2
+      ? '- Current capacity permits a review wave: start at least 2 distinct read-only review Agents.'
+      : availableStartSlots === 1
+        ? '- Start 1 read-only review Agent and keep a separate review lane with the root.'
+        : '- No child start slot is currently available; keep the root on useful work and refill a review lane after capacity changes.';
+  const scopeRule = isDiffScopedReview
+    ? '- If the exact diff scope is unknown, call `changed_scope` once, then fan out before `changed_diff_bundle` or before the root reads every diff.'
+    : '- Preserve the exact user-requested repository/module scope. Fan out inside that scope; do not expand into unrelated dirty-worktree changes.';
+
+  return [
+    'BROAD REVIEW FAN-OUT (authoritative task policy):',
+    `- Review scale: ${decision.reviewScale ?? 'systemic-scope'}`,
+    `- Review target: ${decision.reviewTarget ?? 'general'}`,
+    `- Independent QA needed: ${decision.needsIndependentQA ? 'yes' : 'no'}`,
+    launchRule,
+    scopeRule,
+    '- Use distinct modules, files, or failure-mode axes as non-overlapping lanes. The root owns cross-cutting synthesis.',
+    '- Do not finish this broad review solo while capacity was available unless the discovered scope collapsed to one tightly coupled lane or the user prohibited delegation; state that reason explicitly.',
+  ].join('\n');
+}
+
 /**
  * Pure builder. Returns the system prompt the role-prompt entry point
  * splices in for the V2 Worker (the only active AMA role after
@@ -174,7 +220,7 @@ export function buildWorkerStableInstructions(): string {
     '- DISPATCH OBJECTIVE QUALITY: when writing a child\'s `objective`, prefer stating the goal abstractly. Avoid hand-feeding specific bash commands ("use `git diff X`", "run `git log`") — the child picks its own tools, and hand-feeding bash bypasses the child\'s pull-tool guidance. If you need to convey a specific git revision or scope (e.g., v0.7.39..HEAD), state it as data ("scope: v0.7.39..HEAD") rather than a command directive.',
     '- DISPATCH OBJECTIVE LANGUAGE: write the `objective` (and any `run_workflow` child prompts) in the same natural language as the user\'s request, so the child\'s report comes back in that language. Code, file paths, and quoted scope stay in their source form.',
     '- DISPATCH OBJECTIVE GUIDANCE: WHEN RELEVANT (review / change-audit / module-exploration objectives only — not trivial probes), briefly note the recommended pull-tool family in the objective. Examples:',
-    '    - Review tasks: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
+    '    - Change-set review: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
     '    - Module exploration: "use `module_context` to map the module surface before reading individual files"',
     '    - Symbol tracing: "start with `symbol_context` to find callers"',
     '    - Relationship mapping: "start with `relationship_scan` for upstream/downstream callers, callees, dependencies, and impact"',
@@ -186,6 +232,8 @@ export function buildWorkerStableInstructions(): string {
   const parallelFirstCollaboration = [
     'PARALLEL-FIRST COLLABORATION:',
     '- When a task has two or more substantive independent lanes and child start slots are available, fan them out with `spawn_agent` calls in the same assistant response. Do not serially perform every lane first.',
+    '- Broad review and audit work is presumptively multi-lane: split it by module, file group, or failure-mode axis unless the discovered scope is genuinely indivisible.',
+    '- For a change-set review with unknown scope, call `changed_scope` once, then fan out before `changed_diff_bundle` or reading every diff locally. For repository/module audits, preserve the requested scope and use the matching repo-intelligence tool instead.',
     '- Split lanes by distinct evidence scopes or mutually exclusive write sets. Read-only investigations and bounded sidecars are especially suitable for parallel execution.',
     '- Keep the root on the critical path and continue useful non-overlapping work while children run; the root remains responsible for synthesis and the final result.',
     '- Do not duplicate delegated work locally or across children. Give every child a concrete bounded objective and a distinct ownership boundary.',
@@ -234,7 +282,7 @@ export function buildWorkerStableInstructions(): string {
     '- `impact_estimate(symbol|module|path)` — blast-radius estimate combining symbol/module info with current changed-scope overlap. Use BEFORE planning a rename/refactor instead of guessing from grep.',
     '- `process_context(entry|module)` — static execution trace from an entry point. Use to understand "how does this flow execute" instead of chasing N file reads.',
     '- `repo_overview()` — workspace-wide structure snapshot. Use ONCE when onboarding to a new area.',
-    '- `changed_scope()` — list of changed files in current git state, with area/category labels. Use before any review/audit task to scope.',
+    '- `changed_scope()` — list of changed files in current git state, with area/category labels. Use for current-worktree, compare-range, and other change-set reviews; do not use it to expand an explicitly scoped repository/module/file audit.',
     '- `changed_diff_bundle(paths[])` — paged diff for multiple changed files in one call. Use for review tasks instead of multiple `bash git diff` calls.',
     '- `changed_diff(path)` — paged diff for one file. Use when one file dominates the review.',
     '- LSP precision tools (`lsp_workspace_symbols`, `lsp_implementation`, `lsp_incoming_calls`, `lsp_outgoing_calls`) - use when you have an exact file position or need compiler-backed symbol/call hierarchy edges.',
@@ -246,7 +294,7 @@ export function buildWorkerStableInstructions(): string {
     '- About to read 3+ files in the same module → call `module_context` first.',
     '- About to grep for a symbol\'s callers → call `symbol_context` first.',
     '- About to estimate impact of a change → call `impact_estimate` first.',
-    '- About to review a multi-file change → call `changed_scope` + `changed_diff_bundle` instead of `git diff` + N reads.',
+    '- About to review a multi-file change → call `changed_scope`, fan out independent review lanes, then use `changed_diff_bundle` for the root\'s own lane instead of reading every diff serially.',
     '',
     'WHEN TO STICK WITH read/grep:',
     '- Single-file targeted edit or lookup in one or a few known files.',
@@ -261,8 +309,9 @@ export function buildWorkerStableInstructions(): string {
     // "git ops" intent — the former goes through repo-intel capsules, the
     // latter stays in bash.
     'CHANGE-REVIEW POSITIVE REFRAME:',
-    '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call).',
-    '- Follow with `changed_diff_bundle(paths[])` to read the specific files surfaced by `changed_scope`.',
+    '- For a task framed as "compare changes", "check diff", "what changed since X", or a current-worktree/change-set review: your first scope-acquisition tool MUST be `changed_scope` (one call).',
+    '- If `changed_scope` surfaces independent areas, dispatch their review lanes before calling `changed_diff_bundle(paths[])` for the root\'s own cross-cutting lane.',
+    '- Keep an explicitly scoped file/module/repository audit inside the requested scope; do not call `changed_scope` merely because unrelated worktree changes exist.',
     '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel tools already structured for you.',
     '- `bash git …` is reserved for NON-review git ops: status, commit, tag, push, log (commit history), branch operations.',
   ].join('\n');
@@ -283,12 +332,12 @@ export function buildWorkerStableInstructions(): string {
 
   return [
     managedRunContextTrust,
+    parallelFirstCollaboration,
     planFirstContract,
     planListHygiene,
     scopeCommitment,
     mutationDiscipline,
     repoIntelligenceTools,
-    parallelFirstCollaboration,
     dispatchRules,
     childSteeringRules,
     EXECUTION_GUIDANCE,
@@ -307,6 +356,9 @@ export function buildWorkerRoutingContext(
     `- Work intent: ${decision.workIntent}`,
     `- Risk: ${decision.riskLevel}`,
     `- Complexity: ${decision.complexity}`,
+    `- Review scale: ${decision.reviewScale ?? 'not classified'}`,
+    `- Review target: ${decision.reviewTarget ?? 'general'}`,
+    `- Independent QA needed: ${decision.needsIndependentQA ? 'yes' : 'no'}`,
     `- Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
 }
@@ -327,10 +379,12 @@ export function buildWorkerInstructions(
   void isResumeAfterReviseFailure;
 
   const actorCapacityContract = buildWorkerActorCapacityContract(actorCapacity);
+  const reviewFanoutContract = buildWorkerReviewFanoutContract(decision, actorCapacity);
 
   return [
     buildWorkerRoutingContext(decision),
     actorCapacityContract,
+    reviewFanoutContract,
     buildWorkerStableInstructions(),
   ]
     .filter((part): part is string => Boolean(part?.length))

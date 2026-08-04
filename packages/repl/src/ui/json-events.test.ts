@@ -212,6 +212,30 @@ describe('createJsonEvents', () => {
     expect(stderr.readLines()).toEqual([]);
   });
 
+  it('preserves the JSON-safe zero sentinel for an unbounded managed run', () => {
+    const stdout = createWritable();
+    const events = createJsonEvents({ stdout: stdout.stream });
+
+    events.onIterationStart?.(65, 0);
+    events.onIterationEnd?.({
+      iter: 65,
+      maxIter: 0,
+      tokenCount: 42,
+      tokenSource: 'estimate',
+    });
+
+    expect(stdout.readLines()).toEqual([
+      { type: 'iteration.start', iter: 65, maxIter: 0 },
+      {
+        type: 'iteration.end',
+        iter: 65,
+        maxIter: 0,
+        tokenCount: 42,
+        tokenSource: 'estimate',
+      },
+    ]);
+  });
+
   it('serializes child activity metadata for live telemetry callbacks', () => {
     const stdout = createWritable();
     const stderr = createWritable();

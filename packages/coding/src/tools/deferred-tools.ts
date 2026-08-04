@@ -42,7 +42,7 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
 
   // Repo intelligence
   repo_overview:   'Workspace structure snapshot — call ONCE at session start; `tool_search("repo_overview")` for full schema.',
-  changed_scope:   'List files / areas changed in current git diff — canonical review entry. `tool_search("changed_scope")` for full schema.',
+  changed_scope:   'List files / areas changed in current git diff — for worktree, range, and other change-set reviews. After scope, fan out independent review lanes before reading every diff. `tool_search("changed_scope")` for full schema.',
   module_context:  'Compact module capsule (deps, entries, symbols, tests) — call `tool_search("module_context")` for full schema and selection rules vs symbol_context.',
   symbol_context:  'Definition + callers/callees for one symbol — call `tool_search("symbol_context")` for full schema and selection rules.',
   process_context: 'Static execution/process trace from an entry — call `tool_search("process_context")` for full schema.',

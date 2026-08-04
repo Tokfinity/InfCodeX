@@ -640,4 +640,70 @@ describe('F270 — explicit Workflow activation policy', () => {
     expect(rendered).toMatch(/^ACTOR CAPACITY \(authoritative runtime fact\):/);
     expect(rendered).toContain('emit at most 2 `spawn_agent` calls');
   });
+
+  it('places a broad-review fan-out decision beside current Actor capacity', () => {
+    const decision = {
+      ...buildFallbackRoutingDecision(userQuestion),
+      primaryTask: 'review' as const,
+      complexity: 'complex' as const,
+      reviewScale: 'massive' as const,
+      reviewTarget: 'compare-range' as const,
+      needsIndependentQA: true,
+    };
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      actorCapacity: { maxConcurrentThreads: 4, activeNonRootTurns: 0 },
+    };
+    const rendered = createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+      'context',
+    );
+
+    expect(rendered).toContain('Review scale: massive');
+    expect(rendered).toContain('Review target: compare-range');
+    expect(rendered).toContain('Independent QA needed: yes');
+    expect(rendered).toContain('BROAD REVIEW FAN-OUT (authoritative task policy):');
+    expect(rendered.indexOf('ACTOR CAPACITY')).toBeLessThan(
+      rendered.indexOf('BROAD REVIEW FAN-OUT'),
+    );
+    expect(rendered.indexOf('BROAD REVIEW FAN-OUT')).toBeLessThan(
+      rendered.indexOf('Primary task:'),
+    );
+  });
+
+  it('injects one capacity-aware broad-review contract in combined mode', () => {
+    const decision = {
+      ...buildFallbackRoutingDecision(userQuestion),
+      primaryTask: 'review' as const,
+      complexity: 'systemic' as const,
+      reviewScale: 'massive' as const,
+      reviewTarget: 'general' as const,
+    };
+    const rendered = createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      {
+        ...buildContext({ provider: 'p', model: 'm' }),
+        actorCapacity: { maxConcurrentThreads: 2, activeNonRootTurns: 0 },
+      },
+    );
+
+    expect(rendered.match(/BROAD REVIEW FAN-OUT \(authoritative task policy\):/g)).toHaveLength(1);
+    expect(rendered).toContain('Start 1 read-only review Agent');
+    expect(rendered).not.toContain('when at least 2 child start slots are available');
+  });
 });
