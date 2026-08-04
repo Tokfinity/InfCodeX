@@ -46,7 +46,7 @@ import {
   KODAX_MAX_MAXTOKENS_RETRIES,
   KODAX_MAX_EMPTY_COMPLETION_RETRIES,
   KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS,
-  MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
+  MANAGED_RUNNER_PANIC_ITERATIONS,
 } from '../../../constants.js';
 import {
   bucketProviderPayloadSize,
@@ -296,15 +296,12 @@ export function buildRunnerLlmAdapter(
   // FEATURE_072 parity: the REPL's token-count indicator reads
   // `onIterationEnd` to refresh after each worker LLM turn. The iteration
   // index is reported as the `iter` of `onIterationStart`/`onIterationEnd`;
-  // `maxIter = 0` is the public, JSON-safe representation of an unbounded
-  // managed run. The Runner itself receives positive infinity; that internal
-  // sentinel must not leak into event DTOs because JSON.stringify maps it to
-  // null and breaks numeric event consumers.
+  // `maxIter` reports the real per-Runner mechanical fuse. It is not a
+  // cumulative managed-task budget: the caller resets `iterationStateRef`
+  // before every fresh idle-yield `runOnce` invocation.
   const localIterationState = { current: 0 };
   const iterationState = iterationStateRef ?? localIterationState;
-  const MAX_ITER_HINT = Number.isFinite(MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS)
-    ? MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS
-    : 0;
+  const MAX_ITER_HINT = MANAGED_RUNNER_PANIC_ITERATIONS;
   let pendingRuntimeReminders: string[] = [];
 
   // Cost tracker — one per session; `recordUsage` is called after every

@@ -33,21 +33,17 @@ export const KODAX_MAX_EMPTY_COMPLETION_RETRIES = 2;
 export const KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS = 500;
 
 /**
- * Managed-task (AMA) Runner tool-loop limit.
+ * Mechanical fuse for one uninterrupted managed `Runner.run` tool loop.
  *
- * The runner-driven AMA chain invokes `Runner.run` with this value as
- * `maxToolLoopIterations`. The engine default (`MAX_TOOL_LOOP_ITERATIONS`
- * = 20) targets stand-alone single-agent runs and is far too low for a
- * multi-step investigation + execution + verify chain. Managed runs are
- * intentionally unbounded by round count, matching Codex's turn loop. They
- * terminate when the model completes or an explicit cancellation/error ends
- * the run; compaction and stall controls address capacity and repetition
- * without treating legitimate task length as a failure.
- *
- * This sentinel stays inside the Runner contract. Public iteration events use
- * `maxIter = 0` for an unbounded run so their payload remains JSON-safe.
+ * Each idle-yield resume starts a fresh Runner invocation and resets this
+ * counter. Reaching 500 therefore indicates a runaway prompt/tool loop; it is
+ * not a cumulative task budget and does not limit legitimate long-running
+ * work that progresses through child completions and context compaction.
  */
-export const MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS = Number.POSITIVE_INFINITY;
+export const MANAGED_RUNNER_PANIC_ITERATIONS = 500;
+
+/** Managed tasks may resume after arbitrarily many idle-yield wake events. */
+export const MANAGED_TASK_IDLE_YIELD_ITERATIONS = Number.POSITIVE_INFINITY;
 
 /** Prefix used to detect user-cancelled tool results in the agent loop. */
 export const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';

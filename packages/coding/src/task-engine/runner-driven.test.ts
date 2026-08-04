@@ -536,11 +536,10 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
     expect(capturedTranscript[0]!.content).toBe('follow-up');
   });
 
-  // SDK bug: AMA `onIterationStart`/`onIterationEnd` reported a hardcoded
-  // `maxIter = 20` (the engine's stand-alone `MAX_TOOL_LOOP_ITERATIONS`
-  // default) that the Runner-driven path never actually enforces — the
-  // Managed turns are not bounded by the standalone Runner's default 20.
-  it('reports the managed iteration scope as unbounded, not the stale 20', async () => {
+  // The event denominator follows the real per-Runner panic fuse. It is not
+  // a task-wide provider-call budget: fresh idle-yield resumes reset `iter`.
+  it('reports the managed per-Runner panic fuse, not the stale default 20', async () => {
+    const { MANAGED_RUNNER_PANIC_ITERATIONS } = await import('../constants.js');
     const starts: Array<{ iter: number; maxIter: number }> = [];
     const ends: Array<{ iter: number; maxIter: number }> = [];
     const adapter = buildRunnerLlmAdapter({
@@ -551,8 +550,14 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       },
     } as unknown as KodaXOptions, async () => ({ textBlocks: [{ text: 'ok' }], toolBlocks: [] }));
     await adapter([{ role: 'user', content: 'q' }], { name: 'x', instructions: 'i' });
-    expect(starts).toEqual([{ iter: 1, maxIter: 0 }]);
-    expect(ends[0]!.maxIter).toBe(0);
+    expect(MANAGED_RUNNER_PANIC_ITERATIONS).toBe(500);
+    expect(starts).toEqual([{ iter: 1, maxIter: 500 }]);
+    expect(ends[0]!.maxIter).toBe(500);
+  });
+
+  it('keeps the managed task idle-yield lifecycle unbounded', async () => {
+    const { MANAGED_TASK_IDLE_YIELD_ITERATIONS } = await import('../constants.js');
+    expect(MANAGED_TASK_IDLE_YIELD_ITERATIONS).toBe(Number.POSITIVE_INFINITY);
   });
 
   it('resets the iteration counter for a fresh Runner invocation', async () => {

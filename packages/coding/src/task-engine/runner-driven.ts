@@ -47,6 +47,7 @@ import {
   getMessageQueue,
   maybeDrainMidTurn,
   persistPendingEpisodeReview,
+  isRunnerIterationLimitError,
   readRunnerRecoveryTranscript,
   registerActiveRootQueueRoute,
   type MemoryContextIdentity,
@@ -263,7 +264,8 @@ import { listToolDefinitions } from '../tools/index.js';
 import { activateSessionHistoryTools } from '../tools/session-history.js';
 import {
   CANCELLED_TOOL_RESULT_MESSAGE,
-  MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
+  MANAGED_RUNNER_PANIC_ITERATIONS,
+  MANAGED_TASK_IDLE_YIELD_ITERATIONS,
 } from '../constants.js';
 // CAP-048: shared tool-execution-context builder. Centralizes
 // FEATURE_074 (set_permission_mode NOT forwarded) and FEATURE_067
@@ -2478,12 +2480,10 @@ async function runManagedTaskViaRunnerInner(
       stopHook,
       // Core's default (20) is meant for stand-alone single-agent runs
       // and is far too low for a multi-step managed task.
-      // Managed turns intentionally have no round-count ceiling. They end
-      // through model completion or explicit cancellation/error; context
-      // compaction and semantic stall controls remain independent safeguards.
-      // The LLM adapter receives the same policy so iteration callbacks can
-      // represent the run as unbounded instead of reporting a stale cap.
-      maxToolLoopIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
+      // A fresh idle-yield resume starts a new Runner invocation and resets
+      // this counter. The fuse catches one uninterrupted runaway tool loop;
+      // it never becomes a cumulative managed-task budget.
+      maxToolLoopIterations: MANAGED_RUNNER_PANIC_ITERATIONS,
     }).catch(async (err: unknown) => {
       options.context?.interruptInput?.closeInputWindow();
       // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
@@ -2492,7 +2492,13 @@ async function runManagedTaskViaRunnerInner(
       // checkpoint.json on disk, which the next query's
       // findValidCheckpoint scan picks up and triggers the "found
       // incomplete task" prompt.
-      await cleanupRunCheckpoint();
+      // A panic-fuse exit is explicitly resumable: Runner attached the last
+      // legal transcript and the checkpoint remains available for diagnosis
+      // or recovery. Other errors keep the established stale-checkpoint
+      // cleanup behavior.
+      if (!isRunnerIterationLimitError(err)) {
+        await cleanupRunCheckpoint();
+      }
       throw err;
     });
   };
@@ -2645,7 +2651,7 @@ async function runManagedTaskViaRunnerInner(
     // A managed task may legitimately resume after arbitrarily many child
     // completions. Keep the generic wrapper's defensive default for other
     // callers, but do not turn it into a task-wide ceiling here.
-    maxIterations: MANAGED_TASK_MAX_TOOL_LOOP_ITERATIONS,
+    maxIterations: MANAGED_TASK_IDLE_YIELD_ITERATIONS,
       });
     } catch (error) {
       options.context?.interruptInput?.closeInputWindow();

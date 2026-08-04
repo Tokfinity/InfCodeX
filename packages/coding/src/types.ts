@@ -491,12 +491,12 @@ export interface KodaXEvents {
   onTurnStarted?: (event: KodaXTurnStartedEvent) => void;
   onTurnCompleted?: (event: KodaXTurnCompletedEvent) => void;
   onTurnFailed?: (event: KodaXTurnFailedEvent) => void;
-  /** `maxIter` is zero when a managed run is unbounded by round count. */
+  /** `maxIter` is the active Runner invocation's fuse, not a task-wide budget. */
   onIterationStart?: (iter: number, maxIter: number, meta?: KodaXActivityEventMeta) => void;
   /** Called after each iteration with current token count for UI updates */
   onIterationEnd?: (info: {
     iter: number;
-    /** Zero means the active managed run has no round-count ceiling. */
+    /** Active Runner invocation fuse; zero is reserved for unbounded callers. */
     maxIter: number;
     tokenCount: number;
     tokenSource: 'api' | 'estimate';
