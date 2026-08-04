@@ -698,10 +698,16 @@ export function createInteractiveRuntimeRunner(
     const transportIsolated =
       runtime.identity.mode === 'daemon' ||
       runtime.identity.isolation === 'worker';
+    const workerHosted = runtime.identity.isolation === 'worker';
     const runtimeOptions = toRuntimeOwnedInteractiveOptions(input.options, {
+      // Only a Worker-hosted embedded Runtime strips host callbacks silently:
+      // it has no inline host that could honor them. Daemon mode keeps the
+      // loud host-binding rejection in toDaemonRuntimeRunOptions so a
+      // configured `events.beforeToolExecute` / `extensionRuntime` is never
+      // silently disabled.
       omitLegacyBeforeToolExecute:
-        input.legacyPermissionHook === true || transportIsolated,
-      omitExtensionRuntime: transportIsolated,
+        input.legacyPermissionHook === true || workerHosted,
+      omitExtensionRuntime: workerHosted,
     });
     const abortSignal = input.options.abortSignal;
     let abortRun: (() => void) | undefined;

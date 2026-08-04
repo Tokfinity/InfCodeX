@@ -567,6 +567,36 @@ describe('interactive daemon runtime bridge', () => {
     } as unknown as KodaXOptions)).toThrow(/events\.beforeToolExecute.*cannot cross/i);
   });
 
+  it('keeps the loud daemon host-binding rejection through the runner', async () => {
+    const runtime = {
+      identity: {
+        runtimeId: 'runtime-daemon-bindings',
+        mode: 'daemon',
+        profile: 'default',
+        startedAt: '2026-07-20T00:00:00.000Z',
+        version: 'test',
+      },
+      sessions: {
+        load: vi.fn(async () => ({ id: 'session-1' })),
+        updateSettings: vi.fn(async () => ({ permissionMode: 'plan' })),
+      },
+      runs: { start: vi.fn() },
+      events: { subscribe: vi.fn(() => ({ close: vi.fn() })) },
+      permissions: { respond: vi.fn(async () => true) },
+    } as unknown as KodaXRuntime;
+
+    const runner = createInteractiveRuntimeRunner(runtime);
+    await expect(runner({
+      options: {
+        provider: 'mock-provider',
+        events: { beforeToolExecute: async () => true },
+      } as unknown as KodaXOptions,
+      prompt: 'inspect',
+      sessionId: 'session-1',
+    })).rejects.toThrow(/events\.beforeToolExecute.*cannot cross/i);
+    expect(runtime.runs.start).not.toHaveBeenCalled();
+  });
+
   it('transport-sanitizes run options for a Worker-hosted embedded runtime', async () => {
     let capturedOptions: unknown;
     let eventListener: ((event: RuntimeEvent) => void) | undefined;
