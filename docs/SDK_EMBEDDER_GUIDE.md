@@ -4799,6 +4799,10 @@ concerns use the existing shared
 it. Hosts should subscribe to permission events to display such a request, but
 must not treat a missing request as an error for a safe tool call.
 
+Direct guardrail embedders should supply `projectRoot` or `executionCwd` for
+path-bearing calls. If both are absent, KodaX keeps those targets unresolved
+instead of treating the host process cwd as the user's workspace.
+
 On PowerShell, deterministic read admission includes independently validated
 sequential/pipeline stages such as `where.exe`, ordinary `rg` inspection,
 non-sensitive `$env:NAME` reads, and constrained `Where-Object` /
@@ -4813,29 +4817,29 @@ Authenticated child constraints are checked before deterministic admission:
 for example, `Do not execute shell commands` keeps even a read-only shell call
 under review, while `Do not modify files` does not make an ordinary read ask.
 
-The classifier deadline is 30 seconds by default and includes connection
-setup, provider Retry-After/backoff, inference, and stream completion. KodaX
-retries one timeout/provider/response-contract failure once; a second failure
-uses the Accept-edits safety boundary and never switches to Auto[rules].
-KodaX does not solve timeouts by extending that deadline indefinitely. Before the
+The classifier deadline is 45 seconds for the first default attempt and 90
+seconds for its one retry. A configured `timeoutMs` overrides both attempts
+with the same explicit deadline. Each deadline includes connection setup,
+provider Retry-After/backoff, inference, and stream completion. A second
+timeout/provider/response-contract failure uses the Accept-edits safety
+boundary and never switches to Auto[rules]. Before the
 provider call it removes assistant prose/thinking and image paths, limits each
 tool result to 2 KiB and the serialized permission-relevant transcript to
 8 KiB, then enforces 16 KiB action and 32 KiB total-prompt ceilings plus a
-256-token output cap. An oversized action or prompt escalates without a
-provider call; it is never truncated into an automatic allow. These limits are
-owned by `classify()` itself, so custom callers cannot accidentally bypass the
+256-token first-attempt output cap. If that answer is truncated before a
+decision, the retry uses 1024 tokens instead of repeating the same impossible
+budget. An oversized action or prompt escalates without a provider call; it is
+never truncated into an automatic allow. These limits are owned by
+`classify()` itself, so custom callers cannot accidentally bypass the
 session-history boundary.
 
-Deterministic read admission treats wildcard-bearing path operands as
-unresolved when they could expand to protected data. Explicit PowerShell
-`-LiteralPath` remains literal. Positive broad search selectors (including
-structured `grep`/`glob`, ripgrep/GNU-grep filters, and custom ripgrep types),
-PowerShell path arrays/enumeration pipelines, indirect file lists, and dynamic
-Git pathspecs or expanded `git grep --no-index`/`--untracked` scopes remain
-LLM-reviewed because a lexical root cannot prove which files will be read. The
-same applies to implicit/directory content searches, including a structured
-`grep` call whose omitted path defaults to the workspace and GNU-grep
-`-d recurse`/`--directories=recurse`, and to unscoped Git patch output. Git
+Deterministic read admission keeps ordinary project directories, structured
+`grep`/`glob`, ripgrep/GNU-grep filters, and other bounded search selectors on
+the read fast path. A wildcard remains unresolved only when it can reach a
+protected credential area or its path boundary cannot be established.
+Explicit PowerShell `-LiteralPath` remains literal. Indirect file lists,
+dynamic Git pathspecs, and expanded `git grep --no-index`/`--untracked` scopes
+remain LLM-reviewed when their targets cannot be bounded safely. Git
 line-log `-L` paths, patch-enabling short-option clusters, and merge-diff modes
 are resolved before deciding whether output is scoped. Exact-file reads and
 metadata-only output such as `git show --stat` remain deterministic. Exclusion

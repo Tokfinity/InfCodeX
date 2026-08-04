@@ -323,6 +323,20 @@ describe('sideQuery — happy path', () => {
     expect(result.stopReason).toBe('max_tokens');
   });
 
+  it('maps OpenAI-compatible length truncation to max_tokens', async () => {
+    const provider = new StubProvider(async () => okResult({
+      textBlocks: [text('truncated...')],
+      stopReason: 'length',
+    }));
+
+    const result = await sideQuery({
+      provider, model: 'm', system: 's',
+      messages: baseMessages, querySource: 'auto_mode',
+    });
+
+    expect(result.stopReason).toBe('max_tokens');
+  });
+
   it('treats stop_sequence and tool_use stopReasons as end_turn (text-only completion)', async () => {
     for (const raw of ['stop_sequence', 'end_turn', undefined]) {
       const provider = new StubProvider(async () => okResult({ stopReason: raw }));

@@ -37,6 +37,8 @@
     "glob": "^11.0.1",
     "iconv-lite": "^0.6.3",
     "jimp": "^1.6.0",
+    "minimatch": "^10.1.1",
+    "shell-quote": "^1.8.3",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vscode-languageserver-protocol": "^3.17.5"
@@ -47,6 +49,7 @@
     "@lezer/python": "^1.1.18",
     "@lezer/rust": "^1.0.2",
     "@types/node": "^22.13.4",
+    "@types/shell-quote": "^1.7.5",
     "vitest": "^3.2.4"
   },
   "peerDependencies": {

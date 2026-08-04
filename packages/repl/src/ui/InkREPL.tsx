@@ -10733,8 +10733,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     onEngineChange: (engine) => {
       inkAutoModeEngineChangeRef.current?.(engine);
     },
-    // FEATURE_158: inject path-aware bash signal collector. Path utilities
-    // live in @kodax/repl; this is the layer-boundary-preserving entrypoint.
+    // FEATURE_158: inject the REPL-specific path signal collector. Shared path
+    // utilities are coding-owned; this collector adds REPL protected paths.
     extraCollectors: [replBashPathSignalCollector],
   });
 

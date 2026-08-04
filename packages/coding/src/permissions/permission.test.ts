@@ -1,7 +1,7 @@
+import fs from 'node:fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   getDirectShellBypassBlockReason,
   getPlanModeBlockReason,
@@ -13,7 +13,23 @@ import {
   isPlanModeAllowedPath,
   isToolCallAllowed,
 } from './permission.js';
-import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
+import type {
+  BashPrefixExtractor,
+  BashPrefixResult,
+} from '../guardrails/auto-mode/bash-prefix-extractor.js';
+
+function createTempDirSync(prefix: string, parentDir?: string): string {
+  return fs.mkdtempSync(path.join(parentDir ?? os.tmpdir(), prefix));
+}
+
+function removeTempDirSync(dir: string | undefined): void {
+  if (!dir) return;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    // Windows may keep a test handle open briefly; the OS reclaims temp files.
+  }
+}
 
 const createdRoots: string[] = [];
 

@@ -3,7 +3,12 @@
  */
 
 import type { BashPrefixExtractor } from '@kodax-ai/coding';
-import { listBuiltinToolDefinitions } from '@kodax-ai/coding';
+import {
+  BASH_SAFE_READ_COMMANDS,
+  BASH_WRITE_COMMANDS,
+  FILE_MODIFICATION_TOOLS,
+  MODIFICATION_TOOLS,
+} from '@kodax-ai/coding';
 import { emitKodaXDiagnostic } from '@kodax-ai/agent';
 
 // ============== Permission Mode ==============
@@ -166,8 +171,6 @@ export interface ConfirmResult {
 // The sets below are retained for back-compat with existing callsites
 // in REPL / executor / InkREPL / src/acp_server.
 
-const _builtinSnapshot = listBuiltinToolDefinitions();
-
 /**
  * Tools that mutate the local filesystem AND accept a `path` input.
  * Eligible for plan-mode's path-aware escape (writes to
@@ -180,11 +183,7 @@ const _builtinSnapshot = listBuiltinToolDefinitions();
  * NOT in this set — their plan-mode block reason is computed elsewhere
  * via `isToolPlanModeAllowed()` instead of a path check.
  */
-export const FILE_MODIFICATION_TOOLS: Set<string> = new Set(
-  _builtinSnapshot
-    .filter((tool) => tool.sideEffect === 'mutates-fs' && tool.requiredParams.includes('path'))
-    .map((tool) => tool.name),
-);
+export { FILE_MODIFICATION_TOOLS } from '@kodax-ai/coding';
 
 /**
  * All tools with any observable side effect (`sideEffect !== 'readonly'`).
@@ -196,9 +195,7 @@ export const FILE_MODIFICATION_TOOLS: Set<string> = new Set(
  * `task_stop` / `todo_*` / `ask_user_question`). Retained as a derived
  * back-compat alias.
  */
-export const MODIFICATION_TOOLS: Set<string> = new Set(
-  _builtinSnapshot.filter((tool) => tool.sideEffect !== 'readonly').map((tool) => tool.name),
-);
+export { MODIFICATION_TOOLS } from '@kodax-ai/coding';
 
 /**
  * Bash commands that have write side-effects (blocked in plan mode).
@@ -207,50 +204,13 @@ export const MODIFICATION_TOOLS: Set<string> = new Set(
  * Additional write detection for redirection and PowerShell cmdlets lives in
  * `permission.ts`.
  */
-export const BASH_WRITE_COMMANDS = new Set([
-  // Package managers
-  "npm install", "npm i", "npm uninstall", "npm remove", "npm update", "npm ci",
-  "yarn add", "yarn remove", "yarn upgrade",
-  "pnpm add", "pnpm remove", "pnpm update",
-
-  // Git write operations
-  "git clean", "git reset", "git checkout", "git switch", "git merge", "git rebase",
-  "git cherry-pick", "git revert", "git commit", "git push", "git pull",
-
-  // File operations
-  "rm", "mv", "cp", "mkdir", "rmdir", "touch", "chmod", "chown",
-  "del", "erase", "rd", "copy", "move", "ren",
-
-  // Download/create
-  "curl", "wget", "dd", "tar",
-
-  // Process control
-  "kill", "pkill", "killall",
-]);
+export { BASH_WRITE_COMMANDS } from '@kodax-ai/coding';
 
 /**
  * Strict whitelist of bash commands considered safe for read-only exploration in plan mode.
  * Any bash command not matching these bases will require user confirmation.
  */
-export const BASH_SAFE_READ_COMMANDS = new Set([
-  // Basic shell inspection
-  "ls", "cat", "pwd", "echo", "whoami", "date", "which", "whereis", "tree",
-  "dir", "type", "get-childitem", "get-content", "select-string", "get-location",
-  "where",
-
-  // Search and find
-  "grep", "find", "head", "tail", "more", "wc",
-  "findstr",
-
-  // Git operations (read-only) — FEATURE_158 added tag / stash list /
-  // describe / config --get to close the Issue 131 reproduction.
-  "git status", "git diff", "git log", "git show", "git branch",
-  "git remote", "git ls-files", "git rev-parse", "git grep",
-  "git tag", "git stash list", "git describe", "git config --get",
-
-  // Language toolchains (version/info only)
-  "npm", "tsc", "go", "cargo", "rustc",
-]);
+export { BASH_SAFE_READ_COMMANDS } from '@kodax-ai/coding';
 
 // ============== Permission Context ==============
 

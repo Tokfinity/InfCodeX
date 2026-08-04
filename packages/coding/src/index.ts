@@ -1197,6 +1197,7 @@ export {
   classify,
   CLASSIFIER_MAX_OUTPUT_TOKENS,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  DEFAULT_CLASSIFIER_RETRY_TIMEOUT_MS,
 } from './guardrails/auto-mode/classify.js';
 export type {
   ClassifyOptions,
@@ -1205,6 +1206,11 @@ export type {
   ClassifierAttemptOutcome,
   ClassifierFailureKind,
 } from './guardrails/auto-mode/classify.js';
+export * from './guardrails/auto-mode/permission-analyzer.js';
+export * from './permissions/permission.js';
+export * from './permissions/bash-ast.js';
+export * from './permissions/powershell-mutation.js';
+export * from './permissions/shell-command-sets.js';
 export {
   loadAutoRules,
   parseAutoRules,

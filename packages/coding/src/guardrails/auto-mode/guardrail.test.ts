@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createAutoModeToolGuardrail } from './guardrail.js';
 import type { AutoModeAskUser, AutoModeGuardrailConfig } from './guardrail.js';
@@ -68,6 +69,7 @@ const baseConfig = (
     resolveProvider: () => provider,
     defaultProvider: 'stub',
     defaultModel: 'stub-default',
+    analyzeCall: () => undefined,
     ...overrides,
   };
 };
@@ -151,9 +153,13 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     expect(verdict.action).toBe('escalate');
   });
 
-  it.each(['read', 'grep', 'glob'])(
-    'routes deterministic %s through the classifier when its analyzer is unavailable',
-    async (toolName) => {
+  it.each([
+    ['read', { path: 'src/sdk-runtime.ts' }, 'Review src/sdk-runtime.ts.'],
+    ['grep', { path: 'src/sdk-runtime.ts', pattern: 'function isTerminalRunPhase' }, 'Review src/sdk-runtime.ts.'],
+    ['glob', { pattern: 'src/**/*.ts' }, 'Review the project files.'],
+  ] as const)(
+    'admits deterministic %s through the built-in analyzer',
+    async (toolName, input, userIntent) => {
     let classifierCalled = false;
     const provider = new StubProvider(async () => {
       classifierCalled = true;
@@ -161,16 +167,98 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
     });
     const g = createAutoModeToolGuardrail({
       ...baseConfig('<decision>allow</decision><hazard>none</hazard><reason>x</reason>'),
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
       resolveProvider: () => provider,
+      analyzeCall: undefined,
     });
     const verdict = await g.beforeTool!(
-      { id: 'c1', name: toolName, input: { path: '/tmp/x' } },
-      ctx(),
+      { id: 'c1', name: toolName, input },
+      toolName === 'glob'
+        ? ctx()
+        : ctx([{ role: 'user', content: userIntent }]),
     );
     expect(verdict.action).toBe('allow');
-    expect(classifierCalled).toBe(true);
+    expect(classifierCalled).toBe(false);
     },
   );
+
+  it('does not borrow process.cwd as a mutation boundary when SDK paths are omitted', async () => {
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      initialEngine: 'rules',
+      analyzeCall: undefined,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'sdk-no-boundary', name: 'write', input: { path: 'package.json', content: '{}' } },
+      ctx([{ role: 'user', content: 'Write package.json.' }]),
+    );
+
+    expect(verdict.action).toBe('escalate');
+  });
+
+  it.each([undefined, ''] as const)(
+    'uses executionCwd as the SDK workspace boundary when projectRoot is %s',
+    async (projectRoot) => {
+    const executionCwd = path.join(process.cwd(), 'packages', 'coding');
+    const siblingTarget = path.join(process.cwd(), 'packages', 'repl', 'src', 'index.ts');
+    const provider = new StubProvider(okResult(
+      '<decision>ask</decision><hazard>environment_mismatch</hazard>'
+        + '<reason>the write is outside the configured SDK workspace</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      projectRoot,
+      executionCwd,
+      resolveProvider: () => provider,
+      analyzeCall: undefined,
+    });
+
+    const verdict = await guardrail.beforeTool!(
+      { id: 'sdk-boundary', name: 'write', input: { path: siblingTarget, content: 'x' } },
+      ctx([{ role: 'user', content: `Write ${siblingTarget}.` }]),
+    );
+
+    expect(verdict.action).toBe('escalate');
+    expect(stream).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps delegated exact-file grep deterministic when root intent names another file', async () => {
+    const provider = new StubProvider(okResult(
+      '<decision>ask</decision><hazard>intent_conflict</hazard><reason>should not run</reason>',
+    ));
+    const stream = vi.spyOn(provider, 'stream');
+    const guardrail = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      projectRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      resolveProvider: () => provider,
+      analyzeCall: undefined,
+    });
+    const context = {
+      ...ctx([{ role: 'user', content: '# Child Agent Task\nInspect src/sdk-runtime.ts.' }]),
+      permissionIntent: {
+        rootUserIntent: 'Review guardrail.ts and fix the issue.',
+        delegatedObjective: 'Inspect src/sdk-runtime.ts.',
+        readOnly: true,
+      },
+    } satisfies GuardrailContext;
+
+    const verdict = await guardrail.beforeTool!(
+      {
+        id: 'sdk-grep',
+        name: 'grep',
+        input: { path: 'src/sdk-runtime.ts', pattern: 'function isTerminalRunPhase' },
+      },
+      context,
+    );
+
+    expect(verdict.action).toBe('allow');
+    expect(stream).not.toHaveBeenCalled();
+  });
 
   it('allows an exact deterministic git show review without calling the classifier', async () => {
     const provider = new StubProvider(okResult('<decision>ask</decision><hazard>intent_conflict</hazard><reason>should not happen</reason>'));
@@ -465,7 +553,7 @@ describe('AutoModeToolGuardrail — Tier 1', () => {
       'Review src/index.ts and keep your eyes off README.md.',
       'README.md must remain unseen while you review src/index.ts.',
       'Review scope implementation details in README.md.',
-      'Review README.md.bak.',
+      'Review only README.md.bak.',
       '\u8bf7\u5ba1\u67e5 src/ \u548c README.md\u3002',
       'Only package.json.',
       'package.json only.',
@@ -2926,9 +3014,9 @@ describe('AutoModeToolGuardrail — public state surface (FEATURE_092 phase 2b.8
     expect(g.getEngine()).toBe('llm');
     g.setEngine('rules');
     expect(g.getEngine()).toBe('rules');
-    // Without askUser, the rules path returns escalate.
+    // The coding-owned rules evaluator admits an ordinary read-only command.
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
-    expect(verdict.action).toBe('escalate');
+    expect(verdict.action).toBe('allow');
   });
 
   it('setEngine("llm") restores classifier consultation after manual rules toggle', async () => {
@@ -2949,7 +3037,7 @@ describe('AutoModeToolGuardrail — public state surface (FEATURE_092 phase 2b.8
 });
 
 describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_092 phase 2b.7b slice C)', () => {
-  it('initialEngine="rules" starts in rules mode without ever calling the classifier', async () => {
+  it('initialEngine="rules" starts with the built-in evaluator and never calls the classifier', async () => {
     let classifierCalled = false;
     const provider = new StubProvider(async () => {
       classifierCalled = true;
@@ -2966,9 +3054,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(verdict.action).toBe('allow');
     expect(classifierCalled).toBe(false);
-    expect(askUser).toHaveBeenCalledOnce();
-    expect(askUser.mock.calls[0]![1]).toMatch(/rules engine/i);
-    expect(askUser.mock.calls[0]![1]).not.toMatch(/downgraded/i);
+    expect(askUser).not.toHaveBeenCalled();
   });
 
   it('uses the Runtime Tier-2 evaluator before asking the user in rules mode', async () => {
@@ -3031,7 +3117,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
   it('timeoutMs override forces a fast classifier timeout when sideQuery hangs', async () => {
     // Provider that hangs but observes the abort signal. sideQuery's
     // internal timeout (classify forwards opts.timeoutMs to sideQuery)
-    // must fire — the guardrail's default is 30_000ms, so without the
+    // must fire — the guardrail's default is 45_000ms, so without the
     // override this would hang. Setting timeoutMs: 25 forces fast escalate.
     class HangingProvider extends KodaXBaseProvider {
       readonly name = 'hanging';
@@ -3075,7 +3161,7 @@ describe('AutoModeToolGuardrail — initialEngine + timeoutMs config (FEATURE_09
     if (verdict.action === 'escalate') {
       expect(verdict.reason).toMatch(/timeout/i);
     }
-    // The default 30_000ms must NOT have been used — assert we returned in
+    // The default 45_000ms must NOT have been used — assert we returned in
     // well under 1s. The 500ms cap leaves slack for slow CI without
     // accidentally validating the default.
     expect(elapsed).toBeLessThan(500);
@@ -3171,6 +3257,10 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
     const g = createAutoModeToolGuardrail({
       ...baseConfig('<decision>ask</decision><hazard>intent_conflict</hazard><reason>nope</reason>'),
       askUser,
+      evaluateRulesCall: () => ({
+        action: 'escalate',
+        reason: 'rules engine requires review',
+      }),
     });
     g.setEngine('rules');
     expect(g.getEngineForTest()).toBe('rules');
@@ -3237,6 +3327,10 @@ describe('AutoModeToolGuardrail — askUser escalation handling (FEATURE_092 pha
       ...baseConfig('<decision>ask</decision><hazard>intent_conflict</hazard><reason>nope</reason>'),
       askUser,
       initialEngine: 'rules',
+      evaluateRulesCall: () => ({
+        action: 'escalate',
+        reason: 'rules engine requires review',
+      }),
     });
     const verdict = await g.beforeTool!(callBash('ls'), ctx());
     expect(verdict.action).toBe('block');

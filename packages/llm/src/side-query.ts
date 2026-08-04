@@ -26,6 +26,7 @@ import type {
 } from './types.js';
 import { KodaXBaseProvider } from './providers/base.js';
 import { type CostTracker, recordRetry, recordUsage } from './cost-tracker.js';
+import { classifyStopReason } from './stop-reason.js';
 
 export type SideQueryStopReason =
   | 'end_turn'
@@ -388,6 +389,6 @@ function isPositiveInteger(value: number | undefined): value is number {
 // Any unknown future value is conservatively treated as a normal completion;
 // the caller's parsing of `text` is the authoritative success signal.
 function mapStopReason(raw: string | undefined): SideQueryStopReason {
-  if (raw === 'max_tokens') return 'max_tokens';
+  if (classifyStopReason(raw) === 'truncated') return 'max_tokens';
   return 'end_turn';
 }

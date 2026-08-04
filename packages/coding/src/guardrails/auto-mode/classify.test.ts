@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classify,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
+  DEFAULT_CLASSIFIER_RETRY_TIMEOUT_MS,
   MAX_CLASSIFIER_ACTION_BYTES,
 } from './classify.js';
 import type { AutoRules } from './rules.js';
@@ -67,8 +68,9 @@ const okStream = (out: string): KodaXStreamResult => ({
 });
 
 describe('classify', () => {
-  it('uses a 30 second default classifier timeout', () => {
-    expect(DEFAULT_CLASSIFIER_TIMEOUT_MS).toBe(30_000);
+  it('uses 45 and 90 second default classifier timeouts', () => {
+    expect(DEFAULT_CLASSIFIER_TIMEOUT_MS).toBe(45_000);
+    expect(DEFAULT_CLASSIFIER_RETRY_TIMEOUT_MS).toBe(90_000);
   });
 
   it('returns confirm when classifier outputs <block>yes</block>', async () => {
@@ -368,6 +370,8 @@ describe('classify', () => {
         terminalPhase: 'pre_output',
       });
       expect(result.attempts).toHaveLength(2);
+      expect(result.attempts.map((attempt) => attempt.diagnostics?.timeoutMs))
+        .toEqual([20, 20]);
     }
   });
 
@@ -590,6 +594,8 @@ describe('classify', () => {
     expect(result.kind).toBe('allow');
     expect(providerCalls).toBe(2);
     expect(outputBudgets).toEqual([256, 1024]);
+    expect(result.attempts.map((attempt) => attempt.diagnostics?.timeoutMs))
+      .toEqual([45_000, 90_000]);
     expect(result.attempts.map((attempt) => attempt.outcome))
       .toEqual(['contract_error', 'allow']);
   });

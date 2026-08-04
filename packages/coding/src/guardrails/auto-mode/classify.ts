@@ -119,7 +119,9 @@ export type ClassifyDecision =
  * and any Retry-After/backoff handled by the provider adapter. Keep it bounded
  * so infrastructure failure reaches the configured Accept-edits fallback.
  */
-export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 30_000;
+export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 45_000;
+/** A retry gets a longer deadline because its expanded response budget can take longer to emit. */
+export const DEFAULT_CLASSIFIER_RETRY_TIMEOUT_MS = 90_000;
 /** The classifier returns three short XML tags; a coding-turn-sized budget is wasteful. */
 export const CLASSIFIER_MAX_OUTPUT_TOKENS = 256;
 /** A truncated first response gets one larger, still-bounded contract window. */
@@ -166,10 +168,13 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
 
   const attempts: ClassifierAttemptDiagnostics[] = [];
   let costTracker = opts.costTracker;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
   let maxOutputTokens = CLASSIFIER_MAX_OUTPUT_TOKENS;
 
   for (let attempt = 1; attempt <= CLASSIFIER_MAX_ATTEMPTS; attempt += 1) {
+    const timeoutMs = opts.timeoutMs
+      ?? (attempt === 1
+        ? DEFAULT_CLASSIFIER_TIMEOUT_MS
+        : DEFAULT_CLASSIFIER_RETRY_TIMEOUT_MS);
     const result = await sideQuery({
       provider: opts.provider,
       model: opts.model,

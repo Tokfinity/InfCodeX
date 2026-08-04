@@ -7,7 +7,7 @@ import type { GuardrailContext, RunnerToolCall } from '@kodax-ai/agent';
 import {
   createAutoModeToolGuardrail,
   type AutoModeRulesContext,
-} from '@kodax-ai/coding';
+} from './guardrail.js';
 import {
   KodaXBaseProvider,
   type KodaXMessage,
@@ -17,13 +17,25 @@ import {
   type KodaXStreamResult,
   type KodaXToolDefinition,
 } from '@kodax-ai/llm';
-import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   analyzeAutoModeCall,
   assessAutoModeCall,
   evaluateAutoRulesCall,
-} from './auto-rules.js';
-import { isBashReadCommand } from './permission.js';
+} from './permission-analyzer.js';
+import { isBashReadCommand } from '../../permissions/permission.js';
+
+function createTempDirSync(prefix: string, parentDir?: string): string {
+  return fs.mkdtempSync(path.join(parentDir ?? os.tmpdir(), prefix));
+}
+
+function removeTempDirSync(dir: string | undefined): void {
+  if (!dir) return;
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    // Windows may keep a test handle open briefly; the OS reclaims temp files.
+  }
+}
 
 const createdRoots: string[] = [];
 const GIT_AVAILABLE = spawnSync('git', ['--version'], { windowsHide: true }).status === 0;

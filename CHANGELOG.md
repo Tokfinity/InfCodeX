@@ -20,6 +20,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Direct `@kodax-ai/coding` SDK guardrails now use the same deterministic
+  filesystem, shell, and Git permission analyzer as the REPL, so ordinary
+  project `read`/`grep`/`glob` and read-only shell calls no longer depend on
+  host-specific analyzer wiring. Classifier truncation recognizes
+  OpenAI-compatible `length`, with default attempt deadlines of 45s and 90s;
+  an explicit `timeoutMs` remains authoritative for both attempts.
 - Oversized tool output is byte/line-spilled before token estimation, avoiding
   main-loop stalls on long Base64/ASCII output while preserving a bounded
   preview and complete artifact.

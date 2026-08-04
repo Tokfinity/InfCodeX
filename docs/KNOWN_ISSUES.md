@@ -415,6 +415,9 @@ failure could become a user confirmation. Session
   though non-sensitive reads are allowed by policy.
 - The guardrail did not consume registry `sideEffect` metadata when a tool had
   no dedicated analyzer.
+- The canonical analyzer and shell/path helpers lived in `@kodax-ai/repl`, so
+  direct `@kodax-ai/coding` SDK guardrails silently lacked the deterministic
+  fast path unless each embedder supplied the same wiring.
 - Classifier retries did not adapt their output budget after truncation.
 
 #### Resolution
@@ -432,6 +435,15 @@ failure could become a user confirmation. Session
   the classifier when a host has not supplied one.
 - Keep the first classifier attempt at 256 output tokens, but raise the single
   retry to 1024 only when the first response ended with `max_tokens`.
+- Move the canonical analyzer, shell AST, PowerShell mutation binding, and
+  permission helpers into `@kodax-ai/coding`; the guardrail now installs that
+  analyzer and Rules evaluator by default, while REPL modules remain thin
+  compatibility exports. An omitted or blank project root uses the SDK's
+  explicit `executionCwd`; without either boundary, path-bearing calls stay
+  unresolved instead of borrowing the embedder process cwd.
+- Recognize OpenAI-compatible `length` as truncation. Use 45 seconds for the
+  first default classifier attempt and 90 seconds for its retry, while keeping
+  an explicitly configured timeout unchanged across both attempts.
 
 #### Tests Added
 
@@ -442,6 +454,9 @@ failure could become a user confirmation. Session
   directory names, custom read-only tool paths, and Windows device namespaces
   remain reviewed.
 - A truncated classifier response retries with output budgets `[256, 1024]`.
+- Direct SDK guardrails admit structured `read`, exact-file `grep`, project
+  `glob`, and ordinary read-only Rules calls without REPL injection; timeout
+  diagnostics show `[45000, 90000]`, and `length` triggers the larger retry.
 
 #### Resolution Date
 
@@ -11369,7 +11384,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 156 (27 Open, 129 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 158 (27 Open, 131 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

@@ -33,9 +33,8 @@
  *   independent.
  *
  * Provider capability checks and the explicit `supportsAutoModeClassifier`
- * flag are deferred to follow-up phases. Tier 2 is supplied by the Runtime
- * host because canonical filesystem and shell parsing live in @kodax/repl;
- * the guardrail remains the single decision point.
+ * flag are deferred to follow-up phases. Coding owns the default analyzer and
+ * Tier 2 evaluator so direct SDK and REPL consumers share one decision path.
  */
 
 import { createHash } from 'node:crypto';
@@ -55,7 +54,6 @@ import {
 import { bashSignalCollector } from './bash-signals.js';
 import {
   classify,
-  DEFAULT_CLASSIFIER_TIMEOUT_MS,
   type ClassifierAttemptDiagnostics,
   type ClassifierFailureKind,
   type ClassifyDecision,
@@ -73,6 +71,10 @@ import {
   type DenialTracker,
 } from './denial-tracker.js';
 import { fileSignalCollector } from './file-signals.js';
+import {
+  analyzeAutoModeCall,
+  evaluateAutoRulesCall,
+} from './permission-analyzer.js';
 import {
   resolveClassifierModel,
   type ResolveClassifierModelOptions,
@@ -205,7 +207,7 @@ export interface AutoModePermissionReview {
 export type AutoModeCallAnalyzer = (
   call: RunnerToolCall,
   context: AutoModeRulesContext,
-) => AutoModePermissionReview | Promise<AutoModePermissionReview>;
+) => AutoModePermissionReview | undefined | Promise<AutoModePermissionReview | undefined>;
 
 export type AutoModeRulesDecision =
   | { readonly action: 'allow' }
@@ -261,17 +263,13 @@ export interface AutoModeGuardrailConfig {
   ) => void;
 
   /**
-   * Runtime-owned deterministic Tier-2 evaluator. It is injected rather than
-   * implemented in @kodax/coding because canonical path and shell-AST helpers
-   * live in @kodax/repl. Omitting it preserves fail-closed SDK compatibility:
-   * every non-Tier-1 rules call escalates.
+   * Override for the coding-owned deterministic Tier-2 evaluator.
    */
   readonly evaluateRulesCall?: AutoModeRulesEvaluator;
 
   /**
-   * Runtime-owned compact facts used by deterministic read admission and the
-   * LLM permission reviewer. When absent or faulty, direct read tools use a
-   * bounded metadata-only projection and remain LLM-reviewed.
+   * Override for the coding-owned compact permission analyzer. An override may
+   * return undefined to decline a call and leave it on the classifier path.
    */
   readonly analyzeCall?: AutoModeCallAnalyzer;
 
@@ -352,8 +350,8 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * FEATURE_092 phase 2b.7b slice C: classifier sideQuery timeout in ms.
-   * Defaults to 30_000. Resolved by the REPL from `~/.kodax/config.json`
-   * `autoMode.timeoutMs`.
+   * Defaults to 45_000 for the first attempt and 90_000 for the retry.
+   * A configured value applies to both attempts.
    */
   readonly timeoutMs?: number;
 
@@ -365,11 +363,9 @@ export interface AutoModeGuardrailConfig {
    * doesn't use it (command-string-level) but threads it for uniform
    * collector contract.
    *
-   * Required by FEATURE_158: if omitted, the default coding-side
-   * collectors produce no `outside_project` signal (degrades gracefully),
-   * but **REPL-injected `extraCollectors` will likely require it**.
-   * SDK consumers without a project root should set `projectRoot: ''`
-   * and supply no `extraCollectors`.
+   * When omitted or blank, the guardrail uses `executionCwd`. If neither is
+   * available, path-bearing calls remain unresolved instead of borrowing the
+   * embedder process's ambient cwd as an authorization boundary.
    */
   readonly projectRoot?: string;
 
@@ -395,11 +391,8 @@ export interface AutoModeGuardrailConfig {
 
   /**
    * Additional signal collectors to merge with `signalCollectors`.
-   * Primary use: REPL injects a path-aware bash collector built on its
-   * own `extractPathsFromCommand` / `isAlwaysConfirmPath` utilities
-   * (those live in `@kodax/repl` for historical reasons; lifting them
-   * is out-of-scope for FEATURE_158 — see design doc layer-boundary
-   * decision).
+   * Primary use: REPL injects its path-aware bash signal collector. The
+   * underlying shell and path permission utilities are coding-owned.
    *
    * Order: defaults run first, then extras (preserves per-collector
    * signal order).
@@ -815,9 +808,7 @@ function intentMayConstrainReadTarget(
   const lowerIntent = currentIntent.toLowerCase();
   const targetReferences = [...normalizedReadTargetReferences(operation)];
   if (!targetReferences.some((reference) => referenceTokenPattern(reference).test(lowerIntent))) {
-    const namedFiles = [...currentIntent.matchAll(CONCRETE_FILE_REFERENCE)];
-    return namedFiles.length > 0
-      && /\b(?:read|review|inspect|examine|open|view|check|audit|analy[sz]e)\b/i.test(currentIntent);
+    return false;
   }
   const intentWithTarget = replaceIntentTargetReferences(operation, currentIntent);
   if (DIRECT_TARGET_EXCLUSION.test(intentWithTarget)) return true;
@@ -1345,8 +1336,8 @@ export function createAutoModeToolGuardrail(
     denials: createDenialTracker(),
     breaker: createCircuitBreaker(),
   };
-  const timeoutMs = config.timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS;
-
+  const analyzeCall = config.analyzeCall ?? analyzeAutoModeCall;
+  const evaluateRulesCall = config.evaluateRulesCall ?? evaluateAutoRulesCall;
   // For tests only: lets us swap the provider mid-flight.
   let providerOverride: KodaXBaseProvider | undefined;
 
@@ -1366,8 +1357,10 @@ export function createAutoModeToolGuardrail(
     ...(config.signalCollectors ?? [bashSignalCollector, fileSignalCollector]),
     ...(config.extraCollectors ?? []),
   ];
-  const projectRoot = config.projectRoot ?? '';
-  const executionCwd = config.executionCwd ?? projectRoot;
+  const projectRoot = config.projectRoot?.trim()
+    ? config.projectRoot
+    : config.executionCwd?.trim() ? config.executionCwd : '';
+  const executionCwd = config.executionCwd?.trim() ? config.executionCwd : projectRoot;
 
   const beforeTool = async (
     call: RunnerToolCall,
@@ -1508,23 +1501,9 @@ export function createAutoModeToolGuardrail(
       action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
     }
     const requiresReadAnalysis = DETERMINISTIC_READ_TOOLS.has(guardedCall.name);
-    if (requiresReadAnalysis && !config.analyzeCall) {
-      if (action === '') {
-        action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
-      }
-      permissionReview = fallbackPermissionReview(
-        guardedCall.name,
-        action,
-        'analyzer_unavailable',
-      );
-      logAutoModeWarning(
-        config.log,
-        '[auto-mode] read safety analyzer is unavailable; using classifier fallback',
-      );
-    }
-    if (config.analyzeCall && (action !== '' || requiresReadAnalysis)) {
+    if (action !== '' || requiresReadAnalysis) {
       try {
-        permissionReview = await config.analyzeCall(guardedCall, {
+        permissionReview = await analyzeCall(guardedCall, {
           projectRoot,
           executionCwd,
           signals,
@@ -1542,6 +1521,16 @@ export function createAutoModeToolGuardrail(
         }
         permissionReview = fallbackPermissionReview(guardedCall.name, action, 'analyzer_failed');
       }
+    }
+    if (!permissionReview && requiresReadAnalysis) {
+      if (action === '') {
+        action = safeFallbackToClassifierInput(guardedCall.name, guardedCall.input);
+      }
+      permissionReview = fallbackPermissionReview(
+        guardedCall.name,
+        action,
+        'analyzer_unavailable',
+      );
     }
     if (!permissionReview && !requiresReadAnalysis && toolSideEffect) {
       permissionReview = permissionReviewFromDeclaredSideEffect(
@@ -1598,17 +1587,12 @@ export function createAutoModeToolGuardrail(
       }
     }
 
-    // Rules engine: Tier 1 already returned above. Runtime supplies the
-    // deterministic Tier-2 evaluator and this guardrail remains the sole
-    // decision point. Direct SDK consumers that omit it retain a fail-closed
-    // escalation path.
+    // Rules engine: Tier 1 already returned above. The coding package owns the
+    // default deterministic evaluator; hosts may still inject an override.
     if (state.engine === 'rules') {
-      if (!config.evaluateRulesCall) {
-        return escalateOrAsk('auto-mode rules engine requires user confirmation for this call');
-      }
       let decision: AutoModeRulesDecision;
       try {
-        decision = await config.evaluateRulesCall(guardedCall, {
+        decision = await evaluateRulesCall(guardedCall, {
           projectRoot,
           executionCwd,
           signals,
@@ -1694,8 +1678,8 @@ export function createAutoModeToolGuardrail(
         provider,
         model: resolved.model,
         rules: config.rules,
-        // Runtime compact review deliberately excludes AGENTS.md. Legacy SDK
-        // consumers without an analyzer retain the prior live/static behavior.
+        // Compact review deliberately excludes AGENTS.md. An analyzer override
+        // that declines the call retains the legacy live/static behavior.
         claudeMd: intentEvidence ? undefined : config.getClaudeMd?.() ?? config.claudeMd,
         // classify() ignores transcript when intentEvidence is present; keeping
         // the parameter here preserves its standalone/legacy API.
@@ -1704,7 +1688,7 @@ export function createAutoModeToolGuardrail(
         intentEvidence,
         getToolProjection: config.getToolProjection,
         signals,
-        timeoutMs,
+        ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
         abortSignal: ctx.abortSignal,
         costTracker: config.getCostTracker?.(),
         setCostTracker: config.setCostTracker,

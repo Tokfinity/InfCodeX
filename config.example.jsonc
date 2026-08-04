@@ -47,7 +47,8 @@
   // "autoMode": {
   //   "engine": "llm",
   //   "classifierModel": "provider:model",
-  //   "timeoutMs": 30000,
+  //   // Omit timeoutMs for the 45s first-attempt / 90s retry defaults.
+  //   // A configured timeoutMs applies the same deadline to both attempts.
   //   "speculativeWindowMs": 500
   // },
 

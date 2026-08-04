@@ -26,8 +26,8 @@
  *                        only path here is normally an LLM-emitted shell).
  *
  * Layer note: bash-level `~/.kodax/` writes (e.g. `echo x > ~/.kodax/y`)
- * require AST path-extraction which lives in `@kodax/repl`. The REPL-side
- * collector wired through `extraCollectors` (Step 7) identifies those as
+ * require AST path-extraction. The REPL-side collector wired through
+ * `extraCollectors` (Step 7) identifies those as
  * Tier 0 by emitting a synthetic `user_kodax_write` match via the same
  * `AbsoluteDenyResult` shape. This module handles the file-tool path
  * directly (the most common attack vector) and the four command-string

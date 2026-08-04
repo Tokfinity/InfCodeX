@@ -1,17 +1,13 @@
 /**
  * REPL-side path-aware bash signal collector — FEATURE_158 Step 8 (v0.7.39).
  *
- * Bridges the coding-side `SignalCollector` contract to repl-side path
+ * Bridges the coding-side `SignalCollector` contract to coding-owned path
  * utilities (`extractPathsFromCommand`, `isAlwaysConfirmPath`,
  * `getBashOutsideProjectWriteRisk`, `collectBashWriteTargets`).
  *
- * Why this lives in @kodax/repl, not @kodax/coding:
- *   The AST + path-extraction utilities live in `packages/repl/src/permission/`
- *   for historical reasons (Issue 131 root-cause area). Lifting them to
- *   `@kodax/coding` is a separate refactor (out of FEATURE_158 scope per
- *   ADR-025 design decision). Instead, the guardrail accepts an
- *   `extraCollectors` config knob and the REPL injects this collector at
- *   bootstrap. Layer boundary preserved; no parallel paths.
+ * This integration collector stays in @kodax/repl because it adds REPL-owned
+ * protected-path policy. The shared AST, path extraction, and permission
+ * helpers live in @kodax/coding and remain usable by direct SDK consumers.
  *
  * Signal kinds produced (bash-only):
  *   - protected_path        (~/.kodax or <projectRoot>/.kodax)

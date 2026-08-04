@@ -44,7 +44,6 @@ import {
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
 import { replBashUserKodaxWriteDeny } from '../permission/repl-bash-signals.js';
-import { analyzeAutoModeCall, evaluateAutoRulesCall } from '../permission/auto-rules.js';
 import { allowsAcceptEditsClassifierFallback } from '../permission/accept-edits-fallback.js';
 
 export interface AutoModeBootstrapDeps {
@@ -94,9 +93,8 @@ export interface AutoModeBootstrapDeps {
    * coding-side defaults (`bashSignalCollector` + `fileSignalCollector`).
    * The REPL passes `replBashPathSignalCollector` here so bash commands
    * targeting protected paths (~/.kodax / <projectRoot>/.kodax) or
-   * redirecting outside the project produce signals — the path utilities
-   * live in @kodax/repl, so this is the layer-boundary-preserving
-   * injection point.
+   * redirecting outside the project produce signals. The collector remains a
+   * REPL integration, while its shell/path utilities are coding-owned.
    */
   readonly extraCollectors?: readonly SignalCollector[];
 }
@@ -189,8 +187,6 @@ export async function bootstrapAutoMode(
       ),
       workspaceShellSandboxAvailable: deps.workspaceShellSandboxAvailable,
       admitWorkspaceSandboxCall: deps.admitWorkspaceSandboxCall,
-      evaluateRulesCall: evaluateAutoRulesCall,
-      analyzeCall: analyzeAutoModeCall,
       log: deps.log,
       onEngineChange: deps.onEngineChange,
       sharedState: deps.sharedState,
