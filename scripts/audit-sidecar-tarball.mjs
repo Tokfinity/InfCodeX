@@ -2,7 +2,7 @@
 
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const OPTIONAL_FOLLOWUP_RULE =
@@ -66,7 +66,16 @@ export function auditSidecarTarball(tarballPath) {
     throw new Error(`Tarball does not exist: ${absoluteTarball}`);
   }
 
-  const entries = runTar(['-tf', absoluteTarball])
+  // Windows bsdtar parses any `X:` prefix as a remote `host:path` spec, so an
+  // absolute drive path (`C:\...` or `C:/...`) fails with "Cannot connect".
+  // A cwd-relative path carries no colon and works on every tar flavor; the
+  // cross-drive absolute fallback only applies when the tarball lives on a
+  // different drive than the process cwd.
+  const cwdRelative = relative(process.cwd(), absoluteTarball);
+  const tarPath = cwdRelative.includes(':')
+    ? absoluteTarball.replaceAll('\\', '/')
+    : cwdRelative;
+  const entries = runTar(['-tf', tarPath])
     .split(/\r?\n/)
     .filter((entry) => entry.startsWith('package/dist/') && entry.endsWith('.js'));
   if (entries.length === 0) {
@@ -76,7 +85,7 @@ export function auditSidecarTarball(tarballPath) {
   const verifierPromptEntries = [];
   const budgetBridgeEntries = [];
   for (const entry of entries) {
-    const source = runTar(['-xOf', absoluteTarball, entry]);
+    const source = runTar(['-xOf', tarPath, entry]);
     if (source.includes(VERIFIER_PROMPT_ANCHOR)) {
       verifierPromptEntries.push(entry);
       if (!source.includes(OPTIONAL_FOLLOWUP_RULE)) {
