@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   _resetMessageQueueForTests,
   actorQueueId,
+  createSessionLineage,
   getMessageQueue,
+  getSessionMessageEntryId,
   type KodaXMemoryOutcomeDigest,
+  type KodaXSessionData,
 } from '@kodax-ai/agent';
 import {
   KodaXBaseProvider,
@@ -158,6 +161,154 @@ describe('runKodaX Runtime terminal interrupt continuation', { timeout: 30_000 }
       maxPriority: 'user',
       mode: 'prompt',
     })).toBe(false);
+  });
+
+  it('persists a Runtime-owned interrupt before exposing its exact entry reference', async () => {
+    const sessionId = 'runtime-terminal-interrupt-entry-reference';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+    let turn = 0;
+    let lineage: KodaXSessionData['lineage'];
+    let deliveredQueueId: string | undefined;
+    let deliveredEntryId: string | undefined;
+
+    class RuntimeInterruptProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        turn += 1;
+        if (turn === 1) {
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'runtime durable interrupt',
+          });
+        }
+        return {
+          textBlocks: [{ type: 'text', text: `answer ${turn}` }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new RuntimeInterruptProvider());
+    actorSession = new CodingActorSession({ sessionId });
+    const result = await runKodaX({
+      provider: PROVIDER_NAME,
+      model: 'baseline-model',
+      maxIter: 1,
+      lsp: false,
+      session: {
+        id: sessionId,
+        persistedByHost: false,
+        storage: {
+          load: async () => null,
+          save: async (_id: string, data: KodaXSessionData) => {
+            lineage = createSessionLineage(data.messages, lineage);
+          },
+        },
+      },
+      context: {
+        actorSession,
+        gitRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        repoIntelligenceMode: 'off',
+        interruptInput: {
+          closeInputWindow() {},
+          reopenInputWindow() {},
+        },
+      },
+      events: {
+        onMidTurnUserMessages(_contents, meta) {
+          expect(lineage).toBeDefined();
+          deliveredQueueId = meta?.queuedMessageIds?.[0];
+          deliveredEntryId = deliveredQueueId === undefined
+            ? undefined
+            : meta?.queuedMessageEntryIds?.[deliveredQueueId];
+        },
+      },
+    }, 'first prompt');
+
+    expect(turn).toBe(2);
+    expect(deliveredEntryId).toMatch(/^entry_/);
+    expect(deliveredEntryId).toBe(getSessionMessageEntryId(result.messages.at(-2)!));
+  });
+
+  it('does not expose a Runtime-owned interrupt when its canonical persistence fails', async () => {
+    const sessionId = 'runtime-terminal-interrupt-save-failure';
+    const queueAgentId = actorQueueId(sessionId, '/root');
+    const delivered: string[][] = [];
+    let turn = 0;
+
+    class FailedRuntimeInterruptProvider extends KodaXBaseProvider {
+      readonly name = PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: API_KEY_ENV,
+        model: 'baseline-model',
+        supportsThinking: false,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        turn += 1;
+        getMessageQueue().enqueue({
+          agentId: queueAgentId,
+          priority: 'user',
+          mode: 'prompt',
+          content: 'must not be reported delivered',
+        });
+        return {
+          textBlocks: [{ type: 'text', text: 'first answer' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+        };
+      }
+    }
+
+    registerModelProvider(PROVIDER_NAME, () => new FailedRuntimeInterruptProvider());
+    actorSession = new CodingActorSession({ sessionId });
+    const result = await runKodaX({
+      provider: PROVIDER_NAME,
+      model: 'baseline-model',
+      maxIter: 1,
+      lsp: false,
+      session: {
+        id: sessionId,
+        persistedByHost: false,
+        storage: {
+          load: async () => null,
+          save: async () => {
+            throw new Error('canonical interrupt persistence failed');
+          },
+        },
+      },
+      context: {
+        actorSession,
+        gitRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        repoIntelligenceMode: 'off',
+        interruptInput: {
+          closeInputWindow() {},
+          reopenInputWindow() {},
+        },
+      },
+      events: {
+        onMidTurnUserMessages(contents) {
+          delivered.push([...contents]);
+        },
+      },
+    }, 'first prompt');
+
+    expect(result.success).toBe(false);
+    expect(turn).toBe(1);
+    expect(delivered).toEqual([]);
   });
 
   it('binds memory_intent to a queued user turn instead of the initial prompt', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { MessageQueue } from '../messaging/queue.js';
 import { createAgent } from '../primitives/agent.js';
@@ -216,7 +217,40 @@ describe('Actor-aware idle yield', () => {
       ['change direction'],
       ['msg-1'],
       expect.objectContaining({ role: 'user', content: 'change direction' }),
+      expect.any(Map),
     );
+  });
+
+  it('keeps each drained user prompt paired with its own transcript message', async () => {
+    let messagesByQueuedId: ReadonlyMap<string, KodaXMessage> | undefined;
+    const messages = await composeIdleYieldUserMessage({
+      kind: 'messages-arrived',
+      messages: [
+        {
+          id: 'msg-1',
+          priority: 'user',
+          mode: 'prompt',
+          content: 'first direction',
+          agentId: '/root',
+          enqueuedAt: 1,
+        },
+        {
+          id: 'msg-2',
+          priority: 'user',
+          mode: 'prompt',
+          content: 'second direction',
+          agentId: '/root',
+          enqueuedAt: 2,
+        },
+      ],
+    }, () => [], undefined, (_contents, _ids, _promptMessage, exactMessages) => {
+      messagesByQueuedId = exactMessages;
+    });
+
+    expect(messages).toHaveLength(2);
+    expect(messagesByQueuedId?.get('msg-1')?.content).toBe('first direction');
+    expect(messagesByQueuedId?.get('msg-2')?.content).toBe('second direction');
+    expect(new Set(messagesByQueuedId?.values()).size).toBe(2);
   });
 
   it('keeps explicit Actor mailbox messages synthetic instead of user-authored', async () => {

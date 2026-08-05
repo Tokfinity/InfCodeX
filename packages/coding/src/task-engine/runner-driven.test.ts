@@ -21,6 +21,7 @@ import {
   createAgentActorController,
   createMemoryControlPlane,
   createSessionLineage,
+  getSessionMessageEntryId,
   getMessageQueue,
   listPendingEpisodeReviews,
   readLearningProposalStore,
@@ -177,8 +178,11 @@ describe('managed runner queue routing', () => {
     const crash = new Error('simulated daemon crash in queued turn');
     const completedSnapshots: KodaXSessionData[] = [];
     const deliveredSnapshots: KodaXSessionData[] = [];
+    let deliveredEntryIds: Readonly<Record<string, string>> | undefined;
+    let lineage: KodaXSessionData['lineage'];
     const save = vi.fn(async (_id: string, data: KodaXSessionData) => {
-      stored = structuredClone(data);
+      lineage = createSessionLineage(data.messages, lineage);
+      stored = structuredClone({ ...data, lineage });
     });
 
     try {
@@ -204,8 +208,9 @@ describe('managed runner queue routing', () => {
             onTurnCompleted() {
               if (stored !== null) completedSnapshots.push(structuredClone(stored));
             },
-            onMidTurnUserMessages() {
+            onMidTurnUserMessages(_contents, meta) {
               if (stored !== null) deliveredSnapshots.push(structuredClone(stored));
+              deliveredEntryIds = meta?.queuedMessageEntryIds;
             },
           },
         },
@@ -238,6 +243,11 @@ describe('managed runner queue routing', () => {
       expect(JSON.stringify(deliveredSnapshots[0]?.messages)).toContain(
         'QUEUED_RUNTIME_PROMPT',
       );
+      const queuedEntry = stored?.lineage?.entries.find((entry) =>
+        entry.type === 'message'
+        && JSON.stringify(entry.message.content).includes('QUEUED_RUNTIME_PROMPT'));
+      expect(Object.keys(deliveredEntryIds ?? {})).toHaveLength(1);
+      expect(Object.values(deliveredEntryIds ?? {})).toEqual([queuedEntry?.id]);
     } finally {
       getMessageQueue().dequeue({
         agentId: queueAgentId,
@@ -485,10 +495,23 @@ describe('managed runner queue routing', () => {
     const queueAgentId = `actor:${sessionId}:/root`;
     let inputWindowOpen = true;
     let turn = 0;
-    const delivered: Array<{ contents: readonly string[]; ids: readonly string[] }> = [];
+    const delivered: Array<{
+      contents: readonly string[];
+      ids: readonly string[];
+      entryIds?: Readonly<Record<string, string>>;
+    }> = [];
+    let lineage: KodaXSessionData['lineage'];
     const options: KodaXOptions = {
       ...makeOptions(),
-      session: { id: sessionId },
+      session: {
+        id: sessionId,
+        storage: {
+          load: vi.fn(async () => null),
+          save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+            lineage = createSessionLineage(data.messages, lineage);
+          }),
+        },
+      },
       context: {
         ...makeOptions().context,
         interruptInput: {
@@ -505,6 +528,7 @@ describe('managed runner queue routing', () => {
           delivered.push({
             contents,
             ids: meta?.queuedMessageIds ?? [],
+            entryIds: meta?.queuedMessageEntryIds,
           });
         },
       },
@@ -547,7 +571,15 @@ describe('managed runner queue routing', () => {
       expect(delivered).toEqual([{
         contents: ['interrupt accepted during the final request'],
         ids: [expect.any(String)],
+        entryIds: expect.any(Object),
       }]);
+      const deliveredId = delivered[0]?.ids[0];
+      expect(Object.keys(delivered[0]?.entryIds ?? {})).toEqual([deliveredId]);
+      expect(deliveredId === undefined
+        ? undefined
+        : delivered[0]?.entryIds?.[deliveredId]).toBe(
+        getSessionMessageEntryId(result.messages.at(-2)!),
+      );
       expect(inputWindowOpen).toBe(false);
       expect(getMessageQueue().has({
         agentId: queueAgentId,
@@ -600,6 +632,9 @@ describe('managed runner queue routing', () => {
     let turn = 0;
     let resumedWithInterrupt = false;
     let resumedTranscript: readonly KodaXMessage[] = [];
+    let lineage: KodaXSessionData['lineage'];
+    let deliveredIds: readonly string[] = [];
+    let deliveredEntryIds: Readonly<Record<string, string>> | undefined;
     const actorSession = new CodingActorSession({
       sessionId,
       executor: {
@@ -611,13 +646,27 @@ describe('managed runner queue routing', () => {
             mode: 'prompt',
             content: 'interrupt while idle-yielding',
           });
+          getMessageQueue().enqueue({
+            agentId: queueAgentId,
+            priority: 'user',
+            mode: 'prompt',
+            content: 'second interrupt at the same idle boundary',
+          });
           return { output: 'child completed' };
         },
       },
     });
     const options: KodaXOptions = {
       ...makeOptions(),
-      session: { id: sessionId },
+      session: {
+        id: sessionId,
+        storage: {
+          load: vi.fn(async () => null),
+          save: vi.fn(async (_id: string, data: KodaXSessionData) => {
+            lineage = createSessionLineage(data.messages, lineage);
+          }),
+        },
+      },
       context: {
         ...makeOptions().context,
         actorSession,
@@ -628,6 +677,12 @@ describe('managed runner queue routing', () => {
           reopenInputWindow() {
             inputWindowOpen = true;
           },
+        },
+      },
+      events: {
+        onMidTurnUserMessages(_contents, meta) {
+          deliveredIds = meta?.queuedMessageIds ?? [];
+          deliveredEntryIds = meta?.queuedMessageEntryIds;
         },
       },
     };
@@ -651,6 +706,9 @@ describe('managed runner queue routing', () => {
           }
           resumedTranscript = [...transcript];
           expect(JSON.stringify(transcript)).toContain('interrupt while idle-yielding');
+          expect(JSON.stringify(transcript)).toContain(
+            'second interrupt at the same idle boundary',
+          );
           resumedWithInterrupt = true;
           return {
             textBlocks: [{ text: 'resumed answer' }],
@@ -669,6 +727,13 @@ describe('managed runner queue routing', () => {
         JSON.stringify(message.content).includes('interrupt while idle-yielding'));
       expect(runtimeDeltaIndex).toBeGreaterThanOrEqual(0);
       expect(wakeMessageIndex).toBeGreaterThan(runtimeDeltaIndex);
+      expect(deliveredIds).toHaveLength(2);
+      expect(Object.keys(deliveredEntryIds ?? {})).toEqual(deliveredIds);
+      const entryRefs = Object.values(deliveredEntryIds ?? {});
+      expect(entryRefs).toHaveLength(2);
+      expect(new Set(entryRefs).size).toBe(2);
+      expect(lineage?.entries.filter((entry) =>
+        entry.type === 'message' && entryRefs.includes(entry.id))).toHaveLength(2);
     } finally {
       await actorSession.close('test complete');
       getMessageQueue().dequeue({

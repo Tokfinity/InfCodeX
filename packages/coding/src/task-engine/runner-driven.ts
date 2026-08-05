@@ -44,6 +44,7 @@ import {
   buildSystemPrompt,
   captureEpisodeReviewBranchEpoch,
   createMemoryControlPlane,
+  getSessionMessageEntryId,
   getMessageQueue,
   maybeDrainMidTurn,
   persistPendingEpisodeReview,
@@ -2367,25 +2368,35 @@ async function runManagedTaskViaRunnerInner(
           userText: prompts.map((message) => message.content).join('\n'),
         })
       : undefined;
-    const messages = prompts.map((message): KodaXMessage => {
-      const inputArtifacts = toKodaXInputArtifacts(message.inputArtifacts);
+    const deliveries = prompts.map((queued) => {
+      const inputArtifacts = toKodaXInputArtifacts(queued.inputArtifacts);
       validateInputArtifactsForModel(inputArtifacts ?? [], {
         provider: options.provider,
         model: options.modelOverride ?? options.model,
       });
-      return {
+      const message: KodaXMessage = {
         role: 'user',
-        content: buildPromptMessageContent(message.content, inputArtifacts),
+        content: buildPromptMessageContent(queued.content, inputArtifacts),
         ...(preparedTurn ? { turnId: preparedTurn.turnId } : {}),
         timestamp,
       };
+      return { queued, message };
     });
+    const messages = deliveries.map((delivery) => delivery.message);
     if (prompts.length > 0) {
       await persistManagedBoundary([...transcript, ...messages]);
+      const queuedMessageEntryIds: Record<string, string> = {};
+      for (const { queued, message } of deliveries) {
+        const entryId = getSessionMessageEntryId(message);
+        if (entryId !== undefined) queuedMessageEntryIds[queued.id] = entryId;
+      }
       preparedTurn?.start();
       options.events?.onMidTurnUserMessages?.(
-        prompts.map((message) => message.content),
-        { queuedMessageIds: prompts.map((message) => message.id) },
+        deliveries.map(({ queued }) => queued.content),
+        {
+          queuedMessageIds: deliveries.map(({ queued }) => queued.id),
+          queuedMessageEntryIds,
+        },
       );
     }
     return messages;
@@ -2718,13 +2729,25 @@ async function runManagedTaskViaRunnerInner(
     onResumedUserPrompts: async (
       contents,
       queuedMessageIds,
-      promptMessage,
+      _promptMessage,
       previousRunResult,
+      promptMessagesByQueuedId,
     ) => {
+      const promptMessages = queuedMessageIds.flatMap((queuedMessageId) => {
+        const message = promptMessagesByQueuedId.get(queuedMessageId);
+        return message === undefined ? [] : [message];
+      });
       await persistManagedBoundary([
         ...previousRunResult.messages,
-        promptMessage,
+        ...promptMessages,
       ]);
+      const queuedMessageEntryIds: Record<string, string> = {};
+      for (const queuedMessageId of queuedMessageIds) {
+        const message = promptMessagesByQueuedId.get(queuedMessageId);
+        if (message === undefined) continue;
+        const entryId = getSessionMessageEntryId(message);
+        if (entryId !== undefined) queuedMessageEntryIds[queuedMessageId] = entryId;
+      }
       preparedIdleTurn?.start();
       preparedIdleTurn = undefined;
       if (memoryRuntime !== undefined) {
@@ -2733,7 +2756,10 @@ async function runManagedTaskViaRunnerInner(
           turnId: liveTurnController.currentTurnId(),
         };
       }
-      options.events?.onMidTurnUserMessages?.(contents, { queuedMessageIds });
+      options.events?.onMidTurnUserMessages?.(contents, {
+        queuedMessageIds,
+        queuedMessageEntryIds,
+      });
     },
     resolveResumeTurnId: async (previousRunResult) => {
       await persistManagedBoundary(previousRunResult.messages);

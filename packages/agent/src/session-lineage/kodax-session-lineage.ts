@@ -216,6 +216,13 @@ function recordMessageProvenanceSource(
   messageProvenanceSourceIds.set(message, sourceIds);
 }
 
+/** Return the sole physical lineage entry proven for this message reference. */
+export function getSessionMessageEntryId(message: KodaXMessage): string | undefined {
+  const sourceIds = messageProvenanceSourceIds.get(message);
+  if (sourceIds?.size !== 1) return undefined;
+  return sourceIds.values().next().value;
+}
+
 function entryOwnsCompactionMessage(
   entry: NavigableSessionEntry,
   message: KodaXMessage,
@@ -607,6 +614,7 @@ export function createSessionLineage(
       message: cloneMessage(message),
     };
     lineage.entries.push(entry);
+    recordMessageProvenanceSource(message, entry);
     const bucket = children.get(parentId) ?? [];
     bucket.push(entry);
     children.set(parentId, bucket);

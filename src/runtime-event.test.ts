@@ -119,6 +119,7 @@ describe('parseRuntimeEvent', () => {
           input: { type: 'text', text: 'second' },
           queuedAt: '2026-07-14T00:00:02.000Z',
           deliveredAt: '2026-07-14T00:00:03.000Z',
+          entryId: 'entry_interrupt_2',
         },
       ],
     })).ok).toBe(true);
@@ -131,6 +132,29 @@ describe('parseRuntimeEvent', () => {
       ok: false,
       error: 'run.input.delivered requires an ordered interrupt input batch.',
     });
+  });
+
+  it('rejects a present invalid interrupt entry reference while allowing legacy absence', () => {
+    expect(parseRuntimeEvent(event('run.input.delivered', {
+      inputs: [{
+        inputId: 'input-1',
+        afterRunId: 'run-1',
+        input: { type: 'text', text: 'first' },
+        queuedAt: '2026-07-14T00:00:01.000Z',
+        deliveredAt: '2026-07-14T00:00:03.000Z',
+        entryId: 1,
+      }],
+    })).ok).toBe(false);
+    expect(parseRuntimeEvent(event('run.input.delivered', {
+      inputs: [{
+        inputId: 'input-1',
+        afterRunId: 'run-1',
+        input: { type: 'text', text: 'first' },
+        queuedAt: '2026-07-14T00:00:01.000Z',
+        deliveredAt: '2026-07-14T00:00:03.000Z',
+        entryId: '',
+      }],
+    })).ok).toBe(false);
   });
 
   it('accepts only complete canonical compaction facts', () => {

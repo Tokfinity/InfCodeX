@@ -283,6 +283,8 @@ export interface KodaXActivityEventMeta extends KodaXWorkflowEventMeta, Partial<
   readonly sessionId?: string;
   /** Exact queue identities consumed by a mid-turn user-message boundary. */
   readonly queuedMessageIds?: readonly string[];
+  /** Exact durable lineage entry created for each consumed queue identity. */
+  readonly queuedMessageEntryIds?: Readonly<Record<string, string>>;
   /**
    * FEATURE_247 (R8) — SDK-consumer agent profile that produced this event.
    * Absent ⇒ default Coding Agent (or an event emitted before a profile is known).

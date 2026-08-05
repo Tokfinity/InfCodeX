@@ -127,6 +127,7 @@ export interface RunWithIdleYieldOptions<
     queuedMessageIds: readonly string[],
     promptMessage: AgentMessage,
     runResult: TRunResult,
+    promptMessagesByQueuedId: ReadonlyMap<string, AgentMessage>,
   ) => void | Promise<void>;
   /**
    * Optional attribution hook for real user prompts spliced during an
@@ -270,8 +271,14 @@ export async function runWithIdleYield<
       // the UI, so a follow-up typed while waiting for a sub-agent appears in
       // the transcript (it otherwise only reaches the agent input below).
       opts.onResumedUserPrompts
-        ? (contents, ids, promptMessage) =>
-            opts.onResumedUserPrompts?.(contents, ids, promptMessage, runResult)
+        ? (contents, ids, promptMessage, promptMessagesByQueuedId) =>
+            opts.onResumedUserPrompts?.(
+              contents,
+              ids,
+              promptMessage,
+              runResult,
+              promptMessagesByQueuedId,
+            )
         : undefined,
       opts.resolveResumeTurnId
         ? () => opts.resolveResumeTurnId?.(runResult)

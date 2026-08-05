@@ -1841,6 +1841,8 @@ export interface RuntimeInterruptInputStatus {
   readonly contentPreview: string;
   readonly queuedAt: string;
   readonly deliveredAt?: string;
+  /** Canonical user-entry reference; absent before delivery or in legacy records. */
+  readonly entryId?: string;
   readonly origin?: RuntimeRunStatus["origin"];
 }
 
@@ -2067,6 +2069,11 @@ export interface RuntimeDeliveredInterruptInput {
   readonly input: RuntimeInput | readonly RuntimeInput[];
   readonly queuedAt: string;
   readonly deliveredAt: string;
+  /**
+   * Canonical user-entry reference created by durable input persistence.
+   * Optional only because legacy persisted events may not contain it.
+   */
+  readonly entryId?: string;
   readonly origin?: RuntimeRunStatus["origin"];
 }
 
@@ -2852,6 +2859,7 @@ interface RuntimeActorHealthBaseRunState {
 interface RuntimeInterruptInputRecord extends RuntimeInterruptInputStatus {
   state: RuntimeInterruptInputStatus["state"];
   deliveredAt?: string;
+  entryId?: string;
   readonly input?: RuntimeInput | readonly RuntimeInput[];
   queueMessageId?: string;
 }
@@ -7626,8 +7634,8 @@ function createRuntimeRunService(deps: {
         }
         publishRunUpdate(record);
       },
-      onMidTurnUserMessages: (queuedMessageIds) =>
-        deliverInterruptInputs(record, queuedMessageIds),
+      onMidTurnUserMessages: (queuedMessageIds, queuedMessageEntryIds) =>
+        deliverInterruptInputs(record, queuedMessageIds, queuedMessageEntryIds),
     });
     const runOptions = buildRunOptions({
       agentPlane: deps.agentPlane,
@@ -7948,6 +7956,7 @@ function createRuntimeRunService(deps: {
   const deliverInterruptInputs = (
     record: RuntimeRunRecord,
     queuedMessageIds: readonly string[],
+    queuedMessageEntryIds: Readonly<Record<string, string>> | undefined,
   ): void => {
     const queuedByMessageId = new Map<string, RuntimeInterruptInputRecord>();
     for (const input of record.interruptInputs) {
@@ -7965,20 +7974,30 @@ function createRuntimeRunService(deps: {
     }
     if (delivered.length === 0) return;
     const deliveredAt = new Date().toISOString();
-    const batch = delivered.map((input): RuntimeDeliveredInterruptInput => {
-      if (input.input === undefined) {
+    const deliveries = delivered.map((record) => {
+      if (record.input === undefined) {
         throw new Error(
-          `Runtime interrupt input is unavailable: ${input.inputId}`,
+          `Runtime interrupt input is unavailable: ${record.inputId}`,
         );
       }
-      return {
-        inputId: input.inputId,
-        afterRunId: input.afterRunId,
-        input: input.input,
-        queuedAt: input.queuedAt,
+      const entryId = record.queueMessageId === undefined
+        ? undefined
+        : queuedMessageEntryIds?.[record.queueMessageId];
+      if (typeof entryId !== "string" || entryId.length === 0) {
+        throw new Error(
+          `Runtime interrupt input is missing its canonical entry reference: ${record.inputId}`,
+        );
+      }
+      const eventInput: RuntimeDeliveredInterruptInput = {
+        inputId: record.inputId,
+        afterRunId: record.afterRunId,
+        input: record.input,
+        queuedAt: record.queuedAt,
         deliveredAt,
-        ...(input.origin !== undefined ? { origin: input.origin } : {}),
+        entryId,
+        ...(record.origin !== undefined ? { origin: record.origin } : {}),
       };
+      return { record, entryId, eventInput };
     });
     const scope = {
       sessionId: record.sessionId,
@@ -7988,13 +8007,14 @@ function createRuntimeRunService(deps: {
     try {
       deps.bus.emitDurable(
         "run.input.delivered",
-        { inputs: batch },
+        { inputs: deliveries.map((delivery) => delivery.eventInput) },
         scope,
         () => {
-          for (const input of delivered) {
-            input.state = "delivered";
-            input.deliveredAt = deliveredAt;
-            delete input.queueMessageId;
+          for (const delivery of deliveries) {
+            delivery.record.state = "delivered";
+            delivery.record.deliveredAt = deliveredAt;
+            delivery.record.entryId = delivery.entryId;
+            delete delivery.record.queueMessageId;
           }
         },
       );
@@ -13180,7 +13200,9 @@ function parseRuntimeInterruptInputStatus(
       value.state !== "terminal") ||
     typeof value.contentPreview !== "string" ||
     typeof value.queuedAt !== "string" ||
-    (value.deliveredAt !== undefined && typeof value.deliveredAt !== "string")
+    (value.deliveredAt !== undefined && typeof value.deliveredAt !== "string") ||
+    (value.entryId !== undefined &&
+      (typeof value.entryId !== "string" || value.entryId.length === 0))
   ) {
     return undefined;
   }
@@ -13208,6 +13230,9 @@ function parseRuntimeInterruptInputStatus(
     queuedAt: value.queuedAt,
     ...(typeof value.deliveredAt === "string"
       ? { deliveredAt: value.deliveredAt }
+      : {}),
+    ...(typeof value.entryId === "string" && value.entryId.length > 0
+      ? { entryId: value.entryId }
       : {}),
     ...(origin !== undefined ? { origin } : {}),
   };
@@ -13474,7 +13499,10 @@ function reconcilePersistedInterruptDeliveries(
   events: readonly RuntimeEvent[],
 ): RuntimeRunStatus {
   if (status.interruptInputs === undefined) return status;
-  const deliveredAtByInputId = new Map<string, string>();
+  const deliveryByInputId = new Map<
+    string,
+    { readonly deliveredAt: string; readonly entryId?: string }
+  >();
   for (const event of events) {
     if (
       event.type !== "run.input.delivered" ||
@@ -13490,18 +13518,39 @@ function reconcilePersistedInterruptDeliveries(
       if (
         typeof input.inputId !== "string" ||
         input.afterRunId !== status.runId ||
-        typeof input.deliveredAt !== "string"
+        typeof input.deliveredAt !== "string" ||
+        (input.entryId !== undefined &&
+          (typeof input.entryId !== "string" || input.entryId.length === 0))
       )
         continue;
-      deliveredAtByInputId.set(input.inputId, input.deliveredAt);
+      deliveryByInputId.set(input.inputId, {
+        deliveredAt: input.deliveredAt,
+        ...(typeof input.entryId === "string" ? { entryId: input.entryId } : {}),
+      });
     }
   }
   let changed = false;
   const interruptInputs = status.interruptInputs.map((input) => {
-    const deliveredAt = deliveredAtByInputId.get(input.inputId);
-    if (input.state !== "queued" || deliveredAt === undefined) return input;
-    changed = true;
-    return { ...input, state: "delivered" as const, deliveredAt };
+    const delivery = deliveryByInputId.get(input.inputId);
+    if (delivery === undefined) return input;
+    if (input.state === "queued") {
+      changed = true;
+      return {
+        ...input,
+        state: "delivered" as const,
+        deliveredAt: delivery.deliveredAt,
+        ...(delivery.entryId !== undefined ? { entryId: delivery.entryId } : {}),
+      };
+    }
+    if (
+      input.state === "delivered" &&
+      delivery.entryId !== undefined &&
+      input.entryId !== delivery.entryId
+    ) {
+      changed = true;
+      return { ...input, entryId: delivery.entryId };
+    }
+    return input;
   });
   return changed ? { ...status, interruptInputs } : status;
 }
@@ -14479,7 +14528,10 @@ function wrapKodaXEvents(input: {
     stage: RuntimeRunStage,
     activeSubtaskCount?: number,
   ) => void;
-  readonly onMidTurnUserMessages: (queuedMessageIds: readonly string[]) => void;
+  readonly onMidTurnUserMessages: (
+    queuedMessageIds: readonly string[],
+    queuedMessageEntryIds: Readonly<Record<string, string>> | undefined,
+  ) => void;
 }): KodaXEvents {
   const {
     bus,
@@ -14752,7 +14804,10 @@ function wrapKodaXEvents(input: {
       original?.onCompactEnd?.(meta);
     },
     onMidTurnUserMessages(contents, meta) {
-      onMidTurnUserMessages(meta?.queuedMessageIds ?? []);
+      onMidTurnUserMessages(
+        meta?.queuedMessageIds ?? [],
+        meta?.queuedMessageEntryIds,
+      );
       emit(
         "run.progress",
         { kind: "mid_turn_user_messages", contents, meta },
@@ -17158,6 +17213,7 @@ function runtimeInterruptInputStatus(
     ...(input.deliveredAt !== undefined
       ? { deliveredAt: input.deliveredAt }
       : {}),
+    ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     ...(input.origin !== undefined ? { origin: input.origin } : {}),
   };
 }

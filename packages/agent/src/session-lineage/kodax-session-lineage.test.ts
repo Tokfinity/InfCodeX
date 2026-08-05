@@ -16,6 +16,7 @@ import {
   evictOldIslandMessageContent,
   findPreviousUserEntryId,
   forkSessionLineage,
+  getSessionMessageEntryId,
   getSessionLineagePath,
   getSessionMessagesFromLineage,
   resolveSessionLineageTarget,
@@ -99,6 +100,21 @@ function legacyPollutedLineageFixture(): KodaXSessionLineage {
 }
 
 describe('session lineage helpers', () => {
+  it('exposes the exact physical entry created for a message reference', () => {
+    const message = createTextMessage('user', 'durable interrupt');
+    const lineage = createSessionLineage([message]);
+
+    expect(getSessionMessageEntryId(message)).toBe(lineage.activeEntryId);
+  });
+
+  it('does not choose an ordinal entry when one message reference has ambiguous provenance', () => {
+    const message = createTextMessage('user', 'reused reference');
+    createSessionLineage([message]);
+    createSessionLineage([message]);
+
+    expect(getSessionMessageEntryId(message)).toBeUndefined();
+  });
+
   it('creates an empty lineage for empty message lists', () => {
     const lineage = createSessionLineage([]);
 

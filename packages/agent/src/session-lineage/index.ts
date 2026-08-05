@@ -51,6 +51,7 @@ export {
   createSessionLineage,
   evictOldIslandMessageContent,
   forkSessionLineage,
+  getSessionMessageEntryId,
   getSessionLineagePath,
   getSessionMessagesFromLineage,
   resolveSessionLineageTarget,

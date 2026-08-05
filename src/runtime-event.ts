@@ -296,6 +296,8 @@ function isDeliveredInterruptInput(value: unknown): boolean {
     && typeof value.afterRunId === 'string'
     && typeof value.queuedAt === 'string'
     && typeof value.deliveredAt === 'string'
+    && (value.entryId === undefined
+      || (typeof value.entryId === 'string' && value.entryId.length > 0))
     && isRuntimeInput(value.input);
 }
 

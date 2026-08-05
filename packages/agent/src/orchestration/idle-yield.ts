@@ -445,6 +445,7 @@ export async function composeIdleYieldUserMessage(
     prompts: readonly string[],
     queuedMessageIds: readonly string[],
     promptMessage: KodaXMessage,
+    promptMessagesByQueuedId: ReadonlyMap<string, KodaXMessage>,
   ) => void | Promise<void>,
   resolveTurnId?: () => string | undefined | Promise<string | undefined>,
   priorMessages: readonly KodaXMessage[] = [],
@@ -503,6 +504,22 @@ export async function composeIdleYieldUserMessage(
         timestamp: new Date().toISOString(),
       }
     : undefined;
+  const promptMessagesByQueuedId = new Map<string, KodaXMessage>();
+  if (promptMessage !== undefined) {
+    if (promptFragments.length === 1) {
+      promptMessagesByQueuedId.set(promptFragments[0]!.id, promptMessage);
+    } else {
+      for (const fragment of promptFragments) {
+        promptMessagesByQueuedId.set(fragment.id, {
+          role: 'user',
+          content: buildQueuedPromptContent([fragment]),
+          ...(promptTurnId !== undefined ? { turnId: promptTurnId } : {}),
+          timestamp: promptMessage.timestamp,
+        });
+      }
+    }
+  }
+  const promptMessages = [...promptMessagesByQueuedId.values()];
 
   if (syntheticFragments.length > 0) {
     // Aggregate budget enforcer applies only here — task-notification
@@ -510,7 +527,7 @@ export async function composeIdleYieldUserMessage(
     const enforced = enforceAggregate
       ? await enforceAggregate(syntheticFragments, {
           transcript: priorMessages,
-          pendingMessages: promptMessage ? [promptMessage] : [],
+          pendingMessages: promptMessages,
         })
       : syntheticFragments;
     if (enforced.length > 0) {
@@ -539,10 +556,11 @@ export async function composeIdleYieldUserMessage(
       promptFragments.map((fragment) => fragment.content),
       promptFragments.map((fragment) => fragment.id),
       promptMessage,
+      promptMessagesByQueuedId,
     );
     // No `_synthetic` flag — this IS the user's typed input echoed into
     // the transcript as a normal user bubble.
-    messages.push(promptMessage);
+    messages.push(...promptMessages);
   }
 
   return messages;

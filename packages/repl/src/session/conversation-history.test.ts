@@ -107,6 +107,23 @@ describe('buildSessionConversationHistory', () => {
     });
   });
 
+  it('retains an archived source entry id in the compacted copy audit references', () => {
+    const history = project([
+      compactionEntry('compact', 'u2-copy'),
+      messageEntry('u2-copy', 'compact', 'user', 'retained request', {
+        logicalId: 'u2',
+        sourceEntryId: 'u2',
+      }),
+    ], 'u2-copy');
+
+    expect(history.entries).toEqual([
+      expect.objectContaining({
+        boundaryId: 'u2-copy',
+        auditEntryIds: ['u2', 'u2-copy'],
+      }),
+    ]);
+  });
+
   it('uses firstKeptEntryId plus a unique suffix match for legacy compaction copies', () => {
     const entries = [
       messageEntry('u1', null, 'user', 'first request'),
@@ -453,6 +470,10 @@ describe('buildSessionConversationHistory', () => {
 
     expect(history.status).toBe('ambiguous');
     expect(history.entries.map((entry) => entry.boundaryId)).toEqual(['u1', 'u1-copy']);
+    expect(history.entries.map((entry) => entry.auditEntryIds)).toEqual([
+      ['u1'],
+      ['u1-copy'],
+    ]);
     expect(history.issues).toEqual([
       expect.objectContaining({
         code: 'logical_identity_conflict',
@@ -485,6 +506,8 @@ describe('buildSessionConversationHistory', () => {
       'u1-copy',
       'a1-copy',
     ]);
+    expect(history.entries.flatMap((entry) => entry.auditEntryIds)
+      .filter((entryId) => entryId === 'a1')).toHaveLength(1);
     expect(history.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'compaction_boundary_invalid' }),
     ]));

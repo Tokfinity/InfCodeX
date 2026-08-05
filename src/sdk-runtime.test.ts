@@ -21,7 +21,9 @@ import {
   createAgent,
   enqueueWithArtifacts,
   getSessionMessagesFromLineage,
+  getSessionMessageEntryId,
   getMessageQueue,
+  persistCompactedSessionHistory,
   resolveActiveRootQueueRoute,
   Runner,
   SkillRegistry,
@@ -55,6 +57,7 @@ import type {
   RuntimeDaemonClientTransport,
   RuntimeEvent,
   RuntimeInput,
+  RuntimeRunInputDeliveredEventPayload,
   RuntimeStartRunInput,
 } from "./sdk-runtime.js";
 import type { RuntimeDaemonEndpoint } from "./runtime-daemon/transport.js";
@@ -2908,6 +2911,7 @@ describe("createKodaXRuntime", () => {
     const runDir = path.join(tempRoot, ".kodax", "runtime", "runs", runId);
     const queuedAt = "2026-07-09T00:00:01.000Z";
     const deliveredAt = "2026-07-09T00:00:02.000Z";
+    const canonicalEntryId = "entry_durable_interrupt";
     await fs.mkdir(runDir, { recursive: true });
     const statusFile = path.join(runDir, "status.json");
     await fs.writeFile(
@@ -2925,6 +2929,14 @@ describe("createKodaXRuntime", () => {
             delivery: "interrupt",
             state: "queued",
             contentPreview: "already consumed",
+            queuedAt,
+          },
+          {
+            inputId: "input-legacy",
+            afterRunId: runId,
+            delivery: "interrupt",
+            state: "queued",
+            contentPreview: "legacy consumed input",
             queuedAt,
           },
         ],
@@ -2949,6 +2961,14 @@ describe("createKodaXRuntime", () => {
               input: { type: "text", text: "already consumed" },
               queuedAt,
               deliveredAt,
+              entryId: canonicalEntryId,
+            },
+            {
+              inputId: "input-legacy",
+              afterRunId: runId,
+              input: { type: "text", text: "legacy consumed input" },
+              queuedAt,
+              deliveredAt,
             },
           ],
         },
@@ -2958,7 +2978,8 @@ describe("createKodaXRuntime", () => {
 
     const runtime = await createKodaXRuntime({ homeDir: tempRoot });
 
-    await expect(runtime.runs.get(runId)).resolves.toMatchObject({
+    const recovered = await runtime.runs.get(runId);
+    expect(recovered).toMatchObject({
       phase: "unknown",
       error: "owner_liveness_unconfirmed",
       interruptInputs: [
@@ -2966,9 +2987,16 @@ describe("createKodaXRuntime", () => {
           inputId: "input-durable",
           state: "delivered",
           deliveredAt,
+          entryId: canonicalEntryId,
+        }),
+        expect.objectContaining({
+          inputId: "input-legacy",
+          state: "delivered",
+          deliveredAt,
         }),
       ],
     });
+    expect(recovered?.interruptInputs?.[1]).not.toHaveProperty("entryId");
     expect(await fs.readFile(statusFile)).toEqual(originalStatus);
     await runtime.close();
   });
@@ -4005,21 +4033,27 @@ describe("createKodaXRuntime", () => {
         });
         const queuedPrompt = queued[0];
         if (!queuedPrompt) throw new Error("Runtime queued prompt missing");
+        const queuedMessage: KodaXMessage = {
+          role: "user",
+          content: queuedPrompt.content,
+          turnId: "turn-durable-2",
+        };
         await storage.save(session.id, {
           messages: [
             ...completed,
-            {
-              role: "user",
-              content: queuedPrompt.content,
-              turnId: "turn-durable-2",
-            },
+            queuedMessage,
           ],
           title: "Managed Durable Boundary",
           gitRoot: tempRoot,
         });
         options.events?.onMidTurnUserMessages?.(
           [queuedPrompt.content],
-          { queuedMessageIds: [queuedPrompt.id] },
+          {
+            queuedMessageIds: [queuedPrompt.id],
+            queuedMessageEntryIds: {
+              [queuedPrompt.id]: getSessionMessageEntryId(queuedMessage)!,
+            },
+          },
         );
         throw new Error("simulated daemon crash during queued turn");
       })();
@@ -4051,7 +4085,89 @@ describe("createKodaXRuntime", () => {
     const deliveredIndex = lifecycle.findIndex((event) => event.type === "run.input.delivered");
     expect(completedIndex).toBeGreaterThanOrEqual(0);
     expect(deliveredIndex).toBeGreaterThan(completedIndex);
+    const deliveredEvent = lifecycle[deliveredIndex];
+    expect(deliveredEvent?.type).toBe("run.input.delivered");
+    const deliveredEntryId = deliveredEvent?.type === "run.input.delivered"
+      ? (deliveredEvent.payload as RuntimeRunInputDeliveredEventPayload).inputs[0]?.entryId
+      : undefined;
+    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+      interruptInputs: [expect.objectContaining({
+        state: "delivered",
+        entryId: deliveredEntryId,
+      })],
+    });
+    if (!canonical?.lineage) throw new Error("canonical lineage missing");
+    const retainedInterrupt = canonical.messages.at(-1);
+    if (!retainedInterrupt) throw new Error("canonical interrupt missing");
+    await persistCompactedSessionHistory({
+      storage: new FileSessionStorage({ sessionsDir }),
+      sessionId: session.id,
+      compactedMessages: [retainedInterrupt],
+      update: {
+        preCompactionMessages: canonical.messages,
+        anchor: {
+          summary: "Compacted before interrupt entry verification",
+          tokensBefore: 3,
+          tokensAfter: 1,
+          entriesRemoved: 2,
+          reason: "test_compaction",
+        },
+      },
+    });
+    const conversation = await runtime.sessions.conversation(session.id);
+    if (conversation === null) throw new Error("conversation missing after compaction");
+    const deliveredConversationEntry = conversation.entries.find((entry) =>
+      entry.boundaryId === deliveredEntryId
+      || entry.auditEntryIds.includes(deliveredEntryId ?? ""));
+    expect(deliveredEntryId).toMatch(/^entry_/);
+    expect(JSON.stringify(deliveredConversationEntry?.message.content)).toContain(
+      "SECOND_MANAGED_PROMPT",
+    );
+
+    const pagedEntries: Array<NonNullable<typeof deliveredConversationEntry>> = [];
+    let pageCursor: string | undefined;
+    do {
+      const page = await runtime.sessions.conversationPage({
+        sessionId: session.id,
+        ...(pageCursor !== undefined ? { cursor: pageCursor } : {}),
+        limit: 1,
+      });
+      if (page === null) throw new Error("conversation page missing");
+      for (const item of page.entries) {
+        if (item.entry !== undefined) pagedEntries.push(item.entry);
+      }
+      pageCursor = page.nextCursor;
+    } while (pageCursor !== undefined);
+    expect(pagedEntries.some((entry) =>
+      entry.boundaryId === deliveredEntryId
+      || entry.auditEntryIds.includes(deliveredEntryId ?? ""))).toBe(true);
+
     await runtime.close();
+    const resumedRuntime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir,
+      defaultProvider: "mock-provider",
+    });
+    const resumedDelivery = await resumedRuntime.events.replay({
+      runId: run.runId,
+      type: "run.input.delivered",
+    });
+    const resumedDeliveryPayload = resumedDelivery[0]?.payload as
+      | RuntimeRunInputDeliveredEventPayload
+      | undefined;
+    expect(resumedDeliveryPayload?.inputs[0]?.entryId).toBe(deliveredEntryId);
+    await expect(resumedRuntime.runs.get(run.runId)).resolves.toMatchObject({
+      interruptInputs: [expect.objectContaining({
+        state: "delivered",
+        entryId: deliveredEntryId,
+      })],
+    });
+    const resumedConversation = await resumedRuntime.sessions.conversation(session.id);
+    if (resumedConversation === null) throw new Error("resumed conversation missing");
+    expect(resumedConversation.entries.some((entry) =>
+      entry.boundaryId === deliveredEntryId
+      || entry.auditEntryIds.includes(deliveredEntryId ?? ""))).toBe(true);
+    await resumedRuntime.close();
   });
 
   it("emits one ordered canonical lifecycle for manual session compaction", async () => {
@@ -10928,16 +11044,58 @@ describe("createKodaXRuntime", () => {
       maxPriority: "user",
       mode: "prompt",
     });
-    activeEvents?.onMidTurnUserMessages?.(
+    const firstDrained = drained[0];
+    if (firstDrained === undefined) throw new Error("First queued interrupt missing");
+    expect(() => activeEvents?.onMidTurnUserMessages?.(
       drained.map((message) => message.content),
       { queuedMessageIds: drained.map((message) => message.id) },
+    )).toThrow(/canonical entry reference/i);
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      interruptInputs: [
+        expect.objectContaining({ state: "queued" }),
+        expect.objectContaining({ state: "queued" }),
+      ],
+    });
+    expect(() => activeEvents?.onMidTurnUserMessages?.(
+      drained.map((message) => message.content),
+      {
+        queuedMessageIds: drained.map((message) => message.id),
+        queuedMessageEntryIds: {
+          [firstDrained.id]: "entry_interrupt_partial",
+        },
+      },
+    )).toThrow(/canonical entry reference/i);
+    await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+      interruptInputs: [
+        expect.objectContaining({ state: "queued" }),
+        expect.objectContaining({ state: "queued" }),
+      ],
+    });
+    await expect(runtime.events.replay({
+      runId: first.runId,
+      type: "run.input.delivered",
+    })).resolves.toEqual([]);
+    activeEvents?.onMidTurnUserMessages?.(
+      drained.map((message) => message.content),
+      {
+        queuedMessageIds: drained.map((message) => message.id),
+        queuedMessageEntryIds: Object.fromEntries(
+          drained.map((message, index) => [message.id, `entry_interrupt_${2 - index}`]),
+        ),
+      },
     );
     await flushMicrotasks();
 
     await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
       interruptInputs: [
-        expect.objectContaining({ state: "delivered" }),
-        expect.objectContaining({ state: "delivered" }),
+        expect.objectContaining({
+          state: "delivered",
+          entryId: "entry_interrupt_2",
+        }),
+        expect.objectContaining({
+          state: "delivered",
+          entryId: "entry_interrupt_1",
+        }),
       ],
     });
     const replay = await runtime.events.replay({ runId: first.runId });
@@ -10952,9 +11110,11 @@ describe("createKodaXRuntime", () => {
           inputs: [
             expect.objectContaining({
               input: { type: "text", text: "urgent one" },
+              entryId: "entry_interrupt_2",
             }),
             expect.objectContaining({
               input: { type: "text", text: "urgent two" },
+              entryId: "entry_interrupt_1",
             }),
           ],
         }),
@@ -11081,7 +11241,12 @@ describe("createKodaXRuntime", () => {
 
     activeEvents?.onMidTurnUserMessages?.(
       consumed.map((message) => message.content),
-      { queuedMessageIds: consumed.map((message) => message.id) },
+      {
+        queuedMessageIds: consumed.map((message) => message.id),
+        queuedMessageEntryIds: Object.fromEntries(
+          consumed.map((message) => [message.id, "entry_consumed_now"]),
+        ),
+      },
     );
 
     await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
@@ -11099,6 +11264,7 @@ describe("createKodaXRuntime", () => {
       inputs: [
         expect.objectContaining({
           input: { type: "text", text: "consumed now" },
+          entryId: "entry_consumed_now",
         }),
       ],
     });
@@ -11158,7 +11324,12 @@ describe("createKodaXRuntime", () => {
     try {
       activeEvents?.onMidTurnUserMessages?.(
         consumed.map((message) => message.content),
-        { queuedMessageIds: consumed.map((message) => message.id) },
+        {
+          queuedMessageIds: consumed.map((message) => message.id),
+          queuedMessageEntryIds: Object.fromEntries(
+            consumed.map((message) => [message.id, "entry_unconfirmed"]),
+          ),
+        },
       );
     } catch (error: unknown) {
       deliveryError = error;
@@ -11168,9 +11339,11 @@ describe("createKodaXRuntime", () => {
     }
 
     expect(deliveryError).toBeInstanceOf(Error);
-    await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+    const failedDeliveryStatus = await runtime.runs.get(run.runId);
+    expect(failedDeliveryStatus).toMatchObject({
       interruptInputs: [expect.objectContaining({ state: "queued" })],
     });
+    expect(failedDeliveryStatus?.interruptInputs?.[0]).not.toHaveProperty("entryId");
     await expect(
       runtime.events.replay({
         runId: run.runId,

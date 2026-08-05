@@ -709,6 +709,17 @@ function registerEntryIdentities(
   }
 }
 
+function physicalAuditEntryIds(
+  entry: KodaXSessionMessageEntry,
+  knownIdentities?: { has(identity: string): boolean },
+): string[] {
+  return entry.sourceEntryId !== undefined
+    && entry.sourceEntryId !== entry.id
+    && knownIdentities?.has(entry.sourceEntryId) !== true
+    ? [entry.sourceEntryId, entry.id]
+    : [entry.id];
+}
+
 function provenLegacyOverlap(
   root: KodaXSessionCompactionEntry,
   messages: readonly KodaXSessionMessageEntry[],
@@ -857,7 +868,7 @@ function appendConversationMessage(
       const group = {
         index: groups.length,
         source: entry,
-        auditEntryIds: [entry.id],
+        auditEntryIds: physicalAuditEntryIds(entry, groupsByIdentity),
       };
       groups.push(group);
       registerEntryIdentities(entry, group, groupsByIdentity);
@@ -898,7 +909,7 @@ function appendConversationMessage(
   const group = {
     index: groups.length,
     source: entry,
-    auditEntryIds: [entry.id],
+    auditEntryIds: physicalAuditEntryIds(entry, groupsByIdentity),
   };
   groups.push(group);
   registerEntryIdentities(entry, group, groupsByIdentity);
@@ -974,13 +985,30 @@ export function buildSessionConversationHistory(
     || issue.code === 'compaction_predecessor_ambiguous'
     || issue.code === 'compaction_predecessor_missing'
     || issue.code === 'lineage_path_incomplete');
+  const messageEntries = lineage.entries.filter(
+    (entry): entry is KodaXSessionMessageEntry => entry.type === 'message',
+  );
+  const unreliableKnownOrAmbiguousSourceIds = new Set(
+    messageEntries.map((entry) => entry.id),
+  );
+  if (unreliableTopology) {
+    const missingSourceClaims = new Map<string, number>();
+    for (const entry of messageEntries) {
+      const sourceEntryId = entry.sourceEntryId;
+      if (sourceEntryId === undefined || unreliableKnownOrAmbiguousSourceIds.has(sourceEntryId)) {
+        continue;
+      }
+      missingSourceClaims.set(sourceEntryId, (missingSourceClaims.get(sourceEntryId) ?? 0) + 1);
+    }
+    for (const [sourceEntryId, claims] of missingSourceClaims) {
+      if (claims > 1) unreliableKnownOrAmbiguousSourceIds.add(sourceEntryId);
+    }
+  }
   const groups: MutableConversationEntry[] = unreliableTopology
-    ? lineage.entries
-        .filter((entry): entry is KodaXSessionMessageEntry => entry.type === 'message')
-        .map((source, index) => ({
+    ? messageEntries.map((source, index) => ({
           index,
           source,
-          auditEntryIds: [source.id],
+          auditEntryIds: physicalAuditEntryIds(source, unreliableKnownOrAmbiguousSourceIds),
         }))
     : [];
   const groupsByIdentity = new Map<string, MutableConversationEntry>();

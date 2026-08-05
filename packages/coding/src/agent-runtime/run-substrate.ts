@@ -114,6 +114,7 @@ import {
   createAgent,
   ContextCapacityError,
   emitKodaXDiagnostic,
+  getSessionMessageEntryId,
   getMessageQueue,
   validateAndFixToolHistory,
   type Agent,
@@ -269,7 +270,10 @@ import {
   buildRuntimeSessionState,
   snapshotRuntimeSessionState,
 } from './runtime-session-state.js';
-import { saveSessionSnapshot } from './middleware/session-snapshot.js';
+import {
+  saveRequiredSessionSnapshot,
+  saveSessionSnapshot,
+} from './middleware/session-snapshot.js';
 import { emitRepoIntelligenceTrace } from './middleware/repo-intelligence.js';
 // CAP-015 (`buildEditRecoveryUserMessage`, `RunnableToolCall`) and
 // CAP-016 mutation-reflection helpers are wired inside
@@ -771,7 +775,7 @@ export async function runSubstrate(
   if (messageQueueAgentId !== undefined && ctx.actorControl?.callerPath === '/root') {
     releaseActiveRootQueueRoute = registerActiveRootQueueRoute(messageQueueAgentId);
   }
-  const consumeRuntimeInterruptInput = (): boolean => {
+  const consumeRuntimeInterruptInput = async (): Promise<boolean> => {
     if (!options.context?.interruptInput) return false;
     const queue = getMessageQueue();
     const promptFilter = {
@@ -802,17 +806,35 @@ export async function runSubstrate(
       };
     }
     const timestamp = new Date().toISOString();
-    for (const { queued, inputArtifacts } of preparedPrompts) {
-      messages.push({
+    const deliveries = preparedPrompts.map(({ queued, inputArtifacts }) => {
+      const message: KodaXMessage = {
         role: 'user',
         content: buildPromptMessageContent(queued.content, inputArtifacts),
         turnId: queuedTurnId,
         timestamp,
+      };
+      messages.push(message);
+      return { queued, message };
+    });
+    if (options.session?.persistedByHost === false) {
+      await saveRequiredSessionSnapshot(options, sessionId, {
+        messages,
+        title,
+        gitRoot: options.context?.gitRoot ?? undefined,
+        runtimeSessionState,
       });
     }
+    const queuedMessageEntryIds: Record<string, string> = {};
+    for (const { queued, message } of deliveries) {
+      const entryId = getSessionMessageEntryId(message);
+      if (entryId !== undefined) queuedMessageEntryIds[queued.id] = entryId;
+    }
     events.onMidTurnUserMessages?.(
-      prompts.map((queued) => queued.content),
-      { queuedMessageIds: prompts.map((queued) => queued.id) },
+      deliveries.map(({ queued }) => queued.content),
+      {
+        queuedMessageIds: deliveries.map(({ queued }) => queued.id),
+        queuedMessageEntryIds,
+      },
     );
     return true;
   };
@@ -1965,7 +1987,7 @@ export async function runSubstrate(
           signal,
         });
         const appendedQueuedMessages = appendQueuedRuntimeMessages(messages, runtimeSessionState);
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
           const hasContinuationIteration = consumedInterruptInput
             ? reserveInterruptContinuation(iter)
@@ -2041,7 +2063,7 @@ export async function runSubstrate(
           messages,
           runtimeSessionState,
         );
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
           const hasContinuationIteration = consumedInterruptInput
             ? reserveInterruptContinuation(iter)
@@ -2108,7 +2130,7 @@ export async function runSubstrate(
       });
       turnState.maxTokensRetryCount = maxTokensOutcome.nextMaxTokensRetryCount;
       if (maxTokensOutcome.outcome === 'continue') {
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         const hasContinuationIteration = consumedInterruptInput
           ? reserveInterruptContinuation(iter)
           : iter + 1 < iterationLimit;
@@ -2138,7 +2160,7 @@ export async function runSubstrate(
       });
       turnState.managedProtocolContinueAttempted = protocolContinueOutcome.nextContinueAttempted;
       if (protocolContinueOutcome.outcome === 'continue') {
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         const hasContinuationIteration = consumedInterruptInput
           ? reserveInterruptContinuation(iter)
           : iter + 1 < iterationLimit;
@@ -2181,7 +2203,7 @@ export async function runSubstrate(
           messages,
           runtimeSessionState,
         );
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
           const hasContinuationIteration = consumedInterruptInput
             ? reserveInterruptContinuation(iter)
@@ -2439,7 +2461,7 @@ export async function runSubstrate(
           messages,
           runtimeSessionState,
         );
-        const consumedInterruptInput = consumeRuntimeInterruptInput();
+        const consumedInterruptInput = await consumeRuntimeInterruptInput();
         if (appendedQueuedMessages || consumedInterruptInput) {
           const hasContinuationIteration = consumedInterruptInput
             ? reserveInterruptContinuation(iter)
@@ -2567,7 +2589,7 @@ export async function runSubstrate(
       });
       await commitActorNotificationReceipts(ctx, messages);
       contextTokenSnapshot = settleOutcome.contextTokenSnapshot;
-      const consumedInterruptInput = consumeRuntimeInterruptInput();
+      const consumedInterruptInput = await consumeRuntimeInterruptInput();
       if (consumedInterruptInput) {
         reserveInterruptContinuation(iter);
         contextTokenSnapshot = rebaseContextTokenSnapshot(messages, contextTokenSnapshot);
