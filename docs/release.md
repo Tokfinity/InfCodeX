@@ -136,6 +136,10 @@ Before tagging, all of the following must be true:
    and installed into an empty consumer that imports the root plus all 12 SDK
    subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,
    provider capabilities, and built-in Skills must be present;
+
+   Local `--pack-only` audit evidence: SHA-256
+   `3530757F8B4A7084C056E2749BB6025904060D0E0A201715093EA337179E1C6D`;
+   consumer import evidence: root plus all 12 SDK subpaths.
 7. any performance evidence from `npm run bench:session-cold-open` follows
    `benchmark/EVAL_GUIDELINES.md` and is supporting evidence, not a substitute
    for correctness gates or a task-quality claim;
