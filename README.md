@@ -601,6 +601,17 @@ rescheduled to v0.7.85, so v0.7.80 remains a debug/patch slot and no incomplete
 feature is represented as shipped. See the
 [v0.7.80 release checklist](docs/release.md#v0780-release-preparation).
 
+**v0.7.81 Runtime interrupt integrity release:** Active-Run inputs submitted
+with `delivery: 'interrupt'` now receive one canonical physical Session entry
+before KodaX reports them as delivered. Every delivered item exposes its
+`entryId` in both `runtime.runs.get(...).interruptInputs` and the durable
+`run.input.delivered` event, including after compaction, replay, or Runtime
+restart. A multi-input safe-boundary drain keeps each prompt as a separate user
+message and maps it to its own entry. Runtime-owned persistence or provenance
+failure fails the delivery closed rather than emitting an unverifiable event.
+FEATURE_287 remains planned for v0.7.88; this is a non-Feature patch. See the
+[v0.7.81 release checklist](docs/release.md#v0781-release-preparation).
+
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX

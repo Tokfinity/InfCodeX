@@ -214,6 +214,15 @@ FEATURE_278/279/282/283/285 已显式改期到 v0.7.85，因此 v0.7.80 仍是
 debug/patch 槽位，没有把未完成特性表述为已交付。详见
 [v0.7.80 发布清单](docs/release.md#v0780-release-preparation)。
 
+**v0.7.81 Runtime 中断交付完整性发布**：以 `delivery: 'interrupt'` 提交给活动 Run
+的输入，会先获得唯一的 canonical Session 物理 entry，之后才会被标记为已交付。
+`runtime.runs.get(...).interruptInputs` 与 durable `run.input.delivered` 事件均公开
+每项的 `entryId`；压缩、事件重放和 Runtime 重启后该引用仍可追溯。一次批量安全边界
+交付会保留每条 prompt 独立的 user message 与 entry 映射。Runtime-owned 持久化或
+provenance 失败会 fail closed，不会发布无法验证的交付事件。FEATURE_287 仍计划于
+v0.7.88；本版本是非 Feature 补丁。详见
+[v0.7.81 发布清单](docs/release.md#v0781-release-preparation)。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

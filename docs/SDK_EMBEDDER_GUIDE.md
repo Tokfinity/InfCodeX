@@ -4403,6 +4403,15 @@ complete ordered batch. Exact operation retries return the same `inputId`.
 The accepted result's `runId` is the existing owning Run (equal to
 `afterRunId`), not a newly created continuation.
 
+Since v0.7.81, every newly delivered item also carries `entryId`: the exact
+physical Session-lineage user entry created by canonical persistence. The same
+value appears in `runtime.runs.get(runId).interruptInputs`; do not infer it
+from a transcript ordinal or fabricate one. Runtime-owned Sessions write the
+required snapshot before publishing the delivery event, so a failed or
+ambiguous canonical reference fails delivery closed. The field may be absent
+only when reading a legacy persisted record. Event replay, Session compaction,
+and Runtime restart preserve a newly recorded reference.
+
 Interrupt admission closes when the Runner publishes its final completion or
 terminal error signal, or when the Run's supplied `abortSignal` aborts, even if
 the outer Run is still settling. Non-terminal observer diagnostics do not close

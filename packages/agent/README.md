@@ -102,6 +102,12 @@ with `code: 'RUNNER_ITERATION_LIMIT'` and carries the last legal transcript,
 readable through `readRunnerRecoveryTranscript`, so callers can distinguish a
 runaway tool loop from other failures.
 
+The v0.7.81 release exports `getSessionMessageEntryId(message)`. It returns a
+physical Session-lineage entry only when that exact message reference has one
+unambiguous provenance source; reused or otherwise ambiguous references return
+`undefined`. Runtime delivery uses this narrow proof instead of deriving an
+entry from transcript order.
+
 Windows process-tree cleanup now identity-checks observed roots and descendants
 and returns an indeterminate outcome when evidence is incomplete. Snapshot
 ancestry is not kernel containment, however; Issue 256 remains open and is

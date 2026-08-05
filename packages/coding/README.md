@@ -83,6 +83,12 @@ every idle-yield resume (the managed-task lifecycle stays unbounded), and lets
 the CLI honor `worker.configuredA2A` from `~/.kodax/config.json` for a
 Worker-hosted embedded Runtime. `kodax_manual` documents the same surface.
 
+The v0.7.81 release makes active-Run interrupt delivery referentially durable:
+each queued prompt is persisted as its own canonical user entry before
+`run.input.delivered` is emitted, and the SDK exposes its `entryId` in both the
+event and Run status. Missing canonical persistence or an ambiguous entry fails
+the delivery closed. `kodax_manual` documents the same contract.
+
 ## 安装 / 导入
 
 ```bash

@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-04
+> Last updated: 2026-08-05
 >
-> Current release baseline: `v0.7.80`
-> (`@kodax-ai/kodax@0.7.80`; npm publication remains manual)
+> Current release baseline: `v0.7.81`
+> (`@kodax-ai/kodax@0.7.81`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,20 +20,18 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.80`. This debug/patch
-release after v0.7.79; FEATURE_278/279/282/
-283/285 were rescheduled to v0.7.85) adds CLI `worker.configuredA2A` support
-for a Worker-hosted embedded Runtime (rejecting configured MCP servers or
-Extensions that cannot cross the Worker boundary), daemon-style transport
-sanitization of Worker-hosted run options, a structured
-`RunnerIterationLimitError` with a
-500-iteration per-invocation panic fuse for one uninterrupted managed tool
-loop, and the Issue 275 Auto permission fixes. It retains
-v0.7.78's evidence-gated project Skill canaries, complete first-run split
-configuration, intent-aligned Auto[LLM] permission behavior, optional
-workspace-scoped ASRT containment, and standalone `/sandbox` SDK. Issue 256 is
-scheduled for v0.7.84 because snapshot-based Windows process ancestry cannot
-prove descendant closure after an intermediate parent exits.
+The root workspace package is `@kodax-ai/kodax@0.7.81`. This non-Feature
+debug/patch release makes active-Run interrupt delivery canonically
+referential: a Runtime-owned Session persists every accepted queued prompt
+before it reports delivery, and `RuntimeInterruptInputStatus` plus
+`run.input.delivered` expose the exact physical Session-lineage `entryId`.
+Multi-input drains retain distinct user-message boundaries with a
+per-queue-message entry map. Missing, ambiguous, or failed canonical
+persistence fails delivery closed; the reference remains available through
+event replay, Session compaction, and Runtime restart, while legacy records
+remain readable without it. It retains v0.7.80's Worker configured-A2A,
+managed Runner fuse, and Auto permission hardening. FEATURE_287 remains planned
+for v0.7.88; Issue 256 remains scheduled for v0.7.84.
 
 `package.json` exposes:
 

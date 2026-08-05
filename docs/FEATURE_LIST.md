@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.80` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.80` release (npm publication remains manual) |
+| Current released version | `v0.7.81` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.81` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `72` |
 | InProgress | `1` |
@@ -26,7 +26,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.80 is the current Git/GitHub release and remains a feature-free debug/patch slot; npm publication remains manual. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.81 is the current Git/GitHub release and remains a feature-free runtime-integrity patch; npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.85` -> `v0.7.86` -> `v0.7.88` -> `v0.7.89` -> `v0.7.90` -> `v0.7.95` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -526,6 +526,26 @@ The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.81 Release Record
+
+`v0.7.81` is a non-Feature runtime-integrity patch. `FEATURE_287` was already
+rescheduled from `v0.7.81` to `v0.7.88`; it is not presented as delivered here.
+The `@kodax-ai/kodax@0.7.81` release records the following canonical interrupt
+delivery contract:
+
+- every Runtime-owned queued interrupt prompt is saved as its own canonical
+  Session user entry before delivery is published;
+- the durable `run.input.delivered` event and `runs.get()` interrupt status
+  expose the exact physical `entryId` for each delivered queue item, including
+  after compaction, replay, and Runtime restart;
+- an ordered multi-input drain keeps separate user-message boundaries and maps
+  each queue id to its own entry; missing/ambiguous provenance or persistence
+  failure fails delivery closed rather than publishing an unverifiable result.
+
+The release checklist is [docs/release.md](release.md#v0781-release-preparation).
 
 ---
 

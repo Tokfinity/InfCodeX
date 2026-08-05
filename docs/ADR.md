@@ -1,6 +1,14 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-04
+> Last updated: 2026-08-05
+>
+> **v0.7.81 release addendum:** Runtime-owned active-Run interrupt input is
+> persisted as one canonical Session user entry before delivery is published.
+> The public Run status and `run.input.delivered` event carry that exact
+> `entryId`; ambiguous/missing provenance or a required persistence failure
+> fails delivery closed. The reference remains useful after replay, compaction,
+> and restart, while legacy records remain readable without it. npm publication
+> remains a separate manual operator step.
 >
 > **v0.7.80 release addendum:** the CLI can opt its embedded Runtime into the
 > configured A2A plane inside a Worker, managed AMA turns have a per-invocation
@@ -8,7 +16,7 @@
 > analysis now shares the deterministic analyzer with the SDK. npm publication
 > remains a separate manual operator step.
 >
-> This header and addendum are authoritative for the v0.7.80 release; the long
+> This header and addendum are authoritative for the v0.7.81 release; the long
 > architecture-state notice below is retained as historical context.
 >
 > **v0.7.79 Runtime observation and A2A authorization addendum:** Runtime

@@ -136,6 +136,15 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toMatch(/input\s+window/);
   });
 
+  it('documents the v0.7.81 canonical interrupt-entry contract', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(sdk).toContain('entryId');
+    expect(sdk).toContain('canonical session-entry reference');
+    expect(sdk).toContain('legacy');
+    expect(sdk).toMatch(/fails\s+the\s+current\s+delivery\s+closed/);
+  });
+
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
 

@@ -81,6 +81,77 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.81 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.81`. This release is
+prepared for the `v0.7.81` tag and GitHub Release; npm publication remains a
+separate manual operator step. Its scope is a non-Feature runtime-integrity
+patch:
+
+- a Runtime-owned Session saves each accepted active-Run interrupt prompt as
+  its own canonical user entry before publishing delivery;
+- `RuntimeInterruptInputStatus` and every newly durable
+  `run.input.delivered` item expose the exact physical Session-lineage `entryId`;
+  a multi-input safe-boundary drain keeps every user prompt separate and maps
+  each queue id to its own entry;
+- required persistence, canonical-provenance ambiguity, or a missing entry
+  reference fails delivery closed before a delivered status or durable event can
+  be emitted; a newly recorded reference survives replay, Session compaction,
+  and Runtime restart, while legacy records remain readable without `entryId`.
+
+`FEATURE_287` was rescheduled from `v0.7.81` to `v0.7.88` before this cut, so no
+incomplete feature is represented as shipped. Issue 256 remains scheduled for
+`v0.7.84` and is not a v0.7.81 gate.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, this checklist, SDK/package guides, `docs/features`, and
+   `kodax_manual` agree on the v0.7.81 contract;
+2. no incomplete feature or known High release blocker is presented as shipped;
+   FEATURE_287 has the explicit v0.7.88 disposition above and Issue 256 is not
+   a v0.7.81 gate;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. a clean-install-equivalent deterministic gate passes on the exact release
+   commit:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused verification covers a two-input active-Run interrupt batch, exact
+   `entryId` correlation in Run status and `run.input.delivered`, storage
+   failure before delivery publication, and the same reference after event
+   replay, Session compaction, and Runtime restart;
+6. the exact publish-shaped `kodax-ai-kodax-0.7.81.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths. The Runtime, semantic, sandbox, and constructed-handler sidecars,
+   provider capabilities, and built-in Skills must be present;
+
+   Local `--pack-only` audit evidence: SHA-256
+   `07D746D19834D9C07DF1F4E4C345840485263E04EA9BDCD7D0595E49BEE66A13`;
+   consumer import evidence: root plus all 12 SDK subpaths.
+7. any performance evidence from `npm run bench:session-cold-open` follows
+   `benchmark/EVAL_GUIDELINES.md` and is recorded as supporting evidence, not a
+   substitute for correctness gates or a task-quality claim;
+8. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+9. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.81`. The tag-triggered workflow
+    must finish green and the GitHub Release must contain all five archives plus
+    `SHA256SUMS`. npm publication remains the maintainer-owned
+    `node scripts/release.mjs` step after the audited bytes are approved.
+
 ## v0.7.80 release preparation
 
 Release state: the root package, all four workspace packages, and every

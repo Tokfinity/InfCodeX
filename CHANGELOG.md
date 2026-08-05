@@ -10,6 +10,37 @@ No changes yet.
 
 ---
 
+## [0.7.81] - 2026-08-05
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
+### Added
+
+- Delivered Runtime interrupt inputs now expose an `entryId`: the exact physical
+  Session-lineage entry created by canonical user-input persistence. The value
+  is available in both `RuntimeInterruptInputStatus` and the
+  `run.input.delivered` event payload, so an SDK host can correlate a completed
+  interrupt with conversation history without reconstructing ordinal position.
+
+### Changed
+
+- A safe-boundary drain keeps every queued user prompt as its own transcript
+  message and passes the per-queue-id `queuedMessageEntryIds` mapping through
+  the Runner/Runtime boundary. A delivered batch is therefore ordered and
+  referentially exact even when it contains multiple prompts.
+
+### Fixed
+
+- Runtime-owned Session persistence completes before an interrupt is reported
+  as delivered. Missing, ambiguous, or failed canonical persistence now fails
+  delivery closed; no durable delivery event or delivered status is published.
+  The canonical entry reference survives event replay, Session compaction, and
+  Runtime restart. Legacy persisted delivery records remain readable without an
+  `entryId`.
+
+---
+
 ## [0.7.80] - 2026-08-04
 
 > Git tag and GitHub Release are created by the release workflow. npm
