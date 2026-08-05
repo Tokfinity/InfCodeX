@@ -4,7 +4,10 @@ import {
   DEFAULT_SPECULATIVE_WINDOW_MS,
   getActiveExtensionRuntime,
 } from "@kodax-ai/coding";
-import type { ExtensionRuntimeContract } from "@kodax-ai/coding";
+import type {
+  CapabilitySearchSnapshot,
+  ExtensionRuntimeContract,
+} from "@kodax-ai/coding";
 import {
   emitKodaXDiagnostic,
   ExternalAgentRegistrationConflictError,
@@ -2828,6 +2831,76 @@ function parseRuntimeHostToolDescriptors(
   });
 }
 
+function selectCapabilityRuntimes(
+  host: ExtensionRuntimeContract,
+  base: ExtensionRuntimeContract,
+  providerId: string,
+  server?: string,
+): readonly ExtensionRuntimeContract[] {
+  if (providerId !== "mcp") return [base];
+  if (server !== undefined) {
+    const runtime = server === "host" ? host : base;
+    return runtime.hasCapabilityProvider?.(providerId) === false ? [] : [runtime];
+  }
+  return [host, base].filter(
+    (runtime) => runtime.hasCapabilityProvider?.(providerId) !== false,
+  );
+}
+
+async function searchCapabilityRuntimeSnapshot(
+  runtime: ExtensionRuntimeContract,
+  providerId: string,
+  query: string,
+  options: Parameters<NonNullable<ExtensionRuntimeContract["searchCapabilitySnapshot"]>>[2],
+): Promise<CapabilitySearchSnapshot> {
+  if (runtime.searchCapabilitySnapshot !== undefined) {
+    return runtime.searchCapabilitySnapshot(providerId, query, options);
+  }
+  return {
+    items: await runtime.searchCapabilities(providerId, query, {
+      ...options,
+      limit: Number.MAX_SAFE_INTEGER,
+    }),
+    complete: false,
+    freshness: "unknown",
+  };
+}
+
+function mergeCapabilitySearchSnapshots(
+  snapshots: readonly CapabilitySearchSnapshot[],
+): CapabilitySearchSnapshot {
+  const seenIds = new Set<string>();
+  const items = snapshots.flatMap((snapshot) => snapshot.items).filter((item) => {
+    const id = item && typeof item === "object" && !Array.isArray(item)
+      ? (item as Record<string, unknown>).id
+      : undefined;
+    if (typeof id !== "string") return true;
+    if (seenIds.has(id)) return false;
+    seenIds.add(id);
+    return true;
+  });
+  const revisions = snapshots.map((snapshot) => snapshot.revision);
+  const revision = snapshots.length === 1
+    ? revisions[0]
+    : revisions.every((value) => typeof value === "string")
+      ? JSON.stringify(revisions)
+      : undefined;
+  const firstFreshness = snapshots[0]?.freshness;
+  const freshness = firstFreshness === undefined
+    ? "unknown"
+    : snapshots.every((snapshot) => snapshot.freshness === firstFreshness)
+      ? firstFreshness
+      : "mixed";
+  const failures = snapshots.flatMap((snapshot) => snapshot.failures ?? []);
+  return {
+    items,
+    ...(revision !== undefined ? { revision } : {}),
+    complete: snapshots.length > 0 && snapshots.every((snapshot) => snapshot.complete),
+    freshness,
+    ...(failures.length > 0 ? { failures } : {}),
+  };
+}
+
 function mergeExtensionRuntimeContracts(
   host: ExtensionRuntimeContract,
   base: ExtensionRuntimeContract,
@@ -2840,12 +2913,19 @@ function mergeExtensionRuntimeContracts(
       );
     },
     async searchCapabilities(providerId, query, options) {
-      const [hostResults, baseResults] = await Promise.all([
-        host.searchCapabilities(providerId, query, options),
-        base.searchCapabilities(providerId, query, options),
-      ]);
-      const merged = [...hostResults, ...baseResults];
+      const runtimes = selectCapabilityRuntimes(host, base, providerId, options?.server);
+      const results = await Promise.all(
+        runtimes.map((runtime) => runtime.searchCapabilities(providerId, query, options)),
+      );
+      const merged = results.flat();
       return merged.slice(0, options?.limit ?? merged.length);
+    },
+    async searchCapabilitySnapshot(providerId, query, options) {
+      const runtimes = selectCapabilityRuntimes(host, base, providerId, options?.server);
+      const snapshots = await Promise.all(runtimes.map((runtime) => (
+        searchCapabilityRuntimeSnapshot(runtime, providerId, query, options)
+      )));
+      return mergeCapabilitySearchSnapshots(snapshots);
     },
     async describeCapability(providerId, capabilityId) {
       if (capabilityId.startsWith("host:")) {

@@ -498,25 +498,39 @@ export function createRuntimeDaemonReverseBridge(
       const lease = hostTools.get(input.leaseId);
       if (!lease) throw bridgeError('host_tool_unavailable', 'Host tool lease is missing.');
       hostToolRuns.set(input.runId, input.leaseId);
+      const searchCapabilities: ExtensionRuntimeContract['searchCapabilities'] = async (
+        providerId,
+        query,
+        options,
+      ) => {
+        if (providerId !== 'mcp' || (options?.kind !== undefined && options.kind !== 'tool')) return [];
+        if (options?.server !== undefined && options.server !== 'host') return [];
+        const normalized = query.toLowerCase();
+        return lease.tools
+          .filter((tool) => (
+            tool.name.toLowerCase().includes(normalized)
+            || tool.description.toLowerCase().includes(normalized)
+          ))
+          .slice(0, options?.limit ?? lease.tools.length)
+          .map((tool) => ({
+            id: hostToolCapabilityId(lease.id, tool.name),
+            name: tool.name,
+            description: tool.description,
+            kind: 'tool',
+            server: 'host',
+            inputSchema: tool.inputSchema,
+          }));
+      };
       return {
         hasCapabilityProvider(providerId) { return providerId === 'mcp'; },
-        async searchCapabilities(providerId, query, options) {
-          if (providerId !== 'mcp' || (options?.kind !== undefined && options.kind !== 'tool')) return [];
-          const normalized = query.toLowerCase();
-          return lease.tools
-            .filter((tool) => (
-              tool.name.toLowerCase().includes(normalized)
-              || tool.description.toLowerCase().includes(normalized)
-            ))
-            .slice(0, options?.limit ?? lease.tools.length)
-            .map((tool) => ({
-              id: hostToolCapabilityId(lease.id, tool.name),
-              name: tool.name,
-              description: tool.description,
-              kind: 'tool',
-              server: 'host',
-              inputSchema: tool.inputSchema,
-            }));
+        searchCapabilities,
+        async searchCapabilitySnapshot(providerId, query, options) {
+          return {
+            items: await searchCapabilities(providerId, query, options),
+            revision: `host:${lease.id}`,
+            complete: true,
+            freshness: 'live',
+          };
         },
         async describeCapability(providerId, capabilityId) {
           if (providerId !== 'mcp') return undefined;

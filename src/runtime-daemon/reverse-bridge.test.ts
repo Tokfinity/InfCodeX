@@ -88,8 +88,21 @@ describe('runtime daemon reverse bridge', () => {
       sessionId: 'session-space',
       runId: 'run-space',
     });
+    await expect(runtime.searchCapabilities('mcp', '', {
+      kind: 'tool',
+      server: 'db-query-server',
+    })).resolves.toEqual([]);
+    await expect(runtime.searchCapabilitySnapshot?.('mcp', '', {
+      kind: 'tool',
+      server: 'host',
+    })).resolves.toMatchObject({
+      items: [expect.objectContaining({ name: 'space_artifact_create', server: 'host' })],
+      complete: true,
+      freshness: 'live',
+    });
     const [descriptor] = await runtime.searchCapabilities('mcp', 'space_artifact_create', {
       kind: 'tool',
+      server: 'host',
     }) as Array<{ readonly id: string }>;
     if (!descriptor) throw new Error('expected host tool descriptor');
     expect(hub.getRunRequirements('run-space')).toMatchObject({

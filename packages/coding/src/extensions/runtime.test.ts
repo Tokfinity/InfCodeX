@@ -555,12 +555,13 @@ describe('KodaXExtensionRuntime', () => {
     await runtime.dispose();
   });
 
-  it('does not claim a legacy provider search is a complete snapshot', async () => {
+  it('reads an uncapped legacy provider search without claiming a complete snapshot', async () => {
     const runtime = createExtensionRuntime().activate();
+    const search = vi.fn(async () => [{ id: 'legacy:one' }]);
     runtime.registerCapabilityProvider({
       id: 'legacy-search',
       kinds: ['tool'],
-      search: async () => [{ id: 'legacy:one' }],
+      search,
     });
 
     await expect(runtime.searchCapabilitySnapshot('legacy-search', '', {})).resolves.toEqual({
@@ -568,6 +569,7 @@ describe('KodaXExtensionRuntime', () => {
       complete: false,
       freshness: 'unknown',
     });
+    expect(search).toHaveBeenCalledWith('', { limit: Number.MAX_SAFE_INTEGER });
 
     await runtime.dispose();
   });

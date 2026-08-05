@@ -2,11 +2,17 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ExternalAgentRegistrationConflictError,
   setKodaXDiagnosticSink,
 } from '@kodax-ai/agent';
+import {
+  createExtensionRuntime,
+  getTool,
+  setActiveExtensionRuntime,
+  type KodaXToolExecutionContext,
+} from '@kodax-ai/coding';
 
 import type {
   KodaXRuntime,
@@ -43,6 +49,8 @@ import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 import type { RuntimeDaemonManagementController } from './management.js';
 
 describe('runtime daemon dispatcher', () => {
+  afterEach(() => setActiveExtensionRuntime(null));
+
   it('passes Agent revision fences and maps stale follow-ups to conflict', async () => {
     const runtime = makeRuntime();
     const followup = vi.spyOn(runtime.agents, 'followup').mockRejectedValue(Object.assign(
@@ -659,8 +667,29 @@ describe('runtime daemon dispatcher', () => {
     dispatcher.close();
   });
 
-  it('binds credential and host-tool reverse calls only to the requesting run', async () => {
+  it('binds reverse calls to one run without degrading the active MCP snapshot', async () => {
     const runtime = makeRuntime();
+    const activeExtensionRuntime = createExtensionRuntime();
+    const mcpItems = Array.from({ length: 14 }, (_, index) => ({
+      id: `mcp:db-query-server:tool:tool-${index + 1}`,
+      kind: 'tool' as const,
+      name: `tool-${index + 1}`,
+    }));
+    activeExtensionRuntime.registerCapabilityProvider({
+      id: 'mcp',
+      kinds: ['tool'],
+      search: async () => mcpItems.slice(0, 10),
+      searchSnapshot: async (_query, options) => {
+        if (options?.server !== undefined) expect(options.server).toBe('db-query-server');
+        return {
+          items: mcpItems,
+          revision: 'db-query-server-v1',
+          complete: true,
+          freshness: 'live',
+        };
+      },
+    });
+    setActiveExtensionRuntime(activeExtensionRuntime);
     const reverseBridgeHub = createRuntimeDaemonReverseBridgeHub();
     let notificationListener: ((notification: RuntimeDaemonNotification) => void) | undefined;
     const dispatcher = createRuntimeDaemonDispatcher({
@@ -700,6 +729,81 @@ describe('runtime daemon dispatcher', () => {
       expect(trusted.providerCredential).toBe('space-secret');
       const extensionRuntime = input.options?.extensionRuntime;
       if (!extensionRuntime) throw new Error('expected run-bound extension runtime');
+      const mcpSearch = getTool('mcp_search');
+      if (!mcpSearch) throw new Error('expected mcp_search tool');
+      const toolContext = {
+        backups: new Map(),
+        executionCwd: process.cwd(),
+        gitRoot: process.cwd(),
+        extensionRuntime,
+      } satisfies KodaXToolExecutionContext;
+      if (trusted.prompt === 'host only') {
+        const hostOnlyOutput = await mcpSearch({ kind: 'tool' }, toolContext);
+        if (typeof hostOnlyOutput !== 'string') throw new Error('expected Host-only search result');
+        expect(hostOnlyOutput).toContain('freshness=live | complete=true');
+        expect(hostOnlyOutput).toContain('Page: returned=1 | total=1 | has_more=false');
+        expect(hostOnlyOutput).toContain('host:');
+        const missingServerOutput = await mcpSearch({
+          server: 'db-query-server',
+          kind: 'tool',
+        }, toolContext);
+        if (typeof missingServerOutput !== 'string') {
+          throw new Error('expected empty missing-server search result');
+        }
+        expect(missingServerOutput).toContain('freshness=unknown | complete=false');
+        expect(missingServerOutput).toContain('Page: returned=0 | total=0 | has_more=false');
+        expect(missingServerOutput).not.toContain('[Tool Error]');
+      } else if (trusted.prompt === 'legacy MCP') {
+        const legacyOutput = await mcpSearch({
+          server: 'db-query-server',
+          kind: 'tool',
+          limit: 30,
+        }, toolContext);
+        if (typeof legacyOutput !== 'string') throw new Error('expected legacy MCP search result');
+        expect(legacyOutput).toContain('freshness=unknown | complete=false');
+        expect(legacyOutput).toContain('Page: returned=14 | total=14 | has_more=false');
+        expect(legacyOutput).toContain('mcp:db-query-server:tool:tool-14');
+      } else {
+        const searchOutput = await mcpSearch({
+          server: 'db-query-server',
+          kind: 'tool',
+          limit: 30,
+        }, toolContext);
+        if (typeof searchOutput !== 'string') throw new Error('expected text mcp_search result');
+        expect(searchOutput).toContain(
+          'Catalog: revision=db-query-server-v1 | freshness=live | complete=true',
+        );
+        expect(searchOutput).toContain('Page: returned=14 | total=14 | has_more=false');
+        expect(searchOutput).toContain('mcp:db-query-server:tool:tool-14');
+        expect(searchOutput).not.toContain('host:');
+        const hostSearchOutput = await mcpSearch({
+          server: 'host',
+          kind: 'tool',
+        }, toolContext);
+        if (typeof hostSearchOutput !== 'string') throw new Error('expected Host Tool search result');
+        expect(hostSearchOutput).toContain('freshness=live | complete=true');
+        expect(hostSearchOutput).toContain('Page: returned=1 | total=1 | has_more=false');
+        expect(hostSearchOutput).toContain('host:');
+        expect(hostSearchOutput).not.toContain('mcp:db-query-server:');
+        const combinedSearchOutput = await mcpSearch({ kind: 'tool', limit: 30 }, toolContext);
+        if (typeof combinedSearchOutput !== 'string') {
+          throw new Error('expected combined capability search result');
+        }
+        expect(combinedSearchOutput).toContain('freshness=live | complete=true');
+        expect(combinedSearchOutput).toContain('Page: returned=15 | total=15 | has_more=false');
+        expect(combinedSearchOutput).toContain('host:');
+        expect(combinedSearchOutput).toContain('mcp:db-query-server:tool:tool-14');
+        const snapshot = await extensionRuntime.searchCapabilitySnapshot?.('mcp', '', {
+          kind: 'tool',
+          server: 'db-query-server',
+        });
+        expect(snapshot).toMatchObject({
+          items: mcpItems,
+          revision: 'db-query-server-v1',
+          complete: true,
+          freshness: 'live',
+        });
+      }
       const [tool] = await extensionRuntime.searchCapabilities('mcp', 'space_artifact_create', {
         kind: 'tool',
       }) as Array<{ readonly id: string }>;
@@ -750,12 +854,40 @@ describe('runtime daemon dispatcher', () => {
         hostTools: { leaseId: tools.id, state: 'ready' },
       },
     });
+    await expect(handle.result).resolves.toMatchObject({ phase: 'completed' });
 
-    expect(start).toHaveBeenCalledTimes(1);
-    expect(handlerCalls).toBe(1);
+    const emptyExtensionRuntime = createExtensionRuntime().activate();
+    const hostOnlyHandle = await client.runs.start({
+      sessionId: 'session-1',
+      prompt: 'host only',
+      credential: { leaseId: credential.id, provider: 'mock' },
+      hostTools: { leaseId: tools.id },
+    });
+    await expect(hostOnlyHandle.result).resolves.toMatchObject({ phase: 'completed' });
+
+    const legacyExtensionRuntime = createExtensionRuntime();
+    legacyExtensionRuntime.registerCapabilityProvider({
+      id: 'mcp',
+      kinds: ['tool'],
+      search: async (_query, options) => mcpItems.slice(0, options?.limit ?? 10),
+    });
+    legacyExtensionRuntime.activate();
+    const legacyHandle = await client.runs.start({
+      sessionId: 'session-1',
+      prompt: 'legacy MCP',
+      credential: { leaseId: credential.id, provider: 'mock' },
+      hostTools: { leaseId: tools.id },
+    });
+    await expect(legacyHandle.result).resolves.toMatchObject({ phase: 'completed' });
+
+    expect(start).toHaveBeenCalledTimes(3);
+    expect(handlerCalls).toBe(3);
     await client.close();
     dispatcher.close();
     reverseBridgeHub.close();
+    await activeExtensionRuntime.dispose();
+    await emptyExtensionRuntime.dispose();
+    await legacyExtensionRuntime.dispose();
   });
 
   it('rejects initialize when the requested profile differs from the daemon identity', async () => {

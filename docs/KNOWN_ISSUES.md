@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-04_
+_Last Updated: 2026-08-05_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-08-04_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
 | 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 release | 2026-08-04 | 2026-08-04 |
@@ -181,6 +182,82 @@ _Last Updated: 2026-08-04_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 279: Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search
+
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.7.70 progressive MCP discovery
+- **Fixed**: post-v0.7.81 development
+- **Created**: 2026-08-05
+- **Resolved**: 2026-08-05
+
+#### Original Problem
+
+A KodaX Space Worker Run bound to a Host Tool lease returned a different
+`mcp_search({ server: "db-query-server" })` inventory from the KodaX CLI. Four
+`host:hostlease_*` capabilities appeared despite the explicit server filter,
+only 10 of 14 database tools remained, and the catalog was reported as
+`freshness=unknown` and `complete=false`. Direct `mcp_describe` and `mcp_call`
+by canonical ID still worked, so the defect was limited to capability
+discovery and could be bypassed only when the model already knew the missing
+IDs.
+
+#### Context
+
+Space registers an ordinary active MCP runtime and binds a run-scoped Host
+Tool lease to Worker Runs. The daemon combines those two runtime contracts for
+the bound Run; CLI Runs do not inherit the Space lease and therefore never
+exercise this merge. The Host Tool merge existed in v0.7.69, where legacy
+searches could already cross server boundaries. Snapshot-based progressive
+discovery in v0.7.70 then formed the full reported failure mode.
+
+#### Root Cause
+
+- `mergeExtensionRuntimeContracts()` forwarded legacy `searchCapabilities()`
+  but omitted the optional `searchCapabilitySnapshot()` contract added by the
+  progressive MCP discovery implementation.
+- `mcp_search` therefore used its legacy fallback. The merged legacy search
+  concatenated Host Tool results with the MCP provider's default 10-result
+  page, producing four host entries plus ten database entries.
+- The Host Tool reverse runtime ignored `options.server`, so an explicit
+  `db-query-server` filter did not remove its `server: "host"` entries.
+- The fallback truthfully but unhelpfully hard-coded the degraded snapshot as
+  incomplete with unknown freshness.
+
+#### Resolution
+
+- The Host Tool reverse runtime now publishes an immutable, live, complete
+  snapshot whose revision is scoped to the lease, and returns no results for
+  an explicit server other than `host`.
+- The daemon merge selects only the requested source for an explicit server;
+  without a server it composes Host Tool and active-runtime snapshots with
+  deduplicated items, combined revision/freshness/completeness, and failures.
+  A runtime with no MCP provider no longer prevents Host-only discovery.
+- A legacy runtime without snapshot support is queried without the ordinary
+  ten-item page cap, then reported honestly as incomplete with unknown freshness.
+- Regression tests prove the pre-fix failures (missing snapshot and ignored
+  server filter), preserve all 14 MCP entries, keep run-scoped Host Tools
+  discoverable through `mcp_search`, and retain bound Host Tool execution.
+
+#### Files Changed
+
+- `src/runtime-daemon/server.ts`
+- `src/runtime-daemon/reverse-bridge.ts`
+- `src/runtime-daemon/server.test.ts`
+- `src/runtime-daemon/reverse-bridge.test.ts`
+- `packages/coding/src/extensions/runtime.ts`
+- `packages/coding/src/extensions/runtime.test.ts`
+
+#### Tests Added
+
+- Model-facing `mcp_search` returns 14/14 database tools for the database
+  server, one Host Tool for `server: "host"`, and all 15 for an unfiltered
+  search, all with truthful live/complete metadata.
+- A Host Tool remains discoverable and executable when the active runtime has
+  no MCP provider; explicit non-host filtering returns no Host Tool.
+- A legacy MCP provider without snapshot support still contributes all 14
+  fixture tools while retaining degraded metadata.
 
 ### 278: Managed Runtime publishes completed turns without a durable canonical Session boundary
 
@@ -11384,11 +11461,20 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 158 (27 Open, 131 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 159 (27 Open, 132 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-05: Issue 279 added and resolved (post-v0.7.81 development)
+- Added a lease-scoped Host Tool snapshot and composed it with the active MCP
+  snapshot for unfiltered discovery; explicit server searches select only the
+  matching source and report a missing source as an empty degraded snapshot.
+- Preserved complete database discovery, model-facing Host Tool discovery, and
+  bound Host Tool execution without leaking Host Tools across server filters.
+- Added red/green regressions for database-only, Host-only, unfiltered, and
+  missing-active-provider paths, plus uncapped legacy-provider discovery.
 
 ### 2026-08-04: Issue 275 resolved (v0.7.80)
 - Kept ordinary search selectors, directory scopes, and Git reads on the

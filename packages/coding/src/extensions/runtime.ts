@@ -731,7 +731,10 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
       return this.withCapabilityProvider(provider, () => provider.searchSnapshot!(query, options));
     }
     const items = provider.search
-      ? await this.withCapabilityProvider(provider, () => provider.search!(query, options))
+      ? await this.withCapabilityProvider(provider, () => provider.search!(query, {
+        ...options,
+        limit: Number.MAX_SAFE_INTEGER,
+      }))
       : [];
     return { items, complete: false, freshness: 'unknown' };
   }
