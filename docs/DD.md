@@ -2,8 +2,8 @@
 
 > Last updated: 2026-08-05
 >
-> Current release baseline: `v0.7.81`
-> (`@kodax-ai/kodax@0.7.81`; npm publication remains manual)
+> Current release baseline: `v0.7.82`
+> (`@kodax-ai/kodax@0.7.82`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,18 +20,17 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.81`. This non-Feature
-debug/patch release makes active-Run interrupt delivery canonically
-referential: a Runtime-owned Session persists every accepted queued prompt
-before it reports delivery, and `RuntimeInterruptInputStatus` plus
-`run.input.delivered` expose the exact physical Session-lineage `entryId`.
-Multi-input drains retain distinct user-message boundaries with a
-per-queue-message entry map. Missing, ambiguous, or failed canonical
-persistence fails delivery closed; the reference remains available through
-event replay, Session compaction, and Runtime restart, while legacy records
-remain readable without it. It retains v0.7.80's Worker configured-A2A,
-managed Runner fuse, and Auto permission hardening. FEATURE_287 remains planned
-for v0.7.88; Issue 256 remains scheduled for v0.7.84.
+The root workspace package is `@kodax-ai/kodax@0.7.82`. This non-Feature
+runtime-causality patch fixes three active contracts: daemon Host Tool and MCP
+capability snapshots retain their complete/fresh scoped truth during composition;
+a recorded managed-Run Stop cooperatively fences later provider, guardrail,
+tool, and Run-owned Actor work and preserves trusted Abort terminal causality
+before credential redaction; and input admission resolves the authoritative Run
+before reading mutable Session history. Active interrupt and after-turn input
+therefore avoid transient `data_changed`, while continuation execution remains
+queued until predecessor settlement. It retains v0.7.81's canonical interrupt
+entry references. FEATURE_287 remains planned for v0.7.88; Issue 256 remains
+scheduled for v0.7.84.
 
 `package.json` exposes:
 

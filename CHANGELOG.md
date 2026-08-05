@@ -10,6 +10,32 @@ No changes yet.
 
 ---
 
+## [0.7.82] - 2026-08-05
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
+### Fixed
+
+- Daemon Host Tool capability discovery now preserves complete, lease-scoped
+  snapshots when it composes them with the active MCP runtime. Explicit server
+  filters select only their requested source, unfiltered discovery stays
+  complete/live, and legacy providers are queried without the ordinary page cap
+  while retaining explicit degraded metadata (Issue 279).
+- A recorded managed-Run Stop now fences provider retry/fallback/continuation,
+  guardrail, tool, and Actor work after cooperative cancellation is observed.
+  The trusted Stop/Abort cause is classified before credential redaction, so
+  status, terminal event, `runs.get()`, and `runs.await()` consistently report
+  interruption without overriding genuine completion or independent failures
+  (Issue 280).
+- `runtime.runs.submitInput()` and daemon preflight now resolve the admitted
+  authoritative Run before reading mutable Session history. Active interrupt
+  and after-turn admission no longer fail with transient `data_changed`; queued
+  continuations still wait for predecessor settlement and retain exact
+  operation-id idempotency (Issue 281).
+
+---
+
 ## [0.7.81] - 2026-08-05
 
 > Git tag and GitHub Release are created by the release workflow. npm

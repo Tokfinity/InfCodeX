@@ -2,6 +2,13 @@
 
 > Last updated: 2026-08-05
 >
+> **v0.7.82 release addendum:** daemon MCP/Host Tool discovery preserves
+> explicit source filtering and truthful complete/live capability snapshots;
+> managed-Run Stop cooperatively fences later Runtime-controlled work and keeps
+> trusted Abort causality ahead of credential redaction; and input submission
+> resolves an admitted authoritative Run before it can observe mutable Session
+> history. npm publication remains a separate manual operator step.
+>
 > **v0.7.81 release addendum:** Runtime-owned active-Run interrupt input is
 > persisted as one canonical Session user entry before delivery is published.
 > The public Run status and `run.input.delivered` event carry that exact
@@ -16,7 +23,7 @@
 > analysis now shares the deterministic analyzer with the SDK. npm publication
 > remains a separate manual operator step.
 >
-> This header and addendum are authoritative for the v0.7.81 release; the long
+> This header and addendum are authoritative for the v0.7.82 release; the long
 > architecture-state notice below is retained as historical context.
 >
 > **v0.7.79 Runtime observation and A2A authorization addendum:** Runtime

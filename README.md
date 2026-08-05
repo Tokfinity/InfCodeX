@@ -612,6 +612,18 @@ failure fails the delivery closed rather than emitting an unverifiable event.
 FEATURE_287 remains planned for v0.7.88; this is a non-Feature patch. See the
 [v0.7.81 release checklist](docs/release.md#v0781-release-preparation).
 
+**v0.7.82 Runtime causality release:** Daemon capability discovery now composes
+live, complete MCP and Host Tool snapshots only for unfiltered search; an
+explicit server filter selects that source alone, while legacy providers report
+honest incomplete/unknown discovery. An observed Stop cooperatively fences
+later retries, continuations, guardrails, tools, and Run-admitted Actor work;
+trusted Abort remains terminal causality before credential redaction without
+overriding a real completion or independent failure. Input submission resolves
+the admitted authoritative Run before reading mutable Session history, so
+active interrupt and after-turn admission do not produce a transient
+`data_changed` rejection. FEATURE_287 remains planned for v0.7.88; this is a
+non-Feature patch. See the [v0.7.82 release checklist](docs/release.md#v0782-release-preparation).
+
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX

@@ -223,6 +223,15 @@ provenance 失败会 fail closed，不会发布无法验证的交付事件。FEA
 v0.7.88；本版本是非 Feature 补丁。详见
 [v0.7.81 发布清单](docs/release.md#v0781-release-preparation)。
 
+**v0.7.82 Runtime 因果性发布**：daemon 的未过滤 capability 发现会组合 live、complete
+的 MCP 与 Host Tool snapshot；显式 `server` 过滤只选择对应来源，legacy provider 则如实
+报告 incomplete/unknown。观察到 Stop 后，后续 retry、continuation、guardrail、tool 及
+Run-admitted Actor 工作会协作式停止；可信 Abort 会在 credential redaction 前保留为终态
+因果，但不会覆盖真实 completion 或独立 failure。输入提交先解析已接纳的 authoritative
+Run，再读取可变 Session history，因此活动中断和 after-turn 接纳不会产生瞬态
+`data_changed` 拒绝。FEATURE_287 仍计划于 v0.7.88；本版本是非 Feature 补丁。详见
+[v0.7.82 发布清单](docs/release.md#v0782-release-preparation)。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

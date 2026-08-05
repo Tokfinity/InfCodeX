@@ -89,6 +89,13 @@ each queued prompt is persisted as its own canonical user entry before
 event and Run status. Missing canonical persistence or an ambiguous entry fails
 the delivery closed. `kodax_manual` documents the same contract.
 
+The v0.7.82 release composes complete live MCP and Host Tool discovery only for
+unfiltered search, while an explicit server filter isolates its source. Managed
+Stop cooperatively fences later recovery, tool, and Actor work without rewriting
+a real completion or independent failure; input admission resolves its Run before
+reading mutable Session history, avoiding transient `data_changed` responses.
+`kodax_manual` documents these boundaries.
+
 ## 安装 / 导入
 
 ```bash

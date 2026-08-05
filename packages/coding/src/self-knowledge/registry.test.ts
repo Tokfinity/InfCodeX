@@ -145,6 +145,18 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toMatch(/fails\s+the\s+current\s+delivery\s+closed/);
   });
 
+  it('documents the v0.7.82 discovery and runtime-causality contract', () => {
+    const mcp = resolveKodaXManual({ topic: 'mcp' }).content;
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(mcp).toContain('lease-scoped live, complete snapshot');
+    expect(mcp).toContain('unfiltered');
+    expect(mcp).toContain('incomplete/unknown');
+    expect(sdk).toContain('authoritative Run');
+    expect(sdk).toContain('data_changed');
+    expect(sdk).toContain('cooperative');
+  });
+
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
 

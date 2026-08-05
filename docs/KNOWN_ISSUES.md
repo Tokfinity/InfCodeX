@@ -14,9 +14,9 @@ _Last Updated: 2026-08-05_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
-| 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
-| 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
+| 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
+| 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
+| 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 276 | High | Resolved | Release preparation reused a stale F274 experiment, narrowed sibling provenance to control scope, and silently dropped a daemon host binding | v0.7.80 release preparation | v0.7.80 release | 2026-08-04 | 2026-08-04 |
@@ -190,7 +190,7 @@ _Last Updated: 2026-08-05_
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.69 Runtime input submission
-- **Fixed**: post-v0.7.81 development
+- **Fixed**: v0.7.82 release
 - **Created**: 2026-08-05
 - **Resolved**: 2026-08-05
 
@@ -266,7 +266,7 @@ authoritative Run checks and can observe a transient canonical revision.
 - **Priority**: High
 - **Status**: Resolved
 - **Introduced**: v0.7.69 daemon managed Runs
-- **Fixed**: post-v0.7.81 development
+- **Fixed**: v0.7.82 release
 - **Created**: 2026-08-05
 - **Resolved**: 2026-08-05
 
@@ -362,7 +362,7 @@ ignores `AbortSignal`.
 - **Priority**: Medium
 - **Status**: Resolved
 - **Introduced**: v0.7.70 progressive MCP discovery
-- **Fixed**: post-v0.7.81 development
+- **Fixed**: v0.7.82 release
 - **Created**: 2026-08-05
 - **Resolved**: 2026-08-05
 
@@ -11641,7 +11641,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ## Changelog
 
-### 2026-08-05: Issue 281 added and resolved (post-v0.7.81 development)
+### 2026-08-05: Issue 281 resolved (v0.7.82)
 - Reordered input admission around the authoritative Run and cached its minimal
   admitted Session context, eliminating canonical transcript reads from active
   interrupt/after-turn submission and daemon preflight.
@@ -11649,14 +11649,14 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   surface rejection, stale and interrupt-window responses, and exact-operation
   single-enqueue behavior; aligned daemon active phases with the SDK.
 
-### 2026-08-05: Issue 280 added and resolved (post-v0.7.81 development)
+### 2026-08-05: Issue 280 resolved (v0.7.82)
 - Fenced managed Provider recovery, continuation, and tool admission after an
   observed Run abort, and cooperatively converged Run-admitted Actor turns.
 - Preserved trusted Stop/Abort causality before credential redaction so every
   terminal surface reports interrupted consistently without changing genuine
   completion or independent-failure races.
 
-### 2026-08-05: Issue 279 added and resolved (post-v0.7.81 development)
+### 2026-08-05: Issue 279 resolved (v0.7.82)
 - Added a lease-scoped Host Tool snapshot and composed it with the active MCP
   snapshot for unfiltered discovery; explicit server searches select only the
   matching source and report a missing source as an empty degraded snapshot.

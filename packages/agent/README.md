@@ -108,6 +108,12 @@ unambiguous provenance source; reused or otherwise ambiguous references return
 `undefined`. Runtime delivery uses this narrow proof instead of deriving an
 entry from transcript order.
 
+The v0.7.82 release makes managed cancellation cooperative and causal:
+`AgentActorController.quiesce()` preserves turns admitted before the Stop while
+preventing later Run-owned admission, and cancellation after required settlement
+fails rather than disappearing. Runner guardrail and tool boundaries observe an
+already-aborted signal before starting further work.
+
 Windows process-tree cleanup now identity-checks observed roots and descendants
 and returns an indeterminate outcome when evidence is incomplete. Snapshot
 ancestry is not kernel containment, however; Issue 256 remains open and is

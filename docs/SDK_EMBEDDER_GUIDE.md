@@ -4227,6 +4227,13 @@ interrupted, and late finalizer/recovery progress cannot revive an unconfirmed
 stopped Run. If the Runtime owner then dies, recovery resolves the pending Stop
 as `confirmed/interrupted`.
 
+Since v0.7.82, an observed Stop cooperatively gates later Runtime-controlled
+provider retries and continuations, Runner guardrail/tool dispatch, and
+Run-admitted Actor work. It does not hard-kill turns admitted before Stop or
+rewrite a genuine completion or an independent failure. A trusted Stop/Abort
+cause is classified before credential redaction, so `runs.get()` and `await()`
+report the same factual terminal outcome.
+
 For support bundles, use the pure read-only compositor:
 
 ```ts
@@ -4412,6 +4419,12 @@ ambiguous canonical reference fails delivery closed. The field may be absent
 only when reading a legacy persisted record. Event replay, Session compaction,
 and Runtime restart preserve a newly recorded reference.
 
+Since v0.7.82, submission resolves the admitted authoritative Run before it
+reads mutable canonical Session history. Active interrupt and after-turn
+requests therefore do not surface a transient `data_changed` response caused by
+predecessor persistence. `after_turn` still waits for predecessor settlement,
+and an exact `operationId` still produces one admission and one queue item.
+
 Interrupt admission closes when the Runner publishes its final completion or
 terminal error signal, or when the Run's supplied `abortSignal` aborts, even if
 the outer Run is still settling. Non-terminal observer diagnostics do not close
@@ -4592,6 +4605,12 @@ metadata state `prepared`, `dispatched`, `completed`, `unknown`, or
 `not_dispatched`; it never returns handler input, result, or credential data.
 The daemon writes the `dispatched` marker before attempting the reverse frame
 and never auto-replays an invocation.
+
+Since v0.7.82, a live Host Tool lease contributes a complete, lease-scoped
+capability snapshot to unfiltered `mcp_search`. An explicit `server` filter
+selects only that named MCP or Host Tool source; it never leaks tools from the
+other source. A provider without a snapshot is queried uncapped and reported as
+incomplete/unknown rather than silently presenting a truncated catalog.
 
 ### Coder admission, typed events, and transport-safe inputs
 
