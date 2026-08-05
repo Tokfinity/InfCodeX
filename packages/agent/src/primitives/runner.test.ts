@@ -743,6 +743,38 @@ describe('Runner', () => {
       };
     }
 
+    it('does not start a tool after caller cancellation is observed by beforeTool', async () => {
+      const controller = new AbortController();
+      const execute = vi.fn(async () => ({ content: 'must not execute' }));
+      const agent = createAgent({
+        name: 'cancelled-before-tool-agent',
+        instructions: 'sys',
+        tools: [{
+          name: 'bash',
+          description: 'test tool',
+          input_schema: { type: 'object', properties: {} },
+          execute,
+        }],
+      });
+
+      const run = Runner.run(agent, 'q', {
+        abortSignal: controller.signal,
+        llm: async () => ({
+          text: '',
+          toolCalls: [{ id: 'cancelled-call', name: 'bash', input: {} }],
+        }),
+        toolObserver: {
+          beforeTool: async () => {
+            controller.abort();
+            return true;
+          },
+        },
+      });
+
+      await expect(run).rejects.toMatchObject({ name: 'AbortError' });
+      expect(execute).not.toHaveBeenCalled();
+    });
+
     it('fires onToolCall + onToolResult around each invocation', async () => {
       const echoTool = makeLocalEchoTool();
       const agent = createAgent({ name: 'obs-agent', instructions: 'sys', tools: [echoTool] });

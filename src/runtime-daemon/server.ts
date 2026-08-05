@@ -2095,6 +2095,8 @@ function isActiveRuntimeRunPhase(phase: string): boolean {
   return (
     phase === "queued" ||
     phase === "running" ||
+    phase === "waiting_agent" ||
+    phase === "recovering" ||
     phase === "waiting_permission" ||
     phase === "waiting_user_input"
   );

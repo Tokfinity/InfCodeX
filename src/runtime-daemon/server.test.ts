@@ -538,6 +538,7 @@ describe('runtime daemon dispatcher', () => {
 
       expect(isRuntimeDaemonSuccessResponse(first)).toBe(true);
       expect(retry).toEqual({ ...first, id: 'req-input-2' });
+      expect(runtime.runs.get).toHaveBeenCalledTimes(1);
       expect(submit).toHaveBeenCalledTimes(1);
       dispatcher.close();
     } finally {
@@ -605,6 +606,7 @@ describe('runtime daemon dispatcher', () => {
         });
       }
       expect(retry).toEqual({ ...first, id: 'req-interrupt-2' });
+      expect(runtime.runs.get).toHaveBeenCalledTimes(1);
       expect(submit).toHaveBeenCalledTimes(1);
       expect(submit).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: 'session-1',
@@ -666,6 +668,51 @@ describe('runtime daemon dispatcher', () => {
     expect(submit).not.toHaveBeenCalled();
     dispatcher.close();
   });
+
+  it.each(['waiting_agent', 'recovering'] as const)(
+    'keeps %s Runs eligible for after-turn input',
+    async (phase) => {
+      const runtime = makeRuntime();
+      vi.spyOn(runtime.runs, 'get').mockResolvedValue({
+        runId: 'run-active',
+        sessionId: 'session-1',
+        phase,
+        startedAt: '2026-07-14T00:00:00.000Z',
+        provider: 'mock',
+      });
+      const submit = vi.spyOn(runtime.runs, 'submitInput').mockResolvedValue({
+        accepted: true,
+        delivery: 'after_turn',
+        runId: 'run-continuation',
+        sessionId: 'session-1',
+        afterRunId: 'run-active',
+        sessionOrder: 2,
+      });
+      const dispatcher = createRuntimeDaemonDispatcher({ runtime });
+      await initializeDispatcher(dispatcher);
+
+      const response = await dispatcher.handle(createRuntimeDaemonRequest(
+        `req-after-turn-${phase}`,
+        'run.input.submit',
+        {
+          sessionId: 'session-1',
+          afterRunId: 'run-active',
+          delivery: 'after_turn',
+          input: { type: 'text', text: 'continue' },
+        },
+      ));
+
+      expect(isRuntimeDaemonSuccessResponse(response)).toBe(true);
+      if (isRuntimeDaemonSuccessResponse(response)) {
+        expect(response.result).toMatchObject({
+          accepted: true,
+          runId: 'run-continuation',
+        });
+      }
+      expect(submit).toHaveBeenCalledTimes(1);
+      dispatcher.close();
+    },
+  );
 
   it('binds reverse calls to one run without degrading the active MCP snapshot', async () => {
     const runtime = makeRuntime();

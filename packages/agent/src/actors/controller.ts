@@ -571,20 +571,41 @@ export class AgentActorController {
     this.stopLocalWork(reason);
   }
 
-  /** Interrupts every local execution while retaining the durable owner fence. */
-  async quiesce(reason = 'runtime quiesced'): Promise<void> {
+  /** Interrupts eligible local execution while retaining the durable owner fence. */
+  async quiesce(
+    reason = 'runtime quiesced',
+    preservedTurnIds?: ReadonlySet<string>,
+  ): Promise<void> {
     if (this.ownershipReleased) return;
-    const aborts = await this.mutate(() => {
-      const pendingAborts: AbortController[] = [];
-      for (const turn of this.turns.values()) {
-        if (isTerminal(turn.state)) continue;
-        const abort = this.abortControllers.get(turn.turnId);
-        if (abort) pendingAborts.push(abort);
-        this.finishTurn(turn.turnId, 'interrupted', { error: reason });
+    let earlyAbortedTurnId: string | undefined;
+    try {
+      await this.mutate(() => {
+        for (const turn of this.turns.values()) {
+          if (isTerminal(turn.state) || preservedTurnIds?.has(turn.turnId)) continue;
+          const abort = this.abortControllers.get(turn.turnId);
+          // Fence a start whose admission commit just completed before its
+          // caller can schedule the executor while this durable mutation waits.
+          if (abort && !abort.signal.aborted) {
+            earlyAbortedTurnId ??= turn.turnId;
+            abort.abort(reason);
+          }
+          this.finishTurn(turn.turnId, 'interrupted', { error: reason });
+        }
+      });
+    } catch (error: unknown) {
+      if (earlyAbortedTurnId !== undefined) {
+        this.indeterminateFailure = normalizeControllerError(error);
+        this.fenceUnknownSettlement();
+        this.setHealth({
+          state: 'unknown',
+          code: 'actor_settlement_not_persisted',
+          turnId: earlyAbortedTurnId,
+          message:
+            `Actor cancellation for ${earlyAbortedTurnId} was observed locally but could not be durably confirmed.`,
+        });
       }
-      return pendingAborts;
-    });
-    for (const abort of aborts) abort.abort(reason);
+      throw error;
+    }
   }
 
   /** Stops in-flight work for process shutdown while preserving reusable Actor identities. */

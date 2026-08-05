@@ -518,6 +518,109 @@ describe('F270 actor tree and scheduler', () => {
       .resolves.toMatchObject({ delivery: 'started_turn' });
   });
 
+  it('quiesces only turns admitted after a preserved active-turn baseline', async () => {
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({ executor });
+    const preserved = await controller.spawn('/root', {
+      taskName: 'pre-existing',
+      objective: 'Remain independent.',
+    });
+    const owned = await controller.spawn('/root', {
+      taskName: 'run-owned',
+      objective: 'Stop with the managed Run.',
+    });
+
+    await controller.quiesce('runtime run aborted', new Set([preserved.turnId]));
+
+    expect(controller.output('/root', preserved.actorPath, preserved.turnId))
+      .toMatchObject({ state: 'running' });
+    expect(controller.output('/root', owned.actorPath, owned.turnId))
+      .toMatchObject({ state: 'interrupted', error: 'runtime run aborted' });
+    expect(executor.pending[0]?.input.signal.aborted).toBe(false);
+    expect(executor.pending[1]?.input.signal.aborted).toBe(true);
+  });
+
+  it('quiesces a durably pending admission before its executor can start', async () => {
+    let releaseStartSave: (() => void) | undefined;
+    let startSaveEntered: (() => void) | undefined;
+    let saveCount = 0;
+    const startSaveStarted = new Promise<void>((resolve) => { startSaveEntered = resolve; });
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save() {
+          saveCount += 1;
+          if (saveCount !== 1) return;
+          startSaveEntered?.();
+          await new Promise<void>((resolve) => { releaseStartSave = resolve; });
+        },
+      },
+    });
+
+    const spawning = controller.spawn('/root', {
+      taskName: 'racing-quiesce',
+      objective: 'Do not start after cancellation.',
+    });
+    await startSaveStarted;
+    const quiescing = controller.quiesce('runtime run aborted');
+    releaseStartSave?.();
+
+    const [turn] = await Promise.all([spawning, quiescing]);
+    await settle();
+
+    expect(executor.pending).toHaveLength(0);
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'interrupted', error: 'runtime run aborted',
+    });
+  });
+
+  it('reports unknown health when a pre-launch quiesce cannot be persisted', async () => {
+    let releaseStartSave: (() => void) | undefined;
+    let startSaveEntered: (() => void) | undefined;
+    let saveCount = 0;
+    const startSaveStarted = new Promise<void>((resolve) => { startSaveEntered = resolve; });
+    const executor = new DeferredExecutor();
+    const controller = await createAgentActorController({
+      executor,
+      store: {
+        async load() { return undefined; },
+        async save() {
+          saveCount += 1;
+          if (saveCount === 1) {
+            startSaveEntered?.();
+            await new Promise<void>((resolve) => { releaseStartSave = resolve; });
+            return;
+          }
+          throw new Error('quiesce save failed');
+        },
+      },
+    });
+
+    const spawning = controller.spawn('/root', {
+      taskName: 'indeterminate-quiesce',
+      objective: 'Do not become false healthy work.',
+    });
+    await startSaveStarted;
+    const quiescing = controller.quiesce('runtime run aborted');
+    releaseStartSave?.();
+
+    const turn = await spawning;
+    await expect(quiescing).rejects.toThrow('quiesce save failed');
+    await settle();
+
+    expect(executor.pending).toHaveLength(0);
+    expect(controller.output('/root', turn.actorPath, turn.turnId)).toMatchObject({
+      state: 'running',
+    });
+    expect(controller.healthSnapshot()).toMatchObject({
+      state: 'unknown',
+      code: 'actor_settlement_not_persisted',
+      turnId: turn.turnId,
+    });
+  });
+
   it('rejects subtree interruption atomically when one active descendant cannot interrupt', async () => {
     const executor = new DeferredExecutor();
     const controller = await createAgentActorController({ executor });

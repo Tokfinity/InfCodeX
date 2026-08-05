@@ -14,6 +14,8 @@ _Last Updated: 2026-08-05_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
+| 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
 | 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | post-v0.7.81 development | 2026-08-05 | 2026-08-05 |
 | 278 | High | Resolved | Managed Runtime publishes completed turns without a durable canonical Session boundary | v0.7.79 Runtime Session persistence | v0.7.80 release | 2026-08-04 | 2026-08-04 |
 | 277 | High | Resolved | Synchronous tokenization precedes tool-output byte/line spill | v0.7.74 tool attention admission | v0.7.80 release | 2026-08-04 | 2026-08-04 |
@@ -182,6 +184,178 @@ _Last Updated: 2026-08-05_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 281: Runtime input submission reads mutable canonical Session before resolving its authoritative Run target
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.69 Runtime input submission
+- **Fixed**: post-v0.7.81 development
+- **Created**: 2026-08-05
+- **Resolved**: 2026-08-05
+
+#### Original Problem
+
+`runtime.runs.submitInput()` reads the canonical Session before resolving and
+validating the authoritative `afterRunId`. Normal interrupt and after-turn
+submission can therefore race with persistence from that Run and incorrectly
+fail with `data_changed`.
+
+Submission should first resolve the target Run, validate its `sessionId`, and
+authorize from the identity already admitted for that Run without reading its
+mutable transcript or history. Any history needed by an after-turn Run should
+be loaded only after the predecessor has fully ended. Existing Partner and
+unknown-surface rejection, stale-Run responses, and `operationId` idempotency
+must remain intact so one logical input cannot be queued twice.
+
+#### Context
+
+The daemon currently performs a Session-reading `runs.get()` preflight before
+calling the SDK submission path, while the SDK path independently calls
+`loadRequired()` before looking up `afterRunId`. Both reads precede the
+authoritative Run checks and can observe a transient canonical revision.
+
+#### Root Cause
+
+- SDK submission called `loadRequired()` before resolving `afterRunId`, and an
+  after-turn submission then called `loadExecutable()` again while its
+  predecessor was still writing the Session.
+- The daemon's authoritative-Run preflight used `runs.get()`, whose admission
+  check also reread the canonical Session for a locally owned active Run.
+- The daemon active-phase helper omitted `waiting_agent` and `recovering`, so
+  those nonterminal Runs could be mistaken for stale continuations.
+
+#### Resolution
+
+- Each locally admitted Run now retains a private, immutable Session context
+  containing only execution metadata and cached surface/profile identity, not
+  transcript or history.
+- Submission resolves and validates `afterRunId` and `sessionId` first, then
+  authorizes from that Run's cached admission. After-turn preparation reuses
+  the same context and preserves the existing second stale check immediately
+  before queue insertion.
+- Local nonterminal `runs.get()`/`runs.await()` use cached admission, allowing
+  the daemon preflight and retained result registration to remain side-effect
+  free. Foreign, persisted, and terminal `runs.get()`/`runs.await()` access
+  keeps canonical admission.
+- The executor still launches only through the existing per-Session queue after
+  predecessor settlement, so its history load observes the completed turn.
+- Daemon preflight now recognizes every SDK active phase while retaining queued
+  interrupt, closed-window, cross-Session, and terminal stale behavior.
+
+#### Files Changed
+
+- `src/sdk-runtime.ts`
+- `src/sdk-runtime.test.ts`
+- `src/runtime-daemon/server.ts`
+- `src/runtime-daemon/server.test.ts`
+
+#### Test Plan
+
+- An adversarial `data_changed` storage hook proves `runs.get`, `runs.await`,
+  interrupt, and after-turn admission perform no canonical Session read while
+  their authoritative predecessor is active.
+- The continuation stays queued and its executor does not launch until the
+  predecessor settles; queue-time Session settings remain snapshotted.
+- Partner and unknown surfaces remain outside shared Runtime Run admission.
+- Daemon `waiting_agent`/`recovering` phases remain eligible, while exact
+  `operationId` retries perform one preflight and one submission only.
+
+### 280: Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction
+
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.7.69 daemon managed Runs
+- **Fixed**: post-v0.7.81 development
+- **Created**: 2026-08-05
+- **Resolved**: 2026-08-05
+
+#### Original Problem
+
+After `runtime.runs.abort(runId)`, a managed Provider can observe the Run's
+`AbortSignal` and throw `AbortError`, while the managed executor still enters
+recovery or starts SDK-controlled LLM, tool, and Actor work. Active Actor
+descendants can therefore keep the Run at `phase=unknown` with
+`stop_outcome_unconfirmed`. When settlement eventually reaches the Runtime,
+run-scoped credential redaction replaces the trusted Abort cause with a generic
+Provider credential error and terminalizes the Run as ordinary `failed`.
+
+Expected behavior is to fence new managed work once cooperative cancellation is
+observed, cancel and converge SDK-controllable Actor descendants caused by the
+Run, and classify the final status, terminal event, and await/get results as
+`cancelled` or `interrupted`. Initial Stop acknowledgement may remain unknown,
+real completion races may remain completed, and independent failures must remain
+failed.
+
+#### Context
+
+The defect spans the daemon-owned Runtime Run service, the managed Provider
+resilience loop, Runtime tool admission, Actor finalization, and the
+credential-safe error terminalization path. The fix must not add API fields,
+identity fields, status enums, or hard-kill guarantees for external code that
+ignores `AbortSignal`.
+
+#### Proposed Solution
+
+- Add cancellation gates before managed Provider recovery/retry and Runtime
+  tool admission.
+- Cooperatively interrupt only active Actor turns admitted after this Run began,
+  then await their existing durable settlement path.
+- Classify only the trusted conjunction of recorded Stop, aborted Run signal,
+  and raw `AbortError` before credential normalization; keep unrelated errors on
+  the existing failed path.
+- Add regressions for credential-safe Abort terminalization, descendant
+  convergence, late completion, and independent failure races.
+
+#### Root Cause
+
+- The managed Provider resilience loop treated an observed caller abort like an
+  ordinary Provider failure, so recovery, fallback, continuation, or later tool
+  admission could start after the Run signal was already aborted.
+- Runtime finalization waited on the whole Session Actor tree but did not issue
+  a cooperative interruption scoped to turns admitted by the managed Run.
+- Run-scoped credential normalization ran before terminal-cause classification,
+  replacing the raw `AbortError` needed to prove the recorded Stop relationship.
+
+#### Resolution
+
+- Added AbortSignal gates around managed Provider retry/fallback/continuation,
+  Runner guardrails and tools, and Coding permission/dispatch boundaries.
+- Captured the active Actor-turn baseline when the managed Run starts, then
+  atomically quiesced only later SDK-controlled turns on Stop and awaited their
+  existing durable settlement path. Pre-existing Session Actors remain active.
+- Classified only `managed_task + recorded Stop + aborted Run signal + raw
+  AbortError` as a trusted interrupted terminal before credential redaction.
+  Unrequested AbortErrors and independent failures retain the failed path, while
+  latched completion remains authoritative.
+- Cleared the temporary `stop_outcome_unconfirmed` placeholder on confirmed
+  terminal settlement so `RunHandle`, terminal event, `runs.get`, and
+  `runs.await` expose the same outcome.
+
+#### Files Changed
+
+- `packages/agent/src/actors/controller.ts`
+- `packages/agent/src/primitives/runner.ts`
+- `packages/agent/src/primitives/runner-tool-loop.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `packages/coding/src/agent-runtime/tool-dispatch.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/agent-chain.ts`
+- `packages/coding/src/task-engine/_internal/managed-task/llm-adapter.ts`
+- `src/sdk-runtime.ts`
+- Adjacent unit, contract, managed-runner, and Runtime regression tests.
+
+#### Test Coverage
+
+- Provider AbortError does not enter recovery/fallback or start a continuation.
+- Abort during async guardrail/permission work prevents concrete tool execution.
+- A durably pending Actor admission is interrupted before its executor starts.
+- If that cancellation cannot be persisted, Actor health becomes explicit
+  `unknown` instead of exposing a false healthy-running state.
+- Stop interrupts Run-admitted Actor descendants without touching pre-existing
+  Session Actors.
+- Trusted Stop/Abort terminalization is credential-safe and consistent across
+  events and all Run read APIs; independent failure, unrequested AbortError, and
+  completion-race controls remain unchanged.
 
 ### 279: Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search
 
@@ -11461,11 +11635,26 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 159 (27 Open, 132 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 161 (27 Open, 134 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-08-05: Issue 281 added and resolved (post-v0.7.81 development)
+- Reordered input admission around the authoritative Run and cached its minimal
+  admitted Session context, eliminating canonical transcript reads from active
+  interrupt/after-turn submission and daemon preflight.
+- Preserved delayed after-turn launch, queue-time settings, Partner/unknown
+  surface rejection, stale and interrupt-window responses, and exact-operation
+  single-enqueue behavior; aligned daemon active phases with the SDK.
+
+### 2026-08-05: Issue 280 added and resolved (post-v0.7.81 development)
+- Fenced managed Provider recovery, continuation, and tool admission after an
+  observed Run abort, and cooperatively converged Run-admitted Actor turns.
+- Preserved trusted Stop/Abort causality before credential redaction so every
+  terminal surface reports interrupted consistently without changing genuine
+  completion or independent-failure races.
 
 ### 2026-08-05: Issue 279 added and resolved (post-v0.7.81 development)
 - Added a lease-scoped Host Tool snapshot and composed it with the active MCP

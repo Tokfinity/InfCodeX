@@ -202,8 +202,11 @@ export class CodingActorSession {
     this.environment = undefined;
   }
 
-  quiesce(reason = 'runtime quiesced'): Promise<void> {
-    return this.controller.quiesce(reason);
+  quiesce(
+    reason = 'runtime quiesced',
+    preservedTurnIds?: ReadonlySet<string>,
+  ): Promise<void> {
+    return this.controller.quiesce(reason, preservedTurnIds);
   }
 
   disposeAfterStoreRemoval(reason = 'session removed'): void {

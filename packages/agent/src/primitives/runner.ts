@@ -1189,12 +1189,14 @@ async function genericRun<TData>(
     // to the call; the provider-emitted tool_use block is not committed yet.
     // Rewrites become the canonical call for every downstream consumer.
     const prepareOneCall = async (index: number): Promise<void> => {
+      throwIfAborted();
       const outcome = await runToolBeforeGuardrails(
         toolCalls[index]!,
         guardrailSlots.tool,
         { ...guardrailCtx, agent: currentAgent, messages: [...transcript] },
         agentSpan,
       );
+      throwIfAborted();
       (finalCalls as RunnerToolCall[])[index] = outcome.call;
       if (outcome.kind === 'block') {
         results[index] = outcome.result;
@@ -1238,6 +1240,7 @@ async function genericRun<TData>(
     // Bash stays serial because shell side-effects can interfere
     // (git checkout followed by git diff, etc.).
     const executeOneCall = async (index: number): Promise<void> => {
+      throwIfAborted();
       const call = finalCalls[index]!;
       if (guardrailBlockedIndices.has(index)) {
         // Still fire the observer so the REPL sees the blocked call +
@@ -1293,6 +1296,7 @@ async function genericRun<TData>(
       // message as the tool result seen by the LLM).
       if (opts.toolObserver?.beforeTool) {
         const verdict = await opts.toolObserver.beforeTool(call);
+        throwIfAborted();
         if (verdict === false || typeof verdict === 'string') {
           const blockedMessage = typeof verdict === 'string'
             ? verdict
@@ -1311,6 +1315,7 @@ async function genericRun<TData>(
         agentSpan,
         transcript,
       });
+      throwIfAborted();
       if (guardrailSlots.tool.length > 0) {
         // Per-invocation: pass the CURRENT agent (may differ from
         // startAgent after handoff). Same reasoning as the beforeTool
@@ -1322,6 +1327,7 @@ async function genericRun<TData>(
           { ...guardrailCtx, agent: currentAgent, messages: [...transcript] },
           agentSpan,
         );
+        throwIfAborted();
       }
       results[index] = result;
       // FEATURE_101 (v0.7.31.1): dispatch tool_call observe event to

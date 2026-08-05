@@ -232,6 +232,27 @@ describe('CAP-077: runToolDispatch — mid-bash abort (Issue 088)', () => {
     expect(resultMap.get('a')).toBe(CANCELLED_TOOL_RESULT_MESSAGE);
     expect(resultMap.get('b')).toBe(CANCELLED_TOOL_RESULT_MESSAGE);
   });
+
+  it('CAP-TOOL-DISPATCH-PAR-003c: abort observed while permission is pending fences concrete tool execution', async () => {
+    const ctrl = new AbortController();
+    const events: KodaXEvents = {
+      beforeToolExecute: async () => {
+        ctrl.abort();
+        return true;
+      },
+    };
+
+    const resultMap = await runToolDispatch({
+      toolBlocks: [tool('a', 'read')],
+      events,
+      ctx: makeCtx(),
+      runtimeSessionState: freshState(),
+      activeToolNames: ['read'],
+      abortSignal: ctrl.signal,
+    });
+
+    expect(resultMap.get('a')).toBe(CANCELLED_TOOL_RESULT_MESSAGE);
+  });
 });
 
 describe('CAP-077: raw result handoff', () => {

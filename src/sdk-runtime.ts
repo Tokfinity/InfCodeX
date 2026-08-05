@@ -2796,6 +2796,11 @@ function createRuntimeSessionDiagnosticsRecord(
   };
 }
 
+interface RuntimeAdmittedSessionContext {
+  readonly gitRoot: string;
+  readonly runtimeInfo?: KodaXSessionData["runtimeInfo"];
+}
+
 interface RuntimeRunRecord {
   readonly runId: string;
   readonly sessionId: string;
@@ -2825,6 +2830,8 @@ interface RuntimeRunRecord {
   running?: RunningSession;
   abortController?: AbortController;
   actorFinalizationAbortController?: AbortController;
+  actorTurnBaseline?: ReadonlySet<string>;
+  actorCancellation?: Promise<void>;
   mode: RuntimeRunMode;
   readonly origin?: RuntimeRunStatus["origin"];
   readonly continuation?: Omit<RuntimeContinuationStatus, "state">;
@@ -2834,6 +2841,7 @@ interface RuntimeRunRecord {
   readonly hadProviderCredential: boolean;
   readonly agentContext?: AgentDispatchContext;
   readonly actorSession?: CodingActorSession;
+  readonly admittedSessionContext?: RuntimeAdmittedSessionContext;
   interruptInputOpen: boolean;
   releaseAbortSignalSubscription?: () => void;
   start?: PendingRunStart;
@@ -7141,6 +7149,50 @@ function createRuntimeRunService(deps: {
     return result;
   };
 
+  const activeManagedActorTurnIds = (
+    record: RuntimeRunRecord,
+  ): readonly string[] => {
+    const actorSession = record.actorSession;
+    const baseline = record.actorTurnBaseline;
+    if (actorSession === undefined || baseline === undefined) return [];
+    return actorSession.rootControl().list().actors.flatMap((actor) =>
+      actor.path !== "/root"
+        && actor.currentTurnId !== undefined
+        && !baseline.has(actor.currentTurnId)
+        ? [actor.currentTurnId]
+        : []
+    );
+  };
+
+  const requestManagedActorCancellation = (
+    record: RuntimeRunRecord,
+    reason: string,
+  ): Promise<void> => {
+    const actorSession = record.actorSession;
+    const baseline = record.actorTurnBaseline;
+    if (
+      record.mode !== "managed_task"
+      || record.stop === undefined
+      || actorSession === undefined
+      || baseline === undefined
+    ) {
+      return Promise.resolve();
+    }
+    const previous = record.actorCancellation ?? Promise.resolve();
+    const cancellation = previous
+      .then(() => actorSession.quiesce(reason, baseline))
+      .catch((error: unknown) => {
+        emitKodaXDiagnostic({
+          source: "runtime.run.actor-cancellation",
+          level: "error",
+          message: `Failed to cooperatively cancel Actor descendants for Runtime run ${record.runId}.`,
+          detail: error,
+        });
+      });
+    record.actorCancellation = cancellation;
+    return cancellation;
+  };
+
   const awaitActorFinalization = async (
     record: RuntimeRunRecord,
   ): Promise<AgentControllerHealth> => {
@@ -7200,6 +7252,10 @@ function createRuntimeRunService(deps: {
         if (finalizationAbort.signal.aborted) return finalizationTimedOut();
         const actorSession = record.actorSession;
         if (actorSession === undefined) return { state: "healthy" };
+        if (record.stop !== undefined && record.actorTurnBaseline !== undefined) {
+          await requestManagedActorCancellation(record, record.stop.reason);
+          if (finalizationAbort.signal.aborted) return finalizationTimedOut();
+        }
         const observed = actorSession.health();
         if (observed.state === "recovering") {
           const healthChange = deps.waitForActorHealthChange(record.sessionId);
@@ -7231,36 +7287,74 @@ function createRuntimeRunService(deps: {
         if (observed.state === "unknown") return observed;
         const root = actorSession.rootControl();
         const tree = root.list();
-        if (tree.activeNonRootTurns > 0) {
+        const activeSubtaskCount =
+          record.stop !== undefined && record.actorTurnBaseline !== undefined
+            ? activeManagedActorTurnIds(record).length
+            : tree.activeNonRootTurns;
+        if (activeSubtaskCount > 0) {
           if (record.stop?.state !== "unknown") {
             const phaseChanged = record.phase !== "waiting_agent";
             const countChanged =
-              record.activeSubtaskCount !== tree.activeNonRootTurns;
+              record.activeSubtaskCount !== activeSubtaskCount;
             if (phaseChanged) {
               record.phase = "waiting_agent";
               record.stage = "waiting_agent";
               record.stageChangedAt = new Date().toISOString();
             }
-            record.activeSubtaskCount = tree.activeNonRootTurns;
+            record.activeSubtaskCount = activeSubtaskCount;
             if (phaseChanged || countChanged) publishRunUpdate(record);
           }
           const cursor = root.eventSnapshot().at(-1)?.sequence ?? 0;
-          if (root.list().activeNonRootTurns === 0) continue;
+          if (
+            record.stop !== undefined && record.actorTurnBaseline !== undefined
+              ? activeManagedActorTurnIds(record).length === 0
+              : root.list().activeNonRootTurns === 0
+          ) continue;
           const healthChange = deps.waitForActorHealthChange(record.sessionId);
+          let resolveCancellation: (() => void) | undefined;
+          const cancellationRequested = new Promise<void>((resolve) => {
+            resolveCancellation = resolve;
+          });
+          const handleCancellation = (): void => resolveCancellation?.();
+          if (cancellationController.signal.aborted) {
+            handleCancellation();
+          } else {
+            cancellationController.signal.addEventListener(
+              "abort",
+              handleCancellation,
+              { once: true },
+            );
+          }
           try {
             await Promise.race([
               root.wait(cursor, undefined, finalizationAbort.signal),
               healthChange.promise,
+              cancellationRequested,
             ]);
           } finally {
+            cancellationController.signal.removeEventListener(
+              "abort",
+              handleCancellation,
+            );
+            resolveCancellation = undefined;
             healthChange.close();
           }
           continue;
         }
+        const admissionRevision = tree.admissionRevision;
         await Promise.resolve();
         const confirmed = actorSession.health();
         if (confirmed.state === "recovering") continue;
-        if (root.list().activeNonRootTurns > 0) continue;
+        const confirmedTree = root.list();
+        const confirmedActiveSubtaskCount =
+          record.stop !== undefined && record.actorTurnBaseline !== undefined
+            ? activeManagedActorTurnIds(record).length
+            : confirmedTree.activeNonRootTurns;
+        if (confirmedActiveSubtaskCount > 0) continue;
+        if (
+          admissionRevision !== undefined
+          && confirmedTree.admissionRevision !== admissionRevision
+        ) continue;
         return confirmed;
       }
     };
@@ -7377,6 +7471,37 @@ function createRuntimeRunService(deps: {
     record: RuntimeRunRecord,
     error: unknown,
   ): RuntimeRunResult => {
+    const trustedManagedAbort =
+      record.mode === "managed_task"
+      && record.stop !== undefined
+      && record.abortController?.signal.aborted === true
+      && error instanceof Error
+      && error.name === "AbortError";
+    if (trustedManagedAbort) {
+      if (!record.terminalEmitted) {
+        delete record.error;
+        markRunTerminal(
+          deps.bus,
+          deps.persistence,
+          record,
+          "interrupted",
+          {
+            code: "interrupted",
+            effectOutcome: "unknown",
+            message: record.stop?.reason,
+          },
+        );
+      }
+      return {
+        runId: record.runId,
+        sessionId: record.sessionId,
+        phase: record.phase,
+        ...(record.terminal !== undefined
+          ? { terminal: record.terminal }
+          : {}),
+        ...(record.stop !== undefined ? { stop: record.stop } : {}),
+      };
+    }
     const normalized = normalizeRuntimeRunError(error, record);
     const failure = classifyRuntimeRunFailure(error);
     const phase = record.terminalEmitted ? record.phase : failure.phase;
@@ -7395,6 +7520,9 @@ function createRuntimeRunService(deps: {
       sessionId: record.sessionId,
       phase: record.phase,
       error: normalized,
+      ...(record.terminal !== undefined
+        ? { terminal: record.terminal }
+        : {}),
       ...(record.stop !== undefined ? { stop: record.stop } : {}),
     };
   };
@@ -7407,7 +7535,11 @@ function createRuntimeRunService(deps: {
       actorSession === undefined
       || (
         actorSession.health().state === "healthy"
-        && actorSession.rootControl().list().activeNonRootTurns === 0
+        && (
+          record.stop !== undefined && record.actorTurnBaseline !== undefined
+            ? activeManagedActorTurnIds(record).length === 0
+            : actorSession.rootControl().list().activeNonRootTurns === 0
+        )
       )
     );
   };
@@ -7473,6 +7605,7 @@ function createRuntimeRunService(deps: {
     releaseAbortSignalSubscription(record);
     record.running?.abort(new Error(reason));
     record.abortController?.abort(new Error(reason));
+    void requestManagedActorCancellation(record, reason);
     record.actorFinalizationAbortController?.abort(new Error(reason));
     deps.permissions.rejectForRun(record.runId, reason);
     deps.userInputs.rejectForRun(record.runId, reason);
@@ -7535,6 +7668,13 @@ function createRuntimeRunService(deps: {
     record.interruptInputOpen = record.actorSession !== undefined;
     record.queuedAt = undefined;
     record.runningAt = new Date().toISOString();
+    if (record.mode === "managed_task" && record.actorSession !== undefined) {
+      record.actorTurnBaseline = new Set(
+        record.actorSession.rootControl().list().actors.flatMap((actor) =>
+          actor.currentTurnId === undefined ? [] : [actor.currentTurnId]
+        ),
+      );
+    }
     activeRunBySession.set(record.sessionId, record.runId);
     const startedStatus = statusFromRecord(record);
     const authoritative = saveRunStatusSafely(
@@ -8056,24 +8196,81 @@ function createRuntimeRunService(deps: {
     },
   );
 
+  const assertRunRecordAccess = async (
+    record: RuntimeRunRecord,
+    useCachedTerminalAdmission = false,
+  ): Promise<void> => {
+    const admitted = record.admittedSessionContext;
+    if (
+      record.ownedByRuntime
+      && admitted !== undefined
+      && (useCachedTerminalAdmission || !isTerminalRunPhase(record.phase))
+    ) {
+      deps.sessionAdmission.assertCachedIdentity(record.sessionId, {
+        surface: admitted.runtimeInfo?.surface,
+        profileId: admitted.runtimeInfo?.profileId,
+      });
+      return;
+    }
+    await deps.sessionAdmission.assertRunAccess(record.sessionId);
+  };
+
+  const assertContinuationTarget = (
+    record: RuntimeRunRecord,
+    sessionId: string,
+  ): void => {
+    if (record.sessionId !== sessionId) {
+      throw new Error(
+        `Runtime continuation target ${record.runId} does not belong to session ${sessionId}`,
+      );
+    }
+    if (!isActiveRunPhase(record.phase) && record.phase !== "queued") {
+      throw new RuntimeContinuationStaleError(record.runId);
+    }
+  };
+
   const startRun = async (
     input: RuntimeStartRunInput,
     operation: RuntimeRunInputOperation,
   ): Promise<RuntimeRunHandle> => {
     deps.ensureOpen();
+    const trustedInput = input as RuntimeTrustedStartRunInput;
+    const requiredAfterRunId = trustedInput.requiredAfterRunId;
+    const requiredAfterRun =
+      requiredAfterRunId === undefined
+        ? undefined
+        : getRecord(requiredAfterRunId);
+    if (requiredAfterRun !== undefined) {
+      assertContinuationTarget(requiredAfterRun, input.sessionId);
+      await assertRunRecordAccess(requiredAfterRun);
+    }
     const normalizedInput = normalizeRuntimeRunInput(
       input,
       deps.artifacts,
       operation,
     );
-    const session = await deps.sessionAdmission.loadExecutable(input.sessionId);
+    let admittedSessionContext = requiredAfterRun?.admittedSessionContext;
+    if (requiredAfterRun !== undefined && admittedSessionContext === undefined) {
+      throw new RuntimeContinuationStaleError(requiredAfterRun.runId);
+    }
+    if (admittedSessionContext === undefined) {
+      const session = await deps.sessionAdmission.loadExecutable(
+        input.sessionId,
+      );
+      admittedSessionContext = {
+        gitRoot: session.gitRoot,
+        ...(session.runtimeInfo !== undefined
+          ? { runtimeInfo: structuredClone(session.runtimeInfo) }
+          : {}),
+      };
+    }
     const settings = (await deps.settingsOwner.read(input.sessionId)).value;
-    assertSessionSettingsAllowed(session, settings);
+    assertSessionSettingsAllowed(admittedSessionContext, settings);
     const options = buildEffectiveRuntimeOptions(
       input.options ?? {},
       settings,
       normalizedInput.inputArtifacts,
-      session,
+      admittedSessionContext,
     );
     const ownedActorSession = await deps.actorRegistry.forSession(
       input.sessionId,
@@ -8108,7 +8305,6 @@ function createRuntimeRunService(deps: {
         "runtime.runs.start requires input.options.provider or runtime defaultProvider",
       );
     }
-    const trustedInput = input as RuntimeTrustedStartRunInput;
     if (
       trustedInput.providerCredential !== undefined &&
       trustedInput.providerCredentialProvider !== undefined &&
@@ -8214,24 +8410,8 @@ function createRuntimeRunService(deps: {
     const result = new Promise<RuntimeRunResult>((resolve) => {
       resolveResult = resolve;
     });
-    const requiredAfterRunId = (input as RuntimeTrustedStartRunInput)
-      .requiredAfterRunId;
-    const requiredAfterRun =
-      requiredAfterRunId === undefined
-        ? undefined
-        : getRecord(requiredAfterRunId);
     if (requiredAfterRun !== undefined) {
-      if (requiredAfterRun.sessionId !== input.sessionId) {
-        throw new Error(
-          `Runtime continuation target ${requiredAfterRunId} does not belong to session ${input.sessionId}`,
-        );
-      }
-      if (
-        !isActiveRunPhase(requiredAfterRun.phase) &&
-        requiredAfterRun.phase !== "queued"
-      ) {
-        throw new RuntimeContinuationStaleError(requiredAfterRun.runId);
-      }
+      assertContinuationTarget(requiredAfterRun, input.sessionId);
     }
     const sessionOrder = deps.persistence.nextSessionOrder(input.sessionId);
     const isQueued =
@@ -8300,6 +8480,7 @@ function createRuntimeRunService(deps: {
         ? { agentContext: input.agentContext ?? deps.defaultAgentContext }
         : {}),
       ...(actorSession ? { actorSession } : {}),
+      admittedSessionContext,
       interruptInputOpen: false,
       result,
       start: {
@@ -8344,13 +8525,13 @@ function createRuntimeRunService(deps: {
 
     async submitInput(input) {
       deps.ensureOpen();
-      await deps.sessionAdmission.loadRequired(input.sessionId);
       const afterRun = getRecord(input.afterRunId);
       if (afterRun.sessionId !== input.sessionId) {
         throw new Error(
           `Runtime continuation target ${input.afterRunId} does not belong to session ${input.sessionId}`,
         );
       }
+      await assertRunRecordAccess(afterRun, true);
       if (input.delivery === "interrupt") {
         if (
           afterRun.actorSession === undefined
@@ -8516,7 +8697,7 @@ function createRuntimeRunService(deps: {
       deps.ensureOpen();
       const run = deps.runs.get(runId);
       if (run?.ownedByRuntime === true) {
-        await deps.sessionAdmission.assertRunAccess(run.sessionId);
+        await assertRunRecordAccess(run);
         return run.result;
       }
       const persisted = deps.persistence.loadRunStatus(runId);
@@ -8538,7 +8719,13 @@ function createRuntimeRunService(deps: {
       const run = deps.runs.get(runId);
       const persisted = deps.persistence.loadRunStatus(runId);
       if (persisted) {
-        await deps.sessionAdmission.assertRunAccess(persisted.status.sessionId);
+        if (run !== undefined) {
+          await assertRunRecordAccess(run);
+        } else {
+          await deps.sessionAdmission.assertRunAccess(
+            persisted.status.sessionId,
+          );
+        }
         if (
           run === undefined
           || !run.ownedByRuntime
@@ -8548,7 +8735,7 @@ function createRuntimeRunService(deps: {
         }
       }
       if (run) {
-        await deps.sessionAdmission.assertRunAccess(run.sessionId);
+        await assertRunRecordAccess(run);
         return statusFromRecord(run);
       }
       throw new Error(`Runtime run not found: ${runId}`);
@@ -8672,6 +8859,7 @@ function createRuntimeRunService(deps: {
         releaseAbortSignalSubscription(run);
         run.running?.abort(new Error("runtime run aborted"));
         run.abortController?.abort(new Error("runtime run aborted"));
+        void requestManagedActorCancellation(run, "runtime run aborted");
         deps.permissions.rejectForRun(run.runId, "runtime run aborted");
         deps.userInputs.rejectForRun(run.runId, "runtime run aborted");
         run.start?.options.guardrails
@@ -14566,6 +14754,12 @@ function wrapKodaXEvents(input: {
       onPhase("running");
     }
   };
+  const managedStopDecision = (): string | undefined =>
+    record.mode === "managed_task"
+      && record.stop !== undefined
+      && record.abortController?.signal.aborted === true
+      ? record.stop.reason
+      : undefined;
   const runWithUserInputPhase = async <T>(
     kind: RuntimeUserInputKind,
     options: unknown,
@@ -14908,12 +15102,19 @@ function wrapKodaXEvents(input: {
     onError(error, meta) {
       record.interruptInputOpen = false;
       onExecutorTerminal("failed", error);
+      const trustedManagedAbort =
+        record.mode === "managed_task"
+        && record.stop !== undefined
+        && record.abortController?.signal.aborted === true
+        && error.name === "AbortError";
       emit(
         "runtime.warning",
         {
           source: "coding",
           severity: "error",
-          message: error.message,
+          message: trustedManagedAbort
+            ? "Managed provider observed Runtime Stop."
+            : normalizeRuntimeRunError(error, record).message,
         },
         meta,
       );
@@ -14943,6 +15144,8 @@ function wrapKodaXEvents(input: {
       toolInput: Record<string, unknown>,
       meta?: KodaXToolEventMeta,
     ): Promise<RuntimePermissionToolDecision> => {
+      const stoppedBeforeAdmission = managedStopDecision();
+      if (stoppedBeforeAdmission !== undefined) return stoppedBeforeAdmission;
       const autoGuardrail = getRuntimeAutoModeGuardrail(record);
       const autoModeEngine = record.autoModeEngine;
       const runtimeOwnsAutoDecision =
@@ -14956,6 +15159,10 @@ function wrapKodaXEvents(input: {
           toolInput,
           meta,
         );
+        const stoppedAfterHostDecision = managedStopDecision();
+        if (stoppedAfterHostDecision !== undefined) {
+          return stoppedAfterHostDecision;
+        }
         if (hostDecision !== undefined && hostDecision !== true) {
           return hostDecision;
         }
@@ -15001,6 +15208,8 @@ function wrapKodaXEvents(input: {
           ? resolveRuntimePermissionPolicy(record, tool, toolInput)
           : undefined;
       if (policyDecision !== undefined) return policyDecision;
+      const stoppedBeforePermission = managedStopDecision();
+      if (stoppedBeforePermission !== undefined) return stoppedBeforePermission;
       const previousPhase = record.phase;
       if (record.phase === "running") {
         onPhase("waiting_permission");
@@ -15044,6 +15253,10 @@ function wrapKodaXEvents(input: {
           }),
         );
         const result = await Promise.race([hookDecision, runtimeDecision]);
+        const stoppedAfterPermission = managedStopDecision();
+        if (stoppedAfterPermission !== undefined) {
+          return stoppedAfterPermission;
+        }
         if (result.source === "hook") {
           permissions.resolve(
             pendingPermission.request.id,
@@ -15056,6 +15269,10 @@ function wrapKodaXEvents(input: {
           type: "reject",
           reason: normalizeError(error).message,
         });
+        const stoppedAfterPermissionError = managedStopDecision();
+        if (stoppedAfterPermissionError !== undefined) {
+          return stoppedAfterPermissionError;
+        }
         throw error;
       } finally {
         if (record.phase === "waiting_permission") {
@@ -15330,7 +15547,7 @@ function buildEffectiveRuntimeOptions(
   options: RuntimeKodaXOptions,
   settings: RuntimeSessionSettings,
   inputArtifacts: readonly KodaXInputArtifact[],
-  session: KodaXSessionData,
+  session: RuntimeAdmittedSessionContext,
 ): RuntimeKodaXOptions {
   const storedGitRoot =
     session.runtimeInfo?.canonicalRepoRoot ??
@@ -16297,7 +16514,7 @@ function previewQueuedInput(prompt: string): string {
 }
 
 function assertSessionSettingsAllowed(
-  session: KodaXSessionData,
+  session: RuntimeAdmittedSessionContext,
   settings: RuntimeSessionSettings,
 ): void {
   if (settings.executionCwd === undefined) return;
@@ -17500,6 +17717,7 @@ function markRunTerminal(
 ): void {
   if (run.terminalEmitted) return;
   delete run.actorHealthBaseState;
+  if (run.error === "stop_outcome_unconfirmed") delete run.error;
   run.interruptInputOpen = false;
   terminalizeQueuedInterruptInputs(run);
   run.phase = phase;

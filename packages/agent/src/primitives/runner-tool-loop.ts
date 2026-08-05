@@ -198,6 +198,13 @@ export async function executeRunnerToolCall(
   agent: Agent,
   ctx: RunnerToolContext,
 ): Promise<RunnerToolResult> {
+  const throwIfAborted = (): void => {
+    if (!ctx.abortSignal?.aborted) return;
+    const error = new Error('Runner cancelled by caller.');
+    error.name = 'AbortError';
+    throw error;
+  };
+  throwIfAborted();
   const tool = agent.tools?.find((t) => t.name === call.name);
   const toolSpan = ctx.agentSpan
     ? ctx.agentSpan.addChild(`tool_call:${call.name}`, {
@@ -236,6 +243,7 @@ export async function executeRunnerToolCall(
     // telemetry, etc.) without threading the id through every layer.
     const executeCtx: RunnerToolContext = { ...ctx, toolCallId: call.id };
     const result = await tool.execute(call.input, executeCtx);
+    throwIfAborted();
     if (toolSpan) {
       if (result.isError) {
         toolSpan.setError(new Error(typeof result.content === 'string' ? result.content : '[non-text content]'));
@@ -249,6 +257,7 @@ export async function executeRunnerToolCall(
       toolSpan.setError(error);
       toolSpan.end();
     }
+    if (ctx.abortSignal?.aborted) throw error;
     return { content: `Error: ${error.message}`, isError: true };
   }
 }

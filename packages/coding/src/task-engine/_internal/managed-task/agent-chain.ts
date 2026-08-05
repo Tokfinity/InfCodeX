@@ -242,6 +242,7 @@ function buildManagedToolCallBridge(
       input: Record<string, unknown>,
       runnerCtx?: RunnerToolContext,
     ): Promise<RunnerToolResult> => {
+      throwIfManagedToolAborted(runnerCtx?.abortSignal);
       if (budget) incrementManagedBudgetUsage(budget, 1);
       const parsed = parseManagedBridgeCallInput(input);
       if (!parsed.ok) {
@@ -275,6 +276,7 @@ function buildManagedToolCallBridge(
           ctx.gitRoot,
         )
         : undefined;
+      throwIfManagedToolAborted(runnerCtx.abortSignal);
       if (permissionOverride !== undefined) {
         return {
           content: permissionOverride,
@@ -325,6 +327,13 @@ function buildManagedToolCallBridge(
       };
     },
   };
+}
+
+function throwIfManagedToolAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const error = new Error('Managed tool work cancelled by caller.');
+  error.name = 'AbortError';
+  throw error;
 }
 
 /**

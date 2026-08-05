@@ -9084,6 +9084,145 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("admits active-run input from cached Run identity without reading canonical Session", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "cached-run-admission-sessions"),
+      defaultProvider: "mock-provider",
+      sharedDaemonHost: true,
+    });
+    const session = await runtime.sessions.create({
+      title: "Cached Run Admission",
+      surface: "sdk",
+    });
+    const starts: string[] = [];
+    const finishers: Array<(value: KodaXResult) => void> = [];
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions, prompt: string): RunningSession => {
+        starts.push(prompt);
+        return fakeRunningSession(
+          options,
+          new Promise<KodaXResult>((resolve) => finishers.push(resolve)),
+        );
+      },
+    );
+
+    const first = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "first",
+    });
+    const loadSessionCalls = replMock.loadSessionCalls;
+    replMock.beforeLoadSession = async (call) => {
+      if (call > loadSessionCalls) {
+        throw new SessionReadError(
+          "data_changed",
+          "active Run changed canonical Session data",
+        );
+      }
+    };
+    const canonicalRead = vi.spyOn(
+      FileSessionStorage.prototype,
+      "read",
+    ).mockRejectedValue(new SessionReadError(
+      "data_changed",
+      "active Run changed canonical Session data",
+    ));
+    try {
+      await expect(runtime.runs.submitInput({
+        sessionId: "wrong-session",
+        afterRunId: first.runId,
+        delivery: "after_turn",
+        input: { type: "text", text: "must not cross sessions" },
+      })).rejects.toThrow(
+        `Runtime continuation target ${first.runId} does not belong to session wrong-session`,
+      );
+      await expect(runtime.runs.get(first.runId)).resolves.toMatchObject({
+        phase: "running",
+      });
+      await expect(runtime.runs.submitInput({
+        sessionId: session.id,
+        afterRunId: first.runId,
+        delivery: "interrupt",
+        input: { type: "text", text: "urgent" },
+      })).resolves.toMatchObject({ accepted: true, delivery: "interrupt" });
+      const continuation = await runtime.runs.submitInput({
+        sessionId: session.id,
+        afterRunId: first.runId,
+        delivery: "after_turn",
+        input: { type: "text", text: "second" },
+      });
+      if (!continuation.accepted || continuation.delivery !== "after_turn") {
+        throw new Error("Expected accepted continuation");
+      }
+      const continuationResult = runtime.runs.await(continuation.runId);
+      await flushMicrotasks();
+
+      expect(canonicalRead).not.toHaveBeenCalled();
+      expect(replMock.loadSessionCalls).toBe(loadSessionCalls);
+      expect(starts).toEqual(["first"]);
+
+      canonicalRead.mockRestore();
+      replMock.beforeLoadSession = null;
+      finishers[0]?.({
+        success: true,
+        lastText: "first done",
+        messages: [],
+        sessionId: session.id,
+      });
+      await first.result;
+      await flushMicrotasks();
+      expect(starts).toEqual(["first", "second"]);
+
+      finishers[1]?.({
+        success: true,
+        lastText: "second done",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(continuationResult).resolves.toMatchObject({
+        phase: "completed",
+      });
+    } finally {
+      canonicalRead.mockRestore();
+      replMock.beforeLoadSession = null;
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    ["Partner", "partner-client"],
+    ["unknown", "unrecognized-client"],
+  ] as const)(
+    "keeps %s Session surfaces outside shared Runtime Run admission",
+    async (_label, surface) => {
+      const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+      const sessionsDir = path.join(tempRoot, "surface-admission-sessions");
+      const owner = await createKodaXRuntime({ homeDir: tempRoot, sessionsDir });
+      const session = await owner.sessions.create({
+        title: "Non-daemon Session",
+        surface,
+      });
+      await owner.close();
+
+      const shared = await createKodaXRuntime({
+        homeDir: tempRoot,
+        sessionsDir,
+        defaultProvider: "mock-provider",
+        sharedDaemonHost: true,
+      });
+      try {
+        await expect(shared.runs.start({
+          sessionId: session.id,
+          prompt: "must remain outside shared admission",
+        })).rejects.toMatchObject({ code: "session_not_admitted" });
+        expect(codingMock.startKodaX).not.toHaveBeenCalled();
+      } finally {
+        await shared.close();
+      }
+    },
+  );
+
   it("rejects interrupt input after a managed task closes its final safe-boundary window", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const runtime = await createKodaXRuntime({
@@ -10317,7 +10456,7 @@ describe("createKodaXRuntime", () => {
   );
 
   it.each(["abort-signal", "runs.abort"] as const)(
-    "bounds Actor finalization after explicit cancellation via %s",
+    "preserves a pre-existing Actor when a completed managed Run is stopped via %s",
     async (cancelVia) => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const external = deferredExternalAgentFixture("bounded-cancel-finalization");
@@ -10367,31 +10506,27 @@ describe("createKodaXRuntime", () => {
       if (cancelVia === "abort-signal") {
         abortController.abort(new Error("host cancelled long-running child"));
       } else {
-        await runtime.runs.abort(handle.runId);
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 4_900));
-      expect(settled).toBe(false);
-      await expect(handle.result).resolves.toMatchObject({
-        phase: "unknown",
-        stop: {
+        await expect(runtime.runs.abort(handle.runId)).resolves.toMatchObject({
+          accepted: true,
+          phase: "unknown",
           state: "unknown",
           outcome: "unknown",
+        });
+      }
+      await expect(handle.result).resolves.toMatchObject({
+        phase: "completed",
+        terminal: { kind: "completed", code: "completed" },
+        stop: {
+          state: "confirmed",
+          outcome: "completed",
           reason: cancelVia === "abort-signal"
             ? "host cancelled long-running child"
             : "runtime run aborted",
         },
       });
-      await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
-        phase: "unknown",
-        stop: { state: "unknown", outcome: "unknown" },
-      });
-      const fenced = await runtime.runs.start({
-        sessionId: session.id,
-        prompt: "must remain queued behind unknown Actor settlement",
-        mode: "managed_task",
-      });
-      await expect(runtime.runs.get(fenced.runId)).resolves.toMatchObject({
-        phase: "queued",
+      expect(settled).toBe(true);
+      await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
+        activeNonRootTurns: 1,
       });
     } finally {
       external.finish();
@@ -10400,6 +10535,85 @@ describe("createKodaXRuntime", () => {
     }
     },
   );
+
+  it("cooperatively interrupts Actor descendants admitted by the managed Run", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const external = deferredExternalAgentFixture("managed-run-owned-abort");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "managed-run-owned-abort-sessions"),
+      defaultProvider: "mock-provider",
+      externalAgents: {
+        factories: [external.factory],
+        policy: async () => ({ allowed: true }),
+        defaultContext: { actorId: "managed-run-owned-abort-host" },
+      },
+    });
+    let spawnedTurn: { readonly actorPath: string; readonly turnId: string } | undefined;
+    try {
+      await runtime.admin.agentRegistrations.upsert(external.registration);
+      const session = await runtime.sessions.create({
+        sessionId: "managed-run-owned-abort",
+      });
+      codingMock.runManagedTask.mockImplementation(async (options: KodaXOptions) => {
+        const actorSession = options.context?.actorSession;
+        if (!actorSession) throw new Error("expected Runtime-owned Actor session");
+        spawnedTurn = await actorSession.rootControl().spawn({
+          taskName: "run-child",
+          kind: "external",
+          objective: "Remain active until the owning managed Run is stopped.",
+          metadata: { agentId: external.registration.agentId },
+        });
+        return new Promise<KodaXResult>((_resolve, reject) => {
+          const rejectFromAbort = (): void => {
+            const error = new Error("Provider observed the managed Run abort");
+            error.name = "AbortError";
+            options.events?.onError?.(error);
+            reject(error);
+          };
+          options.abortSignal?.addEventListener("abort", rejectFromAbort, {
+            once: true,
+          });
+          if (options.abortSignal?.aborted) rejectFromAbort();
+        });
+      });
+
+      const handle = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "start a cooperative child then stop",
+        mode: "managed_task",
+      });
+      await vi.waitFor(() => expect(spawnedTurn).toBeDefined());
+      if (!spawnedTurn) throw new Error("managed Run did not admit its child turn");
+
+      const receipt = await runtime.runs.abort(handle.runId);
+      expect(receipt).toMatchObject({
+        accepted: true,
+        phase: "unknown",
+        state: "unknown",
+        outcome: "unknown",
+      });
+
+      await expect(handle.result).resolves.toMatchObject({
+        phase: "interrupted",
+        terminal: { kind: "interrupted", code: "interrupted" },
+        stop: { state: "confirmed", outcome: "interrupted" },
+      });
+      await expect(runtime.agents.output(
+        session.id,
+        spawnedTurn.actorPath,
+        spawnedTurn.turnId,
+      )).resolves.toMatchObject({ state: "interrupted" });
+      await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
+        activeNonRootTurns: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+      external.finish();
+      await flushMicrotasks();
+      await runtime.close();
+    }
+  });
 
   it("bounds Actor finalization after normal root completion with a stuck child", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
@@ -11573,6 +11787,171 @@ describe("createKodaXRuntime", () => {
     ).not.toContain(secret);
     await runtime.close();
     expect(await readDirectoryText(tempRoot)).not.toContain(secret);
+  });
+
+  it("preserves trusted managed Stop causality before run-scoped credential redaction", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const secret = "F280_ABORT_CREDENTIAL_SECRET";
+    const originalToolHook = vi.fn(async () => true);
+    let managedOptions: KodaXOptions | undefined;
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "managed-abort-credential-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Managed Abort Credential Causality",
+    });
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+      managedOptions = options;
+      return new Promise<KodaXResult>((_resolve, reject) => {
+        const rejectFromAbort = (): void => {
+          const error = new Error(`Provider observed AbortSignal with ${secret}`);
+          error.name = "AbortError";
+          options.events?.onError?.(error);
+          reject(error);
+        };
+        options.abortSignal?.addEventListener("abort", rejectFromAbort, {
+          once: true,
+        });
+        if (options.abortSignal?.aborted) rejectFromAbort();
+      });
+    });
+    const trustedInput = {
+      sessionId: session.id,
+      prompt: "stop without losing trusted causality",
+      mode: "managed_task",
+      options: { events: { beforeToolExecute: originalToolHook } },
+      providerCredential: secret,
+      providerCredentialProvider: "mock-provider",
+    } as RuntimeStartRunInput & {
+      readonly providerCredential: string;
+      readonly providerCredentialProvider: string;
+    };
+
+    const handle = await runtime.runs.start(trustedInput);
+    const receipt = await runtime.runs.abort(handle.runId);
+    expect(receipt).toMatchObject({
+      accepted: true,
+      phase: "unknown",
+      state: "unknown",
+      outcome: "unknown",
+    });
+    await expect(managedOptions?.events?.beforeToolExecute?.(
+      "bash",
+      { command: "must not execute" },
+    )).resolves.toBe("runtime run aborted");
+    expect(originalToolHook).not.toHaveBeenCalled();
+
+    const result = await handle.result;
+    expect(result).toMatchObject({
+      phase: "interrupted",
+      terminal: {
+        kind: "interrupted",
+        code: "interrupted",
+        effectOutcome: "unknown",
+      },
+      stop: { state: "confirmed", outcome: "interrupted" },
+    });
+    expect(result).not.toHaveProperty("error");
+    await expect(runtime.runs.await(handle.runId)).resolves.toEqual(result);
+    await expect(runtime.runs.get(handle.runId)).resolves.toMatchObject({
+      phase: "interrupted",
+      terminal: { kind: "interrupted", code: "interrupted" },
+      stop: { state: "confirmed", outcome: "interrupted" },
+    });
+    const terminalEvents = await runtime.events.replay({
+      runId: handle.runId,
+      type: ["run.interrupted", "run.failed"],
+    });
+    expect(terminalEvents.map((event) => event.type)).toEqual(["run.interrupted"]);
+    expect(JSON.stringify({ result, terminalEvents })).not.toContain(secret);
+
+    await runtime.close();
+    const persisted = await readDirectoryText(tempRoot);
+    expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain(
+      "Provider run failed while using a run-scoped credential.",
+    );
+  });
+
+  it("keeps an independent managed failure after Stop on the credential-safe failed path", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const secret = "F280_INDEPENDENT_FAILURE_SECRET";
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "managed-stop-failure-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Managed Stop Independent Failure",
+    });
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) =>
+      new Promise<KodaXResult>((_resolve, reject) => {
+        const fail = (): void => {
+          const error = new Error(`Independent finalizer failure ${secret}`);
+          options.events?.onError?.(error);
+          reject(error);
+        };
+        options.abortSignal?.addEventListener("abort", fail, { once: true });
+        if (options.abortSignal?.aborted) fail();
+      }),
+    );
+    const trustedInput = {
+      sessionId: session.id,
+      prompt: "fail independently after Stop",
+      mode: "managed_task",
+      providerCredential: secret,
+      providerCredentialProvider: "mock-provider",
+    } as RuntimeStartRunInput & {
+      readonly providerCredential: string;
+      readonly providerCredentialProvider: string;
+    };
+
+    const handle = await runtime.runs.start(trustedInput);
+    await runtime.runs.abort(handle.runId);
+    await expect(handle.result).resolves.toMatchObject({
+      phase: "failed",
+      error: {
+        message: "Provider run failed while using a run-scoped credential.",
+      },
+      terminal: { kind: "failed", code: "run_failed" },
+      stop: { state: "confirmed", outcome: "failed" },
+    });
+    const persisted = JSON.stringify(await runtime.runs.get(handle.runId));
+    expect(persisted).not.toContain(secret);
+    await runtime.close();
+  });
+
+  it("keeps an unrequested managed AbortError on the failed path", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "unrequested-abort-error-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Unrequested AbortError",
+    });
+    codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => {
+      const error = new Error("synthetic provider AbortError");
+      error.name = "AbortError";
+      options.events?.onError?.(error);
+      return Promise.reject(error);
+    });
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "fail without Stop",
+      mode: "managed_task",
+    });
+
+    await expect(handle.result).resolves.toMatchObject({
+      phase: "failed",
+      terminal: { kind: "failed", code: "run_failed" },
+      error: { name: "AbortError", message: "synthetic provider AbortError" },
+    });
+    await runtime.close();
   });
 
   it("keeps queued runs on the session settings snapshot captured at queue time", async () => {

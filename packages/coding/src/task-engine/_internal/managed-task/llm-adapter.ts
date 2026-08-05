@@ -165,6 +165,51 @@ function isEmptyCompletion(raw: {
   return text.length === 0 && toolCount === 0;
 }
 
+function managedProviderAbortError(): Error {
+  const error = new Error('Managed provider work cancelled by caller.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfManagedProviderAborted(
+  signal: AbortSignal | undefined,
+  providerMessages: readonly KodaXMessage[],
+): void {
+  if (!signal?.aborted) return;
+  const error = managedProviderAbortError();
+  attachRunnerRecoveryTranscript(error, providerMessages);
+  throw error;
+}
+
+function rethrowObservedManagedProviderAbort(
+  signal: AbortSignal | undefined,
+  error: Error,
+  providerMessages: readonly KodaXMessage[],
+): void {
+  if (!signal?.aborted) return;
+  attachRunnerRecoveryTranscript(error, providerMessages);
+  throw error;
+}
+
+async function waitForManagedProviderRetry(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+  providerMessages: readonly KodaXMessage[],
+): Promise<void> {
+  throwIfManagedProviderAborted(signal, providerMessages);
+  try {
+    await waitForRetryDelay(delayMs, signal);
+  } catch (error: unknown) {
+    if (signal?.aborted) {
+      const abortError = managedProviderAbortError();
+      attachRunnerRecoveryTranscript(abortError, providerMessages);
+      throw abortError;
+    }
+    throw error;
+  }
+  throwIfManagedProviderAborted(signal, providerMessages);
+}
+
 function estimateFinalEnvelopeTokens(
   messages: readonly KodaXMessage[],
   tools: readonly KodaXToolDefinition[],
@@ -658,6 +703,7 @@ export function buildRunnerLlmAdapter(
       // the max_tokens escalation) for re-streaming a fully-empty turn.
       let emptyCompletionRetries = 0;
       while (true) {
+        throwIfManagedProviderAborted(options.abortSignal, providerMessages);
         attempt += 1;
         const wireProviderMessages = lowerProviderMessages(providerMessages);
         boundaryTracker.beginRequest(
@@ -785,6 +831,7 @@ export function buildRunnerLlmAdapter(
             && !process.env.KODAX_MAX_OUTPUT_TOKENS
             && provider.getEffectiveMaxOutputTokens(activeModel) < KODAX_ESCALATED_MAX_OUTPUT_TOKENS
           ) {
+            throwIfManagedProviderAborted(options.abortSignal, providerMessages);
             hasEscalatedForCurrentAdapterCall = true;
             provider.setMaxOutputTokensOverride(KODAX_ESCALATED_MAX_OUTPUT_TOKENS);
             options.events?.onRetry?.(
@@ -833,9 +880,10 @@ export function buildRunnerLlmAdapter(
             hardTimer = undefined;
             idleTimer = undefined;
             attempt -= 1;
-            await waitForRetryDelay(
+            await waitForManagedProviderRetry(
               KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS * emptyCompletionRetries,
               options.abortSignal,
+              providerMessages,
             );
             continue;
           }
@@ -852,6 +900,11 @@ export function buildRunnerLlmAdapter(
             const { KodaXNetworkError } = await import('@kodax-ai/llm');
             error = new KodaXNetworkError(reason, true);
           }
+          rethrowObservedManagedProviderAbort(
+            options.abortSignal,
+            error,
+            providerMessages,
+          );
 
           const failureStage = boundaryTracker.inferFailureStage();
           const classified = classifyResilienceError(error, failureStage);
@@ -889,6 +942,7 @@ export function buildRunnerLlmAdapter(
           }
 
           if (decision.shouldUseNonStreaming && typeof provider.complete === 'function') {
+            throwIfManagedProviderAborted(options.abortSignal, providerMessages);
             const fallbackTimeoutController = new AbortController();
             const fallbackSignal = options.abortSignal
               ? AbortSignal.any([options.abortSignal, fallbackTimeoutController.signal])
@@ -944,6 +998,11 @@ export function buildRunnerLlmAdapter(
               break;
             } catch (fallbackError) {
               error = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
+              rethrowObservedManagedProviderAbort(
+                options.abortSignal,
+                error,
+                providerMessages,
+              );
             } finally {
               clearTimeout(fallbackHardTimer);
             }
@@ -966,7 +1025,11 @@ export function buildRunnerLlmAdapter(
             // Don't bill an attempt slot for the sanitize step — same
             // rationale as the L1 escalation reversal at line ~2546.
             attempt -= 1;
-            await waitForRetryDelay(decision.delayMs, options.abortSignal);
+            await waitForManagedProviderRetry(
+              decision.delayMs,
+              options.abortSignal,
+              providerMessages,
+            );
             continue;
           }
 
@@ -988,7 +1051,11 @@ export function buildRunnerLlmAdapter(
           if (idleTimer) clearTimeout(idleTimer);
           hardTimer = undefined;
           idleTimer = undefined;
-          await waitForRetryDelay(decision.delayMs, options.abortSignal);
+          await waitForManagedProviderRetry(
+            decision.delayMs,
+            options.abortSignal,
+            providerMessages,
+          );
           continue;
         } finally {
           if (hardTimer) clearTimeout(hardTimer);
@@ -1029,6 +1096,7 @@ export function buildRunnerLlmAdapter(
         && accumulatedText.trim().length > 0
         && l5Retries < KODAX_MAX_MAXTOKENS_RETRIES
       ) {
+        throwIfManagedProviderAborted(options.abortSignal, providerMessages);
         l5Retries += 1;
         options.events?.onTextDelta?.('\n\n[max_tokens reached, continuing...]\n\n');
         // Push the partial assistant turn + synthetic user continuation
@@ -1116,7 +1184,12 @@ export function buildRunnerLlmAdapter(
             l5Signal,
           );
           completePromptCacheDiagnostic(cacheDiagnostic, raw.usage);
-        } catch {
+        } catch (error: unknown) {
+          rethrowObservedManagedProviderAbort(
+            options.abortSignal,
+            error instanceof Error ? error : new Error(String(error)),
+            providerMessages,
+          );
           // L5 retries are best-effort — any failure here falls back to
           // the partial result we already have.
           break;

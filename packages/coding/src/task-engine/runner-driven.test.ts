@@ -1925,6 +1925,78 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(cacheDiagnostics.at(-1)?.cachedReadTokens).toBe(0);
   }, 15_000);
 
+  it('does not recover or start fallback work after the caller AbortSignal is observed', async () => {
+    const controller = new AbortController();
+    const recoveries: string[] = [];
+    let streamCalls = 0;
+    let completeCalls = 0;
+
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        streamCalls += 1;
+        controller.abort(new Error('runtime run aborted'));
+        const error = new Error('Provider observed the managed Run abort');
+        error.name = 'AbortError';
+        throw error;
+      }
+
+      override supportsNonStreamingFallback(): boolean {
+        return true;
+      }
+
+      override async complete(): Promise<KodaXStreamResult> {
+        completeCalls += 1;
+        return {
+          textBlocks: [{ type: 'text', text: 'must not run' }],
+          toolBlocks: [],
+          thinkingBlocks: [],
+          stopReason: 'end_turn',
+        };
+      }
+    }
+
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      abortSignal: controller.signal,
+      events: {
+        onProviderRecovery: (event) => recoveries.push(event.recoveryAction),
+      },
+    });
+
+    await expect(adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'cancel me' }],
+      { name: 'worker', instructions: '' },
+    )).rejects.toMatchObject({
+      name: 'AbortError',
+      message: 'Provider observed the managed Run abort',
+    });
+    expect(streamCalls).toBe(1);
+    expect(completeCalls).toBe(0);
+    expect(recoveries).toEqual([]);
+  });
+
   it('keeps provider execution independent from throwing diagnostics callbacks', async () => {
     const streamSpy = vi.fn(async (): Promise<KodaXStreamResult> => ({
       textBlocks: [{ type: 'text', text: 'done' }],
@@ -2042,6 +2114,54 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
     expect(result.text).toContain('half');
     expect(result.text).toContain('done');
     expect(observedModels).toEqual(['glm-5.2', 'glm-5.2', 'glm-5.2']);
+  }, 15_000);
+
+  it('does not start L5 continuation after a successful turn observes caller cancellation', async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        maxOutputTokens: KODAX_CAPPED,
+      };
+
+      async stream(): Promise<KodaXStreamResult> {
+        streamCalls += 1;
+        if (streamCalls === 1) {
+          return { textBlocks: [], toolBlocks: [], stopReason: 'max_tokens' };
+        }
+        if (streamCalls === 2) {
+          controller.abort(new Error('runtime run aborted'));
+          return {
+            textBlocks: [{ type: 'text', text: 'partial' }],
+            toolBlocks: [],
+            stopReason: 'max_tokens',
+          };
+        }
+        return {
+          textBlocks: [{ type: 'text', text: 'must not continue' }],
+          toolBlocks: [],
+          stopReason: 'end_turn',
+        };
+      }
+    }
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      abortSignal: controller.signal,
+    });
+
+    await expect(adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'large task' }],
+      { name: 'worker', instructions: '' },
+    )).rejects.toMatchObject({ name: 'AbortError' });
+    expect(streamCalls).toBe(2);
   }, 15_000);
 
   it('escalates capped budget to 64K on first max_tokens, reissues same turn', async () => {

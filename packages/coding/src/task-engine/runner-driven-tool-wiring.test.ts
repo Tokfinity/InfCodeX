@@ -18,7 +18,7 @@
  * deleted alongside the V1 chain agent declarations.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type AmaRole,
@@ -33,7 +33,8 @@ import {
   registerTool,
 } from '../tools/registry.js';
 import { DEFERRED_TOOL_HINTS } from '../tools/deferred-tools.js';
-import type { KodaXToolExecutionContext } from '../types.js';
+import { createExtensionRuntime } from '../extensions/index.js';
+import type { KodaXEvents, KodaXToolExecutionContext } from '../types.js';
 
 const cleanupToolRegistrations: Array<() => void> = [];
 
@@ -305,6 +306,71 @@ describe('FEATURE_250 — managed-path progressive disclosure (deferred hint-swa
       { agent: chain.worker, toolCallId: 'call-1' },
     );
     expect(callResult.content).toBe('managed-target:ok');
+  });
+
+  it('does not start a bridge target after cancellation during an extension permission hook', async () => {
+    const targetExecuted = vi.fn(async () => 'unexpected');
+    cleanupToolRegistrations.push(registerTool({
+      name: 'managed_bridge_cancel_target',
+      description: 'Managed bridge cancellation target.',
+      input_schema: { type: 'object', properties: {} },
+      handler: targetExecuted,
+      sideEffect: 'write',
+      toClassifierInput: () => '',
+    }));
+    let releaseHook: (() => void) | undefined;
+    let hookEntered: (() => void) | undefined;
+    const hookStarted = new Promise<void>((resolve) => { hookEntered = resolve; });
+    const extensionRuntime = createExtensionRuntime().activate();
+    extensionRuntime.registerHook('tool:before', async () => {
+      hookEntered?.();
+      await new Promise<void>((resolve) => { releaseHook = resolve; });
+    });
+    const events: KodaXEvents = {
+      beforeToolExecute: async () => true,
+    };
+    const chain = buildRunnerAgentChain(
+      makeCtx(true, true),
+      makeRecorder(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      events,
+    );
+    const callTool = (chain.worker.tools ?? []).find((tool) => tool.name === 'tool_call') as {
+      execute?: (
+        input: Record<string, unknown>,
+        ctx: {
+          agent: typeof chain.worker;
+          toolCallId: string;
+          abortSignal?: AbortSignal;
+        },
+      ) => Promise<{ content: string | readonly unknown[] }>;
+    } | undefined;
+    const controller = new AbortController();
+
+    try {
+      const executing = callTool!.execute!(
+        { name: 'managed_bridge_cancel_target', input: {} },
+        {
+          agent: chain.worker,
+          toolCallId: 'call-cancelled',
+          abortSignal: controller.signal,
+        },
+      );
+      await hookStarted;
+      controller.abort(new Error('runtime run aborted'));
+      releaseHook?.();
+
+      await expect(executing).rejects.toMatchObject({ name: 'AbortError' });
+      expect(targetExecuted).not.toHaveBeenCalled();
+    } finally {
+      releaseHook?.();
+      await extensionRuntime.dispose();
+    }
   });
 
   it('managed tool_describe preserves every requested schema without character caps', async () => {

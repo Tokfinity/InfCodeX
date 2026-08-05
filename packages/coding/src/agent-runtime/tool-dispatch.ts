@@ -213,6 +213,9 @@ export async function executeToolCall(
     if (override !== undefined) {
       return override;
     }
+    if (abortSignal?.aborted) {
+      return CANCELLED_TOOL_RESULT_MESSAGE;
+    }
   }
 
   if (activeToolNames && !activeToolNames.includes(toolCall.name)) {
@@ -398,6 +401,9 @@ async function executeBridgeToolCall(input: {
   );
   if (override !== undefined) {
     return override;
+  }
+  if (input.abortSignal?.aborted) {
+    return CANCELLED_TOOL_RESULT_MESSAGE;
   }
   if (input.activeToolNames && !input.activeToolNames.includes(targetName)) {
     return `[Tool Error] ${targetName}: Tool is not active in the current runtime.`;
