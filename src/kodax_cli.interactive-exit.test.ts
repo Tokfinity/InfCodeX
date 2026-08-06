@@ -275,6 +275,7 @@ async function importMainWithMocks(options: {
       readonly args: readonly string[];
       readonly env: NodeJS.ProcessEnv;
     }) => ({ args: [...input.args], env: { ...input.env } }),
+    isCurrentProcessWindowsJobContained: vi.fn(() => false),
     cleanupRegisteredManagedChildren,
     shutdownTracing,
   }));
