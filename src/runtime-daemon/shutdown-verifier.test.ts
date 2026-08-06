@@ -125,6 +125,7 @@ describe('runtime daemon shutdown verifier', () => {
     const configHome = temporaryConfigHome();
     const owner = {
       ...deadContainedOwner('rt_containment_before_replacement'),
+      processContainment: 'windows-job' as const,
       supervisorPid: process.pid,
     };
     const paths = resolveRuntimeDaemonPathsFromConfigHome(configHome, 'coder');
