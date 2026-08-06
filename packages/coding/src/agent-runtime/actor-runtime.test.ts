@@ -217,7 +217,7 @@ describe('F270 coding Actor runtime adapter', () => {
     });
     await settle();
 
-    expect(root.output(turn.actorPath, turn.turnId).structured).toEqual({
+    await vi.waitFor(() => expect(root.output(turn.actorPath, turn.turnId).structured).toEqual({
       schemaVersion: 1,
       outcomes: [{
         target: { evidenceRef: 'finding:valid' },
@@ -225,7 +225,7 @@ describe('F270 coding Actor runtime adapter', () => {
         evidenceRefs: ['file:packages/agent/src/actors/controller.ts'],
       }],
       assertedCoverage: [],
-    });
+    }));
     expect(root.get(turn.actorPath).turns[0]?.metadata).toMatchObject({
       effectiveProvider: 'fallback-provider',
       effectiveModel: 'fallback-model',
