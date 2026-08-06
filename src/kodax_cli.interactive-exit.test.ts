@@ -44,6 +44,7 @@ const originalProvider = process.env.KODAX_PROVIDER;
 const originalMockProviderApiKey = process.env.MOCK_PROVIDER_API_KEY;
 const originalExitCode = process.exitCode;
 const originalDaemonCleanupTimeout = process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
+const originalDaemonServe = process.env.KODAX_DAEMON_SERVE;
 const daemonTempHomes: string[] = [];
 
 beforeEach(() => {
@@ -53,9 +54,9 @@ beforeEach(() => {
   delete process.env.KODAX_RUNTIME_MODE;
   delete process.env.KODAX_PROVIDER;
   delete process.env.MOCK_PROVIDER_API_KEY;
+  delete process.env.KODAX_DAEMON_SERVE;
   process.exitCode = undefined;
 });
-
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.resetModules();
@@ -78,6 +79,8 @@ afterEach(async () => {
   else process.env.KODAX_PROVIDER = originalProvider;
   if (originalMockProviderApiKey === undefined) delete process.env.MOCK_PROVIDER_API_KEY;
   else process.env.MOCK_PROVIDER_API_KEY = originalMockProviderApiKey;
+  if (originalDaemonServe === undefined) delete process.env.KODAX_DAEMON_SERVE;
+  else process.env.KODAX_DAEMON_SERVE = originalDaemonServe;
   if (originalDaemonCleanupTimeout === undefined) {
     delete process.env.KODAX_INTERNAL_DAEMON_FINAL_CLEANUP_TIMEOUT_MS;
   } else {

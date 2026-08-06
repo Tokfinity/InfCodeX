@@ -238,8 +238,13 @@ export function createConfiguredA2ARuntimeIntegration(input: {
     policy: () => ({ allowed: true }),
     credentialBroker: environmentCredentialBroker(),
     artifactPolicy: configuredA2AArtifactPolicy,
+    // Without defaultContext, the runtime sets defaultAgentContext to undefined,
+    // which prevents agentExecutorPlane from being injected into tool contexts.
+    // list_dispatchable_agents and spawn_agent then cannot see configured A2A
+    // agents even though registrations are written to disk successfully.
+    // run.start may override this with a session-specific agentContext.
+    defaultContext: { actorId: CONFIG_OWNER },
   };
-
   return {
     runtimeOptions,
     async start(runtime) {

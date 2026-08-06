@@ -105,6 +105,18 @@ afterEach(() => {
 });
 
 describe('configured A2A Runtime integration', () => {
+
+  it('exposes a defaultContext so agentExecutorPlane reaches tool contexts', () => {
+    const root = tempRoot();
+    const configHome = path.join(root, '.kodax');
+    const integration = createConfiguredA2ARuntimeIntegration({ configHome });
+    // Without defaultContext, the runtime leaves defaultAgentContext undefined,
+    // which breaks the agentExecutorPlane injection into tool contexts —
+    // list_dispatchable_agents and spawn_agent cannot see configured A2A agents.
+    expect(integration.runtimeOptions.defaultContext).toBeDefined();
+    expect(integration.runtimeOptions.defaultContext?.actorId).toBe('kodax-a2a-runtime-config-v1');
+  });
+
   it('starts with no outbound agents when the A2A file is invalid and recovers after repair', async () => {
     const root = tempRoot();
     const configHome = path.join(root, '.kodax');
