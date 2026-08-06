@@ -418,6 +418,7 @@ export {
   killChildProcessTreeSync,
   killPidTree,
   killPidTreeSync,
+  isCurrentProcessWindowsJobContained,
   readProcessStartIdentity,
   rememberChildProcessTree,
   type ProcessTreeKillResult,

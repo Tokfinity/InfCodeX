@@ -543,6 +543,35 @@ describe("createKodaXRuntime", () => {
     ).rejects.toThrow(/does not support.*managedRunDurability/i);
   });
 
+  it("fails closed when a daemon lacks authoritative shutdown verification", async () => {
+    const { connectKodaXRuntime } = await import("./sdk-runtime.js");
+    const transport: RuntimeDaemonClientTransport = {
+      async request(method) {
+        if (method !== "initialize") return null;
+        return {
+          identity: {
+            runtimeId: "daemon-without-shutdown-verification",
+            mode: "daemon",
+            profile: "default",
+            startedAt: "2026-08-06T00:00:00.000Z",
+            version: "0.7.82",
+          },
+          capabilities: {},
+        };
+      },
+      subscribe() {
+        return { close() {} };
+      },
+    };
+
+    await expect(
+      connectKodaXRuntime({
+        transport,
+        requirements: { daemonShutdownVerification: 1 },
+      }),
+    ).rejects.toThrow(/does not support.*daemonShutdownVerification/i);
+  });
+
   it("fails closed when an older daemon lacks fenced external Agent administration", async () => {
     const { connectKodaXRuntime } = await import("./sdk-runtime.js");
     const transport: RuntimeDaemonClientTransport = {

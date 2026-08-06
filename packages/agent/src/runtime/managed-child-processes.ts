@@ -12,6 +12,7 @@ import path from 'node:path';
 import { emitKodaXDiagnostic } from '../diagnostics.js';
 import { getAgentConfigPath } from './agent-home.js';
 import {
+  isCurrentProcessWindowsJobContained,
   killPidTree,
   rememberChildProcessTree,
   rememberedChildProcessTreeIdentities,
@@ -63,6 +64,12 @@ interface CleanupOptions {
   readonly includeCurrentOwner?: boolean;
   /** Fail when a child owned by this process cannot be verified as reclaimed. */
   readonly requireCurrentOwnerCleanup?: boolean;
+  /**
+   * The current process entered a Windows Job before it could spawn user code.
+   * Unknown child ancestry can be retired because the Job is the authoritative
+   * final process-tree boundary.
+   */
+  readonly currentOwnerJobContained?: boolean;
 }
 
 interface WindowsProcessInfo {
@@ -595,6 +602,7 @@ export function registerManagedChildProcess(
       && active?.record.registrationId === registrationId
       && (child.exitCode !== null || child.signalCode !== null)
       && active.record.processTreeComplete !== true
+      && !isCurrentProcessWindowsJobContained()
     ) {
       activeChildren.delete(pid);
       return;
@@ -701,6 +709,7 @@ export async function cleanupRegisteredManagedChildren(
 
   const activeSummary = await cleanupActiveCurrentOwnerChildren(options);
   killed += activeSummary.killed;
+  pruned += activeSummary.pruned;
   skipped += activeSummary.skipped;
   unresolvedCurrentOwner += activeSummary.unresolved;
 
@@ -733,6 +742,15 @@ export async function cleanupRegisteredManagedChildren(
 
   for (const { filePath, persisted } of persistedFiles) {
     if (persisted.status === 'unsupported') {
+      if (
+        process.platform === 'win32'
+        && options.currentOwnerJobContained === true
+        && persisted.record.ownerPid === process.pid
+      ) {
+        rmSync(filePath, { force: true });
+        pruned += 1;
+        continue;
+      }
       const ownerState = managedOwnerState(
         persisted.record,
         readOwnerStartIdentity,
@@ -749,6 +767,16 @@ export async function cleanupRegisteredManagedChildren(
       continue;
     }
     const record = persisted.record;
+
+    if (
+      process.platform === 'win32'
+      && options.currentOwnerJobContained === true
+      && record.ownerPid === process.pid
+    ) {
+      if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+      else skip(record.ownerPid);
+      continue;
+    }
 
     if (!options.includeCurrentOwner && record.ownerPid === process.pid) {
       const currentOwnerIdentity = readOwnerStartIdentity(process.pid);
@@ -872,14 +900,16 @@ async function cleanupActiveCurrentOwnerChildren(
   options: CleanupOptions,
 ): Promise<{
   readonly killed: number;
+  readonly pruned: number;
   readonly skipped: number;
   readonly unresolved: number;
   readonly processedFiles: ReadonlySet<string>;
 }> {
   if (options.includeCurrentOwner !== true) {
-    return { killed: 0, skipped: 0, unresolved: 0, processedFiles: new Set() };
+    return { killed: 0, pruned: 0, skipped: 0, unresolved: 0, processedFiles: new Set() };
   }
   let killed = 0;
+  let pruned = 0;
   let skipped = 0;
   let unresolved = 0;
   const processedFiles = new Set<string>();
@@ -887,6 +917,17 @@ async function cleanupActiveCurrentOwnerChildren(
     .filter(({ record }) => record.ownerPid === process.pid);
   for (const { record } of records) {
     processedFiles.add(path.basename(registryPath(record.pid, record.registrationId)));
+    if (
+      process.platform === 'win32'
+      && options.currentOwnerJobContained === true
+    ) {
+      if (removeRecord(record.pid, record.registrationId)) pruned += 1;
+      else {
+        skipped += 1;
+        unresolved += 1;
+      }
+      continue;
+    }
     try {
       const result = await killPidTree(record.pid, {
         ...(record.processStartIdentity === undefined
@@ -914,5 +955,5 @@ async function cleanupActiveCurrentOwnerChildren(
       unresolved += 1;
     }
   }
-  return { killed, skipped, unresolved, processedFiles };
+  return { killed, pruned, skipped, unresolved, processedFiles };
 }

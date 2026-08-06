@@ -11,6 +11,7 @@ import type {
 import {
   emitKodaXDiagnostic,
   ExternalAgentRegistrationConflictError,
+  isCurrentProcessWindowsJobContained,
 } from "@kodax-ai/agent";
 
 import type {
@@ -2140,6 +2141,7 @@ function runtimeDaemonCapabilities(
   delete safeOverrides.integrationConfigResilience;
   delete safeOverrides.managedRunDurability;
   delete safeOverrides.daemonOrphanExit;
+  delete safeOverrides.daemonShutdownVerification;
   delete safeOverrides.runtimeEventCoalescing;
   delete safeOverrides.runtimeAutoModeGuardrail;
   delete safeOverrides.sandboxRuntime;
@@ -2190,6 +2192,15 @@ function runtimeDaemonCapabilities(
             version: 1,
             idleOnly: true,
             bootstrapGrace: true,
+          },
+        }
+      : {}),
+    ...(isCurrentProcessWindowsJobContained()
+      ? {
+          daemonShutdownVerification: {
+            version: 1,
+            durableOutcome: true,
+            processContainment: "windows-job",
           },
         }
       : {}),

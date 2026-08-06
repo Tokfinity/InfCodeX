@@ -5,6 +5,7 @@ import { join as pathJoin } from 'node:path';
 import iconv from 'iconv-lite';
 import {
   emitKodaXDiagnostic,
+  isCurrentProcessWindowsJobContained,
   killChildProcessTree,
   killChildProcessTreeSync,
   registerManagedChildProcess,
@@ -434,7 +435,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     const cleanupOnProcessExit = (): void => {
       killChildProcessTreeSync(proc);
     };
-    process.once('exit', cleanupOnProcessExit);
+    if (!isCurrentProcessWindowsJobContained()) process.once('exit', cleanupOnProcessExit);
     const abortSignal = ctx.abortSignal;
     let cleaned = false;
     let onAbort: (() => void) | undefined;
@@ -500,7 +501,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     const cleanupOnProcessExit = (): void => {
       killChildProcessTreeSync(proc);
     };
-    process.once('exit', cleanupOnProcessExit);
+    if (!isCurrentProcessWindowsJobContained()) process.once('exit', cleanupOnProcessExit);
     let foregroundCommandRegistered = true;
     const unregisterForegroundCommand = (): void => {
       if (!foregroundCommandRegistered) return;

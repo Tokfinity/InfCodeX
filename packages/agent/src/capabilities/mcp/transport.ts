@@ -7,6 +7,7 @@ import { stripHardenedEnvVars } from '../../runtime/process-hardening.js';
 import {
   killChildProcessTree,
   killChildProcessTreeSync,
+  isCurrentProcessWindowsJobContained,
   rememberChildProcessTree,
 } from '../../runtime/process-tree.js';
 import { registerManagedChildProcess } from '../../runtime/managed-child-processes.js';
@@ -168,17 +169,22 @@ export function createStdioTransport(config: {
       child.once('spawn', () => {
         spawnConfirmed = true;
       });
-      cleanupOnProcessExit = () => killChildProcessTreeSync(child);
-      const childCleanupOnProcessExit = cleanupOnProcessExit;
+      let childCleanupOnProcessExit: (() => void) | undefined;
       const removeChildCleanupOnProcessExit = (): void => {
-        globalThis.process.off('exit', childCleanupOnProcessExit);
+        if (childCleanupOnProcessExit !== undefined) {
+          globalThis.process.off('exit', childCleanupOnProcessExit);
+        }
         if (cleanupOnProcessExit === childCleanupOnProcessExit) {
           cleanupOnProcessExit = undefined;
           removeCleanupOnProcessExit = undefined;
         }
       };
-      removeCleanupOnProcessExit = removeChildCleanupOnProcessExit;
-      globalThis.process.once('exit', cleanupOnProcessExit);
+      if (!isCurrentProcessWindowsJobContained()) {
+        childCleanupOnProcessExit = () => killChildProcessTreeSync(child);
+        cleanupOnProcessExit = childCleanupOnProcessExit;
+        removeCleanupOnProcessExit = removeChildCleanupOnProcessExit;
+        globalThis.process.once('exit', childCleanupOnProcessExit);
+      }
       unregisterManagedChild = registerManagedChildProcess(child, {
         kind: 'mcp-stdio',
         command: config.command,

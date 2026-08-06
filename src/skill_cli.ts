@@ -3,6 +3,7 @@ import { pathToFileURL } from 'url';
 import { spawn } from 'child_process';
 import {
   getDefaultSkillPaths,
+  isCurrentProcessWindowsJobContained,
   killChildProcessTreeSync,
   prepareInternalNodeLaunch,
   registerManagedChildProcess,
@@ -109,7 +110,7 @@ export async function defaultSkillToolRunner(
     const cleanupOnProcessExit = (): void => {
       killChildProcessTreeSync(child);
     };
-    process.once('exit', cleanupOnProcessExit);
+    if (!isCurrentProcessWindowsJobContained()) process.once('exit', cleanupOnProcessExit);
     const cleanup = (): void => {
       process.off('exit', cleanupOnProcessExit);
       unregisterManagedChild();

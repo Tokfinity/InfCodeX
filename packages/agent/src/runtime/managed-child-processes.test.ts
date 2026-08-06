@@ -529,6 +529,32 @@ describe('managed child process registry', () => {
     }
   });
 
+  it.skipIf(process.platform !== 'win32')(
+    'retires current-owner incomplete records only when a Windows Job contains the owner',
+    async () => {
+      tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+      setAgentConfigHome(tempHome);
+      const deadPid = findDeadPid();
+      await writeRegistryRecord(tempHome, {
+        version: 4,
+        registrationId: 'fixture-job-contained',
+        pid: deadPid,
+        ownerPid: process.pid,
+        registeredAtMs: Date.now(),
+        kind: 'short-lived-probe',
+        command: process.execPath,
+        processTreeComplete: false,
+      });
+
+      await expect(cleanupRegisteredManagedChildren({
+        includeCurrentOwner: true,
+        requireCurrentOwnerCleanup: true,
+        currentOwnerJobContained: true,
+      })).resolves.toEqual({ killed: 0, pruned: 1, skipped: 0 });
+      expect(await registeredChildFiles(tempHome, deadPid)).toEqual([]);
+    },
+  );
+
   it.skipIf(process.platform !== 'win32')('preserves active recovery evidence when isolation rename fails', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);

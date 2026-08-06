@@ -65,6 +65,10 @@ export interface RuntimeDaemonLockOwner {
   readonly pid: number;
   readonly createdAt: string;
   readonly kind?: 'daemon' | 'inline';
+  /** Present when the daemon was assigned to a Windows Job before user code could start. */
+  readonly processContainment?: 'windows-job';
+  /** Process outside the Job whose exit proves that the Job became empty. */
+  readonly supervisorPid?: number;
 }
 
 export interface RuntimeOwnerPolicy {
@@ -1033,7 +1037,11 @@ function isRuntimeDaemonLockOwner(value: unknown): value is RuntimeDaemonLockOwn
   const owner = value as Record<string, unknown>;
   return typeof owner.runtimeId === 'string'
     && typeof owner.pid === 'number'
-    && typeof owner.createdAt === 'string';
+    && typeof owner.createdAt === 'string'
+    && (owner.processContainment === undefined || owner.processContainment === 'windows-job')
+    && (owner.processContainment === 'windows-job'
+      ? Number.isSafeInteger(owner.supervisorPid) && (owner.supervisorPid as number) > 0
+      : owner.supervisorPid === undefined);
 }
 
 function isRuntimeDaemonStatus(value: unknown): value is RuntimeDaemonStatus {

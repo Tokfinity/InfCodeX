@@ -6,7 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Windows daemon startup now assigns the Runtime process to a kill-on-close Job
+  Object before user code can run. The public
+  `waitForRuntimeDaemonShutdown()` verifier combines the exact durable cleanup
+  outcome with daemon and containment-supervisor exit, advertised by
+  `daemonShutdownVerification:1`.
+
+### Fixed
+
+- Daemon final cleanup can safely retire incomplete current-owner child
+  registry records when kernel Job containment is active. Per-child synchronous
+  process-exit hooks are omitted in that mode, avoiding listener growth and
+  repeated PowerShell tree scans during shutdown. CLI stop now waits for the
+  containment boundary as well as the daemon PID before reporting success.
+- Existing Windows daemons are no longer forced through a lock-only capability
+  upgrade merely to restore Sessions. Shutdown verification remains explicitly
+  negotiable; a legacy daemon must be stopped and relaunched before callers can
+  require the new containment contract.
 
 ---
 

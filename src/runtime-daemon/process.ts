@@ -44,6 +44,7 @@ import {
   defaultRuntimeDaemonEndpoint,
   type RuntimeDaemonEndpoint,
 } from "./transport.js";
+import { spawnWindowsJobContainedProcess } from "./windows-job-supervisor.js";
 
 export interface RuntimeDaemonProcessLeaseOptions {
   readonly homeDir?: string;
@@ -291,6 +292,7 @@ export async function acquireRuntimeDaemonProcessLease(
     sessionsDir: options.sessionsDir,
     permissionTimeoutMs: options.permissionTimeoutMs,
     orphanExitMs: options.orphanExitMs,
+    startupTimeoutMs: options.startupTimeoutMs,
   });
   const observation = await waitForHealthyDaemonStartup(paths, options, child);
   const endpoint = runtimeDaemonEndpointFromState(observation.state);
@@ -584,6 +586,7 @@ export interface RuntimeDaemonServeProcessInput {
   readonly sessionsDir?: string;
   readonly permissionTimeoutMs?: number;
   readonly orphanExitMs?: number;
+  readonly startupTimeoutMs?: number;
 }
 
 export function buildRuntimeDaemonServeArgs(
@@ -641,25 +644,53 @@ export async function spawnRuntimeDaemonServeProcess(
   );
   const bootstrapLog = openRuntimeDaemonBootstrapLog(paths);
   let child: ChildProcess;
+  let daemonPid: number | undefined;
+  let terminateContainedProcess: (() => Promise<void>) | undefined;
+  let releaseContainedProcess: (() => void) | undefined;
   try {
-    child = spawn(process.execPath, launch.args, {
-      detached: true,
-      stdio: ["ignore", bootstrapLog, bootstrapLog],
-      windowsHide: true,
-      env: launch.env,
-    });
+    if (process.platform === "win32") {
+      const contained = await spawnWindowsJobContainedProcess({
+        executable: process.execPath,
+        args: launch.args,
+        cwd: process.cwd(),
+        env: launch.env,
+        logFile: runtimeDaemonBootstrapLogPath(paths),
+        startupTimeoutMs: input.startupTimeoutMs,
+      });
+      child = contained.supervisor;
+      daemonPid = contained.processPid;
+      terminateContainedProcess = contained.terminate;
+      releaseContainedProcess = contained.release;
+    } else {
+      child = spawn(process.execPath, launch.args, {
+        detached: true,
+        stdio: ["ignore", bootstrapLog, bootstrapLog],
+        windowsHide: true,
+        env: launch.env,
+      });
+    }
   } finally {
     closeSync(bootstrapLog);
   }
-  const exit = new Promise<RuntimeDaemonStartupExit>((resolve) => {
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once("spawn", resolve);
-    child.once("error", reject);
-  });
+  const exit = child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve({ code: child.exitCode, signal: child.signalCode })
+    : new Promise<RuntimeDaemonStartupExit>((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+  if (daemonPid === undefined) {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+  }
   rememberChildProcessTree(child);
-  return createRuntimeDaemonStartupProcess(child, exit);
+  return createRuntimeDaemonStartupProcess(
+    child,
+    exit,
+    daemonPid,
+    terminateContainedProcess,
+    releaseContainedProcess,
+  );
 }
 
 async function terminateCompetingStartupChild(
@@ -681,25 +712,38 @@ async function terminateCompetingStartupChild(
 export function createRuntimeDaemonStartupProcess(
   child: ChildProcess,
   exit: Promise<RuntimeDaemonStartupExit>,
+  processPid = child.pid,
+  terminateContainedProcess?: () => Promise<void>,
+  releaseContainedProcess?: () => void,
 ): RuntimeDaemonStartupProcess {
   return {
-    pid: child.pid,
+    pid: processPid,
     exit,
     hasExited() {
       return isChildProcessExited(child);
     },
     unref() {
-      child.unref();
+      if (releaseContainedProcess !== undefined) releaseContainedProcess();
+      else child.unref();
     },
     async terminate() {
+      if (terminateContainedProcess !== undefined) {
+        await terminateContainedProcess();
+        if (!(await didExitWithin(exit, 1_000))) {
+          throw new Error(
+            `Runtime daemon Job supervisor ${child.pid ?? "unknown"} did not exit after termination.`,
+          );
+        }
+        return;
+      }
       const rootAlreadyExited = isChildProcessExited(child);
       const result = await killChildProcessTree(child);
       if (result.status === "unknown" && !rootAlreadyExited) {
-        throw new RuntimeDaemonProcessCleanupIncompleteError(child.pid);
+        throw new RuntimeDaemonProcessCleanupIncompleteError(processPid);
       }
       if (!(await didExitWithin(exit, 1_000))) {
         throw new Error(
-          `Runtime daemon child ${child.pid ?? "unknown"} did not exit after termination.`,
+          `Runtime daemon child ${processPid ?? "unknown"} did not exit after termination.`,
         );
       }
     },

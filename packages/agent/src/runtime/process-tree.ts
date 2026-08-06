@@ -11,6 +11,83 @@ import { readFileSync } from 'node:fs';
 const DEFAULT_GRACE_MS = 300;
 const DEFAULT_FORCE_MS = 2_000;
 const DEFAULT_TASKKILL_MS = 5_000;
+const WINDOWS_JOB_MEMBERSHIP_SOURCE = String.raw`
+using System;
+using System.Runtime.InteropServices;
+public static class KodaXWindowsJobMembership {
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BasicLimitInformation {
+    public long PerProcessUserTimeLimit;
+    public long PerJobUserTimeLimit;
+    public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize;
+    public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit;
+    public UIntPtr Affinity;
+    public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct IoCounters {
+    public ulong ReadOperationCount;
+    public ulong WriteOperationCount;
+    public ulong OtherOperationCount;
+    public ulong ReadTransferCount;
+    public ulong WriteTransferCount;
+    public ulong OtherTransferCount;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct ExtendedLimitInformation {
+    public BasicLimitInformation BasicLimitInformation;
+    public IoCounters IoInfo;
+    public UIntPtr ProcessMemoryLimit;
+    public UIntPtr JobMemoryLimit;
+    public UIntPtr PeakProcessMemoryUsed;
+    public UIntPtr PeakJobMemoryUsed;
+  }
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr OpenJobObjectW(uint desiredAccess, bool inheritHandle, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool QueryInformationJobObject(
+    IntPtr job,
+    int informationClass,
+    out ExtendedLimitInformation information,
+    uint informationLength,
+    IntPtr returnLength);
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")]
+  private static extern bool CloseHandle(IntPtr handle);
+  public static bool IsCurrentProcessContained(string name) {
+    var job = OpenJobObjectW(4, false, name);
+    if (job == IntPtr.Zero) return false;
+    try {
+      bool inJob;
+      if (!IsProcessInJob(GetCurrentProcess(), job, out inJob) || !inJob) return false;
+      ExtendedLimitInformation limits;
+      if (!QueryInformationJobObject(
+        job,
+        9,
+        out limits,
+        (uint)Marshal.SizeOf(typeof(ExtendedLimitInformation)),
+        IntPtr.Zero)) return false;
+      return (limits.BasicLimitInformation.LimitFlags & 0x00002000) != 0;
+    } finally {
+      CloseHandle(job);
+    }
+  }
+}`;
+const WINDOWS_JOB_MEMBERSHIP_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:KODAX_INTERNAL_JOB_QUERY_SOURCE))
+Add-Type -TypeDefinition $source
+if ([KodaXWindowsJobMembership]::IsCurrentProcessContained($env:KODAX_DAEMON_JOB_NAME)) {
+  [Console]::Out.Write('1')
+} else {
+  [Console]::Out.Write('0')
+}`;
 const NATIVE_PARENT_PROCESS_SOURCE = String.raw`
 using System;
 using System.Runtime.InteropServices;
@@ -384,6 +461,47 @@ export function readProcessStartIdentity(pid: number): string | undefined {
   });
   const value = result.status === 0 ? result.stdout.trim() : '';
   return value === '' ? undefined : `${process.platform}:${value}`;
+}
+
+/** True only when this daemon entered its supervising Windows Job before startup. */
+let currentProcessWindowsJobContained: boolean | undefined;
+
+export function isCurrentProcessWindowsJobContained(): boolean {
+  if (process.platform !== 'win32') return false;
+  if (currentProcessWindowsJobContained !== undefined) {
+    return currentProcessWindowsJobContained;
+  }
+  const supervisorPid = Number.parseInt(
+    process.env.KODAX_DAEMON_JOB_SUPERVISOR_PID ?? '',
+    10,
+  );
+  if (
+    process.env.KODAX_DAEMON_JOB_CONTAINED !== '1'
+    || !process.env.KODAX_DAEMON_JOB_NAME
+    || !Number.isSafeInteger(supervisorPid)
+    || supervisorPid <= 0
+  ) {
+    currentProcessWindowsJobContained = false;
+    return false;
+  }
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_JOB_MEMBERSHIP_SCRIPT],
+    {
+      encoding: 'utf8',
+      timeout: 5_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        KODAX_INTERNAL_JOB_QUERY_SOURCE: Buffer.from(
+          WINDOWS_JOB_MEMBERSHIP_SOURCE,
+          'utf8',
+        ).toString('base64'),
+      },
+    },
+  );
+  currentProcessWindowsJobContained = result.status === 0 && result.stdout.trim() === '1';
+  return currentProcessWindowsJobContained;
 }
 
 function collectDescendantIdentities(

@@ -62,4 +62,42 @@ describe("Runtime daemon startup process cleanup", () => {
 
     await expect(processHandle.terminate()).resolves.toBeUndefined();
   });
+
+  it("terminates a Windows Job supervisor directly instead of snapshotting its tree", async () => {
+    const child = fakeChild();
+    Object.assign(child, { exitCode: null });
+    const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const terminateContainedProcess = vi.fn(async () => {
+      Object.assign(child, { exitCode: 1 });
+      child.emit("exit", 1, null);
+    });
+    const processHandle = createRuntimeDaemonStartupProcess(
+      child,
+      exit,
+      5_252,
+      terminateContainedProcess,
+    );
+
+    await expect(processHandle.terminate()).resolves.toBeUndefined();
+    expect(terminateContainedProcess).toHaveBeenCalledOnce();
+    expect(killChildProcessTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("releases a healthy Windows Job bootstrap control channel before unref", () => {
+    const child = fakeChild();
+    const releaseContainedProcess = vi.fn();
+    const processHandle = createRuntimeDaemonStartupProcess(
+      child,
+      Promise.resolve({ code: 0, signal: null }),
+      5_353,
+      undefined,
+      releaseContainedProcess,
+    );
+
+    processHandle.unref();
+    expect(releaseContainedProcess).toHaveBeenCalledOnce();
+    expect(child.unref).not.toHaveBeenCalled();
+  });
 });

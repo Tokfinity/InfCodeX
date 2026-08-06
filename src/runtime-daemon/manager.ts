@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
+import { isCurrentProcessWindowsJobContained } from '@kodax-ai/agent';
+
 import type {
   KodaXRuntime,
   RuntimeIntegrationDomainStatus,
@@ -70,11 +72,22 @@ export async function acquireRuntimeDaemonLease(
     profile,
     resolveRuntimeDaemonEndpointScope(homeDir, configHome),
   );
+  const supervisorPid = Number.parseInt(
+    process.env.KODAX_DAEMON_JOB_SUPERVISOR_PID ?? '',
+    10,
+  );
+  const jobContained = isCurrentProcessWindowsJobContained()
+    && Number.isSafeInteger(supervisorPid)
+    && supervisorPid > 0;
   const owner = {
     runtimeId: `rt_${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     pid: process.pid,
     createdAt: new Date().toISOString(),
     kind: 'daemon' as const,
+    ...(jobContained ? {
+      processContainment: 'windows-job' as const,
+      supervisorPid,
+    } : {}),
   };
 
   const decision = await resolveRuntimeDaemonOwnership(paths, owner, options.healthCheck);

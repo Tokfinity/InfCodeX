@@ -224,9 +224,81 @@ describe('Runtime daemon capability upgrade', () => {
     expect(newClose).toHaveBeenCalled();
   });
 
+  it.skipIf(process.platform !== 'win32')(
+    'attaches an existing daemon without making shutdown verification a session requirement',
+    async () => {
+      const calls: string[] = [];
+      const oldTransport = createLegacyTransport({
+        preflight: createPreflight(),
+        calls,
+        close: vi.fn(async () => undefined),
+        capabilities: {
+          managedRunDurability: { version: 1 },
+          daemonManagement: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+          runtimeEventCoalescing: { version: 1 },
+        },
+        onRollback: () => upgradeMocks.readLockOwner.mockReturnValue(undefined),
+      });
+      upgradeMocks.acquireProcessLease
+        .mockResolvedValueOnce(createLease(oldTransport));
+      upgradeMocks.readLockOwner.mockReturnValue({
+        runtimeId: RUNTIME_ID,
+        pid: 101,
+        createdAt: '2026-07-19T00:00:00.000Z',
+        kind: 'daemon',
+      });
+
+      const runtime = await connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+      });
+
+      expect(runtime.identity.runtimeId).toBe(RUNTIME_ID);
+      expect(calls).toEqual(['old:initialize']);
+      await runtime.close();
+      expect(calls).toEqual(['old:initialize', 'old:close']);
+    },
+  );
+
+  it.skipIf(process.platform !== 'win32')(
+    'refuses an explicit in-place migration to authoritative shutdown verification',
+    async () => {
+      const calls: string[] = [];
+      const oldTransport = createLegacyTransport({
+        preflight: createPreflight(),
+        calls,
+        close: vi.fn(async () => undefined),
+        capabilities: {
+          managedRunDurability: { version: 1 },
+          daemonManagement: { version: 1 },
+          runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
+          runtimeEventCoalescing: { version: 1 },
+        },
+      });
+      upgradeMocks.acquireProcessLease.mockResolvedValueOnce(createLease(oldTransport));
+      upgradeMocks.readLockOwner.mockReturnValue({
+        runtimeId: RUNTIME_ID,
+        pid: 101,
+        createdAt: '2026-07-19T00:00:00.000Z',
+        kind: 'daemon',
+      });
+
+      await expect(connectKodaXRuntime({
+        autoStart: true,
+        profile: PROFILE,
+        homeDir: path.join('C:', 'kodax-upgrade-test'),
+        requirements: { daemonShutdownVerification: 1 },
+      })).rejects.toThrow(/cannot be migrated safely in place/i);
+      expect(calls).toEqual(['old:initialize', 'old:close']);
+    },
+  );
+
   it('publishes pre-spawn managed durability, event coalescing, and orphan-exit capabilities', () => {
     expect(KODAX_RUNTIME_SDK_CAPABILITIES).toEqual({
       daemonOrphanExit: 1,
+      daemonShutdownVerification: 1,
       managedRunDurability: 1,
       runtimeEventCoalescing: 1,
     });
@@ -512,6 +584,9 @@ function createCurrentTransport(
         managedRunDurability: { version: 1 },
         runtimeAutoModeGuardrail: { version: 4, owner: 'session-runtime' },
         runtimeEventCoalescing: { version: 1 },
+        ...(process.platform === 'win32'
+          ? { daemonShutdownVerification: { version: 1 } }
+          : {}),
         daemonOrphanExit: {
           version: 1,
           idleOnly: true,

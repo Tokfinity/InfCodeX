@@ -1127,6 +1127,8 @@ function ownerIdentitySchema(): RuntimeDaemonJsonSchema {
     pid: integerSchema,
     createdAt: stringSchema,
     kind: { type: 'string', enum: ['daemon', 'inline'] },
+    processContainment: { type: 'string', enum: ['windows-job'] },
+    supervisorPid: integerSchema,
   }, ['runtimeId', 'pid', 'createdAt']);
 }
 

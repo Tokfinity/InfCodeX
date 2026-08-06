@@ -16,7 +16,10 @@
 
 import path from 'path';
 import { getRunScopedConfig } from '@kodax-ai/llm';
-import { emitKodaXDiagnostic } from '@kodax-ai/agent';
+import {
+  emitKodaXDiagnostic,
+  isCurrentProcessWindowsJobContained,
+} from '@kodax-ai/agent';
 import type { Diagnostic, Position } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
@@ -388,7 +391,7 @@ export function getDefaultLspService(): LspService | undefined {
         })
         : undefined,
     });
-    if (!exitCleanupRegistered) {
+    if (!exitCleanupRegistered && !isCurrentProcessWindowsJobContained()) {
       // Last-resort sync kill on natural exit / process.exit() so spawned
       // servers don't linger (Windows does not auto-reap orphans). Hosts
       // that own the lifecycle should call shutdownDefaultLspService() on

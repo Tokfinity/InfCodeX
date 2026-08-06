@@ -164,6 +164,7 @@ import {
 import {
   cleanupRegisteredManagedChildren,
   emitKodaXDiagnostic,
+  isCurrentProcessWindowsJobContained,
   killPidTree,
   readProcessStartIdentity,
   shutdownTracing,
@@ -1538,6 +1539,7 @@ async function getDaemonStartResult(input: {
       configHome: input.configHome,
       defaultProvider: input.provider,
       defaultModel: input.model,
+      startupTimeoutMs: input.timeoutMs,
     });
     try {
       const observation = await waitForHealthyDaemonStartup(
@@ -1873,6 +1875,7 @@ async function cleanupDaemonServeProcessResources(input: {
     await cleanupRegisteredManagedChildren({
       includeCurrentOwner: true,
       requireCurrentOwnerCleanup: true,
+      currentOwnerJobContained: isCurrentProcessWindowsJobContained(),
     });
   }, Math.max(0, deadline - Date.now()));
   await attempt('tracing', shutdownTracing);
@@ -2044,6 +2047,18 @@ async function getDaemonStopResult(input: {
   }
 
   const stoppedState = observation.state;
+  const stoppedOwner = readRuntimeDaemonLockOwner(paths.lockFile);
+  if (
+    stoppedOwner === undefined
+    || stoppedOwner.runtimeId !== stoppedState.runtimeId
+    || stoppedOwner.pid !== stoppedState.pid
+  ) {
+    return {
+      stopped: false,
+      reason: 'unverified_owner',
+      state: stoppedState,
+    };
+  }
   const expectedProcessStartIdentity = readProcessStartIdentity(stoppedState.pid);
   await delayDaemonStopAfterObservationForTest();
   const endpoint = runtimeDaemonEndpointFromState(stoppedState);
@@ -2086,12 +2101,23 @@ async function getDaemonStopResult(input: {
     })).status;
     processExited = await waitForDaemonProcessExit(stoppedState.pid, 1_000);
   }
+  const containmentAvailable = process.platform !== 'win32'
+    || stoppedOwner.processContainment === 'windows-job';
+  const containmentExited = process.platform !== 'win32'
+    || (stoppedOwner.processContainment === 'windows-job'
+      && stoppedOwner.supervisorPid !== undefined
+      && await waitForDaemonProcessExit(
+        stoppedOwner.supervisorPid,
+        Math.max(0, deadline - Date.now()),
+      ));
   const outcome = processExited
     ? readRuntimeDaemonShutdownOutcome(paths, stoppedState)
     : undefined;
   const outcomeMatches = outcome?.runtimeId === stoppedState.runtimeId
     && outcome.pid === stoppedState.pid;
   const requestedDaemonStopped = processExited
+    && containmentAvailable
+    && containmentExited
     && outcomeMatches
     && outcome.status === 'succeeded';
   let after = await observeRuntimeDaemonHealth(paths);
@@ -2120,13 +2146,17 @@ async function getDaemonStopResult(input: {
       : 'cleanup_unverified' as const;
   const cleanupError = outcomeMatches && outcome.status === 'failed'
     ? outcome.error
-    : processExited
-      ? 'Runtime daemon exited without a verifiable successful cleanup outcome.'
-      : expectedProcessStartIdentity === undefined
-        ? 'Runtime daemon did not exit and its exact process identity is unavailable.'
-        : process.platform === 'win32'
-          ? `Runtime daemon did not exit after exact process-tree cleanup (${watchdogStatus ?? 'not-attempted'}).`
-          : 'Runtime daemon did not exit; unsafe POSIX cached-PID escalation was refused.';
+    : processExited && !containmentAvailable
+      ? 'Runtime daemon exited, but Windows Job containment metadata is unavailable.'
+      : processExited && !containmentExited
+        ? 'Runtime daemon exited, but its Windows Job containment supervisor did not confirm an empty process tree.'
+        : processExited
+          ? 'Runtime daemon exited without a verifiable successful cleanup outcome.'
+          : expectedProcessStartIdentity === undefined
+            ? 'Runtime daemon did not exit and its exact process identity is unavailable.'
+            : process.platform === 'win32'
+              ? `Runtime daemon did not exit after exact process-tree cleanup (${watchdogStatus ?? 'not-attempted'}).`
+              : 'Runtime daemon did not exit; unsafe POSIX cached-PID escalation was refused.';
   const result: DaemonStopResult = {
     stopped: requestedDaemonStopped && !replacementRunning,
     ...(replacementRunning ? { replacementRunning: true } : {}),

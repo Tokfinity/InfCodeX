@@ -2080,6 +2080,24 @@ identity-checked snapshot mitigation above remains the v0.7.79 behavior; the
 remaining spawn-time Job Object / Worker owner-lease closure work no longer
 blocks the v0.7.79 release.
 
+#### 2026-08-06 daemon containment slice
+
+The daemon-owned half of this issue is implemented in the current unreleased
+source. On Windows, the daemon is created suspended, assigned to a
+kill-on-close Job Object, and only then resumed. A supervisor outside that Job
+terminates remaining descendants after the daemon exits and itself exits only
+after Job accounting reports zero active processes. The daemon lock publishes
+that containment boundary, while `waitForRuntimeDaemonShutdown()` requires the
+exact durable cleanup outcome, daemon exit, and supervisor exit before an SDK
+host may treat shutdown as complete. Final daemon cleanup can therefore retire
+incomplete current-owner registry evidence without a bare-PID kill, and it no
+longer installs redundant synchronous child-tree exit hooks under containment.
+
+This does **not** resolve Issue 256 as a whole. Worker-owned children still need
+the separately scheduled host-issued owner lease before their lifetime can be
+invalidated independently of the long-lived host PID. The issue remains Open
+and its scheduled version remains unchanged.
+
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 
 - **Priority**: High

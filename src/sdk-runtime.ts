@@ -232,6 +232,12 @@ import {
   acquireRuntimeDaemonProcessLease,
   type RuntimeDaemonProcessLease,
 } from "./runtime-daemon/process.js";
+export { waitForRuntimeDaemonShutdown } from "./runtime-daemon/shutdown-verifier.js";
+export type {
+  RuntimeDaemonShutdownVerification,
+  RuntimeDaemonShutdownVerificationInput,
+  RuntimeDaemonShutdownVerificationOwner,
+} from "./runtime-daemon/shutdown-verifier.js";
 import { createRuntimeWorkerTransport } from "./runtime-worker/transport.js";
 import type { RuntimeWorkerOptions } from "./runtime-worker/protocol.js";
 import {
@@ -360,6 +366,8 @@ export interface RuntimeOwnerIdentity {
   readonly pid: number;
   readonly createdAt: string;
   readonly kind?: "daemon" | "inline";
+  readonly processContainment?: "windows-job";
+  readonly supervisorPid?: number;
 }
 
 export interface RuntimeOwnerState {
@@ -672,6 +680,7 @@ export interface ConnectKodaXRuntimeOptions {
 /** SDK facts that embedders can inspect before auto-starting a daemon. */
 export const KODAX_RUNTIME_SDK_CAPABILITIES = Object.freeze({
   daemonOrphanExit: 1,
+  daemonShutdownVerification: 1,
   managedRunDurability: 1,
   runtimeEventCoalescing: 1,
 } as const);
@@ -718,6 +727,8 @@ export interface RuntimeCapabilityRequirements {
   readonly daemonManagement?: 1;
   /** Require an auto-started daemon whose current host has orphan idle-exit enabled. */
   readonly daemonOrphanExit?: 1;
+  /** Require authoritative durable shutdown plus kernel-backed process containment. */
+  readonly daemonShutdownVerification?: 1;
   /** Require source-level bounded coalescing before sequence allocation and persistence. */
   readonly runtimeEventCoalescing?: 1;
   /** Optional integration failures are isolated, observable, and hot-recoverable. */
@@ -4069,6 +4080,7 @@ function assertRuntimeCapabilities(
     requirements?.managedRunDurability === undefined &&
     requirements?.daemonManagement === undefined &&
     requirements?.daemonOrphanExit === undefined &&
+    requirements?.daemonShutdownVerification === undefined &&
     requirements?.runtimeEventCoalescing === undefined &&
     requirements?.integrationConfigResilience === undefined &&
     requirements?.actorControlPlane === undefined &&
@@ -4122,6 +4134,7 @@ function assertRuntimeCapabilities(
     ["managedRunDurability", requirements.managedRunDurability],
     ["daemonManagement", requirements.daemonManagement],
     ["daemonOrphanExit", requirements.daemonOrphanExit],
+    ["daemonShutdownVerification", requirements.daemonShutdownVerification],
     ["runtimeEventCoalescing", requirements.runtimeEventCoalescing],
     ["integrationConfigResilience", requirements.integrationConfigResilience],
     ["actorControlPlane", requirements.actorControlPlane],
@@ -4468,6 +4481,10 @@ async function connectKodaXRuntimeInternal(
         name: "daemonOrphanExit",
         version: requirements?.daemonOrphanExit,
       },
+      {
+        name: "daemonShutdownVerification",
+        version: requirements?.daemonShutdownVerification,
+      },
     ].find(
       (requirement): requirement is { name: string; version: number } =>
         requirement.version !== undefined &&
@@ -4485,6 +4502,14 @@ async function connectKodaXRuntimeInternal(
       ) {
         throw new RuntimeDaemonCapabilityUpgradeError(
           `Runtime daemon does not support ${requiredUpgrade.name} v${requiredUpgrade.version}. Stop all daemon work and restart it with a compatible KodaX installation.`,
+          undefined,
+          undefined,
+          requiredUpgrade.name,
+        );
+      }
+      if (requiredUpgrade.name === "daemonShutdownVerification") {
+        throw new RuntimeDaemonCapabilityUpgradeError(
+          "The running Windows daemon predates authoritative process containment. Stop it explicitly before requiring daemonShutdownVerification v1; it cannot be migrated safely in place.",
           undefined,
           undefined,
           requiredUpgrade.name,

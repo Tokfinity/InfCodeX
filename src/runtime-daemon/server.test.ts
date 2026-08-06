@@ -48,6 +48,11 @@ import { createRuntimeControlJournal } from './control-journal.js';
 import { createRuntimeDaemonReverseBridgeHub } from './reverse-bridge.js';
 import type { RuntimeDaemonManagementController } from './management.js';
 
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 describe('runtime daemon dispatcher', () => {
   afterEach(() => setActiveExtensionRuntime(null));
 
@@ -1558,6 +1563,30 @@ describe('runtime daemon dispatcher', () => {
     });
     spaceManaged.close();
   });
+
+  it.skipIf(process.platform !== 'win32')(
+    'does not trust a spoofed Job-containment environment marker',
+    async () => {
+      const previous = {
+        contained: process.env.KODAX_DAEMON_JOB_CONTAINED,
+        jobName: process.env.KODAX_DAEMON_JOB_NAME,
+        supervisorPid: process.env.KODAX_DAEMON_JOB_SUPERVISOR_PID,
+      };
+      try {
+        process.env.KODAX_DAEMON_JOB_CONTAINED = '1';
+        process.env.KODAX_DAEMON_JOB_NAME = `spoofed-${Date.now()}`;
+        process.env.KODAX_DAEMON_JOB_SUPERVISOR_PID = String(process.pid);
+        const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });
+        const initialized = await initializeDispatcher(dispatcher);
+        expect(initialized.capabilities).not.toHaveProperty('daemonShutdownVerification');
+        dispatcher.close();
+      } finally {
+        restoreEnvironment('KODAX_DAEMON_JOB_CONTAINED', previous.contained);
+        restoreEnvironment('KODAX_DAEMON_JOB_NAME', previous.jobName);
+        restoreEnvironment('KODAX_DAEMON_JOB_SUPERVISOR_PID', previous.supervisorPid);
+      }
+    },
+  );
 
   it('routes canonical protocol aliases for external clients', async () => {
     const dispatcher = createRuntimeDaemonDispatcher({ runtime: makeRuntime() });

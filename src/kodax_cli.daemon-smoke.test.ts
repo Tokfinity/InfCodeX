@@ -860,6 +860,16 @@ describe('daemon CLI smoke', () => {
       profile,
       status: 'ready',
     });
+    const daemonPaths = resolveRuntimeDaemonPaths(homeDir, profile);
+    const firstOwner = JSON.parse(fs.readFileSync(daemonPaths.lockFile, 'utf8')) as {
+      readonly processContainment?: unknown;
+      readonly supervisorPid?: unknown;
+    };
+    if (process.platform === 'win32') {
+      expect(firstOwner.processContainment).toBe('windows-job');
+      expect(typeof firstOwner.supervisorPid).toBe('number');
+      expect(isRuntimeDaemonPidAlive(firstOwner.supervisorPid as number)).toBe(true);
+    }
 
     const status = await runDaemonCommand([
       'status',
@@ -948,6 +958,12 @@ describe('daemon CLI smoke', () => {
         health: 'healthy',
       },
     });
+    if (process.platform === 'win32') {
+      expect(isRuntimeDaemonPidAlive(firstOwner.supervisorPid as number)).toBe(false);
+    }
+    const restartedOwner = JSON.parse(fs.readFileSync(daemonPaths.lockFile, 'utf8')) as {
+      readonly supervisorPid?: unknown;
+    };
 
     const stop = await runDaemonCommand([
       'stop',
@@ -964,6 +980,9 @@ describe('daemon CLI smoke', () => {
       health: 'missing',
       state: null,
     });
+    if (process.platform === 'win32') {
+      expect(isRuntimeDaemonPidAlive(restartedOwner.supervisorPid as number)).toBe(false);
+    }
 
     const stateFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.json');
     const lockFile = path.join(homeDir, '.kodax', 'runtime', 'daemon', profile, 'daemon.lock');
@@ -975,6 +994,44 @@ describe('daemon CLI smoke', () => {
     expect(shutdownOutcomes).toHaveLength(2);
     expect(new Set(shutdownOutcomes.map((name) => name.split('.')[1])).size).toBe(2);
   }, 180_000);
+
+  it.skipIf(process.platform !== 'win32')(
+    'does not report a legacy uncontained daemon as safely stopped',
+    async () => {
+      const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-uncontained-stop-'));
+      tempRoots.push(homeDir);
+      const profile = `uncontained-stop-${process.pid}-${Date.now()}`;
+      await runDaemonCommand([
+        'start', '--home', homeDir, '--profile', profile,
+        '--provider', 'mock-provider', '--timeout-ms', '30000', '--json',
+      ]);
+      const paths = resolveRuntimeDaemonPaths(homeDir, profile);
+      const owner = JSON.parse(fs.readFileSync(paths.lockFile, 'utf8')) as {
+        readonly runtimeId: string;
+        readonly pid: number;
+        readonly createdAt: string;
+        readonly kind?: 'daemon';
+      };
+      fs.writeFileSync(paths.lockFile, `${JSON.stringify({
+        runtimeId: owner.runtimeId,
+        pid: owner.pid,
+        createdAt: owner.createdAt,
+        ...(owner.kind !== undefined ? { kind: owner.kind } : {}),
+      }, null, 2)}\n`, 'utf8');
+
+      const stop = await runDaemonCommand([
+        'stop', '--home', homeDir, '--profile', profile,
+        '--timeout-ms', '30000', '--json',
+      ]);
+
+      expect(stop).toMatchObject({
+        stopped: false,
+        reason: 'cleanup_unverified',
+      });
+      expect(String(stop.error)).toMatch(/containment metadata is unavailable/i);
+    },
+    90_000,
+  );
 
   it('shuts down a test-owned daemon when its explicitly watched parent exits', async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-daemon-parent-watch-'));
