@@ -96,6 +96,14 @@ a real completion or independent failure; input admission resolves its Run befor
 reading mutable Session history, avoiding transient `data_changed` responses.
 `kodax_manual` documents these boundaries.
 
+The v0.7.83 release documents and exposes the Windows daemon containment
+boundary. A new daemon is assigned to a kill-on-close Job Object before user
+code runs; `waitForRuntimeDaemonShutdown()` proves the durable cleanup result
+and both daemon and supervisor exit, while `daemonShutdownVerification:1`
+allows hosts to require the contract. Legacy daemons are not silently upgraded
+in place. `kodax_manual` carries the same shutdown and migration rules; the
+Worker owner-lease portion of Issue 256 remains scheduled for v0.7.84.
+
 ## 安装 / 导入
 
 ```bash

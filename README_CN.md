@@ -232,6 +232,14 @@ Run，再读取可变 Session history，因此活动中断和 after-turn 接纳�
 `data_changed` 拒绝。FEATURE_287 仍计划于 v0.7.88；本版本是非 Feature 补丁。详见
 [v0.7.82 发布清单](docs/release.md#v0782-release-preparation)。
 
+**v0.7.83 Windows daemon containment 发布**：Windows daemon 会先以 suspended
+状态创建，在用户代码运行前分配到 kill-on-close Job Object，并由 Job 外部的
+supervisor 等待整个 Job 清空。SDK 导出 `waitForRuntimeDaemonShutdown()`，并通过
+`daemonShutdownVerification:1` 宣布该能力；CLI stop 会等待 daemon 与 supervisor
+都退出。旧的未 containment daemon 不会被报告为已验证，也不会被静默地原地升级。
+Issue 256 的 Worker owner lease 部分仍计划于 v0.7.84，FEATURE_287 仍计划于
+v0.7.88。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparation)。
+
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
 或 Git Bash 的绝对路径；KodaX 会在实际项目 cwd 中解析 shell 环境，再通过同一

@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-05
+> Last updated: 2026-08-06
 >
-> Current implementation baseline: `v0.7.82` release
-> (`@kodax-ai/kodax@0.7.82` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.83` release
+> (`@kodax-ai/kodax@0.7.83` workspace package; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -29,6 +29,13 @@ The published package is `@kodax-ai/kodax`. It exposes the root API plus twelve
 SDK subpaths: `/agent`, `/llm`, `/coding`, `/media`, `/repl`, `/skills`,
 `/mcp`, `/session`, `/runtime`, `/sandbox`, `/a2a`, and
 `/experimental-memory`.
+
+For a Windows daemon Runtime, startup is a three-part process boundary:
+PowerShell creates the daemon suspended, assigns it to a kill-on-close Job
+Object, and resumes it; an out-of-Job supervisor waits for daemon exit and then
+for the Job's active-process count to reach zero. The SDK and CLI consume that
+boundary as a verified shutdown contract rather than treating PID exit alone as
+completion.
 
 ## 2. Layering
 

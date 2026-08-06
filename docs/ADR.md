@@ -1,6 +1,16 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-05
+> Last updated: 2026-08-06
+>
+> **v0.7.83 release addendum:** Windows daemon startup creates the daemon
+> suspended and assigns it to a kill-on-close Job Object before resume/user code;
+> an out-of-Job supervisor owns the wait boundary and remains alive until Job
+> accounting is empty. Durable shutdown verification now requires the exact
+> cleanup outcome plus daemon and supervisor exit. The public SDK advertises
+> `daemonShutdownVerification:1` and `waitForRuntimeDaemonShutdown()`; legacy
+> uncontained daemons cannot be claimed verified or upgraded in place. A review
+> hardening path terminates a suspended process when Job assignment fails. The
+> Worker owner-lease part of Issue 256 remains scheduled for v0.7.84.
 >
 > **v0.7.82 release addendum:** daemon MCP/Host Tool discovery preserves
 > explicit source filtering and truthful complete/live capability snapshots;
@@ -23,7 +33,7 @@
 > analysis now shares the deterministic analyzer with the SDK. npm publication
 > remains a separate manual operator step.
 >
-> This header and addendum are authoritative for the v0.7.82 release; the long
+> This header and addendum are authoritative for the v0.7.83 release; the long
 > architecture-state notice below is retained as historical context.
 >
 > **v0.7.79 Runtime observation and A2A authorization addendum:** Runtime

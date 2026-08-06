@@ -24,6 +24,7 @@ vi.mock('node:child_process', () => ({
 vi.mock('../../runtime/process-tree.js', () => ({
   killChildProcessTree: killChildProcessTreeMock,
   killChildProcessTreeSync: vi.fn(() => ({ status: 'unknown' as const })),
+  isCurrentProcessWindowsJobContained: () => false,
   isChildProcessExited: (child: { exitCode: number | null; signalCode: NodeJS.Signals | null }) => (
     child.exitCode !== null || child.signalCode !== null
   ),

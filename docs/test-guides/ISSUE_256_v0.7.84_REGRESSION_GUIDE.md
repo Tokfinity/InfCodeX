@@ -1,13 +1,15 @@
 # Issue 256 daemon-containment regression guide
 
-This guide covers only the Windows daemon-owned slice. The broader Worker owner-lease work remains
-open.
+This guide covers the Windows daemon-owned slice shipped in v0.7.83. The broader Worker
+owner-lease work remains open and is still targeted for v0.7.84.
 
 ## Automated checks
 
 1. Run `npx vitest run src/runtime-daemon/windows-job-supervisor.test.ts`.
    The target must be assigned before it runs, a detached descendant must be terminated, and the
    supervisor must exit only after the Job is empty.
+   Review the assignment-failure path as well: a process that is still suspended when Job
+   assignment fails must be terminated before its handles are closed.
 2. Run
    `npx vitest run src/kodax_cli.daemon-smoke.test.ts -t "SDK auto-start owns a daemon process outside the embedding process"`.
    The detached bootstrap must keep the PowerShell Job owner and daemon alive after the short-lived

@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.82` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.82` release (npm publication remains manual) |
+| Current released version | `v0.7.83` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.83` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `72` |
 | InProgress | `1` |
@@ -26,7 +26,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.82 is the current Git/GitHub release and remains a feature-free runtime-causality patch; npm publication remains manual. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.83 is the current Git/GitHub release and remains a feature-free Windows daemon-containment hardening patch; npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.85` -> `v0.7.86` -> `v0.7.88` -> `v0.7.89` -> `v0.7.90` -> `v0.7.95` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -66,6 +66,7 @@
 | `v0.7.80` | `0` |
 | `v0.7.81` | `0` |
 | `v0.7.82` | `0` |
+| `v0.7.83` | `0` |
 | `v0.7.85` | `5` |
 | `v0.7.86` | `1` |
 | `v0.7.88` | `1` |
@@ -527,6 +528,26 @@ The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.83 Release Record
+
+`v0.7.83` is a non-Feature Windows daemon-containment hardening release. A
+new Windows daemon is created suspended, assigned to a kill-on-close Job Object
+before resume, and supervised from outside that Job until its active-process
+count reaches zero. The SDK exports `waitForRuntimeDaemonShutdown()` and
+advertises `daemonShutdownVerification:1`; CLI stop waits for both daemon and
+supervisor exit. Legacy uncontained daemons remain explicitly unverified and
+must be stopped and relaunched before a host requires this contract.
+
+The release also closes the review-found Job-assignment failure path by
+terminating a still-suspended process before closing its handles. This is a
+runtime system-code fix, not a test-only or process-only change. The daemon
+slice reduces Issue 256's scope but does not resolve the Worker owner-lease
+portion, which remains scheduled for `v0.7.84`; `FEATURE_287` remains planned
+for `v0.7.88`. The release checklist is
+[docs/release.md](release.md#v0783-release-preparation).
 
 ---
 

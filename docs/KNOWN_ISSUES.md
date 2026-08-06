@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-05_
+_Last Updated: 2026-08-06_
 
 ---
 
@@ -2080,10 +2080,10 @@ identity-checked snapshot mitigation above remains the v0.7.79 behavior; the
 remaining spawn-time Job Object / Worker owner-lease closure work no longer
 blocks the v0.7.79 release.
 
-#### 2026-08-06 daemon containment slice
+#### 2026-08-06 daemon containment slice (v0.7.83)
 
-The daemon-owned half of this issue is implemented in the current unreleased
-source. On Windows, the daemon is created suspended, assigned to a
+The daemon-owned half of this issue is implemented in the v0.7.83 release. On
+Windows, the daemon is created suspended, assigned to a
 kill-on-close Job Object, and only then resumed. A supervisor outside that Job
 terminates remaining descendants after the daemon exits and itself exits only
 after Job accounting reports zero active processes. The daemon lock publishes

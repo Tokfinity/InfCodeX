@@ -81,6 +81,75 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.83 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.83`. This release is
+prepared for the `v0.7.83` tag and GitHub Release; npm publication remains a
+separate manual operator step. Its scope is a non-Feature Windows daemon
+containment hardening patch:
+
+- a new Windows daemon is created suspended, assigned to a kill-on-close Job
+  Object before resume/user code, and watched by an out-of-Job supervisor until
+  Job accounting reports zero active processes;
+- `waitForRuntimeDaemonShutdown()` requires the exact durable cleanup outcome,
+  daemon exit, and containment-supervisor exit; `daemonShutdownVerification:1`
+  advertises this contract and CLI stop waits on the same boundary;
+- legacy daemons without Job containment are not reported as verified and are
+  not silently upgraded in place; explicit stop/relaunch is required before a
+  host requires the capability;
+- the review-found Job-assignment failure path terminates and waits for a
+  still-suspended process before closing handles, preventing an uncontained
+  orphan; this is an intentional runtime system-code fix;
+- containment allows final cleanup to retire incomplete current-owner child
+  records without redundant per-child synchronous exit hooks or repeated tree
+  scans. The Worker owner-lease portion of Issue 256 remains scheduled for
+  `v0.7.84`; `FEATURE_287` remains planned for `v0.7.88`.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, known-issue record, this checklist, SDK/package guides,
+   `docs/features`, and `kodax_manual` agree on the v0.7.83 contract;
+2. no incomplete Feature or known High release blocker is presented as shipped;
+   Issue 256 retains its v0.7.84 Worker owner-lease disposition;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. a clean-install-equivalent deterministic gate passes on the exact release
+   commit:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused verification covers Windows Job assignment before resume, supervisor
+   exit after Job emptiness, exact shutdown verification, legacy-daemon refusal,
+   managed-child containment pruning, CLI stop, and SDK upgrade behavior;
+6. the exact publish-shaped `kodax-ai-kodax-0.7.83.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths. Runtime, semantic, sandbox, and constructed-handler sidecars,
+   provider capabilities, and built-in Skills must be present;
+   Local `--pack-only` audit evidence: SHA-256
+   `B4988DAD1B714A0C984B95E8BFA894E60FE6663A730486A26C340E32A5B1D71A`;
+   consumer import evidence: root plus all 12 SDK subpaths.
+7. any performance evidence follows `benchmark/EVAL_GUIDELINES.md` and is
+   supporting evidence, not a substitute for correctness gates;
+8. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+9. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.83`. The tag-triggered workflow
+    must finish green and the GitHub Release must contain all five archives plus
+    `SHA256SUMS`. npm publication remains the maintainer-owned manual step after
+    the audited bytes are approved.
+
 ## v0.7.82 release preparation
 
 Release state: the root package, all four workspace packages, and every

@@ -190,6 +190,9 @@ public static class KodaXWindowsJobSupervisor {
   private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
   [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
   private static extern uint ResumeThread(IntPtr thread);
 
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -256,6 +259,7 @@ public static class KodaXWindowsJobSupervisor {
     if (job == IntPtr.Zero) throw new InvalidOperationException(
       "CreateJobObject failed with Win32 error " + Marshal.GetLastWin32Error());
     var process = new ProcessInformation();
+    var processAssigned = false;
     var security = new SecurityAttributes();
     security.length = Marshal.SizeOf(typeof(SecurityAttributes));
     security.inheritHandle = 1;
@@ -298,6 +302,7 @@ public static class KodaXWindowsJobSupervisor {
         out process),
         "CreateProcess");
       Require(AssignProcessToJobObject(job, process.hProcess), "AssignProcessToJobObject");
+      processAssigned = true;
       PublishReady(readyFile, process.dwProcessId);
       if (ResumeThread(process.hThread) == 0xffffffff) {
         throw new InvalidOperationException(
@@ -324,6 +329,10 @@ public static class KodaXWindowsJobSupervisor {
         Thread.Sleep(10);
       }
     } finally {
+      if (process.hProcess != IntPtr.Zero && !processAssigned) {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, 2000);
+      }
       if (process.hThread != IntPtr.Zero) CloseHandle(process.hThread);
       if (process.hProcess != IntPtr.Zero) CloseHandle(process.hProcess);
       CloseHandle(logHandle);

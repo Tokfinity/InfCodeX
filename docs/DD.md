@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-05
+> Last updated: 2026-08-06
 >
-> Current release baseline: `v0.7.82`
-> (`@kodax-ai/kodax@0.7.82`; npm publication remains manual)
+> Current release baseline: `v0.7.83`
+> (`@kodax-ai/kodax@0.7.83`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,17 +20,17 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.82`. This non-Feature
-runtime-causality patch fixes three active contracts: daemon Host Tool and MCP
-capability snapshots retain their complete/fresh scoped truth during composition;
-a recorded managed-Run Stop cooperatively fences later provider, guardrail,
-tool, and Run-owned Actor work and preserves trusted Abort terminal causality
-before credential redaction; and input admission resolves the authoritative Run
-before reading mutable Session history. Active interrupt and after-turn input
-therefore avoid transient `data_changed`, while continuation execution remains
-queued until predecessor settlement. It retains v0.7.81's canonical interrupt
-entry references. FEATURE_287 remains planned for v0.7.88; Issue 256 remains
-scheduled for v0.7.84.
+The root workspace package is `@kodax-ai/kodax@0.7.83`. This non-Feature
+runtime hardening patch establishes Windows daemon containment before user code
+can create descendants: the daemon is created suspended, assigned to a
+kill-on-close Job Object, and resumed only after assignment succeeds. An
+out-of-Job supervisor waits for daemon exit and Job emptiness. The public
+`waitForRuntimeDaemonShutdown()` verifier requires that boundary plus the exact
+durable cleanup outcome, while the `daemonShutdownVerification:1` capability
+lets hosts require it. Legacy daemons are deliberately not upgraded in place
+for this contract. The patch retains v0.7.82's causality and input-admission
+contracts; FEATURE_287 remains planned for v0.7.88 and the Worker owner-lease
+portion of Issue 256 remains scheduled for v0.7.84.
 
 `package.json` exposes:
 

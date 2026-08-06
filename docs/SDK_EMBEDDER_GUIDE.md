@@ -2651,14 +2651,41 @@ SDK auto-start allows `daemonStartupTimeoutMs` (default 60 seconds) and
 concurrent test/desktop startup without weakening PID, endpoint, token, or
 runtime-identity validation.
 
-On Windows, current child cleanup verifies observed process identities and
-reports indeterminate outcomes instead of falling back to bare-PID success.
-That is not Job Object-grade containment: if an intermediate process exits
-between snapshots, an already-running descendant can become unobservable.
-Until Issue 256 is resolved (scheduled for v0.7.84) with spawn-time Job Object
-assignment and a host-issued Worker owner lease, embedders must not treat
-Runtime/Worker close or executor cleanup as proof that every descendant has
-terminated.
+### Windows daemon shutdown containment (v0.7.83)
+
+On Windows, a newly started daemon is created suspended and assigned to a
+kill-on-close Job Object before it is resumed. Daemon application code cannot
+create descendants before that assignment. An out-of-Job supervisor waits for
+the daemon to exit and then waits for the Job's active-process count to reach
+zero, so a daemon PID exit alone is not a verified shutdown.
+
+Hosts that own the shutdown boundary can use the public verifier:
+
+```ts
+import { waitForRuntimeDaemonShutdown } from '@kodax-ai/kodax/runtime';
+
+const result = await waitForRuntimeDaemonShutdown({
+  homeDir: kodaxHome,
+  profile: 'default',
+  runtimeId,
+  timeoutMs: 30_000,
+});
+if (!result.verified) {
+  throw new Error(`Runtime shutdown was not verified: ${result.outcome}`);
+}
+```
+
+The connected daemon must advertise `daemonShutdownVerification: 1` when a host
+requires this contract. A legacy daemon without Job-containment metadata is
+kept usable for ordinary Session recovery, but it is never reported as a
+verified shutdown and is not silently upgraded in place. Stop it explicitly and
+relaunch it before requiring the capability. The CLI's `kodax daemon stop
+--json` follows the same daemon-plus-supervisor boundary.
+
+The daemon-owned slice does not close the Worker-owned child lifetime gap in
+Issue 256; that owner-lease work remains scheduled for v0.7.84. Worker and
+executor cleanup still use identity-checked evidence and fail closed when a
+descendant cannot be proven gone.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;

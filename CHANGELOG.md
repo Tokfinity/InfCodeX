@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+No changes yet.
+
+---
+
+## [0.7.83] - 2026-08-06
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Added
 
 - Windows daemon startup now assigns the Runtime process to a kill-on-close Job
@@ -25,6 +34,9 @@ All notable changes to this project will be documented in this file.
   upgrade merely to restore Sessions. Shutdown verification remains explicitly
   negotiable; a legacy daemon must be stopped and relaunched before callers can
   require the new containment contract.
+- Review hardening closes the Windows Job-assignment failure path by terminating
+  and waiting for a still-suspended daemon before its process handles are closed.
+  This prevents an uncontained orphan when kernel Job assignment fails.
 
 ---
 

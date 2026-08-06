@@ -624,6 +624,16 @@ active interrupt and after-turn admission do not produce a transient
 `data_changed` rejection. FEATURE_287 remains planned for v0.7.88; this is a
 non-Feature patch. See the [v0.7.82 release checklist](docs/release.md#v0782-release-preparation).
 
+**v0.7.83 Windows daemon containment release:** Windows daemon startup creates
+the daemon suspended, assigns it to a kill-on-close Job Object before resuming
+user code, and keeps an out-of-Job supervisor until the Job is empty. The SDK
+exports `waitForRuntimeDaemonShutdown()` and capability
+`daemonShutdownVerification:1`; CLI stop waits for both daemon and supervisor
+exit. Legacy uncontained daemons are not reported as verified and are not
+silently upgraded in place. The Worker owner-lease portion of Issue 256 remains
+scheduled for v0.7.84, and FEATURE_287 remains planned for v0.7.88. See the
+[v0.7.83 release checklist](docs/release.md#v0783-release-preparation).
+
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows
 PowerShell, `cmd`, `bash`, `zsh`, or an explicit Git Bash executable; KodaX

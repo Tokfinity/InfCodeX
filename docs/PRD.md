@@ -1,9 +1,9 @@
 # KodaX Product Requirements
 
-> Last updated: 2026-08-05
+> Last updated: 2026-08-06
 >
-> Current implementation baseline: `v0.7.82` release
-> (`@kodax-ai/kodax@0.7.82` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.83` release
+> (`@kodax-ai/kodax@0.7.83` workspace package; npm publication remains manual)
 >
 > This document describes the current product. Historical pre-v0.7.43
 > chain/harness designs have been removed from this current PRD because they no
@@ -23,6 +23,13 @@ The product promise is simple: give a developer an LLM-native engineering
 assistant that can read, edit, test, reason over a repository, coordinate child
 tasks, and preserve useful session context without forcing a heavy IDE or
 server product around it.
+
+On Windows, a daemon-backed Runtime now establishes kernel process containment
+before daemon application code runs. The daemon is placed in a kill-on-close Job
+Object, and shutdown is considered verified only after the durable cleanup
+outcome, daemon exit, and containment-supervisor exit are all observed. The
+broader Worker owner-lease boundary tracked by Issue 256 remains planned for
+v0.7.84.
 
 ## 2. Target Users
 

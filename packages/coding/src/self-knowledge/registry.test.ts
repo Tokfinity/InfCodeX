@@ -157,6 +157,16 @@ describe('FEATURE_218 manual registry', () => {
     expect(sdk).toContain('cooperative');
   });
 
+  it('documents the v0.7.83 Windows daemon shutdown contract', () => {
+    const sdk = resolveKodaXManual({ topic: 'sdk' }).content;
+
+    expect(sdk).toContain('waitForRuntimeDaemonShutdown()');
+    expect(sdk).toContain('daemonShutdownVerification:1');
+    expect(sdk).toContain('kill-on-close');
+    expect(sdk).toContain('cannot be migrated safely in place');
+    expect(sdk).toContain('Issue 256');
+  });
+
   it('documents the v0.7.78 evidence-gated background Skill learning boundary', () => {
     const content = resolveKodaXManual({ topic: 'skills' }).content;
 
