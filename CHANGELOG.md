@@ -6,7 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No changes yet.
+### Fixed
+
+- Agent progress persistence is now backpressured and coalesced to constant-size
+  work. Terminal settlement seals new observations without waiting indefinitely
+  for a stuck progress write, so the controller can expose an explicit
+  durability-unknown state instead of leaving the adapter spinning forever.
+  Stop can reconcile a late exact-owner Actor snapshot, durably quiesce
+  remaining children, and safely retry that repair on repeated requests. After
+  repair, returned Promise success/failure facts outrank fallback callbacks;
+  stale durable unknown status cannot rewind an in-process terminal Run. No-op
+  quiescence avoids an unnecessary Session rewrite, while genuine owner
+  conflicts and persistent storage failures remain fail-closed (Issue 282).
 
 ---
 

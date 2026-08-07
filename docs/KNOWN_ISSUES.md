@@ -14,6 +14,7 @@ _Last Updated: 2026-08-06_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 development | 2026-08-06 | 2026-08-06 |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -184,6 +185,119 @@ _Last Updated: 2026-08-06_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 282: Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.79 bounded Actor settlement
+- Fixed: v0.7.84 development
+- Created: 2026-08-06
+- Resolved: 2026-08-06
+
+#### Problem
+
+In Space Session `20260806_200641_l181e74214d29d`, two analysis Agents
+visibly finished, but their durable turns remained `running`. The first terminal
+save reported `actor_settlement_retrying`, crossed the fixed five-second
+settlement deadline, and changed the owning Run to `phase: unknown`. The root
+worker later rendered a final-looking answer but remained in
+`idleWaitingPendingCount: 2`; the spinner continued, both Stop requests returned
+`accepted: false`, and follow-up input returned `stale_run`.
+
+The draft was restored by Space and the streamed answer remained recoverable
+from the Runtime event journal, but neither was a substitute for a canonical
+terminal Run. Restarting or force-idling the UI would have hidden the unresolved
+Actor facts and risked overlapping Session work.
+
+#### Root Cause
+
+Four contracts formed one failure chain:
+
+1. Native and external Agent progress called `reportProgress()` fire-and-forget.
+   Every update queued a full durable Actor snapshot mutation, while executor
+   completion did not wait for those projections to drain.
+2. Executor settlement started its five-second deadline before its mutation
+   reached the head of that queue. A slow or backlogged Session writer could
+   therefore make an already-finished Agent miss the deadline. A save that
+   completed after the caller timed out had already changed durable state, but
+   the controller rolled its local view back.
+3. `fenceUnknownSettlement()` represented that indeterminate save by setting
+   `ownershipLost`, the same flag used for a real foreign-owner CAS conflict.
+   Later cancellation therefore failed with the misleading message that the
+   tree was owned by the same live Runtime.
+4. Runtime persistence rejected Stop whenever phase was already `unknown`.
+   Because abort signals and cooperative Actor quiescence were delivered only
+   after an accepted Stop, the request became a no-op. Space correctly kept
+   `unknown` visible as nonterminal, while interrupt-input admission correctly
+   rejected it as stale; without a working Stop recovery path, those two safe
+   decisions made the Session permanently unusable.
+
+#### Resolution
+
+- Native and external Agent progress now use one in-flight durable projection
+  plus one coalesced latest update. The terminal boundary seals new progress
+  observations and does not wait for the projector to flush. Terminal
+  persistence therefore follows only constant-size projection work; if the
+  already-in-flight write itself hangs, the controller's five-second deadline
+  exposes `unknown` instead of leaving the adapter waiting forever.
+- Settlement-timeout fencing is distinguished from an actual owner conflict.
+  An explicit quiesce waits for the timed-out mutation to finish, reloads the
+  latest durable snapshot, validates the schema and exact owner ID, restores
+  only newly committed events/messages, and then persists cancellation. A
+  different owner remains fenced; a missing, hung, or unwritable store remains
+  `unknown`.
+- `runs.abort()` may record and deliver the first Stop for a live Run owned by
+  the calling Runtime even when that Run is already `unknown`. The receipt stays
+  truthfully `state/outcome: unknown` until Actor and executor settlement prove
+  a terminal result. A repeated Stop remains `accepted: false`, but may
+  idempotently redeliver abort/quiesce effects when both the live record and
+  durable status prove the exact local owner and the Stop is still unknown;
+  foreign, ownerless, confirmed, and terminal Runs remain no-ops.
+- Confirmed terminal settlement clears the temporary Actor lifecycle error.
+  If the executor had already returned while Actor durability was unknown, its
+  credential-safe Promise result or failure fact is applied only after the
+  same-owner Stop repairs the Actor snapshot. Promise facts remain authoritative
+  over fallback terminal callbacks, including when the callback returned
+  `unknown` before the Promise settled. The Run then releases the Session route
+  normally without inventing a terminal fact.
+- A local terminal fact is not regressed by a stale durable unknown Stop when a
+  best-effort terminal status write failed; repeated Stop neither rewinds the
+  in-process Run nor duplicates cancellation effects or terminal events.
+- A quiesce with no eligible turn is now a true no-op instead of rewriting the
+  Session snapshot, removing an unnecessary Stop/diagnostic lock race.
+
+#### Files Changed
+
+- `packages/agent/src/actors/controller.ts`
+- `packages/coding/src/agent-runtime/actor-runtime.ts`
+- `src/sdk-runtime.ts`
+- Focused Actor, coding-adapter, and Runtime regression tests.
+
+#### Test Coverage
+
+- Twenty rapid progress updates are coalesced to constant-size durable work. A
+  permanently delayed in-flight projection no longer blocks the adapter:
+  terminal settlement reaches its deadline, publishes `unknown`, and an
+  explicit same-owner quiesce restores healthy zero-active-turn state after
+  storage recovers.
+- A late same-owner terminal save is reconciled before Stop; a still-active
+  sibling is durably interrupted and the Actor tree becomes healthy with zero
+  active non-root turns.
+- A live same-owner `unknown` Run accepts Stop, converges to confirmed
+  `interrupted`, and admits a successful follow-up Run in the same Session.
+- A Run whose executor already returned success as `unknown` is repaired to its
+  saved `completed` fact after Stop, then admits a follow-up Run. Promise
+  success/failure wins over conflicting callback failure/completion, and
+  ordinary or pre-Stop `AbortError` rejection keeps its captured failure class;
+  no-result unknowns remain fenced.
+- A first repair timeout can be retried with repeated Stop after storage
+  recovers, while an already-terminal local Run cannot be rewound by a stale
+  durable unknown status.
+- A no-op quiesce performs no durable save, and immediate read-only diagnostics
+  after Stop remain stable.
+- Existing permanent-storage-failure, late-save stickiness, owner-conflict,
+  Stop/completion race, and no-fabricated-terminal controls remain covered.
 
 ### 281: Runtime input submission reads mutable canonical Session before resolving its authoritative Run target
 
@@ -11653,7 +11767,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 161 (27 Open, 134 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 162 (27 Open, 135 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
