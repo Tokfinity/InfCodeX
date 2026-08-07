@@ -541,6 +541,81 @@ describe('F270 coding Actor runtime adapter', () => {
     );
   });
 
+  it('does not wait forever for durable progress before attempting terminal settlement', async () => {
+    vi.useFakeTimers();
+    let releaseFirstProgressSave: (() => void) | undefined;
+    let markFirstProgressSaveStarted: (() => void) | undefined;
+    const firstProgressSaveStarted = new Promise<void>((resolve) => {
+      markFirstProgressSaveStarted = resolve;
+    });
+    const firstProgressSave = new Promise<void>((resolve) => {
+      releaseFirstProgressSave = resolve;
+    });
+    let progressSaveCount = 0;
+    let saved: AgentActorSnapshot | undefined;
+    const session = new CodingActorSession({
+      sessionId: 'session-1',
+      owner: {
+        ownerId: 'progress-owner',
+        runtimeId: 'progress-runtime',
+        pid: 101,
+        startedAt: '2026-08-06T00:00:00.000Z',
+      },
+      isOwnerAlive: async () => true,
+      store: {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot) {
+          const worker = snapshot.turns.find((turn) => turn.actorPath === '/root/worker');
+          if (worker?.state === 'running' && (worker.progress?.length ?? 0) > 0) {
+            progressSaveCount += 1;
+            if (progressSaveCount === 1) {
+              markFirstProgressSaveStarted?.();
+              await firstProgressSave;
+            }
+          }
+          saved = structuredClone(snapshot);
+        },
+      },
+    });
+    executeChildAgentsMock.mockImplementation(async (_bundles, _ctx, childOptions) => {
+      for (let index = 1; index <= 20; index += 1) {
+        childOptions.onProgress?.(`Progress ${index}`);
+      }
+      return completedChild('done');
+    });
+    const { ctx, options } = environment();
+    await session.initialize();
+    const root = session.attach(ctx, options);
+
+    try {
+      const turn = await root.spawn({ taskName: 'worker', objective: 'Emit progress quickly.' });
+      await firstProgressSaveStarted;
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(session.health()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+
+      releaseFirstProgressSave?.();
+      await vi.runAllTimersAsync();
+      await session.quiesce('repair after delayed progress persistence');
+      await vi.waitFor(() => {
+        expect(root.output(turn.actorPath, turn.turnId)).toMatchObject({
+          state: 'interrupted',
+          error: 'repair after delayed progress persistence',
+        });
+      });
+      expect(progressSaveCount).toBe(1);
+      expect(session.health()).toEqual({ state: 'healthy' });
+    } finally {
+      releaseFirstProgressSave?.();
+      vi.useRealTimers();
+    }
+  });
+
   it('projects deduplicated external progress into the same Runtime turn view', async () => {
     const tasks = {
       start: vi.fn(async () => externalTask('working', { message: 'Connecting' })),

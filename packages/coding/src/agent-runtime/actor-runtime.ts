@@ -297,6 +297,7 @@ async function executeCodingActorTurn(
 ): Promise<AgentExecutionResult> {
   if (input.actor.kind === 'external') {
     const toolId = `external-actor:${input.turn.turnId}`;
+    const progressProjector = createDurableProgressProjector(input, 'External Actor');
     const activityMeta = {
       childAgentId: input.actor.path,
       childAgentName: input.actor.taskName,
@@ -305,10 +306,12 @@ async function executeCodingActorTurn(
     } as const;
     try {
       return await executeExternalActorTurn(input, parentCtx.agentExecutorPlane, (summary) => {
+        progressProjector.report(summary);
         parentCtx.reportToolProgress?.(`[agent ${input.actor.path}] ${summary}`);
         parentCtx.parentEvents?.onToolProgress?.({ id: toolId, message: summary }, activityMeta);
       });
     } finally {
+      progressProjector.finish();
       parentCtx.parentEvents?.onChildActivityEnd?.(activityMeta);
     }
   }
@@ -326,6 +329,7 @@ async function executeCodingActorTurn(
       completionTaskResult(actorControl, message),
     )),
   ];
+  const progressProjector = createDurableProgressProjector(input, 'Actor');
   const pumpStop = new AbortController();
   const mailboxPump = pumpMailbox(input, parentCtx.sessionId, actorControl, pumpStop.signal);
   let result: Awaited<ReturnType<typeof executeChildAgents>>;
@@ -370,18 +374,13 @@ async function executeCodingActorTurn(
       initialMessages,
       actorCapabilities: input.actor.capabilities,
       onProgress: (message) => {
-        void input.reportProgress({ kind: 'status', summary: message }).catch((error: unknown) => {
-          emitKodaXDiagnostic({
-            source: 'coding:actors',
-            level: 'warn',
-            message: `Actor progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
-          });
-        });
+        progressProjector.report(message);
         parentCtx.reportToolProgress?.(`[agent ${input.actor.path}] ${message}`);
       },
     });
   } finally {
     pumpStop.abort();
+    progressProjector.finish();
     await mailboxPump;
   }
   const child = result.results[0];
@@ -423,6 +422,58 @@ async function executeCodingActorTurn(
       ? { artifacts: child.artifactPaths } : {}),
     ...(validated.structured === undefined ? {} : { structured: validated.structured }),
     ...(Object.keys(turnMetadata).length === 0 ? {} : { turnMetadata }),
+  };
+}
+
+function createDurableProgressProjector(
+  input: AgentExecutionInput,
+  label: string,
+): {
+  report(summary: string): void;
+  finish(): void;
+} {
+  // Progress is a bounded observation, not a terminal fact. Keep at most one
+  // durable write in flight and one latest replacement so terminal settlement
+  // cannot start behind an unbounded fire-and-forget mutation queue.
+  let pending: string | undefined;
+  let draining: Promise<void> | undefined;
+  let finished = false;
+  const drain = async (): Promise<void> => {
+    while (pending !== undefined) {
+      const summary = pending;
+      pending = undefined;
+      try {
+        await input.reportProgress({ kind: 'status', summary });
+      } catch (error: unknown) {
+        emitKodaXDiagnostic({
+          source: 'coding:actors',
+          level: 'warn',
+          message: `${label} progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    }
+  };
+  const start = (): void => {
+    if (finished || draining !== undefined || pending === undefined) return;
+    const current = drain().finally(() => {
+      if (draining === current) draining = undefined;
+    });
+    draining = current;
+  };
+  return {
+    report(summary) {
+      if (finished) return;
+      pending = summary;
+      start();
+    },
+    finish() {
+      // Terminal settlement is stronger than pending observational progress.
+      // Reject new reports but do not await the in-flight drainer. It may still
+      // project its one latest replacement; the controller serializes terminal
+      // settlement without letting this adapter wait forever. If persistence
+      // stalls, the controller deadline can now surface unknown health.
+      finished = true;
+    },
   };
 }
 
@@ -553,7 +604,7 @@ async function executeExternalActorTurn(
         task.cancellationError ?? `External Agent cancellation cannot converge (${task.cancellation}).`,
       );
     }
-    let lastProgress = reportExternalProgress(input, task.progress, undefined, onProgress);
+    let lastProgress = reportExternalProgress(task.progress, undefined, onProgress);
     while (!isExternalTerminal(task.state)) {
       if (input.signal.aborted) {
         task = await requestCancellation();
@@ -578,7 +629,7 @@ async function executeExternalActorTurn(
       if (!isExternalTerminal(task.state)) {
         await new Promise<void>((resolve) => setTimeout(resolve, 25));
         task = await binding.plane.tasks.get(taskId);
-        lastProgress = reportExternalProgress(input, task.progress, lastProgress, onProgress);
+        lastProgress = reportExternalProgress(task.progress, lastProgress, onProgress);
         if (input.signal.aborted && !isExternalTerminal(task.state)) {
           assertExternalCancellationAccepted(task);
         }
@@ -630,7 +681,6 @@ function assertExternalCancellationAccepted(task: AgentTaskSnapshot): void {
 }
 
 function reportExternalProgress(
-  input: AgentExecutionInput,
   progress: AgentTaskSnapshot['progress'],
   previous: string | undefined,
   onProgress?: (summary: string) => void,
@@ -638,13 +688,6 @@ function reportExternalProgress(
   const summary = progress?.message?.trim()
     || (progress?.percent === undefined ? undefined : `${progress.percent}% complete`);
   if (!summary || summary === previous) return previous;
-  void input.reportProgress({ kind: 'status', summary }).catch((error: unknown) => {
-    emitKodaXDiagnostic({
-      source: 'coding:actors',
-      level: 'warn',
-      message: `External Actor progress projection failed: ${error instanceof Error ? error.message : String(error)}`,
-    });
-  });
   onProgress?.(summary);
   return summary;
 }
