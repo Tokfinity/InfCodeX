@@ -140,6 +140,7 @@ export class AgentActorController {
   private durableOwner?: AgentActorOwner;
   private initialized = false;
   private ownershipLost = false;
+  private settlementPersistenceUnknown = false;
   private ownershipReleased = false;
   private closing = false;
   private settlementGeneration = 0;
@@ -577,11 +578,18 @@ export class AgentActorController {
     preservedTurnIds?: ReadonlySet<string>,
   ): Promise<void> {
     if (this.ownershipReleased) return;
+    let reconciledUnknown = false;
+    if (this.ownershipLost && this.settlementPersistenceUnknown) {
+      await this.reconcileUnknownSettlement();
+      reconciledUnknown = true;
+    }
     let earlyAbortedTurnId: string | undefined;
     try {
       await this.mutate(() => {
+        let changed = false;
         for (const turn of this.turns.values()) {
           if (isTerminal(turn.state) || preservedTurnIds?.has(turn.turnId)) continue;
+          changed = true;
           const abort = this.abortControllers.get(turn.turnId);
           // Fence a start whose admission commit just completed before its
           // caller can schedule the executor while this durable mutation waits.
@@ -591,17 +599,20 @@ export class AgentActorController {
           }
           this.finishTurn(turn.turnId, 'interrupted', { error: reason });
         }
-      });
+        return changed;
+      }, (changed) => changed);
     } catch (error: unknown) {
-      if (earlyAbortedTurnId !== undefined) {
+      if (earlyAbortedTurnId !== undefined || reconciledUnknown) {
         this.indeterminateFailure = normalizeControllerError(error);
         this.fenceUnknownSettlement();
         this.setHealth({
           state: 'unknown',
           code: 'actor_settlement_not_persisted',
-          turnId: earlyAbortedTurnId,
+          ...(earlyAbortedTurnId === undefined ? {} : { turnId: earlyAbortedTurnId }),
           message:
-            `Actor cancellation for ${earlyAbortedTurnId} was observed locally but could not be durably confirmed.`,
+            earlyAbortedTurnId === undefined
+              ? 'Actor cancellation after settlement reconciliation could not be durably confirmed.'
+              : `Actor cancellation for ${earlyAbortedTurnId} was observed locally but could not be durably confirmed.`,
         });
       }
       throw error;
@@ -1063,8 +1074,12 @@ export class AgentActorController {
     }
   }
 
-  private setHealth(health: AgentControllerHealth): void {
-    if (this.health.state === 'unknown' && health.state !== 'unknown') {
+  private setHealth(health: AgentControllerHealth, allowUnknownRecovery = false): void {
+    if (
+      this.health.state === 'unknown'
+      && health.state !== 'unknown'
+      && !allowUnknownRecovery
+    ) {
       return;
     }
     if (
@@ -1639,9 +1654,62 @@ export class AgentActorController {
 
   private fenceUnknownSettlement(): void {
     this.ownershipLost = true;
+    this.settlementPersistenceUnknown = true;
     this.settlementValidityGeneration += 1;
     this.settlementRecoveryMessages.clear();
     this.stopLocalWork('actor settlement persistence is unknown');
+  }
+
+  private async reconcileUnknownSettlement(): Promise<void> {
+    const store = this.options.store;
+    if (!store) {
+      throw new Error('Actor settlement cannot be reconciled without a durable store.');
+    }
+    const attempt = { active: true };
+    try {
+      await raceSettlementAttempt((async () => {
+        // A timed-out save cannot be cancelled. Observe its final durable
+        // result, then recover only when the exact owner fence still matches.
+        await this.mutationTail;
+        const latest = await store.load();
+        if (!attempt.active) return;
+        if (!latest) {
+          throw new Error('Actor settlement cannot be reconciled because its snapshot is missing.');
+        }
+        validateSnapshot(latest, this.scheduler.maxConcurrentThreads);
+        const desired = this.options.owner;
+        const latestOwner = latest.schemaVersion === 2 ? latest.owner : undefined;
+        if (
+          desired === undefined
+          || latestOwner?.ownerId !== desired.ownerId
+        ) {
+          throw new AgentOwnerConflictError(
+            latestOwner?.runtimeId,
+            latest.revision,
+            false,
+          );
+        }
+        const priorCommitted = this.committedSnapshot;
+        this.restore(latest);
+        replaceMap(this.abortControllers, []);
+        this.committedSnapshot = this.snapshot();
+        this.ownershipLost = false;
+        this.settlementPersistenceUnknown = false;
+        this.indeterminateFailure = undefined;
+        this.settlementRecoveryMessages.clear();
+        for (const message of appendedMessages(priorCommitted, this.committedSnapshot)) {
+          this.publishCommittedMessage(message);
+        }
+        const priorSequence = priorCommitted.events.at(-1)?.sequence ?? 0;
+        for (const event of this.committedSnapshot.events) {
+          if (event.sequence > priorSequence) this.publishCommittedEvent(event);
+        }
+        this.setHealth({ state: 'healthy' }, true);
+      })(), Date.now() + SETTLEMENT_RETRY_DEADLINE_MS);
+    } catch (error: unknown) {
+      attempt.active = false;
+      throw error;
+    }
   }
 
   private stopLocalWork(reason: string): void {
@@ -1658,6 +1726,7 @@ export class AgentActorController {
   ): Promise<AgentOwnerConflictError> {
     this.restore(before);
     this.ownershipLost = true;
+    this.settlementPersistenceUnknown = false;
     const localAborts = [...new Set(beforeAborts.values())];
     replaceMap(this.abortControllers, []);
     for (const abort of localAborts) abort.abort('actor owner superseded');

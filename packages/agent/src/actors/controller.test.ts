@@ -540,6 +540,19 @@ describe('F270 actor tree and scheduler', () => {
     expect(executor.pending[1]?.input.signal.aborted).toBe(true);
   });
 
+  it('does not rewrite the durable snapshot when quiesce has no eligible turn', async () => {
+    const durable = revisionedActorStore();
+    const controller = await createAgentActorController({
+      executor: new DeferredExecutor(),
+      store: durable.store,
+    });
+    const saveCountBeforeQuiesce = durable.saveCount();
+
+    await controller.quiesce('runtime run aborted');
+
+    expect(durable.saveCount()).toBe(saveCountBeforeQuiesce);
+  });
+
   it('quiesces a durably pending admission before its executor can start', async () => {
     let releaseStartSave: (() => void) | undefined;
     let startSaveEntered: (() => void) | undefined;
@@ -2180,6 +2193,133 @@ describe('F270 actor tree and scheduler', () => {
       await expect(controller.shutdown()).rejects.toMatchObject({
         code: 'actor_shutdown_not_persisted',
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a late same-owner settlement before an explicit quiesce', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseLateSave: (() => void) | undefined;
+      const lateSave = new Promise<void>((resolve) => {
+        releaseLateSave = resolve;
+      });
+      let terminalSaveStarted = false;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot, expectedRevision) {
+          const actualRevision = saved?.revision ?? 0;
+          if (actualRevision !== expectedRevision) {
+            throw Object.assign(new Error('synthetic Actor revision conflict'), {
+              code: 'actor_snapshot_conflict' as const,
+              expectedRevision,
+              currentRevision: actualRevision,
+            });
+          }
+          if (
+            !terminalSaveStarted
+            && snapshot.turns.some((turn) => (
+              turn.actorPath === '/root/worker-a' && turn.state === 'completed'
+            ))
+          ) {
+            terminalSaveStarted = true;
+            await lateSave;
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        owner: FIRST_OWNER,
+        isOwnerAlive: async () => true,
+        onBackgroundError: vi.fn(),
+      });
+      const first = await controller.spawn('/root', {
+        taskName: 'worker-a',
+        objective: 'Finish while persistence is slow.',
+      });
+      const second = await controller.spawn('/root', {
+        taskName: 'worker-b',
+        objective: 'Remain active until the Run is stopped.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'durable after the deadline' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.healthSnapshot()).toMatchObject({
+        state: 'unknown',
+        code: 'actor_settlement_not_persisted',
+      });
+
+      releaseLateSave?.();
+      await vi.runAllTimersAsync();
+      await controller.quiesce('operator stopped the owning Run');
+
+      expect(controller.healthSnapshot()).toEqual({ state: 'healthy' });
+      expect(controller.output('/root', first.actorPath, first.turnId)).toMatchObject({
+        state: 'completed',
+        output: 'durable after the deadline',
+      });
+      expect(controller.output('/root', second.actorPath, second.turnId)).toMatchObject({
+        state: 'interrupted',
+        error: 'operator stopped the owning Run',
+      });
+      expect(controller.list('/root').activeNonRootTurns).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reconcile an ownerless late settlement as same-owner state', async () => {
+    vi.useFakeTimers();
+    try {
+      let saved: AgentActorSnapshot | undefined;
+      let releaseLateSave: (() => void) | undefined;
+      const lateSave = new Promise<void>((resolve) => {
+        releaseLateSave = resolve;
+      });
+      let terminalSaveStarted = false;
+      const store: AgentActorStore = {
+        async load() {
+          return saved === undefined ? undefined : structuredClone(saved);
+        },
+        async save(snapshot) {
+          if (
+            !terminalSaveStarted
+            && snapshot.turns.some((turn) => turn.state === 'completed')
+          ) {
+            terminalSaveStarted = true;
+            await lateSave;
+          }
+          saved = structuredClone(snapshot);
+        },
+      };
+      const executor = new DeferredExecutor();
+      const controller = await createAgentActorController({
+        executor,
+        store,
+        onBackgroundError: vi.fn(),
+      });
+      await controller.spawn('/root', {
+        taskName: 'ownerless-worker',
+        objective: 'Finish after the settlement deadline.',
+      });
+
+      executor.pending[0]?.resolve({ output: 'late ownerless result' });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.healthSnapshot().state).toBe('unknown');
+      releaseLateSave?.();
+      await vi.runAllTimersAsync();
+
+      await expect(controller.quiesce('operator requested Stop')).rejects.toMatchObject({
+        code: 'actor_owner_conflict',
+      });
+      expect(controller.healthSnapshot().state).toBe('unknown');
     } finally {
       vi.useRealTimers();
     }
