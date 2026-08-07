@@ -107,6 +107,7 @@ export function buildPromptSurfaceItems(
       case "tool_group":
       case "event":
       case "info":
+      case "sidecar":
         promptItems.push({ ...item });
         break;
       case "assistant":

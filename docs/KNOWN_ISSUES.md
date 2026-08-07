@@ -14,6 +14,7 @@ _Last Updated: 2026-08-07_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 283 | Medium | Resolved | REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry | v0.7.43 first-class sidecar messages | v0.7.84 development | 2026-08-07 | 2026-08-07 |
 | 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 release | 2026-08-06 | 2026-08-06 |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -185,6 +186,66 @@ _Last Updated: 2026-08-07_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 283: REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry
+
+- Priority: Medium
+- Status: Resolved
+- Introduced: v0.7.43 first-class sidecar messages
+- Fixed: v0.7.84 development
+- Created: 2026-08-07
+- Resolved: 2026-08-07
+
+#### Original Problem
+
+When Sidecar Verifier returned an actionable `revise` or `blocked` verdict, the
+REPL inserted the first-class `sidecar` history item at the correct temporal
+position between the first Worker attempt and its retry. The normal prompt
+surface did not render that item. After the managed run completed, the same
+evaluator evidence was converted to a generic `event` and appended at the end,
+making one logical verdict appear late and making persisted history depend on
+the duplicate projection.
+
+#### Root Cause
+
+- `buildPromptSurfaceItems()` omitted `sidecar` from its supported history-item
+  cases, although the transcript surface and Session serializer already
+  supported the type.
+- Final managed-task evidence projection had no knowledge that
+  `onSidecarMessage` had already delivered the actionable evaluator verdict, so
+  it emitted a second `[Sidecar Verifier]` event during round finalization.
+
+#### Resolution
+
+- The prompt surface now renders first-class `sidecar` items in ledger order.
+- Each queueable agent sequence tracks whether the current managed round
+  delivered a first-class sidecar message. Final transcript projection filters
+  actionable evaluator evidence only when that delivery occurred, retaining
+  the previous evidence fallback when delivery did not occur.
+- Accept evidence remains hidden by default and remains available under
+  `KODAX_VERIFIER_LOG=1`; it is not treated as duplicated because accept does
+  not produce a first-class sidecar message.
+- The canonical sidecar item remains in the foreground ledger and is persisted
+  once at its original position, so Session restore preserves the ordering
+  `Worker attempt 1 -> sidecar -> Worker attempt 2`.
+
+#### Files Changed
+
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/InkREPL-transcript-builders.ts`
+- `packages/repl/src/ui/utils/transcript-surface.ts`
+- Focused prompt-surface, managed-transcript, and Session-restore regression
+  tests.
+
+#### Test Coverage
+
+- The prompt surface includes a sidecar item without changing its position.
+- Delivered actionable sidecar evidence is not re-emitted as a final generic
+  event, while the no-delivery fallback and verifier-log accept behavior remain
+  covered.
+- Persisted sidecar history restores in exact Worker/sidecar/Worker order.
+- The complete REPL TypeScript build and all 2,475 REPL tests pass (one
+  unrelated test remains skipped by its existing suite definition).
 
 ### 282: Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop
 

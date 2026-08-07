@@ -68,15 +68,21 @@ describe("restore-history / sidecar items", () => {
 
   it("preserves sidecar items alongside other history item types after restore", () => {
     const uiHistory: KodaXSessionUiHistoryItem[] = [
-      { type: "user", text: "hello" },
-      { type: "assistant", text: "hi" },
+      { type: "assistant", text: "Worker round 1" },
       persistedSidecar("Please fix the output.", "revise"),
+      { type: "assistant", text: "Worker round 2" },
     ];
     const result = restoreHistoryItemsFromSession({ messages: [], uiHistory });
-    const types = result.map((item) => item.type);
-    expect(types).toContain("sidecar");
-    expect(types).toContain("user");
-    expect(types).toContain("assistant");
+    expect(result.map((item) => item.type)).toEqual([
+      "assistant",
+      "sidecar",
+      "assistant",
+    ]);
+    expect(result.map((item) => "text" in item ? item.text : "")).toEqual([
+      "Worker round 1",
+      "Please fix the output.",
+      "Worker round 2",
+    ]);
   });
 });
 

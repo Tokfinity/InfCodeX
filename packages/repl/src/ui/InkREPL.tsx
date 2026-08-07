@@ -1973,6 +1973,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const managedLiveEventsRef = useRef<HistoryItem[]>([]);
   const managedRoundEventHistoryRef = useRef<HistoryItem[]>([]);
   const managedForegroundTurnItemsRef = useRef<HistoryItem[]>([]);
+  const sidecarMessageDeliveredRef = useRef(false);
   // FEATURE_213 (v0.7.45) — ids of mid-turn user messages already committed to
   // history (by a round-end / fresh-submit / interrupt commit). The ledger-wipe
   // rescue pass uses this to commit any UNcommitted mid-turn user message before
@@ -6695,6 +6696,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           "sidecar-message",
         );
       }
+      sidecarMessageDeliveredRef.current = true;
     },
     onError: (error: Error) => {
       const latestExecutingTool = findLatestExecutingTool();
@@ -8073,6 +8075,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
     flushForegroundTextBuffer();
+    const sidecarMessageDelivered = sidecarMessageDeliveredRef.current;
+    sidecarMessageDeliveredRef.current = false;
     context.messages = result.messages;
     context.contextTokenSnapshot = result.contextTokenSnapshot;
     applyRuntimeSessionSnapshot(context, result);
@@ -8117,14 +8121,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     ));
     const needsFinalResponseItem = !roundFailed && finalResponse && !foregroundCoversAssistantText;
     const managedRoundEvents = [...managedRoundEventHistoryRef.current];
+    const managedTranscriptCandidates = buildManagedTaskTranscriptItems(result, {
+      sidecarMessageDelivered,
+    });
     // Skip routing diagnostics for failed rounds — they mislead users into
     // thinking the task completed successfully.
     const managedTranscriptItems = roundFailed
       ? []
       : managedRoundEvents.length === 0
         ? (TRANSCRIPT_HARNESS_MARKERS_ENABLED
-            ? buildManagedTaskTranscriptItems(result)
-            : buildManagedTaskTranscriptItems(result).filter(
+            ? managedTranscriptCandidates
+            : managedTranscriptCandidates.filter(
                 (text) => !isCompletionTranscriptItem(text),
               ))
         : [];
@@ -8251,6 +8258,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const sequenceGeneration = promptGenerationRef.current;
     userInterruptedRef.current = false;
     interruptPersistenceQueuedRef.current = false;
+    sidecarMessageDeliveredRef.current = false;
     setCanQueueFollowUps(true);
     try {
       return await runQueuedPromptSequence({

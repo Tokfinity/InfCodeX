@@ -101,6 +101,13 @@ describe("transcript-surface", () => {
         compactText: "Planner completed: compact detail",
       },
       {
+        id: "sidecar-1",
+        type: "sidecar",
+        timestamp: 4.75,
+        text: "Please perform the requested implementation.",
+        verdict: "revise",
+      },
+      {
         id: "assistant-1",
         type: "assistant",
         timestamp: 5,
@@ -143,6 +150,13 @@ describe("transcript-surface", () => {
         timestamp: 4.5,
         text: "Planner completed: full detail",
         compactText: "Planner completed: compact detail",
+      },
+      {
+        id: "sidecar-1",
+        type: "sidecar",
+        timestamp: 4.75,
+        text: "Please perform the requested implementation.",
+        verdict: "revise",
       },
       {
         id: "assistant-1",

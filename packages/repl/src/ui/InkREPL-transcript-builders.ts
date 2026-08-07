@@ -15,29 +15,34 @@ type EvidenceEntry = ManagedTask['evidence']['entries'][number];
 
 /**
  * FEATURE_195 (v0.7.43): hide Sidecar Verifier accept-verdict evidence entries
- * by default. Revise / blocked verdicts remain visible because they are
- * user-actionable. Debug visibility is opt-in via verifierLog.
+ * by default. Revise / blocked verdicts remain visible unless the same verdict
+ * was already delivered through the first-class sidecar message channel.
+ * Accept debug visibility is opt-in via verifierLog.
  */
-function shouldFilterSidecarAcceptEntry(
+function shouldFilterSidecarEvidenceEntry(
   entry: EvidenceEntry,
   verifierLog: boolean,
+  sidecarMessageDelivered: boolean,
 ): boolean {
-  if (verifierLog) return false;
   if (entry.role !== 'evaluator') return false;
-  if (entry.signal !== 'COMPLETE') return false;
-  return true;
+  if (entry.signal === 'COMPLETE') return !verifierLog;
+  return sidecarMessageDelivered;
 }
 
 /** Build the managed-task transcript string list shown after a run completes. */
 export function buildManagedTaskTranscriptItems(
   result: KodaXResult,
-  options?: { readonly verifierLog?: boolean },
+  options?: {
+    readonly verifierLog?: boolean;
+    readonly sidecarMessageDelivered?: boolean;
+  },
 ): string[] {
   const task = result.managedTask;
   if (!task) {
     return [];
   }
   const verifierLog = options?.verifierLog ?? process.env.KODAX_VERIFIER_LOG === '1';
+  const sidecarMessageDelivered = options?.sidecarMessageDelivered === true;
 
   const isInterruptedCancellation = (entry: EvidenceEntry): boolean => {
     if (!result.interrupted && !task.verdict.signalReason?.includes('Orchestration cancelled')) {
@@ -79,7 +84,10 @@ export function buildManagedTaskTranscriptItems(
       );
     })
     .filter((entry) => !isInterruptedCancellation(entry))
-    .filter((entry) => !shouldFilterSidecarAcceptEntry(entry, verifierLog))
+    .filter(
+      (entry) =>
+        !shouldFilterSidecarEvidenceEntry(entry, verifierLog, sidecarMessageDelivered),
+    )
     .filter(
       (entry) =>
         result.interrupted ||

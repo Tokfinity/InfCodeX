@@ -416,6 +416,55 @@ describe("buildManagedTaskTranscriptItems", () => {
       expect(transcript).toContain("revise needed");
     });
 
+    it("omits actionable sidecar evidence after the first-class sidecar message was delivered", () => {
+      const result = {
+        success: true,
+        messages: [],
+        lastText: "Worker completed the requested implementation on retry.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "running",
+                summary: "Please perform the requested implementation.",
+              },
+            ],
+          },
+          verdict: { decidedByAssignmentId: "direct", disposition: "complete" },
+        },
+      };
+
+      const items = buildManagedTaskTranscriptItems(
+        result as Parameters<typeof buildManagedTaskTranscriptItems>[0],
+        {
+          verifierLog: false,
+          sidecarMessageDelivered: true,
+        },
+      );
+      const transcript = items.join("\n\n");
+
+      expect(transcript).not.toContain("Sidecar Verifier");
+      expect(transcript).not.toContain("Please perform the requested implementation.");
+    });
+
+    it("keeps verifier-log accept evidence because accept has no first-class sidecar message", () => {
+      const items = buildManagedTaskTranscriptItems(
+        baseSidecarAcceptResult() as Parameters<typeof buildManagedTaskTranscriptItems>[0],
+        { verifierLog: true, sidecarMessageDelivered: true },
+      );
+
+      expect(items.join("\n\n")).toContain("Sidecar Verifier");
+    });
+
     it("default mode: sidecar blocked verdict (signal='BLOCKED') still surfaces — user actionable", () => {
       const result = {
         success: false,
@@ -574,6 +623,30 @@ describe("buildRoundHistoryItems", () => {
 });
 
 describe("appendPersistedUiHistorySnapshot", () => {
+  it("persists the canonical sidecar between Worker attempts", () => {
+    const history = appendPersistedUiHistorySnapshot([], [
+      { type: "assistant", text: "Worker attempt 1", timestamp: 1_000 },
+      {
+        type: "sidecar",
+        text: "Please perform the requested implementation.",
+        verdict: "revise",
+        timestamp: 2_000,
+      },
+      { type: "assistant", text: "Worker attempt 2", timestamp: 3_000 },
+    ]);
+
+    expect(history).toEqual([
+      { type: "assistant", text: "Worker attempt 1", timestamp: 1_000 },
+      {
+        type: "sidecar",
+        text: "Please perform the requested implementation.",
+        icon: "revise",
+        timestamp: 2_000,
+      },
+      { type: "assistant", text: "Worker attempt 2", timestamp: 3_000 },
+    ]);
+  });
+
   it("preserves distinct event timestamps across persistence", () => {
     const history = appendPersistedUiHistorySnapshot([], [
       { type: "assistant", text: "first reply", timestamp: 1_000 },
