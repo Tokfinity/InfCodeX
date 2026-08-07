@@ -823,6 +823,72 @@ function isProtectedAgentHome(targetPath: string): boolean {
   }
 }
 
+/**
+ * Credential- and security-control-bearing subset of the user KodaX home
+ * (`~/.kodax/`). After the read-side narrowing only these paths remain
+ * `protected` for reads; every other `~/.kodax/` path reads as
+ * `outside-workspace` (Tier 1 deterministic allow). Writes keep the whole-home
+ * Tier 0 deny (`checkUserKodaxWrite`) independently of this classification.
+ *
+ * `target` is a resolved absolute path inside `agentHome`.
+ */
+function isCredentialBearingKodaxPath(target: string, agentHome: string): boolean {
+  const rel = path.relative(agentHome, target);
+  if (rel.startsWith('..')) return false;
+  const relNorm = rel.replace(/\\/g, '/').toLowerCase();
+  // OAuth / daemon credential stores (plaintext tokens / client secrets).
+  if (relNorm === 'mcp-tokens' || relNorm.startsWith('mcp-tokens/')) return true;
+  if (relNorm === 'mcp-clients' || relNorm.startsWith('mcp-clients/')) return true;
+  // Integration declarations may carry literal secrets (${env:NAME} is
+  // recognized but not yet expanded at runtime).
+  if (relNorm === 'integrations' || relNorm.startsWith('integrations/')) return true;
+  // Core config may carry legacy literal MCP server secrets (env/headers/auth).
+  if (relNorm === 'config.json') return true;
+  // Authorization / trust control files.
+  if (relNorm === 'trusted-project-rules.json') return true;
+  if (relNorm === 'runtime/permission-grants.json') return true;
+  if (relNorm.startsWith('runtime/daemon/')) {
+    return relNorm.endsWith('/daemon.token') || relNorm.endsWith('/owner-policy.json');
+  }
+  return false;
+}
+
+/**
+ * Read-side narrowing for the user KodaX home. Resolves `targetPath` the same
+ * way `classifyTarget` does and, when it confidently lands inside
+ * `getAgentConfigHome()`, classifies it by the credential subset:
+ * credential / security-control -> `protected`, everything else ->
+ * `outside-workspace`. Returns `undefined` when the path cannot be confidently
+ * resolved to the user home, so the caller falls through to the conservative
+ * lexical `isSensitivePath` logic -- which still protects project
+ * `<root>/.kodax/` and other CLI homes (`.codex` / `.claude` / ...).
+ */
+function classifyAgentHomeTarget(
+  targetPath: string,
+  context: AutoModeRulesContext,
+  literalWildcards: boolean,
+): AutoModePermissionTarget | undefined {
+  let agentHome: string | undefined;
+  try {
+    agentHome = canonicalizePath(getAgentConfigHome());
+  } catch {
+    return undefined;
+  }
+  if (!agentHome) return undefined;
+  const normalized = literalWildcards
+    ? normalizeLiteralShellTarget(targetPath)
+    : normalizeShellTarget(targetPath);
+  if (!normalized) return undefined;
+  const executionCwd = canonicalizeExistingDirectory(context.executionCwd);
+  if (!executionCwd) return undefined;
+  const target = canonicalizePath(normalized, executionCwd);
+  if (!target) return undefined;
+  if (!isPathInsideDirectory(target, agentHome)) return undefined;
+  return isCredentialBearingKodaxPath(target, agentHome)
+    ? { path: targetPath, boundary: 'protected' }
+    : { path: targetPath, boundary: 'outside-workspace' };
+}
+
 function classifyTarget(
   targetPath: string,
   context: AutoModeRulesContext,
@@ -841,6 +907,14 @@ function classifyTarget(
   if (hasWindowsDeviceComponent(targetPath)) {
     return { path: targetPath, boundary: 'unresolved' };
   }
+  // Read-side narrowing: a path confidently inside the user KodaX home is
+  // classified by the credential subset instead of the whole-home lexical
+  // rule. Non-credential paths (tool-results, sessions, config.json, ...)
+  // read as outside-workspace; the credential subset stays protected. Falls
+  // through to the lexical rule when the path is not confidently under the
+  // user home (project <root>/.kodax/ and other CLI homes stay protected).
+  const agentHomeTarget = classifyAgentHomeTarget(targetPath, context, literalWildcards);
+  if (agentHomeTarget) return agentHomeTarget;
   if (isSensitivePath(targetPath)) return { path: targetPath, boundary: 'protected' };
   const normalized = literalWildcards
     ? normalizeLiteralShellTarget(targetPath)

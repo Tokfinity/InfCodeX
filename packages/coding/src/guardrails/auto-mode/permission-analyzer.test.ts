@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { setAgentConfigHome } from '@kodax-ai/agent';
 import type { GuardrailContext, RunnerToolCall } from '@kodax-ai/agent';
 import {
   createAutoModeToolGuardrail,
@@ -3111,5 +3112,140 @@ describe('Auto[LLM] environment-provider routing', () => {
 
     expect(verdict.action).toBe('allow');
     expect(provider.calls).toHaveLength(0);
+  });
+});
+
+describe('Auto[rules] user KodaX home read narrowing', () => {
+  let userKodax: string | undefined;
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+    if (userKodax) {
+      removeTempDirSync(userKodax);
+      userKodax = undefined;
+    }
+  });
+
+  it('allows reading non-credential ~/.kodax paths without confirmation', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'tool-results', 'out.txt'), 'x');
+    fs.writeFileSync(path.join(userKodax, 'custom-providers.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'sessions', 's.json'), '{}');
+
+    const openPaths = [
+      'tool-results/out.txt',
+      'custom-providers.json',
+      'sessions/s.json',
+    ];
+    for (const rel of openPaths) {
+      const assessment = assessAutoModeCall(
+        call('read', { path: path.join(userKodax, rel) }),
+        context(projectRoot),
+      );
+      expect(assessment.decision.action).toBe('allow');
+      expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+        kind: 'read',
+        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+      }));
+    }
+  });
+
+  it('allows glob/grep of non-credential ~/.kodax paths without confirmation', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'tool-results', 'out.txt'), 'x');
+
+    const toolCalls = [
+      call('glob', { path: path.join(userKodax, 'tool-results'), pattern: '*.txt' }),
+      call('grep', { path: path.join(userKodax, 'tool-results'), pattern: 'x' }),
+    ];
+    for (const toolCall of toolCalls) {
+      const assessment = assessAutoModeCall(toolCall, context(projectRoot));
+      expect(assessment.decision.action).toBe('allow');
+      expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+        kind: 'read',
+        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+      }));
+    }
+  });
+
+  it('still escalates credential-bearing ~/.kodax reads', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'mcp-tokens'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'mcp-tokens', 't.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'mcp-clients'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'mcp-clients', 'c.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'integrations'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'integrations', 'mcp.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'runtime', 'daemon', 'default'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'daemon.token'), 'x');
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'owner-policy.json'), '{}');
+    fs.mkdirSync(path.join(userKodax, 'runtime'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'permission-grants.json'), '{}');
+    fs.writeFileSync(path.join(userKodax, 'trusted-project-rules.json'), '{}');
+    fs.writeFileSync(path.join(userKodax, 'config.json'), '{}');
+
+    const protectedPaths = [
+      'mcp-tokens/t.json',
+      'mcp-clients/c.json',
+      'integrations/mcp.json',
+      'runtime/daemon/default/daemon.token',
+      'runtime/daemon/default/owner-policy.json',
+      'runtime/permission-grants.json',
+      'trusted-project-rules.json',
+      'config.json',
+    ];
+    for (const rel of protectedPaths) {
+      const assessment = assessAutoModeCall(
+        call('read', { path: path.join(userKodax, rel) }),
+        context(projectRoot),
+      );
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+        kind: 'read',
+        target: expect.objectContaining({ boundary: 'protected' }),
+      }));
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
+  });
+
+  it('still escalates reads of project <root>/.kodax/ (not the user home)', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(projectRoot, '.kodax'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, '.kodax', 'config.local.json'), '{}');
+
+    const assessment = assessAutoModeCall(
+      call('read', { path: '.kodax/config.local.json' }),
+      context(projectRoot),
+    );
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+      kind: 'read',
+      target: expect.objectContaining({ boundary: 'protected' }),
+    }));
+  });
+
+  it('still escalates writes to non-credential ~/.kodax paths', () => {
+    const projectRoot = createRoot('kodax-home-narrow-');
+    userKodax = createTempDirSync('kodax-home-narrow-user-', process.cwd());
+    setAgentConfigHome(userKodax);
+    fs.mkdirSync(path.join(userKodax, 'tool-results'), { recursive: true });
+    fs.writeFileSync(path.join(userKodax, 'tool-results', 'out.txt'), 'x');
+
+    const decision = evaluateAutoRulesCall(
+      call('write', { path: path.join(userKodax, 'tool-results', 'out.txt') }),
+      context(projectRoot),
+    );
+    expect(decision.action).toBe('escalate');
   });
 });
