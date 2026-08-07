@@ -2683,9 +2683,26 @@ relaunch it before requiring the capability. The CLI's `kodax daemon stop
 --json` follows the same daemon-plus-supervisor boundary.
 
 The daemon-owned slice does not close the Worker-owned child lifetime gap in
-Issue 256; that owner-lease work remains scheduled for v0.7.84. Worker and
+Issue 256; that owner-lease work remains scheduled for v0.7.85. Worker and
 executor cleanup still use identity-checked evidence and fail closed when a
 descendant cannot be proven gone.
+
+### Actor settlement recovery (v0.7.84)
+
+The v0.7.84 Actor settlement boundary bounds progress persistence to one
+in-flight durable projection plus one latest replacement. A terminal save can
+therefore make progress without waiting behind an unbounded backlog. If Actor
+durability becomes unknown because that boundary times out, a
+`runtime.runs.abort()` Stop can reconcile the late Actor snapshot only for the
+exact same local owner, validate the owner fence, quiesce remaining turns, and
+retry the repair.
+
+The receipt remains unknown until both Actor and executor settlement are
+resolved. Repeated same-owner Stop delivery is idempotent under the same
+unknown-owner proof; foreign owners, missing snapshots, legacy records, and
+unresolved stores fail closed. After repair, Promise terminal facts win over
+fallback callbacks, so a stale callback cannot rewind a terminal Run or emit a
+duplicate outcome. A no-op quiesce does not rewrite the Session.
 
 `homeDir` and `KODAX_HOME` deliberately name different levels. Runtime SDK and
 CLI daemon `--home` accept the **base directory that contains `.kodax`**;

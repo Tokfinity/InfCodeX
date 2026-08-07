@@ -117,7 +117,7 @@ already-aborted signal before starting further work.
 Windows process-tree cleanup now identity-checks observed roots and descendants
 and returns an indeterminate outcome when evidence is incomplete. Snapshot
 ancestry is not kernel containment, however; Issue 256 remains open and is
-scheduled for v0.7.84, when spawn-time Job Object assignment and Worker owner
+scheduled for v0.7.85, when spawn-time Job Object assignment and Worker owner
 leasing can prove descendant closure after an intermediate parent exits.
 
 The v0.7.83 release adds the daemon-owned Windows containment slice: the daemon
@@ -127,7 +127,14 @@ kernel boundary instead of synchronous per-child tree hooks. The SDK's
 `waitForRuntimeDaemonShutdown()` and `daemonShutdownVerification:1` make the
 durable cleanup plus daemon/supervisor exits explicit. Legacy uncontained
 daemons remain fail-closed and must be relaunched; Worker owner leasing for the
-rest of Issue 256 remains scheduled for v0.7.84.
+rest of Issue 256 remains scheduled for v0.7.85.
+
+The v0.7.84 release adds Issue 282 settlement recovery. Agent progress
+persistence is bounded to one in-flight write plus one latest replacement;
+same-owner Stop can reconcile a late Actor snapshot and retry an unknown
+settlement, while Promise terminal facts outrank fallback callbacks and foreign
+owners or unresolved stores remain fail-closed. This is runtime system-code
+hardening, not a new Feature release.
 
 `DefaultSummaryCompaction` 是给自定义 Agent loop 使用的独立 primitive；它不替代、也不能关闭 KodaX coding runtime 在 FEATURE_272 中定义的始终开启大型压缩策略。
 

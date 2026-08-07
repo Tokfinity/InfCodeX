@@ -1,9 +1,9 @@
 # KodaX Detailed Design
 
-> Last updated: 2026-08-06
+> Last updated: 2026-08-07
 >
-> Current release baseline: `v0.7.83`
-> (`@kodax-ai/kodax@0.7.83`; npm publication remains manual)
+> Current release baseline: `v0.7.84`
+> (`@kodax-ai/kodax@0.7.84`; npm publication remains manual)
 >
 > This DD describes current implementation structure. Retired V1 chain details
 > were deleted from this active document; use git history and historical feature
@@ -20,8 +20,10 @@ reference and does not duplicate every type. It should answer three questions:
 
 ## 2. Published Package And Build Entries
 
-The root workspace package is `@kodax-ai/kodax@0.7.83`. This non-Feature
-runtime hardening patch establishes Windows daemon containment before user code
+The root workspace package is `@kodax-ai/kodax@0.7.84`. This non-Feature
+runtime hardening patch establishes bounded Actor progress persistence and
+same-owner settlement recovery after an unknown durability boundary. It keeps
+Windows daemon containment before user code
 can create descendants: the daemon is created suspended, assigned to a
 kill-on-close Job Object, and resumed only after assignment succeeds. An
 out-of-Job supervisor waits for daemon exit and Job emptiness. The public
@@ -30,7 +32,7 @@ durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
 contracts; FEATURE_287 remains planned for v0.7.88 and the Worker owner-lease
-portion of Issue 256 remains scheduled for v0.7.84.
+portion of Issue 256 remains scheduled for v0.7.85.
 
 `package.json` exposes:
 

@@ -1,9 +1,9 @@
 # KodaX High-Level Design
 
-> Last updated: 2026-08-06
+> Last updated: 2026-08-07
 >
-> Current implementation baseline: `v0.7.83` release
-> (`@kodax-ai/kodax@0.7.83` workspace package; npm publication remains manual)
+> Current implementation baseline: `v0.7.84` release
+> (`@kodax-ai/kodax@0.7.84` workspace package; npm publication remains manual)
 >
 > This HLD is intentionally current-state only. The old pre-v0.7.43
 > chain/harness model has been removed from this active design document because
@@ -36,6 +36,13 @@ Object, and resumes it; an out-of-Job supervisor waits for daemon exit and then
 for the Job's active-process count to reach zero. The SDK and CLI consume that
 boundary as a verified shutdown contract rather than treating PID exit alone as
 completion.
+
+Actor settlement is a separate durability boundary. Progress observations are
+coalesced behind a bounded projector, while terminal settlement is allowed to
+reach the controller deadline without waiting for an unbounded observation
+queue. A same-owner Stop can reload and validate the late durable Actor
+snapshot before quiescing remaining turns; owner conflicts and unresolved
+storage remain unknown rather than being treated as successful cancellation.
 
 ## 2. Layering
 

@@ -631,8 +631,18 @@ exports `waitForRuntimeDaemonShutdown()` and capability
 `daemonShutdownVerification:1`; CLI stop waits for both daemon and supervisor
 exit. Legacy uncontained daemons are not reported as verified and are not
 silently upgraded in place. The Worker owner-lease portion of Issue 256 remains
-scheduled for v0.7.84, and FEATURE_287 remains planned for v0.7.88. See the
+scheduled for v0.7.85, and FEATURE_287 remains planned for v0.7.88. See the
 [v0.7.83 release checklist](docs/release.md#v0783-release-preparation).
+
+**v0.7.84 Actor settlement recovery release:** Agent progress persistence is
+now bounded to one in-flight write plus one latest replacement, so terminal
+settlement cannot wait behind an unbounded progress backlog. A same-owner Stop
+can reconcile a late Actor snapshot after a durability timeout, durably quiesce
+remaining children, and retry the repair. Promise success/failure facts remain
+authoritative over fallback callbacks after repair; stale durable unknown state
+cannot rewind a local terminal Run or duplicate cancellation effects. No-op
+quiescence avoids an unnecessary Session rewrite. See the
+[v0.7.84 release checklist](docs/release.md#v0784-release-preparation).
 
 The v0.7.77 release also adds an opt-in, host-configurable Shell Execution Contract.
 Runtime Session settings or an individual Run can select `pwsh`, Windows

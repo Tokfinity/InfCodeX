@@ -11,8 +11,8 @@
 
 | Item | Value |
 |---|---|
-| Current released version | `v0.7.83` (Git tag / GitHub Release) |
-| Current package version | `@kodax-ai/kodax@0.7.83` release (npm publication remains manual) |
+| Current released version | `v0.7.84` (Git tag / GitHub Release) |
+| Current package version | `@kodax-ai/kodax@0.7.84` release (npm publication remains manual) |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `72` |
 | InProgress | `1` |
@@ -26,7 +26,7 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.83 is the current Git/GitHub release and remains a feature-free Windows daemon-containment hardening patch; npm publication remains manual. |
+| Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.84 is the current Git/GitHub release and remains a feature-free Actor settlement-recovery hardening patch; npm publication remains manual. |
 | InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
 | Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.85` -> `v0.7.86` -> `v0.7.88` -> `v0.7.89` -> `v0.7.90` -> `v0.7.95` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
@@ -67,6 +67,7 @@
 | `v0.7.81` | `0` |
 | `v0.7.82` | `0` |
 | `v0.7.83` | `0` |
+| `v0.7.84` | `0` |
 | `v0.7.85` | `5` |
 | `v0.7.86` | `1` |
 | `v0.7.88` | `1` |
@@ -518,16 +519,34 @@ together with that decision.
 The same release contains a non-Feature release-hardening addendum. Issue 257
 delivers the evidence-checked ordinary-conversation projection without changing
 raw transcript audit semantics. Issue 256 was explicitly rescheduled to
-`v0.7.84` on 2026-08-04 and is not part of this release: snapshot-based
+`v0.7.85` on 2026-08-07 and is not part of this release: snapshot-based
 Windows ancestry cannot prove descendant closure after an intermediate parent
 exits, so spawn-time Job Object containment and a host-issued Worker owner
-lease are required in v0.7.84.
+lease are required in v0.7.85.
 
-The release checklist is [docs/release.md](release.md#v0779-release-preparation).
+The release checklist is [docs/release.md](release.md#v0784-release-preparation).
 The completed F281 human verification is
 [FEATURE_281_v0.7.79_TEST_GUIDE](test-guides/FEATURE_281_v0.7.79_TEST_GUIDE.md).
 The completed F284 Qwen Token Plan verification is
 [FEATURE_284_v0.7.79_TEST_GUIDE](test-guides/FEATURE_284_v0.7.79_TEST_GUIDE.md).
+
+---
+
+## v0.7.84 Release Record
+
+`v0.7.84` is a non-Feature Actor settlement-recovery hardening release. Agent
+progress persistence is bounded to one in-flight write plus one latest
+replacement, so terminal settlement cannot wait behind an unbounded progress
+backlog. When durability becomes unknown, a same-owner Stop can reconcile the
+late Actor snapshot, validate the owner fence, quiesce remaining turns, and
+retry repair. Promise terminal facts outrank fallback callbacks after repair;
+foreign owners, missing snapshots, and persistent storage failures remain
+fail-closed. No-op quiescence avoids an unnecessary Session rewrite.
+
+This release resolves Issue 282. It does not claim the Worker owner-lease
+portion of Issue 256, which remains scheduled for `v0.7.85`; `FEATURE_287`
+remains planned for `v0.7.88`. The release checklist is
+[docs/release.md](release.md#v0784-release-preparation).
 
 ---
 
@@ -637,7 +656,7 @@ minor versions so the next several slots can serve as release/debug buffer:
 The design documents keep their per-version homes
 (`docs/features/v0.7.80.md`, `v0.7.85.md`, `v0.7.90.md`) with updated
 Status/Target fields; `v0.7.80`, `v0.7.81`, and `v0.7.82` are debug/patch slots.
-Issue 256 remains scheduled for `v0.7.84` (bug fix, not a feature).
+Issue 256 remains scheduled for `v0.7.85` (bug fix, not a feature).
 
 ---
 

@@ -102,7 +102,14 @@ code runs; `waitForRuntimeDaemonShutdown()` proves the durable cleanup result
 and both daemon and supervisor exit, while `daemonShutdownVerification:1`
 allows hosts to require the contract. Legacy daemons are not silently upgraded
 in place. `kodax_manual` carries the same shutdown and migration rules; the
-Worker owner-lease portion of Issue 256 remains scheduled for v0.7.84.
+Worker owner-lease portion of Issue 256 remains scheduled for v0.7.85.
+
+The v0.7.84 release carries the Issue 282 Actor settlement-recovery hardening:
+progress persistence is bounded to one in-flight write plus one latest
+replacement, same-owner Stop can reconcile and retry an unknown settlement,
+and terminal Promise facts remain authoritative over fallback callbacks. The
+boundary is fail-closed for foreign owners, missing snapshots, and persistent
+stores; `kodax_manual` documents the same contract.
 
 ## 安装 / 导入
 

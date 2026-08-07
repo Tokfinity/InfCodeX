@@ -1,7 +1,7 @@
 # Issue 256 daemon-containment regression guide
 
 This guide covers the Windows daemon-owned slice shipped in v0.7.83. The broader Worker
-owner-lease work remains open and is still targeted for v0.7.84.
+owner-lease work remains open and is still targeted for v0.7.85.
 
 ## Automated checks
 

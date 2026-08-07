@@ -81,6 +81,70 @@ version smoke is:
 dist/binary/linux-x64/kodax --version
 ```
 
+## v0.7.84 release preparation
+
+Release state: the root package, all four workspace packages, and every
+`package-lock.json` workspace entry are version `0.7.84`. This release is
+prepared for the `v0.7.84` tag and GitHub Release; npm publication remains a
+separate manual operator step. Its scope is a non-Feature Actor
+settlement-recovery hardening patch for Issue 282:
+
+- Agent progress persistence is bounded to one in-flight durable projection
+  plus one latest replacement, so terminal settlement is not delayed by an
+  unbounded progress backlog;
+- a same-owner Stop can reconcile a late Actor snapshot after an unknown
+  durability outcome, validate the owner fence, quiesce remaining turns, and
+  retry repair;
+- Promise terminal facts remain authoritative over fallback callbacks after
+  repair, while foreign owners, missing snapshots, and persistent storage
+  failures remain fail-closed;
+- no-op quiescence avoids an unnecessary Session rewrite. These are intentional
+  runtime system-code fixes, not a new Feature release.
+
+Issue 256's Worker owner-lease portion remains scheduled for `v0.7.85` and
+`FEATURE_287` remains planned for `v0.7.88`; neither is represented as shipped
+by this release.
+
+Before tagging, all of the following must be true:
+
+1. version metadata, changelog, README/README_CN, PRD/HLD/DD/ADR, feature
+   tracker, known-issue record, this checklist, SDK/package guides,
+   `docs/features`, and `kodax_manual` agree on the v0.7.84 contract;
+2. no incomplete Feature or known High release blocker is presented as shipped;
+   Issue 256 retains its v0.7.85 Worker owner-lease disposition;
+3. both the root repository and `docs/features` submodule are clean, and the
+   parent points to a submodule commit reachable from its remote;
+4. a clean-install-equivalent deterministic gate passes on the exact release
+   commit:
+
+   ```bash
+   npm ci
+   npm run config:templates:check
+   npm run build:packages
+   npm run build:bundle
+   npm run build:dts
+   npm run test:full
+   npm run test:electron-daemon:built
+   node scripts/release.mjs --pack-only
+   ```
+
+5. focused Issue 282 regression checks pass for the Agent controller, Actor
+   runtime, SDK Stop/recovery paths, and `kodax_manual` registry;
+6. the exact publish-shaped `kodax-ai-kodax-0.7.84.tgz` is hashed, inspected,
+   and installed into an empty consumer that imports the root plus all 12 SDK
+   subpaths. Runtime, semantic, sandbox, and constructed-handler sidecars,
+   provider capabilities, and built-in Skills must be present;
+7. any performance evidence follows `benchmark/EVAL_GUIDELINES.md` and is
+   supporting evidence, not a substitute for correctness gates;
+8. GitHub `CI` is green for the exact commit on Node 20/22, the Unix Runtime
+   socket job, Windows Shell Contract, and packaged Electron;
+9. a manual `release.yml` `workflow_dispatch` for `target=all` is green before
+   tagging, proving all five binary targets without creating a release;
+10. only then is that exact commit tagged `v0.7.84`. The tag-triggered workflow
+    must finish green and the GitHub Release must contain all five archives plus
+    `SHA256SUMS`. npm publication remains the maintainer-owned manual step after
+    the audited bytes are approved.
+
 ## v0.7.83 release preparation
 
 Release state: the root package, all four workspace packages, and every

@@ -1,6 +1,15 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-08-06
+> Last updated: 2026-08-07
+>
+> **v0.7.84 release addendum:** Agent progress persistence is bounded to one
+> in-flight durable projection plus one latest replacement. Terminal settlement
+> does not wait behind an unbounded progress backlog. When the Actor durability
+> deadline is exceeded, a same-owner Stop may reconcile the exact late snapshot,
+> validate owner identity, and quiesce remaining turns; foreign owners and
+> unresolved stores remain fail-closed. Promise terminal facts outrank fallback
+> callbacks after repair, and stale durable unknown status cannot rewind a local
+> terminal Run. npm publication remains a separate manual operator step.
 >
 > **v0.7.83 release addendum:** Windows daemon startup creates the daemon
 > suspended and assigns it to a kill-on-close Job Object before resume/user code;
@@ -10,7 +19,7 @@
 > `daemonShutdownVerification:1` and `waitForRuntimeDaemonShutdown()`; legacy
 > uncontained daemons cannot be claimed verified or upgraded in place. A review
 > hardening path terminates a suspended process when Job assignment fails. The
-> Worker owner-lease part of Issue 256 remains scheduled for v0.7.84.
+> Worker owner-lease part of Issue 256 remains scheduled for v0.7.85.
 >
 > **v0.7.82 release addendum:** daemon MCP/Host Tool discovery preserves
 > explicit source filtering and truthful complete/live capability snapshots;
@@ -33,7 +42,7 @@
 > analysis now shares the deterministic analyzer with the SDK. npm publication
 > remains a separate manual operator step.
 >
-> This header and addendum are authoritative for the v0.7.83 release; the long
+> This header and addendum are authoritative for the v0.7.84 release; the long
 > architecture-state notice below is retained as historical context.
 >
 > **v0.7.79 Runtime observation and A2A authorization addendum:** Runtime

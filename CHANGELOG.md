@@ -6,18 +6,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+No changes yet.
+
+---
+
+## [0.7.84] - 2026-08-07
+
+> Git tag and GitHub Release are created by the release workflow. npm
+> publication remains a separate manual operator step.
+
 ### Fixed
 
-- Agent progress persistence is now backpressured and coalesced to constant-size
-  work. Terminal settlement seals new observations without waiting indefinitely
-  for a stuck progress write, so the controller can expose an explicit
-  durability-unknown state instead of leaving the adapter spinning forever.
-  Stop can reconcile a late exact-owner Actor snapshot, durably quiesce
-  remaining children, and safely retry that repair on repeated requests. After
-  repair, returned Promise success/failure facts outrank fallback callbacks;
-  stale durable unknown status cannot rewind an in-process terminal Run. No-op
-  quiescence avoids an unnecessary Session rewrite, while genuine owner
-  conflicts and persistent storage failures remain fail-closed (Issue 282).
+- Issue 282: Agent progress persistence is now backpressured and coalesced to
+  one in-flight write plus one latest replacement. Terminal settlement no
+  longer waits behind an unbounded progress backlog and exposes an explicit
+  durability-unknown state when the remaining write cannot settle in time.
+- A same-owner Stop can reconcile a late Actor snapshot after settlement
+  timeout, durably quiesce remaining children, and retry the repair on a later
+  Stop. Foreign owners, missing snapshots, and persistent storage failures
+  remain fail-closed.
+- Promise success/failure facts are retained while Actor durability is unknown
+  and outrank fallback terminal callbacks after repair. A stale durable unknown
+  status cannot rewind an already terminal local Run, duplicate cancellation
+  effects, or emit conflicting terminal events.
+- A quiesce with no eligible turn is now a true no-op and avoids an unnecessary
+  Session snapshot rewrite.
+
+### Documentation
+
+- Updated the release baseline, SDK embedder guidance, `kodax_manual`, feature
+  design index, regression guides, and known-issue disposition for Issue 282.
 
 ---
 

@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-06_
+_Last Updated: 2026-08-07_
 
 ---
 
@@ -14,7 +14,7 @@ _Last Updated: 2026-08-06_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 development | 2026-08-06 | 2026-08-06 |
+| 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 release | 2026-08-06 | 2026-08-06 |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 280 | High | Resolved | Daemon managed Run Stop does not fence cooperative work or preserve Abort causality through credential redaction | v0.7.69 daemon managed Runs | v0.7.82 release | 2026-08-05 | 2026-08-05 |
 | 279 | Medium | Resolved | Daemon Host Tool merge drops MCP capability snapshots and leaks host tools into server-filtered search | v0.7.70 progressive MCP discovery | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -40,7 +40,7 @@ _Last Updated: 2026-08-06_
 | 259 | Medium | Resolved | REPL startup persists zero-message sessions before the first prompt | v0.7.72 Runtime REPL bridge | v0.7.79 development | 2026-08-02 | 2026-08-02 |
 | 258 | Medium | Resolved | TodoList content and labels can ignore the query and UI locale | v0.7.79 development | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 257 | High | Resolved | Legacy compaction copies cannot be safely folded by hosts | legacy compaction/resume persistence | v0.7.79 development | 2026-08-01 | 2026-08-01 |
-| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.84 (scheduled) | 2026-08-01 | - |
+| 256 | High | Open | Windows child containment cannot prove descendant closure after an intermediate parent exits | Windows LLM, MCP, daemon-startup, and Worker-owned child processes | v0.7.85 (scheduled) | 2026-08-01 | - |
 | 255 | High | Resolved | Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries | Runtime SDK lifecycle and daemon protocol | v0.7.79 development | 2026-08-01 | 2026-08-01 |
 | 254 | High | Resolved | First v0.7.78 Session reconciliation replays historical messages as new lineage entries | v0.7.78 lineage reconciliation | v0.7.79 development | 2026-07-31 | 2026-07-31 |
 | 253 | Medium | Resolved | Parallel quality-strategy admissions conflict on unrelated Actor progress | v0.7.77 quality-strategy admission | v0.7.79 development | 2026-07-31 | 2026-07-31 |
@@ -191,7 +191,7 @@ _Last Updated: 2026-08-06_
 - Priority: High
 - Status: Resolved
 - Introduced: v0.7.79 bounded Actor settlement
-- Fixed: v0.7.84 development
+- Fixed: v0.7.84 release
 - Created: 2026-08-06
 - Resolved: 2026-08-06
 
@@ -2139,7 +2139,7 @@ show duplicates or silently delete real user input.
 - **Priority**: High
 - **Status**: Open
 - **Introduced**: Windows LLM, MCP, daemon-startup, and Worker-owned child processes
-- **Fixed**: v0.7.84 (scheduled)
+- **Fixed**: v0.7.85 (scheduled)
 - **Created**: 2026-08-01
 - **Resolved**: -
 
@@ -2210,7 +2210,14 @@ longer installs redundant synchronous child-tree exit hooks under containment.
 This does **not** resolve Issue 256 as a whole. Worker-owned children still need
 the separately scheduled host-issued owner lease before their lifetime can be
 invalidated independently of the long-lived host PID. The issue remains Open
-and its scheduled version remains unchanged.
+and the Worker owner-lease portion is scheduled for v0.7.85.
+
+#### 2026-08-07 v0.7.84 release disposition
+
+The v0.7.84 release resolves Issue 282's Actor settlement-recovery problem but
+does not claim Issue 256's remaining Worker owner-lease closure. The current
+schedule is therefore v0.7.85 for the outstanding Worker-owned child lifetime
+boundary; no containment completion is implied by the v0.7.84 release.
 
 ### 255: Runtime teardown and cancellation could report completion across indeterminate lifecycle boundaries
 

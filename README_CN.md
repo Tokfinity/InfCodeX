@@ -237,8 +237,10 @@ Run，再读取可变 Session history，因此活动中断和 after-turn 接纳�
 supervisor 等待整个 Job 清空。SDK 导出 `waitForRuntimeDaemonShutdown()`，并通过
 `daemonShutdownVerification:1` 宣布该能力；CLI stop 会等待 daemon 与 supervisor
 都退出。旧的未 containment daemon 不会被报告为已验证，也不会被静默地原地升级。
-Issue 256 的 Worker owner lease 部分仍计划于 v0.7.84，FEATURE_287 仍计划于
+Issue 256 的 Worker owner lease 部分仍计划于 v0.7.85，FEATURE_287 仍计划于
 v0.7.88。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparation)。
+
+**v0.7.84 Actor settlement recovery 发布**：Agent progress 持久化现在限制为一个进行中的写入加一个最新替换，terminal settlement 不会再被无限 progress backlog 阻塞。同 owner 的 Stop 可以在 durability timeout 后协调迟到的 Actor snapshot，持久化 quiesce 剩余子任务，并在后续 Stop 中重试修复。修复后 Promise 的 success/failure fact 优先于 fallback callback；过时的 durable unknown 状态不能回退本地已终态 Run，也不会重复取消效果。没有可处理 turn 的 quiesce 现在是真正 no-op，不再无意义地重写 Session。详见 [v0.7.84 发布清单](docs/release.md#v0784-release-preparation)。
 
 v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime Session
 设置或单次 Run 可以选择 `pwsh`、Windows PowerShell、`cmd`、`bash`、`zsh`
