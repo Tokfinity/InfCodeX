@@ -90,7 +90,7 @@ broker 使用；Space Artifact/Office/Control 只通过显式绑定到该 run �
 lease 暴露。CLI run 不会因为 Space 后来加入而继承这些能力。Partner 继续使用独立
 data/session root 下的 inline Runtime，不参与 Coder owner fence。capability 缺失时必须
 fail closed，不能静默退回 inline Coder。完整接入说明见
-[SDK Embedder Guide §23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)。
+[SDK Embedder Guide §23](public_docs/sdk/embedder-guide.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769)。
 
 **v0.7.71 Electron 打包修复**：packaged/asar Electron 宿主可以直接自动启动
 daemon，不会再次打开 GUI。`ELECTRON_RUN_AS_NODE` 只存在于子进程启动边界，
@@ -171,7 +171,7 @@ subpath，且不可用时不会静默改为非隔离执行。KodaX 自身的 wor
 读取收窄成 allowlist。详见
 [v0.7.78 设计](docs/features/v0.7.78.md)、
 [发布检查清单](docs/release.md#v0778-release-verification)与
-[SDK 指南第 29–30 节](docs/SDK_EMBEDDER_GUIDE.md#29-evidence-gated-background-skill-learning-feature_263-v0778)。
+[SDK 指南第 29–30 节](public_docs/sdk/embedder-guide.md#29-evidence-gated-background-skill-learning-feature_263-v0778)。
 
 本次发布收口同时保证相邻表面不扭曲意图：Edit/Plan 可加载静态 Skill 指令，但不
 预授权其后续副作用；动态 Skill 命令必须由宿主显式控制 executor；根 AMA 使用受
@@ -220,7 +220,7 @@ debug/patch 槽位，没有把未完成特性表述为已交付。详见
 每项的 `entryId`；压缩、事件重放和 Runtime 重启后该引用仍可追溯。一次批量安全边界
 交付会保留每条 prompt 独立的 user message 与 entry 映射。Runtime-owned 持久化或
 provenance 失败会 fail closed，不会发布无法验证的交付事件。FEATURE_287 仍计划于
-v0.7.88；本版本是非 Feature 补丁。详见
+v0.7.93；本版本是非 Feature 补丁。详见
 [v0.7.81 发布清单](docs/release.md#v0781-release-preparation)。
 
 **v0.7.82 Runtime 因果性发布**：daemon 的未过滤 capability 发现会组合 live、complete
@@ -229,7 +229,7 @@ v0.7.88；本版本是非 Feature 补丁。详见
 Run-admitted Actor 工作会协作式停止；可信 Abort 会在 credential redaction 前保留为终态
 因果，但不会覆盖真实 completion 或独立 failure。输入提交先解析已接纳的 authoritative
 Run，再读取可变 Session history，因此活动中断和 after-turn 接纳不会产生瞬态
-`data_changed` 拒绝。FEATURE_287 仍计划于 v0.7.88；本版本是非 Feature 补丁。详见
+`data_changed` 拒绝。FEATURE_287 仍计划于 v0.7.93；本版本是非 Feature 补丁。详见
 [v0.7.82 发布清单](docs/release.md#v0782-release-preparation)。
 
 **v0.7.83 Windows daemon containment 发布**：Windows daemon 会先以 suspended
@@ -238,7 +238,7 @@ supervisor 等待整个 Job 清空。SDK 导出 `waitForRuntimeDaemonShutdown()`
 `daemonShutdownVerification:1` 宣布该能力；CLI stop 会等待 daemon 与 supervisor
 都退出。旧的未 containment daemon 不会被报告为已验证，也不会被静默地原地升级。
 Issue 256 的 Worker owner lease 部分仍计划于 v0.7.85，FEATURE_287 仍计划于
-v0.7.88。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparation)。
+v0.7.93。详见 [v0.7.83 发布清单](docs/release.md#v0783-release-preparation)。
 
 **v0.7.84 Actor settlement recovery 发布**：Agent progress 持久化现在限制为一个进行中的写入加一个最新替换，terminal settlement 不会再被无限 progress backlog 阻塞。同 owner 的 Stop 可以在 durability timeout 后协调迟到的 Actor snapshot，持久化 quiesce 剩余子任务，并在后续 Stop 中重试修复。修复后 Promise 的 success/failure fact 优先于 fallback callback；过时的 durable unknown 状态不能回退本地已终态 Run，也不会重复取消效果。没有可处理 turn 的 quiesce 现在是真正 no-op，不再无意义地重写 Session。详见 [v0.7.84 发布清单](docs/release.md#v0784-release-preparation)。
 
@@ -250,7 +250,7 @@ v0.7.77 还增加了由宿主显式配置的 Shell Execution Contract。Runtime 
 过滤；旧的 platform-shell 路径同样会过滤凭据型变量。用户级 `sandbox.envPass`
 明确列出的变量只会在最终命令目标中恢复。没有配置 `shellExecution` 时仍保持原有
 解释器路径。详见
-[SDK Embedder Guide 第 28 节](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
+[SDK Embedder Guide 第 28 节](public_docs/sdk/embedder-guide.md#28-host-configurable-shell-execution-contract-v0777)
 与 [Issue 214 回归指南](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)。
 
 Kimi Code 请求现在还会携带由 Runtime 逻辑上下文派生的稳定、不透明 Prompt Cache
@@ -281,7 +281,7 @@ Session 也可设置 classifier model 和有界 timeout；`auto` 默认使用 LL
 本 Session 允许，或（仅安全场景）持久允许；客户端只能回传不透明 suggestion id，不能从
 预览内容自行扩大范围。持久授权由 daemon 持有并通过 revision 管理。没有宿主审批回调时，
 不会向模型暴露 `exit_plan_mode`。完整 SDK 接入见
-[Runtime Auto Mode 指引](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072)。
+[Runtime Auto Mode 指引](public_docs/sdk/embedder-guide.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v072)。
 
 **v0.7.74 Auto 切换可靠性：**默认用 `Shift+Tab` 在 `Plan -> Edits -> Auto`
 之间循环，`Shift+Enter` 仍用于换行。进入 Auto 时状态栏会立即显示已解析的
@@ -427,7 +427,7 @@ Auto[LLM] 的权限体验保持一致，只缺少 OS 级 containment；普通运
 在 REPL 中，`/sandbox` 会刷新 ready 状态与诊断，但不会激活 backend 或请求提权。
 逐命令 sandbox 路由属于内部机制，不显示在普通命令历史中。SDK 嵌入方还可通过
 `@kodax-ai/kodax/sandbox` 在 Auto[LLM] 之外独立使用该能力，
-见 [SDK sandbox 指南](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778)。
+见 [SDK sandbox 指南](public_docs/sdk/embedder-guide.md#30-standalone-sandbox-sdk-v0778)。
 
 模型发起的 shell 命令默认会过滤名称形似凭据的环境变量。若要把指定宿主变量
 透传给命令目标（包括 ASRT），只需在用户级 core 配置中列出变量名：
@@ -521,9 +521,9 @@ import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-
 
 13 个 SDK 入口（root + 12 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
 
-完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md)。
+完整的宿主集成契约——包括 embedded/Worker/daemon 所有权、外部 Agent 注册与任务控制、session cursor 分页、workflow 模型分层和效率遥测——见 [SDK Embedder Integration Guide](public_docs/sdk/embedder-guide.md)。
 
-> **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
+> **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [public_docs/sdk/embedder-guide.md §5](public_docs/sdk/embedder-guide.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
 
 ### 5. 自定义 Provider（OpenAI / Anthropic 兼容端点）
 
@@ -904,9 +904,9 @@ runtime auto-resume 都会扫描最多 1000 条最新摘要并跳过 `msgCount=0
 runtime、消息、UI 历史、lineage、artifact、extension 状态、标题、tag 与 session ID，
 因此相对 shell 命令不会错误地落回启动目录。
 
-**实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
+**实验性 Memory Agent SDK（FEATURE_260，v0.7.68）**：`/experimental-memory` 暴露基于既有 F228 治理平面的薄 `MemoryAgent` 与 scoped `MemorySession`。被动 recall 零等待，`query()` 只读且由主 Action LLM 主动选择；持久化仍必须经过 proposal/preview/fingerprint/apply。召回内容保持低权限，安全与 scope 边界仍由确定性代码门禁承担。直接 session 示例与宿主边界见 [SDK Embedder Guide §21](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768)。
 
-**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback，且不会返回 Fetch 兼容客户端禁止的端口；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
+**双向 A2A 1.0（FEATURE_267，v0.7.69）**：`/a2a` 可发现 allowlist 内的 Agent Card，并通过既有 F258 plane 安装 JSON-RPC/SSE executor。配置中的出站 Agent 还会作为 `external:<name>` 自动注册到 embedded CLI 与用户 daemon Runtime，因此主 Agent 无需宿主代码即可编排。一个 `a2a.json` 可保存多个出站注册，但最多只有一个入站 server；入站可发布 Runtime 默认 Agent，或发布一个经过验证的 `~/.kodax/agents/*.md` Agent。内置 listener 仅允许 loopback，且不会返回 Fetch 兼容客户端禁止的端口；公网部署必须由宿主用 TLS、鉴权和授权包住 `handle()`。不宣称支持 A2A 0.3、gRPC、HTTP+JSON、push notification，也不会自动把本地 Agent 暴露到网络。详见 [SDK Embedder Guide §22](public_docs/sdk/embedder-guide.md#22-bidirectional-a2a-10--a2a-feature_267-v0769)。
 
 **A2A 互操作与认证加固**：发现得到的 interface 必须与受信 Agent Card 同源，且只有
 完整满足 Card/Skill 的一个 security requirement 时才会携带凭据。无代码 client
@@ -1003,9 +1003,9 @@ stdin 并立即回到原 shell。历史回放保留每条持久 event 的原始�
 使用 session-root Actor queue scope，避免一个 session/child 的待处理输入被另一个
 REPL 显示、唤醒或消费。
 
-**外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767)。
+**外部 Agent SDK plane（FEATURE_258，v0.7.67）**：`/agent` 导出协议中立的 executor、registration、policy、credential broker、artifact policy、catalog 和 durable task 契约；`/runtime` 通过 `admin.agentRegistrations`、`agents`、`agentTasks` 向 embedded 与 daemon client 提供同一组 DTO API。Executor factory 是宿主函数，只能装入 inline owner，或在创建新的 in-process daemon owner 时装入；不能通过既有 daemon 连接或 Runtime Worker 边界注入。Plane 关闭后是终态：未完成的 wait 和后续所有服务调用都会拒绝；受限 Workflow 脚本会完整校验并传递 `phase` 与外部 `target`。完整所有权、注册、preflight、启动/等待/继续/取消/对账和安全边界见 [SDK Embedder Guide §18](public_docs/sdk/embedder-guide.md#18-external-agent-executor-plane-feature_258-v0767)。
 
-**成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
+**成本受控 Workflow SDK（FEATURE_259，v0.7.67）**：SDK 调用方用 run-scoped `modelTiers` 与 `workflow.maxConcurrency` 配置路由和并发，workflow 作者只表达 `fast` / `balanced` / `deep` 语义意图。terminal workflow event 回显 tier/source/fallback/usage/duration，持久化 `run.json.efficiencyReport` 给出 token coverage、role/tier 启动数、packet-read 拓扑、review wave 和 quality gate 结果。完整配置与遥测读取方式见 [SDK Embedder Guide §20](public_docs/sdk/embedder-guide.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767)。
 
 **Inline workflow authoring（FEATURE_246，v0.7.58；F270 于 v0.7.72 更新）**：Worker 在明确表达 Workflow 意图时，可通过 model-callable 的 `run_workflow` 工具在会话内编写并运行工作流。F270 退役 AMAW 与复杂度驱动激活；AMA 保留显式 `/workflow`、named/SDK 和自然语言 Workflow 请求。Workflow 子 Agent 统一运行在 Actor 控制面。详见 [docs/features/v0.7.58.md](docs/features/v0.7.58.md)、[docs/features/v0.7.72.md](docs/features/v0.7.72.md) 与 ADR-044/046/047/048/049/055。
 
@@ -1015,9 +1015,9 @@ REPL 显示、唤醒或消费。
 
 **上下文高效的工具结果 + Workflow 质量预检（FEATURE_251 + FEATURE_252，v0.7.61；2026-07-14 纠偏）**：本地工具先完整采集，只采用契约等价且严格更短的无损规范化；命令专用 Bash 有损过滤默认关闭，compound Bash 不使用语义 adapter。并行结果由唯一 owner 按最终 provider 请求统一判容：先求满足 `Pmax + 输出预留 + max(2048, Pmax 的 3%) <= 上下文窗口` 的最大最终输入，再只使用剩余物理容量。能放下就逐字交付，只有真实溢出才持久化完整结果并返回 `KODAX_RESULT_INCOMPLETE`。历史仍遵守相同的物理容量安全规则：容量内不做默认有损 microcompaction，压力下 summary-first，无法形成可恢复请求时 typed failure，禁止静默删除。FEATURE_272 仅取代 FEATURE_251 的大型压缩默认触发策略；FEATURE_252 的确定性 workflow 启动前合约 lint 保持不变。详见 [docs/features/v0.7.61.md](docs/features/v0.7.61.md) 与 [docs/ADR.md ADR-050](docs/ADR.md)。
 
-**可靠且始终开启的上下文压缩（FEATURE_272，v0.7.74）**：自动大型压缩不允许关闭。百分比阈值默认 75%，并限制在 15-90%；可选 `triggerTokens` 未设置或为 0 时不生效，否则百分比、绝对值和物理容量三者取最小。最近原始尾部保护量为有效阈值的 20%。一次事务压缩保护尾部之外的完整 eligible prefix，并用精确 query ledger 保留所有真实用户请求；只有实际减少 token、恢复物理可用且等待持久化提交成功后才发出成功事件。原始正文从内存驱逐前，Session owner 会先持久化并刷盘精确 lineage；sidecar 与精简 Session 通过稳定 entry ID 合并去重。根 Agent 与持久化子 Agent 都可用有界的 `session_history_search` → `session_history_read` 回溯自己的被省略细节；子 Agent 只绑定独立隐藏的 worker Session，永远不能读取根历史。SDK/Runtime 则使用 revision-bound `transcriptSearch`、分页和无损 chunk；隐藏思考、system 指令与合成 checkpoint 不进入模型检索。详见 [功能设计](docs/features/v0.7.74.md)、[SDK 指南第 25 节](docs/SDK_EMBEDDER_GUIDE.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774) 与 [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction)。
+**可靠且始终开启的上下文压缩（FEATURE_272，v0.7.74）**：自动大型压缩不允许关闭。百分比阈值默认 75%，并限制在 15-90%；可选 `triggerTokens` 未设置或为 0 时不生效，否则百分比、绝对值和物理容量三者取最小。最近原始尾部保护量为有效阈值的 20%。一次事务压缩保护尾部之外的完整 eligible prefix，并用精确 query ledger 保留所有真实用户请求；只有实际减少 token、恢复物理可用且等待持久化提交成功后才发出成功事件。原始正文从内存驱逐前，Session owner 会先持久化并刷盘精确 lineage；sidecar 与精简 Session 通过稳定 entry ID 合并去重。根 Agent 与持久化子 Agent 都可用有界的 `session_history_search` → `session_history_read` 回溯自己的被省略细节；子 Agent 只绑定独立隐藏的 worker Session，永远不能读取根历史。SDK/Runtime 则使用 revision-bound `transcriptSearch`、分页和无损 chunk；隐藏思考、system 指令与合成 checkpoint 不进入模型检索。详见 [功能设计](docs/features/v0.7.74.md)、[SDK 指南第 25 节](public_docs/sdk/embedder-guide.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774) 与 [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction)。
 
-**邮箱驱动的 Agent 协作（FEATURE_273，v0.7.74）**：`wait_agent` 现在是真正的模型侧 mailbox yield，只接受一个有界 `timeout_ms`，不再读取 Actor progress/event。它只因当前作用域的 Agent 消息或完成通知、根用户输入、中断或超时而唤醒；progress 仍通过 UI/SDK snapshot、replay 和 long-poll 提供，但不会触发父模型重采样。工具只返回 wake acknowledgement，可信 Agent evidence 与结构化 task metadata 在下一安全边界只注入一次。未确认的根 completion 可在硬重启后恢复，同进程 Runtime 重建按子 `turnId` 去重，已确认或旧版历史 completion 不重放。树状态用 `list_agents`，已知结果用 `agent_output`。详见 [功能设计](docs/features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation)、[SDK 指南第 26 节](docs/SDK_EMBEDDER_GUIDE.md#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774) 与 [ADR-058](docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry)。
+**邮箱驱动的 Agent 协作（FEATURE_273，v0.7.74）**：`wait_agent` 现在是真正的模型侧 mailbox yield，只接受一个有界 `timeout_ms`，不再读取 Actor progress/event。它只因当前作用域的 Agent 消息或完成通知、根用户输入、中断或超时而唤醒；progress 仍通过 UI/SDK snapshot、replay 和 long-poll 提供，但不会触发父模型重采样。工具只返回 wake acknowledgement，可信 Agent evidence 与结构化 task metadata 在下一安全边界只注入一次。未确认的根 completion 可在硬重启后恢复，同进程 Runtime 重建按子 `turnId` 去重，已确认或旧版历史 completion 不重放。树状态用 `list_agents`，已知结果用 `agent_output`。详见 [功能设计](docs/features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation)、[SDK 指南第 26 节](public_docs/sdk/embedder-guide.md#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774) 与 [ADR-058](docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry)。
 
 **活跃 Run 中断输入（v0.7.74）**：embedded Runtime 与 shared daemon 声明 `interruptInput:1`。`runtime.runs.submitInput()` 把不可变、有序的输入排入当前 active Actor Run；同一安全 Runner 边界前接纳的输入按 FIFO 作为独立 user message 一次性交给下一次 LLM 请求，不创建 continuation Run。Run snapshot/event 暴露 queued/delivered 状态，确认只匹配实际消费的 ID，终态清理保证未交付输入不会泄漏到后续 Run。
 
@@ -1132,7 +1132,7 @@ KodaX 现在会把 Repo Intelligence 的本地缓存分成内置引擎 profile�
 ## 文档
 
 - [README.md](README.md) - 英文版 README
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK 宿主集成、shared Runtime、v0.7.74 压缩/历史恢复、Agent 遥测与活跃 Run 输入契约
+- [public_docs/sdk/embedder-guide.md](public_docs/sdk/embedder-guide.md) - SDK 宿主集成、shared Runtime、v0.7.74 压缩/历史恢复、Agent 遥测与活跃 Run 输入契约
 - [docs/release.md](docs/release.md) - 单文件二进制构建与发布流程
 - [docs/PRD.md](docs/PRD.md) - 产品需求
 - [docs/ADR.md](docs/ADR.md) - 架构决策

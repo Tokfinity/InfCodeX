@@ -220,7 +220,7 @@ and diagnostics without activating the backend or requesting elevation.
 Per-command sandbox routing remains internal and is not shown in normal command
 history. SDK embedders can use the same capability independently through
 `@kodax-ai/kodax/sandbox`; see the
-[SDK sandbox guide](docs/SDK_EMBEDDER_GUIDE.md#30-standalone-sandbox-sdk-v0778).
+[SDK sandbox guide](public_docs/sdk/embedder-guide.md#30-standalone-sandbox-sdk-v0778).
 
 Credential-shaped environment variables are filtered from model-issued shell
 commands by default. To expose exact host variables to those command targets,
@@ -415,7 +415,7 @@ const result = await runKodaX(
 ```
 
 > **Embedding KodaX inside another app?** (KodaX Space, IDE extensions, custom CLIs)
-> See [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) for the runtime-mutation
+> See [public_docs/sdk/embedder-guide.md](public_docs/sdk/embedder-guide.md) for the runtime-mutation
 > surface (`startKodaX` + `RunningSession`), MCP popout manager API (`McpManager`),
 > Skill `` !`cmd` `` host hook, and per-app data dir namespacing (`getAppDataDir`).
 
@@ -546,7 +546,7 @@ home credential paths and the complete resolved agent home without turning
 ordinary external reads into an allowlist. See the
 [v0.7.78 design](docs/features/v0.7.78.md), the
 [release checklist](docs/release.md#v0778-release-verification), and
-[SDK guide sections 29–30](docs/SDK_EMBEDDER_GUIDE.md#29-evidence-gated-background-skill-learning-feature_263-v0778).
+[SDK guide sections 29–30](public_docs/sdk/embedder-guide.md#29-evidence-gated-background-skill-learning-feature_263-v0778).
 
 The release closure also preserves intent across adjacent surfaces: static
 Skill instructions load in Edit/Plan without granting later side effects,
@@ -609,7 +609,7 @@ before KodaX reports them as delivered. Every delivered item exposes its
 restart. A multi-input safe-boundary drain keeps each prompt as a separate user
 message and maps it to its own entry. Runtime-owned persistence or provenance
 failure fails the delivery closed rather than emitting an unverifiable event.
-FEATURE_287 remains planned for v0.7.88; this is a non-Feature patch. See the
+FEATURE_287 remains planned for v0.7.93; this is a non-Feature patch. See the
 [v0.7.81 release checklist](docs/release.md#v0781-release-preparation).
 
 **v0.7.82 Runtime causality release:** Daemon capability discovery now composes
@@ -621,7 +621,7 @@ trusted Abort remains terminal causality before credential redaction without
 overriding a real completion or independent failure. Input submission resolves
 the admitted authoritative Run before reading mutable Session history, so
 active interrupt and after-turn admission do not produce a transient
-`data_changed` rejection. FEATURE_287 remains planned for v0.7.88; this is a
+`data_changed` rejection. FEATURE_287 remains planned for v0.7.93; this is a
 non-Feature patch. See the [v0.7.82 release checklist](docs/release.md#v0782-release-preparation).
 
 **v0.7.83 Windows daemon containment release:** Windows daemon startup creates
@@ -631,7 +631,7 @@ exports `waitForRuntimeDaemonShutdown()` and capability
 `daemonShutdownVerification:1`; CLI stop waits for both daemon and supervisor
 exit. Legacy uncontained daemons are not reported as verified and are not
 silently upgraded in place. The Worker owner-lease portion of Issue 256 remains
-scheduled for v0.7.85, and FEATURE_287 remains planned for v0.7.88. See the
+scheduled for v0.7.85, and FEATURE_287 remains planned for v0.7.93. See the
 [v0.7.83 release checklist](docs/release.md#v0783-release-preparation).
 
 **v0.7.84 Actor settlement recovery release:** Agent progress persistence is
@@ -655,7 +655,7 @@ before profile/setup code and again before the command starts. Credential-shaped
 variables are also filtered on the legacy platform-shell path; explicit names
 in user-level `sandbox.envPass` are restored only for the final command target.
 When `shellExecution` is absent, the established interpreter path is unchanged. See
-[SDK Embedder Guide section 28](docs/SDK_EMBEDDER_GUIDE.md#28-host-configurable-shell-execution-contract-v0777)
+[SDK Embedder Guide section 28](public_docs/sdk/embedder-guide.md#28-host-configurable-shell-execution-contract-v0777)
 and the [Issue 214 regression guide](docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md).
 
 Kimi Code requests also receive a stable, opaque prompt-cache affinity key
@@ -697,10 +697,10 @@ silently fall back to inline Coder.
 For the full host-integration contract, including inline/Worker/daemon selection,
 multi-client permission handling, config/catalog/MCP admin APIs, artifacts,
 context diagnostics, and daemon protocol schemas, see
-[docs/SDK_EMBEDDER_GUIDE.md §17](docs/SDK_EMBEDDER_GUIDE.md#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257).
+[public_docs/sdk/embedder-guide.md §17](public_docs/sdk/embedder-guide.md#17-runtime-sdk-worker-isolation-and-local-daemon-feature_253-feature_257).
 
 The Space/IDE shared-daemon contract is documented in
-[SDK Embedder Guide section 23](docs/SDK_EMBEDDER_GUIDE.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
+[SDK Embedder Guide section 23](public_docs/sdk/embedder-guide.md#23-shared-coder-daemon-for-space-and-ide-hosts-feature_269-v0769).
 
 **v0.7.72–v0.7.73 Runtime permission contract:** Auto Mode is owned by the Runtime session,
 not by a UI hook. It reuses its LLM/rules guardrail across turns, classifies
@@ -713,7 +713,7 @@ the Accept-edits safety boundary; they never change the engine to rules.
 Runtime permission prompts offer opaque, exact
 allow-once/session/persistent grant suggestions; persistent grants are
 daemon-owned and revisioned. Host plan exit is exposed only when the host
-supplies an approval callback. See the [Runtime Auto Mode integration guide](docs/SDK_EMBEDDER_GUIDE.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773).
+supplies an approval callback. See the [Runtime Auto Mode integration guide](public_docs/sdk/embedder-guide.md#24-runtime-owned-auto-mode-and-plan-approval-bridges-v0772v0773).
 
 ## Repo Intelligence
 
@@ -838,21 +838,21 @@ KodaX has two layers that consumers should understand separately:
 
 **Context-Efficient Tool Results + Workflow Quality Preflight (FEATURE_251 + FEATURE_252, v0.7.61; corrected 2026-07-14)**: local tools collect complete output and apply only contract-equivalent normalization that is strictly shorter; command-specific lossy Bash filters are off by default, and compound Bash uses no semantic adapter. One owner evaluates the complete parallel-result batch against the final provider request: it solves the largest final input `Pmax` for which `Pmax + output reserve + max(2048, 3% of Pmax) <= context window`, then admits only the remaining physical capacity. Results stay verbatim whenever they fit; only real overflow persists the complete value and emits `KODAX_RESULT_INCOMPLETE`. History keeps the same physical-capacity safety rule: no default lossy microcompaction below capacity, summary-first at pressure, and typed failure without silent deletion when a recoverable request cannot be formed. FEATURE_272 supersedes FEATURE_251 only for the default major-compaction trigger. FEATURE_252's deterministic pre-start workflow contract lint is unchanged. See [docs/features/v0.7.61.md](docs/features/v0.7.61.md) and [docs/ADR.md ADR-050](docs/ADR.md).
 
-**Reliable Always-On Context Compaction (FEATURE_272, v0.7.74)**: automatic major compaction cannot be disabled. Its percentage trigger defaults to 75% and clamps to 15-90%; optional `triggerTokens` is inactive when omitted/zero, otherwise the smaller percentage, absolute, and physical-capacity threshold wins. The protected raw tail is 20% of that effective trigger. One transaction summarizes the complete eligible prefix, preserves every genuine user request through an exact ledger, and emits success only after a physically valid token reduction and awaited durable commit. Before raw bodies are evicted, the Session owner durably flushes their exact lineage; stable entry IDs merge the sidecar and slim Session without duplicates. Root and persistent child Agents can recover omitted user/assistant/tool details through bounded `session_history_search` → `session_history_read`, with children isolated to hidden worker Sessions and never granted root-history access. SDK/Runtime clients use revision-bound `transcriptSearch`, pages, and lossless chunks. Hidden reasoning, system instructions, and synthetic checkpoints are excluded from model search. See [the feature design](docs/features/v0.7.74.md), [SDK guide §25](docs/SDK_EMBEDDER_GUIDE.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774), and [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction).
+**Reliable Always-On Context Compaction (FEATURE_272, v0.7.74)**: automatic major compaction cannot be disabled. Its percentage trigger defaults to 75% and clamps to 15-90%; optional `triggerTokens` is inactive when omitted/zero, otherwise the smaller percentage, absolute, and physical-capacity threshold wins. The protected raw tail is 20% of that effective trigger. One transaction summarizes the complete eligible prefix, preserves every genuine user request through an exact ledger, and emits success only after a physically valid token reduction and awaited durable commit. Before raw bodies are evicted, the Session owner durably flushes their exact lineage; stable entry IDs merge the sidecar and slim Session without duplicates. Root and persistent child Agents can recover omitted user/assistant/tool details through bounded `session_history_search` → `session_history_read`, with children isolated to hidden worker Sessions and never granted root-history access. SDK/Runtime clients use revision-bound `transcriptSearch`, pages, and lossless chunks. Hidden reasoning, system instructions, and synthetic checkpoints are excluded from model search. See [the feature design](docs/features/v0.7.74.md), [SDK guide §25](public_docs/sdk/embedder-guide.md#25-always-on-context-compaction-and-bounded-transcript-recovery-v0774), and [ADR-057](docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction).
 
-**Mailbox-Driven Agent Coordination (FEATURE_273, v0.7.74)**: `wait_agent` is now a true model-facing mailbox yield with one bounded `timeout_ms`, not an Actor progress/event reader. It wakes for scoped Agent messages or completions, root user input, interruption, or timeout; progress remains available to UI/SDK snapshot, replay, and long-poll consumers without resampling the parent model. The tool returns only a wake acknowledgement, while authenticated Agent evidence and structured task metadata enter the next safe model boundary once. Unacknowledged root completions survive a hard restart, same-process Runtime rebuilds deduplicate by child turn ID, and acknowledged or legacy historical completions are not replayed. Use `list_agents` for tree state and `agent_output` for a targeted known result. See [the feature design](docs/features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation), [SDK guide §26](docs/SDK_EMBEDDER_GUIDE.md#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774), and [ADR-058](docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry).
+**Mailbox-Driven Agent Coordination (FEATURE_273, v0.7.74)**: `wait_agent` is now a true model-facing mailbox yield with one bounded `timeout_ms`, not an Actor progress/event reader. It wakes for scoped Agent messages or completions, root user input, interruption, or timeout; progress remains available to UI/SDK snapshot, replay, and long-poll consumers without resampling the parent model. The tool returns only a wake acknowledgement, while authenticated Agent evidence and structured task metadata enter the next safe model boundary once. Unacknowledged root completions survive a hard restart, same-process Runtime rebuilds deduplicate by child turn ID, and acknowledged or legacy historical completions are not replayed. Use `list_agents` for tree state and `agent_output` for a targeted known result. See [the feature design](docs/features/v0.7.74.md#feature_273-mailbox-driven-agent-wait-and-telemetrycontrol-separation), [SDK guide §26](public_docs/sdk/embedder-guide.md#26-agent-mailbox-control-versus-sdk-event-telemetry-v0774), and [ADR-058](docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry).
 
 **Active-Run Interrupt Input (v0.7.74)**: embedded Runtime and the shared daemon advertise `interruptInput:1`. `runtime.runs.submitInput()` queues an immutable, ordered input for the current active Actor Run; all inputs admitted before one safe Runner boundary are delivered FIFO as separate user messages in the next LLM request, without creating continuation Runs. Queued/delivered state is visible in typed Run snapshots/events, delivery is acknowledged against the exact consumed IDs, and terminal cleanup prevents undelivered input from leaking into later Runs.
 
-**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. Plane shutdown is terminal: pending waits and all later service calls reject. Restricted Workflow scripts preserve validated `phase` and external `target` routing. See the [complete owner/consumer recipes and safety contract](docs/SDK_EMBEDDER_GUIDE.md#18-external-agent-executor-plane-feature_258-v0767).
+**External Agent SDK Plane (FEATURE_258, v0.7.67)**: `/agent` exports the protocol-neutral executor, registration, policy, credential-broker, artifact-policy, catalog, and durable task contracts. `/runtime` exposes the installed plane through `admin.agentRegistrations`, `agents`, and `agentTasks`, with the same DTO service methods over embedded and daemon clients. Executor factories are host functions: install them in an inline owner or while creating a new in-process daemon owner; they cannot be injected through an existing daemon connection or across a Runtime Worker boundary. Plane shutdown is terminal: pending waits and all later service calls reject. Restricted Workflow scripts preserve validated `phase` and external `target` routing. See the [complete owner/consumer recipes and safety contract](public_docs/sdk/embedder-guide.md#18-external-agent-executor-plane-feature_258-v0767).
 
-**Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](docs/SDK_EMBEDDER_GUIDE.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
+**Cost-Disciplined Workflow SDK (FEATURE_259, v0.7.67)**: SDK callers configure run-scoped `modelTiers` and `workflow.maxConcurrency`, while workflow authors express semantic `fast` / `balanced` / `deep` intent. Terminal workflow events expose resolved tier/source/fallback/usage/duration facts, and each durable `run.json` contains an `efficiencyReport` with token coverage, role/tier starts, packet-read topology, review waves, and quality-gate outcomes. See the [routing and telemetry contract](public_docs/sdk/embedder-guide.md#20-cost-disciplined-workflow-routing-and-telemetry-feature_259-v0767).
 
-**Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](docs/SDK_EMBEDDER_GUIDE.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
+**Paged Session Listing (FEATURE_261, v0.7.67)**: both `/session` `listSessions()` and `runtime.sessions.list()` accept an exact `surface` filter and opaque continuation `cursor`; each returned summary carries the cursor for the next page. Filtering happens before the page limit, so a host does not need to over-fetch mixed surfaces. See the [pagination recipes](public_docs/sdk/embedder-guide.md#19-session-surface-filtering-and-cursor-pagination-feature_261-v0767).
 
-**Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](docs/SDK_EMBEDDER_GUIDE.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
+**Experimental Memory Agent SDK (FEATURE_260, v0.7.68)**: `/experimental-memory` exposes the thin agent-layer `MemoryAgent` and scoped `MemorySession` lifecycle over the existing governed F228 plane. Passive recall is zero-wait; `query()` is read-only and deliberate; durable changes still require the proposal/preview/fingerprint/apply path. The Action LLM remains the final decision maker, recalled content stays low-authority, and safety/scope gates remain deterministic. See the [direct session and boundary guide](public_docs/sdk/embedder-guide.md#21-experimental-governed-memory--experimental-memory-feature_260-v0768).
 
-**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only and will not return a port blocked by Fetch-compatible clients; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](docs/SDK_EMBEDDER_GUIDE.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
+**Bidirectional A2A 1.0 (FEATURE_267, v0.7.69)**: `/a2a` discovers allowed Agent Cards and installs a JSON-RPC/SSE executor through the existing F258 plane. Configured outbound Agents are also registered automatically as `external:<name>` in embedded CLI and user-daemon Runtimes, so the main Agent can orchestrate them without host code. One `a2a.json` may hold many outbound registrations and at most one inbound server, which publishes either the Runtime default or one validated `~/.kodax/agents/*.md` Agent behind an authenticated Runtime facade. The built-in listener is loopback-only and will not return a port blocked by Fetch-compatible clients; public deployment uses `handle()` behind host-owned TLS and authorization. A2A 0.3, gRPC, HTTP+JSON, push notifications, and automatic public exposure are not advertised. See the [client/server recipes and security boundaries](public_docs/sdk/embedder-guide.md#22-bidirectional-a2a-10--a2a-feature_267-v0769).
 
 **A2A interoperability and authentication hardening** keeps a discovered
 interface on the trusted Agent Card origin and sends credentials only when one
@@ -1087,9 +1087,9 @@ All 13 SDK entries (root + 12 subpaths) share internal code via ESM chunk splitt
 For the complete host-facing contract — including embedded/Worker/daemon ownership,
 external-agent registration and task control, session cursor pagination, workflow
 model-tier routing, and efficiency telemetry — see the
-[SDK Embedder Integration Guide](docs/SDK_EMBEDDER_GUIDE.md).
+[SDK Embedder Integration Guide](public_docs/sdk/embedder-guide.md).
 
-> **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
+> **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [public_docs/sdk/embedder-guide.md §5](public_docs/sdk/embedder-guide.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
 
 For CLI users, provider defaults live in `~/.kodax/config.json`. For library users, API keys are still read from environment variables; if you need custom base URLs or provider aliases, use `registerCustomProviders()` as shown above.
 
@@ -1434,7 +1434,7 @@ import { createKodaXA2AServer } from '@kodax-ai/kodax/a2a';      // A2A 1.0 clie
 import { createMemoryAgent } from '@kodax-ai/kodax/experimental-memory'; // opt-in experimental memory SDK
 ```
 
-> The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
+> The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [public_docs/sdk/embedder-guide.md §5](public_docs/sdk/embedder-guide.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
 
 ### `@kodax-ai/kodax/llm` — LLM Abstraction
 
@@ -1869,7 +1869,7 @@ KodaX uses an **English-first** comment style with selective Chinese brief notes
 ## Documentation
 
 - [README_CN.md](README_CN.md) - Chinese Documentation
-- [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) - SDK hosting, shared Runtime daemon, Auto Mode, v0.7.74 compaction/history recovery, Agent telemetry, and active-run input contracts
+- [public_docs/sdk/embedder-guide.md](public_docs/sdk/embedder-guide.md) - SDK hosting, shared Runtime daemon, Auto Mode, v0.7.74 compaction/history recovery, Agent telemetry, and active-run input contracts
 - [docs/release.md](docs/release.md) - Standalone binary build & release pipeline
 - [docs/PRD.md](docs/PRD.md) - Product Requirements
 - [docs/ADR.md](docs/ADR.md) - Architecture Decisions

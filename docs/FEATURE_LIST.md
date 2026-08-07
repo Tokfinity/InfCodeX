@@ -27,8 +27,8 @@
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
 | Completed | 49 | `286, 284, 281, 277, 276, 263, 275, 274, 273, 272, 271, 270, 266, 269, 268, 267, 260, 261, 259, 258, 253, 254, 255, 256, 257, 228, 251, 252, 250, 248, 249, 247, 246, 245, 243, 242, 241, 233, 240, 239, 224, 221, 174, 211, 237, 229, 230, 234, 236` | `286`, `284`, and `281` shipped in v0.7.79; `263`, `276`, and `277` shipped in v0.7.78. v0.7.84 is the current Git/GitHub release and remains a feature-free Actor settlement-recovery hardening patch; npm publication remains manual. |
-| InProgress | 1 | `225` | `225` remains the bounded v0.7.100 cleanup. |
-| Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.85` -> `v0.7.86` -> `v0.7.88` -> `v0.7.89` -> `v0.7.90` -> `v0.7.95` |
+| InProgress | 1 | `225` | `225` remains the bounded v0.7.105 cleanup. |
+| Planned, near-term | 10 | `288, 287, 278, 279, 282, 283, 285, 280, 265, 105` | `v0.7.90` -> `v0.7.91` -> `v0.7.93` -> `v0.7.94` -> `v0.7.95` -> `v0.7.100` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.5+` |
 | Planned, v0.9.x | 1 | `262` | `v0.9.0` |
 | Reviewed out, 2026-07-12 | 6 | `244, 231, 235, 238, 232, 108` | Shelved, deferred, absorbed, or cancelled after the post-v0.7.70 roadmap review; F105 was restored by the 2026-07-29 MoA redesign. |
@@ -68,13 +68,17 @@
 | `v0.7.82` | `0` |
 | `v0.7.83` | `0` |
 | `v0.7.84` | `0` |
-| `v0.7.85` | `5` |
-| `v0.7.86` | `1` |
-| `v0.7.88` | `1` |
-| `v0.7.89` | `1` |
-| `v0.7.90` | `1` |
+| `v0.7.85` | `0` |
+| `v0.7.86` | `0` |
+| `v0.7.88` | `0` |
+| `v0.7.89` | `0` |
+| `v0.7.90` | `5` |
+| `v0.7.91` | `1` |
+| `v0.7.93` | `1` |
+| `v0.7.94` | `1` |
 | `v0.7.95` | `1` |
 | `v0.7.100` | `1` |
+| `v0.7.105` | `1` |
 | `v0.8.5` | `3` |
 | `v0.8.7` | `1` |
 | `v0.8.25` | `1` |
@@ -344,7 +348,7 @@
 > Ink StatusBar and Runtime SDK. Its module, dead-only tests, allocation,
 > updates, and cleanup calls were removed. The auto-mode guardrail returns to
 > its documented lazy first-use construction. F225 remains InProgress because
-> the broader current-HEAD cleanup is still planned for `v0.7.100`.
+> the broader current-HEAD cleanup is still planned for `v0.7.105`.
 >
 > **2026-07-11 emergency session-recovery exception**: `FEATURE_261` is a
 > bounded v0.7.67 corrective enhancement prompted by Issue 149. It replaces
@@ -497,7 +501,7 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.100` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
+| `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.105` | [v0.7.100](features/v0.7.100.md#feature_225-repl-dead--legacy-code-cleanup) |
 
 ---
 
@@ -545,7 +549,7 @@ fail-closed. No-op quiescence avoids an unnecessary Session rewrite.
 
 This release resolves Issue 282. It does not claim the Worker owner-lease
 portion of Issue 256, which remains scheduled for `v0.7.85`; `FEATURE_287`
-remains planned for `v0.7.88`. The release checklist is
+remains planned for `v0.7.93`. The release checklist is
 [docs/release.md](release.md#v0784-release-preparation).
 
 ---
@@ -565,7 +569,7 @@ terminating a still-suspended process before closing its handles. This is a
 runtime system-code fix, not a test-only or process-only change. The daemon
 slice reduces Issue 256's scope but does not resolve the Worker owner-lease
 portion, which remains scheduled for `v0.7.84`; `FEATURE_287` remains planned
-for `v0.7.88`. The release checklist is
+for `v0.7.93`. The release checklist is
 [docs/release.md](release.md#v0783-release-preparation).
 
 ---
@@ -586,7 +590,7 @@ Issue 279/280/281 hardening without representing any planned feature as shipped:
   after-turn submission while retaining predecessor settlement and exact
   operation idempotency.
 
-`FEATURE_287` remains planned for `v0.7.88`; Issue 256 remains scheduled for
+`FEATURE_287` remains planned for `v0.7.93`; Issue 256 remains scheduled for
 `v0.7.84`. The release checklist is
 [docs/release.md](release.md#v0782-release-preparation).
 
@@ -675,6 +679,29 @@ at explicit user direction:
 Advisor mode validates the provider-neutral skeleton (effective-target
 resolution, prepare/rebase, advisory transcript, physical-call ledger,
 role-separated cache) with one real mode before MoA adds parallel fan-out.
+
+---
+
+## 2026-08-07 v0.7.85+ Roadmap Reschedule
+
+At explicit user direction, every planned `v0.7.x` feature at `v0.7.85` and
+later moves back by five minor versions so the next several slots can serve as
+release/debug buffer:
+
+- `FEATURE_278`, `FEATURE_279`, `FEATURE_282`, `FEATURE_283`, `FEATURE_285`:
+  `v0.7.85` -> `v0.7.90`.
+- `FEATURE_280`: `v0.7.86` -> `v0.7.91`.
+- `FEATURE_287`: `v0.7.88` -> `v0.7.93`.
+- `FEATURE_288`: `v0.7.89` -> `v0.7.94`.
+- `FEATURE_265`: `v0.7.90` -> `v0.7.95`.
+- `FEATURE_105`: `v0.7.95` -> `v0.7.100`.
+- `FEATURE_225`: `v0.7.100` -> `v0.7.105` (InProgress).
+
+The design documents keep their per-version homes
+(`docs/features/v0.7.79.md`, `v0.7.80.md`, `v0.7.85.md`, `v0.7.88.md`,
+`v0.7.89.md`, `v0.7.90.md`, `v0.7.100.md`) with updated Status/Target fields;
+`v0.7.85`, `v0.7.86`, `v0.7.88`, and `v0.7.89` return to debug/patch slots.
+Issue 256 remains scheduled for `v0.7.85` (bug fix, not a feature).
 
 ---
 
@@ -1090,16 +1117,16 @@ fixed GitHub binary archive sidecar omission before tagging.
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.7.88` | [v0.7.88](features/v0.7.88.md#feature_287-advisor-mode-virtual-provider) |
-| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.7.89` | [v0.7.89](features/v0.7.89.md#feature_288-cli-space-daemon-profile-alignment) |
-| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
-| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
-| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
-| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
-| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.85` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
-| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.86` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
-| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.90` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
-| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.7.95` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
+| `287` | Advisor Mode Virtual Provider | Enhancement / LLM Provider + Session Quality | High | `v0.7.93` | [v0.7.88](features/v0.7.88.md#feature_287-advisor-mode-virtual-provider) |
+| `288` | CLI-Space Daemon Profile Alignment | Enhancement / Runtime + Multi-Client UX | High | `v0.7.94` | [v0.7.89](features/v0.7.89.md#feature_288-cli-space-daemon-profile-alignment) |
+| `278` | Durable AskUser History Projection + Compact SDK/REPL Visualization | Enhancement / SDK + Session UX | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_278-durable-askuser-history-projection--compact-sdkrepl-visualization) |
+| `279` | Same-Runtime Root Task Messaging + Durable Safe-Boundary Inbox | Enhancement / Runtime + Agent Collaboration | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_279-same-runtime-root-task-messaging--durable-safe-boundary-inbox) |
+| `282` | Bounded Active Query Recovery + Durable Physical-Capacity Emergency Compaction | Core / Context Management + Reliability | Critical | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_282-bounded-active-query-recovery--durable-physical-capacity-emergency-compaction) |
+| `283` | Local Hybrid Session History Retrieval + Builtin Adaptive LLM Rerank | Enhancement / Session Retrieval + LLM | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_283-local-hybrid-session-history-retrieval--builtin-adaptive-llm-rerank) |
+| `285` | Capability-Aware Auto Classifier Model Selection | Enhancement / LLM Provider + Auto Permission Reliability | High | `v0.7.90` | [v0.7.80](features/v0.7.80.md#feature_285-capability-aware-auto-classifier-model-selection) |
+| `280` | Cache-Stable Prompt and Tool Surface Optimization | Internal / LLM Cost + Tool Reliability | High | `v0.7.91` | [v0.7.79](features/v0.7.79.md#feature_280-cache-stable-prompt-and-tool-surface-optimization) |
+| `265` | Work Fast Path + Coding Assurance Budget | Core / Performance + Agent Quality | High | `v0.7.95` | [v0.7.85](features/v0.7.85.md#feature_265-work-fast-path--coding-assurance-budget) |
+| `105` | Mixture-of-Agents Virtual Provider (MoA mode, reuses F287 skeleton) | Core / LLM Provider + Test-Time Scaling | High | `v0.7.100` | [v0.7.90](features/v0.7.90.md#feature_105-mixture-of-agents-virtual-provider) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_007-theme-system-consolidation) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_030-multi-surface-delivery) |
 | `093` | Coding and REPL Internal Circular Dependency Decoupling | Internal | Medium | `v0.8.5` | [v0.8.5](features/v0.8.5.md#feature_093-coding-and-repl-internal-circular-dependency-decoupling) |

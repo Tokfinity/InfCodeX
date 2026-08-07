@@ -102,7 +102,7 @@ settlement-recovery hardening patch for Issue 282:
   runtime system-code fixes, not a new Feature release.
 
 Issue 256's Worker owner-lease portion remains scheduled for `v0.7.85` and
-`FEATURE_287` remains planned for `v0.7.88`; neither is represented as shipped
+`FEATURE_287` remains planned for `v0.7.93`; neither is represented as shipped
 by this release.
 
 Before tagging, all of the following must be true:
@@ -168,7 +168,7 @@ containment hardening patch:
 - containment allows final cleanup to retire incomplete current-owner child
   records without redundant per-child synchronous exit hooks or repeated tree
   scans. The Worker owner-lease portion of Issue 256 remains scheduled for
-  `v0.7.84`; `FEATURE_287` remains planned for `v0.7.88`.
+  `v0.7.84`; `FEATURE_287` remains planned for `v0.7.93`.
 
 Before tagging, all of the following must be true:
 
@@ -234,7 +234,7 @@ patch:
   active interrupt and after-turn admission while preserving predecessor
   settlement and exact-operation idempotency.
 
-`FEATURE_287` remains planned for `v0.7.88`; no incomplete Feature is
+`FEATURE_287` remains planned for `v0.7.93`; no incomplete Feature is
 represented as shipped. Issue 256 remains scheduled for `v0.7.84` and is not a
 v0.7.82 gate.
 

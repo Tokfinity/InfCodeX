@@ -31,7 +31,7 @@ out-of-Job supervisor waits for daemon exit and Job emptiness. The public
 durable cleanup outcome, while the `daemonShutdownVerification:1` capability
 lets hosts require it. Legacy daemons are deliberately not upgraded in place
 for this contract. The patch retains v0.7.82's causality and input-admission
-contracts; FEATURE_287 remains planned for v0.7.88 and the Worker owner-lease
+contracts; FEATURE_287 remains planned for v0.7.93 and the Worker owner-lease
 portion of Issue 256 remains scheduled for v0.7.85.
 
 `package.json` exposes:

@@ -3,7 +3,7 @@
 > Audience: host applications embedding `@kodax-ai/kodax` (and its
 > subpaths) as a substrate — e.g. KodaX Space's desktop wrapper, IDE
 > extensions, custom CLIs. If you are an end-user running the `kodax`
-> command-line tool, see the root [README.md](../README.md) instead.
+> command-line tool, see the root [README.md](../../README.md) instead.
 
 This guide documents the SDK surfaces a host integrator needs that
 are NOT obvious from inspecting the type definitions alone:
@@ -41,7 +41,7 @@ are NOT obvious from inspecting the type definitions alone:
 - [Learned Skill promotion reference](#learned-skill-promotion-reference-v0778)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
-under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
+under FEATURE_186 (see [ADR-032](../../docs/ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
 §5 documents the ESM-only packaging contract and the canonical
 `await import(...)` recipe for CJS / Electron main consumers.
 
@@ -1327,9 +1327,9 @@ this as "non-Worker/Generator"; Generator is historical after FEATURE_193.
 
 ### See also
 
-- [docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md](test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md) — manual test recipes
-- [docs/features/v0.7.43.md FEATURE_191](features/v0.7.43.md#feature_191-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge) — design + acceptance gates
-- [docs/ADR.md ADR-035](ADR.md#adr-035-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge-feature_191-v0743) — architectural rationale
+- [docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md](../../docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md) — manual test recipes
+- [docs/features/v0.7.43.md FEATURE_191](../../docs/features/v0.7.43.md#feature_191-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge) — design + acceptance gates
+- [docs/ADR.md ADR-035](../../docs/ADR.md#adr-035-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge-feature_191-v0743) — architectural rationale
 
 ---
 
@@ -1364,7 +1364,7 @@ following probe (Node 24, Windows, v0.7.43 dist):
 | `loadConfig()` + `listMcpServers()` | 0 | none | 0 |
 
 `hydrateProcessEnvFromShell()` on Windows specifically returns `false`
-at [packages/repl/src/common/utils.ts](../packages/repl/src/common/utils.ts)
+at [packages/repl/src/common/utils.ts](../../packages/repl/src/common/utils.ts)
 line 151 **before** any `spawnSync`. Even on non-Windows where the
 spawn happens, it explicitly passes `stdio: ['ignore', 'pipe', 'pipe']`
 — the child shell never sees the parent stdin.
@@ -1409,7 +1409,7 @@ The spawn-time decision belongs to the host.
 
 ### How to confirm whether your symptom matches this
 
-Run [`scripts/probe-sdk-stdin.mjs`](../scripts/probe-sdk-stdin.mjs)
+Run [`scripts/probe-sdk-stdin.mjs`](../../scripts/probe-sdk-stdin.mjs)
 against your in-tree or installed SDK dist:
 
 ```bash
@@ -1653,7 +1653,7 @@ tables, capability-aware routing.
 ### Confirming snapshot accuracy
 
 Snapshot values are sourced from
-[`packages/llm/src/providers/provider-capabilities.json`](../packages/llm/src/providers/provider-capabilities.json)
+[`packages/llm/src/providers/provider-capabilities.json`](../../packages/llm/src/providers/provider-capabilities.json)
 and loaded into the in-memory `KODAX_PROVIDER_SNAPSHOTS` export. When upstream
 providers publish a new model or change a context-window cap, the JSON file is
 the patch site — the new value flows to runtime (via `buildProviderConfig`) AND
@@ -1661,13 +1661,13 @@ to SDK consumers (via the getters) in a single edit. The current snapshot is
 dated 2026-07-16 and includes the GPT-5.4, Kimi K2.7 Code / HighSpeed, GLM-5.2, MiniMax
 M3/M2.7, DeepSeek V4, and Doubao Seed 2.0 route refreshes where supported. The
 test suite at
-[`packages/llm/src/providers/model-capabilities.test.ts`](../packages/llm/src/providers/model-capabilities.test.ts)
+[`packages/llm/src/providers/model-capabilities.test.ts`](../../packages/llm/src/providers/model-capabilities.test.ts)
 locks in specific values (e.g. the public Kimi lineup at 262,144 tokens, deepseek-v4-pro at 1M)
 so accidental drift is caught at PR time.
 
 The probe scripts that surveyed upstream APIs live at
-[`scripts/probe-upstream-model-metadata.mjs`](../scripts/probe-upstream-model-metadata.mjs)
-and [`scripts/probe-ark-tokens.mjs`](../scripts/probe-ark-tokens.mjs) —
+[`scripts/probe-upstream-model-metadata.mjs`](../../scripts/probe-upstream-model-metadata.mjs)
+and [`scripts/probe-ark-tokens.mjs`](../../scripts/probe-ark-tokens.mjs) —
 re-run them periodically; if a provider starts returning richer model
 metadata, we can promote the snapshot to derive from it.
 
@@ -2157,7 +2157,7 @@ Cli-bridge providers (`gemini-cli`, `codex-cli`) return their CLI binary's known
 
 - Source: `packages/llm/src/providers/verify-credential.ts` (orchestrator + classifier) + `verify-credential.test.ts` (27 unit tests) + `verify-credential-integration.test.ts` (12 gated real-key/fake-key tests, enabled by `KODAX_INTEGRATION_TEST=1`).
 - Data: `packages/llm/src/providers/provider-capabilities.json` `verifyStrategy` field per provider.
-- Design notes + probe matrix: [docs/features/v0.7.45.md FEATURE_216](features/v0.7.45.md#feature_216-provider-credential-verification-api).
+- Design notes + probe matrix: [docs/features/v0.7.45.md FEATURE_216](../../docs/features/v0.7.45.md#feature_216-provider-credential-verification-api).
 
 ---
 
@@ -2239,7 +2239,7 @@ topic bodies at build time — e.g. to re-word them under your own brand.
 ### Reference
 
 - Types/exports: `KodaXManualTopicInput`, `KodaXSelfManualConfig`, `ResolveKodaXManualOptions`, `buildSelfKnowledgeRoutingRule` from `@kodax-ai/coding`.
-- Design: [docs/features/v0.7.47.md FEATURE_221](features/v0.7.47.md#feature_221-injectable-self-manual-for-sdk-consumers).
+- Design: [docs/features/v0.7.47.md FEATURE_221](../../docs/features/v0.7.47.md#feature_221-injectable-self-manual-for-sdk-consumers).
 
 ---
 
@@ -2417,7 +2417,7 @@ inject into the current active Actor Run at its next safe Runner boundary.
 - Public SDK entry: `src/sdk-media.ts`.
 - Shared implementation: `packages/agent/src/media/`.
 - Compatibility source re-export: `packages/coding/src/media/`.
-- Design: [docs/features/v0.7.56.md FEATURE_239](features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api).
+- Design: [docs/features/v0.7.56.md FEATURE_239](../../docs/features/v0.7.56.md#feature_239-sdk-multimodal-input--clipboard-image-public-api).
 
 ---
 
@@ -2510,7 +2510,7 @@ runKodaX({
 
 - Types: `KodaXAgentProfile`, `KodaXToolVisibilityPolicy`, `KodaXEffectiveTaskConfig`
   from `@kodax-ai/coding`; `compactSession` from `@kodax-ai/kodax/session`.
-- Design: [docs/features/v0.7.58.md](features/v0.7.58.md) FEATURE_247.
+- Design: [docs/features/v0.7.58.md](../../docs/features/v0.7.58.md) FEATURE_247.
 
 ---
 
@@ -5045,9 +5045,9 @@ The callback belongs in a trusted host process (for Electron, Main rather than
 renderer). It is intentionally not inferred from the presence of a permission
 UI: tool permission and plan approval are different user decisions.
 
-See [ADR-056](ADR.md#adr-056-runtime-owns-auto-mode-permission-decisions-and-host-capability-exposure)
-for the ownership decision, [the v0.7.72 design](features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
-for the release boundary, and [Known Issue 187](KNOWN_ISSUES.md#187-shared-daemon-auto-permission-ownership-upgrade-fencing-preview-bounds-and-sdk-compatibility-were-incomplete)
+See [ADR-056](../../docs/ADR.md#adr-056-runtime-owns-auto-mode-permission-decisions-and-host-capability-exposure)
+for the ownership decision, [the v0.7.72 design](../../docs/features/v0.7.72.md#2026-07-18-runtime-permission-queue-and-resume-closure)
+for the release boundary, and [Known Issue 187](../../docs/KNOWN_ISSUES.md#187-shared-daemon-auto-permission-ownership-upgrade-fencing-preview-bounds-and-sdk-compatibility-were-incomplete)
 for the final capability-upgrade and compatibility closure.
 
 ---
@@ -5296,7 +5296,7 @@ runs 20 ordinary queries with a Win32 probe and checks that the expected Git
 children never own a visible console window. These checks validate the SDK
 boundary, but they do not replace product-level validation in the packaged host.
 KodaX Space should install the exact v0.7.75 tarball and complete
-[`ISSUE_205_v0.7.75_REGRESSION_GUIDE.md`](test-guides/ISSUE_205_v0.7.75_REGRESSION_GUIDE.md)
+[`ISSUE_205_v0.7.75_REGRESSION_GUIDE.md`](../../docs/test-guides/ISSUE_205_v0.7.75_REGRESSION_GUIDE.md)
 on Windows 10 and Windows 11 as a non-blocking product validation follow-up.
 This follow-up does not gate SDK packaging, tagging, or publication.
 
@@ -5414,7 +5414,7 @@ the command through another shell. When `shellExecution` is absent, KodaX keeps
 the pre-v0.7.77 platform-shell interpreter behavior for compatibility; the
 credential filter and explicit `sandbox.envPass` final-target restoration still
 apply. See
-[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)
+[`ISSUE_214_v0.7.77_REGRESSION_GUIDE.md`](../../docs/test-guides/ISSUE_214_v0.7.77_REGRESSION_GUIDE.md)
 for cross-project, cache, cancellation, credential, and Windows argv checks.
 
 ---
@@ -5741,12 +5741,12 @@ unsupported options fail before the Runtime mutation.
 
 ## See also
 
-- [README.md](../README.md) — end-user CLI quick start
-- [docs/ADR.md ADR-024](ADR.md#adr-024-npm-发布物正名-kodax-aikodax--sdk-subpath-exports-形式化-v0739) — SDK subpath architecture rationale
-- [docs/ADR.md ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742) — FEATURE_186 design record (all 8 phases)
-- [docs/ADR.md ADR-057](ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction) — v0.7.74 compaction and exact-history ownership
-- [docs/ADR.md ADR-058](ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry) — mailbox control versus Actor telemetry
-- [docs/features/v0.7.42.md FEATURE_186](features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
-- [docs/features/v0.7.74.md](features/v0.7.74.md) — v0.7.74 release-candidate design and verification record
-- [docs/features/v0.7.75.md](features/v0.7.75.md) — v0.7.75 Windows GUI and Sidecar/Runtime stabilization candidate
-- [docs/features/v0.7.77.md](features/v0.7.77.md) — v0.7.77 adaptive-quality, governed-memory, and release-hardening record
+- [README.md](../../README.md) — end-user CLI quick start
+- [docs/ADR.md ADR-024](../../docs/ADR.md#adr-024-npm-发布物正名-kodax-aikodax--sdk-subpath-exports-形式化-v0739) — SDK subpath architecture rationale
+- [docs/ADR.md ADR-032](../../docs/ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742) — FEATURE_186 design record (all 8 phases)
+- [docs/ADR.md ADR-057](../../docs/ADR.md#adr-057-large-compaction-is-an-always-on-context-scoped-full-coverage-transaction) — v0.7.74 compaction and exact-history ownership
+- [docs/ADR.md ADR-058](../../docs/ADR.md#adr-058-model-agent-wait-is-mailbox-control-not-event-telemetry) — mailbox control versus Actor telemetry
+- [docs/features/v0.7.42.md FEATURE_186](../../docs/features/v0.7.42.md#feature_186-sdk-embedder-surface-closure--kodax-space-gap-list--mcp-popout) — gap-by-gap landing matrix
+- [docs/features/v0.7.74.md](../../docs/features/v0.7.74.md) — v0.7.74 release-candidate design and verification record
+- [docs/features/v0.7.75.md](../../docs/features/v0.7.75.md) — v0.7.75 Windows GUI and Sidecar/Runtime stabilization candidate
+- [docs/features/v0.7.77.md](../../docs/features/v0.7.77.md) — v0.7.77 adaptive-quality, governed-memory, and release-hardening record
