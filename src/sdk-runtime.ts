@@ -11292,15 +11292,10 @@ function createRuntimePersistence(
       throw new Error("Runtime event sequence batch size must be positive");
     }
     const cursor = readEventSequenceCursor();
-    const recoveredMax =
-      validatedSequenceFloor === undefined || cursor === undefined
-        ? findMaxPersistedEventSeq()
-        : validatedSequenceFloor;
-    validatedSequenceFloor = Math.max(
-      cursor ?? 0,
-      recoveredMax,
-      validatedSequenceFloor ?? 0,
-    );
+    if (validatedSequenceFloor === undefined) {
+      validatedSequenceFloor = findMaxPersistedEventSeq();
+    }
+    validatedSequenceFloor = Math.max(cursor ?? 0, validatedSequenceFloor);
     const first = validatedSequenceFloor + 1;
     const last = validatedSequenceFloor + count;
     writeRuntimeJsonAtomic(eventSequenceFile, last);
@@ -11311,6 +11306,9 @@ function createRuntimePersistence(
 
   const reserveEventSeqs = (count: number): number => {
     fs.mkdirSync(runtimeDir, { recursive: true });
+    if (validatedSequenceFloor === undefined) {
+      validatedSequenceFloor = findMaxPersistedEventSeq();
+    }
     return withRuntimeStatusFileLock(
       eventSequenceFile,
       () => reserveEventSeqsLocked(count),
@@ -11569,6 +11567,9 @@ function createRuntimePersistence(
     create: (firstSeq: number) => readonly RuntimeEvent[],
   ): readonly RuntimeEvent[] => {
     fs.mkdirSync(runtimeDir, { recursive: true });
+    if (validatedSequenceFloor === undefined) {
+      validatedSequenceFloor = findMaxPersistedEventSeq();
+    }
     let trimError: unknown;
     let completed: readonly RuntimeEvent[] | undefined;
     let committed: readonly RuntimeEvent[];
@@ -11584,7 +11585,6 @@ function createRuntimePersistence(
             "Runtime event batch must match its reserved sequence range",
           );
         }
-        trimError = appendEventBatch(events);
         completed = events;
         return events;
       });
@@ -11596,13 +11596,23 @@ function createRuntimePersistence(
         throw error;
       }
       committed = completed;
-      trimError = trimError === undefined
-        ? error.cleanupError
-        : new AggregateError(
-            [trimError, error.cleanupError],
-            "Runtime event file and sequence-lock cleanup both failed",
-        );
+      trimError = error.cleanupError;
     }
+    // appendEventBatch writes the per-run events file under its own per-run
+    // lock (a run has a single owner, so there is no concurrent writer to that
+    // file). It does not need the global event-sequence lock, whose only job is
+    // the atomic sequence-counter increment above. Keeping the file append and
+    // trim outside the global lock removes cross-process contention from the
+    // hot event-commit path.
+    const appendTrimError = appendEventBatch(committed);
+    trimError = trimError === undefined
+      ? appendTrimError
+      : appendTrimError === undefined
+        ? trimError
+        : new AggregateError(
+          [trimError, appendTrimError],
+          "Runtime event append and sequence-lock cleanup both failed",
+        );
     const first = committed[0];
     if (trimError !== undefined && first !== undefined) {
       const file = eventFile(first.runId);
