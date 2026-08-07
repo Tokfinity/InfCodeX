@@ -2859,10 +2859,13 @@ interface RuntimeRunRecord {
   executorTerminalSignal?: {
     readonly signal: "completed" | "failed";
     readonly error?: Error;
+    readonly failure?: RuntimeRunFailureFact;
     readonly interruptedAtSignal: boolean;
   };
   actorHealthBaseState?: RuntimeActorHealthBaseRunState;
   settlementFinished?: boolean;
+  unconfirmedResult?: RuntimeRunResult;
+  unconfirmedFailure?: RuntimeRunFailureFact;
   terminalEmitted: boolean;
   readonly ownedByRuntime: boolean;
   readonly observedOwner?: AgentActorOwner;
@@ -2873,6 +2876,12 @@ interface RuntimeActorHealthBaseRunState {
   stage?: RuntimeRunStage;
   error?: string;
   lifecycleError?: RuntimeRunLifecycleError;
+}
+
+interface RuntimeRunFailureFact {
+  readonly phase: "failed" | "interrupted";
+  readonly error?: Error;
+  readonly terminal: Omit<RuntimeTerminalFact, "revision" | "kind">;
 }
 
 interface RuntimeInterruptInputRecord extends RuntimeInterruptInputStatus {
@@ -2949,6 +2958,7 @@ interface PersistedRuntimeRunStatus {
 
 interface PersistedRuntimeRunStop {
   readonly accepted: boolean;
+  readonly effectDeliveryAllowed: boolean;
   readonly status: RuntimeRunStatus;
   readonly revision: number;
 }
@@ -2986,7 +2996,11 @@ interface RuntimePersistence {
   currentEventSeq(): number;
   replay(filter?: RuntimeEventReplayFilter): readonly RuntimeEvent[];
   saveRunStatus(status: RuntimeRunStatus): RuntimeRunStatus;
-  requestRunStop(runId: string, reason: string): PersistedRuntimeRunStop;
+  requestRunStop(
+    runId: string,
+    reason: string,
+    ownedUnknownOwnerId?: string,
+  ): PersistedRuntimeRunStop;
   loadRunStatus(runId: string): PersistedRuntimeRunStatus | undefined;
   loadRunStatuses(): readonly PersistedRuntimeRunStatus[];
   loadSessionSettings(sessionId: string): RuntimeSessionSettings;
@@ -7132,8 +7146,13 @@ function createRuntimeRunService(deps: {
     record: RuntimeRunRecord,
     result: RuntimeRunResult,
   ): RuntimeRunResult => {
-    if (record.settlementFinished === true) return result;
+    if (
+      record.settlementFinished === true
+      && record.unconfirmedResult === undefined
+    ) return result;
     record.settlementFinished = true;
+    delete record.unconfirmedResult;
+    delete record.unconfirmedFailure;
     releaseAbortSignalSubscription(record);
     deps.permissions.rejectForRun(record.runId, "runtime run ended");
     deps.userInputs.rejectForRun(record.runId, "runtime run ended");
@@ -7152,8 +7171,17 @@ function createRuntimeRunService(deps: {
     record: RuntimeRunRecord,
     result: RuntimeRunResult,
   ): RuntimeRunResult => {
-    if (record.settlementFinished === true) return result;
+    if (record.settlementFinished === true) {
+      // A terminal callback may have resolved the public Run result while the
+      // executor Promise was still pending. Retain a later Promise payload as
+      // the authoritative replay fact without resolving or publishing twice.
+      if (result.phase === "unknown" && result.result !== undefined) {
+        record.unconfirmedResult = result;
+      }
+      return result;
+    }
     record.settlementFinished = true;
+    record.unconfirmedResult = result;
     if (result.phase === "unknown" && record.phase !== "unknown") {
       record.phase = "unknown";
       record.stage = "unknown";
@@ -7432,6 +7460,14 @@ function createRuntimeRunService(deps: {
     record.executorTerminalSignal = {
       signal,
       ...(error !== undefined ? { error } : {}),
+      ...(signal === "failed"
+        ? {
+            failure: captureRunFailureFact(
+              record,
+              error ?? new Error("Runtime executor reported failure"),
+            ),
+          }
+        : {}),
       interruptedAtSignal:
         record.running?.aborted === true
         || record.start?.options.abortSignal?.aborted === true
@@ -7457,9 +7493,13 @@ function createRuntimeRunService(deps: {
       if (latched.signal === "failed") {
         finishRun(
           record,
-          failedRunResult(
+          applyRunFailureFact(
             record,
-            latched.error ?? new Error("Runtime executor reported failure"),
+            latched.failure
+              ?? captureRunFailureFact(
+                record,
+                latched.error ?? new Error("Runtime executor reported failure"),
+              ),
           ),
         );
         return;
@@ -7492,10 +7532,10 @@ function createRuntimeRunService(deps: {
     });
   };
 
-  const failedRunResult = (
+  const captureRunFailureFact = (
     record: RuntimeRunRecord,
     error: unknown,
-  ): RuntimeRunResult => {
+  ): RuntimeRunFailureFact => {
     const trustedManagedAbort =
       record.mode === "managed_task"
       && record.stop !== undefined
@@ -7503,35 +7543,37 @@ function createRuntimeRunService(deps: {
       && error instanceof Error
       && error.name === "AbortError";
     if (trustedManagedAbort) {
-      if (!record.terminalEmitted) {
-        delete record.error;
-        markRunTerminal(
-          deps.bus,
-          deps.persistence,
-          record,
-          "interrupted",
-          {
-            code: "interrupted",
-            effectOutcome: "unknown",
-            message: record.stop?.reason,
-          },
-        );
-      }
       return {
-        runId: record.runId,
-        sessionId: record.sessionId,
-        phase: record.phase,
-        ...(record.terminal !== undefined
-          ? { terminal: record.terminal }
-          : {}),
-        ...(record.stop !== undefined ? { stop: record.stop } : {}),
+        phase: "interrupted",
+        terminal: {
+          code: "interrupted",
+          effectOutcome: "unknown",
+          message: record.stop.reason,
+        },
       };
     }
     const normalized = normalizeRuntimeRunError(error, record);
     const failure = classifyRuntimeRunFailure(error);
+    const capturedError = new Error(normalized.message);
+    capturedError.name = normalized.name;
+    return {
+      phase: failure.phase,
+      error: capturedError,
+      terminal: failure.terminal,
+    };
+  };
+
+  const applyRunFailureFact = (
+    record: RuntimeRunRecord,
+    failure: RuntimeRunFailureFact,
+  ): RuntimeRunResult => {
     const phase = record.terminalEmitted ? record.phase : failure.phase;
     if (!record.terminalEmitted) {
-      record.error = normalized.message;
+      if (failure.error === undefined) {
+        delete record.error;
+      } else {
+        record.error = failure.error.message;
+      }
     }
     markRunTerminal(
       deps.bus,
@@ -7544,13 +7586,19 @@ function createRuntimeRunService(deps: {
       runId: record.runId,
       sessionId: record.sessionId,
       phase: record.phase,
-      error: normalized,
+      ...(failure.error !== undefined ? { error: failure.error } : {}),
       ...(record.terminal !== undefined
         ? { terminal: record.terminal }
         : {}),
       ...(record.stop !== undefined ? { stop: record.stop } : {}),
     };
   };
+
+  const failedRunResult = (
+    record: RuntimeRunRecord,
+    error: unknown,
+  ): RuntimeRunResult =>
+    applyRunFailureFact(record, captureRunFailureFact(record, error));
 
   const canApplyExecutorTerminalSignal = (
     record: RuntimeRunRecord,
@@ -7581,10 +7629,14 @@ function createRuntimeRunService(deps: {
       && canApplyExecutorTerminalSignal(record)
     ) {
       if (executorSignal.signal === "failed") {
-        return failedRunResult(
+        return applyRunFailureFact(
           record,
-          executorSignal.error
-            ?? new Error("Runtime executor reported failure"),
+          executorSignal.failure
+            ?? captureRunFailureFact(
+              record,
+              executorSignal.error
+                ?? new Error("Runtime executor reported failure"),
+            ),
         );
       }
       markRunTerminal(
@@ -7679,6 +7731,68 @@ function createRuntimeRunService(deps: {
       drainNext(record.sessionId);
     }
     return result;
+  };
+
+  const finishRecoveredUnconfirmedRun = (
+    record: RuntimeRunRecord,
+  ): void => {
+    const unconfirmed = record.unconfirmedResult;
+    if (
+      unconfirmed === undefined
+      || record.terminalEmitted
+      || !canApplyExecutorTerminalSignal(record)
+    ) return;
+    const value = unconfirmed.result;
+    if (value !== undefined) {
+      const phase = value.interrupted
+        ? "interrupted"
+        : value.success
+          ? "completed"
+          : "failed";
+      const blockedTerminal =
+        !value.success && !value.interrupted && value.signal === "BLOCKED"
+          ? {
+              code: "blocked" as const,
+              effectOutcome: "known" as const,
+              ...(value.signalReason !== undefined
+                ? { message: value.signalReason }
+                : {}),
+            }
+          : undefined;
+      markRunTerminal(
+        deps.bus,
+        deps.persistence,
+        record,
+        phase,
+        blockedTerminal,
+      );
+      finishRun(record, {
+        runId: record.runId,
+        sessionId: record.sessionId,
+        phase: record.phase,
+        result: value,
+        ...(record.terminal !== undefined ? { terminal: record.terminal } : {}),
+        ...(record.stop !== undefined ? { stop: record.stop } : {}),
+      });
+      return;
+    }
+    const failure = record.unconfirmedFailure;
+    if (failure !== undefined) {
+      finishRun(record, applyRunFailureFact(record, failure));
+      return;
+    }
+    // Executor callbacks are deliberately fallback-only. A returned Promise
+    // result or rejection above is the stronger fact when both are present.
+    if (record.executorTerminalSignal !== undefined) {
+      finishRun(
+        record,
+        cancelRun(
+          record,
+          record.stop?.reason ?? "runtime run recovered",
+          false,
+        ),
+      );
+    }
   };
 
   const launchRecord = (record: RuntimeRunRecord): void => {
@@ -7962,10 +8076,13 @@ function createRuntimeRunService(deps: {
           };
         })
         .catch(async (error: unknown) => {
+          const failure = captureRunFailureFact(record, error);
           const actorHealth = await awaitActorFinalization(record);
-          return actorHealth.state === "unknown"
-            ? unknownActorSettlementResult(record)
-            : failedRunResult(record, error);
+          if (actorHealth.state === "unknown") {
+            record.unconfirmedFailure = failure;
+            return unknownActorSettlementResult(record);
+          }
+          return applyRunFailureFact(record, failure);
         })
         .then((result) => finishAccordingToTerminalFact(record, result));
       return;
@@ -8030,10 +8147,13 @@ function createRuntimeRunService(deps: {
         };
       })
       .catch(async (error: unknown) => {
+        const failure = captureRunFailureFact(record, error);
         const actorHealth = await awaitActorFinalization(record);
-        return actorHealth.state === "unknown"
-          ? unknownActorSettlementResult(record)
-          : failedRunResult(record, error);
+        if (actorHealth.state === "unknown") {
+          record.unconfirmedFailure = failure;
+          return unknownActorSettlementResult(record);
+        }
+        return applyRunFailureFact(record, failure);
       })
       .then((result) => finishAccordingToTerminalFact(record, result));
   };
@@ -8045,12 +8165,14 @@ function createRuntimeRunService(deps: {
       launchRecord(record);
       return undefined;
     } catch (error) {
+      const failure = captureRunFailureFact(record, error);
       void awaitActorFinalization(record).then((actorHealth) => {
         if (actorHealth.state === "unknown") {
+          record.unconfirmedFailure = failure;
           finishUnconfirmedRun(record, unknownActorSettlementResult(record));
           return;
         }
-        finishRun(record, failedRunResult(record, error));
+        finishRun(record, applyRunFailureFact(record, failure));
       });
       return { error };
     }
@@ -8850,6 +8972,20 @@ function createRuntimeRunService(deps: {
       await deps.sessionAdmission.assertRunAccess(sessionId);
       if (run !== undefined) assertRuntimeOwnsRun(run, deps.runOwner);
       if (
+        run?.terminalEmitted === true
+        && persisted?.owner?.ownerId === deps.runOwner.ownerId
+      ) {
+        // A best-effort terminal status write may fail after the local terminal
+        // fact and event were committed. Never let an older durable unknown
+        // Stop regress that stronger in-process fact or redeliver effects.
+        return runtimeRunStopReceipt({
+          accepted: false,
+          effectDeliveryAllowed: false,
+          status: statusFromRecord(run),
+          revision: persisted.revision,
+        });
+      }
+      if (
         run?.executorTerminalSignal !== undefined
         && !run.terminalEmitted
         && canApplyExecutorTerminalSignal(run)
@@ -8858,6 +8994,7 @@ function createRuntimeRunService(deps: {
         const terminal = deps.persistence.loadRunStatus(runId);
         return runtimeRunStopReceipt({
           accepted: false,
+          effectDeliveryAllowed: false,
           status: terminal?.status ?? statusFromRecord(run),
           revision: terminal?.revision ?? 0,
         });
@@ -8865,6 +9002,7 @@ function createRuntimeRunService(deps: {
       const stop = deps.persistence.requestRunStop(
         runId,
         "runtime run aborted",
+        run?.ownedByRuntime === true ? deps.runOwner.ownerId : undefined,
       );
       if (run === undefined) return runtimeRunStopReceipt(stop);
       applyAuthoritativeRunStatus(run, stop.status);
@@ -8876,7 +9014,9 @@ function createRuntimeRunService(deps: {
       if (stop.status.stop?.state === "unknown") {
         delete run.actorHealthBaseState;
       }
-      if (stop.accepted) {
+      const deliverCancellationEffects =
+        stop.accepted || stop.effectDeliveryAllowed;
+      if (deliverCancellationEffects) {
         const wasQueued = stop.status.phase === "cancelled";
         if (wasQueued) {
           removeQueuedRun(queueBySession, run);
@@ -8884,7 +9024,11 @@ function createRuntimeRunService(deps: {
         releaseAbortSignalSubscription(run);
         run.running?.abort(new Error("runtime run aborted"));
         run.abortController?.abort(new Error("runtime run aborted"));
-        void requestManagedActorCancellation(run, "runtime run aborted");
+        const actorCancellation = requestManagedActorCancellation(
+          run,
+          "runtime run aborted",
+        );
+        void actorCancellation.then(() => finishRecoveredUnconfirmedRun(run));
         deps.permissions.rejectForRun(run.runId, "runtime run aborted");
         deps.userInputs.rejectForRun(run.runId, "runtime run aborted");
         run.start?.options.guardrails
@@ -8892,7 +9036,7 @@ function createRuntimeRunService(deps: {
           ?.clearAllowedCalls();
         run.interruptInputOpen = false;
         terminalizeQueuedInterruptInputs(run);
-        if (wasQueued) {
+        if (stop.accepted && wasQueued) {
           deps.bus.emit("run.cancelled", stop.status, {
             sessionId: run.sessionId,
             runId: run.runId,
@@ -8909,7 +9053,7 @@ function createRuntimeRunService(deps: {
           releaseActiveQueueRoute(run);
           releaseActiveRun(run);
           if (!deps.isClosed()) drainNext(run.sessionId);
-        } else {
+        } else if (stop.accepted) {
           deps.bus.emit("run.updated", stop.status, {
             sessionId: run.sessionId,
             runId: run.runId,
@@ -12045,7 +12189,7 @@ function createRuntimePersistence(
         return status;
       });
     },
-    requestRunStop(runId, reason) {
+    requestRunStop(runId, reason, ownedUnknownOwnerId) {
       const file = statusFile(runId);
       return withRuntimeStatusFileLock(file, () => {
         const existing = readPersistedRuntimeRunStatus(file);
@@ -12063,14 +12207,34 @@ function createRuntimePersistence(
           );
         }
         const current = existing.status;
+        const exactLocalOwner =
+          ownedUnknownOwnerId === runOwner.ownerId
+          && existing.owner?.ownerId === runOwner.ownerId;
+        // A live local executor still needs a first cancellation request even
+        // when an earlier lifecycle fault already made its durable phase
+        // unknown. Both the live record and durable owner must prove the exact
+        // same Runtime owner before enabling this path.
+        const canStopOwnedUnknown =
+          exactLocalOwner
+          && current.phase === "unknown"
+          && current.stop === undefined;
         if (
           current.stop !== undefined
-          || current.phase === "unknown"
+          || (current.phase === "unknown" && !canStopOwnedUnknown)
           || isTerminalRunPhase(current.phase)
-          || (current.phase !== "queued" && !isActiveRunPhase(current.phase))
+          || (
+            !canStopOwnedUnknown
+            && current.phase !== "queued"
+            && !isActiveRunPhase(current.phase)
+          )
         ) {
           return {
             accepted: false,
+            effectDeliveryAllowed:
+              exactLocalOwner
+              && current.phase === "unknown"
+              && current.stop?.state === "unknown"
+              && current.terminal === undefined,
             status: current,
             revision: existing.revision,
           };
@@ -12080,9 +12244,12 @@ function createRuntimePersistence(
           lifecycleError: _discardedLifecycleError,
           ...currentWithoutLifecycleError
         } = current;
+        const currentForStop = canStopOwnedUnknown
+          ? current
+          : currentWithoutLifecycleError;
         const next: RuntimeRunStatus = current.phase === "queued"
           ? {
-              ...currentWithoutLifecycleError,
+              ...currentForStop,
               phase: "cancelled",
               stage: "terminal",
               stageChangedAt: requestedAt,
@@ -12104,7 +12271,7 @@ function createRuntimePersistence(
               },
             }
           : {
-              ...currentWithoutLifecycleError,
+              ...currentForStop,
               phase: "unknown",
               stage: "unknown",
               stageChangedAt: requestedAt,
@@ -12127,6 +12294,7 @@ function createRuntimePersistence(
         finalizeRunStatusIndex(next);
         return {
           accepted: true,
+          effectDeliveryAllowed: exactLocalOwner,
           status: next,
           revision,
         };
@@ -17742,6 +17910,7 @@ function markRunTerminal(
 ): void {
   if (run.terminalEmitted) return;
   delete run.actorHealthBaseState;
+  delete run.lifecycleError;
   if (run.error === "stop_outcome_unconfirmed") delete run.error;
   run.interruptInputOpen = false;
   terminalizeQueuedInterruptInputs(run);

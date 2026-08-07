@@ -9679,6 +9679,666 @@ describe("createKodaXRuntime", () => {
     }
   });
 
+  it("accepts Stop for a live same-owner unknown Run and restores Session reuse after Actor reconciliation", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-unknown-stop-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      const session = await runtime.sessions.create({
+        title: "Recover an unknown Actor settlement through Stop",
+      });
+      codingMock.runManagedTask.mockImplementation((options: KodaXOptions) => (
+        new Promise<KodaXResult>((_resolve, reject) => {
+          const rejectFromAbort = (): void => {
+            const error = new Error("Provider observed recovered Stop");
+            error.name = "AbortError";
+            options.events?.onError?.(error);
+            reject(error);
+          };
+          options.abortSignal?.addEventListener("abort", rejectFromAbort, { once: true });
+          if (options.abortSignal?.aborted) rejectFromAbort();
+        })
+      ));
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "become unknown, then stop",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot is delayed.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        lifecycleError: {
+          code: "actor_settlement_not_persisted",
+          retryable: false,
+        },
+      });
+      releaseLateSettlement?.();
+      await vi.runAllTimersAsync();
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+        state: "unknown",
+        outcome: "unknown",
+      });
+      await expect(run.result).resolves.toMatchObject({
+        phase: "interrupted",
+        terminal: { kind: "interrupted", code: "interrupted" },
+        stop: { state: "confirmed", outcome: "interrupted" },
+      });
+      const terminal = await runtime.runs.get(run.runId);
+      expect(terminal).toMatchObject({
+        phase: "interrupted",
+        stop: { state: "confirmed", outcome: "interrupted" },
+      });
+      expect(terminal).not.toHaveProperty("lifecycleError");
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+        phase: "interrupted",
+        state: "confirmed",
+        outcome: "interrupted",
+      });
+      await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
+        activeNonRootTurns: 0,
+      });
+
+      codingMock.runManagedTask.mockResolvedValueOnce({
+        success: true,
+        lastText: "Session is usable again",
+        messages: [],
+        sessionId: session.id,
+      });
+      const next = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "continue after recovered Stop",
+        mode: "managed_task",
+      });
+      await expect(next.result).resolves.toMatchObject({ phase: "completed" });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close();
+    }
+  });
+
+  it("redelivers cancellation effects on repeated Stop after the first Actor repair times out", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-repeat-stop-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>((resolve) => {
+          finishRoot = resolve;
+        }),
+      );
+      const session = await runtime.sessions.create({
+        title: "Retry Actor repair through repeated Stop",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "ignore the first provider abort",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot remains blocked.",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+      });
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+        phase: "unknown",
+        stop: { state: "unknown", outcome: "unknown" },
+      });
+
+      releaseLateSettlement?.();
+      await vi.runAllTimersAsync();
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+        phase: "unknown",
+        state: "unknown",
+        outcome: "unknown",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.agents.tree(session.id)).resolves.toMatchObject({
+          activeNonRootTurns: 0,
+        });
+      });
+
+      finishRoot?.({
+        success: true,
+        lastText: "Executor completed after repeated Stop repaired Actors",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(run.result).resolves.toMatchObject({
+        phase: "completed",
+        stop: { state: "confirmed", outcome: "completed" },
+      });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close();
+    }
+  });
+
+  it("does not regress a local terminal Run from a stale durable unknown Stop", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "terminal-versus-stale-stop-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const renameSync = mutableNodeFs.renameSync;
+    let restoreRename = false;
+    try {
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      codingMock.startKodaX.mockImplementation(
+        (options: KodaXOptions): RunningSession => fakeRunningSession(
+          options,
+          new Promise<KodaXResult>((resolve) => {
+            finishRoot = resolve;
+          }),
+        ),
+      );
+      const session = await runtime.sessions.create({
+        title: "Keep local terminal fact",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "complete after Stop",
+      });
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+      });
+      const statusFile = path.join(
+        tempRoot,
+        ".kodax",
+        "runtime",
+        "runs",
+        run.runId,
+        "status.json",
+      );
+      let terminalWriteRejected = false;
+      mutableNodeFs.renameSync = ((source, destination) => {
+        if (!terminalWriteRejected && String(destination) === statusFile) {
+          terminalWriteRejected = true;
+          throw Object.assign(new Error("synthetic terminal status write failure"), {
+            code: "EIO",
+          });
+        }
+        return renameSync(source, destination);
+      }) as typeof nodeFs.renameSync;
+      syncBuiltinESMExports();
+      restoreRename = true;
+
+      finishRoot?.({
+        success: true,
+        lastText: "completed locally",
+        messages: [],
+        sessionId: session.id,
+      });
+      await expect(run.result).resolves.toMatchObject({
+        phase: "completed",
+      });
+      expect(terminalWriteRejected).toBe(true);
+
+      mutableNodeFs.renameSync = renameSync;
+      syncBuiltinESMExports();
+      restoreRename = false;
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+        phase: "completed",
+        state: "confirmed",
+        outcome: "completed",
+      });
+      await expect(runtime.events.replay({
+        runId: run.runId,
+        type: ["run.completed", "run.failed", "run.interrupted"],
+      })).resolves.toHaveLength(1);
+    } finally {
+      if (restoreRename) {
+        mutableNodeFs.renameSync = renameSync;
+        syncBuiltinESMExports();
+      }
+      await runtime.close();
+    }
+  });
+
+  it("terminalizes a previously returned unknown Run from its saved executor result after Stop repairs Actor settlement", async () => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "actor-returned-unknown-recovery-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>((resolve) => {
+          finishRoot = resolve;
+        }),
+      );
+      const session = await runtime.sessions.create({
+        title: "Repair a returned unknown Run",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "finish while child settlement is delayed",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot is delayed.",
+      });
+      finishRoot?.({
+        success: true,
+        lastText: "Root completed before Actor durability was known",
+        messages: [],
+        sessionId: session.id,
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      await expect(run.result).resolves.toMatchObject({
+        phase: "unknown",
+        result: { success: true },
+      });
+      releaseLateSettlement?.();
+      await vi.runAllTimersAsync();
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+        state: "unknown",
+        outcome: "unknown",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "completed",
+          terminal: { kind: "completed", code: "completed" },
+          stop: { state: "confirmed", outcome: "completed" },
+        });
+      });
+
+      codingMock.runManagedTask.mockResolvedValueOnce({
+        success: true,
+        lastText: "Session remains reusable after returned unknown recovery",
+        messages: [],
+        sessionId: session.id,
+      });
+      const next = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "continue after repairing returned unknown",
+        mode: "managed_task",
+      });
+      await expect(next.result).resolves.toMatchObject({ phase: "completed" });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    ["success", "failure"] as const,
+    ["failure", "completion"] as const,
+  ])("prefers a late Promise %s over an earlier %s callback when repairing an unknown Run", async (
+    promiseOutcome,
+    callbackSignal,
+  ) => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(
+        tempRoot,
+        `actor-late-${promiseOutcome}-evidence-sessions`,
+      ),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      let activeEvents: KodaXOptions["events"];
+      let finishRoot: ((value: KodaXResult) => void) | undefined;
+      let failRoot: ((error: Error) => void) | undefined;
+      codingMock.runManagedTask.mockImplementation(
+        (options: KodaXOptions) => new Promise<KodaXResult>((resolve, reject) => {
+          activeEvents = options.events;
+          finishRoot = resolve;
+          failRoot = reject;
+        }),
+      );
+      const session = await runtime.sessions.create({
+        title: "Prefer late Promise evidence",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "preserve the authoritative Promise result",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot is delayed.",
+      });
+
+      if (callbackSignal === "failure") {
+        activeEvents?.onError?.(new Error("callback failure must remain fallback-only"));
+      } else {
+        activeEvents?.onComplete?.();
+      }
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
+
+      if (promiseOutcome === "success") {
+        finishRoot?.({
+          success: true,
+          lastText: "Promise success is authoritative",
+          messages: [],
+          sessionId: session.id,
+        });
+      } else {
+        failRoot?.(new Error("Promise failure is authoritative"));
+      }
+      await vi.runAllTimersAsync();
+      releaseLateSettlement?.();
+      await vi.runAllTimersAsync();
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+      });
+      const expectedPhase = promiseOutcome === "success" ? "completed" : "failed";
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: expectedPhase,
+          terminal: {
+            kind: expectedPhase,
+            code: promiseOutcome === "success" ? "completed" : "run_failed",
+          },
+          stop: { state: "confirmed", outcome: expectedPhase },
+        });
+      });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close();
+    }
+  });
+
+  it("rejects owned-unknown Stop when the durable Run owner is missing", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "tampered-unknown-owner-sessions"),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>(() => undefined),
+      );
+      const session = await runtime.sessions.create({
+        title: "Reject ownerless unknown Stop",
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "remain live while status ownership is removed",
+        mode: "managed_task",
+      });
+      const statusFile = path.join(
+        tempRoot,
+        ".kodax",
+        "runtime",
+        "runs",
+        run.runId,
+        "status.json",
+      );
+      const persisted = JSON.parse(await fs.readFile(statusFile, "utf-8")) as {
+        readonly _runtime: {
+          readonly revision: number;
+        };
+        readonly [key: string]: unknown;
+      };
+      const tampered = {
+        ...persisted,
+        phase: "unknown",
+        stage: "unknown",
+        _runtime: { revision: persisted._runtime.revision },
+      };
+      await fs.writeFile(statusFile, JSON.stringify(tampered), "utf-8");
+      const beforeStop = await fs.readFile(statusFile);
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: false,
+        phase: "unknown",
+        state: "unknown",
+        outcome: "unknown",
+      });
+      expect(await fs.readFile(statusFile)).toEqual(beforeStop);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    ["ordinary failure", new Error("executor failed before Stop")],
+    ["pre-Stop AbortError", Object.assign(new Error("independent abort"), {
+      name: "AbortError",
+    })],
+  ])("replays a saved %s only after Stop repairs Actor settlement", async (
+    _label,
+    executorError,
+  ) => {
+    vi.useFakeTimers();
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
+    let releaseLateSettlement: (() => void) | undefined;
+    const lateSettlement = new Promise<void>((resolve) => {
+      releaseLateSettlement = resolve;
+    });
+    let terminalSaveStarted = false;
+    const save = vi.spyOn(
+      FileSessionStorage.prototype,
+      "saveActorSnapshot",
+    ).mockImplementation(async function (
+      this: FileSessionStorage,
+      id: string,
+      snapshot: AgentActorSnapshot,
+      expectedRevision: number,
+    ) {
+      if (
+        !terminalSaveStarted
+        && snapshot.turns.some((turn) => (
+          turn.actorPath === "/root/worker" && turn.state === "failed"
+        ))
+      ) {
+        terminalSaveStarted = true;
+        await lateSettlement;
+      }
+      await originalSave.call(this, id, snapshot, expectedRevision);
+    });
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(
+        tempRoot,
+        `actor-returned-${_label.replaceAll(" ", "-")}-sessions`,
+      ),
+      defaultProvider: "mock-provider",
+    });
+    try {
+      let failRoot: ((error: Error) => void) | undefined;
+      codingMock.runManagedTask.mockImplementation(
+        () => new Promise<KodaXResult>((_resolve, reject) => {
+          failRoot = reject;
+        }),
+      );
+      const session = await runtime.sessions.create({
+        title: `Repair returned ${_label}`,
+      });
+      const run = await runtime.runs.start({
+        sessionId: session.id,
+        prompt: "fail while child settlement is delayed",
+        mode: "managed_task",
+      });
+      await runtime.agents.spawn(session.id, {
+        taskName: "worker",
+        objective: "Fail while its terminal snapshot is delayed.",
+      });
+      failRoot?.(executorError);
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      await expect(run.result).resolves.toMatchObject({ phase: "unknown" });
+      releaseLateSettlement?.();
+      await vi.runAllTimersAsync();
+
+      await expect(runtime.runs.abort(run.runId)).resolves.toMatchObject({
+        accepted: true,
+        phase: "unknown",
+      });
+      await vi.waitFor(async () => {
+        await expect(runtime.runs.get(run.runId)).resolves.toMatchObject({
+          phase: "failed",
+          error: executorError.message,
+          terminal: { kind: "failed", code: "run_failed" },
+          stop: { state: "confirmed", outcome: "failed" },
+        });
+      });
+    } finally {
+      releaseLateSettlement?.();
+      save.mockRestore();
+      vi.useRealTimers();
+      await runtime.close();
+    }
+  });
+
   it("does not terminalize a Run before its Actor settlements are durable", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const originalSave = FileSessionStorage.prototype.saveActorSnapshot;
