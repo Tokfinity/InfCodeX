@@ -49,9 +49,11 @@ import type {
   LoadedExtensionDiagnostic,
   KodaXCustomProviderConfig,
   KodaXContextCompactionFinishedEvent,
+  KodaXCompactionEndResult,
   KodaXContextIdentity,
   KodaXContextOptions,
   KodaXActivityEventMeta,
+  KodaXLiveEventMeta,
   KodaXEvents,
   KodaXFileInputArtifact,
   KodaXImageInputArtifact,
@@ -78,6 +80,7 @@ import type {
   AutoModePermissionReview,
   AutoModeToolGuardrail,
   RuntimeContextBudgetSnapshot,
+  RuntimeCompactionSkippedEvent,
   RuntimeToolExposurePlan,
   ToolCallSignal,
   KodaXVideoInputArtifact,
@@ -2112,6 +2115,26 @@ export interface RuntimeWarningEventPayload {
   readonly sourceEventId?: string;
 }
 
+export interface RuntimeContextCompactionStartedEventPayload {
+  readonly meta?: KodaXActivityEventMeta;
+}
+
+export type RuntimeContextCompactionStatsEventPayload = {
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+} & Partial<KodaXLiveEventMeta>;
+
+/** Legacy events and non-managed compaction paths may omit the structured outcome. */
+export type RuntimeContextCompactionEndedEventPayload =
+  | ({ readonly meta?: KodaXActivityEventMeta } & KodaXCompactionEndResult)
+  | {
+      readonly meta?: KodaXActivityEventMeta;
+      readonly outcome?: undefined;
+    };
+
+export type RuntimeContextCompactionSkippedEventPayload =
+  RuntimeCompactionSkippedEvent & Partial<KodaXLiveEventMeta>;
+
 export type RuntimeContextCompactionFinishedEventPayload =
   KodaXContextCompactionFinishedEvent &
     KodaXContextIdentity & {
@@ -2191,6 +2214,10 @@ export type RuntimeEventPayloadMap = Omit<
   | "context.budget.snapshot"
   | "provider.cache.diagnostics"
   | "tool.exposure.planned"
+  | "context.compaction.started"
+  | "context.compaction.stats"
+  | "context.compaction.ended"
+  | "context.compaction.skipped"
   | "context.compaction.messages"
   | "context.compaction.finished"
   | "runtime.warning"
@@ -2230,6 +2257,10 @@ export type RuntimeEventPayloadMap = Omit<
   readonly "context.budget.snapshot": RuntimeContextBudgetSnapshot;
   readonly "provider.cache.diagnostics": KodaXPromptCacheDiagnosticEvent;
   readonly "tool.exposure.planned": RuntimeToolExposurePlan;
+  readonly "context.compaction.started": RuntimeContextCompactionStartedEventPayload;
+  readonly "context.compaction.stats": RuntimeContextCompactionStatsEventPayload;
+  readonly "context.compaction.ended": RuntimeContextCompactionEndedEventPayload;
+  readonly "context.compaction.skipped": RuntimeContextCompactionSkippedEventPayload;
   readonly "context.compaction.messages": RuntimeContextCompactionMessagesEventPayload;
   readonly "context.compaction.finished": RuntimeContextCompactionFinishedEventPayload;
   readonly "runtime.warning": RuntimeWarningEventPayload;
@@ -15196,9 +15227,12 @@ function wrapKodaXEvents(input: {
       );
       original?.onContextCompactionFinished?.(event);
     },
-    onCompactEnd(meta) {
-      emit("context.compaction.ended", { meta }, meta);
-      original?.onCompactEnd?.(meta);
+    onCompactEnd(meta, result) {
+      emit("context.compaction.ended", {
+        meta,
+        ...(result ?? {}),
+      }, meta);
+      original?.onCompactEnd?.(meta, result);
     },
     onMidTurnUserMessages(contents, meta) {
       onMidTurnUserMessages(

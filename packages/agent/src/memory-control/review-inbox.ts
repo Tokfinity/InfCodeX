@@ -161,6 +161,9 @@ export type EpisodeReviewDrainEligibility = 'eligible' | 'discard' | 'defer';
 
 export interface EpisodeReviewDrainOptions {
   readonly maxEntries?: number;
+  /** Epoch-ms deadline: stop claiming new jobs once passed and release an
+   * in-flight claim instead of committing a decision. */
+  readonly deadlineAtMs?: number;
   readonly revalidate: (
     entry: PendingEpisodeReview,
   ) => Promise<EpisodeReviewDrainEligibility>;
@@ -947,65 +950,6 @@ export async function completeEpisodeReview(
   });
 }
 
-export async function rewindPendingEpisodeReviews(
-  identity: MemoryContextIdentity,
-  throughSequence: number,
-): Promise<number> {
-  return withEpisodeReviewRootRegistryLock(
-    identity,
-    () => rewindPendingEpisodeReviewsAtRoot(sessionInboxRoot(identity), throughSequence),
-  );
-}
-
-export async function rewindPendingEpisodeReviewsForSession(
-  input: {
-    readonly configHome?: string;
-    readonly sessionId: string;
-  },
-  throughSequence: number,
-): Promise<number> {
-  if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
-    throw new Error('rewind sequence must be a non-negative safe integer');
-  }
-  return withEpisodeReviewRootRegistryLock(input, async () => {
-    const sessionRoots = [...await findSessionInboxRoots(input)].sort();
-    return withEpisodeReviewRootLocks(sessionRoots, 0, async () => {
-      const plans: EpisodeReviewMutationPlan[] = [];
-      for (const sessionRoot of sessionRoots) {
-        plans.push(await prepareEpisodeReviewMutationPlan(
-          sessionRoot,
-          ({ entry }) => entry.digest.sequence > throughSequence,
-          ({ entry, queue }) =>
-            queue === 'processing' && entry.digest.sequence <= throughSequence,
-        ));
-      }
-      let removed = 0;
-      for (const plan of plans) {
-        removed += await applyRewindEpisodeReviewPlan(plan, throughSequence);
-      }
-      return removed;
-    });
-  });
-}
-
-/**
- * Fences every tenant-owned review job for a Session unless its exact durable
- * job identity is attached to the prospective active lineage branch. Legacy
- * lineage records may supply digest.id as a conservative fallback.
- */
-export async function fencePendingEpisodeReviewsForSession(
-  input: {
-    readonly configHome?: string;
-    readonly sessionId: string;
-  },
-  activeReviewIds: readonly string[],
-): Promise<number> {
-  return withPendingEpisodeReviewSessionFence(
-    input,
-    (fence) => fence(activeReviewIds),
-  );
-}
-
 /**
  * Establishes the lock order used by both review completion and Session branch
  * mutation: the Session root registry first, every sorted tenant branch fence
@@ -1187,67 +1131,6 @@ function isActiveReview(
     || activeReviewIds.has(entry.digest.id);
 }
 
-async function rewindPendingEpisodeReviewsAtRoot(
-  sessionRoot: string,
-  throughSequence: number,
-): Promise<number> {
-  if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
-    throw new Error('rewind sequence must be a non-negative safe integer');
-  }
-  return withLearningFileLock(
-    path.join(sessionRoot, '.branch-authority.lock'),
-    async () => {
-      const plan = await prepareEpisodeReviewMutationPlan(
-        sessionRoot,
-        ({ entry }) => entry.digest.sequence > throughSequence,
-        ({ entry, queue }) =>
-          queue === 'processing' && entry.digest.sequence <= throughSequence,
-      );
-      return applyRewindEpisodeReviewPlan(plan, throughSequence);
-    },
-    REVIEW_AUTHORITY_LOCK_ACQUIRE_TIMEOUT_MS,
-  );
-}
-
-async function applyRewindEpisodeReviewPlan(
-  plan: EpisodeReviewMutationPlan,
-  throughSequence: number,
-): Promise<number> {
-  const now = new Date().toISOString();
-  const epoch = plan.current.epoch + 1;
-  await writeJsonAtomic(plan.authorityFile, {
-    ...plan.current,
-    epoch,
-    rewinds: [...plan.current.rewinds, { epoch, throughSequence, createdAt: now }],
-  } satisfies EpisodeReviewBranchAuthority);
-  let removed = 0;
-  for (const { entry, filePath } of plan.retired) {
-    if (entry.version === 2) {
-      const root = path.join(plan.sessionRoot, 'jobs', safeKey(entry.jobId));
-      await withLearningFileLock(path.join(root, '.authority.lock'), async () => {
-        const stateFile = path.join(root, 'state.json');
-        const state = plan.retiredStates.get(entry.jobId);
-        if (state !== undefined && state.status !== 'completed') {
-          await writeJsonAtomic(stateFile, {
-            ...state,
-            status: 'completed',
-            claimToken: undefined,
-            leaseDeadline: undefined,
-            lastError: `rewound through sequence ${throughSequence}`,
-            updatedAt: now,
-          } satisfies EpisodeReviewJobState);
-        }
-        await rm(filePath, { force: true });
-      });
-    } else {
-      await rm(filePath, { force: true });
-    }
-    removed += 1;
-  }
-  await restoreQueuedReviewFiles(plan.sessionRoot, plan.recoverable);
-  return removed;
-}
-
 export async function drainPendingEpisodeReviews(
   identity: MemoryContextIdentity,
   options: EpisodeReviewDrainOptions,
@@ -1279,18 +1162,22 @@ export async function drainPendingEpisodeReviews(
   let visitedEntries = 0;
   for (const entry of owned) {
     if (spentEntries >= maxEntries) break;
+    // Past the deadline no new job is claimed; unvisited entries are counted
+    // as deferred by the tail accounting below.
+    if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) break;
     visitedEntries += 1;
     const ownerIdentity = { ...identity, sessionId: entry.ownerSessionRef };
     if (entry.version === 2) {
       const outcome = await drainFencedEpisodeReview(ownerIdentity, entry, options);
-      if (outcome.kind === 'not_claimed') {
+      // Deferred work released its claim without progress; like an unclaimed
+      // entry it must not consume the per-drain entry budget.
+      if (outcome.kind === 'not_claimed' || outcome.kind === 'deferred') {
         result.deferred += 1;
         continue;
       }
       spentEntries += 1;
       if (outcome.kind === 'reviewed') result.reviewed += 1;
       else if (outcome.kind === 'discarded') result.discarded += 1;
-      else if (outcome.kind === 'deferred') result.deferred += 1;
       else if (outcome.kind === 'failed') {
         result.failed += 1;
         result.failures.push({ reviewKey: entry.reviewKey, error: outcome.error });
@@ -1298,14 +1185,13 @@ export async function drainPendingEpisodeReviews(
       continue;
     }
     const outcome = await drainLegacyEpisodeReview(ownerIdentity, entry, options);
-    if (outcome.kind === 'not_claimed') {
+    if (outcome.kind === 'not_claimed' || outcome.kind === 'deferred') {
       result.deferred += 1;
       continue;
     }
     spentEntries += 1;
     if (outcome.kind === 'reviewed') result.reviewed += 1;
     else if (outcome.kind === 'discarded') result.discarded += 1;
-    else if (outcome.kind === 'deferred') result.deferred += 1;
     else if (outcome.kind === 'failed') {
       result.failed += 1;
       result.failures.push({
@@ -1415,6 +1301,13 @@ async function drainFencedEpisodeReview(
           return { kind: 'discarded' };
         }
         await deferEpisodeReview(identity, claim, 'review branch unavailable before decision');
+        return { kind: 'deferred' };
+      }
+      // The decide phase is not interruptible, so enforce the drain deadline
+      // before committing: release the claim back to pending instead of
+      // leaving the job in processing until its lease expires.
+      if (options.deadlineAtMs !== undefined && Date.now() >= options.deadlineAtMs) {
+        await deferEpisodeReview(identity, claim, 'drain deadline reached before decision commit');
         return { kind: 'deferred' };
       }
       decision = await commitEpisodeReviewDecision(identity, claim, decisionInput);
@@ -1533,7 +1426,13 @@ async function drainFencedEpisodeReview(
           });
         }
       } else {
-        await deferEpisodeReview(identity, claim, message);
+        // Failures before a decision is committed (input freeze, decide
+        // setup, commit) must consume provider attempts so repeated crashes
+        // back off and eventually escalate to attention.
+        await failEpisodeReviewAttempt(identity, claim, {
+          kind: classifyEpisodeReviewFailure(error),
+          message,
+        });
       }
     } catch (deferError) {
       if (!(deferError instanceof Error)

@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-08-07_
+_Last Updated: 2026-08-08_
 
 ---
 
@@ -14,6 +14,7 @@ _Last Updated: 2026-08-07_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 284 | High | Resolved | Managed-task compaction no-ops can permanently trip the summary circuit breaker | v0.7.80 managed-run-context stripping | v0.7.85 development | 2026-08-07 | 2026-08-08 |
 | 283 | Medium | Resolved | REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry | v0.7.43 first-class sidecar messages | v0.7.84 development | 2026-08-07 | 2026-08-07 |
 | 282 | High | Resolved | Agent progress persistence backlog can self-fence its live owner and make an unknown Run reject Stop | v0.7.79 bounded Actor settlement | v0.7.84 release | 2026-08-06 | 2026-08-06 |
 | 281 | High | Resolved | Runtime input submission reads mutable canonical Session before resolving its authoritative Run target | v0.7.69 Runtime input submission | v0.7.82 release | 2026-08-05 | 2026-08-05 |
@@ -186,6 +187,88 @@ _Last Updated: 2026-08-07_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+
+### 284: Managed-task compaction no-ops can permanently trip the summary circuit breaker
+
+- Priority: High
+- Status: Resolved
+- Introduced: v0.7.80 managed-run-context stripping
+- Fixed: v0.7.85 development
+- Created: 2026-08-07
+- Resolved: 2026-08-08
+
+#### Original Problem
+
+SDK session `20260807_212018_k48d034d3a215d`, Run
+`run_msj1sot2_01b0e562`, configured an effective 256,000-token compaction
+threshold. Three `context.compaction.started` / `ended` pairs were observed
+without a `context.compaction.finished` event. The first two attempts became
+normal no-ops after managed-run-context messages were removed and the remaining
+compactable input fell below the threshold. Both no-ops nevertheless consumed
+failure budget. One subsequent Provider error then opened the three-failure
+circuit breaker, after which automatic compaction remained disabled while the
+input grew beyond 300,000 tokens.
+
+#### Expected Behavior
+
+- A below-threshold or no-eligible-prefix no-op does not count as a failure.
+- Outer admission and semantic compaction use the same compactable-token basis,
+  or the compactor returns a structured no-op reason.
+- Only real summary-generation or persistence failures consume breaker budget.
+- The breaker prevents unbounded retries but has a bounded cooldown/reset path
+  before physical context exhaustion.
+- Runtime events expose no-op, breaker skip, and failure reasons explicitly.
+- Regression coverage exercises repeated managed-context-only threshold
+  crossings followed by a real compactable threshold crossing, plus consecutive
+  real Provider failures.
+
+#### Root Cause
+
+- The managed hook admitted compaction using full request tokens, while the
+  semantic compactor re-evaluated the threshold after removing replaceable
+  managed-run-context messages.
+- Every `compacted: false` result and several non-summary error paths consumed
+  the same three-attempt failure budget. Once open, the breaker had no bounded
+  retry path before physical context pressure.
+- Lifecycle events exposed starts and ends but did not distinguish no-op,
+  summary, persistence, or breaker outcomes.
+
+#### Resolution
+
+- Managed admission now uses the same compactable-token basis as semantic
+  compaction, while full request tokens remain authoritative for physical
+  capacity enforcement.
+- Below-threshold and no-prefix outcomes are explicit no-ops. Only summary
+  generation and persistence rejection increment the failure breaker.
+- The breaker waits two eligible boundaries before a half-open retry, rearms
+  earlier after meaningful compactable growth, resets only after a committed
+  rewrite, and remains bypassable by hard physical pressure.
+- Successful anti-thrash remains separate from Provider/persistence failures.
+- Runtime `skipped` and backward-compatible `ended` events now carry typed
+  reason, token-basis, failure-count, breaker-state, and cooldown fields.
+- Success projections and `context.compaction.finished` are emitted only after
+  persistence acknowledgement; daemon forwarding preserves the structured
+  outcome and does not project `committed: false` as legacy success.
+
+#### Files Changed
+
+- `packages/coding/src/task-engine/_internal/managed-task/compaction.ts`
+- `packages/coding/src/agent-runtime/middleware/compaction-pressure.ts`
+- `packages/coding/src/types.ts`
+- `src/sdk-runtime.ts`, `src/runtime-event.ts`, and `src/kodax_cli.ts`
+- Focused managed-hook, event-parser, SDK Runtime, child-event, and daemon bridge
+  regression tests.
+
+#### Test Coverage
+
+- Repeated full-context threshold crossings caused only by managed context do
+  not call the summary Provider or consume failure budget; later compactable
+  growth commits normally.
+- No-prefix, canonical-context capture, persistence, hard-pressure,
+  cooldown, growth-rearm, half-open failure, and successful reset paths retain
+  their distinct semantics.
+- Structured skip/failure outcomes survive child, embedded Runtime, persisted
+  event replay, parser validation, and daemon-client forwarding.
 
 ### 283: REPL hides the canonical sidecar item and appends duplicated verifier evidence after Worker retry
 

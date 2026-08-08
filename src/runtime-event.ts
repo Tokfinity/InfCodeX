@@ -181,6 +181,60 @@ function validateKnownRuntimeEventPayload(
       ? undefined
       : 'requires a canonical compaction payload.';
   }
+  if (type === 'context.compaction.started') {
+    return isRecord(payload)
+      && (payload.meta === undefined || isRecord(payload.meta))
+      ? undefined
+      : 'requires an optional activity meta payload.';
+  }
+  if (type === 'context.compaction.stats') {
+    return isRecord(payload)
+      && typeof payload.tokensBefore === 'number'
+      && typeof payload.tokensAfter === 'number'
+      ? undefined
+      : 'requires numeric token statistics.';
+  }
+  if (type === 'context.compaction.skipped') {
+    const valid = isRecord(payload)
+      && isCompactionSkipReason(payload.reason)
+      && typeof payload.currentTokens === 'number'
+      && typeof payload.contextWindow === 'number'
+      && typeof payload.triggerPercent === 'number'
+      && typeof payload.cooldownTurnsRemaining === 'number'
+      && typeof payload.lowSavingsStreak === 'number'
+      && isOptionalNumber(payload.compactableTokens)
+      && isOptionalNumber(payload.effectiveTriggerTokens)
+      && isOptionalNumber(payload.consecutiveFailures)
+      && isOptionalNumber(payload.circuitBreakerLimit)
+      && isOptionalNumber(payload.rearmAtTokens)
+      && isOptionalCircuitBreakerState(payload.circuitBreakerState);
+    return valid ? undefined : 'requires a structured skip reason.';
+  }
+  if (type === 'context.compaction.ended') {
+    if (!isRecord(payload) || (payload.meta !== undefined && !isRecord(payload.meta))) {
+      return 'requires a compaction lifecycle payload.';
+    }
+    if (payload.outcome === undefined) {
+      const legacy = payload.reason === undefined
+        && payload.failurePhase === undefined
+        && payload.currentTokens === undefined
+        && payload.compactableTokens === undefined
+        && payload.consecutiveFailures === undefined
+        && payload.circuitBreakerLimit === undefined
+        && payload.circuitBreakerState === undefined
+        && payload.cooldownTurnsRemaining === undefined;
+      return legacy ? undefined : 'requires a structured compaction outcome.';
+    }
+    const valid = typeof payload.currentTokens === 'number'
+      && typeof payload.compactableTokens === 'number'
+      && typeof payload.consecutiveFailures === 'number'
+      && typeof payload.circuitBreakerLimit === 'number'
+      && isOptionalCircuitBreakerState(payload.circuitBreakerState)
+      && payload.circuitBreakerState !== undefined
+      && typeof payload.cooldownTurnsRemaining === 'number'
+      && isCompactionEndOutcome(payload);
+    return valid ? undefined : 'requires a structured compaction outcome.';
+  }
   if (type === 'todo.updated') {
     return isRecord(payload) && Array.isArray(payload.items)
       ? undefined
@@ -237,6 +291,54 @@ function validateKnownRuntimeEventPayload(
       : 'requires a warning message payload.';
   }
   return undefined;
+}
+
+function isCompactionSkipReason(value: unknown): boolean {
+  return value === 'low_savings_cooldown'
+    || value === 'covered_context_unchanged'
+    || value === 'compactable_below_threshold'
+    || value === 'no_compactable_prefix'
+    || value === 'circuit_breaker_cooldown';
+}
+
+function isCompactionFailureReason(value: unknown): boolean {
+  return value === 'summary_generation_failed'
+    || value === 'persistence_failed'
+    || value === 'context_capacity_exceeded'
+    || value === 'post_processing_failed';
+}
+
+function isCompactionEndOutcome(payload: Record<string, unknown>): boolean {
+  if (payload.outcome === 'compacted') {
+    return payload.reason === undefined && payload.failurePhase === undefined;
+  }
+  if (payload.outcome === 'skipped') {
+    return isCompactionSkipReason(payload.reason) && payload.failurePhase === undefined;
+  }
+  if (payload.outcome !== 'failed' || !isCompactionFailureReason(payload.reason)) {
+    return false;
+  }
+  if (payload.reason === 'summary_generation_failed') {
+    return payload.failurePhase === 'summary_generation';
+  }
+  if (payload.reason === 'persistence_failed') {
+    return payload.failurePhase === 'persistence';
+  }
+  if (payload.reason === 'post_processing_failed') {
+    return payload.failurePhase === 'post_processing';
+  }
+  return payload.failurePhase === undefined;
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || typeof value === 'number';
+}
+
+function isOptionalCircuitBreakerState(value: unknown): boolean {
+  return value === undefined
+    || value === 'closed'
+    || value === 'open'
+    || value === 'half_open';
 }
 
 function validateRunProgressPayload(payload: unknown): string | undefined {

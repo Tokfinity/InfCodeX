@@ -766,6 +766,18 @@ function buildOutcomeDigest(
   const reusableLesson = typeof latestOutcome?.metadata?.reusableLesson === 'string'
     ? sanitizePromptSafeMemoryClaim(latestOutcome.metadata.reusableLesson, 512)
     : undefined;
+  // FEATURE_290 §3.2: carry verification-class observation evidence (with its
+  // verdict) into the digest evidence so verifiedOutcome has real input.
+  // Outcome-bound evidence wins on ref conflicts; cancelled episodes keep
+  // their intent-only evidence untouched.
+  const verdictObservationEvidence = outcome.status === 'cancelled'
+    ? []
+    : observations
+        .filter((observation) => observation.metadata?.verification === true)
+        .flatMap((observation) => observation.evidence)
+        .filter((evidence) => evidence.verdict === 'passed' || evidence.verdict === 'failed')
+        .filter((candidate) => !outcome.evidence.some((existing) => existing.ref === candidate.ref));
+  const mergedEvidence = [...outcome.evidence, ...verdictObservationEvidence];
   const sequence = observations.at(-1)?.sequence ?? 0;
   const reviewKey = digest([
     input.identity.sessionId,
@@ -789,8 +801,8 @@ function buildOutcomeDigest(
     approach: latestOutcome?.summary ?? 'episode completion',
     outcome: outcome.status,
     summary: outcome.summary.trim(),
-    evidenceRefs: unique(outcome.evidence.map((evidence) => evidence.ref)),
-    evidence: outcome.evidence.map((evidence) => ({
+    evidenceRefs: unique(mergedEvidence.map((evidence) => evidence.ref)),
+    evidence: mergedEvidence.map((evidence) => ({
       ref: evidence.ref,
       grade: evidence.requestedGrade,
       source: evidence.source,

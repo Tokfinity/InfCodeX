@@ -37,6 +37,12 @@ export interface LearningReviewQualification {
   readonly independentEpisodeCount: number;
   readonly verifiedOutcome: boolean;
   readonly exactSkillInvoked: boolean;
+  /**
+   * FEATURE_290 §3.3: additive admission signal
+   * (`outcome === 'failed' && lesson !== undefined`). No existing predicate
+   * reads it; absent on pre-F290 frozen inputs.
+   */
+  readonly failedWithLesson?: boolean;
 }
 
 export interface LearningReviewEvidencePacket {
@@ -250,7 +256,9 @@ export function isUnifiedLearningReviewModelInput(
     && typeof qualification.explicitSkillPreservation === 'boolean'
     && Number.isSafeInteger(qualification.independentEpisodeCount)
     && typeof qualification.verifiedOutcome === 'boolean'
-    && typeof qualification.exactSkillInvoked === 'boolean';
+    && typeof qualification.exactSkillInvoked === 'boolean'
+    && (qualification.failedWithLesson === undefined
+      || typeof qualification.failedWithLesson === 'boolean');
 }
 
 function isIntentOnlyCancelledDigest(digest: Record<string, unknown>): boolean {
@@ -295,6 +303,7 @@ export function normalizeUnifiedLearningReview(
     record.memoryPlan,
     input.memory,
     input.evidence.outcomeDigest,
+    input.evidence.qualification,
   );
   const capabilityDecision = normalizeCapabilityDecision(
     record.capabilityDecision,
@@ -535,13 +544,25 @@ function bindMemoryPlanToInput(
   plan: MemoryReviewPlan,
   input: MemoryReviewModelInput,
   digest: KodaXMemoryOutcomeDigest,
+  qualification: LearningReviewQualification,
 ): MemoryReviewPlan {
+  // FEATURE_290 §3.4: proposals whose evidence basis is a failed-with-lesson
+  // episode stay in the human approval queue. The deterministic floor
+  // overrides the reviewer's self-assessed low risk; medium/high are kept.
+  const floorToHumanQueue = qualification.failedWithLesson === true;
   return {
     ...plan,
     trigger: input.trigger,
     sourceRefs: input.sourceRefs,
     candidateRefs: input.candidateRefs,
     episodeDigest: digest,
+    ...(floorToHumanQueue
+      ? {
+          actions: plan.actions.map((action) => (
+            action.risk === 'low' ? { ...action, risk: 'medium' as const } : action
+          )),
+        }
+      : {}),
   };
 }
 

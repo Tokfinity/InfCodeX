@@ -21,15 +21,11 @@ import {
   drainPendingEpisodeReviews,
   failEpisodeReviewApply,
   failEpisodeReviewAttempt,
-  fencePendingEpisodeReviewsForSession,
-  freezeEpisodeReviewInput,
-  inspectEpisodeReviewJob,
+  freezeEpisodeReviewInput,  inspectEpisodeReviewJob,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
-  rewindPendingEpisodeReviews,
-  rewindPendingEpisodeReviewsForSession,
-  type EpisodeReviewDrainOptions,
-  type PendingEpisodeReviewV2,
+  withPendingEpisodeReviewSessionFence,
+  type EpisodeReviewDrainOptions,  type PendingEpisodeReviewV2,
   EpisodeReviewBranchChangedError,
 } from './review-inbox.js';
 
@@ -142,51 +138,7 @@ describe('FEATURE_260 episode review inbox', () => {
     expect(await listPendingEpisodeReviews({ tenantId: identity.tenantId })).toHaveLength(1);
   });
 
-  it('removes only post-target reviews on rewind', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-rewind-'));
-    setAgentConfigHome(home);
-    await persistPendingEpisodeReview(identity, digest(1));
-    await persistPendingEpisodeReview(identity, digest(2));
-
-    expect(await rewindPendingEpisodeReviews(identity, 1)).toBe(1);
-    expect((await listPendingEpisodeReviews({ tenantId: identity.tenantId })))
-      .toMatchObject([{ digest: { sequence: 1 } }]);
-  });
-
-  it('fences every tenant inbox for one runtime-owned session', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-session-rewind-'));
-    const tenantB = { ...identity, tenantId: 'tenant-b' };
-    const otherSession = { ...identity, sessionId: 'session-b' };
-    await persistPendingEpisodeReview({ ...identity, configHome: home }, digest(2));
-    await persistPendingEpisodeReview(
-      { ...tenantB, configHome: home },
-      { ...digest(2), id: 'digest-tenant-b' },
-    );
-    await persistPendingEpisodeReview(
-      { ...otherSession, configHome: home },
-      {
-        ...digest(2),
-        id: 'digest-session-b',
-        sessionId: otherSession.sessionId,
-      },
-    );
-
-    expect(await rewindPendingEpisodeReviewsForSession({
-      configHome: home,
-      sessionId: identity.sessionId,
-    }, 1)).toBe(2);
-    expect(await listPendingEpisodeReviews({
-      configHome: home,
-      tenantId: identity.tenantId,
-    })).toMatchObject([{ ownerSessionRef: otherSession.sessionId }]);
-    expect(await listPendingEpisodeReviews({
-      configHome: home,
-      tenantId: tenantB.tenantId,
-    })).toEqual([]);
-  });
-
-  it('serializes new tenant root registration with a session-wide fence', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-root-registry-'));
+  it('serializes new tenant root registration with a session-wide fence', async () => {    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-root-registry-'));
     const identityA = { ...identity, configHome: home };
     const identityB = { ...identityA, tenantId: 'tenant-b' };
     const pendingA = await persistPendingEpisodeReview(identityA, digest(2));
@@ -211,11 +163,10 @@ describe('FEATURE_260 episode review inbox', () => {
     });
     await branchLockHeld;
 
-    const fence = fencePendingEpisodeReviewsForSession({
+    const fence = withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: identityA.sessionId,
-    }, []);
-    const queuePath = `${branchLockPath}.queue`;
+    }, (runFence) => runFence([]));    const queuePath = `${branchLockPath}.queue`;
     const queueDeadline = Date.now() + 2_000;
     let fenceQueued = false;
     while (!fenceQueued && Date.now() < queueDeadline) {
@@ -278,20 +229,15 @@ describe('FEATURE_260 episode review inbox', () => {
       sibling,
     );
 
-    expect(await fencePendingEpisodeReviewsForSession({
+    expect(await withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: identity.sessionId,
-    }, [active.id])).toBe(1);
+    }, (fence) => fence([active.id]))).toBe(1);
     expect(await listPendingEpisodeReviews({
       configHome: home,
       tenantId: identity.tenantId,
     })).toMatchObject([{ digest: { id: active.id } }]);
-    expect(await rewindPendingEpisodeReviewsForSession({
-      configHome: home,
-      sessionId: identity.sessionId,
-    }, 9)).toBe(0);
-    const authority = JSON.parse(await readFile(path.join(
-      home,
+    const authority = JSON.parse(await readFile(path.join(      home,
       'memory-review-inbox',
       hashMemoryIdentityComponent('tenant', identity.tenantId),
       hashMemoryIdentityComponent('session', identity.sessionId),
@@ -354,11 +300,10 @@ describe('FEATURE_260 episode review inbox', () => {
     );
     await writeFile(badReceiptPath, '{}\n', 'utf8');
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: identity.sessionId,
-    }, [])).rejects.toThrow('invalid review protocol record');
-    await rm(badReceiptPath, { force: true });
+    }, (fence) => fence([]))).rejects.toThrow('invalid review protocol record');    await rm(badReceiptPath, { force: true });
     await expect(claimEpisodeReview(goodOwner, good.entry.jobId))
       .resolves.toMatchObject({ jobId: good.entry.jobId });
   });
@@ -387,75 +332,13 @@ describe('FEATURE_260 episode review inbox', () => {
       'utf8',
     );
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, [])).rejects.toThrow('review job state identity mismatch');
-    await expect(readFile(persisted.path, 'utf8')).resolves.toContain(persisted.entry.jobId);
+    }, (fence) => fence([]))).rejects.toThrow('review job state identity mismatch');    await expect(readFile(persisted.path, 'utf8')).resolves.toContain(persisted.entry.jobId);
   });
 
-  it('prevalidates every tenant root before applying a session rewind', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-rewind-preflight-'));
-    const tenantIds = ['tenant-rewind-preflight-a', 'tenant-rewind-preflight-b']
-      .sort((left, right) =>
-        hashMemoryIdentityComponent('tenant', left)
-          .localeCompare(hashMemoryIdentityComponent('tenant', right)));
-    const goodOwner = { ...identity, configHome: home, tenantId: tenantIds[0]! };
-    const badOwner = { ...identity, configHome: home, tenantId: tenantIds[1]! };
-    const goodDigest = {
-      ...digest(2),
-      id: 'digest-rewind-preflight-good',
-      reviewKey: 'review-rewind-preflight-good',
-    };
-    const good = await persistPendingEpisodeReview(goodOwner, goodDigest);
-    const badDigest = {
-      ...digest(1),
-      id: 'digest-rewind-preflight-bad-receipt',
-      reviewKey: 'review-rewind-preflight-bad-receipt',
-    };
-    const badSessionRoot = path.join(
-      home,
-      'memory-review-inbox',
-      hashMemoryIdentityComponent('tenant', badOwner.tenantId),
-      hashMemoryIdentityComponent('session', badOwner.sessionId),
-    );
-    const badPendingDir = path.join(badSessionRoot, 'pending');
-    const badReceiptsDir = path.join(badSessionRoot, 'receipts');
-    await mkdir(badPendingDir, { recursive: true });
-    await mkdir(badReceiptsDir, { recursive: true });
-    await writeFile(
-      path.join(
-        badPendingDir,
-        `${hashMemoryIdentityComponent('review', badDigest.reviewKey)}.json`,
-      ),
-      `${JSON.stringify({
-        version: 1,
-        reviewKey: badDigest.reviewKey,
-        digest: badDigest,
-        ownerSessionRef: badOwner.sessionId,
-        ownerAgentHash: hashMemoryIdentityComponent('agent', badOwner.agentId),
-        ownerProjectHash: hashMemoryIdentityComponent('project', badOwner.projectId),
-        createdAt: badDigest.createdAt,
-      })}\n`,
-      'utf8',
-    );
-    const badReceiptPath = path.join(
-      badReceiptsDir,
-      `${hashMemoryIdentityComponent('review', badDigest.reviewKey)}.json`,
-    );
-    await writeFile(badReceiptPath, '{}\n', 'utf8');
-
-    await expect(rewindPendingEpisodeReviewsForSession({
-      configHome: home,
-      sessionId: identity.sessionId,
-    }, 1)).rejects.toThrow('invalid review protocol record');
-    await rm(badReceiptPath, { force: true });
-    await expect(claimEpisodeReview(goodOwner, good.entry.jobId))
-      .resolves.toMatchObject({ jobId: good.entry.jobId });
-  });
-
-  it('drains only owner-validated reviews and keeps deferred work pending', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-drain-'));
+  it('drains only owner-validated reviews and keeps deferred work pending', async () => {    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-drain-'));
     setAgentConfigHome(home);
     await persistPendingEpisodeReview(identity, digest(1));
     await persistPendingEpisodeReview(identity, digest(2));
@@ -537,11 +420,10 @@ describe('FEATURE_260 episode review inbox', () => {
     await reviewEntered;
 
     let fenceFinished = false;
-    const fence = fencePendingEpisodeReviewsForSession({
+    const fence = withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, []).then((removed) => {
-      fenceFinished = true;
+    }, (runFence) => runFence([])).then((removed) => {      fenceFinished = true;
       return removed;
     });
     const fenceDeadline = Date.now() + 1_000;
@@ -590,11 +472,10 @@ describe('FEATURE_260 episode review inbox', () => {
       'utf8',
     );
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, [])).resolves.toBe(1);
-    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }, (fence) => fence([]))).resolves.toBe(1);    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(listPendingEpisodeReviews({
       configHome: home,
       tenantId: owner.tenantId,
@@ -619,11 +500,10 @@ describe('FEATURE_260 episode review inbox', () => {
       'utf8',
     );
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, [activeDigest.id])).resolves.toBe(0);
-    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }, (fence) => fence([activeDigest.id]))).resolves.toBe(0);    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(listPendingEpisodeReviews({
       configHome: home,
       tenantId: owner.tenantId,
@@ -676,11 +556,10 @@ describe('FEATURE_260 episode review inbox', () => {
       'utf8',
     );
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, [activeDigest.id])).resolves.toBe(1);
-    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }, (fence) => fence([activeDigest.id]))).resolves.toBe(1);    await expect(readFile(processingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(listPendingEpisodeReviews({
       configHome: home,
       tenantId: owner.tenantId,
@@ -741,11 +620,10 @@ describe('FEATURE_260 episode review inbox', () => {
     })).resolves.toMatchObject([{ digest: { id: pendingDigest.id } }]);
     await expect(readdir(processingDir)).resolves.toEqual(['stale-claim.json']);
 
-    await expect(fencePendingEpisodeReviewsForSession({
+    await expect(withPendingEpisodeReviewSessionFence({
       configHome: home,
       sessionId: owner.sessionId,
-    }, [staleDigest.id])).resolves.toBe(1);
-    await expect(readdir(processingDir)).resolves.toEqual([]);
+    }, (fence) => fence([staleDigest.id]))).resolves.toBe(1);    await expect(readdir(processingDir)).resolves.toEqual([]);
     await expect(listPendingEpisodeReviews({
       configHome: home,
       tenantId: owner.tenantId,
@@ -1154,51 +1032,7 @@ describe('FEATURE_260 episode review inbox', () => {
     await expect(readFile(pendingPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('retires or restores legacy processing entries according to rewind sequence', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-v1-rewind-'));
-    const owner = { ...identity, configHome: home };
-    const processingDir = path.join(
-      home,
-      'memory-review-inbox',
-      hashMemoryIdentityComponent('tenant', owner.tenantId),
-      hashMemoryIdentityComponent('session', owner.sessionId),
-      'processing',
-    );
-    await mkdir(processingDir, { recursive: true });
-    for (const sequence of [1, 2]) {
-      const reviewDigest = {
-        ...digest(sequence),
-        id: `digest-legacy-v1-rewind-${sequence}`,
-        reviewKey: `review-legacy-v1-rewind-${sequence}`,
-      };
-      await writeFile(
-        path.join(processingDir, `claim-${sequence}.json`),
-        `${JSON.stringify({
-          version: 1,
-          reviewKey: reviewDigest.reviewKey,
-          digest: reviewDigest,
-          ownerSessionRef: owner.sessionId,
-          ownerAgentHash: hashMemoryIdentityComponent('agent', owner.agentId),
-          ownerProjectHash: hashMemoryIdentityComponent('project', owner.projectId),
-          createdAt: reviewDigest.createdAt,
-        })}\n`,
-        'utf8',
-      );
-    }
-
-    await expect(rewindPendingEpisodeReviewsForSession({
-      configHome: home,
-      sessionId: owner.sessionId,
-    }, 1)).resolves.toBe(1);
-    await expect(readdir(processingDir)).resolves.toEqual([]);
-    await expect(listPendingEpisodeReviews({
-      configHome: home,
-      tenantId: owner.tenantId,
-    })).resolves.toMatchObject([{ digest: { id: 'digest-legacy-v1-rewind-1' } }]);
-  });
-
-  it('bounds a maintenance drain and retains failed reviews for retry', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-bounded-'));
+  it('bounds a maintenance drain and retains failed reviews for retry', async () => {    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-inbox-bounded-'));
     setAgentConfigHome(home);
     await persistPendingEpisodeReview(identity, digest(1));
     await persistPendingEpisodeReview(identity, digest(2));
@@ -1343,12 +1177,11 @@ describe('FEATURE_263 fenced episode review protocol', () => {
     setAgentConfigHome(home);
     const epoch = await captureEpisodeReviewBranchEpoch(identity);
 
-    await rewindPendingEpisodeReviews(identity, 0);
+    await withPendingEpisodeReviewSessionFence(identity, (fence) => fence([]));
 
     await expect(persistPendingEpisodeReview(identity, digest(), {
       expectedBranchEpoch: epoch,
-    })).rejects.toBeInstanceOf(EpisodeReviewBranchChangedError);
-    await expect(listPendingEpisodeReviews({ tenantId: identity.tenantId }))
+    })).rejects.toBeInstanceOf(EpisodeReviewBranchChangedError);    await expect(listPendingEpisodeReviews({ tenantId: identity.tenantId }))
       .resolves.toEqual([]);
   });
 
@@ -1370,9 +1203,8 @@ describe('FEATURE_263 fenced episode review protocol', () => {
       },
     });
     await entered;
-    const mutation = rewindPendingEpisodeReviews(identity, 0)
-      .then(() => { branchMutationFinished = true; });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    const mutation = withPendingEpisodeReviewSessionFence(identity, (fence) => fence([]))
+      .then(() => { branchMutationFinished = true; });    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(branchMutationFinished).toBe(false);
 
     releaseOwner();
@@ -1849,46 +1681,7 @@ describe('FEATURE_263 fenced episode review protocol', () => {
     })).toBeUndefined();
   });
 
-  it('rewind takes the authority lock and permanently fences an outstanding claim', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-v2-rewind-fence-'));
-    setAgentConfigHome(home);
-    await persistPendingEpisodeReview(identity, digest(2));
-    const claim = await claimEpisodeReview(identity, 'review-2');
-    if (claim === undefined) throw new Error('expected review claim');
-
-    expect(await rewindPendingEpisodeReviews(identity, 1)).toBe(1);
-    await expect(freezeEpisodeReviewInput(identity, claim, {
-      evidence: { digest: digest(2) },
-      promptRevision: 'p1',
-      schemaRevision: 's1',
-      policyRevision: 'g1',
-      providerRevision: 'provider-a',
-    })).rejects.toThrow('review claim is no longer authoritative');
-  });
-
-  it('allows the same legacy review key to identify a new job after rewind', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-v2-rebranch-'));
-    setAgentConfigHome(home);
-    const original = await persistPendingEpisodeReview(identity, digest());
-
-    expect(await rewindPendingEpisodeReviews(identity, 0)).toBe(1);
-    const rebranchedDigest = {
-      ...digest(),
-      id: 'digest-rebranched',
-      branchId: 'branch-after-rewind',
-      createdAt: '2026-07-12T00:05:00.000Z',
-    };
-    const rebranched = await persistPendingEpisodeReview(identity, rebranchedDigest);
-
-    expect(rebranched.entry.jobId).not.toBe(original.entry.jobId);
-    expect((await listPendingEpisodeReviews({ tenantId: identity.tenantId })))
-      .toMatchObject([{ digest: { id: 'digest-rebranched' } }]);
-    await expect(claimEpisodeReview(identity, rebranched.entry.jobId)).resolves
-      .toMatchObject({ jobId: rebranched.entry.jobId });
-  });
-
-  it('resumes a committed decision without re-applying an action that has a receipt', async () => {
-    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-v2-resume-action-'));
+  it('resumes a committed decision without re-applying an action that has a receipt', async () => {    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-v2-resume-action-'));
     setAgentConfigHome(home);
     await persistPendingEpisodeReview(identity, digest());
     const claim = await claimEpisodeReview(identity, 'review-1');
@@ -2306,9 +2099,8 @@ describe('FEATURE_263 fenced episode review protocol', () => {
       review: async () => [],
     });
     expect((await drain()).reviewed).toBe(1);
-    await rewindPendingEpisodeReviews(identity, 0);
-    const second = await persistPendingEpisodeReview(identity, {
-      ...digest(),
+    await withPendingEpisodeReviewSessionFence(identity, (fence) => fence([]));
+    const second = await persistPendingEpisodeReview(identity, {      ...digest(),
       branchId: 'new-branch',
     });
     expect(second.entry.jobId).not.toBe(first.entry.jobId);
@@ -2327,5 +2119,103 @@ describe('FEATURE_263 fenced episode review protocol', () => {
     expect(new Set(receipts.map((receipt) => receipt.jobId))).toEqual(
       new Set([first.entry.jobId, second.entry.jobId]),
     );
+  });
+});
+
+describe('FEATURE_289 episode review drain fixes', () => {
+  let home: string | undefined;
+
+  afterEach(async () => {
+    setAgentConfigHome(undefined);
+    if (home !== undefined) await rm(home, { recursive: true, force: true });
+  });
+
+  it('does not spend the drain entry budget on deferred jobs', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-f289-defer-budget-'));
+    setAgentConfigHome(home);
+    await persistPendingEpisodeReview(identity, digest(1));
+    await persistPendingEpisodeReview(identity, {
+      ...digest(2),
+      createdAt: '2026-07-12T00:01:00.000Z',
+    });
+    await persistPendingEpisodeReview(identity, {
+      ...digest(3),
+      createdAt: '2026-07-12T00:02:00.000Z',
+    });
+    const reviewed: string[] = [];
+
+    const result = await drainPendingEpisodeReviews(identity, {
+      maxEntries: 2,
+      revalidate: async (entry) => entry.reviewKey === 'review-1' ? 'defer' : 'eligible',
+      review: async (entry) => {
+        reviewed.push(entry.reviewKey);
+        return [`proposal-${entry.digest.sequence}`];
+      },
+    });
+
+    expect(result).toMatchObject({ reviewed: 2, deferred: 1, failed: 0 });
+    expect(reviewed).toEqual(['review-2', 'review-3']);
+    expect((await listPendingEpisodeReviews({ tenantId: identity.tenantId })))
+      .toMatchObject([{ reviewKey: 'review-1' }]);
+  });
+
+  it('counts pre-decide failures as provider attempts and escalates to attention', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-12T00:00:00.000Z'));
+    try {
+      home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-f289-predecide-attempt-'));
+      setAgentConfigHome(home);
+      const persisted = await persistPendingEpisodeReview(identity, digest());
+      const options = {
+        revalidate: async () => 'eligible' as const,
+        review: async () => ['proposal-1'],
+        prepareV2Input: async () => {
+          throw new Error('reviewer crashed while building input');
+        },
+      };
+
+      for (const backoffMs of [0, 60_000, 5 * 60_000, 30 * 60_000]) {
+        await vi.advanceTimersByTimeAsync(backoffMs);
+        await expect(drainPendingEpisodeReviews(identity, options))
+          .resolves.toMatchObject({ failed: 1, reviewed: 0 });
+      }
+
+      expect((await inspectEpisodeReviewJob(identity, persisted.entry.jobId))?.state)
+        .toMatchObject({ providerAttempts: 4, status: 'attention' });
+      await expect(drainPendingEpisodeReviews(identity, options))
+        .resolves.toMatchObject({ failed: 0, reviewed: 0, deferred: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releases the claim without committing a decision once the drain deadline passes', async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), 'kodax-review-f289-deadline-'));
+    setAgentConfigHome(home);
+    const persisted = await persistPendingEpisodeReview(identity, digest());
+    const deadlineAtMs = Date.now() + 100;
+
+    const result = await drainPendingEpisodeReviews(identity, {
+      deadlineAtMs,
+      revalidate: async () => 'eligible',
+      review: async () => ['proposal-1'],
+      decideV2: async (
+        _entry: PendingEpisodeReviewV2,
+        input: Parameters<NonNullable<EpisodeReviewDrainOptions['decideV2']>>[1],
+      ) => {
+        // Simulate a slow provider that only resolves after the deadline.
+        while (Date.now() <= deadlineAtMs) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        return { inputHash: input.evidenceHash, memoryProposalIds: [] };
+      },
+    });
+
+    expect(result).toMatchObject({ reviewed: 0, failed: 0, deferred: 1 });
+    const snapshot = await inspectEpisodeReviewJob(identity, persisted.entry.jobId);
+    expect(snapshot?.state).toMatchObject({ status: 'pending', providerAttempts: 0 });
+    expect(snapshot?.decision).toBeUndefined();
+    await expect(listPendingEpisodeReviews({ tenantId: identity.tenantId }))
+      .resolves.toHaveLength(1);
   });
 });

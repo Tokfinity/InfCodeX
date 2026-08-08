@@ -140,6 +140,7 @@ describe('managed history compaction', () => {
     const result = await hook?.(messages);
     expect(compactMock).toHaveBeenCalledTimes(1);
     expect(compactMock.mock.calls[0]?.[0]).toBe(messages);
+    expect(compactMock.mock.calls[0]?.[10]).toBe(true);
     expect(JSON.stringify(compactMock.mock.calls[0]?.[0])).toContain(
       'FULL_EVIDENCE_SENTINEL',
     );
@@ -380,7 +381,265 @@ describe('managed history compaction', () => {
     expect(messages[0]?.content).toContain('FULL_EVIDENCE_SENTINEL');
   });
 
-  it('uses the circuit breaker only while physical capacity still exists', async () => {
+  it('does not spend failure budget when only managed context crosses the threshold', async () => {
+    const managedContext: KodaXMessage = {
+      role: 'user',
+      content: `=== Managed Run Context ===\n${'managed state '.repeat(2_000)}`,
+      _synthetic: true,
+      _source: 'managed-run-context',
+    };
+    const compactableMessages = makeMessages();
+    const messages = [managedContext, ...compactableMessages];
+    const triggerTokens = 256_000;
+    const fixedEnvelopeTokens = triggerTokens - estimateTokens(compactableMessages) - 1_000;
+    const ref: ContextTokenSnapshotRef = {
+      current: snapshot(fixedEnvelopeTokens + estimateTokens(messages), messages),
+    };
+    const capacity = resolvedCapacity(90, 400_000);
+    capacity.compactionConfig.triggerTokens = triggerTokens;
+    const onCompactStart = vi.fn();
+    const onContextCompactionSkipped = vi.fn();
+    const onContextCompactionFinished = vi.fn();
+    compactMock.mockResolvedValue({
+      compacted: false,
+      messages: compactableMessages,
+      tokensBefore: triggerTokens - 1_000,
+      tokensAfter: triggerTokens - 1_000,
+      entriesRemoved: 0,
+    });
+    const hook = await buildManagedTaskCompactionHook(options({
+      onCompactStart,
+      onContextCompactionSkipped,
+      onContextCompactionFinished,
+    }), {
+      resolvedContextCapacity: capacity,
+      contextTokenSnapshotRef: ref,
+      canonicalManagedContext: () => managedContext,
+    });
+
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+
+    expect(compactMock).not.toHaveBeenCalled();
+    expect(onCompactStart).not.toHaveBeenCalled();
+    expect(onContextCompactionFinished).not.toHaveBeenCalled();
+    expect(onContextCompactionSkipped).toHaveBeenCalledTimes(4);
+    expect(onContextCompactionSkipped).toHaveBeenLastCalledWith(expect.objectContaining({
+      reason: 'compactable_below_threshold',
+      currentTokens: fixedEnvelopeTokens + estimateTokens(messages),
+      compactableTokens: triggerTokens - 1_000,
+    }));
+
+    const growth: KodaXMessage = {
+      role: 'assistant',
+      content: 'new compactable evidence '.repeat(4_000),
+    };
+    const expandedCompactable = [...compactableMessages, growth];
+    const expandedMessages = [managedContext, ...expandedCompactable];
+    expect(fixedEnvelopeTokens + estimateTokens(expandedCompactable))
+      .toBeGreaterThan(triggerTokens);
+    ref.current = snapshot(
+      fixedEnvelopeTokens + estimateTokens(expandedMessages),
+      expandedMessages,
+    );
+    compactMock.mockResolvedValueOnce(compactedResult(expandedCompactable));
+
+    const result = await hook?.(expandedMessages);
+
+    expect(compactMock).toHaveBeenCalledTimes(1);
+    expect(compactMock.mock.calls[0]?.[0]).toEqual(expandedCompactable);
+    expect(result).toBeDefined();
+    expect(onContextCompactionFinished).toHaveBeenCalledTimes(1);
+    expect(onContextCompactionFinished).toHaveBeenCalledWith(expect.objectContaining({
+      committed: true,
+    }));
+  });
+
+  it('does not count a no-compactable-prefix result as a breaker failure', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
+    const onContextCompactionSkipped = vi.fn();
+    compactMock.mockResolvedValue({
+      compacted: false,
+      messages,
+      tokensBefore: 75_000,
+      tokensAfter: 75_000,
+      entriesRemoved: 0,
+    });
+    const hook = await buildManagedTaskCompactionHook(options({
+      onContextCompactionSkipped,
+    }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: ref,
+    });
+
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(4);
+    expect(onContextCompactionSkipped).toHaveBeenCalledTimes(4);
+    expect(onContextCompactionSkipped).toHaveBeenLastCalledWith(expect.objectContaining({
+      reason: 'no_compactable_prefix',
+      consecutiveFailures: 0,
+    }));
+
+    compactMock.mockResolvedValueOnce(compactedResult(messages));
+    await expect(hook?.(messages)).resolves.toBeDefined();
+    expect(compactMock).toHaveBeenCalledTimes(5);
+  });
+
+  it('reports summary failures through the compaction end outcome', async () => {
+    const messages = makeMessages();
+    const onCompactEnd = vi.fn();
+    compactMock.mockRejectedValue(new Error('provider unavailable'));
+    const hook = await buildManagedTaskCompactionHook(options({ onCompactEnd }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: { current: snapshot(75_000, messages) },
+    });
+
+    await hook?.(messages);
+
+    expect(onCompactEnd).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      outcome: 'failed',
+      reason: 'summary_generation_failed',
+      failurePhase: 'summary_generation',
+      consecutiveFailures: 1,
+    }));
+  });
+
+  it('does not spend failure budget when canonical managed context capture fails', async () => {
+    const messages = makeMessages();
+    const onCompactEnd = vi.fn();
+    const canonicalManagedContext = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new Error('context capture failed');
+      })
+      .mockReturnValue(undefined);
+    compactMock.mockResolvedValue(compactedResult(messages));
+    const hook = await buildManagedTaskCompactionHook(options({ onCompactEnd }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: { current: snapshot(75_000, messages) },
+      canonicalManagedContext,
+    });
+
+    await expect(hook?.(messages)).resolves.toBeUndefined();
+    expect(compactMock).not.toHaveBeenCalled();
+    expect(onCompactEnd).toHaveBeenLastCalledWith(undefined, expect.objectContaining({
+      outcome: 'failed',
+      reason: 'post_processing_failed',
+      consecutiveFailures: 0,
+      circuitBreakerState: 'closed',
+    }));
+
+    await expect(hook?.(messages)).resolves.toBeDefined();
+    expect(compactMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts persistence rejection but emits no successful compaction facts', async () => {
+    const messages = makeMessages();
+    const onCompactStats = vi.fn();
+    const onCompact = vi.fn();
+    const onContextCompactionFinished = vi.fn();
+    const onCompactEnd = vi.fn();
+    compactMock.mockResolvedValue(compactedResult(messages));
+    const hook = await buildManagedTaskCompactionHook(options({
+      onCompactStats,
+      onCompact,
+      onCompactedMessages: vi.fn().mockRejectedValue(new Error('session write failed')),
+      onContextCompactionFinished,
+      onCompactEnd,
+    }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: { current: snapshot(75_000, messages) },
+    });
+
+    await hook?.(messages);
+
+    expect(onCompactStats).not.toHaveBeenCalled();
+    expect(onCompact).not.toHaveBeenCalled();
+    expect(onContextCompactionFinished).not.toHaveBeenCalled();
+    expect(onCompactEnd).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      outcome: 'failed',
+      reason: 'persistence_failed',
+      failurePhase: 'persistence',
+      consecutiveFailures: 1,
+    }));
+  });
+
+  it('retries after a bounded circuit-breaker cooldown before physical pressure', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
+    const onContextCompactionSkipped = vi.fn();
+    const onCompactEnd = vi.fn();
+    compactMock.mockRejectedValue(new Error('temporary summary failure'));
+    const hook = await buildManagedTaskCompactionHook(options({
+      onContextCompactionSkipped,
+      onCompactEnd,
+    }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: ref,
+    });
+
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(3);
+    expect(onContextCompactionSkipped).toHaveBeenCalledTimes(2);
+    expect(onContextCompactionSkipped).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      reason: 'circuit_breaker_cooldown',
+      consecutiveFailures: 3,
+      cooldownTurnsRemaining: 1,
+    }));
+    expect(onContextCompactionSkipped).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      reason: 'circuit_breaker_cooldown',
+      consecutiveFailures: 3,
+      cooldownTurnsRemaining: 0,
+    }));
+
+    compactMock.mockResolvedValueOnce(compactedResult(messages));
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(4);
+
+    compactMock.mockRejectedValueOnce(new Error('new summary failure'));
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(5);
+    expect(onCompactEnd).toHaveBeenLastCalledWith(undefined, expect.objectContaining({
+      outcome: 'failed',
+      reason: 'summary_generation_failed',
+      consecutiveFailures: 1,
+      circuitBreakerState: 'closed',
+    }));
+  });
+
+  it('reopens the cooldown when a half-open summary attempt fails', async () => {
+    const messages = makeMessages();
+    const onContextCompactionSkipped = vi.fn();
+    compactMock.mockRejectedValue(new Error('provider still unavailable'));
+    const hook = await buildManagedTaskCompactionHook(options({
+      onContextCompactionSkipped,
+    }), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: { current: snapshot(75_000, messages) },
+    });
+
+    for (let attempt = 0; attempt < 6; attempt += 1) await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(4);
+
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(4);
+    expect(onContextCompactionSkipped).toHaveBeenLastCalledWith(expect.objectContaining({
+      reason: 'circuit_breaker_cooldown',
+      consecutiveFailures: 4,
+      cooldownTurnsRemaining: 1,
+    }));
+  });
+
+  it('bypasses an open breaker immediately under physical context pressure', async () => {
     const messages = makeMessages();
     const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
     compactMock.mockRejectedValue(new Error('temporary summary failure'));
@@ -392,12 +651,32 @@ describe('managed history compaction', () => {
     await hook?.(messages);
     await hook?.(messages);
     await hook?.(messages);
-    await hook?.(messages);
     expect(compactMock).toHaveBeenCalledTimes(3);
 
     ref.current = snapshot(88_000, messages);
     compactMock.mockResolvedValueOnce(compactedResult(messages));
+    await expect(hook?.(messages)).resolves.toBeDefined();
+    expect(compactMock).toHaveBeenCalledTimes(4);
+    expect(compactMock.mock.calls[3]?.[10]).toBe(true);
+  });
+
+  it('rearms the breaker early after meaningful compactable growth', async () => {
+    const messages = makeMessages();
+    const ref: ContextTokenSnapshotRef = { current: snapshot(75_000, messages) };
+    compactMock.mockRejectedValue(new Error('temporary summary failure'));
+    const hook = await buildManagedTaskCompactionHook(options(), {
+      resolvedContextCapacity: resolvedCapacity(70),
+      contextTokenSnapshotRef: ref,
+    });
+
     await hook?.(messages);
+    await hook?.(messages);
+    await hook?.(messages);
+    expect(compactMock).toHaveBeenCalledTimes(3);
+
+    ref.current = snapshot(84_000, messages);
+    compactMock.mockResolvedValueOnce(compactedResult(messages));
+    await expect(hook?.(messages)).resolves.toBeDefined();
     expect(compactMock).toHaveBeenCalledTimes(4);
   });
 
@@ -425,6 +704,11 @@ describe('managed history compaction', () => {
     await hook?.(messages);
     expect(onCompactStart).toHaveBeenCalledTimes(1);
     expect(onCompactEnd).toHaveBeenCalledTimes(1);
+    expect(onCompactEnd).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      outcome: 'compacted',
+      consecutiveFailures: 0,
+      circuitBreakerState: 'closed',
+    }));
     expect(onCompactedMessages).toHaveBeenCalledTimes(1);
     const finalMessages = onCompactedMessages.mock.calls[0]?.[0] as KodaXMessage[];
     const finalTokens = 88_000 - estimateTokens(messages) + estimateTokens(finalMessages);

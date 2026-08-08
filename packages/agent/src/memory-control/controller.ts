@@ -2211,10 +2211,12 @@ function extractClaimBody(body: string): string {
   return parseMemoryFile(body).body.trim();
 }
 
+// Gate persisted memory bodies with the same unsafe-claim semantics used on
+// the prompt-input side, so hostile content cannot bypass sanitization by
+// being paraphrased into a review action's proposedBody. Reject-only: the
+// body is never rewritten here.
 function isRestrictedMemoryBody(body: string): boolean {
-  return /(?:api[_-]?key|authorization:\s*bearer|private key|password|secret|token\s*[:=])/i.test(body)
-    || /(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior|system|developer)\s+instructions?/i.test(body)
-    || /<\/?(?:system|developer|assistant|tool|prompt)(?:\s|>)/i.test(body);
+  return body.trim().length > 0 && sanitizePromptSafeMemoryClaim(body) === undefined;
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {

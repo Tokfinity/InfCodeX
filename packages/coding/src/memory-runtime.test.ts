@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   appendMemoryOutcomeDigest,
@@ -11,6 +11,7 @@ import {
   LearnedAreaStore,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
+  readLearningProposalStore,
   resolveProjectLearnedAreaRoot,
   resolveMemoryRoot,
   resolveScopedMemoryRoot,
@@ -26,6 +27,7 @@ import { createMemoryAgent } from '@kodax-ai/agent/experimental-memory';
 
 import type { KodaXOptions } from './types.js';
 import {
+  awaitLatestCodingMemoryReviewDrain,
   canonicalMemoryProjectId,
   appliedMemoryReviewSummaries,
   detectMemoryReviewTrigger,
@@ -1193,11 +1195,307 @@ describe('memory runtime hooks', () => {
       outcome: 'succeeded',
       actionSignature: expect.stringMatching(/^bash:verify:[a-f0-9]{16}$/),
       lesson: 'Run `npm test` and require a successful verifier result.',
+      // FEATURE_290 §3.2: the verification observation's evidence is merged
+      // into the digest evidence after the completion-supplied entry.
       evidence: [{
         ref: 'artifact:release-check',
         grade: 'verified',
         verdict: 'passed',
+      }, {
+        ref: 'tool-result:check-release',
+        grade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-27T00:00:00.000Z',
       }],
     }]);
+  });
+
+  // Shared fixture for the FEATURE_290 §3.3/§3.4, FEATURE_289 §3.6 and drain
+  // deadline/await tests: one failed episode digest carrying a sanitized
+  // lesson and a failed verified verdict.
+  async function failedLessonDrainFixture(
+    learningReviewer: NonNullable<KodaXOptions['learningReviewer']>,
+  ) {
+    const cwd = await createTempDir('kodax-memory-runtime-failed-lesson-');
+    const home = await createTempDir('kodax-memory-runtime-failed-lesson-home-');
+    cleanupDirs.push(cwd, home);
+    const identity: MemoryContextIdentity = {
+      configHome: home,
+      tenantId: 'tenant-failed',
+      agentId: 'agent-failed',
+      projectId: 'project-failed',
+      sessionId: 'session-failed',
+    };
+    const learningStorePath = path.join(home, 'learning', 'proposals.json');
+    const controller = createMemoryControlPlane({
+      cwd,
+      identity,
+      learningStorePath,
+      projectDocs: [],
+      discoverSkills: false,
+    });
+    const digest: KodaXMemoryOutcomeDigest = {
+      id: 'digest-failed-lesson-1',
+      reviewKey: 'review-failed-lesson-1',
+      sessionId: identity.sessionId,
+      branchId: identity.sessionId,
+      sequence: 1,
+      objective: 'Verify a release candidate',
+      approach: 'Run the release verification command.',
+      outcome: 'failed',
+      summary: 'The release verification failed.',
+      evidenceRefs: ['tool-result:check-release'],
+      evidence: [{
+        ref: 'tool-result:check-release',
+        grade: 'verified',
+        source: 'tool',
+        verdict: 'failed',
+        observedAt: '2026-07-27T00:00:00.000Z',
+      }],
+      actionSignature: 'bash:verify:0123456789abcdef',
+      lesson: 'A `bash` call with these inputs failed before. Inspect the referenced tool result and adjust the inputs before retrying.',
+      visibility: 'prompt_safe',
+      createdAt: '2026-07-27T00:00:00.000Z',
+    };
+    const pending = await persistPendingEpisodeReview(identity, digest);
+    let sessionData: KodaXSessionData = {
+      messages: [{ role: 'user', content: 'Verify release' }],
+      title: 'release',
+      gitRoot: cwd,
+      lineage: appendMemoryOutcomeDigest(
+        createSessionLineage([{ role: 'user', content: 'Verify release' }]),
+        digest,
+        pending.entry.version === 2 ? pending.entry.jobId : undefined,
+      ),
+    };
+    const storage = {
+      save: async (id: string, data: KodaXSessionData) => {
+        if (id === identity.sessionId) sessionData = data;
+      },
+      load: async (id: string) => id === identity.sessionId ? sessionData : null,
+      mutateLineage: async (id: string, mutation: (
+        lineage: import('@kodax-ai/agent').KodaXSessionLineage,
+      ) => import('@kodax-ai/agent').KodaXSessionLineage) => {
+        if (id !== identity.sessionId) return false;
+        const lineage = sessionData.lineage ?? createSessionLineage(sessionData.messages);
+        const nextLineage = mutation(lineage);
+        if (nextLineage !== lineage) sessionData = { ...sessionData, lineage: nextLineage };
+        return true;
+      },
+      list: async () => [{
+        id: identity.sessionId,
+        title: sessionData.title,
+        msgCount: sessionData.messages.length,
+      }],
+    };
+    const notices: Array<{
+      readonly sessionId?: string;
+      readonly episodeId: string;
+      readonly summaries: readonly string[];
+      readonly proposalIds: readonly string[];
+    }> = [];
+    const options: KodaXOptions = {
+      provider: 'anthropic',
+      context: { executionCwd: cwd, configHome: home },
+      session: { id: identity.sessionId, persistedByHost: true, storage },
+      learningReviewer,
+      events: { onMemoryNotice: (notice) => notices.push(notice) },
+    };
+    return { controller, digest, identity, learningStorePath, notices, options };
+  }
+
+  it('derives failedWithLesson qualification from a failed digest with a lesson (FEATURE_290 §3.3)', async () => {
+    let reviewedInput: import('@kodax-ai/agent').UnifiedLearningReviewModelInput | undefined;
+    const fixture = await failedLessonDrainFixture(async (input) => {
+      reviewedInput = input;
+      return {
+        memoryPlan: {
+          trigger: input.memory.trigger,
+          createdAt: '2026-07-27T00:01:00.000Z',
+          sourceRefs: input.memory.sourceRefs,
+          candidateRefs: input.memory.candidateRefs,
+          actions: [],
+          warnings: [],
+        },
+      };
+    });
+
+    const result = await drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      'session-visible',
+    );
+
+    expect(result).toMatchObject({ reviewed: 1, failed: 0 });
+    expect(reviewedInput?.evidence.qualification.failedWithLesson).toBe(true);
+  });
+
+  it('keeps low-risk reviewer actions on failedWithLesson evidence in the human queue (FEATURE_290 §3.4)', async () => {
+    const fixture = await failedLessonDrainFixture(async (input) => ({
+      memoryPlan: {
+        trigger: input.memory.trigger,
+        createdAt: '2026-07-27T00:01:00.000Z',
+        sourceRefs: input.memory.sourceRefs,
+        candidateRefs: input.memory.candidateRefs,
+        actions: [{
+          action: 'write_memdir',
+          targetRefIds: [],
+          summary: 'Remember the failed verification lesson.',
+          rationale: 'The episode failed with a sanitized lesson.',
+          confidence: 'high',
+          risk: 'low',
+          requiresApproval: true,
+          proposedBody: 'Inspect the failing verifier output before retrying.',
+        }],
+        warnings: [],
+      },
+    }));
+
+    const result = await drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      'session-visible',
+    );
+
+    expect(result).toMatchObject({ reviewed: 1, failed: 0 });
+    // Without the deterministic risk floor, a low-risk + high-confidence
+    // action would auto-apply and emit a client notice (see the
+    // auto-promotion test above); the floor keeps it pending instead.
+    expect(fixture.notices).toEqual([]);
+    const store = await readLearningProposalStore(fixture.learningStorePath);
+    expect(store.proposals).toMatchObject([{ status: 'pending' }]);
+  });
+
+  it('emits an explicit failure notice on the visible session when episode review fails (FEATURE_289 §3.6)', async () => {
+    const fixture = await failedLessonDrainFixture(async () => {
+      throw new Error('reviewer unavailable');
+    });
+
+    const result = await drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      'session-visible',
+    );
+
+    expect(result).toMatchObject({ reviewed: 0, failed: 1 });
+    expect(fixture.notices).toEqual([{
+      sessionId: 'session-visible',
+      episodeId: `memory-review-failure:${fixture.digest.reviewKey}`,
+      summaries: [expect.stringMatching(/^Memory review failed: .*reviewer unavailable/)],
+      proposalIds: [],
+    }]);
+  });
+
+  it('routes failure notices to the visible session when the drain defer key is empty (FEATURE_289 §3.6)', async () => {
+    const fixture = await failedLessonDrainFixture(async () => {
+      throw new Error('reviewer unavailable');
+    });
+
+    const result = await drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      '',
+    );
+
+    expect(result).toMatchObject({ reviewed: 0, failed: 1 });
+    // Turn-end drains pass '' as the own-session defer key; the REPL drops
+    // notices whose sessionId is defined but mismatched, so the notice must
+    // carry sessionId undefined to render on the visible session.
+    expect(fixture.notices).toEqual([{
+      sessionId: undefined,
+      episodeId: `memory-review-failure:${fixture.digest.reviewKey}`,
+      summaries: [expect.stringMatching(/^Memory review failed: .*reviewer unavailable/)],
+      proposalIds: [],
+    }]);
+  });
+  it('passes the drain deadline through and reports deadline-released claims', async () => {
+    let reviewCalls = 0;
+    const fixture = await failedLessonDrainFixture(async (input) => {
+      reviewCalls += 1;
+      return {
+        memoryPlan: {
+          trigger: input.memory.trigger,
+          createdAt: '2026-07-27T00:01:00.000Z',
+          sourceRefs: input.memory.sourceRefs,
+          candidateRefs: input.memory.candidateRefs,
+          actions: [],
+          warnings: [],
+        },
+      };
+    });
+
+    const result = await drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      'session-visible',
+      Date.now() - 1,
+    );
+
+    // The deadline already passed, so no job is claimed and the entry stays
+    // pending for the next run.
+    expect(result).toMatchObject({ reviewed: 0, failed: 0 });
+    expect(result?.deferred).toBeGreaterThanOrEqual(1);
+    expect(reviewCalls).toBe(0);
+    expect(fixture.notices).toEqual([{
+      sessionId: 'session-visible',
+      episodeId: 'memory-review-drain-deadline:session-visible',
+      summaries: [expect.stringContaining('shutdown deadline')],
+      proposalIds: [],
+    }]);
+    await expect(listPendingEpisodeReviews({
+      configHome: fixture.identity.configHome!,
+      tenantId: fixture.identity.tenantId,
+    })).resolves.toHaveLength(1);
+  });
+
+  it('awaitLatestCodingMemoryReviewDrain resolves immediately when no drain has started', async () => {
+    vi.resetModules();
+    const fresh = await import('./memory-runtime.js');
+
+    await expect(fresh.awaitLatestCodingMemoryReviewDrain(10_000)).resolves.toBeUndefined();
+  });
+
+  it('awaitLatestCodingMemoryReviewDrain bounds the wait and resolves once the drain completes', async () => {
+    let releaseReview: (() => void) | undefined;
+    const fixture = await failedLessonDrainFixture((input) => new Promise((resolve) => {
+      releaseReview = () => resolve({
+        memoryPlan: {
+          trigger: input.memory.trigger,
+          createdAt: '2026-07-27T00:01:00.000Z',
+          sourceRefs: input.memory.sourceRefs,
+          candidateRefs: input.memory.candidateRefs,
+          actions: [],
+          warnings: [],
+        },
+      });
+    }));
+
+    const drainPromise = drainCodingMemoryReviewInbox(
+      fixture.options,
+      fixture.identity,
+      fixture.controller,
+      'session-visible',
+    );
+    let drainSettled = false;
+    void drainPromise.then(() => {
+      drainSettled = true;
+    });
+    await vi.waitFor(() => expect(releaseReview).toBeDefined());
+
+    // The reviewer never settles until released, so a short bounded await
+    // returns while the drain is still in flight.
+    await expect(awaitLatestCodingMemoryReviewDrain(30)).resolves.toBeUndefined();
+    expect(drainSettled).toBe(false);
+
+    releaseReview?.();
+    await expect(awaitLatestCodingMemoryReviewDrain(2_000)).resolves.toBeUndefined();
+    expect(drainSettled).toBe(true);
+    await expect(drainPromise).resolves.toMatchObject({ reviewed: 1, failed: 0 });
   });
 });

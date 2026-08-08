@@ -2407,8 +2407,11 @@ export function buildChildEvents(
     onContextCompactionSkipped: (event) => {
       parentEvents?.onContextCompactionSkipped?.(event);
     },
-    onCompactEnd: (meta) => {
-      parentEvents?.onCompactEnd?.(activityEventMeta(meta, { liveOnly: true }));
+    onCompactEnd: (meta, result) => {
+      parentEvents?.onCompactEnd?.(
+        activityEventMeta(meta, { liveOnly: true }),
+        result,
+      );
     },
     // Block parent-only tools, then enforce live plan mode. Runtime Actor
     // collaboration tools remain available within the inherited capability ceiling.

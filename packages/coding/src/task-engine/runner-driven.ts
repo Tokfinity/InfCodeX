@@ -871,6 +871,9 @@ async function finishRunnerMemoryRuntime(
       runtime.identity,
       runtime.controller,
       '',
+      // FEATURE_289 §3.1: bound the decide phase so a shutdown-window drain
+      // releases its claim via defer instead of fossilizing mid-judge.
+      Date.now() + 15_000,
     ).then(() => undefined),
   ).catch((error: unknown) => {
     emitResilienceDebug('[memory:review-inbox:drain-error]', {

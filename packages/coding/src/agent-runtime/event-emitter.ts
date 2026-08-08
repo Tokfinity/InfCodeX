@@ -283,8 +283,8 @@ export function withLiveTurnAttribution(
     onContextCompactionFinished: (event) => {
       baseEvents.onContextCompactionFinished?.(withLiveMeta(scope, event));
     },
-    onCompactEnd: (meta) => {
-      baseEvents.onCompactEnd?.(withActivityMeta(scope, meta));
+    onCompactEnd: (meta, result) => {
+      baseEvents.onCompactEnd?.(withActivityMeta(scope, meta), result);
     },
     onMidTurnUserMessages: (contents, meta) => {
       baseEvents.onMidTurnUserMessages?.(contents, withActivityMeta(scope, meta));

@@ -1023,6 +1023,10 @@ export async function runSubstrate(
           memoryIdentity,
           memoryController,
           '',
+          // FEATURE_289 §3.1: bound the decide phase so a shutdown-window
+          // drain releases its claim via defer instead of fossilizing
+          // mid-judge in `processing`.
+          Date.now() + 15_000,
         ).then(() => undefined),
       ).catch((error: unknown) => {
         emitResilienceDebug('[memory:review-inbox:drain-error]', {

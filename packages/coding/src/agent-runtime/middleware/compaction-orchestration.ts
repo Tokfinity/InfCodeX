@@ -156,24 +156,22 @@ export async function tryIntelligentCompact(
 
   if (shouldSkipLlmCompaction(antiThrash, input.currentTokens) && !requiresCapacityRelief) {
     const nextAntiThrash = consumeCompactionCooldown(antiThrash);
-    if (input.emitCompactionDiagnostics) {
-      input.events.onContextCompactionSkipped?.({
-        ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
-        ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
-        ...(input.parentContextId !== undefined
-          ? { parentContextId: input.parentContextId }
-          : {}),
-        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
-        reason: antiThrash.cooldownTurnsRemaining > 0
-          ? 'low_savings_cooldown'
-          : 'covered_context_unchanged',
-        currentTokens: input.currentTokens,
-        contextWindow: input.contextWindow,
-        triggerPercent: input.compactionConfig.triggerPercent,
-        cooldownTurnsRemaining: nextAntiThrash.cooldownTurnsRemaining,
-        lowSavingsStreak: nextAntiThrash.lowSavingsStreak,
-      });
-    }
+    input.events.onContextCompactionSkipped?.({
+      ...(input.contextId !== undefined ? { contextId: input.contextId } : {}),
+      ...(input.contextKind !== undefined ? { contextKind: input.contextKind } : {}),
+      ...(input.parentContextId !== undefined
+        ? { parentContextId: input.parentContextId }
+        : {}),
+      ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+      reason: antiThrash.cooldownTurnsRemaining > 0
+        ? 'low_savings_cooldown'
+        : 'covered_context_unchanged',
+      currentTokens: input.currentTokens,
+      contextWindow: input.contextWindow,
+      triggerPercent: input.compactionConfig.triggerPercent,
+      cooldownTurnsRemaining: nextAntiThrash.cooldownTurnsRemaining,
+      lowSavingsStreak: nextAntiThrash.lowSavingsStreak,
+    });
     return {
       compacted: input.messages,
       compactionUpdate: undefined,

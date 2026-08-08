@@ -2087,7 +2087,18 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       elapsedMs: 25,
       ...childContextMeta,
     });
-    events!.onCompactEnd?.(childContextMeta);
+    const compactionEndResult = {
+      outcome: 'failed' as const,
+      reason: 'summary_generation_failed' as const,
+      failurePhase: 'summary_generation' as const,
+      currentTokens: 80_000,
+      compactableTokens: 70_000,
+      consecutiveFailures: 3,
+      circuitBreakerLimit: 3,
+      circuitBreakerState: 'open' as const,
+      cooldownTurnsRemaining: 2,
+    };
+    events!.onCompactEnd?.(childContextMeta, compactionEndResult);
     await expect(events!.askUser!({
       question: 'Proceed?',
       kind: 'select',
@@ -2231,7 +2242,10 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       committed: true,
       ...childContextMeta,
     }));
-    expect(parentCompactEnd).toHaveBeenCalledWith(expect.objectContaining(childContextMeta));
+    expect(parentCompactEnd).toHaveBeenCalledWith(
+      expect.objectContaining(childContextMeta),
+      compactionEndResult,
+    );
     expect(parentAskUser).toHaveBeenCalledWith(
       {
         question: 'Proceed?',

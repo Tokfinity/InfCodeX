@@ -40,17 +40,27 @@ export function buildToolMemoryObservations(
     const reusableLesson = verification && safeVerificationCommand !== undefined
       ? `Run \`${safeVerificationCommand}\` and require a successful verifier result.`
       : undefined;
+    // Sanitize the tool name for all prompt-facing fields (summary,
+    // actionSignature, claimKey, metadata). The lesson path additionally
+    // gates on safety — no lesson when the name itself is unsafe; display
+    // fields fall back to a neutral placeholder.
+    const safeToolName = sanitizePromptSafeMemoryClaim(block.name, 64);
+    const displayToolName = safeToolName ?? 'unknown-tool';
+    const failureLesson = failure && safeToolName !== undefined
+      ? `A \`${safeToolName}\` call with these inputs failed before. Inspect the referenced tool result and adjust the inputs before retrying.`
+      : undefined;
+    const lesson = reusableLesson ?? failureLesson;
     if (!failure && !verification) continue;
     if (verification && isRestrictedMemoryContent(content)) continue;
     const callRefId = canonicalToolCallId(block.id);
     const evidenceRef = `tool-result:${callRefId}`;
     const safeResult = sanitizePromptSafeMemoryClaim(boundedSummary(content), 480);
     const neutralFailure =
-      `${block.name} failed under the current inputs and environment. Inspect the referenced tool result.`;
+      `${displayToolName} failed under the current inputs and environment. Inspect the referenced tool result.`;
     const summary = failure
       ? safeResult === undefined
         ? neutralFailure
-        : `${block.name} failed under the current inputs and environment: ${safeResult}`
+        : `${displayToolName} failed under the current inputs and environment: ${safeResult}`
       : `Verification command succeeded: ${safeResult ?? 'Inspect the referenced tool result.'}`;
     sequence += 1;
     observations.push({
@@ -60,28 +70,34 @@ export function buildToolMemoryObservations(
       summary,
       evidence: [{
         ref: evidenceRef,
-        requestedGrade: 'observed',
+        // FEATURE_290 §3.2: verification-class calls record their verdict so
+        // digest evidence gives verifiedOutcome a real input. Other tool
+        // outcomes keep the pre-existing observed grade without a verdict.
+        requestedGrade: verificationCall ? 'verified' : 'observed',
         source: 'tool',
+        ...(verificationCall
+          ? { verdict: (failure ? 'failed' : 'passed') as 'failed' | 'passed' }
+          : {}),
         observedAt: input.observedAt,
       }],
       visibility: 'prompt_safe',
       ...(failure
         ? {
-            actionSignature: input.decisionActionSignature ?? block.name,
-            claimKey: `tool-failure:${block.name}:${failureFingerprint(safeResult)}`,
+            actionSignature: input.decisionActionSignature ?? displayToolName,
+            claimKey: `tool-failure:${displayToolName}:${failureFingerprint(safeResult)}`,
           }
         : {
             // Successful verifier evidence must stay bound to the concrete
             // command that produced it. A broad task signature would let an
             // unrelated later command inherit this verified method.
-            actionSignature: verificationActionSignature(block.name, verificationCommand),
+            actionSignature: verificationActionSignature(displayToolName, verificationCommand),
           }),
       occurredAt: input.observedAt,
       metadata: {
-        toolName: block.name,
+        toolName: displayToolName,
         failed: failure,
         verification: verificationCall,
-        ...(reusableLesson === undefined ? {} : { reusableLesson }),
+        ...(lesson === undefined ? {} : { reusableLesson: lesson }),
       },
     });
   }

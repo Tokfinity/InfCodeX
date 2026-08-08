@@ -600,6 +600,158 @@ describe('FEATURE_263 unified review normalization', () => {
     expect(sanitized.evidence.outcomeDigest.objective).toContain('[omitted:');
   });
 
+  it('accepts the additive failedWithLesson qualification only as a boolean (FEATURE_290 §3.3)', () => {
+    const input = {
+      cacheDomain: 'learning-review' as const,
+      memory: memoryInput,
+      evidence: evidence(),
+    };
+
+    expect(isUnifiedLearningReviewModelInput(input)).toBe(true);
+    expect(isUnifiedLearningReviewModelInput({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        qualification: { ...input.evidence.qualification, failedWithLesson: true },
+      },
+    })).toBe(true);
+    expect(isUnifiedLearningReviewModelInput({
+      ...input,
+      evidence: {
+        ...input.evidence,
+        qualification: { ...input.evidence.qualification, failedWithLesson: 'yes' },
+      },
+    })).toBe(false);
+  });
+
+  it('keeps capability-decision normalization byte-identical with failedWithLesson present (F263 guard)', () => {
+    const failedDigest: KodaXMemoryOutcomeDigest = {
+      ...digest,
+      outcome: 'failed',
+      lesson: 'A `bash` call with these inputs failed before. Inspect the referenced tool result.',
+    };
+    const baseEvidence = evidence({
+      outcomeDigest: failedDigest,
+      verifierFacts: [{ ref: 'tool:test', verdict: 'failed' }],
+      qualification: {
+        reusableMethodEvidence: false,
+        explicitSkillPreservation: false,
+        independentEpisodeCount: 1,
+        verifiedOutcome: true,
+        exactSkillInvoked: false,
+      },
+    });
+    const admissionEvidence = evidence({
+      outcomeDigest: failedDigest,
+      verifierFacts: [{ ref: 'tool:test', verdict: 'failed' }],
+      qualification: {
+        reusableMethodEvidence: false,
+        explicitSkillPreservation: false,
+        independentEpisodeCount: 1,
+        verifiedOutcome: true,
+        exactSkillInvoked: false,
+        failedWithLesson: true,
+      },
+    });
+    const raw = {
+      memoryPlan,
+      capabilityDecision: {
+        disposition: 'project_canary',
+        reasonCodes: ['rule_level_contradiction'],
+        requestedScope: 'project',
+        semanticDisposition: 'allow',
+        operation: 'patch',
+        targetCapabilityId: 'lc_verify_release',
+        expectedFingerprint: 'a'.repeat(64),
+        expectedRevision: 3,
+        spec: {
+          name: 'verify-release',
+          description: 'Use when verifying release candidates.',
+          purpose: 'Verify a release.',
+          triggers: ['A release candidate is ready.'],
+          steps: ['Run release tests.'],
+          verification: ['Confirm tests pass.'],
+          pitfalls: ['Do not accept partial output.'],
+        },
+      },
+    };
+
+    const before = normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: baseEvidence,
+    }, raw);
+    const after = normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: admissionEvidence,
+    }, raw);
+
+    expect(JSON.stringify(after.capabilityDecision))
+      .toBe(JSON.stringify(before.capabilityDecision));
+    expect(after.capabilityDecision).toMatchObject({
+      disposition: 'ready',
+      reasonCodes: expect.arrayContaining(['exact_invoked_revision_required']),
+    });
+  });
+
+  it('floors reviewer self-assessed low risk for failedWithLesson evidence (FEATURE_290 §3.4)', () => {
+    const action = (risk: 'low' | 'medium' | 'high') => ({
+      action: 'write_memdir' as const,
+      targetRefIds: [],
+      summary: 'Remember the failure lesson.',
+      rationale: 'The episode failed with a sanitized lesson.',
+      confidence: 'high' as const,
+      risk,
+      requiresApproval: true as const,
+      proposedBody: 'Inspect the failing verifier output before retrying.',
+    });
+    const failedDigest: KodaXMemoryOutcomeDigest = {
+      ...digest,
+      outcome: 'failed',
+      lesson: 'A `bash` call with these inputs failed before. Inspect the referenced tool result.',
+    };
+    const floored = normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence({
+        outcomeDigest: failedDigest,
+        qualification: {
+          reusableMethodEvidence: false,
+          explicitSkillPreservation: false,
+          independentEpisodeCount: 0,
+          verifiedOutcome: true,
+          exactSkillInvoked: false,
+          failedWithLesson: true,
+        },
+      }),
+    }, {
+      memoryPlan: { ...memoryPlan, actions: [action('low'), action('medium'), action('high')] },
+    });
+
+    expect(floored.memoryPlan.actions.map((item) => item.risk))
+      .toEqual(['medium', 'medium', 'high']);
+
+    const untouched = normalizeUnifiedLearningReview({
+      cacheDomain: 'learning-review',
+      memory: memoryInput,
+      evidence: evidence({
+        outcomeDigest: failedDigest,
+        qualification: {
+          reusableMethodEvidence: false,
+          explicitSkillPreservation: false,
+          independentEpisodeCount: 0,
+          verifiedOutcome: true,
+          exactSkillInvoked: false,
+        },
+      }),
+    }, {
+      memoryPlan: { ...memoryPlan, actions: [action('low')] },
+    });
+
+    expect(untouched.memoryPlan.actions[0]?.risk).toBe('low');
+  });
+
   it('exposes structured memory intent only when its ref has authoritative user evidence', () => {
     const memoryIntent = {
       operation: 'remember' as const,

@@ -5124,6 +5124,18 @@ includes stable root/child identity, revision, before/after tokens, strategy,
 effective trigger, protected budget, and component accounting. Consumers must
 not use `scope: 'worker'` as a parent/child identity substitute.
 
+Operational no-ops are exposed as `context.compaction.skipped`. Its structured
+reason is one of `compactable_below_threshold`, `no_compactable_prefix`,
+`low_savings_cooldown`, `covered_context_unchanged`, or
+`circuit_breaker_cooldown`. A
+started attempt always closes with `context.compaction.ended`; managed-task
+attempts carry an `outcome`, structured `reason` for skips or failures, and
+breaker state. Legacy events and non-managed compaction paths may contain only
+`meta`. The
+failure breaker counts only summary-generation and persistence failures, waits
+two eligible boundaries before a half-open retry, and can rearm earlier after
+meaningful compactable-token growth.
+
 ```ts
 const subscription = runtime.events.subscribe(
   { sessionId: session.id, types: ['context.compaction.finished'] },

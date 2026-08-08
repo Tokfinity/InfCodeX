@@ -33,10 +33,10 @@ import {
   resolveMemoryEntrypoint,
   readLearningProposalStore,
   upsertLearningProposal,
+  type KodaXSessionLineage,
   type MemoryLearningHandoff,
   type MemoryReviewModelInput,
-} from '@kodax-ai/agent';
-import type { KodaXOptions } from '@kodax-ai/coding';
+} from '@kodax-ai/agent';import type { KodaXOptions } from '@kodax-ai/coding';
 
 import { memoryCommand } from './memory-command.js';
 
@@ -393,8 +393,162 @@ describe('FEATURE_124 Phase D — /memory command', () => {
   });
 });
 
-function memoryProposal(proposalId: string): MemoryLearningHandoff {
-  return {
+describe('FEATURE_289 §3.5 — /memory status', () => {
+  let tempHome: string;
+  let cwd: string;
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-mem-status-home-'));
+    setAgentConfigHome(tempHome);
+    cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-mem-status-cwd-'));
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+    fs.rmSync(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+
+  async function invokeStatus(
+    contextOverrides: Record<string, unknown>,
+    callbacks: Partial<MemoryCommandCallbacks>,
+  ) {
+    const context = {
+      messages: [],
+      runtimeInfo: { workspaceRoot: cwd, executionCwd: cwd },
+      sessionId: 'session-status-test',
+      ...contextOverrides,
+    };
+    await memoryCommand.handler(
+      ['status'],
+      context as never,
+      callbacks as MemoryCommandCallbacks,
+      {} as never,
+    );
+  }
+
+  const configuredCallbacks: Partial<MemoryCommandCallbacks> = {
+    createKodaXOptions: () => ({
+      provider: 'anthropic',
+      memoryReviewer: async (input: MemoryReviewModelInput) => ({
+        trigger: input.trigger,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        sourceRefs: input.sourceRefs,
+        candidateRefs: input.candidateRefs,
+        actions: [],
+        warnings: input.warnings,
+      }),
+    } as KodaXOptions),
+  };
+
+  it('renders zero values on an empty project without throwing', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({}, configuredCallbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('per-project memory directory')).toBe(true);
+    expect(log.contains('this-session pipeline')).toBe(true);
+    expect(log.contains('outcome digests : 0')).toBe(true);
+    expect(log.contains('review receipts : 0')).toBe(true);
+    expect(log.contains('client notices  : 0')).toBe(true);
+    expect(log.contains('pending: 0')).toBe(true);
+    expect(log.contains('configured (custom reviewer bound)')).toBe(true);
+    // digests == 0 => capture segment diagnosis.
+    expect(log.contains('capture segment')).toBe(true);
+  });
+
+  it('flags the review segment when digests exist but no review completed', async () => {
+    const lineage: KodaXSessionLineage = {
+      version: 2,
+      activeEntryId: null,
+      entries: [
+        {
+          id: 'digest-1',
+          parentId: null,
+          timestamp: '2026-08-01T00:00:00.000Z',
+          type: 'memory_outcome_digest',
+          digest: {
+            id: 'digest-1',
+            reviewKey: 'review:digest-1',
+            sessionId: 'session-status-test',
+            branchId: 'main',
+            sequence: 1,
+            objective: 'objective',
+            approach: 'approach',
+            outcome: 'succeeded',
+            summary: 'summary',
+            evidenceRefs: [],
+            visibility: 'prompt_safe',
+            createdAt: '2026-08-01T00:00:00.000Z',
+          },
+        },
+        {
+          id: 'notice-1',
+          parentId: null,
+          timestamp: '2026-08-01T00:00:00.000Z',
+          type: 'client_notice',
+          source: 'memory-agent',
+          content: 'Memory updated: x',
+        },
+        {
+          id: 'notice-2',
+          parentId: null,
+          timestamp: '2026-08-01T00:00:00.000Z',
+          type: 'client_notice',
+          source: 'other-agent',
+          content: 'not a memory notice',
+        },
+      ],
+    };
+
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({ lineage }, configuredCallbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('outcome digests : 1')).toBe(true);
+    expect(log.contains('review receipts : 0')).toBe(true);
+    // Only client_notice entries with source 'memory-agent' are counted.
+    expect(log.contains('client notices  : 1')).toBe(true);
+    expect(log.contains('review segment: digests captured but no review completed')).toBe(true);
+    expect(log.contains('capture segment')).toBe(false);
+  });
+
+  it('reports a missing reviewer when the provider is not configured', async () => {
+    const callbacks: Partial<MemoryCommandCallbacks> = {
+      // An unresolvable provider name is deterministically unconfigured.
+      createKodaXOptions: () => ({ provider: 'definitely-unconfigured-provider' } as KodaXOptions),
+    };
+
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({}, callbacks);
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('MISSING — provider "definitely-unconfigured-provider" is not configured')).toBe(true);
+    expect(log.contains('reviewer missing')).toBe(true);
+  });
+
+  it('renders an unavailable note when KodaX options are not bound', async () => {
+    const { log, restore } = captureConsole();
+    try {
+      await invokeStatus({}, {});
+    } finally {
+      restore();
+    }
+
+    expect(log.contains('unavailable — KodaX options are not bound in this session')).toBe(true);
+  });
+});
+
+function memoryProposal(proposalId: string): MemoryLearningHandoff {  return {
     destination: 'memdir_handoff',
     proposalId,
     origin: 'background_learning',

@@ -65,13 +65,10 @@ export {
   drainPendingEpisodeReviews,
   failEpisodeReviewApply,
   failEpisodeReviewAttempt,
-  fencePendingEpisodeReviewsForSession,
   freezeEpisodeReviewInput,
   inspectEpisodeReviewJob,
   listPendingEpisodeReviews,
   persistPendingEpisodeReview,
-  rewindPendingEpisodeReviews,
-  rewindPendingEpisodeReviewsForSession,
   withEpisodeReviewClaimAuthority,
   withPendingEpisodeReviewSessionFence,
 } from './review-inbox.js';

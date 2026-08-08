@@ -3985,6 +3985,89 @@ describe("createKodaXRuntime", () => {
     await runtime.close();
   });
 
+  it("persists structured compaction skip and failed-end outcomes", async () => {
+    const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
+    const runtime = await createKodaXRuntime({
+      homeDir: tempRoot,
+      sessionsDir: path.join(tempRoot, "sessions"),
+      defaultProvider: "mock-provider",
+    });
+    const session = await runtime.sessions.create({
+      title: "Compaction Outcome Events",
+    });
+    codingMock.startKodaX.mockImplementation(
+      (options: KodaXOptions): RunningSession => {
+        queueMicrotask(() => {
+          options.events?.onContextCompactionSkipped?.({
+            reason: "compactable_below_threshold",
+            currentTokens: 280_000,
+            compactableTokens: 255_999,
+            contextWindow: 400_000,
+            triggerPercent: 90,
+            effectiveTriggerTokens: 256_000,
+            cooldownTurnsRemaining: 0,
+            lowSavingsStreak: 0,
+            consecutiveFailures: 0,
+            circuitBreakerLimit: 3,
+            circuitBreakerState: "closed",
+          });
+          options.events?.onCompactStart?.();
+          options.events?.onCompactEnd?.(undefined, {
+            outcome: "failed",
+            reason: "summary_generation_failed",
+            failurePhase: "summary_generation",
+            currentTokens: 300_000,
+            compactableTokens: 280_000,
+            consecutiveFailures: 3,
+            circuitBreakerLimit: 3,
+            circuitBreakerState: "open",
+            cooldownTurnsRemaining: 2,
+          });
+        });
+        return fakeRunningSession(
+          options,
+          Promise.resolve({
+            success: true,
+            lastText: "done",
+            messages: [],
+            sessionId: session.id,
+          }),
+        );
+      },
+    );
+
+    const handle = await runtime.runs.start({
+      sessionId: session.id,
+      prompt: "observe compaction outcomes",
+    });
+    await handle.result;
+    await flushMicrotasks();
+
+    const skipped = await runtime.events.replay({
+      runId: handle.runId,
+      type: "context.compaction.skipped",
+    });
+    const ended = await runtime.events.replay({
+      runId: handle.runId,
+      type: "context.compaction.ended",
+    });
+    expect(skipped[0]?.payload).toMatchObject({
+      reason: "compactable_below_threshold",
+      compactableTokens: 255_999,
+      effectiveTriggerTokens: 256_000,
+    });
+    expect(ended[0]?.payload).toMatchObject({
+      outcome: "failed",
+      reason: "summary_generation_failed",
+      failurePhase: "summary_generation",
+      consecutiveFailures: 3,
+      circuitBreakerState: "open",
+      cooldownTurnsRemaining: 2,
+    });
+
+    await runtime.close();
+  });
+
   it("keeps completed and delivered managed turns canonical when the active Run crashes", async () => {
     const { createKodaXRuntime } = await import("@kodax-ai/kodax/runtime");
     const sessionsDir = path.join(tempRoot, "managed-durable-boundary-sessions");

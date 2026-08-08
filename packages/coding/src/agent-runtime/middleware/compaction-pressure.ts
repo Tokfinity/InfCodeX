@@ -23,7 +23,12 @@ export interface CompactionSavingsDecision {
   readonly enteredCooldown: boolean;
 }
 
-export type CompactionSkipReason = 'low_savings_cooldown' | 'covered_context_unchanged';
+export type CompactionSkipReason =
+  | 'low_savings_cooldown'
+  | 'covered_context_unchanged'
+  | 'compactable_below_threshold'
+  | 'no_compactable_prefix'
+  | 'circuit_breaker_cooldown';
 
 export interface RuntimeCompactionSkippedEvent {
   readonly contextId?: string;
@@ -36,6 +41,13 @@ export interface RuntimeCompactionSkippedEvent {
   readonly triggerPercent: number;
   readonly cooldownTurnsRemaining: number;
   readonly lowSavingsStreak: number;
+  /** Full request minus replaceable managed-run-context messages. */
+  readonly compactableTokens?: number;
+  readonly effectiveTriggerTokens?: number;
+  readonly consecutiveFailures?: number;
+  readonly circuitBreakerLimit?: number;
+  readonly circuitBreakerState?: 'closed' | 'open' | 'half_open';
+  readonly rearmAtTokens?: number;
 }
 
 const DEFAULT_LOW_SAVINGS_RATIO = 0.1;

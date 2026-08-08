@@ -6,12 +6,14 @@ import {
   ContextCapacityError,
   compact as intelligentCompact,
   DEFAULT_POST_COMPACT_CONFIG,
+  calculateMaxContextInputTokens,
   emitKodaXDiagnostic,
   exceedsContextCapacity,
   injectPostCompactAttachments,
   needsCompaction,
   POST_COMPACT_TOKEN_BUDGET,
   resolveContextWindow,
+  resolveCompactionPolicy,
   type AgentMessage,
   type CompactionConfig,
   type CompactionResult,
@@ -31,6 +33,7 @@ import {
 } from '../../../agent-runtime/coding-compaction-prompts.js';
 import type {
   KodaXContextTokenSnapshot,
+  KodaXCompactionEndResult,
   KodaXMessage,
   KodaXOptions,
 } from '../../../types.js';
@@ -43,8 +46,17 @@ import {
   installCanonicalManagedRunContext,
   stripManagedRunContextMessages,
 } from './managed-run-context.js';
+import {
+  consumeCompactionCooldown,
+  createCompactionAntiThrashState,
+  recordCompactionSavings,
+  shouldSkipLlmCompaction,
+  type CompactionAntiThrashState,
+  type CompactionSkipReason,
+} from '../../../agent-runtime/middleware/compaction-pressure.js';
 
 const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;
+const COMPACT_FAILURE_COOLDOWN_TURNS = 2;
 
 export type RunnerCompactionHook = (
   transcript: readonly AgentMessage[],
@@ -71,6 +83,60 @@ interface AttachedCompactionContext {
   readonly messages: KodaXMessage[];
   readonly postCompactAttachments?: readonly KodaXMessage[];
 }
+
+interface SummaryCircuitBreaker {
+  readonly consecutiveFailures: number;
+  readonly cooldownTurnsRemaining: number;
+  readonly rearmAtTokens?: number;
+}
+
+interface ManagedCompactionInput {
+  readonly immutableSystem?: KodaXMessage;
+  readonly compactableMessages: KodaXMessage[];
+  readonly fixedOverheadTokens: number;
+  readonly compactableCurrentTokens: number;
+}
+
+interface ManagedCompactionAttempt extends ManagedCompactionInput {
+  readonly messages: KodaXMessage[];
+  readonly currentTokens: number;
+  readonly hardPressure: boolean;
+  readonly halfOpenAttempt: boolean;
+}
+
+interface ManagedCompactionState {
+  breaker: SummaryCircuitBreaker;
+  antiThrash: CompactionAntiThrashState;
+}
+
+interface CompactionDiagnosticIdentity {
+  readonly contextId?: string;
+  readonly contextKind: 'root' | 'child';
+  readonly parentContextId?: string;
+  readonly agentId?: string;
+}
+
+type ManagedCompactionAdmission =
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'skipped';
+      readonly attempt: ManagedCompactionAttempt;
+      readonly reason: CompactionSkipReason;
+      readonly cooldownTurnsRemaining: number;
+      readonly rearmAtTokens?: number;
+    }
+  | { readonly kind: 'admitted'; readonly attempt: ManagedCompactionAttempt };
+
+interface ManagedCompactionCandidate {
+  readonly finalMessages: KodaXMessage[];
+  readonly finalTokens: number;
+  readonly finalCompactableTokens: number;
+  readonly update: CompactionUpdate;
+}
+
+type PersistenceResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: unknown };
 
 /** Shared provider/model/window resolution for compaction and result admission. */
 export async function resolveManagedTaskContextCapacity(options: KodaXOptions) {
@@ -162,6 +228,66 @@ function notifyPostCompact(callback: (() => void) | undefined): void {
   }
 }
 
+function notifyCompactionObserver(
+  callback: (() => void) | undefined,
+  message: string,
+): void {
+  if (!callback) return;
+  try {
+    callback();
+  } catch (error) {
+    emitKodaXDiagnostic({
+      source: 'coding:managed-compaction',
+      level: 'warn',
+      message,
+      detail: error,
+    });
+  }
+}
+
+function nextRearmTokenCount(currentTokens: number): number {
+  return currentTokens + Math.max(2_048, Math.ceil(currentTokens * 0.1));
+}
+
+function createSummaryCircuitBreaker(): SummaryCircuitBreaker {
+  return { consecutiveFailures: 0, cooldownTurnsRemaining: 0 };
+}
+
+function recordSummaryCircuitFailure(
+  state: SummaryCircuitBreaker,
+  compactableTokens: number,
+): SummaryCircuitBreaker {
+  const consecutiveFailures = state.consecutiveFailures + 1;
+  if (consecutiveFailures < COMPACT_CIRCUIT_BREAKER_LIMIT) {
+    return { ...state, consecutiveFailures };
+  }
+  return {
+    consecutiveFailures,
+    cooldownTurnsRemaining: COMPACT_FAILURE_COOLDOWN_TURNS,
+    rearmAtTokens: nextRearmTokenCount(compactableTokens),
+  };
+}
+
+function compactionEndState(
+  currentTokens: number,
+  compactableTokens: number,
+  breaker: SummaryCircuitBreaker,
+  probeAttempt = false,
+) {
+  return {
+    currentTokens,
+    compactableTokens,
+    consecutiveFailures: breaker.consecutiveFailures,
+    circuitBreakerLimit: COMPACT_CIRCUIT_BREAKER_LIMIT,
+    circuitBreakerState: probeAttempt
+      ? 'half_open' as const
+      : breaker.consecutiveFailures >= COMPACT_CIRCUIT_BREAKER_LIMIT
+        ? 'open' as const
+        : 'closed' as const,
+    cooldownTurnsRemaining: breaker.cooldownTurnsRemaining,
+  };
+}
+
 function updateSnapshot(
   ref: ContextTokenSnapshotRef | undefined,
   messages: KodaXMessage[],
@@ -226,6 +352,541 @@ function prependImmutableSystem(
   return immutableSystem ? [immutableSystem, ...messages] : messages;
 }
 
+function resolveManagedCompactionInput(
+  messages: KodaXMessage[],
+  currentTokens: number,
+  stripManagedContext: boolean,
+): ManagedCompactionInput {
+  const { immutableSystem, mutableMessages } = splitImmutableSystem(messages);
+  const compactableMessages = stripManagedContext
+    ? stripManagedRunContextMessages(mutableMessages)
+    : mutableMessages;
+  const fixedOverheadTokens = Math.max(0, currentTokens - estimateTokens(mutableMessages));
+  return {
+    immutableSystem,
+    compactableMessages,
+    fixedOverheadTokens,
+    compactableCurrentTokens: stripManagedContext
+      ? fixedOverheadTokens + estimateTokens(compactableMessages)
+      : currentTokens,
+  };
+}
+
+function admitManagedCompactionAttempt(input: {
+  readonly messages: KodaXMessage[];
+  readonly currentTokens: number;
+  readonly compactionConfig: CompactionConfig;
+  readonly contextWindow: number;
+  readonly reservedResponseTokens: number;
+  readonly stripManagedContext: boolean;
+  readonly state: ManagedCompactionState;
+}): ManagedCompactionAdmission {
+  if (!needsCompaction(
+    input.messages,
+    input.compactionConfig,
+    input.contextWindow,
+    input.currentTokens,
+    input.reservedResponseTokens,
+  )) return { kind: 'none' };
+
+  const hardPressure = exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: input.currentTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  });
+  const compactable = resolveManagedCompactionInput(
+    input.messages,
+    input.currentTokens,
+    input.stripManagedContext,
+  );
+  const halfOpenAttempt = input.state.breaker.consecutiveFailures
+    >= COMPACT_CIRCUIT_BREAKER_LIMIT;
+  const attempt = {
+    ...compactable,
+    messages: input.messages,
+    currentTokens: input.currentTokens,
+    hardPressure,
+    halfOpenAttempt,
+  };
+  const compactableNeedsCompaction = needsCompaction(
+    compactable.compactableMessages,
+    input.compactionConfig,
+    input.contextWindow,
+    compactable.compactableCurrentTokens,
+    input.reservedResponseTokens,
+  );
+  if (!compactableNeedsCompaction && !hardPressure) {
+    return skippedAdmission('compactable_below_threshold', attempt, input.state.breaker);
+  }
+
+  const growthRearmed = input.state.breaker.rearmAtTokens !== undefined
+    && compactable.compactableCurrentTokens >= input.state.breaker.rearmAtTokens;
+  if (halfOpenAttempt && !hardPressure
+    && input.state.breaker.cooldownTurnsRemaining > 0 && !growthRearmed) {
+    input.state.breaker = {
+      ...input.state.breaker,
+      cooldownTurnsRemaining: input.state.breaker.cooldownTurnsRemaining - 1,
+    };
+    return skippedAdmission('circuit_breaker_cooldown', attempt, input.state.breaker);
+  }
+
+  if (shouldSkipLlmCompaction(
+    input.state.antiThrash,
+    compactable.compactableCurrentTokens,
+  ) && !hardPressure) {
+    const reason = input.state.antiThrash.cooldownTurnsRemaining > 0
+      ? 'low_savings_cooldown'
+      : 'covered_context_unchanged';
+    input.state.antiThrash = consumeCompactionCooldown(input.state.antiThrash);
+    return skippedAdmission(reason, attempt, {
+      ...input.state.breaker,
+      cooldownTurnsRemaining: input.state.antiThrash.cooldownTurnsRemaining,
+      rearmAtTokens: input.state.antiThrash.rearmAtTokens,
+    });
+  }
+  return { kind: 'admitted', attempt };
+}
+
+function skippedAdmission(
+  reason: CompactionSkipReason,
+  attempt: ManagedCompactionAttempt,
+  state: SummaryCircuitBreaker,
+): ManagedCompactionAdmission {
+  return {
+    kind: 'skipped',
+    attempt,
+    reason,
+    cooldownTurnsRemaining: state.cooldownTurnsRemaining,
+    ...(state.rearmAtTokens !== undefined ? { rearmAtTokens: state.rearmAtTokens } : {}),
+  };
+}
+
+async function buildManagedCompactionCandidate(input: {
+  readonly result: CompactionResult;
+  readonly canonicalManagedContext?: KodaXMessage;
+  readonly immutableSystem?: KodaXMessage;
+  readonly fixedOverheadTokens: number;
+  readonly contextWindow: number;
+  readonly reservedResponseTokens: number;
+  readonly preCompactionMessages: readonly KodaXMessage[];
+}): Promise<ManagedCompactionCandidate> {
+  const attached = await attachManagedCompactionContext(
+    input.result,
+    input.fixedOverheadTokens,
+    input.contextWindow,
+    input.reservedResponseTokens,
+  );
+  const attachedMessages = input.canonicalManagedContext
+    ? installCanonicalManagedRunContext(attached.messages, input.canonicalManagedContext)
+    : attached.messages;
+  const finalMessages = prependImmutableSystem(input.immutableSystem, attachedMessages);
+  const finalTokens = input.fixedOverheadTokens + estimateTokens(attachedMessages);
+  if (exceedsContextCapacity({
+    contextWindow: input.contextWindow,
+    currentTokens: finalTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  })) {
+    throw new ContextCapacityError({
+      contextWindow: input.contextWindow,
+      currentTokens: finalTokens,
+      reservedResponseTokens: input.reservedResponseTokens,
+    }, 'Managed history compaction');
+  }
+  return {
+    finalMessages,
+    finalTokens,
+    finalCompactableTokens: input.fixedOverheadTokens + estimateTokens(attached.messages),
+    update: buildCompactionUpdate(
+      input.result,
+      finalTokens,
+      input.preCompactionMessages,
+      attached.postCompactAttachments,
+    ),
+  };
+}
+
+async function persistCompaction(
+  callback: NonNullable<KodaXOptions['events']>['onCompactedMessages'],
+  messages: KodaXMessage[],
+  update: CompactionUpdate,
+): Promise<PersistenceResult> {
+  try {
+    await callback?.(messages, update);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function emitManagedCompactionSkipped(input: {
+  readonly events: KodaXOptions['events'];
+  readonly identity: CompactionDiagnosticIdentity;
+  readonly attempt: ManagedCompactionAttempt;
+  readonly reason: CompactionSkipReason;
+  readonly contextWindow: number;
+  readonly triggerPercent: number;
+  readonly effectiveTriggerTokens: number;
+  readonly cooldownTurnsRemaining: number;
+  readonly rearmAtTokens?: number;
+  readonly state: ManagedCompactionState;
+}): void {
+  notifyCompactionObserver(() => input.events?.onContextCompactionSkipped?.({
+    ...input.identity,
+    reason: input.reason,
+    currentTokens: input.attempt.currentTokens,
+    compactableTokens: input.attempt.compactableCurrentTokens,
+    contextWindow: input.contextWindow,
+    triggerPercent: input.triggerPercent,
+    effectiveTriggerTokens: input.effectiveTriggerTokens,
+    cooldownTurnsRemaining: input.cooldownTurnsRemaining,
+    lowSavingsStreak: input.state.antiThrash.lowSavingsStreak,
+    consecutiveFailures: input.state.breaker.consecutiveFailures,
+    circuitBreakerLimit: COMPACT_CIRCUIT_BREAKER_LIMIT,
+    circuitBreakerState: input.state.breaker.consecutiveFailures
+      >= COMPACT_CIRCUIT_BREAKER_LIMIT ? 'open' : 'closed',
+    ...(input.rearmAtTokens !== undefined
+      ? { rearmAtTokens: input.rearmAtTokens }
+      : {}),
+  }), 'Compaction skip observer failed.');
+}
+
+interface ManagedCompactionExecutionInput {
+  readonly attempt: ManagedCompactionAttempt;
+  readonly state: ManagedCompactionState;
+  readonly options: KodaXOptions;
+  readonly hookOptions: BuildManagedTaskCompactionHookOptions;
+  readonly provider: Awaited<
+    ReturnType<typeof resolveManagedTaskContextCapacity>
+  >['provider'];
+  readonly activeModel?: string;
+  readonly compactionConfig: CompactionConfig;
+  readonly contextWindow: number;
+  readonly reservedResponseTokens: number;
+  readonly effectiveTriggerTokens: number;
+  readonly identity: CompactionDiagnosticIdentity;
+  readonly promptCacheKey?: string;
+  readonly snapshotRef?: ContextTokenSnapshotRef;
+}
+
+type ManagedTerminalOutcome =
+  | { readonly kind: 'stopped'; readonly endResult: KodaXCompactionEndResult }
+  | {
+      readonly kind: 'capacity';
+      readonly endResult: KodaXCompactionEndResult;
+      readonly error: ContextCapacityError;
+    };
+
+type ManagedSummaryOutcome =
+  | ManagedTerminalOutcome
+  | {
+      readonly kind: 'ready';
+      readonly result: CompactionResult;
+      readonly canonicalManagedContext?: KodaXMessage;
+    };
+
+type ManagedCommitOutcome =
+  | ManagedTerminalOutcome
+  | {
+      readonly kind: 'committed';
+      readonly endResult: KodaXCompactionEndResult;
+      readonly messages: readonly AgentMessage[];
+    };
+
+async function executeManagedCompactionAttempt(
+  input: ManagedCompactionExecutionInput,
+): Promise<readonly AgentMessage[] | undefined> {
+  const { attempt, state } = input;
+  const startedAt = Date.now();
+  let endResult: KodaXCompactionEndResult | undefined;
+  notifyCompactionObserver(
+    () => input.options.events?.onCompactStart?.(),
+    'Compaction start observer failed.',
+  );
+  try {
+    const summary = await resolveManagedSummaryOutcome(input);
+    if (summary.kind !== 'ready') {
+      endResult = summary.endResult;
+      if (summary.kind === 'capacity') throw summary.error;
+      return undefined;
+    }
+    const committed = await commitManagedCompactionResult(
+      input,
+      summary,
+      startedAt,
+    );
+    endResult = committed.endResult;
+    if (committed.kind === 'capacity') throw committed.error;
+    return committed.kind === 'committed' ? committed.messages : undefined;
+  } catch (error) {
+    if (error instanceof ContextCapacityError) {
+      endResult ??= capacityEndResult(attempt, state);
+      throw error;
+    }
+    endResult = {
+      ...compactionEndState(
+        attempt.currentTokens,
+        attempt.compactableCurrentTokens,
+        state.breaker,
+        attempt.halfOpenAttempt,
+      ),
+      outcome: 'failed',
+      reason: 'post_processing_failed',
+      failurePhase: 'post_processing',
+    };
+    emitCompactionFailure('Managed history compaction post-processing failed.', error);
+    if (attempt.hardPressure) throw capacityError(input);
+    return undefined;
+  } finally {
+    notifyCompactionObserver(
+      () => input.options.events?.onCompactEnd?.(undefined, endResult),
+      'Compaction end observer failed.',
+    );
+  }
+}
+
+async function resolveManagedSummaryOutcome(
+  input: ManagedCompactionExecutionInput,
+): Promise<ManagedSummaryOutcome> {
+  const { attempt, state } = input;
+  const canonicalManagedContext = input.hookOptions.canonicalManagedContext?.();
+  const systemPrompt = typeof attempt.immutableSystem?.content === 'string'
+    ? attempt.immutableSystem.content
+    : undefined;
+  let result: CompactionResult;
+  try {
+    result = await requestManagedCompactionSummary({ ...input, systemPrompt });
+  } catch (error) {
+    if (error instanceof ContextCapacityError) {
+      return { kind: 'capacity', endResult: capacityEndResult(attempt, state), error };
+    }
+    state.breaker = recordSummaryCircuitFailure(
+      state.breaker,
+      attempt.compactableCurrentTokens,
+    );
+    const endResult: KodaXCompactionEndResult = {
+      ...compactionEndState(
+        attempt.currentTokens,
+        attempt.compactableCurrentTokens,
+        state.breaker,
+      ),
+      outcome: 'failed',
+      reason: 'summary_generation_failed',
+      failurePhase: 'summary_generation',
+    };
+    emitCompactionFailure('Managed history compaction summary failed.', error);
+    return attempt.hardPressure
+      ? { kind: 'capacity', endResult, error: capacityError(input) }
+      : { kind: 'stopped', endResult };
+  }
+  if (!result.compacted) return noCompactablePrefixOutcome(input);
+  return {
+    kind: 'ready',
+    result,
+    ...(canonicalManagedContext !== undefined ? { canonicalManagedContext } : {}),
+  };
+}
+
+function noCompactablePrefixOutcome(
+  input: ManagedCompactionExecutionInput,
+): ManagedTerminalOutcome {
+  const { attempt, state } = input;
+  if (attempt.hardPressure) {
+    return {
+      kind: 'capacity',
+      endResult: capacityEndResult(attempt, state),
+      error: capacityError(input),
+    };
+  }
+  emitManagedCompactionSkipped({
+    events: input.options.events,
+    identity: input.identity,
+    attempt,
+    reason: 'no_compactable_prefix',
+    contextWindow: input.contextWindow,
+    triggerPercent: input.compactionConfig.triggerPercent,
+    effectiveTriggerTokens: input.effectiveTriggerTokens,
+    cooldownTurnsRemaining: state.breaker.cooldownTurnsRemaining,
+    state,
+  });
+  return {
+    kind: 'stopped',
+    endResult: {
+      ...compactionEndState(
+        attempt.currentTokens,
+        attempt.compactableCurrentTokens,
+        state.breaker,
+        attempt.halfOpenAttempt,
+      ),
+      outcome: 'skipped',
+      reason: 'no_compactable_prefix',
+    },
+  };
+}
+
+async function commitManagedCompactionResult(
+  input: ManagedCompactionExecutionInput,
+  summary: Extract<ManagedSummaryOutcome, { readonly kind: 'ready' }>,
+  startedAt: number,
+): Promise<ManagedCommitOutcome> {
+  const { attempt, state } = input;
+  const candidate = await buildManagedCompactionCandidate({
+    result: summary.result,
+    canonicalManagedContext: summary.canonicalManagedContext,
+    immutableSystem: attempt.immutableSystem,
+    fixedOverheadTokens: attempt.fixedOverheadTokens,
+    contextWindow: input.contextWindow,
+    reservedResponseTokens: input.reservedResponseTokens,
+    preCompactionMessages: attempt.messages,
+  });
+  const persisted = await persistCompaction(
+    input.options.events?.onCompactedMessages,
+    candidate.finalMessages,
+    candidate.update,
+  );
+  if (!persisted.ok) return persistenceFailureOutcome(input, persisted.error);
+
+  state.breaker = createSummaryCircuitBreaker();
+  state.antiThrash = recordCompactionSavings(state.antiThrash, {
+    tokensBefore: attempt.compactableCurrentTokens,
+    tokensAfter: candidate.finalCompactableTokens,
+  }).state;
+  notifyPostCompact(input.hookOptions.onPostCompact);
+  updateSnapshot(input.snapshotRef, candidate.finalMessages, candidate.finalTokens);
+  const endResult: KodaXCompactionEndResult = {
+    ...compactionEndState(
+      attempt.currentTokens,
+      attempt.compactableCurrentTokens,
+      state.breaker,
+    ),
+    outcome: 'compacted',
+  };
+  emitCommittedCompaction(input, candidate, summary.result, startedAt);
+  return { kind: 'committed', endResult, messages: candidate.finalMessages };
+}
+
+function persistenceFailureOutcome(
+  input: ManagedCompactionExecutionInput,
+  error: unknown,
+): ManagedTerminalOutcome {
+  const { attempt, state } = input;
+  state.breaker = recordSummaryCircuitFailure(
+    state.breaker,
+    attempt.compactableCurrentTokens,
+  );
+  const endResult: KodaXCompactionEndResult = {
+    ...compactionEndState(
+      attempt.currentTokens,
+      attempt.compactableCurrentTokens,
+      state.breaker,
+    ),
+    outcome: 'failed',
+    reason: 'persistence_failed',
+    failurePhase: 'persistence',
+  };
+  emitCompactionFailure('Managed history compaction persistence failed.', error);
+  return attempt.hardPressure
+    ? { kind: 'capacity', endResult, error: capacityError(input) }
+    : { kind: 'stopped', endResult };
+}
+
+async function requestManagedCompactionSummary(
+  input: ManagedCompactionExecutionInput & { readonly systemPrompt?: string },
+): Promise<CompactionResult> {
+  const observer = input.options.context?.contextDiagnostics === true
+    ? createCompactionPromptCacheObserver({
+        events: input.options.events,
+        enabled: true,
+        provider: input.provider,
+        providerName: input.provider.name,
+        ...input.identity,
+        model: input.activeModel ?? input.provider.getModel(),
+        disablePromptCache: input.options.disablePromptCache,
+      })
+    : undefined;
+  const cacheContext = input.systemPrompt !== undefined
+    && input.hookOptions.activeToolDefinitions !== undefined
+    ? {
+        tools: input.hookOptions.activeToolDefinitions,
+        reasoning: input.hookOptions.reasoning,
+      }
+    : undefined;
+  return intelligentCompact(
+    input.attempt.compactableMessages,
+    input.compactionConfig,
+    input.provider,
+    input.contextWindow,
+    undefined,
+    input.systemPrompt,
+    input.attempt.compactableCurrentTokens,
+    CODING_SUMMARY_PROMPT,
+    CODING_UPDATE_SUMMARY_PROMPT,
+    input.activeModel,
+    input.attempt.hardPressure,
+    input.reservedResponseTokens,
+    cacheContext,
+    observer,
+    input.promptCacheKey !== undefined ? { promptCacheKey: input.promptCacheKey } : undefined,
+  );
+}
+
+function capacityEndResult(
+  attempt: ManagedCompactionAttempt,
+  state: ManagedCompactionState,
+): KodaXCompactionEndResult {
+  return {
+    ...compactionEndState(
+      attempt.currentTokens,
+      attempt.compactableCurrentTokens,
+      state.breaker,
+      attempt.halfOpenAttempt,
+    ),
+    outcome: 'failed',
+    reason: 'context_capacity_exceeded',
+  };
+}
+
+function capacityError(input: ManagedCompactionExecutionInput): ContextCapacityError {
+  return new ContextCapacityError({
+    contextWindow: input.contextWindow,
+    currentTokens: input.attempt.currentTokens,
+    reservedResponseTokens: input.reservedResponseTokens,
+  }, 'Managed history compaction');
+}
+
+function emitCompactionFailure(message: string, error: unknown): void {
+  emitKodaXDiagnostic({
+    source: 'coding:managed-compaction',
+    level: 'error',
+    message,
+    detail: error,
+  });
+}
+
+function emitCommittedCompaction(
+  input: ManagedCompactionExecutionInput,
+  candidate: ManagedCompactionCandidate,
+  result: CompactionResult,
+  startedAt: number,
+): void {
+  const events = input.options.events;
+  notifyCompactionObserver(() => events?.onCompactStats?.({
+    tokensBefore: input.attempt.currentTokens,
+    tokensAfter: candidate.finalTokens,
+  }), 'Compaction stats observer failed.');
+  notifyCompactionObserver(
+    () => events?.onCompact?.(candidate.finalTokens),
+    'Compaction completion observer failed.',
+  );
+  notifyCompactionObserver(() => events?.onContextCompactionFinished?.({
+    source: input.attempt.hardPressure ? 'physical_capacity' : 'automatic_threshold',
+    tokensBefore: input.attempt.currentTokens,
+    tokensAfter: candidate.finalTokens,
+    committed: true,
+    elapsedMs: Date.now() - startedAt,
+    ...(result.report ?? {}),
+  }), 'Canonical compaction observer failed.');
+}
+
 /** Build the hook invoked before each managed Runner provider request. */
 export async function buildManagedTaskCompactionHook(
   options: KodaXOptions,
@@ -268,7 +929,15 @@ export async function buildManagedTaskCompactionHook(
         logicalSessionId: diagnosticSessionId,
         ...(diagnosticAgentId !== undefined ? { agentId: diagnosticAgentId } : {}),
       });
-  let consecutiveFailures = 0;
+  const effectiveTriggerTokens = resolveCompactionPolicy(
+    compactionConfig,
+    contextWindow,
+    calculateMaxContextInputTokens(contextWindow, reservedResponseTokens),
+  ).triggerTokens;
+  const state: ManagedCompactionState = {
+    breaker: createSummaryCircuitBreaker(),
+    antiThrash: createCompactionAntiThrashState(),
+  };
 
   return async (transcript) => {
     const messages = transcript as unknown as KodaXMessage[];
@@ -280,157 +949,48 @@ export async function buildManagedTaskCompactionHook(
     const currentTokens = snapshot
       ? resolveContextTokenCount(messages, snapshot)
       : estimateTokens(messages);
-    if (!needsCompaction(
+    const admission = admitManagedCompactionAttempt({
       messages,
+      currentTokens,
       compactionConfig,
       contextWindow,
-      currentTokens,
       reservedResponseTokens,
-    )) return undefined;
-
-    const hardPressure = exceedsContextCapacity({
-      contextWindow,
-      currentTokens,
-      reservedResponseTokens,
+      stripManagedContext: hookOptions.canonicalManagedContext !== undefined,
+      state,
     });
-    if (consecutiveFailures >= COMPACT_CIRCUIT_BREAKER_LIMIT && !hardPressure) {
+    if (admission.kind === 'none') return undefined;
+    if (admission.kind === 'skipped') {
+      emitManagedCompactionSkipped({
+        events,
+        identity: diagnosticContextIdentity,
+        attempt: admission.attempt,
+        reason: admission.reason,
+        contextWindow,
+        triggerPercent: compactionConfig.triggerPercent,
+        effectiveTriggerTokens,
+        cooldownTurnsRemaining: admission.cooldownTurnsRemaining,
+        ...(admission.rearmAtTokens !== undefined
+          ? { rearmAtTokens: admission.rearmAtTokens }
+          : {}),
+        state,
+      });
       return undefined;
     }
 
-    const startedAt = Date.now();
-    events?.onCompactStart?.();
-    try {
-      const { immutableSystem, mutableMessages } = splitImmutableSystem(messages);
-      const canonicalManagedContext = hookOptions.canonicalManagedContext?.();
-      const compactableMessages = canonicalManagedContext
-        ? stripManagedRunContextMessages(mutableMessages)
-        : mutableMessages;
-      const mutableMessageTokens = estimateTokens(mutableMessages);
-      const fixedOverheadTokens = Math.max(
-        0,
-        currentTokens - mutableMessageTokens,
-      );
-      const compactableCurrentTokens = canonicalManagedContext
-        ? fixedOverheadTokens + estimateTokens(compactableMessages)
-        : currentTokens;
-      const systemPrompt = typeof immutableSystem?.content === 'string'
-        ? immutableSystem.content
-        : undefined;
-      const compactionObserver = options.context?.contextDiagnostics === true
-        ? createCompactionPromptCacheObserver({
-            events,
-            enabled: true,
-            provider,
-            providerName: provider.name,
-            ...diagnosticContextIdentity,
-            model: activeModel ?? provider.getModel(),
-            disablePromptCache: options.disablePromptCache,
-          })
-        : undefined;
-      const cacheContext = systemPrompt !== undefined
-        && hookOptions.activeToolDefinitions !== undefined
-        ? {
-            tools: hookOptions.activeToolDefinitions,
-            reasoning: hookOptions.reasoning,
-          }
-        : undefined;
-      const result = await intelligentCompact(
-        compactableMessages,
-        compactionConfig,
-        provider,
-        contextWindow,
-        undefined,
-        systemPrompt,
-        compactableCurrentTokens,
-        CODING_SUMMARY_PROMPT,
-        CODING_UPDATE_SUMMARY_PROMPT,
-        activeModel,
-        false,
-        reservedResponseTokens,
-        cacheContext,
-        compactionObserver,
-        promptCacheKey !== undefined ? { promptCacheKey } : undefined,
-      );
-      if (!result.compacted) {
-        if (hardPressure) {
-          throw new ContextCapacityError({
-            contextWindow, currentTokens, reservedResponseTokens,
-          }, 'Managed history compaction');
-        }
-        consecutiveFailures += 1;
-        return undefined;
-      }
-
-      const attached = await attachManagedCompactionContext(
-        result,
-        fixedOverheadTokens,
-        contextWindow,
-        reservedResponseTokens,
-      );
-      const attachedMessages = canonicalManagedContext
-        ? installCanonicalManagedRunContext(attached.messages, canonicalManagedContext)
-        : attached.messages;
-      const finalMessages = prependImmutableSystem(
-        immutableSystem,
-        attachedMessages,
-      );
-      const finalTokens = fixedOverheadTokens + estimateTokens(attachedMessages);
-      if (exceedsContextCapacity({
-        contextWindow,
-        currentTokens: finalTokens,
-        reservedResponseTokens,
-      })) {
-        throw new ContextCapacityError({
-          contextWindow,
-          currentTokens: finalTokens,
-          reservedResponseTokens,
-        }, 'Managed history compaction');
-      }
-
-      consecutiveFailures = needsCompaction(
-        finalMessages,
-        compactionConfig,
-        contextWindow,
-        finalTokens,
-        reservedResponseTokens,
-      ) ? consecutiveFailures + 1 : 0;
-      const update = buildCompactionUpdate(
-        result,
-        finalTokens,
-        messages,
-        attached.postCompactAttachments,
-      );
-      events?.onCompactStats?.({ tokensBefore: currentTokens, tokensAfter: finalTokens });
-      events?.onCompact?.(finalTokens);
-      await events?.onCompactedMessages?.(finalMessages, update);
-      notifyPostCompact(hookOptions.onPostCompact);
-      updateSnapshot(snapshotRef, finalMessages, finalTokens);
-      events?.onContextCompactionFinished?.({
-        source: hardPressure ? 'physical_capacity' : 'automatic_threshold',
-        tokensBefore: currentTokens,
-        tokensAfter: finalTokens,
-        committed: true,
-        elapsedMs: Date.now() - startedAt,
-        ...(result.report ?? {}),
-      });
-      return finalMessages as readonly AgentMessage[];
-    } catch (error) {
-      consecutiveFailures += 1;
-      if (error instanceof ContextCapacityError) throw error;
-      emitKodaXDiagnostic({
-        source: 'coding:managed-compaction',
-        level: 'error',
-        message: 'Managed history compaction summary failed.',
-        detail: error,
-      });
-      if (hardPressure) {
-        throw new ContextCapacityError({
-          contextWindow, currentTokens, reservedResponseTokens,
-        }, 'Managed history compaction');
-      }
-      return undefined;
-    } finally {
-      events?.onCompactEnd?.();
-    }
+    return executeManagedCompactionAttempt({
+      attempt: admission.attempt,
+      state,
+      options,
+      hookOptions,
+      provider,
+      ...(activeModel !== undefined ? { activeModel } : {}),
+      compactionConfig,
+      contextWindow,
+      reservedResponseTokens,
+      effectiveTriggerTokens,
+      identity: diagnosticContextIdentity,
+      ...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
+      ...(snapshotRef !== undefined ? { snapshotRef } : {}),
+    });
   };
 }

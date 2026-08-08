@@ -78,10 +78,14 @@ export {
 } from '@kodax-ai/llm';
 
 export {
+  awaitLatestCodingMemoryReviewDrain,
   canonicalMemoryProjectId,
+  deriveCodingMemoryIdentity,
+  drainCodingMemoryReviewInbox,
 } from './memory-runtime.js';
 export {
   createProductionLearningReviewer,
+  installProductionLearningReviewer,
   LEARNING_REVIEW_SYSTEM_PROMPT,
   LEARNING_REVIEW_TOOL,
   LEARNING_REVIEW_PROMPT_SHA256,
@@ -124,6 +128,8 @@ export type {
   KodaXWorkflowAgentDigestEvent,
   KodaXContextIdentity,
   KodaXContextCompactionFinishedEvent,
+  KodaXCompactionEndResult,
+  KodaXCompactionFailureReason,
   KodaXLiveEventMeta,
   KodaXTurnCompletedEvent,
   KodaXTurnDeliveryKind,

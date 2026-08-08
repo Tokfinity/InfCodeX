@@ -32,6 +32,7 @@ import chalk from 'chalk';
 
 import {
   createMemoryControlPlane,
+  listPendingEpisodeReviews,
   parseMemoryFile,
   resolveMemoryEntrypoint,
   resolveMemoryRoot,
@@ -41,9 +42,13 @@ import {
   type MemoryRejectResult,
   type MemoryType,
 } from '@kodax-ai/agent';
+import {
+  deriveCodingMemoryIdentity,
+  resolveProvider,
+} from '@kodax-ai/coding';
 
 import type { Command } from './types.js';
-
+import type { InteractiveContext } from '../interactive/context.js';
 const PREVIEW_FINGERPRINT_TTL_MS = 15 * 60 * 1000;
 
 interface ProposalPreviewCacheEntry {
@@ -178,6 +183,130 @@ async function listMemory(memoryDir: string, entrypointPath: string): Promise<vo
     console.log(indexRaw.trimEnd());
   }
   console.log(chalk.cyan('--- end ---\n'));
+}
+
+/**
+ * FEATURE_289 (v0.7.85) §3.5 — `/memory status`. Read-only pipeline
+ * observability: memory dir stats, this-session lineage counts, the
+ * cross-session tenant review backlog, reviewer configuration, and the
+ * capture/review segment break diagnosis. Zero schema changes — every
+ * data source already exists.
+ */
+async function statusMemory(
+  memoryDir: string,
+  entrypointPath: string,
+  context: InteractiveContext,
+  callbacks: Parameters<Command['handler']>[2],
+  cwd: string,
+): Promise<void> {
+  // Section 1: memory directory stats (reuses the existing list path).
+  await listMemory(memoryDir, entrypointPath);
+
+  // Section 2: this-session pipeline counts from the session lineage.
+  // Receipts exist only for COMPLETED reviews, so pending counts must
+  // come from the inbox (section 3), never from the lineage.
+  const entries = context.lineage?.entries ?? [];
+  let digests = 0;
+  let receipts = 0;
+  let notices = 0;
+  for (const entry of entries) {
+    if (entry.type === 'memory_outcome_digest') digests += 1;
+    else if (entry.type === 'memory_review_receipt') receipts += 1;
+    else if (entry.type === 'client_notice' && entry.source === 'memory-agent') notices += 1;
+  }
+  console.log(chalk.cyan('\n[memory] this-session pipeline'));
+  console.log(chalk.dim(`  outcome digests : ${digests}`));
+  console.log(chalk.dim(`  review receipts : ${receipts}`));
+  console.log(chalk.dim(`  client notices  : ${notices}`));
+
+  // Section 3: cross-session pending reviews from the tenant inbox.
+  const kodaxOptions = callbacks.createKodaXOptions?.();
+  let pendingCount: number | undefined;
+  let oldestPendingAge: string | undefined;
+  if (kodaxOptions !== undefined) {
+    const identity = deriveCodingMemoryIdentity(kodaxOptions, cwd, context.sessionId);
+    const pending = await listPendingEpisodeReviews({
+      configHome: identity.configHome,
+      tenantId: identity.tenantId,
+    });
+    pendingCount = pending.length;
+    const oldest = pending[0];
+    if (oldest !== undefined) {
+      oldestPendingAge = formatPendingAge(oldest.createdAt, Date.now());
+    }
+  }
+  console.log(chalk.cyan('\n[memory] pending episode reviews (all sessions)'));
+  if (pendingCount === undefined) {
+    console.log(chalk.dim('  unavailable — KodaX options are not bound in this session'));
+  } else {
+    console.log(chalk.dim(`  pending: ${pendingCount}`));
+    if (oldestPendingAge !== undefined) {
+      console.log(chalk.dim(`  oldest pending age: ${oldestPendingAge}`));
+    }
+  }
+
+  // Section 4: reviewer configuration state — the most common cause of
+  // silent drain skips. The production reviewer is auto-installed at
+  // session start when no custom reviewer is bound AND the provider has
+  // credentials.
+  let reviewerStatus: string;
+  let reviewerMissing = false;
+  if (kodaxOptions === undefined) {
+    reviewerStatus = 'unknown — KodaX options are not bound in this session';
+  } else if (kodaxOptions.learningReviewer !== undefined || kodaxOptions.memoryReviewer !== undefined) {
+    reviewerStatus = 'configured (custom reviewer bound)';
+  } else {
+    let providerConfigured = false;
+    try {
+      providerConfigured = resolveProvider(kodaxOptions.provider).isConfigured();
+    } catch {
+      // Unresolvable provider name => not configured; reported below.
+      providerConfigured = false;
+    }
+    reviewerStatus = providerConfigured
+      ? 'production reviewer auto-installed at session start'
+      : `MISSING — provider "${kodaxOptions.provider}" is not configured; episode review cannot run`;
+    reviewerMissing = !providerConfigured;
+  }
+  console.log(chalk.cyan('\n[memory] reviewer'));
+  console.log(
+    reviewerMissing ? chalk.yellow(`  ${reviewerStatus}`) : chalk.dim(`  ${reviewerStatus}`),
+  );
+
+  // Diagnosis: locate the broken pipeline segment, if any.
+  const warnings: string[] = [];
+  if (digests === 0) {
+    warnings.push('capture segment: no memory outcome digests recorded in this session yet');
+  } else if (receipts === 0) {
+    warnings.push(
+      pendingCount !== undefined && pendingCount > 0
+        ? 'review segment: digests captured but no review ever completed; the backlog is growing'
+        : 'review segment: digests captured but no review completed in this session',
+    );
+  }
+  if (reviewerMissing) {
+    warnings.push('reviewer missing: configure a provider (`kodax setup`) to unblock episode review');
+  }
+  if (warnings.length > 0) {
+    console.log();
+    for (const warning of warnings) {
+      console.log(chalk.yellow(`  ! ${warning}`));
+    }
+    if (pendingCount !== undefined && pendingCount > 0) {
+      console.log(chalk.dim('  Run `kodax memory review-drain` to process the backlog in the foreground.'));
+    }
+  }
+  console.log();
+}
+
+function formatPendingAge(createdAt: string, nowMs: number): string {
+  const parsed = Date.parse(createdAt);
+  if (Number.isNaN(parsed)) return 'unknown';
+  const minutes = Math.max(0, Math.floor((nowMs - parsed) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 async function rebuildMemory(memoryDir: string, entrypointPath: string): Promise<void> {
@@ -325,6 +454,7 @@ function printHelp(): void {
   console.log(chalk.cyan('\n/memory - Inspect or rebuild per-project memory'));
   console.log(chalk.dim('  /memory                 List MEMORY.md + memory directory'));
   console.log(chalk.dim('  /memory list            Same as `/memory`'));
+  console.log(chalk.dim('  /memory status          Show pipeline health: digests, receipts, backlog, reviewer'));
   console.log(chalk.dim('  /memory pending         List pending memory learning proposals'));
   console.log(chalk.dim('  /memory show <id>       Preview a memory proposal'));
   console.log(chalk.dim('  /memory approve <id>    Approve and apply a memory proposal'));
@@ -341,6 +471,7 @@ function printDetailedHelp(): void {
   console.log('Usage:');
   console.log(chalk.cyan('  /memory                 ') + chalk.dim('Show MEMORY.md + topic file count'));
   console.log(chalk.cyan('  /memory list            ') + chalk.dim('Alias for `/memory`'));
+  console.log(chalk.cyan('  /memory status          ') + chalk.dim('Show pipeline health + review backlog diagnosis'));
   console.log(chalk.cyan('  /memory pending         ') + chalk.dim('List pending memory learning proposals'));
   console.log(chalk.cyan('  /memory show <id>       ') + chalk.dim('Preview a memory proposal'));
   console.log(chalk.cyan('  /memory approve <id>    ') + chalk.dim('Approve and apply a memory proposal'));
@@ -373,8 +504,8 @@ function printDetailedHelp(): void {
 export const memoryCommand: Command = {
   name: 'memory',
   description: 'Inspect, govern, or rebuild per-project memory',
-  usage: '/memory [list|pending|show|approve|reject|curate|rebuild|open|help]',
-  argumentHint: 'list | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
+  usage: '/memory [list|status|pending|show|approve|reject|curate|rebuild|open|help]',
+  argumentHint: 'list | status | pending | show <id> | approve <id> | reject <id> [reason] | curate | rebuild | open | help',
   handler: async (args, context, callbacks) => {
     const cwd = resolveCwd(context);
     const memoryDir = resolveMemoryRoot(cwd);
@@ -392,6 +523,10 @@ export const memoryCommand: Command = {
     }
     if (sub === 'list') {
       await listMemory(memoryDir, entrypointPath);
+      return;
+    }
+    if (sub === 'status') {
+      await statusMemory(memoryDir, entrypointPath, context, callbacks, cwd);
       return;
     }
     if (sub === 'pending' || sub === 'inbox') {

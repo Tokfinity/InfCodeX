@@ -9,11 +9,65 @@ import type {
 import {
   createInteractiveRuntimeRunner,
   createReplRuntimeAutoModeControl,
+  forwardDaemonCompactionEvent,
   toDaemonRuntimeRunOptions,
   toRuntimeOwnedInteractiveOptions,
 } from './kodax_cli.js';
 
 describe('interactive daemon runtime bridge', () => {
+  it('projects only committed daemon compactions as legacy successes', () => {
+    const onCompact = vi.fn();
+    const onCompactEnd = vi.fn();
+    const onContextCompactionFinished = vi.fn();
+    const events = { onCompact, onCompactEnd, onContextCompactionFinished };
+    const payload = {
+      source: 'manual' as const,
+      tokensBefore: 80_000,
+      tokensAfter: 80_000,
+      committed: false,
+      elapsedMs: 10,
+    };
+    const event: RuntimeEvent = {
+      id: 'event-1',
+      seq: 1,
+      time: '2026-08-08T00:00:00.000Z',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      type: 'context.compaction.finished',
+      payload,
+    };
+
+    forwardDaemonCompactionEvent(events, event, payload);
+    expect(onCompact).not.toHaveBeenCalled();
+    expect(onContextCompactionFinished).toHaveBeenCalledWith(payload);
+
+    const committedPayload = { ...payload, tokensAfter: 20_000, committed: true };
+    forwardDaemonCompactionEvent(
+      events,
+      { ...event, id: 'event-2', payload: committedPayload },
+      committedPayload,
+    );
+    expect(onCompact).toHaveBeenCalledWith(20_000, undefined);
+
+    const endedPayload = {
+      outcome: 'failed' as const,
+      reason: 'summary_generation_failed' as const,
+      failurePhase: 'summary_generation' as const,
+      currentTokens: 300_000,
+      compactableTokens: 280_000,
+      consecutiveFailures: 3,
+      circuitBreakerLimit: 3,
+      circuitBreakerState: 'open' as const,
+      cooldownTurnsRemaining: 2,
+    };
+    forwardDaemonCompactionEvent(
+      events,
+      { ...event, id: 'event-3', type: 'context.compaction.ended', payload: endedPayload },
+      endedPayload,
+    );
+    expect(onCompactEnd).toHaveBeenCalledWith(undefined, endedPayload);
+  });
+
   it('synchronizes Auto settings once without resetting a later session engine choice', async () => {
     const updateSettings = vi.fn(async () => ({ permissionMode: 'auto' }));
     const runtime = {

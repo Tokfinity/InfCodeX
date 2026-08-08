@@ -12,7 +12,10 @@ import type { KodaXManualTopicId, KodaXManualTopicInput } from './self-knowledge
 import type { KodaXTimeoutConfig } from './timeouts.js';
 import type { RuntimeContextBudgetSnapshot } from './agent-runtime/context-budget.js';
 import type { RuntimeToolExposurePlan } from './agent-runtime/tool-exposure-planner.js';
-import type { RuntimeCompactionSkippedEvent } from './agent-runtime/middleware/compaction-pressure.js';
+import type {
+  CompactionSkipReason,
+  RuntimeCompactionSkippedEvent,
+} from './agent-runtime/middleware/compaction-pressure.js';
 import type { MemoryRecallRunner } from '@kodax-ai/agent/experimental-memory';
 
 import type {
@@ -354,6 +357,55 @@ export interface KodaXContextCompactionFinishedEvent
   readonly queryLedgerTokens?: number;
 }
 
+export type KodaXCompactionFailureReason =
+  | 'summary_generation_failed'
+  | 'persistence_failed'
+  | 'context_capacity_exceeded'
+  | 'post_processing_failed';
+
+interface KodaXCompactionEndState {
+  readonly currentTokens: number;
+  readonly compactableTokens: number;
+  readonly consecutiveFailures: number;
+  readonly circuitBreakerLimit: number;
+  readonly circuitBreakerState: 'closed' | 'open' | 'half_open';
+  readonly cooldownTurnsRemaining: number;
+}
+
+/** Structured outcome attached to the existing compaction-ended lifecycle event. */
+export type KodaXCompactionEndResult = KodaXCompactionEndState & (
+  | {
+      readonly outcome: 'compacted';
+      readonly reason?: never;
+      readonly failurePhase?: never;
+    }
+  | {
+      readonly outcome: 'skipped';
+      readonly reason: CompactionSkipReason;
+      readonly failurePhase?: never;
+    }
+  | {
+      readonly outcome: 'failed';
+      readonly reason: 'summary_generation_failed';
+      readonly failurePhase: 'summary_generation';
+    }
+  | {
+      readonly outcome: 'failed';
+      readonly reason: 'persistence_failed';
+      readonly failurePhase: 'persistence';
+    }
+  | {
+      readonly outcome: 'failed';
+      readonly reason: 'post_processing_failed';
+      readonly failurePhase: 'post_processing';
+    }
+  | {
+      readonly outcome: 'failed';
+      readonly reason: 'context_capacity_exceeded';
+      readonly failurePhase?: never;
+    }
+);
+
 export interface KodaXSidecarMessageEvent {
   readonly source: 'sidecar-verifier';
   readonly verdict: 'revise' | 'blocked';
@@ -530,8 +582,11 @@ export interface KodaXEvents {
   onContextCompactionFinished?: (
     event: KodaXContextCompactionFinishedEvent,
   ) => void;
-  /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
-  onCompactEnd?: (meta?: KodaXActivityEventMeta) => void;
+  /** Ends a started compaction attempt; the optional result preserves legacy one-argument handlers. */
+  onCompactEnd?: (
+    meta?: KodaXActivityEventMeta,
+    result?: KodaXCompactionEndResult,
+  ) => void;
   /** Whether the caller has queued follow-up input waiting for the next round */
   hasPendingInputs?: () => boolean;
   /**
@@ -627,7 +682,7 @@ export interface KodaXEvents {
   onToolExposurePlanned?: (
     event: RuntimeToolExposurePlan & Partial<KodaXLiveEventMeta>,
   ) => void;
-  /** Optional bounded compaction-pressure diagnostics. Emitted only when context.contextDiagnostics is true. */
+  /** Bounded operational reason whenever a compaction gate skips work. */
   onContextCompactionSkipped?: (
     event: RuntimeCompactionSkippedEvent & Partial<KodaXLiveEventMeta>,
   ) => void;

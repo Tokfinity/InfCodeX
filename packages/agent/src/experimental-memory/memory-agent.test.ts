@@ -660,6 +660,168 @@ describe('FEATURE_260 MemoryAgent', () => {
     });
   });
 
+  it('carries a sanitized failure lesson into the digest (FEATURE_290 §3.1)', async () => {
+    const digests: PersistedOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest: async (digest) => {
+        digests.push(digest);
+      },
+      now: () => '2026-07-12T01:00:00.000Z',
+    }).startSession({ identity, objective: 'Update source files' });
+    session.observe(constraint({
+      kind: 'outcome',
+      summary: 'edit failed under the current inputs and environment: old_string not found',
+      actionSignature: 'task:update-source',
+      claimKey: 'tool-failure:edit:abc123',
+      metadata: {
+        failed: true,
+        reusableLesson: 'A `edit` call with these inputs failed before. Inspect the referenced tool result and adjust the inputs before retrying.',
+      },
+    }));
+
+    await session.complete({
+      status: 'failed',
+      summary: 'The edit could not be applied.',
+      evidence: [{
+        ref: 'host:run-terminal:session-a',
+        requestedGrade: 'observed',
+        source: 'host',
+        observedAt: '2026-07-12T01:00:00.000Z',
+      }],
+    });
+
+    expect(digests).toHaveLength(1);
+    expect(digests[0]).toMatchObject({
+      outcome: 'failed',
+      lesson: 'A `edit` call with these inputs failed before. Inspect the referenced tool result and adjust the inputs before retrying.',
+    });
+  });
+
+  it('merges verification-observation verdicts into digest evidence (FEATURE_290 §3.2)', async () => {
+    const digests: PersistedOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest: async (digest) => {
+        digests.push(digest);
+      },
+      now: () => '2026-07-12T01:00:00.000Z',
+    }).startSession({ identity, objective: 'Verify release' });
+    session.observe(constraint({
+      kind: 'outcome',
+      summary: 'Verification command succeeded: Tests: 42 passed',
+      evidence: [{
+        ref: 'tool-result:check-release',
+        requestedGrade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-12T00:59:00.000Z',
+      }],
+      metadata: {
+        verification: true,
+        reusableLesson: 'Run `npm test` and require a successful verifier result.',
+      },
+    }));
+    session.observe(constraint({
+      id: 'observation-2',
+      sequence: 2,
+      kind: 'outcome',
+      summary: 'edit failed under the current inputs and environment.',
+      evidence: [{
+        ref: 'tool-result:edit-1',
+        requestedGrade: 'observed',
+        source: 'tool',
+        observedAt: '2026-07-12T00:59:30.000Z',
+      }],
+      metadata: { failed: true },
+    }));
+
+    await session.complete({
+      status: 'succeeded',
+      summary: 'Release verified.',
+      evidence: [{
+        ref: 'artifact:release-check',
+        requestedGrade: 'verified',
+        source: 'environment',
+        observedAt: '2026-07-12T01:00:00.000Z',
+      }],
+    });
+
+    expect(digests).toHaveLength(1);
+    // Only the verification-class observation (with a verdict) is merged; the
+    // plain failure observation evidence stays out of the digest.
+    expect(digests[0]?.evidence).toEqual([
+      {
+        ref: 'artifact:release-check',
+        grade: 'verified',
+        source: 'environment',
+        observedAt: '2026-07-12T01:00:00.000Z',
+      },
+      {
+        ref: 'tool-result:check-release',
+        grade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-12T00:59:00.000Z',
+      },
+    ]);
+    expect(digests[0]?.evidenceRefs).toEqual([
+      'artifact:release-check',
+      'tool-result:check-release',
+    ]);
+  });
+
+  it('does not merge verification evidence into a cancelled intent-only digest', async () => {
+    const digests: PersistedOutcomeDigest[] = [];
+    const session = await createMemoryAgent({
+      controlPlane: controller(),
+      sourcePolicy: (evidence) => evidence.requestedGrade,
+      persistOutcomeDigest: async (digest) => {
+        digests.push(digest);
+      },
+      now: () => '2026-07-29T07:00:00.000Z',
+    }).startSession({ identity, objective: 'Run an unrelated task.' });
+    session.observe(constraint({
+      kind: 'outcome',
+      summary: 'Verification command succeeded: Tests: 42 passed',
+      evidence: [{
+        ref: 'tool-result:check-release',
+        requestedGrade: 'verified',
+        source: 'tool',
+        verdict: 'passed',
+        observedAt: '2026-07-29T06:59:00.000Z',
+      }],
+      metadata: { verification: true },
+    }));
+
+    await session.complete({
+      status: 'cancelled',
+      summary: 'Interrupted.',
+      memoryIntent: {
+        operation: 'remember',
+        evidenceRef: 'user-intent:cancelled-pref',
+        candidateStatement: 'Run focused tests before reporting success.',
+        userQuote: 'Remember to run focused tests before reporting success.',
+      },
+      evidence: [{
+        ref: 'user-intent:cancelled-pref',
+        requestedGrade: 'authoritative',
+        source: 'user',
+        observedAt: '2026-07-29T06:59:00.000Z',
+      }],
+    });
+
+    expect(digests).toHaveLength(1);
+    expect(digests[0]?.evidence).toEqual([{
+      ref: 'user-intent:cancelled-pref',
+      grade: 'authoritative',
+      source: 'user',
+      observedAt: '2026-07-29T06:59:00.000Z',
+    }]);
+  });
+
   it('does not create a durable digest for cancelled episodes', async () => {
     const persistOutcomeDigest = vi.fn();
     const session = await createMemoryAgent({

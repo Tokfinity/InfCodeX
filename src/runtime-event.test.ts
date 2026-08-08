@@ -179,4 +179,65 @@ describe('parseRuntimeEvent', () => {
       error: 'context.compaction.finished requires a canonical compaction payload.',
     });
   });
+
+  it('accepts structured compaction skips and rejects unknown reasons', () => {
+    const payload = {
+      reason: 'compactable_below_threshold',
+      currentTokens: 280_000,
+      compactableTokens: 255_999,
+      contextWindow: 400_000,
+      triggerPercent: 90,
+      effectiveTriggerTokens: 256_000,
+      cooldownTurnsRemaining: 0,
+      lowSavingsStreak: 0,
+      consecutiveFailures: 0,
+      circuitBreakerLimit: 3,
+      circuitBreakerState: 'closed',
+    };
+
+    expect(parseRuntimeEvent(event('context.compaction.skipped', payload)).ok).toBe(true);
+    expect(parseRuntimeEvent(event('context.compaction.skipped', {
+      ...payload,
+      reason: 'silent_noop',
+    })).ok).toBe(false);
+    expect(parseRuntimeEvent(event('context.compaction.skipped', {
+      ...payload,
+      consecutiveFailures: 'three',
+    })).ok).toBe(false);
+  });
+
+  it('accepts legacy ended events and validates new failure outcomes', () => {
+    expect(parseRuntimeEvent(event('context.compaction.ended', { meta: {} })).ok).toBe(true);
+    expect(parseRuntimeEvent(event('context.compaction.ended', {
+      reason: 'summary_generation_failed',
+      consecutiveFailures: 3,
+    })).ok).toBe(false);
+    const failed = {
+      outcome: 'failed',
+      reason: 'summary_generation_failed',
+      failurePhase: 'summary_generation',
+      currentTokens: 300_000,
+      compactableTokens: 280_000,
+      consecutiveFailures: 3,
+      circuitBreakerLimit: 3,
+      circuitBreakerState: 'open',
+      cooldownTurnsRemaining: 2,
+    };
+    expect(parseRuntimeEvent(event('context.compaction.ended', failed)).ok).toBe(true);
+    expect(parseRuntimeEvent(event('context.compaction.ended', {
+      ...failed,
+      reason: 'unknown_failure',
+    }))).toEqual({
+      ok: false,
+      error: 'context.compaction.ended requires a structured compaction outcome.',
+    });
+    expect(parseRuntimeEvent(event('context.compaction.ended', {
+      ...failed,
+      failurePhase: 'persistence',
+    })).ok).toBe(false);
+    expect(parseRuntimeEvent(event('context.compaction.ended', {
+      ...failed,
+      outcome: 'compacted',
+    })).ok).toBe(false);
+  });
 });

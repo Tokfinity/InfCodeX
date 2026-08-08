@@ -332,17 +332,62 @@ export async function revalidatePendingEpisodeReview(
   return rewoundAfterDigest ? 'discard' : 'eligible';
 }
 
-export async function drainCodingMemoryReviewInbox(
+// FEATURE_289 §3.1: the latest truly-started drain so shutdown paths can
+// bounded-await it via awaitLatestCodingMemoryReviewDrain.
+let latestMemoryReviewDrain: Promise<unknown> | undefined;
+
+export function drainCodingMemoryReviewInbox(
   options: KodaXOptions,
   identity: MemoryContextIdentity,
   controller: MemoryController,
   currentSessionId: string,
+  drainDeadlineAtMs?: number,
 ): Promise<EpisodeReviewDrainResult | undefined> {
   if (isInternalAgentRun(options)
     || (options.memoryReviewer === undefined && options.learningReviewer === undefined)
-    || options.session?.storage === undefined) return undefined;
+    || options.session?.storage === undefined) return Promise.resolve(undefined);
+  const drain = drainStartedCodingMemoryReviewInbox(
+    options,
+    identity,
+    controller,
+    currentSessionId,
+    drainDeadlineAtMs,
+  );
+  latestMemoryReviewDrain = drain;
+  return drain;
+}
+
+/**
+ * FEATURE_289 §3.1: bounded await of the latest drain for shutdown cleanup.
+ * Never rejects; resolves immediately when no drain was ever started.
+ */
+export async function awaitLatestCodingMemoryReviewDrain(timeoutMs: number): Promise<void> {
+  const drain = latestMemoryReviewDrain;
+  if (drain === undefined) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      drain.then(() => undefined, () => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function drainStartedCodingMemoryReviewInbox(
+  options: KodaXOptions,
+  identity: MemoryContextIdentity,
+  controller: MemoryController,
+  currentSessionId: string,
+  drainDeadlineAtMs: number | undefined,
+): Promise<EpisodeReviewDrainResult | undefined> {
   const result = await drainPendingEpisodeReviews(identity, {
     maxEntries: 2,
+    ...(drainDeadlineAtMs === undefined ? {} : { deadlineAtMs: drainDeadlineAtMs }),
     revalidate: async (entry) => entry.ownerSessionRef === currentSessionId
       ? 'defer'
       : revalidatePendingEpisodeReview(options.session?.storage, entry),
@@ -423,6 +468,34 @@ export async function drainCodingMemoryReviewInbox(
   if (result.reviewed > 0 || result.discarded > 0 || result.failed > 0) {
     emitResilienceDebug('[memory:review-inbox:drain]', { ...result });
   }
+  // FEATURE_289 §3.6: surface drain failures and deadline-released claims on
+  // the visible session. Wording is explicitly about failure — the success
+  // path `Memory updated:` receipt semantics are not reused — and downstream
+  // dedup keeps keying on the episode identity. The own-session defer key
+  // (`currentSessionId`) is '' at turn-end drains by design; the REPL drops
+  // any notice whose sessionId is defined but mismatched, so fall back to
+  // undefined to render on the visible session.
+  const noticeSessionId = currentSessionId === '' ? undefined : currentSessionId;
+  for (const failure of result.failures) {
+    options.events?.onMemoryNotice?.({
+      sessionId: noticeSessionId,
+      episodeId: `memory-review-failure:${failure.reviewKey}`,
+      summaries: [`Memory review failed: ${failure.error.slice(0, 240)}`],
+      proposalIds: [],
+    });
+  }
+  if (drainDeadlineAtMs !== undefined
+    && result.deferred > 0
+    && Date.now() >= drainDeadlineAtMs) {
+    options.events?.onMemoryNotice?.({
+      sessionId: noticeSessionId,
+      episodeId: `memory-review-drain-deadline:${noticeSessionId ?? 'global'}`,
+      summaries: [
+        `Memory review drain stopped at the shutdown deadline; ${result.deferred} job(s) stay pending for the next run.`,
+      ],
+      proposalIds: [],
+    });
+  }
   return result;
 }
 
@@ -484,6 +557,7 @@ async function buildUnifiedReviewInput(
       independentEpisodeCount: new Set(matchingEpisodes.map((item) => item.reviewKey)).size,
       verifiedOutcome,
       exactSkillInvoked: exactInvokedSkill !== null,
+      failedWithLesson: entry.digest.outcome === 'failed' && entry.digest.lesson !== undefined,
     },
   };
   return sanitizeUnifiedLearningReviewInput({
