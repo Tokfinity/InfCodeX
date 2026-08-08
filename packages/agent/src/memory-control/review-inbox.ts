@@ -1434,10 +1434,10 @@ async function drainFencedEpisodeReview(
           message,
         });
       }
-    } catch (deferError) {
-      if (!(deferError instanceof Error)
-        || deferError.message !== 'review claim is no longer authoritative') {
-        throw deferError;
+    } catch (cleanupError) {
+      if (!(cleanupError instanceof Error)
+        || cleanupError.message !== 'review claim is no longer authoritative') {
+        throw cleanupError;
       }
     }
     return { kind: 'failed', error: message };
@@ -2059,10 +2059,7 @@ function isRewound(
   envelope: PendingEpisodeReviewV2,
   authority: EpisodeReviewBranchAuthority,
 ): boolean {
-  return authority.rewinds.some((rewind) => (
-    rewind.epoch > envelope.branchEpoch
-    && envelope.digest.sequence > rewind.throughSequence
-  )) || (authority.exactFences ?? []).some((fence) => (
+  return (authority.exactFences ?? []).some((fence) => (
     fence.epoch > envelope.branchEpoch
     && fence.retiredJobIds.includes(envelope.jobId)
   ));

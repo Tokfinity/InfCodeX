@@ -506,6 +506,51 @@ describe("buildManagedTaskTranscriptItems", () => {
       expect(transcript).toContain("missing dependency");
     });
 
+    it("default mode: sidecar blocked verdict (signal='BLOCKED') is omitted once the sidecar message was delivered", () => {
+      const result = {
+        success: false,
+        signal: "BLOCKED",
+        messages: [],
+        lastText: "Worker reported blocker.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "blocked",
+                signal: "BLOCKED",
+                signalReason: "Cannot proceed — missing dependency in user environment.",
+                summary: "Cannot proceed — missing dependency in user environment.",
+              },
+            ],
+          },
+          // BLOCKED case — per payload-builder.ts:218, harness='H0_DIRECT'
+          // wins so decidedByAssignmentId='direct'. The F195 sidecar filter
+          // omits non-COMPLETE evaluator evidence once the first-class sidecar
+          // message channel already delivered the verdict (no duplicate echo).
+          verdict: { decidedByAssignmentId: "direct", disposition: "blocked" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(
+        result as Parameters<typeof buildManagedTaskTranscriptItems>[0],
+        { verifierLog: false, sidecarMessageDelivered: true },
+      );
+      const transcript = items.join("\n\n");
+      // Evaluator title and BLOCKED content are filtered — already shown via
+      // the first-class sidecar message.
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).not.toContain("Sidecar Verifier");
+      expect(transcript).not.toContain("missing dependency");
+    });
+
     it("default mode: non-evaluator entries with signal='COMPLETE' (e.g. direct H0) still surface", () => {
       // Filter must be evaluator-role-specific; a Worker / Scout / direct
       // entry that happens to also carry signal='COMPLETE' must NOT be

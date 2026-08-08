@@ -34,6 +34,7 @@ import {
 import type {
   KodaXContextTokenSnapshot,
   KodaXCompactionEndResult,
+  KodaXCompactionEndState,
   KodaXMessage,
   KodaXOptions,
 } from '../../../types.js';
@@ -101,7 +102,6 @@ interface ManagedCompactionAttempt extends ManagedCompactionInput {
   readonly messages: KodaXMessage[];
   readonly currentTokens: number;
   readonly hardPressure: boolean;
-  readonly halfOpenAttempt: boolean;
 }
 
 interface ManagedCompactionState {
@@ -215,17 +215,7 @@ function buildCompactionUpdate(
 }
 
 function notifyPostCompact(callback: (() => void) | undefined): void {
-  if (!callback) return;
-  try {
-    callback();
-  } catch (error) {
-    emitKodaXDiagnostic({
-      source: 'coding:managed-compaction',
-      level: 'warn',
-      message: 'Post-compaction callback failed.',
-      detail: error,
-    });
-  }
+  notifyCompactionObserver(callback, 'Post-compaction callback failed.');
 }
 
 function notifyCompactionObserver(
@@ -272,18 +262,15 @@ function compactionEndState(
   currentTokens: number,
   compactableTokens: number,
   breaker: SummaryCircuitBreaker,
-  probeAttempt = false,
-) {
+): KodaXCompactionEndState {
   return {
     currentTokens,
     compactableTokens,
     consecutiveFailures: breaker.consecutiveFailures,
     circuitBreakerLimit: COMPACT_CIRCUIT_BREAKER_LIMIT,
-    circuitBreakerState: probeAttempt
-      ? 'half_open' as const
-      : breaker.consecutiveFailures >= COMPACT_CIRCUIT_BREAKER_LIMIT
-        ? 'open' as const
-        : 'closed' as const,
+    circuitBreakerState: breaker.consecutiveFailures >= COMPACT_CIRCUIT_BREAKER_LIMIT
+      ? (breaker.cooldownTurnsRemaining > 0 ? 'open' as const : 'half_open' as const)
+      : 'closed' as const,
     cooldownTurnsRemaining: breaker.cooldownTurnsRemaining,
   };
 }
@@ -399,14 +386,13 @@ function admitManagedCompactionAttempt(input: {
     input.currentTokens,
     input.stripManagedContext,
   );
-  const halfOpenAttempt = input.state.breaker.consecutiveFailures
+  const breakerTripped = input.state.breaker.consecutiveFailures
     >= COMPACT_CIRCUIT_BREAKER_LIMIT;
   const attempt = {
     ...compactable,
     messages: input.messages,
     currentTokens: input.currentTokens,
     hardPressure,
-    halfOpenAttempt,
   };
   const compactableNeedsCompaction = needsCompaction(
     compactable.compactableMessages,
@@ -421,7 +407,7 @@ function admitManagedCompactionAttempt(input: {
 
   const growthRearmed = input.state.breaker.rearmAtTokens !== undefined
     && compactable.compactableCurrentTokens >= input.state.breaker.rearmAtTokens;
-  if (halfOpenAttempt && !hardPressure
+  if (breakerTripped && !hardPressure
     && input.state.breaker.cooldownTurnsRemaining > 0 && !growthRearmed) {
     input.state.breaker = {
       ...input.state.breaker,
@@ -538,12 +524,19 @@ function emitManagedCompactionSkipped(input: {
     contextWindow: input.contextWindow,
     triggerPercent: input.triggerPercent,
     effectiveTriggerTokens: input.effectiveTriggerTokens,
+    /** Semantic source depends on `reason`: breaker cooldown for
+     * `circuit_breaker_cooldown`; anti-thrash cooldown for
+     * `low_savings_cooldown` / `covered_context_unchanged`. */
     cooldownTurnsRemaining: input.cooldownTurnsRemaining,
     lowSavingsStreak: input.state.antiThrash.lowSavingsStreak,
     consecutiveFailures: input.state.breaker.consecutiveFailures,
     circuitBreakerLimit: COMPACT_CIRCUIT_BREAKER_LIMIT,
-    circuitBreakerState: input.state.breaker.consecutiveFailures
-      >= COMPACT_CIRCUIT_BREAKER_LIMIT ? 'open' : 'closed',
+    circuitBreakerState: input.state.breaker.consecutiveFailures >= COMPACT_CIRCUIT_BREAKER_LIMIT
+      ? (input.reason === 'circuit_breaker_cooldown'
+          || input.state.breaker.cooldownTurnsRemaining > 0
+        ? 'open' as const
+        : 'half_open' as const)
+      : 'closed' as const,
     ...(input.rearmAtTokens !== undefined
       ? { rearmAtTokens: input.rearmAtTokens }
       : {}),
@@ -627,7 +620,6 @@ async function executeManagedCompactionAttempt(
         attempt.currentTokens,
         attempt.compactableCurrentTokens,
         state.breaker,
-        attempt.halfOpenAttempt,
       ),
       outcome: 'failed',
       reason: 'post_processing_failed',
@@ -715,7 +707,6 @@ function noCompactablePrefixOutcome(
         attempt.currentTokens,
         attempt.compactableCurrentTokens,
         state.breaker,
-        attempt.halfOpenAttempt,
       ),
       outcome: 'skipped',
       reason: 'no_compactable_prefix',
@@ -838,7 +829,6 @@ function capacityEndResult(
       attempt.currentTokens,
       attempt.compactableCurrentTokens,
       state.breaker,
-      attempt.halfOpenAttempt,
     ),
     outcome: 'failed',
     reason: 'context_capacity_exceeded',

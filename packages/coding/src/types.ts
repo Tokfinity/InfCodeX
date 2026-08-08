@@ -363,7 +363,7 @@ export type KodaXCompactionFailureReason =
   | 'context_capacity_exceeded'
   | 'post_processing_failed';
 
-interface KodaXCompactionEndState {
+export interface KodaXCompactionEndState {
   readonly currentTokens: number;
   readonly compactableTokens: number;
   readonly consecutiveFailures: number;

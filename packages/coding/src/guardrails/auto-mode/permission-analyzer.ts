@@ -848,9 +848,7 @@ function isCredentialBearingKodaxPath(target: string, agentHome: string): boolea
   // Authorization / trust control files.
   if (relNorm === 'trusted-project-rules.json') return true;
   if (relNorm === 'runtime/permission-grants.json') return true;
-  if (relNorm.startsWith('runtime/daemon/')) {
-    return relNorm.endsWith('/daemon.token') || relNorm.endsWith('/owner-policy.json');
-  }
+  if (relNorm.startsWith('runtime/daemon/')) return true;
   return false;
 }
 

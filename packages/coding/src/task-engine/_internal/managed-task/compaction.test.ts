@@ -594,11 +594,13 @@ describe('managed history compaction', () => {
       reason: 'circuit_breaker_cooldown',
       consecutiveFailures: 3,
       cooldownTurnsRemaining: 1,
+      circuitBreakerState: 'open',
     }));
     expect(onContextCompactionSkipped).toHaveBeenNthCalledWith(2, expect.objectContaining({
       reason: 'circuit_breaker_cooldown',
       consecutiveFailures: 3,
       cooldownTurnsRemaining: 0,
+      circuitBreakerState: 'open',
     }));
 
     compactMock.mockResolvedValueOnce(compactedResult(messages));
@@ -636,6 +638,7 @@ describe('managed history compaction', () => {
       reason: 'circuit_breaker_cooldown',
       consecutiveFailures: 4,
       cooldownTurnsRemaining: 1,
+      circuitBreakerState: 'open',
     }));
   });
 

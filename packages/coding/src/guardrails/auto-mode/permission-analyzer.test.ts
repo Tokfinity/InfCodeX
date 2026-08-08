@@ -3251,6 +3251,10 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
     fs.mkdirSync(path.join(userKodax, 'runtime', 'daemon', 'default'), { recursive: true });
     fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'daemon.token'), 'x');
     fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'owner-policy.json'), '{}');
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'daemon.log'), 'x');
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'daemon.json'), '{}');
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'bootstrap.log'), 'x');
+    fs.writeFileSync(path.join(userKodax, 'runtime', 'daemon', 'default', 'daemon.lock'), 'x');
     fs.mkdirSync(path.join(userKodax, 'runtime'), { recursive: true });
     fs.writeFileSync(path.join(userKodax, 'runtime', 'permission-grants.json'), '{}');
     fs.writeFileSync(path.join(userKodax, 'trusted-project-rules.json'), '{}');
@@ -3262,6 +3266,10 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       'integrations/mcp.json',
       'runtime/daemon/default/daemon.token',
       'runtime/daemon/default/owner-policy.json',
+      'runtime/daemon/default/daemon.log',
+      'runtime/daemon/default/daemon.json',
+      'runtime/daemon/default/bootstrap.log',
+      'runtime/daemon/default/daemon.lock',
       'runtime/permission-grants.json',
       'trusted-project-rules.json',
       'config.json',
