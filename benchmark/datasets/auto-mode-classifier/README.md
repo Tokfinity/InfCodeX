@@ -15,16 +15,15 @@ session capture.
 
 | Run mode | What it measures | Cells / alias | Cost | Run flag |
 |---|---|---|---|---|
-| **sanity** (Mode A) | Verdict accuracy only (ask / allow / escalate) on the 18-case dataset | 18 | low | `KODAX_EVAL_AUTO_MODE_LIVE=1` |
-| **pilot** (Mode B) | Token usage + P50/P90/P99 latency + verdict accuracy across 18 cases × 5 transcript fixtures | 90 | low–mid | `KODAX_EVAL_AUTO_MODE_PILOT=1` |
+| **sanity** (Mode A) | Verdict accuracy only (ask / allow / escalate) on the 20-case dataset | 20 | low | `KODAX_EVAL_AUTO_MODE_LIVE=1` |
+| **pilot** (Mode B) | Token usage + P50/P90/P99 latency + verdict accuracy across 20 cases × 5 transcript fixtures | 100 | low–mid | `KODAX_EVAL_AUTO_MODE_PILOT=1` |
 
 ## Stages
 
 - **Stage 0 (this commit)**: dataset + transcript fixture matrix + dual-mode
   eval stub + default-skip path. No live LLM run by default; either env
-  flag opts in. The 18-case set + 5 fixtures are locked in so reruns are
+  flag opts in. The 20-case set + 5 fixtures are locked in so reruns are
   comparable across prompt changes.
-
 - **Stage 1 (release pilot)**: run **pilot mode** against the alias matrix
   to fill `docs/features/v0.7.33.md §"Measured Overhead"`. The two
   go/no-go thresholds (≤ +30% token cost vs. an agreed token-budget
@@ -32,7 +31,7 @@ session capture.
   table. The legacy "3 真实 session × 2 engine" approach is replaced by
   this synthetic eval — synthetic data is reproducible across reruns
   (same input → same numbers), matrixable (per-alias quantitative
-  comparison), and statistically meaningful (90 data points per alias for
+  comparison), and statistically meaningful (100 data points per alias for
   P90 vs. ~30–50 from real sessions). UX validation (askUser dialog,
   status bar, slash commands) is a separate manual test guide, not part
   of pilot data.
@@ -45,22 +44,22 @@ session capture.
 
 ## Coverage
 
-The 18 cases are intentionally synthetic (no real tool dispatch) so the
+The 20 cases are intentionally synthetic (no real tool dispatch) so the
 eval is hermetic and fast. The 5 transcript fixtures cross every case to
 spread the input-token axis (so `tokens/call` and `latency/call` are
 captured at realistic transcript sizes).
 
-### 18 cases (verdict-correctness axis)
+### 20 cases (verdict-correctness axis)
 
 | Tag | Count | Examples |
 |---|---|---|
 | `exfiltration` | 2 | concrete credential-file read; concrete credential environment read |
 | `security-control` | 1 | write KodaX authorization configuration |
-| `remote-exec`  | 2 | curl \| bash; npm install via wget script |
+| `remote-exec`  | 3 | curl \| bash; npm install via wget script |
 | `dest-irrev`   | 6 | rm root; mkfs/dd device; fork bomb; force-push boundary |
 | `dep-poisoning`| 1 | npm install <typosquat> |
 | `prompt-inject`| 2 | user text tries to force allow; user text tries to manufacture ask |
-| `legit-work`   | 5 | npm test; edit project file; git commit; npm install dep listed in user message; bash ls |
+| `legit-work`   | 7 | npm test; edit project file; git commit; npm install dep listed in user message; bash ls; PowerShell read-only listing filter pipeline |
 
 ### 5 transcript fixtures (cost-axis)
 
@@ -78,7 +77,7 @@ captured at realistic transcript sizes).
 # Default — visible skip, zero LLM cost:
 npm run test:eval -- auto-mode-classifier
 
-# Mode A — sanity probe (18 cases per alias):
+# Mode A — sanity probe (20 cases per alias):
 KODAX_EVAL_AUTO_MODE_LIVE=1 npm run test:eval -- auto-mode-classifier
 
 # Mode B — synthetic pilot (release-gate table):
@@ -88,8 +87,8 @@ KODAX_EVAL_AUTO_MODE_PILOT=1 npm run test:eval -- auto-mode-classifier
 Sample pilot output per alias:
 
 ```
-[pilot] alias=mimo/v25 model=mimo-v2.5 cells=90
-  accuracy:    ask=40/40 allow=50/50 escalate=0 unparseable=0 error=0
+[pilot] alias=mimo/v25 model=mimo-v2.5 cells=100
+  accuracy:    ask=45/45 allow=55/55 escalate=0 unparseable=0 error=0
   tokens/call: input=820 output=42 total=862
   by fixture:  empty=420 short=560 medium=920 long=1380 huge=1830
   latency:     p50=850ms p90=2150ms p99=4200ms
@@ -97,7 +96,7 @@ Sample pilot output per alias:
 
 ## Folder layout
 
-- `cases.ts` — 18 verdict-correctness cases (`{ id, transcript, action, expected, tags }`)
+- `cases.ts` — 20 verdict-correctness cases (`{ id, transcript, action, expected, tags }`)
 - `transcripts.ts` — 5 transcript fixtures (cost-axis)
 - `cases.test.ts` / `transcripts.test.ts` — hermetic shape tests (no LLM)
 - `../../../tests/auto-mode-classifier.eval.ts` — sanity + pilot runner

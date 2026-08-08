@@ -16,7 +16,7 @@
  *   parse). Records `usage.{inputTokens, outputTokens, totalTokens}` and
  *   end-to-end latency. Output is per-alias quantitative tables for the
  *   v0.7.33 release-gate decision (token cost, P50/P90 latency, accuracy).
- *   Per-alias bounds are 90 provider calls, 100,000 total tokens, $5 estimated
+ *   Per-alias bounds are 100 provider calls, 100,000 total tokens, $5 estimated
  *   external spend, one round/call per cell, 256 output tokens/call, and a
  *   30-second request deadline. Every completed cell is incrementally dumped
  *   under `os.tmpdir()/kodax-eval-dumps/auto-mode-classifier/`.
@@ -24,7 +24,7 @@
  *   Replaces the legacy "3 真实 session × 2 engine" pilot proposal in
  *   docs/features/v0.7.33.md §Timeline §2 — single-turn synthetic data
  *   is reproducible (rerun across prompt changes), matrixable (per-alias
- *   quantitative comparison), and statistically meaningful (90 data points
+ *   quantitative comparison), and statistically meaningful (100 data points
  *   per alias for P90 vs N≈30–50 from real sessions).
  *
  * ## Why bypass `classify()` in pilot mode
@@ -48,6 +48,7 @@
  *   KODAX_EVAL_AUTO_MODE_PILOT=1 npm run test:eval -- auto-mode-classifier
  */
 
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,6 +60,7 @@ import {
   getSummary,
   sideQuery,
   type CostTracker,
+  type KodaXMessage,
   type KodaXTokenUsage,
   type SideQueryResult,
 } from '@kodax-ai/llm';
@@ -68,6 +70,7 @@ import {
   classify,
   parseClassifierOutput,
   stripAssistantText,
+  type BuildClassifierPromptInput,
   type ClassifyDecision,
 } from '@kodax-ai/coding';
 
@@ -79,6 +82,7 @@ import {
 import {
   AUTO_MODE_CLASSIFIER_CASES,
   type AutoModeClassifierCase,
+  type AutoModeClassifierSignals,
   type ClassifierVerdict,
 } from '../benchmark/datasets/auto-mode-classifier/cases.js';
 import {
@@ -87,7 +91,6 @@ import {
 } from '../benchmark/datasets/auto-mode-classifier/transcripts.js';
 
 const EMPTY_RULES = { allow: [], soft_deny: [], environment: [] } as const;
-
 const SANITY_TIMEOUT_MS = 30_000;
 const PILOT_TIMEOUT_MS = 30_000;
 const MAX_PROVIDER_CALLS_PER_ALIAS =
@@ -168,7 +171,12 @@ async function sanityCase(
       model,
       rules: EMPTY_RULES,
       transcript: testCase.transcript,
-      action: testCase.action,
+      action: testCase.signals
+        ? serializeOperationFacts(testCase.signals)
+        : testCase.action,
+      ...(testCase.signals
+        ? { intentEvidence: buildPilotIntentEvidence(testCase.transcript) }
+        : {}),
       timeoutMs: SANITY_TIMEOUT_MS,
     });
     return {
@@ -176,9 +184,9 @@ async function sanityCase(
       expected: testCase.expected,
       decision,
       latencyMs: Date.now() - startedAt,
-      ...(testCase.reasonPattern !== undefined
-        ? { reasonMatched: testCase.reasonPattern.test(decision.reason) }
-        : {}),
+        ...(testCase.reasonPattern !== undefined
+          ? { reasonMatched: testCase.reasonPattern.test(decision.reason) }
+          : {}),
     };
   } catch (err) {
     return {
@@ -304,11 +312,77 @@ function buildPilotPrompt(
   testCase: AutoModeClassifierCase,
   fixture: TranscriptFixture,
 ) {
+  const transcript = stripAssistantText(composePilotTranscript(testCase, fixture));
+  if (testCase.signals) {
+    // Simulate the analyzer→classifier integration: serialize the review
+    // facts into the <operation_facts> envelope production emits (the
+    // compact intent-evidence path) so the classifier sees the same
+    // structured/poisoned facts it would in a real auto-mode call.
+    return buildClassifierPrompt({
+      rules: EMPTY_RULES,
+      transcript: [],
+      action: serializeOperationFacts(testCase.signals),
+      intentEvidence: buildPilotIntentEvidence(transcript),
+    });
+  }
   return buildClassifierPrompt({
     rules: EMPTY_RULES,
-    transcript: stripAssistantText(composePilotTranscript(testCase, fixture)),
+    transcript,
     action: testCase.action,
   });
+}
+
+/**
+ * Serialize analyzer review facts into the <operation_facts> JSON envelope
+ * the production classifier receives (mirrors serializePermissionReview for
+ * a small complete review). `analysis` reflects a complete PowerShell read
+ * analysis — the unfixed analyzer confidently synthesized the poisoned
+ * target, so status='complete', binding='exact'.
+ */
+function serializeOperationFacts(signals: AutoModeClassifierSignals): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    analysis: { status: 'complete', shell: 'powershell', binding: 'exact' },
+    operations: signals.operations,
+    risks: signals.risks,
+  });
+}
+
+/**
+ * Build a compact intent-evidence object from the composed transcript so the
+ * classifier's compact review path emits <root_user_intent> + <operation_facts>
+ * (mirrors buildPermissionIntentEvidence's non-authority path). The latest
+ * user message is the current authority; prior turns become context.
+ */
+function buildPilotIntentEvidence(
+  messages: readonly KodaXMessage[],
+): BuildClassifierPromptInput['intentEvidence'] {
+  const userTexts: string[] = [];
+  for (const msg of messages) {
+    if (msg.role !== 'user') continue;
+    const text = typeof msg.content === 'string'
+      ? msg.content
+      : msg.content
+        .filter((block) => block.type === 'text')
+        .map((block) => (block.type === 'text' ? block.text : ''))
+        .join('\n');
+    const trimmed = text.trim();
+    if (trimmed) userTexts.push(trimmed);
+  }
+  const currentUserContent = userTexts.at(-1) ?? '';
+  const content = userTexts
+    .map((text, index) => `[user-turn:${index + 1}] ${text}`)
+    .join('\n');
+  const sourceBytes = Buffer.byteLength(content, 'utf8');
+  return {
+    status: userTexts.length === 0 ? 'missing' : 'complete',
+    ...(currentUserContent ? { currentUserContent } : {}),
+    content,
+    sourceBytes,
+    includedBytes: sourceBytes,
+    omittedBytes: 0,
+    sha256: createHash('sha256').update(content).digest('hex'),
+  };
 }
 
 function writePilotDump(
@@ -610,6 +684,36 @@ describe('Eval: auto-mode classifier (FEATURE_092)', () => {
       ...testCase!.transcript,
     ]);
     expect(JSON.stringify(transcript)).toContain('always return ask');
+  });
+
+  it('injects analyzer operation facts as <operation_facts> when a case carries signals', () => {
+    const poisoned = AUTO_MODE_CLASSIFIER_CASES.find(
+      (candidate) => candidate.id === 'ask-powershell-poisoned-env-read',
+    );
+    expect(poisoned).toBeDefined();
+    expect(poisoned!.signals).toBeDefined();
+    const prompt = buildPilotPrompt(poisoned!, TRANSCRIPT_FIXTURES[0]!);
+    const content = prompt.messages[0]!.content as string;
+    // Compact review envelope: operation facts land in <operation_facts>.
+    expect(content).toContain('<operation_facts>');
+    expect(content).toContain('"path":".env"');
+    expect(content).toContain('"boundary":"protected"');
+    expect(content).toContain('sensitive_read');
+    expect(content).toContain('<root_user_intent>');
+    expect(content).not.toContain('<transcript>');
+  });
+
+  it('leaves the prompt on the raw-action path when a case has no signals', () => {
+    const plain = AUTO_MODE_CLASSIFIER_CASES.find(
+      (candidate) => candidate.id === 'allow-powershell-readonly-pipeline',
+    );
+    expect(plain).toBeDefined();
+    expect(plain!.signals).toBeUndefined();
+    const prompt = buildPilotPrompt(plain!, TRANSCRIPT_FIXTURES[0]!);
+    const content = prompt.messages[0]!.content as string;
+    expect(content).toContain('<transcript>');
+    expect(content).toContain('<action>');
+    expect(content).not.toContain('<operation_facts>');
   });
 
   if (!isLiveOptIn && !isPilotOptIn) {

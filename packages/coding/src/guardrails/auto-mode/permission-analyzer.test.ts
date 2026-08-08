@@ -1500,6 +1500,69 @@ describe('Auto[rules] deterministic Tier 2', () => {
     expect(broadPipeline.review.risks).toContain('sensitive_read');
   });
 
+  it('allows a Get-ChildItem -Name pipeline feeding Select-String (names are matched as text, no file read)', () => {
+    // 2026-08-07 production false positive: the sentinel `.env` target was
+    // injected even though `-Name` makes the enumeration emit strings that
+    // Select-String binds to -InputObject (content search), not -Path.
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', {
+      command: 'Get-ChildItem docs -Name | Select-String -Pattern "memory|AGENTS|PRD"',
+    }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('allow');
+    expect(assessment.review.operations).not.toContainEqual(expect.objectContaining({
+      target: expect.objectContaining({ path: '.env' }),
+    }));
+  });
+
+  it.each([
+    // FileInfo objects flow downstream: Select-String reads each enumerated file.
+    'Get-ChildItem docs | Select-String -Pattern token',
+    // Get-Content binds pipeline strings to -Path, so names still cause reads.
+    'Get-ChildItem docs -Name | Get-Content',
+  ])('keeps the protected-enumeration sentinel when the pipeline reads file contents: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it.each([
+    // -Name emits strings; no content reader consumes them as files here.
+    'Get-ChildItem docs -Name',
+    // Standalone Select-String with no -Path performs no file read.
+    'Select-String -Pattern "v0.7.4"',
+  ])('allows baseline enumeration/search commands that read no file contents: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('allow');
+  });
+
+  it.each([
+    // Explicitly disabling the switch keeps FileInfo objects flowing:
+    // Select-String reads file contents, so the sentinel must stay.
+    'Get-ChildItem docs -Name:$false | Select-String -Pattern token',
+    // A Get-Content consumer anywhere in the pipeline re-enables file reads.
+    'Get-ChildItem docs -Name | Select-String token | Get-Content',
+  ])('keeps the protected-enumeration sentinel when -Name output is not string-only: %s', (command) => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('escalate');
+    expect(assessment.review.risks).toContain('sensitive_read');
+  });
+
+  it('allows the -Name abbreviation -N feeding Select-String (prefix resolution)', () => {
+    const projectRoot = createRoot('kodax-auto-rules-project-');
+    const assessment = assessAutoModeCall(call('bash', {
+      command: 'Get-ChildItem docs -N | Select-String -Pattern token',
+    }), context(projectRoot));
+
+    expect(assessment.decision.action).toBe('allow');
+  });
+
   it.each([
     'cat .git/config',
     'Get-Content .git/config',
@@ -3247,5 +3310,45 @@ describe('Auto[rules] user KodaX home read narrowing', () => {
       context(projectRoot),
     );
     expect(decision.action).toBe('escalate');
+  });
+
+  it('allows bash reads of non-credential ~/.kodax paths (cat/Get-Content)', () => {
+    // agentHome must contain a `.kodax` path component so the bash
+    // sensitivePathCandidate short-circuit fires and exercises the
+    // classifySensitiveReadTarget deferral (not just classifyTarget).
+    const projectRoot = createRoot('kodax-bash-narrow-');
+    userKodax = createTempDirSync('kodax-bash-narrow-', process.cwd());
+    const agentHome = path.join(userKodax, '.kodax');
+    fs.mkdirSync(path.join(agentHome, 'tool-results'), { recursive: true });
+    fs.writeFileSync(path.join(agentHome, 'tool-results', 'out.txt'), 'x');
+    setAgentConfigHome(agentHome);
+    const target = path.join(agentHome, 'tool-results', 'out.txt').replace(/\\/g, '/');
+    for (const command of [`cat ${target}`, `Get-Content ${target}`]) {
+      const assessment = assessAutoModeCall(call('bash', { command }), context(projectRoot));
+      expect(assessment.decision.action).toBe('allow');
+      expect(assessment.review.operations).toContainEqual(expect.objectContaining({
+        kind: 'read',
+        target: expect.objectContaining({ boundary: 'outside-workspace' }),
+      }));
+    }
+  });
+
+  it('still escalates bash reads of credential ~/.kodax paths', () => {
+    const projectRoot = createRoot('kodax-bash-narrow-');
+    userKodax = createTempDirSync('kodax-bash-narrow-', process.cwd());
+    const agentHome = path.join(userKodax, '.kodax');
+    fs.mkdirSync(path.join(agentHome, 'mcp-tokens'), { recursive: true });
+    fs.writeFileSync(path.join(agentHome, 'mcp-tokens', 't.json'), '{}');
+    fs.writeFileSync(path.join(agentHome, 'config.json'), '{}');
+    setAgentConfigHome(agentHome);
+    for (const rel of ['mcp-tokens/t.json', 'config.json']) {
+      const target = path.join(agentHome, rel).replace(/\\/g, '/');
+      const assessment = assessAutoModeCall(
+        call('bash', { command: `cat ${target}` }),
+        context(projectRoot),
+      );
+      expect(assessment.decision.action).toBe('escalate');
+      expect(assessment.review.risks).toContain('sensitive_read');
+    }
   });
 });

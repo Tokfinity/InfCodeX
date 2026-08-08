@@ -889,6 +889,22 @@ function classifyAgentHomeTarget(
     : { path: targetPath, boundary: 'outside-workspace' };
 }
 
+/**
+ * Classifies a shell read target flagged as sensitive by `sensitivePathCandidate`.
+ * Defers to the agent-home narrowing so non-credential `~/.kodax` reads
+ * (tool-results, sessions, ...) read as outside-workspace; credentials stay
+ * protected. Falls back to `protected` when the path is not confidently under
+ * the user home (unresolvable, wildcard, or another CLI home).
+ */
+function classifySensitiveReadTarget(
+  targetPath: string,
+  context: AutoModeRulesContext,
+  literalWildcards = false,
+): AutoModePermissionTarget {
+  return classifyAgentHomeTarget(targetPath, context, literalWildcards)
+    ?? { path: targetPath, boundary: 'protected' };
+}
+
 function classifyTarget(
   targetPath: string,
   context: AutoModeRulesContext,
@@ -1618,19 +1634,23 @@ function collectSensitiveReadTargets(
         }
         continue;
       }
-      const consumesEnumeration = powerShellReadStatement
-        && statement.stages.some((candidate) => (
-          ['get-content', 'select-string'].includes(
-            canonicalPowerShellReadExecutable(candidate) ?? shellExecutable(candidate),
-          )
-        ));
+      const enumerationConsumerNames = powerShellReadStatement
+        ? statement.stages
+          .map((candidate) => canonicalPowerShellReadExecutable(candidate) ?? shellExecutable(candidate))
+          .filter((name) => name === 'get-content' || name === 'select-string')
+        : [];
+      const consumesEnumeration = enumerationConsumerNames.length > 0;
+      const consumesEnumerationAsStringOnly = consumesEnumeration
+        && enumerationConsumerNames.every((name) => name === 'select-string');
       if (executable === 'get-childitem' && consumesEnumeration) {
         let positiveFilterSeen = false;
+        let nameOutput = false;
         for (let index = 1; index < stage.argv.length; index += 1) {
           const token = stage.argv[index] ?? '';
           const attached = parseAttachedPowerShellReadParameter(executable, token);
           if (attached) {
-            if (attached.name === 'literalpath') addCandidate(attached.value, true, true);
+            if (attached.name === 'name' && attached.value.toLowerCase() !== '$false') nameOutput = true;
+            else if (attached.name === 'literalpath') addCandidate(attached.value, true, true);
             else if (attached.name === 'path') addCandidate(attached.value, false, true);
             else if (attached.name === 'filter' || attached.name === 'include') {
               positiveFilterSeen = true;
@@ -1640,6 +1660,7 @@ function collectSensitiveReadTargets(
           }
           const parameter = resolvePowerShellReadParameter(executable, token);
           if (parameter) {
+            if (parameter === 'name') nameOutput = true;
             const consumesValue = [
               'path', 'literalpath', 'filter', 'include', 'exclude', 'depth', 'attributes',
             ].includes(parameter);
@@ -1656,8 +1677,15 @@ function collectSensitiveReadTargets(
           if (!token.startsWith('-')) addCandidate(token, false, true);
         }
         // Without an inclusive selector, the pipeline can feed any enumerated
-        // file to the content reader, including a protected one.
-        if (!positiveFilterSeen) targets.add('.env');
+        // file to the content reader, including a protected one. With -Name the
+        // enumeration emits filenames as strings; a downstream Select-String
+        // binds those to -InputObject (searching the strings, not file
+        // contents), so no file is read and the sentinel does not apply.
+        // Get-Content still treats piped strings as paths and reads files, so
+        // the sentinel is retained whenever it is among the consumers.
+        if (!positiveFilterSeen && !(nameOutput && consumesEnumerationAsStringOnly)) {
+          targets.add('.env');
+        }
         continue;
       }
       if (REGEX_READ_COMMANDS.has(executable)) {
@@ -2121,7 +2149,7 @@ function collectShellOperations(
     operations.push({
       kind: 'read',
       target: sensitive
-        ? { path: target, boundary: 'protected' }
+        ? classifySensitiveReadTarget(target, context)
         : hasShellReadExpansion(target)
           ? { path: target, boundary: 'unresolved' }
           : classifyTarget(target, context),
@@ -2142,7 +2170,7 @@ function collectShellOperations(
     operations.push({
       kind: 'read',
       target: sensitive
-        ? { path: target, boundary: 'protected' }
+        ? classifySensitiveReadTarget(target, context)
         : hasShellReadExpansion(target)
           ? { path: target, boundary: 'unresolved' }
           : classifyTarget(target, context),
@@ -2185,7 +2213,7 @@ function collectShellOperations(
       operations.push({
         kind: 'read',
         target: sensitive
-          ? { path: target, boundary: 'protected' }
+          ? classifySensitiveReadTarget(target, context, literal)
           : !literal && hasDynamicShellReadExpansion(target)
           ? { path: target, boundary: 'unresolved' }
           : classifyTarget(ordinarySelector ? context.executionCwd : target, context, literal),
